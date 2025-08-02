@@ -1,0 +1,13 @@
+.in
+.decl Source(id: number)
+.input Source.csv
+
+.decl Arc(x: number, y: number)
+.input Arc.csv
+
+.out 
+.decl Reach(id: number)
+
+.rule
+Reach(y) :- Source(y).
+Reach(y) :- Reach(x), Arc(x,y).

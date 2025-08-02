@@ -1,0 +1,11 @@
+.in 
+.decl Arc(x: number, y: number)
+.input Arc.csv
+
+.out 
+.decl Tc(x: number, y: number)
+
+.rule
+Tc(x, y) :- Arc(x, y).
+Tc(x, y) :- Arc(z, y), Tc(x, z).
+

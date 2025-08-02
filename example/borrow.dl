@@ -1,0 +1,205 @@
+# cfg_edge.facts                   known_placeholder_subset.facts  loan_killed_at.facts         path_is_var.facts         subset_base.facts               var_defined_at.facts
+# child_path.facts                 loan_invalidated_at.facts       path_accessed_at_base.facts  path_moved_at_base.facts  universal_region.facts          var_dropped_at.facts
+# drop_of_var_derefs_origin.facts  loan_issued_at.facts            path_assigned_at_base.facts  placeholder.facts         use_of_var_derefs_origin.facts  var_used_at.facts
+
+# .input subset_base
+# .input cfg_edge
+# .input loan_issued_at
+# .input universal_region
+# .input var_used_at
+# .input loan_killed_at
+# .input known_placeholder_subset
+# .input var_dropped_at
+# .input drop_of_var_derefs_origin
+# .input var_defined_at
+# .input child_path
+# .input path_moved_at_base
+# .input path_assigned_at_base
+# .input path_accessed_at_base
+# .input path_is_var
+# .input loan_invalidated_at
+# .input use_of_var_derefs_origin
+# // .input placeholder
+
+.in
+.decl subset_base(x:number, y:number, z:number)
+.decl cfg_edge(x:number, y:number)
+.decl loan_issued_at(x:number, y:number, z:number)
+.decl universal_region(x:number)
+.decl var_used_at(x:number, y:number)
+.decl loan_killed_at(x:number, y:number)
+.decl known_placeholder_subset(x:number, y:number)
+.decl var_dropped_at(x:number, y:number)
+.decl drop_of_var_derefs_origin(x:number, y:number)
+.decl var_defined_at(x:number, y:number)
+.decl child_path(x:number, y:number)
+.decl path_moved_at_base(x:number, y:number)
+.decl path_assigned_at_base(x:number, y:number)
+.decl path_accessed_at_base(x:number, y:number)
+.decl path_is_var(x:number, y:number)
+.decl loan_invalidated_at(x:number, y:number)
+.decl use_of_var_derefs_origin(x:number, y:number)
+
+
+.out
+.decl subset(x:number, y:number, z:number)
+.decl origin_live_on_entry(x:number, y:number)
+.decl origin_contains_loan_on_entry(x:number, y:number, z:number)
+.decl loan_live_at(x:number, y:number)
+.decl errors(x:number, y:number)
+.decl placeholder_origin(x:number)
+.decl subset_error(x:number, y:number, z:number)
+.decl var_maybe_partly_initialized_on_exit(x:number, y:number)
+.decl var_maybe_partly_initialized_on_entry(x:number, y:number)
+.decl var_live_on_entry(x:number, y:number)
+.decl ancestor_path(x:number, y:number)
+.decl path_moved_at(x:number, y:number)
+.decl path_assigned_at(x:number, y:number)
+.decl path_accessed_at(x:number, y:number)
+.decl path_begins_with_var(x:number, y:number)
+.decl path_maybe_initialized_on_exit(x:number, y:number)
+.decl path_maybe_uninitialized_on_exit(x:number, y:number)
+.decl move_error(x:number, y:number)
+.decl cfg_node(x:number)
+.decl var_drop_live_on_entry(x:number, y:number)
+
+
+# .out subset
+# .out origin_live_on_entry
+# .out origin_contains_loan_on_entry
+# .out loan_live_at
+# .out errors
+# .out placeholder_origin
+# .out subset_error
+# .out var_maybe_partly_initialized_on_exit
+# .out var_maybe_partly_initialized_on_entry
+# .out var_live_on_entry
+# .out ancestor_path
+# .out path_moved_at
+# .out path_assigned_at
+# .out path_accessed_at
+# .out path_begins_with_var
+# .out path_maybe_initialized_on_exit
+# .out path_maybe_uninitialized_on_exit
+# .out move_error
+# .out cfg_node
+# .out var_drop_live_on_entry
+
+
+.rule
+# basic
+subset(origin1, origin2, point) :-
+    subset_base(origin1, origin2, point).
+origin_contains_loan_on_entry(origin, loan, point) :-
+    loan_issued_at(loan, origin, point).
+placeholder_origin(origin) :-
+    universal_region(origin).
+known_placeholder_subset(x, z) :-
+    known_placeholder_subset(x, y),
+    known_placeholder_subset(y, z).
+subset(origin1, origin3, point) :-
+    subset(origin1, origin2, point),
+    subset_base(origin2, origin3, point),
+    origin1 != origin3.
+subset(origin1, origin2, point2) :-
+    subset(origin1, origin2, point1),
+    cfg_edge(point1, point2),
+    origin_live_on_entry(origin1, point2),
+    origin_live_on_entry(origin2, point2).
+origin_contains_loan_on_entry(origin2, loan, point) :-
+    origin_contains_loan_on_entry(origin1, loan, point),
+    subset(origin1, origin2, point).
+origin_contains_loan_on_entry(origin, loan, point2) :-
+    origin_contains_loan_on_entry(origin, loan, point1),
+    cfg_edge(point1, point2),
+    !loan_killed_at(loan, point1),
+    origin_live_on_entry(origin, point2).
+loan_live_at(loan, point) :-
+    origin_contains_loan_on_entry(origin, loan, point),
+    origin_live_on_entry(origin, point).
+errors(loan, point) :-
+    loan_invalidated_at(loan, point),
+    loan_live_at(loan, point).
+subset_error(origin1, origin2, point) :-
+    subset(origin1, origin2, point),
+    placeholder_origin(origin1),
+    placeholder_origin(origin2),
+    !known_placeholder_subset(origin1, origin2),
+    origin1 != origin2.
+# ========================================================
+# make_universal_regions_live (liveness.rs)
+origin_live_on_entry(origin, point) :-
+    cfg_node(point),
+    universal_region(origin).
+# ========================================================
+# populating cfg_node (output/mod.rs)
+cfg_node(point1) :-
+    cfg_edge(point1, _).
+cfg_node(point2) :-
+    cfg_edge(_, point2).
+# ========================================================
+# liveness logic (liveness.rs)
+var_live_on_entry(var, point) :- var_used_at(var, point).
+var_maybe_partly_initialized_on_entry(var, point2) :-
+    var_maybe_partly_initialized_on_exit(var, point1),
+    cfg_edge(point1, point2).
+var_drop_live_on_entry(var, point) :-
+    var_dropped_at(var, point),
+    var_maybe_partly_initialized_on_entry(var, point).
+origin_live_on_entry(origin, point) :-
+    var_drop_live_on_entry(var, point),
+    drop_of_var_derefs_origin(var, origin).
+origin_live_on_entry(origin, point) :-
+    var_live_on_entry(var, point),
+    use_of_var_derefs_origin(var, origin).
+var_live_on_entry(var, point1) :-
+    var_live_on_entry(var, point2),
+    cfg_edge(point1, point2),
+    !var_defined_at(var, point1).
+var_drop_live_on_entry(Var, SourceNode) :-
+    var_drop_live_on_entry(Var, TargetNode),
+    cfg_edge(SourceNode, TargetNode),
+    !var_defined_at(Var, SourceNode),
+    var_maybe_partly_initialized_on_exit(Var, SourceNode).
+# ========================================================
+# initialization logic (initialization.rs)
+# Step 1: compute transitive closures of path operations
+ancestor_path(x, y) :- child_path(x, y).
+path_moved_at(x, y) :- path_moved_at_base(x, y).
+path_assigned_at(x, y) :- path_assigned_at_base(x, y).
+path_accessed_at(x, y) :- path_accessed_at_base(x, y).
+path_begins_with_var(x, var) :- path_is_var(x, var).
+ancestor_path(Grandparent, Child) :-
+    ancestor_path(Parent, Child),
+    child_path(Parent, Grandparent).
+path_moved_at(Child, Point) :-
+    path_moved_at(Parent, Point),
+    ancestor_path(Parent, Child).
+path_assigned_at(Child, point) :-
+    path_assigned_at(Parent, point),
+    ancestor_path(Parent, Child).
+path_accessed_at(Child, point) :-
+    path_accessed_at(Parent, point),
+    ancestor_path(Parent, Child).
+path_begins_with_var(Child, Var) :-
+    path_begins_with_var(Parent, Var),
+    ancestor_path(Parent, Child).
+# Step 2: Compute path initialization and deinitialization across the CFG.
+path_maybe_initialized_on_exit(path, point) :-
+    path_assigned_at(path, point).
+path_maybe_uninitialized_on_exit(path, point) :-
+    path_moved_at(path, point).
+path_maybe_initialized_on_exit(path, point2) :-
+    path_maybe_initialized_on_exit(path, point1),
+    cfg_edge(point1, point2),
+    !path_moved_at(path, point2).
+path_maybe_uninitialized_on_exit(path, point2) :-
+    path_maybe_uninitialized_on_exit(path, point1),
+    cfg_edge(point1, point2),
+    !path_assigned_at(path, point2).
+var_maybe_partly_initialized_on_exit(var, point) :-
+    path_maybe_initialized_on_exit(path, point),
+    path_begins_with_var(path, var).
+move_error(Path, TargetNode) :-
+    path_maybe_uninitialized_on_exit(Path, SourceNode),
+    cfg_edge(SourceNode, TargetNode).

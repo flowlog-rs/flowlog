@@ -1,0 +1,12 @@
+[package]
+name = "parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# Parser-specific dependencies
+pest = "2.8"
+pest_derive = "2.8"

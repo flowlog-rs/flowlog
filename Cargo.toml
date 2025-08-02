@@ -1,0 +1,16 @@
+[workspace]
+members = [
+    "parser"
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Nemo Yu"]
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

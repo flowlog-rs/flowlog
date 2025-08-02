@@ -1,0 +1,273 @@
+// =============================================================================
+// FLOWLOG GRAMMAR DEFINITION
+// =============================================================================
+// This grammar defines the syntax for FlowLog, a Datalog language
+// for declarative data processing and rule-based queries.
+
+// Main grammar entry point
+main_grammar = { 
+    SOI ~ 
+    (
+        // Each program section must have either input declarations (.in),
+        // output declarations (.out), or both, followed by optional rules
+        (edb_decl ~ idb_decl | edb_decl | idb_decl) ~
+        rule_decl? 
+    )+
+    ~ EOI
+} 
+
+// =============================================================================
+// BASIC ELEMENTS (IDENTIFIERS, LITERALS, TYPES)
+// =============================================================================
+
+// Identifier pattern - must start with letter or underscore, 
+// can contain letters, numbers, underscores
+// Valid examples: x, _temp, myVar123, _private_var
+// Invalid examples: 1x, x-yz (hyphen not allowed)
+identifier = @{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// Variable reference - variables used in rules and queries
+variable = { identifier }
+
+// Attribute name - names of relation attributes (columns)
+attribute_name = { identifier }
+
+// Relation name - names of relations (tables)
+relation_name = { identifier }
+
+// Data type specification
+data_type = { int_type | string_type }
+
+// Numeric data type for integers
+int_type = { "number" }
+
+// Text data type for strings
+string_type = { "string" }
+
+// Constant values
+constant = { integer | string } 
+
+// Integer with optional sign
+// Examples: 42, -17, +100
+integer = @{ ("+" | "-")? ~ ASCII_DIGIT+ }
+
+// String enclosed in double quotes
+// Example: "hello world"
+string = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+// Placeholder for unused variables (underscore)
+// Used when you don't need to reference a variable
+placeholder = { "_" } 
+
+// Boolean values used in expressions
+BOOLEAN = { "True" | "False" } 
+
+// =============================================================================
+// RELATION DECLARATIONS
+// =============================================================================
+// Relations are the core data structures in FlowLog. They can be:
+// - EDB (Extensional Database): Input relations with external data
+// - IDB (Intentional Database): Output relations computed by rules
+
+// .in keyword starts a section of input relation declarations
+edb_decl = { ".in" ~ edb_relation_decl+ }
+
+// .out keyword starts a section of output relation declarations  
+idb_decl = { ".out" ~ idb_relation_decl+ }
+
+// Input relation declaration
+// Example: .decl edge(src: number, dst: number) .input "graph.facts"
+edb_relation_decl = { 
+    ".decl" ~ relation_name ~ "(" ~ attributes_decl ~ ")" ~ in_decl? 
+}
+
+// Output relation declaration
+// Example: .decl reachable(src: number, dst: number) .output "result.csv"
+idb_relation_decl = { 
+    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ out_decl? 
+}
+
+// Comma-separated list of attribute declarations
+// Example: src: number, dst: number, weight: string
+attributes_decl = { attribute_decl ~ ("," ~ attribute_decl)* }
+
+// Single attribute with name and data type
+// Example: "src: number" 
+attribute_decl = { attribute_name ~ ":" ~ data_type }
+
+// =============================================================================
+// INPUT/OUTPUT DIRECTIVES
+// =============================================================================
+// These directives specify where to read input data from or write output to
+
+// Specifies the input file path for a relation
+// Example: .input "edges.facts"
+in_decl = { ".input" ~ file_path }
+
+// Specifies the output file path for a relation
+// Example: .output "results.csv"
+out_decl = { ".output" ~ file_path}
+
+// Path to IO file with supported extensions
+// Examples: "_Method-Modifier.facts", "data.csv", "output.txt"
+file_path = @{ file_name ~ ("." ~ ( "facts" | "csv" | "txt" )) }
+
+// File name pattern (can start with underscore, contain letters, numbers, hyphens)
+file_name = @{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
+
+// =============================================================================
+// ARITHMETIC EXPRESSIONS
+// =============================================================================
+// Mathematical expressions with basic operators
+
+// Simple arithmetic without precedence
+// Note: "x + y * z" is parsed left-to-right as "(x + y) * z"
+arithmics = { factor ~ (arithmic_op ~ factor)* }
+
+// Basic elements in arithmetic expressions
+factor = { variable | constant }
+
+// Arithmetic operators
+arithmic_op = { 
+    plus |    // +
+    minus |   // -
+    times |   // *
+    divide |  // /
+    modulo    // %
+}
+
+// Individual arithmetic operators
+plus = { "+" }
+minus = { "-" }
+times = { "*" }
+divide = { "/" }
+modulo = { "%" }
+
+// =============================================================================
+// COMPARISON EXPRESSIONS  
+// =============================================================================
+// Binary comparisons between arithmetic expressions
+
+// Binary comparison between arithmetic expressions
+// Examples: x + y > z + w, count(x) = 5
+compare_expr = { arithmics ~ compare_op ~ arithmics }
+
+// Comparison operators
+compare_op = { 
+    equals |              // =
+    not_equals |          // !=
+    greater_equal_than |  // >=
+    greater_than |        // >
+    less_equal_than |     // <=
+    less_than             // <
+}
+
+// Individual comparison operators
+equals = { "=" } 
+not_equals = { "!=" }
+greater_equal_than = { ">=" }
+greater_than = { ">" }
+less_equal_than = { "<=" }
+less_than = { "<" }
+
+// =============================================================================
+// AGGREGATE EXPRESSIONS
+// =============================================================================
+// Aggregation functions for computing statistics over groups
+
+// Aggregation operation on a value
+// Examples: count(x), avg(x + y), sum(weight)
+aggregate = { 
+    aggregate_op ~ 
+    "(" ~ 
+    arithmics ~
+    ")" 
+} 
+
+// Supported aggregate operators
+aggregate_op = { 
+    "count" |    // Count of elements
+    "average" |  // Average value
+    "sum" |      // Sum of values
+    "min" |      // Minimum value
+    "max"        // Maximum value
+} 
+
+// =============================================================================
+// ATOMS (RELATION REFERENCES)
+// =============================================================================
+// Atoms represent relation instances with specific arguments
+
+// Relation with arguments
+// Example: edge(x, y), person("Alice", 25)
+atom = { 
+    relation_name ~ 
+    "(" ~ 
+    (atom_arg ~ ("," ~ atom_arg)*)? ~ 
+    ")" 
+}
+
+// Negated atom for negative conditions
+// Example: !edge(x, y)
+neg_atom = { "!" ~ atom }
+
+// Arguments in atoms can be variables, constants, or placeholders
+atom_arg = { variable | constant | placeholder } 
+
+// =============================================================================
+// RULES SECTION
+// =============================================================================
+// Rules define how output relations are computed from input relations
+// Format: head :- body.
+// Example: reachable(x, z) :- edge(x, y), reachable(y, z).
+
+// Optional ".rule" keyword followed by one or more rules
+rule_decl = { (".rule")? ~ rule+ }
+
+// Single rule with head, body predicates, and optional optimization directive
+// Format: head :- predicate1, predicate2, ... .
+rule = { head ~ ":-" ~ predicates ~ "." ~ optimize? }
+
+// Left side of rule (before :-)
+// Example: reachable(x, z), stats(count(x))
+head = {
+    relation_name ~ 
+    "(" ~ 
+    head_args? ~
+    ")" 
+}
+
+// Arguments in rule heads (can include aggregates and arithmetic)
+head_args = {
+    head_arg ~
+    ("," ~ head_arg)*
+}
+
+// Can be aggregate functions or arithmetic expressions
+head_arg = { aggregate | arithmics }
+
+// Comma-separated list of predicates in the rule body
+predicates = { predicate ~ ("," ~ predicate)* }
+
+// Types of predicates allowed in rule bodies
+predicate = { 
+    atom |          // Positive atom: edge(x, y)
+    neg_atom |      // Negated atom: !edge(x, y)  
+    compare_expr |  // Comparison: x > y
+    BOOLEAN         // Boolean literal: True/False
+}
+
+// Optimization hint directives for query planning
+optimize = { ".plan" }
+
+// =============================================================================
+// WHITESPACE AND COMMENTS
+// =============================================================================
+// Rules for handling whitespace and comments (ignored during parsing)
+
+// Whitespace and comments are ignored during parsing
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+
+// Comment starts with # or // and continues until end of line
+// Examples: # This is a comment, // Another comment
+COMMENT = _{ ("#" | "//") ~ (!NEWLINE ~ ANY)* }

@@ -1,0 +1,116 @@
+
+.in
+.decl Insert_input(a: number, b: number, c: number, d: number)
+.input Insert_input.csv
+.decl Remove_input(a: number, b: number)
+.input Remove_input.csv
+
+.out
+
+# definition of insertion into an ordered list (defines nextElem):
+.decl insert(a: number, b: number, c: number, d: number)
+.decl remove(IDCtr: number, IDN: number)
+.decl hasChild(ParentCtr: number, ParentN: number)
+.decl assign(IDCtr: number, IDN: number, ElemCtr: number, ElemN: number, Value: number)
+
+.decl laterChild(ParentCtr: number, ParentN: number, ChildCtr: number, ChildN: number)
+.decl firstChild(ParentCtr: number, ParentN: number, ChildCtr: number, ChildN: number)
+.decl sibling(ChildCtr1: number, ChildN1: number, ChildCtr2: number, ChildN2: number)
+.decl laterSibling(SibCtr1: number, SibN1: number, SibCtr2: number, SibN2: number)
+.decl laterSibling2(SibCtr1: number, SibN1: number, SibCtr3: number, SibN3: number)
+.decl nextSibling(SibCtr1: number, SibN1: number, SibCtr2: number, SibN2: number)
+.decl hasNextSibling(SibCtr1: number, SibN1: number)
+.decl nextSiblingAnc(StartCtr: number, StartN: number, NextCtr: number, NextN: number)
+.decl nextElem(PrevCtr: number, PrevN: number, NextCtr: number, NextN: number)
+
+
+.decl currentValue(ElemCtr: number, ElemN: number, Value: number)
+.decl hasValue(ElemCtr: number, ElemN: number)
+.decl valueStep(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.decl blankStep(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+
+.decl value_blank_star(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.decl nextVisible(PrevCtr: number, PrevN: number, NextCtr: number, NextN: number)
+
+.decl result(ctr1: number, ctr2: number, value: number)
+
+
+
+
+.rule
+insert(a, b, c, d) :- Insert_input(a, b, c, d).
+remove(a, b) :- Remove_input(a, b).
+assign(ctr, n, ctr, n, n) :- insert(ctr, n, _, _).
+hasChild(ParentCtr, ParentN) :- insert(_, _, ParentCtr, ParentN).
+
+laterChild(ParentCtr, ParentN, Ctr2, N2) :-
+  insert(Ctr1, N1, ParentCtr, ParentN),
+  insert(Ctr2, N2, ParentCtr, ParentN),
+  Ctr1 * 10 + N1 > Ctr2 * 10 + N2.
+#  (Ctr1 > Ctr2; (Ctr1 = Ctr2, N1 > N2)). 
+
+
+firstChild(ParentCtr, ParentN, ChildCtr, ChildN) :-
+  insert(ChildCtr, ChildN, ParentCtr, ParentN), 
+  !laterChild(ParentCtr, ParentN, ChildCtr, ChildN).
+
+
+sibling(ChildCtr1, ChildN1, ChildCtr2, ChildN2) :-
+  insert(ChildCtr1, ChildN1, ParentCtr, ParentN), 
+  insert(ChildCtr2, ChildN2, ParentCtr, ParentN).
+
+
+laterSibling(Ctr1, N1, Ctr2, N2) :-
+  sibling(Ctr1, N1, Ctr2, N2),
+  Ctr1 * 10 + N1 > Ctr2 * 10 + N2.
+#  (Ctr1 > Ctr2; (Ctr1 = Ctr2, N1 > N2)).
+
+
+laterSibling2(Ctr1, N1, Ctr3, N3) :-
+  sibling(Ctr1, N1, Ctr2, N2),
+  sibling(Ctr1, N1, Ctr3, N3),
+  Ctr1 * 10 + N1 > Ctr2 * 10 + N2, 
+  Ctr2 * 10 + N2 > Ctr3 * 10 + N3.
+#  (Ctr1 > Ctr2; (Ctr1 = Ctr2, N1 > N2)),
+#  (Ctr2 > Ctr3; (Ctr2 = Ctr3, N2 > N3)).
+
+
+nextSibling(Ctr1, N1, Ctr2, N2) :-
+  laterSibling(Ctr1, N1, Ctr2, N2),
+  !laterSibling2(Ctr1, N1, Ctr2, N2).
+
+
+hasNextSibling(SibCtr1, SibN1) :- laterSibling(SibCtr1, SibN1, _, _).
+
+
+nextSiblingAnc(StartCtr, StartN, NextCtr, NextN) :- nextSibling(StartCtr, StartN, NextCtr, NextN).
+nextSiblingAnc(StartCtr, StartN, NextCtr, NextN) :- 
+    !hasNextSibling(StartCtr, StartN), 
+    insert(StartCtr, StartN, ParentCtr, ParentN), 
+    nextSiblingAnc(ParentCtr, ParentN, NextCtr, NextN).
+
+
+nextElem(PrevCtr, PrevN, NextCtr, NextN) :- firstChild(PrevCtr, PrevN, NextCtr, NextN).
+nextElem(PrevCtr, PrevN, NextCtr, NextN) :- !hasChild(PrevCtr, PrevN), nextSiblingAnc(PrevCtr, PrevN, NextCtr, NextN).
+
+
+
+# Assigning values to list elements.
+currentValue(ElemCtr, ElemN, Value) :- assign(IDCtr, IDN, ElemCtr, ElemN, Value), !remove(IDCtr, IDN).
+
+hasValue(ElemCtr, ElemN) :- currentValue(ElemCtr, ElemN, _).
+valueStep(FromCtr, FromN, ToCtr, ToN) :- hasValue(FromCtr, FromN), nextElem(FromCtr, FromN, ToCtr, ToN). 
+blankStep(FromCtr, FromN, ToCtr, ToN) :- 
+  !valueStep(FromCtr, FromN, ToCtr, ToN), 
+  nextElem(FromCtr, FromN, ToCtr, ToN).
+
+value_blank_star(FromCtr, FromN, ToCtr, ToN) :- valueStep(FromCtr, FromN, ToCtr, ToN).
+value_blank_star(FromCtr, FromN, ToCtr, ToN) :- value_blank_star(FromCtr, FromN, ViaCtr, ViaN), blankStep(ViaCtr, ViaN, ToCtr, ToN).
+
+nextVisible(PrevCtr, PrevN, NextCtr, NextN) :- 
+  value_blank_star(PrevCtr, PrevN, NextCtr, NextN), 
+  hasValue(NextCtr, NextN).
+
+result(ctr1, ctr2, value) :- 
+    nextVisible(ctr1, _, ctr2, N2), 
+    currentValue(ctr2, N2, value).

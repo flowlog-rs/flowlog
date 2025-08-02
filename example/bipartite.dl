@@ -1,0 +1,22 @@
+.in
+.decl Arc(y:number, x:number)
+.input Arc.csv
+
+.decl Source(x:number)
+.input Source.csv
+
+.out
+.decl BipartiteViolation(x:number)
+.decl Zero(x:number)
+.decl One(x:number)
+
+.rule
+Zero(x) :- Source(x).
+
+One(y) :- Arc(x, y), Zero(x).
+One(x) :- Arc(x, y), Zero(y).
+
+Zero(y) :- Arc(x, y), One(x).
+Zero(x) :- Arc(x, y), One(y).
+
+BipartiteViolation(x) :- One(x), Zero(x).

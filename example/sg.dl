@@ -1,0 +1,16 @@
+.in 
+.decl Arc(src: number, dest: number) 
+.input Arc.csv
+
+.out 
+.decl Sg(src: number, dest: number) 
+
+.rule
+
+# Sg(x, y) :- dereference(p, x, z), dereference(p, y, z), !ne(z, z, p), z != p.
+# Sgn(z, z) :- Sg(x, z), Sg(z, z), z == 3, z != x.
+
+Sg(x, y) :- Arc(a, x), Arc(a, y), x != y.
+Sg(x, y) :- Arc(a, x), Sg(a, b), Arc(b, y).
+
+

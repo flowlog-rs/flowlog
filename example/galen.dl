@@ -1,0 +1,34 @@
+.in
+.decl P(X: number, Z: number)
+.input P.csv
+
+.decl Q(X: number, Y: number, Z: number)
+.input Q.csv
+
+.decl R(R: number, P: number, E: number)
+.input R.csv
+
+.decl C(Y: number, Z: number, W: number)
+.input C.csv
+
+.decl U(R: number, Z: number, W: number)
+.input U.csv
+
+.decl S(R: number, P: number)
+.input S.csv
+
+.out 
+.decl OutP(X: number, Z: number)
+
+.out
+.decl OutQ(X: number, Y: number, Z: number)
+
+.rule
+OutP(x,y) :- P(x,y).
+OutQ(x,y,z) :- Q(x,y,z).
+OutP(x,z) :- OutP(x,y), OutP(y,z).
+OutQ(x,r,z) :- OutP(x,y), OutQ(y,r,z).
+OutP(x,z) :- OutP(y,w), U(w,r,z), OutQ(x,r,y).
+OutP(x,z) :- C(y,w,z),OutP(x,w), OutP(x,y).
+OutQ(x,q,z) :- OutQ(x,r,z),S(r,q).
+OutQ(x,e,o) :- OutQ(x,y,z),R(y,u,e),OutQ(z,u,o).

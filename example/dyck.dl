@@ -1,0 +1,19 @@
+.in
+.decl Arc(x:number, y:number, l:number)
+.input Arc.csv
+
+.out
+.decl Zero(x:number, y:number)
+.decl One(x:number, y:number)
+.decl Dyck(x:number, y:number)
+
+
+.rule
+Zero(x, y) :- Arc(x, y, 0).
+One(x, y) :- Arc(x, y, 1).
+
+Dyck(x, y) :- Zero(x, z), Zero(z, y).
+Dyck(x, y) :- One(x, z), One(z, y).
+Dyck(x, y) :- Zero(x, z), Dyck(z, w), Zero(w, y).
+Dyck(x, y) :- One(x, z), Dyck(z, w), One(w, y).
+Dyck(x, y) :- Dyck(x, z), Dyck(z, y).

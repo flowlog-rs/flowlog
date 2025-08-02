@@ -1,0 +1,14 @@
+.in 
+.decl arc(src: number, dest: number, weight: number) 
+.input Arc.csv
+.decl id(src: number)
+.input id.csv
+
+.out 
+.decl sssp2(x: number, y: number)
+.decl sssp(x: number, y: number)
+
+.rule
+sssp2(x, min(0)) :- id(x).
+sssp2(y, min(d1 + d2)) :- sssp2(x, d1), arc(x, y, d2).
+sssp(x, min(d)) :- sssp2(x, d).
