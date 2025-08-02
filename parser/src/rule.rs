@@ -3,7 +3,6 @@
 //! This module defines the core components of FlowLog rules, including:
 //! - Rule heads with arguments (variables, arithmetic expressions, aggregates)
 //! - Rule bodies with predicates (atoms, negations, comparisons, booleans)
-//! - Complete rule structures connecting heads and bodies
 //!
 //! FlowLog rules follow the structure: `head :- body.`
 //! Where the head defines what is derived and the body specifies the conditions.
@@ -91,33 +90,31 @@ impl fmt::Display for HeadArg {
 
 impl Lexeme for HeadArg {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+        let inner = parsed_rule
+            .into_inner()
+            .next()
+            .expect("Expected inner rule for head_arg");
+
         // Process the rule based on its type
-        match parsed_rule.as_rule() {
-            Rule::head_arg => {
-                // head_arg is a wrapper that contains either arithmics or aggregate
-                let inner_rule = parsed_rule.into_inner().next().unwrap();
-                Self::from_parsed_rule(inner_rule)
-            }
-            Rule::arithmics => {
+        match inner.as_rule() {
+            Rule::arithmetic_expr => {
                 // Parse as arithmetic (which also handles variables)
-                let arithmetic = Arithmetic::from_parsed_rule(parsed_rule);
+                let arithmetic = Arithmetic::from_parsed_rule(inner);
 
                 // Check if it's a simple variable
-                if arithmetic.terms().len() == 1 && arithmetic.operators().is_empty() {
-                    if let Some(super::expression::Factor::Var(var_name)) =
-                        arithmetic.terms().first()
-                    {
-                        return Self::Var(var_name.clone());
-                    }
+                if arithmetic.is_var() {
+                    // Extract the variable name and create a Var variant
+                    let var_name = arithmetic.init().vars()[0].to_string();
+                    Self::Var(var_name)
+                } else {
+                    Self::Arith(arithmetic)
                 }
-
-                Self::Arith(arithmetic)
             }
-            Rule::aggregate => {
+            Rule::aggregate_expr => {
                 // TODO: Implement aggregate/groupby parsing
                 todo!("Aggregate parsing not implemented yet")
             }
-            _ => unreachable!("Unexpected rule in HeadArg: {:?}", parsed_rule.as_rule()),
+            _ => unreachable!("Unexpected rule in HeadArg: {:?}", inner.as_rule()),
         }
     }
 }
@@ -199,12 +196,9 @@ impl Lexeme for Head {
         let name = inner.next().unwrap().as_str().to_string();
 
         let mut head_arguments = Vec::new();
-        if let Some(head_args_rule) = inner.next() {
-            if head_args_rule.as_rule() == Rule::head_args {
-                for arg_rule in head_args_rule.into_inner() {
-                    head_arguments.push(HeadArg::from_parsed_rule(arg_rule));
-                }
-            }
+        // Process remaining rules as head arguments directly
+        for arg_rule in inner {
+            head_arguments.push(HeadArg::from_parsed_rule(arg_rule));
         }
 
         Self::new(name, head_arguments)
@@ -315,7 +309,7 @@ impl Lexeme for Predicate {
                 let compare_expr = ComparisonExpr::from_parsed_rule(parsed_rule);
                 Self::ComparePredicate(compare_expr)
             }
-            Rule::BOOLEAN => {
+            Rule::boolean => {
                 let value = parsed_rule.as_str();
                 match value {
                     "True" => Self::BoolPredicate(true),
@@ -346,7 +340,6 @@ impl Lexeme for Predicate {
 /// let body = vec![Predicate::BoolPredicate(true)];
 /// let rule = FLRule::new(head, body, false);
 ///
-/// assert_eq!(rule.arity(), 1);
 /// assert!(!rule.is_planning());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

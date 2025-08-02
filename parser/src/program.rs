@@ -9,15 +9,14 @@
 //! The program supports dead code elimination to remove unused components
 //! and automatic extraction of boolean facts from rules.
 
+use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::{fmt, fs};
-
-use pest::{iterators::Pair, Parser};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{
-    declaration::RelDecl,
+    declaration::RelationDecl,
     rule::{FLRule, Predicate},
     Const, FlowLogParser, Lexeme, Rule,
 };
@@ -36,26 +35,10 @@ use super::{
 /// - **IDBs**: Output relations computed by rules
 /// - **Rules**: Logic rules that transform input data into output data
 /// - **Boolean Facts**: Constants extracted from boolean predicates
-///
-/// # Examples
-///
-/// ```rust
-/// use parser::program::Program;
-/// use parser::declaration::{RelDecl, Attribute};
-/// use parser::rule::{FLRule, Head, HeadArg};
-/// use parser::primitive::DataType;
-///
-/// // Create relations
-/// let edbs = vec![RelDecl::new("input".to_string(), vec![], Some("data.csv".to_string()), None)];
-/// let idbs = vec![RelDecl::new("output".to_string(), vec![], None, Some("result.csv".to_string()))];
-/// let rules = vec![];
-///
-/// let program = Program::new(edbs, idbs, rules);
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    edbs: Vec<RelDecl>,
-    idbs: Vec<RelDecl>,
+    edbs: Vec<RelationDecl>,
+    idbs: Vec<RelationDecl>,
     rules: Vec<FLRule>,
     bool_facts: HashMap<String, Vec<(Vec<Const>, bool)>>,
 }
@@ -131,7 +114,7 @@ impl Program {
     ///
     /// ```rust
     /// use parser::program::Program;
-    /// use parser::declaration::RelDecl;
+    /// use parser::declaration::RelationDecl;
     /// use parser::rule::FLRule;
     ///
     /// let edbs = vec![];
@@ -140,7 +123,7 @@ impl Program {
     /// let program = Program::new(edbs, idbs, rules);
     /// ```
     #[must_use]
-    pub fn new(edbs: Vec<RelDecl>, idbs: Vec<RelDecl>, rules: Vec<FLRule>) -> Self {
+    pub fn new(edbs: Vec<RelationDecl>, idbs: Vec<RelationDecl>, rules: Vec<FLRule>) -> Self {
         Self {
             edbs,
             idbs,
@@ -151,13 +134,13 @@ impl Program {
 
     /// Returns all input (EDB) relations.
     #[must_use]
-    pub fn edbs(&self) -> &[RelDecl] {
+    pub fn edbs(&self) -> &[RelationDecl] {
         &self.edbs
     }
 
     /// Returns all output (IDB) relations.
     #[must_use]
-    pub fn idbs(&self) -> &[RelDecl] {
+    pub fn idbs(&self) -> &[RelationDecl] {
         &self.idbs
     }
 
@@ -177,7 +160,7 @@ impl Program {
     ///
     /// These are IDB relations that have the `.output` directive.
     #[must_use]
-    pub fn output_relations(&self) -> Vec<&RelDecl> {
+    pub fn output_relations(&self) -> Vec<&RelationDecl> {
         self.idbs
             .iter()
             .filter(|rel| rel.output_path().is_some())
@@ -353,36 +336,31 @@ impl Program {
     pub fn prune_dead_components(&self) -> Self {
         let (needed_rules, needed_predicates) = self.identify_needed_components();
 
-        // Identify and report dead components
-        let mut has_dead_components = false;
-
         // Check for dead EDBs
-        let dead_edbs: Vec<&RelDecl> = self
+        let dead_edbs: Vec<&RelationDecl> = self
             .edbs
             .iter()
             .filter(|decl| !needed_predicates.contains(decl.name()))
             .collect();
 
         if !dead_edbs.is_empty() {
-            has_dead_components = true;
-            info!("Dead Input Relations (EDBs):");
+            warn!("Dead Input Relations (EDBs):");
             for edb in &dead_edbs {
                 info!("  - {}", edb.name());
             }
         }
 
         // Check for dead IDBs
-        let dead_idbs: Vec<&RelDecl> = self
+        let dead_idbs: Vec<&RelationDecl> = self
             .idbs
             .iter()
             .filter(|decl| !needed_predicates.contains(decl.name()))
             .collect();
 
         if !dead_idbs.is_empty() {
-            has_dead_components = true;
-            info!("Dead Output Relations (IDBs):");
+            warn!("Dead Output Relations (IDBs):");
             for idb in &dead_idbs {
-                info!("  - {}", idb.name());
+                warn!("  - {}", idb.name());
             }
         }
 
@@ -395,17 +373,10 @@ impl Program {
             .collect();
 
         if !dead_rules.is_empty() {
-            has_dead_components = true;
-            info!("Dead Rules:");
+            warn!("Dead Rules:");
             for (idx, rule) in &dead_rules {
-                info!("  - Rule #{}: {}", idx, rule);
+                warn!("  - Rule #{}: {}", idx, rule);
             }
-        }
-
-        if has_dead_components {
-            info!("Dead components removed.\n");
-        } else {
-            info!("No dead components detected in the program.\n");
         }
 
         // Filter the rules to keep only needed ones
@@ -418,14 +389,14 @@ impl Program {
             .collect();
 
         // Filter IDBs and EDBs to keep only needed ones
-        let pruned_idbs: Vec<RelDecl> = self
+        let pruned_idbs: Vec<RelationDecl> = self
             .idbs
             .iter()
             .filter(|decl| needed_predicates.contains(decl.name()))
             .cloned()
             .collect();
 
-        let pruned_edbs: Vec<RelDecl> = self
+        let pruned_edbs: Vec<RelationDecl> = self
             .edbs
             .iter()
             .filter(|decl| needed_predicates.contains(decl.name()))
@@ -453,19 +424,19 @@ impl Program {
 impl Lexeme for Program {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let inner_rules = parsed_rule.into_inner();
-        let mut edbs: Vec<RelDecl> = Vec::new();
-        let mut idbs: Vec<RelDecl> = Vec::new();
+        let mut edbs: Vec<RelationDecl> = Vec::new();
+        let mut idbs: Vec<RelationDecl> = Vec::new();
         let mut rules: Vec<FLRule> = Vec::new();
 
         // Parse relation declarations and collect them in the appropriate vector
-        fn parse_rel_decls(vec: &mut Vec<RelDecl>, rule: Pair<Rule>) {
+        fn parse_rel_decls(vec: &mut Vec<RelationDecl>, rule: Pair<Rule>) {
             let rel_decls = rule.into_inner();
             for rel_decl in rel_decls {
                 // Only process relation declarations
                 if rel_decl.as_rule() == Rule::edb_relation_decl
                     || rel_decl.as_rule() == Rule::idb_relation_decl
                 {
-                    vec.push(RelDecl::from_parsed_rule(rel_decl));
+                    vec.push(RelationDecl::from_parsed_rule(rel_decl));
                 }
             }
         }

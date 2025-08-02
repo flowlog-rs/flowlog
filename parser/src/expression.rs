@@ -134,15 +134,15 @@ impl fmt::Display for Factor {
 
 impl Lexeme for Factor {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
-        match parsed_rule.as_rule() {
-            Rule::factor => {
-                // factor is a wrapper that contains either variable or constant
-                let inner_rule = parsed_rule.into_inner().next().unwrap();
-                Self::from_parsed_rule(inner_rule)
-            }
-            Rule::variable => Self::Var(parsed_rule.as_str().to_string()),
-            Rule::constant => Self::Const(Const::from_parsed_rule(parsed_rule)),
-            _ => unreachable!("Invalid factor type: {:?}", parsed_rule.as_rule()),
+        let inner = parsed_rule
+            .into_inner()
+            .next()
+            .expect("Expected inner rule for factor");
+
+        match inner.as_rule() {
+            Rule::variable => Self::Var(inner.as_str().to_string()),
+            Rule::constant => Self::Const(Const::from_parsed_rule(inner)),
+            _ => unreachable!("Invalid factor type: {:?}", inner.as_rule()),
         }
     }
 }
@@ -189,26 +189,6 @@ impl Arithmetic {
     #[must_use]
     pub fn rest(&self) -> &Vec<(ArithmeticOperator, Factor)> {
         &self.rest
-    }
-
-    /// Returns all terms (factors) in this arithmetic expression.
-    ///
-    /// This method provides compatibility with the old API by collecting
-    /// all factors into a single vector.
-    #[must_use]
-    pub fn terms(&self) -> Vec<&Factor> {
-        let mut terms = vec![&self.init];
-        terms.extend(self.rest.iter().map(|(_, factor)| factor));
-        terms
-    }
-
-    /// Returns all operators in this arithmetic expression.
-    ///
-    /// This method provides compatibility with the old API by collecting
-    /// all operators into a single vector.
-    #[must_use]
-    pub fn operators(&self) -> Vec<&ArithmeticOperator> {
-        self.rest.iter().map(|(op, _)| op).collect()
     }
 
     /// Returns all variables used in this arithmetic expression.
@@ -280,16 +260,16 @@ impl Lexeme for Arithmetic {
 /// ```rust
 /// use parser::expression::ComparisonOperator;
 ///
-/// let op = ComparisonOperator::Equals;
-/// assert!(op.is_equals());
+/// let op = ComparisonOperator::Equal;
+/// assert!(op.is_equal());
 /// assert_eq!(op.to_string(), "==");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ComparisonOperator {
     /// Equality comparison (==)
-    Equals,
+    Equal,
     /// Inequality comparison (≠)
-    NotEquals,
+    NotEqual,
     /// Greater than comparison (>)
     GreaterThan,
     /// Greater than or equal comparison (≥)
@@ -303,16 +283,16 @@ pub enum ComparisonOperator {
 impl ComparisonOperator {
     /// Checks if this operator is the equality operator.
     #[must_use]
-    pub fn is_equals(&self) -> bool {
-        matches!(self, Self::Equals)
+    pub fn is_equal(&self) -> bool {
+        matches!(self, Self::Equal)
     }
 }
 
 impl fmt::Display for ComparisonOperator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let symbol = match self {
-            Self::Equals => "==",
-            Self::NotEquals => "≠",
+            Self::Equal => "==",
+            Self::NotEqual => "≠",
             Self::GreaterThan => ">",
             Self::GreaterEqualThan => "≥",
             Self::LessThan => "<",
@@ -326,8 +306,8 @@ impl Lexeme for ComparisonOperator {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let operator = parsed_rule.into_inner().next().unwrap();
         match operator.as_rule() {
-            Rule::equals => Self::Equals,
-            Rule::not_equals => Self::NotEquals,
+            Rule::equal => Self::Equal,
+            Rule::not_equal => Self::NotEqual,
             Rule::greater_than => Self::GreaterThan,
             Rule::greater_equal_than => Self::GreaterEqualThan,
             Rule::less_than => Self::LessThan,
@@ -351,7 +331,7 @@ impl Lexeme for ComparisonOperator {
 /// // Create comparison: x == 5
 /// let left = Arithmetic::new(Factor::Var("x".to_string()), vec![]);
 /// let right = Arithmetic::new(Factor::Const(Const::Integer(5)), vec![]);
-/// let comp = ComparisonExpr::new(left, ComparisonOperator::Equals, right);
+/// let comp = ComparisonExpr::new(left, ComparisonOperator::Equal, right);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ComparisonExpr {
@@ -389,18 +369,23 @@ impl ComparisonExpr {
         &self.right
     }
 
-    /// Returns all variables used in this comparison expression.
-    #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
-        let mut vars = self.left.vars();
-        vars.extend(self.right.vars());
-        vars
+    /// Returns a HashSet of all variables in this comparison expression
+    pub fn vars_set(&self) -> HashSet<&String> {
+        self.left
+            .vars_set()
+            .union(&self.right.vars_set())
+            .cloned()
+            .collect()
     }
 
-    /// Returns a HashSet of all variables in this comparison expression.
-    #[must_use]
-    pub fn vars_set(&self) -> HashSet<&String> {
-        self.vars().into_iter().collect()
+    /// Returns all variables from the left side of the comparison
+    pub fn left_vars(&self) -> Vec<&String> {
+        self.left.vars()
+    }
+
+    /// Returns all variables from the right side of the comparison
+    pub fn right_vars(&self) -> Vec<&String> {
+        self.right.vars()
     }
 }
 
@@ -499,16 +484,16 @@ impl fmt::Display for AtomArg {
 
 impl Lexeme for AtomArg {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
-        match parsed_rule.as_rule() {
-            Rule::atom_arg => {
-                // atom_arg is a wrapper that contains variable, constant, or placeholder
-                let inner_rule = parsed_rule.into_inner().next().unwrap();
-                Self::from_parsed_rule(inner_rule)
-            }
-            Rule::variable => Self::Var(parsed_rule.as_str().to_string()),
-            Rule::constant => Self::Const(Const::from_parsed_rule(parsed_rule)),
+        let inner = parsed_rule
+            .into_inner()
+            .next()
+            .expect("Expected inner rule for head_arg");
+
+        match inner.as_rule() {
+            Rule::variable => Self::Var(inner.as_str().to_string()),
+            Rule::constant => Self::Const(Const::from_parsed_rule(inner)),
             Rule::placeholder => Self::Placeholder,
-            _ => unreachable!("Invalid atom argument type: {:?}", parsed_rule.as_rule()),
+            _ => unreachable!("Invalid atom argument type: {:?}", inner.as_rule()),
         }
     }
 }

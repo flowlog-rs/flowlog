@@ -36,10 +36,10 @@ attribute_name = { identifier }
 relation_name = { identifier }
 
 // Data type specification
-data_type = { int_type | string_type }
+data_type = { integer_type | string_type }
 
 // Numeric data type for integers
-int_type = { "number" }
+integer_type = { "number" }
 
 // Text data type for strings
 string_type = { "string" }
@@ -60,7 +60,7 @@ string = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 placeholder = { "_" } 
 
 // Boolean values used in expressions
-BOOLEAN = { "True" | "False" } 
+boolean = { "True" | "False" } 
 
 // =============================================================================
 // RELATION DECLARATIONS
@@ -122,13 +122,13 @@ file_name = @{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
 
 // Simple arithmetic without precedence
 // Note: "x + y * z" is parsed left-to-right as "(x + y) * z"
-arithmics = { factor ~ (arithmic_op ~ factor)* }
+arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
 // Basic elements in arithmetic expressions
 factor = { variable | constant }
 
 // Arithmetic operators
-arithmic_op = { 
+arithmetic_op = { 
     plus |    // +
     minus |   // -
     times |   // *
@@ -150,12 +150,12 @@ modulo = { "%" }
 
 // Binary comparison between arithmetic expressions
 // Examples: x + y > z + w, count(x) = 5
-compare_expr = { arithmics ~ compare_op ~ arithmics }
+compare_expr = { arithmetic_expr ~ compare_op ~ arithmetic_expr }
 
 // Comparison operators
 compare_op = { 
-    equals |              // =
-    not_equals |          // !=
+    equal |               // =
+    not_equal |           // !=
     greater_equal_than |  // >=
     greater_than |        // >
     less_equal_than |     // <=
@@ -163,8 +163,8 @@ compare_op = {
 }
 
 // Individual comparison operators
-equals = { "=" } 
-not_equals = { "!=" }
+equal = { "=" } 
+not_equal = { "!=" }
 greater_equal_than = { ">=" }
 greater_than = { ">" }
 less_equal_than = { "<=" }
@@ -177,10 +177,10 @@ less_than = { "<" }
 
 // Aggregation operation on a value
 // Examples: count(x), avg(x + y), sum(weight)
-aggregate = { 
+aggregate_expr = { 
     aggregate_op ~ 
     "(" ~ 
-    arithmics ~
+    arithmetic_expr ~
     ")" 
 } 
 
@@ -233,18 +233,12 @@ rule = { head ~ ":-" ~ predicates ~ "." ~ optimize? }
 head = {
     relation_name ~ 
     "(" ~ 
-    head_args? ~
+    (head_arg ~ ("," ~ head_arg)*)? ~
     ")" 
 }
 
-// Arguments in rule heads (can include aggregates and arithmetic)
-head_args = {
-    head_arg ~
-    ("," ~ head_arg)*
-}
-
 // Can be aggregate functions or arithmetic expressions
-head_arg = { aggregate | arithmics }
+head_arg = { aggregate_expr | arithmetic_expr }
 
 // Comma-separated list of predicates in the rule body
 predicates = { predicate ~ ("," ~ predicate)* }
@@ -254,7 +248,7 @@ predicate = {
     atom |          // Positive atom: edge(x, y)
     neg_atom |      // Negated atom: !edge(x, y)  
     compare_expr |  // Comparison: x > y
-    BOOLEAN         // Boolean literal: True/False
+    boolean        // Boolean literal: True/False
 }
 
 // Optimization hint directives for query planning

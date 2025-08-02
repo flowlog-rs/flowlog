@@ -85,7 +85,7 @@ impl fmt::Display for Attribute {
 /// # Examples
 ///
 /// ```rust
-/// use parser::declaration::{Attribute, RelDecl};
+/// use parser::declaration::{Attribute, RelationDecl};
 /// use parser::primitive::DataType;
 ///
 /// // Create a simple relation: person(name: string, age: int)
@@ -93,18 +93,18 @@ impl fmt::Display for Attribute {
 ///     Attribute::new("name".to_string(), DataType::String),
 ///     Attribute::new("age".to_string(), DataType::Integer),
 /// ];
-/// let rel = RelDecl::new("person".to_string(), attributes, None, None);
+/// let rel = RelationDecl::from_str("person", attributes, None, None);
 /// assert_eq!(rel.arity(), 2);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelDecl {
+pub struct RelationDecl {
     name: String,
     attributes: Vec<Attribute>,
     input_path: Option<String>,
     output_path: Option<String>,
 }
 
-impl RelDecl {
+impl RelationDecl {
     /// Creates a new relation declaration from string representations.
     #[must_use]
     pub fn from_str(
@@ -119,27 +119,6 @@ impl RelDecl {
             input_path: input_path.map(str::to_string),
             output_path: output_path.map(str::to_string),
         }
-    }
-
-    /// Creates a new relation declaration.
-    #[must_use]
-    pub fn new(
-        name: String,
-        attributes: Vec<Attribute>,
-        input_path: Option<String>,
-        output_path: Option<String>,
-    ) -> Self {
-        Self {
-            name,
-            attributes,
-            input_path,
-            output_path,
-        }
-    }
-
-    /// Adds an attribute to this relation declaration.
-    pub fn push_attr(&mut self, attr: Attribute) {
-        self.attributes.push(attr);
     }
 
     /// Returns the name of this relation.
@@ -177,21 +156,9 @@ impl RelDecl {
     pub fn is_nullary(&self) -> bool {
         self.attributes.is_empty()
     }
-
-    /// Checks if this relation has an input path (is an EDB relation).
-    #[must_use]
-    pub fn is_edb(&self) -> bool {
-        self.input_path.is_some() && self.output_path.is_none()
-    }
-
-    /// Checks if this relation has an output path (is an IDB relation).
-    #[must_use]
-    pub fn is_idb(&self) -> bool {
-        self.output_path.is_some() && self.input_path.is_none()
-    }
 }
 
-impl fmt::Display for RelDecl {
+impl fmt::Display for RelationDecl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -216,7 +183,7 @@ impl fmt::Display for RelDecl {
     }
 }
 
-impl Lexeme for RelDecl {
+impl Lexeme for RelationDecl {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let rule_type = parsed_rule.as_rule();
         let mut inner_rules = parsed_rule.into_inner();
@@ -250,7 +217,7 @@ impl Lexeme for RelDecl {
                 Rule::out_decl => {
                     output_path = Some(rule.into_inner().next().unwrap().as_str());
                 }
-                _ => panic!(
+                _ => unreachable!(
                     "Unexpected rule in relation declaration: {:?}",
                     rule.as_rule()
                 ),

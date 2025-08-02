@@ -1,0 +1,45 @@
+name: Build and test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: ⚙️ Install dependencies and clippy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          rustup component add clippy
+      - name: ⚡ Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: 🔨 Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+      - name: 📎 Run clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: -- -D warnings
+      - name: 📚 Test docs
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --doc

@@ -76,57 +76,6 @@ pub enum Const {
     Text(String),
 }
 
-impl Const {
-    /// Extracts the integer value from this constant.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called on a non-integer constant.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use parser::Const;
-    /// let const_val = Const::Integer(42);
-    /// assert_eq!(const_val.integer(), 42);
-    /// ```
-    #[must_use]
-    pub fn integer(&self) -> i32 {
-        match self {
-            Self::Integer(value) => *value,
-            Self::Text(_) => panic!("Expected integer constant, found text: {self:?}"),
-        }
-    }
-
-    /// Returns `true` if this constant is an integer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use parser::Const;
-    /// assert!(Const::Integer(42).is_integer());
-    /// assert!(!Const::Text("hello".to_string()).is_integer());
-    /// ```
-    #[must_use]
-    pub fn is_integer(&self) -> bool {
-        matches!(self, Self::Integer(_))
-    }
-
-    /// Returns `true` if this constant is a text string.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use parser::Const;
-    /// assert!(Const::Text("hello".to_string()).is_text());
-    /// assert!(!Const::Integer(42).is_text());
-    /// ```
-    #[must_use]
-    pub fn is_text(&self) -> bool {
-        matches!(self, Self::Text(_))
-    }
-}
-
 impl fmt::Display for Const {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

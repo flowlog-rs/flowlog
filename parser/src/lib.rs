@@ -4,7 +4,7 @@ pub mod primitive;
 pub mod program;
 pub mod rule;
 
-pub use declaration::{Attribute, RelDecl};
+pub use declaration::{Attribute, RelationDecl};
 pub use expression::{
     Arithmetic, ArithmeticOperator, Atom, AtomArg, ComparisonExpr, ComparisonOperator, Factor,
 };
