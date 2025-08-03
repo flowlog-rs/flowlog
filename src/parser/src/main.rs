@@ -1,9 +1,8 @@
 use std::env;
 use std::process;
-use std::str::FromStr;
 
 use parser::program::Program;
-use tracing::{error, info};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -24,12 +23,6 @@ fn main() {
     let program_source = &args[1];
 
     // Parse the FlowLog program
-    match Program::from_str(program_source) {
-        Ok(program) => {
-            info!("Success parse program\n{program}");
-        }
-        Err(e) => {
-            error!("Failed to parse program from '{program_source}': {e}");
-        }
-    }
+    let program = Program::parse(program_source);
+    info!("Success parse program\n{program}");
 }

@@ -218,7 +218,7 @@ impl Lexeme for Head {
 /// use parser::expression::{Atom, AtomArg};
 ///
 /// // Positive atom: edge(X, Y)
-/// let atom = Atom::from_str("edge", vec![
+/// let atom = Atom::new("edge", vec![
 ///     AtomArg::Var("X".to_string()),
 ///     AtomArg::Var("Y".to_string())
 /// ]);

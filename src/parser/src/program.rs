@@ -11,7 +11,6 @@
 
 use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 use std::{fmt, fs};
 use tracing::{info, warn};
 
@@ -86,15 +85,19 @@ impl fmt::Display for Program {
     }
 }
 
-impl FromStr for Program {
-    type Err = Box<dyn std::error::Error>;
+impl Program {
+    /// Parse a FlowLog program from a file path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the file cannot be read or if parsing fails.
+    pub fn parse(path: &str) -> Self {
+        let unparsed_str = fs::read_to_string(path).expect("Failed to read file");
 
-    fn from_str(path: &str) -> Result<Self, Self::Err> {
-        let unparsed_str = fs::read_to_string(path)?;
-
-        let parsed_rule = FlowLogParser::parse(Rule::main_grammar, &unparsed_str)?
+        let parsed_rule = FlowLogParser::parse(Rule::main_grammar, &unparsed_str)
+            .expect("Failed to parse FlowLog program")
             .next()
-            .ok_or("No parsed rule found")?;
+            .expect("No parsed rule found");
 
         // Parse the program
         let mut program = Self::from_parsed_rule(parsed_rule);
@@ -103,33 +106,7 @@ impl FromStr for Program {
         program.extract_boolean_facts();
 
         // Detect dead rules, declaration and remove it
-        Ok(program.prune_dead_components())
-    }
-}
-
-impl Program {
-    /// Creates a new program with the given EDBs, IDBs and rules.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use parser::program::Program;
-    /// use parser::declaration::RelationDecl;
-    /// use parser::rule::FLRule;
-    ///
-    /// let edbs = vec![];
-    /// let idbs = vec![];
-    /// let rules = vec![];
-    /// let program = Program::new(edbs, idbs, rules);
-    /// ```
-    #[must_use]
-    pub fn new(edbs: Vec<RelationDecl>, idbs: Vec<RelationDecl>, rules: Vec<FLRule>) -> Self {
-        Self {
-            edbs,
-            idbs,
-            rules,
-            bool_facts: HashMap::new(),
-        }
+        program.prune_dead_components()
     }
 
     /// Returns all input (EDB) relations.

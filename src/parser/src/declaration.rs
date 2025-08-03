@@ -25,9 +25,6 @@ use super::{primitive::DataType, Lexeme, Rule};
 ///
 /// // Create an attribute for a person's name
 /// let name_attr = Attribute::new("name".to_string(), DataType::String);
-///
-/// // Create an attribute from string representations
-/// let age_attr = Attribute::from_str("age", "number");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Attribute {
@@ -36,19 +33,6 @@ pub struct Attribute {
 }
 
 impl Attribute {
-    /// Creates a new attribute from string representations of name and data type.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the data type string is invalid.
-    #[must_use]
-    pub fn from_str(name: &str, data_type: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            data_type: DataType::from_str(data_type).expect("Invalid data type"),
-        }
-    }
-
     /// Creates a new attribute from a name and data type.
     #[must_use]
     pub fn new(name: String, data_type: DataType) -> Self {
@@ -93,7 +77,7 @@ impl fmt::Display for Attribute {
 ///     Attribute::new("name".to_string(), DataType::String),
 ///     Attribute::new("age".to_string(), DataType::Integer),
 /// ];
-/// let rel = RelationDecl::from_str("person", attributes, None, None);
+/// let rel = RelationDecl::new("person", attributes, None, None);
 /// assert_eq!(rel.arity(), 2);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,7 +91,7 @@ pub struct RelationDecl {
 impl RelationDecl {
     /// Creates a new relation declaration from string representations.
     #[must_use]
-    pub fn from_str(
+    pub fn new(
         name: &str,
         attributes: Vec<Attribute>,
         input_path: Option<&str>,
@@ -207,7 +191,10 @@ impl Lexeme for RelationDecl {
                             let mut attr = attr.into_inner();
                             let name = attr.next().unwrap().as_str();
                             let data_type = attr.next().unwrap().as_str();
-                            Attribute::from_str(name, data_type)
+                            Attribute::new(
+                                name.to_string(),
+                                DataType::from_str(data_type).expect("Invalid data type"),
+                            )
                         })
                         .collect();
                 }
@@ -226,9 +213,9 @@ impl Lexeme for RelationDecl {
 
         // Create the appropriate relation based on rule type
         match rule_type {
-            Rule::edb_relation_decl => Self::from_str(name, attributes, input_path, None),
-            Rule::idb_relation_decl => Self::from_str(name, attributes, None, output_path),
-            _ => Self::from_str(name, attributes, input_path, output_path),
+            Rule::edb_relation_decl => Self::new(name, attributes, input_path, None),
+            Rule::idb_relation_decl => Self::new(name, attributes, None, output_path),
+            _ => Self::new(name, attributes, input_path, output_path),
         }
     }
 }

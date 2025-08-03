@@ -498,7 +498,7 @@ impl Lexeme for AtomArg {
     }
 }
 
-/// Represents an atom (predicate) in FlowLog rules.
+/// Represents an atom in FlowLog rules.
 ///
 /// Atoms are the fundamental building blocks of FlowLog rules, representing
 /// relations with named arguments. They correspond to predicates in logic programming.
@@ -514,7 +514,7 @@ impl Lexeme for AtomArg {
 ///     AtomArg::Const(Const::Text("john".to_string())),
 ///     AtomArg::Const(Const::Text("mary".to_string()))
 /// ];
-/// let atom = Atom::from_str("parent", args);
+/// let atom = Atom::new("parent", args);
 /// assert_eq!(atom.arity(), 2);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -541,7 +541,7 @@ impl fmt::Display for Atom {
 impl Atom {
     /// Creates a new atom from a name and a list of arguments.
     #[must_use]
-    pub fn from_str(name: &str, arguments: Vec<AtomArg>) -> Self {
+    pub fn new(name: &str, arguments: Vec<AtomArg>) -> Self {
         Self {
             name: name.to_string(),
             arguments,
