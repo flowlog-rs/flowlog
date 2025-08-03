@@ -38,6 +38,10 @@ jobs:
         with:
           command: clippy
           args: -- -D warnings
+      - name: 🧪 Run tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
       - name: 📚 Test docs
         uses: actions-rs/cargo@v1
         with:
