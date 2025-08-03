@@ -1,16 +1,15 @@
 pub mod declaration;
-pub mod expression;
+pub mod logic;
 pub mod primitive;
 pub mod program;
-pub mod rule;
 
-pub use declaration::{Attribute, RelationDecl};
-pub use expression::{
-    Arithmetic, ArithmeticOperator, Atom, AtomArg, ComparisonExpr, ComparisonOperator, Factor,
+pub use declaration::{Attribute, Relation};
+pub use logic::{
+    Arithmetic, ArithmeticOperator, Atom, AtomArg, ComparisonExpr, ComparisonOperator, FLRule,
+    Factor, Head, HeadArg, Predicate,
 };
-pub use primitive::{Const, DataType};
+pub use primitive::{ConstType, DataType};
 pub use program::Program;
-pub use rule::{FLRule, Head, HeadArg, Predicate};
 
 use pest::iterators::Pair;
 use pest_derive::Parser;

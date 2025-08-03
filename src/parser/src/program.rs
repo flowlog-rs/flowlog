@@ -15,9 +15,9 @@ use std::{fmt, fs};
 use tracing::{info, warn};
 
 use super::{
-    declaration::RelationDecl,
-    rule::{FLRule, Predicate},
-    Const, FlowLogParser, Lexeme, Rule,
+    declaration::Relation,
+    logic::{FLRule, Predicate},
+    ConstType, FlowLogParser, Lexeme, Rule,
 };
 
 /// Represents a complete FlowLog program.
@@ -36,10 +36,10 @@ use super::{
 /// - **Boolean Facts**: Constants extracted from boolean predicates
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    edbs: Vec<RelationDecl>,
-    idbs: Vec<RelationDecl>,
+    edbs: Vec<Relation>,
+    idbs: Vec<Relation>,
     rules: Vec<FLRule>,
-    bool_facts: HashMap<String, Vec<(Vec<Const>, bool)>>,
+    bool_facts: HashMap<String, Vec<(Vec<ConstType>, bool)>>,
 }
 
 impl fmt::Display for Program {
@@ -111,13 +111,13 @@ impl Program {
 
     /// Returns all input (EDB) relations.
     #[must_use]
-    pub fn edbs(&self) -> &[RelationDecl] {
+    pub fn edbs(&self) -> &[Relation] {
         &self.edbs
     }
 
     /// Returns all output (IDB) relations.
     #[must_use]
-    pub fn idbs(&self) -> &[RelationDecl] {
+    pub fn idbs(&self) -> &[Relation] {
         &self.idbs
     }
 
@@ -129,7 +129,7 @@ impl Program {
 
     /// Returns the boolean facts extracted from rules with True predicates.
     #[must_use]
-    pub fn bool_facts(&self) -> &HashMap<String, Vec<(Vec<Const>, bool)>> {
+    pub fn bool_facts(&self) -> &HashMap<String, Vec<(Vec<ConstType>, bool)>> {
         &self.bool_facts
     }
 
@@ -137,7 +137,7 @@ impl Program {
     ///
     /// These are IDB relations that have the `.output` directive.
     #[must_use]
-    pub fn output_relations(&self) -> Vec<&RelationDecl> {
+    pub fn output_relations(&self) -> Vec<&Relation> {
         self.idbs
             .iter()
             .filter(|rel| rel.output_path().is_some())
@@ -314,7 +314,7 @@ impl Program {
         let (needed_rules, needed_predicates) = self.identify_needed_components();
 
         // Check for dead EDBs
-        let dead_edbs: Vec<&RelationDecl> = self
+        let dead_edbs: Vec<&Relation> = self
             .edbs
             .iter()
             .filter(|decl| !needed_predicates.contains(decl.name()))
@@ -328,7 +328,7 @@ impl Program {
         }
 
         // Check for dead IDBs
-        let dead_idbs: Vec<&RelationDecl> = self
+        let dead_idbs: Vec<&Relation> = self
             .idbs
             .iter()
             .filter(|decl| !needed_predicates.contains(decl.name()))
@@ -366,14 +366,14 @@ impl Program {
             .collect();
 
         // Filter IDBs and EDBs to keep only needed ones
-        let pruned_idbs: Vec<RelationDecl> = self
+        let pruned_idbs: Vec<Relation> = self
             .idbs
             .iter()
             .filter(|decl| needed_predicates.contains(decl.name()))
             .cloned()
             .collect();
 
-        let pruned_edbs: Vec<RelationDecl> = self
+        let pruned_edbs: Vec<Relation> = self
             .edbs
             .iter()
             .filter(|decl| needed_predicates.contains(decl.name()))
@@ -383,7 +383,7 @@ impl Program {
         // Filter boolean facts to keep only needed ones
         let mut pruned_bool_facts = HashMap::new();
         for (rel_name, facts) in &self.bool_facts {
-            if needed_predicates.contains(rel_name) {
+            if needed_predicates.contains(rel_name.as_str()) {
                 pruned_bool_facts.insert(rel_name.clone(), facts.clone());
             }
         }
@@ -401,19 +401,19 @@ impl Program {
 impl Lexeme for Program {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let inner_rules = parsed_rule.into_inner();
-        let mut edbs: Vec<RelationDecl> = Vec::new();
-        let mut idbs: Vec<RelationDecl> = Vec::new();
+        let mut edbs: Vec<Relation> = Vec::new();
+        let mut idbs: Vec<Relation> = Vec::new();
         let mut rules: Vec<FLRule> = Vec::new();
 
         // Parse relation declarations and collect them in the appropriate vector
-        fn parse_rel_decls(vec: &mut Vec<RelationDecl>, rule: Pair<Rule>) {
+        fn parse_rel_decls(vec: &mut Vec<Relation>, rule: Pair<Rule>) {
             let rel_decls = rule.into_inner();
             for rel_decl in rel_decls {
                 // Only process relation declarations
                 if rel_decl.as_rule() == Rule::edb_relation_decl
                     || rel_decl.as_rule() == Rule::idb_relation_decl
                 {
-                    vec.push(RelationDecl::from_parsed_rule(rel_decl));
+                    vec.push(Relation::from_parsed_rule(rel_decl));
                 }
             }
         }
