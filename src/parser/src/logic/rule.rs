@@ -558,7 +558,7 @@ impl FLRule {
                 HeadArg::Var(_) => {
                     panic!("Boolean rule head must contain only constants: {self}")
                 }
-                HeadArg::GroupBy(_) => {
+                HeadArg::Aggregation(_) => {
                     panic!("Boolean rule head must contain only constants: {self}")
                 }
                 HeadArg::Arith(arith) => {
@@ -829,13 +829,16 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Boolean rule head must contain only constants")]
-    fn test_rule_extract_constants_from_head_with_group_by_panics() {
+    fn test_rule_extract_constants_from_head_with_aggregation_panics() {
+        use crate::logic::{Aggregation, AggregationOperator};
+
         let arith = Arithmetic::new(Factor::Var("X".to_string()), vec![]);
+        let agg = Aggregation::new(AggregationOperator::Sum, arith);
         let head = simple_head(
             "invalid",
             vec![
                 head_arg_const(ConstType::Integer(1)),
-                HeadArg::GroupBy(arith), // This should cause panic
+                HeadArg::Aggregation(agg), // This should cause panic
             ],
         );
         let body = vec![bool_predicate(true)];

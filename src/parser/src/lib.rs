@@ -12,8 +12,8 @@ pub mod program;
 // Re-export core types for convenient access
 pub use declaration::{Attribute, Relation};
 pub use logic::{
-    Arithmetic, ArithmeticOperator, Atom, AtomArg, ComparisonExpr, ComparisonOperator, FLRule,
-    Factor, Head, HeadArg, Predicate,
+    Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
+    ComparisonExpr, ComparisonOperator, FLRule, Factor, Head, HeadArg, Predicate,
 };
 pub use primitive::{ConstType, DataType};
 pub use program::Program;

@@ -23,6 +23,7 @@
 //! let rule = FLRule::new(head, body, false);
 //! ```
 
+pub mod aggregation;
 pub mod arithmetic;
 pub mod atom;
 pub mod comparison;
@@ -31,6 +32,7 @@ pub mod predicate;
 pub mod rule;
 
 // Re-export main types for easier access
+pub use aggregation::{Aggregation, AggregationOperator};
 pub use arithmetic::{Arithmetic, ArithmeticOperator, Factor};
 pub use atom::{Atom, AtomArg};
 pub use comparison::{ComparisonExpr, ComparisonOperator};

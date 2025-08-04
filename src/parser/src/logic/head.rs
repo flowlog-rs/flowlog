@@ -18,7 +18,7 @@
 //! Arguments can be:
 //! - **Variables**: Simple variable references that pass through values
 //! - **Arithmetic expressions**: Computed values using mathematical operations
-//! - **Aggregate functions**: Group-by operations (currently unimplemented)
+//! - **Aggregate functions**: Statistical operations for data summarization
 //!
 //! # Usage in Rules
 //!
@@ -56,7 +56,7 @@
 //! assert_eq!(nullary_head.to_string(), "flag()");
 //! ```
 
-use super::Arithmetic;
+use super::{Aggregation, Arithmetic};
 use crate::{Lexeme, Rule};
 
 use pest::iterators::Pair;
@@ -74,15 +74,15 @@ use std::fmt;
 ///   the rule body. These create a direct binding between body variables and head positions.
 /// - **`Arith(Arithmetic)`**: Arithmetic expression arguments that compute new values
 ///   using mathematical operations on variables and constants from the rule body.
-/// - **`GroupBy(Arithmetic)`**: Aggregate function arguments for group-by operations
-///   such as counting, summing, or finding maximum values (currently unimplemented).
+/// - **`Aggregation(Aggregation)`**: Aggregate function arguments for statistical operations
+///   such as counting, summing, or finding maximum values.
 ///
 /// # Data Flow Patterns
 ///
 /// Arguments enable different data transformation patterns:
 /// - **Pass-through**: Variables directly transfer values without modification
 /// - **Computation**: Arithmetic expressions transform input values using mathematical operations
-/// - **Aggregation**: Group-by functions summarize multiple input rows (future feature)
+/// - **Aggregation**: Statistical functions that summarize multiple input rows
 ///
 /// # Examples
 ///
@@ -137,15 +137,10 @@ pub enum HeadArg {
 
     /// An aggregate function (e.g., count(X), sum(X + Y))
     ///
-    /// Aggregate arguments perform group-by operations that summarize multiple
+    /// Aggregate arguments perform statistical operations that summarize multiple
     /// input rows into single values. Common aggregates include counting,
     /// summing, finding minimums/maximums, and averaging.
-    ///
-    /// # Note
-    ///
-    /// Currently unimplemented and will panic if used in variable analysis.
-    /// This is a placeholder for future aggregate functionality.
-    GroupBy(Arithmetic),
+    Aggregation(Aggregation),
 }
 
 impl HeadArg {
@@ -155,7 +150,7 @@ impl HeadArg {
     /// variables are required to compute this head argument. The analysis supports:
     /// - **Variables**: Returns the single variable name
     /// - **Arithmetic expressions**: Returns all variables used in the expression
-    /// - **Aggregates**: Currently unimplemented and will panic
+    /// - **Aggregates**: Returns all variables used in the aggregated expression
     ///
     /// The order of variables reflects their appearance order in the expression,
     /// and duplicates are preserved to maintain dependency information.
@@ -163,11 +158,6 @@ impl HeadArg {
     /// # Returns
     ///
     /// A vector of string references representing all variables needed for this argument.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called on a `GroupBy` variant, as aggregate functions are not yet implemented.
-    /// Use pattern matching to check the variant before calling this method if needed.
     ///
     /// # Examples
     ///
@@ -219,7 +209,7 @@ impl HeadArg {
         match self {
             Self::Var(var) => vec![var],
             Self::Arith(arith) => arith.vars(),
-            Self::GroupBy(_arith) => todo!("GroupBy unimplemented"),
+            Self::Aggregation(agg) => agg.vars(),
         }
     }
 }
@@ -230,7 +220,7 @@ impl fmt::Display for HeadArg {
     /// Each argument type is formatted according to its semantic meaning:
     /// - **Variables**: Displayed as their name without modification
     /// - **Arithmetic expressions**: Formatted using standard mathematical notation
-    /// - **Aggregates**: Displayed using their underlying expression (placeholder behavior)
+    /// - **Aggregates**: Displayed using standard function notation (e.g., "count(X)")
     ///
     /// The formatting is suitable for rule display, debugging, and generating
     /// human-readable representations of FlowLog programs.
@@ -268,7 +258,7 @@ impl fmt::Display for HeadArg {
         match self {
             Self::Var(var) => write!(f, "{var}"),
             Self::Arith(arith) => write!(f, "{arith}"),
-            Self::GroupBy(arith) => write!(f, "{arith}"),
+            Self::Aggregation(agg) => write!(f, "{agg}"),
         }
     }
 }
@@ -295,7 +285,7 @@ impl Lexeme for HeadArg {
     /// 1. **Arithmetic expressions**: Parsed first to handle all mathematical constructs
     /// 2. **Simple variables**: Detected when arithmetic expressions contain only a single variable
     /// 3. **Complex expressions**: Remain as `Arith` variants for computed values
-    /// 4. **Aggregates**: Reserved for future implementation (currently unimplemented)
+    /// 4. **Aggregates**: Parsed from aggregate expressions with operators and arithmetic
     ///
     /// # Optimization
     ///
@@ -305,7 +295,7 @@ impl Lexeme for HeadArg {
     /// # Grammar Mapping
     ///
     /// - `Rule::arithmetic_expr` → `HeadArg::Var` (if simple variable) or `HeadArg::Arith`
-    /// - `Rule::aggregate_expr` → `HeadArg::GroupBy` (future implementation)
+    /// - `Rule::aggregate_expr` → `HeadArg::Aggregation` - Creates aggregation with operator and expression
     ///
     /// # Examples
     ///
@@ -318,7 +308,6 @@ impl Lexeme for HeadArg {
     ///
     /// Panics if:
     /// - The parsed rule contains no inner rules
-    /// - An aggregate expression is encountered (not yet implemented)
     /// - The inner rule type is not recognized
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let inner = parsed_rule
@@ -341,10 +330,7 @@ impl Lexeme for HeadArg {
                     Self::Arith(arithmetic)
                 }
             }
-            Rule::aggregate_expr => {
-                // TODO: Implement aggregate/groupby parsing
-                todo!("Aggregate parsing not implemented yet")
-            }
+            Rule::aggregate_expr => Self::Aggregation(Aggregation::from_parsed_rule(inner)),
             _ => unreachable!("Unexpected rule in HeadArg: {:?}", inner.as_rule()),
         }
     }
@@ -377,7 +363,7 @@ impl Lexeme for HeadArg {
 /// Head arguments support various data processing patterns:
 /// - **Variables**: Direct data pass-through from rule body
 /// - **Arithmetic**: Computed values using mathematical expressions
-/// - **Aggregates**: Summarized values from grouped data (future feature)
+/// - **Aggregates**: Summarized values from grouped data using statistical functions
 ///
 /// # Examples
 ///
@@ -742,8 +728,8 @@ impl Lexeme for Head {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::{ArithmeticOperator, Factor};
     use crate::primitive::ConstType;
+    use crate::{ArithmeticOperator, Factor};
 
     // Helper functions for creating test arguments
     fn var_arg(name: &str) -> HeadArg {
@@ -805,18 +791,25 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "GroupBy unimplemented")]
-    fn test_head_arg_group_by_vars_panics() {
+    fn test_head_arg_aggregation_vars() {
+        use crate::logic::AggregationOperator;
+
         let arith = simple_var_arithmetic("X");
-        let arg = HeadArg::GroupBy(arith);
-        let _ = arg.vars(); // Should panic
+        let aggregation = Aggregation::new(AggregationOperator::Count, arith);
+        let arg = HeadArg::Aggregation(aggregation);
+        let vars = arg.vars();
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0], "X");
     }
 
     #[test]
-    fn test_head_arg_group_by_display() {
+    fn test_head_arg_aggregation_display() {
+        use crate::logic::AggregationOperator;
+
         let arith = simple_var_arithmetic("X");
-        let arg = HeadArg::GroupBy(arith);
-        assert_eq!(arg.to_string(), "X");
+        let aggregation = Aggregation::new(AggregationOperator::Count, arith);
+        let arg = HeadArg::Aggregation(aggregation);
+        assert_eq!(arg.to_string(), "count(X)");
     }
 
     #[test]

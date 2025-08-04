@@ -185,13 +185,12 @@ aggregate_expr = {
 } 
 
 // Supported aggregate operators
-aggregate_op = { 
-    "count" |    // Count of elements
-    "average" |  // Average value
-    "sum" |      // Sum of values
-    "min" |      // Minimum value
-    "max"        // Maximum value
-} 
+aggregate_op = { count | average | sum | min | max }
+count = { "count" | "COUNT" }       // Count of elements
+average = { "average" | "AVG" }     // Average value
+sum = { "sum" | "SUM" }             // Sum of values
+min = { "min" | "MIN" }             // Minimum value
+max = { "max" | "MAX" }             // Maximum value
 
 // =============================================================================
 // ATOMS (RELATION REFERENCES)
