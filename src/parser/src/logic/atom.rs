@@ -104,7 +104,6 @@ use std::fmt;
 /// assert!(placeholder.is_placeholder());
 /// assert_eq!(placeholder.to_string(), "_");
 /// ```
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AtomArg {
     /// A variable argument

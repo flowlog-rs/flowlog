@@ -969,8 +969,8 @@ impl Lexeme for Program {
     /// # Section Parsing Functions
     ///
     /// The method uses nested helper functions for section-specific parsing:
-    /// - [`parse_rel_decls()`]: Processes EDB and IDB relation declarations
-    /// - [`parse_rules()`]: Processes logic rules and boolean fact rules
+    /// - `parse_rel_decls()`: Processes EDB and IDB relation declarations
+    /// - `parse_rules()`: Processes logic rules and boolean fact rules
     ///
     /// These functions handle the specific grammar requirements for each section
     /// while maintaining type safety and error resilience.
