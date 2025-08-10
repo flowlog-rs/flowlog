@@ -1,18 +1,18 @@
 .in 
-.decl AddressOf(y: number, x: number)
+.decl AddressOf(y: integer, x: integer)
 .input addressOf.csv
 
-.decl Assign(y: number, x: number)
+.decl Assign(y: integer, x: integer)
 .input assign.csv
 
-.decl Load(y: number, x: number)
+.decl Load(y: integer, x: integer)
 .input load.csv
 
-.decl Store(y: number, x: number)
+.decl Store(y: integer, x: integer)
 .input store.csv
 
 .out
-.decl PointsTo(y: number, x: number)
+.decl PointsTo(y: integer, x: integer)
 .output pointsto.csv
 
 .rule

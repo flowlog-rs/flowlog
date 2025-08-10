@@ -1,6 +1,6 @@
-//! Atom types for FlowLog.
+//! Atom types for Macaron.
 //!
-//! This module provides types for representing atoms in FlowLog rules.
+//! This module provides types for representing atoms in Macaron rules.
 //! Atoms are the fundamental building blocks of logic programming and consist of a
 //! relation name followed by a list of arguments. They represent facts and queries
 //! in the logical knowledge base.
@@ -243,7 +243,7 @@ impl fmt::Display for AtomArg {
     /// - Placeholders are displayed as the underscore symbol (`_`)
     ///
     /// This formatting is suitable for debugging, logging, and generating
-    /// human-readable representations of FlowLog expressions.
+    /// human-readable representations of Macaron expressions.
     ///
     /// # Examples
     ///
@@ -313,9 +313,9 @@ impl Lexeme for AtomArg {
     }
 }
 
-/// Represents an atom in FlowLog rules.
+/// Represents an atom in Macaron rules.
 ///
-/// Atoms are the fundamental building blocks of FlowLog rules, representing
+/// Atoms are the fundamental building blocks of Macaron rules, representing
 /// relations with named arguments. They correspond to predicates in logic programming
 /// and form the basis of both facts and queries in the knowledge base.
 ///
@@ -446,7 +446,7 @@ impl Atom {
     /// Creates a new atom from a name and a list of arguments.
     ///
     /// This is the primary constructor for building atoms programmatically.
-    /// The relation name should follow FlowLog naming conventions, and arguments
+    /// The relation name should follow Macaron naming conventions, and arguments
     /// can be any combination of variables, constants, and placeholders.
     ///
     /// # Arguments
@@ -649,7 +649,7 @@ impl Lexeme for Atom {
     ///
     /// This method constructs an `Atom` from parsed grammar tokens, extracting
     /// the relation name and parsing each argument. It handles the conversion
-    /// from textual FlowLog syntax to the structured atom representation.
+    /// from textual Macaron syntax to the structured atom representation.
     ///
     /// # Arguments
     ///

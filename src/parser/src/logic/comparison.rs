@@ -1,7 +1,7 @@
-//! Comparison expression types for FlowLog.
+//! Comparison expression types for Datalog programs (Macaron engine).
 //!
 //! This module provides types for representing and working with comparison expressions
-//! in FlowLog rules. Comparison expressions are used to create boolean conditions that
+//! in Datalog rules parsed by Macaron. Comparison expressions are used to create boolean conditions that
 //! determine when rules should fire.
 //!
 //! # Overview
@@ -34,7 +34,7 @@ use std::fmt;
 /// Comparison operators for expressions.
 ///
 /// These operators are used to create boolean expressions that compare
-/// arithmetic expressions or values in FlowLog rules. Each operator
+/// arithmetic expressions or values in Macaron rules. Each operator
 /// has a specific semantic meaning and corresponding symbol representation.
 ///
 /// # Examples
@@ -151,7 +151,7 @@ impl Lexeme for ComparisonOperator {
 /// and a right operand. When evaluated, it produces a boolean result indicating
 /// whether the comparison condition is satisfied.
 ///
-/// Comparison expressions are fundamental building blocks in FlowLog rule bodies,
+/// Comparison expressions are fundamental building blocks in Macaron rule bodies,
 /// allowing rules to specify conditions that must be met for the rule to fire.
 /// They enable filtering, validation, and constraint checking within rule logic.
 ///

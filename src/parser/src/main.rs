@@ -22,7 +22,7 @@ fn main() {
 
     let program_source = &args[1];
 
-    // Parse the FlowLog program
+    // Parse the Macaron program
     let program = Program::parse(program_source);
     info!("Success parse program\n{program}");
 }

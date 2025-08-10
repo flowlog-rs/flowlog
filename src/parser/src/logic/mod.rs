@@ -1,11 +1,11 @@
-//! Logic components for FlowLog programs.
+//! Logic components for Datalog programs (Macaron engine).
 //!
-//! This module contains the core logic structures used in FlowLog programs,
+//! This module contains the core logic structures used in Datalog programs parsed by Macaron,
 //! including rules, predicates, arithmetic expressions, and atoms.
 //!
 //! # Components
 //!
-//! - [`rule`]: FlowLog rules with heads and bodies
+//! - [`rule`]: Macaron rules with heads and bodies
 //! - [`head`]: Rule heads with arguments
 //! - [`predicate`]: Predicates used in rule bodies
 //! - [`atom`]: Atom expressions used in predicates

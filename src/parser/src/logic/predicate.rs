@@ -1,6 +1,6 @@
-//! Predicate types for FlowLog rule bodies.
+//! Predicate types for Datalog rule bodies (Macaron engine).
 //!
-//! This module provides types for representing predicates in FlowLog rule bodies.
+//! This module provides types for representing predicates in Datalog rule bodies parsed by Macaron.
 //! Predicates define the conditions that must be satisfied for a rule to fire,
 //! forming the antecedent part of logical implications. They specify constraints,
 //! relationships, and conditions that determine when rules are applicable.
@@ -372,7 +372,7 @@ impl fmt::Display for Predicate {
     /// - **Booleans**: Lowercase literal values `true` or `false`
     ///
     /// The formatting is suitable for rule display, debugging, query representation,
-    /// and generating human-readable FlowLog programs.
+    /// and generating human-readable Macaron programs.
     ///
     /// # Format Examples
     ///
@@ -428,7 +428,7 @@ impl Lexeme for Predicate {
     /// Parses a predicate from a pest parsing rule.
     ///
     /// This method constructs a `Predicate` from parsed grammar tokens, handling
-    /// the conversion from textual FlowLog syntax to the appropriate predicate type.
+    /// the conversion from textual Macaron syntax to the appropriate predicate type.
     /// It dispatches to specialized parsing logic based on the rule type.
     ///
     /// # Arguments

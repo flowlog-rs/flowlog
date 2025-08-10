@@ -1,6 +1,6 @@
-//! Aggregation expressions types for FlowLog.
+//! Aggregation expression types for Datalog programs (Macaron engine).
 //!
-//! This module provides types for representing aggregation operations in FlowLog rules.
+//! This module provides types for representing aggregation operations in Datalog rules parsed by Macaron.
 //! Aggregations allow rules to compute summary values from collections of data,
 //! such as counting items, summing values, or finding minimum/maximum values.
 //!
@@ -51,7 +51,7 @@ use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
-/// Represents the different types of aggregation operations available in FlowLog.
+/// Represents the different types of aggregation operations available in Macaron.
 ///
 /// Aggregation operators define mathematical operations that compute summary
 /// values from collections of data. Each operator has specific semantics for
@@ -122,7 +122,7 @@ impl fmt::Display for AggregationOperator {
     /// Formats the aggregation operator as a lowercase string for display.
     ///
     /// This implementation provides consistent string representation that matches
-    /// FlowLog syntax and SQL-like conventions. The lowercase format is used
+    /// Macaron syntax and SQL-like conventions. The lowercase format is used
     /// for grammar parsing, code generation, and user-friendly output.
     ///
     /// # Format Rules
@@ -157,7 +157,7 @@ impl Lexeme for AggregationOperator {
     /// Converts a Pest parse rule into an AggregationOperator enum variant.
     ///
     /// This implementation handles the parsing of aggregation operator tokens
-    /// from the FlowLog grammar into strongly-typed enum variants. The parser
+    /// from the Macaron grammar into strongly-typed enum variants. The parser
     /// expects specific grammar rules for each operator type.
     ///
     /// # Grammar Rule Mapping
@@ -186,7 +186,7 @@ impl Lexeme for AggregationOperator {
     /// ```rust
     /// // Note: This example shows the conceptual usage.
     /// // In practice, this method is called by the parser internally.
-    /// use parser::{FlowLogParser, Rule, Lexeme, AggregationOperator};
+    /// use parser::{MacaronParser, Rule, Lexeme, AggregationOperator};
     /// use pest::Parser;
     ///
     /// // This would be called internally during parsing:
@@ -208,11 +208,11 @@ impl Lexeme for AggregationOperator {
     }
 }
 
-/// Represents a complete aggregation expression in FlowLog rules.
+/// Represents a complete aggregation expression in Macaron rules.
 ///
 /// An aggregation expression combines an aggregation operator with an arithmetic
 /// expression that defines what values to aggregate. This structure enables
-/// sophisticated data analysis operations within FlowLog rules.
+/// sophisticated data analysis operations within Macaron rules.
 ///
 /// # Structure
 ///
@@ -222,7 +222,7 @@ impl Lexeme for AggregationOperator {
 ///
 /// # Syntax
 ///
-/// FlowLog aggregations follow SQL-like syntax:
+/// Macaron aggregations follow SQL-like syntax:
 /// ```text
 /// operator(arithmetic_expression)
 /// ```
@@ -270,7 +270,7 @@ pub struct Aggregation {
 impl fmt::Display for Aggregation {
     /// Formats the aggregation as "operator(arithmetic_expression)".
     ///
-    /// Produces FlowLog-compatible syntax that can be parsed back into
+    /// Produces Macaron-compatible syntax that can be parsed back into
     /// an aggregation expression. The format follows SQL-like conventions
     /// with the operator name followed by the expression in parentheses.
     ///
@@ -334,7 +334,7 @@ impl Aggregation {
     ///
     /// # Returns
     ///
-    /// A new [`Aggregation`] instance ready for use in FlowLog rules
+    /// A new [`Aggregation`] instance ready for use in Macaron rules
     ///
     /// # Examples
     ///
@@ -495,7 +495,7 @@ impl Lexeme for Aggregation {
     /// Converts a Pest parse rule into a complete Aggregation struct.
     ///
     /// This implementation handles the parsing of complete aggregation expressions
-    /// from FlowLog grammar tokens into strongly-typed Rust structures. The parser
+    /// from Macaron grammar tokens into strongly-typed Rust structures. The parser
     /// expects a specific two-part grammar structure: operator followed by expression.
     ///
     /// # Grammar Structure
@@ -505,7 +505,7 @@ impl Lexeme for Aggregation {
     /// aggregation_expr = { aggregation_operator ~ "(" ~ arithmetic_expr ~ ")" }
     /// ```
     ///
-    /// This corresponds to FlowLog syntax like:
+    /// This corresponds to Macaron syntax like:
     /// - `sum(price * quantity)`
     /// - `count(customer_id)`
     /// - `max(salary + bonus)`

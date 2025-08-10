@@ -1,11 +1,11 @@
-//! FlowLog program representation and manipulation.
+//! Datalog program representation and manipulation for the Macaron engine.
 //!
-//! This module provides the complete infrastructure for representing, parsing, and
-//! optimizing FlowLog programs. FlowLog is a datalog programming language engine.
+//! This module provides the infrastructure for representing, parsing, and
+//! optimizing Datalog programs. Macaron is a Datalog engine targeting Datalog programs.
 //!
-//! # Program Structure
+//! # Datalog Program Structure
 //!
-//! A FlowLog program consists of several key components:
+//! A Datalog program consists of several key components:
 //!
 //! ## Relation Declarations
 //! - **EDB (Extensional Database)**: Input relations that define the base facts
@@ -19,9 +19,9 @@
 //! - **Dead Code Elimination**: Removes unused relations, rules, and facts
 //! - **Boolean Fact Extraction**: Automatically extracts constants from boolean rules
 //!
-//! # FlowLog Language Overview
+//! # Datalog Program Overview
 //!
-//! FlowLog programs follow a declarative paradigm where:
+//! Datalog programs parsed by Macaron follow a declarative paradigm where:
 //! ```text
 //! .in                     // Input relation declarations
 //! person(name: text, age: integer).
@@ -36,7 +36,7 @@
 //!
 //! # Program Processing Pipeline
 //!
-//! 1. **Parsing**: Convert text to structured [`Program`] representation
+//! 1. **Parsing**: Convert Datalog source text to structured [`Program`] representation
 //! 2. **Boolean Extraction**: Extract constant facts from boolean rules
 //! 3. **Dead Code Analysis**: Identify unused components based on outputs
 //! 4. **Optimization**: Remove dead code to create minimal program
@@ -46,7 +46,7 @@
 //! ```rust
 //! use parser::program::Program;
 //!
-//! // Parse a complete FlowLog program from file
+//! // Parse a complete Datalog program from file using Macaron
 //! let program = Program::parse("../../example/tc.dl");
 //!
 //! // Access program components
@@ -70,12 +70,12 @@ use tracing::{info, warn};
 use super::{
     declaration::Relation,
     logic::{FLRule, Predicate},
-    ConstType, FlowLogParser, Lexeme, Rule,
+    ConstType, MacaronParser, Lexeme, Rule,
 };
 
-/// Represents a complete FlowLog program.
+/// Represents a complete Macaron program.
 ///
-/// A FlowLog program encapsulates all components needed for declarative logic
+/// A Macaron program encapsulates all components needed for declarative logic
 /// programming: input/output relation schemas, transformation rules, and derived
 /// facts.
 ///
@@ -125,10 +125,10 @@ pub struct Program {
     bool_facts: HashMap<String, Vec<(Vec<ConstType>, bool)>>,
 }
 
-/// Provides formatted string representation of FlowLog programs.
+/// Provides formatted string representation of Macaron programs.
 ///
-/// Formats the complete program in standard FlowLog syntax with proper section
-/// organization and readable structure. The output follows the canonical FlowLog
+/// Formats the complete program in standard Macaron syntax with proper section
+/// organization and readable structure. The output follows the canonical Macaron
 /// format that can be parsed back into a program.
 ///
 /// # Format Structure
@@ -218,15 +218,15 @@ impl fmt::Display for Program {
 }
 
 impl Program {
-    /// Parses a complete FlowLog program from a file path.
+    /// Parses a complete Macaron program from a file path.
     ///
-    /// This is the primary entry point for loading FlowLog programs from disk.
+    /// This is the primary entry point for loading Macaron programs from disk.
     /// The method handles the complete parsing pipeline including grammar parsing,
     /// AST construction, boolean fact extraction, and dead code elimination.
     ///
     /// # Arguments
     ///
-    /// * `path` - File system path to the FlowLog program file (`.dl` extension recommended)
+    /// * `path` - File system path to the Macaron program file (`.dl` extension recommended)
     ///
     /// # Returns
     ///
@@ -235,8 +235,8 @@ impl Program {
     /// # Parsing Pipeline
     ///
     /// 1. **File Reading**: Loads the entire file content into memory
-    /// 2. **Lexical Analysis**: Tokenizes the FlowLog source code
-    /// 3. **Syntax Parsing**: Constructs AST according to FlowLog grammar
+    /// 2. **Lexical Analysis**: Tokenizes the Macaron source code
+    /// 3. **Syntax Parsing**: Constructs AST according to Macaron grammar
     /// 4. **Semantic Analysis**: Builds typed program representation
     /// 5. **Boolean Extraction**: Extracts constant facts from boolean rules
     /// 6. **Dead Code Elimination**: Removes unused components for optimization
@@ -271,14 +271,14 @@ impl Program {
     /// - **File Not Found**: The specified path does not exist or is not readable
     /// - **Permission Denied**: Insufficient permissions to read the file
     /// - **Invalid UTF-8**: File contains invalid UTF-8 sequences
-    /// - **Syntax Error**: FlowLog source contains invalid syntax
-    /// - **Grammar Error**: Source doesn't conform to FlowLog grammar rules
+    /// - **Syntax Error**: Macaron source contains invalid syntax
+    /// - **Grammar Error**: Source doesn't conform to Macaron grammar rules
     /// - **Empty Parse**: No valid program structure found in source
     pub fn parse(path: &str) -> Self {
         let unparsed_str = fs::read_to_string(path).expect("Failed to read file");
 
-        let parsed_rule = FlowLogParser::parse(Rule::main_grammar, &unparsed_str)
-            .expect("Failed to parse FlowLog program")
+        let parsed_rule = MacaronParser::parse(Rule::main_grammar, &unparsed_str)
+            .expect("Failed to parse Macaron program")
             .next()
             .expect("No parsed rule found");
 
@@ -294,7 +294,7 @@ impl Program {
 
     /// Returns all extensional database (EDB) relations.
     ///
-    /// EDB relations represent the input data sources for the FlowLog program.
+    /// EDB relations represent the input data sources for the Macaron program.
     /// These are typically loaded from external files, databases, or network
     /// sources and serve as the foundation for all derived computations.
     ///
@@ -347,7 +347,7 @@ impl Program {
 
     /// Returns all intensional database (IDB) relations.
     ///
-    /// IDB relations represent the output data computed by the FlowLog program.
+    /// IDB relations represent the output data computed by the Macaron program.
     /// These relations are derived through the application of logic rules to
     /// input data and other derived relations.
     ///
@@ -411,7 +411,7 @@ impl Program {
 
     /// Returns all logic rules in the program.
     ///
-    /// Logic rules define the computational logic of the FlowLog program,
+    /// Logic rules define the computational logic of the Macaron program,
     /// specifying how input data is transformed and combined to produce
     /// derived facts and final outputs.
     ///
@@ -872,9 +872,9 @@ impl Program {
     }
 }
 
-/// Enables parsing FlowLog programs from grammar tokens.
+/// Enables parsing Macaron programs from grammar tokens.
 ///
-/// Implements the [`Lexeme`] trait to support parsing complete FlowLog programs
+/// Implements the [`Lexeme`] trait to support parsing complete Macaron programs
 /// from Pest grammar parse trees. This implementation handles the entire program
 /// construction pipeline from tokens to a fully structured program object.
 ///
@@ -918,7 +918,7 @@ impl Program {
 ///
 /// # Examples
 ///
-/// The parser handles complete FlowLog programs:
+/// The parser handles complete Macaron programs:
 /// ```text
 /// .in
 /// user(name: text, age: integer).
@@ -944,7 +944,7 @@ impl Program {
 /// - 1 logic rule (age-based access control)
 /// - 2 boolean facts (config and audit entries)
 impl Lexeme for Program {
-    /// Constructs a FlowLog program from a parsed grammar rule.
+    /// Constructs a Macaron program from a parsed grammar rule.
     ///
     /// This method serves as the primary entry point for converting a Pest
     /// parse tree into a structured [`Program`] object. It processes all
@@ -992,7 +992,7 @@ impl Lexeme for Program {
         /// Parses relation declarations from a grammar section.
         ///
         /// This helper function processes either EDB or IDB declarations from
-        /// the `.in` or `.out` sections of a FlowLog program. It iterates through
+        /// the `.in` or `.out` sections of a Macaron program. It iterates through
         /// all relation declarations in the section and constructs [`Relation`] objects.
         ///
         /// # Arguments
@@ -1029,7 +1029,7 @@ impl Lexeme for Program {
         /// Parses logic rules from the `.rule` section.
         ///
         /// This helper function processes all logic rules defined in the `.rule`
-        /// section of a FlowLog program. It constructs [`FLRule`] objects that
+        /// section of a Macaron program. It constructs [`FLRule`] objects that
         /// define the computational logic of the program.
         ///
         /// # Arguments
@@ -1058,7 +1058,7 @@ impl Lexeme for Program {
         //
         // Main parsing loop that processes top-level program sections.
         //
-        // This loop iterates through all major sections of the FlowLog program
+        // This loop iterates through all major sections of the Macaron program
         // and dispatches each section to the appropriate parsing function based
         // on the grammar rule type.
         //

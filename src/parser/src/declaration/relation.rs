@@ -1,4 +1,4 @@
-//! Relation declaration types for FlowLog programs.
+//! Relation declaration types for Datalog programs (Macaron engine).
 
 use super::Attribute;
 use crate::primitive::DataType;
@@ -7,7 +7,7 @@ use pest::iterators::Pair;
 use std::fmt;
 use std::str::FromStr;
 
-/// Represents a relation declaration in a FlowLog program.
+/// Represents a relation declaration in a Datalog program.
 ///
 /// A relation declaration defines the schema and metadata for a relation,
 /// including its name, attributes (columns), and optional input/output paths.
@@ -238,7 +238,7 @@ impl Relation {
 }
 
 impl fmt::Display for Relation {
-    /// Format the relation declaration in FlowLog syntax.
+    /// Format the relation declaration in Macaron syntax.
     ///
     /// The format is: `name(attr1: type1, attr2: type2) [.input path] [.output path]`
     ///
@@ -254,7 +254,7 @@ impl fmt::Display for Relation {
     /// ];
     ///
     /// let rel = Relation::new("person", attrs, Some("people.csv"), None);
-    /// let expected = "person(name: string, age: number) .input people.csv";
+    /// let expected = "person(name: string, age: integer) .input people.csv";
     /// assert_eq!(rel.to_string(), expected);
     /// ```
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -282,6 +282,27 @@ impl fmt::Display for Relation {
 }
 
 impl Lexeme for Relation {
+    /// Constructs a `Relation` from a parsed grammar rule.
+    ///
+    /// This function is called by the Macaron parser to convert a pest grammar rule
+    /// representing a relation declaration into a fully-typed `Relation` object.
+    /// It extracts the relation name, attributes, and optional input/output paths
+    /// from the grammar tree, supporting both EDB and IDB relation forms.
+    ///
+    /// # Arguments
+    /// * `parsed_rule` - A pest grammar rule representing a relation declaration.
+    ///
+    /// # Returns
+    /// * `Relation` - A constructed relation object for use in the Datalog program.
+    ///
+    /// # Panics
+    /// Panics if the grammar tree contains unexpected rules or invalid data types.
+    ///
+    /// # Example
+    /// ```text
+    /// person(name: string, age: number) .input "data/people.csv"
+    /// adult(name: string) .output "results/adults.csv"
+    /// ```
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let rule_type = parsed_rule.as_rule();
         let mut inner_rules = parsed_rule.into_inner();
@@ -393,20 +414,20 @@ mod tests {
 
         // Basic relation
         let basic = Relation::new("test", attrs.clone(), None, None);
-        assert_eq!(basic.to_string(), "test(x: number, y: string)");
+        assert_eq!(basic.to_string(), "test(x: integer, y: string)");
 
         // With input path
         let with_input = Relation::new("edb", attrs.clone(), Some("data.csv"), None);
         assert_eq!(
             with_input.to_string(),
-            "edb(x: number, y: string) .input data.csv"
+            "edb(x: integer, y: string) .input data.csv"
         );
 
         // With output path
         let with_output = Relation::new("idb", attrs.clone(), None, Some("result.csv"));
         assert_eq!(
             with_output.to_string(),
-            "idb(x: number, y: string) .output result.csv"
+            "idb(x: integer, y: string) .output result.csv"
         );
 
         // Nullary relation

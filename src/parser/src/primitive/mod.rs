@@ -1,12 +1,12 @@
-//! Primitive types for the FlowLog parser.
+//! Primitive types for the Datalog parser (Macaron engine).
 //!
-//! This module contains the fundamental data types used throughout the FlowLog parser,
+//! This module contains the fundamental data types used throughout the Datalog parser,
 //! including data type specifications and constant values that form the building blocks
-//! of FlowLog programs.
+//! of Datalog programs.
 //!
 //! # Overview
 //!
-//! FlowLog is a declarative language for expressing network policies and protocols.
+//! Macaron is a Datalog engine for expressing network policies and protocols.
 //! This module provides the primitive types that represent the basic elements:
 //!
 //! - [`DataType`]: Represents the types that can be used for relation attributes
@@ -19,7 +19,7 @@
 //! use std::str::FromStr;
 //!
 //! // Working with data types
-//! let number_type = DataType::from_str("number").unwrap();
+//! let number_type = DataType::from_str("integer").unwrap();
 //! let string_type = DataType::from_str("string").unwrap();
 //!
 //! // Working with constants

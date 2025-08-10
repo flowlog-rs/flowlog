@@ -1,7 +1,7 @@
-//! Arithmetic expression types for FlowLog.
+//! Arithmetic expression types for Datalog programs (Macaron engine).
 //!
 //! This module provides types for representing and manipulating arithmetic expressions
-//! in FlowLog programs. Arithmetic expressions can appear in rule heads and predicates,
+//! in Datalog programs parsed by Macaron. Arithmetic expressions can appear in rule heads and predicates,
 //! allowing for computed values and mathematical operations.
 //!
 //! # Overview
@@ -53,7 +53,7 @@ use std::fmt;
 /// Arithmetic operators for mathematical expressions.
 ///
 /// Supports the five basic arithmetic operations commonly used in mathematical
-/// and logical expressions within FlowLog rules. These operators follow standard
+/// and logical expressions within Macaron rules. These operators follow standard
 /// mathematical semantics and precedence rules.
 ///
 /// # Examples

@@ -1,18 +1,18 @@
-//! Constant value types for FlowLog programs.
+//! Constant value types for Datalog programs (Macaron engine).
 
 use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
-/// A constant value used in FlowLog.
+/// A constant value used in Datalog programs.
 ///
-/// Constants represent literal values that can appear in FlowLog programs.
+/// Constants represent literal values that can appear in Datalog programs.
 /// They are used as arguments to atoms, in arithmetic expressions, and
 /// anywhere a literal value is needed in the language.
 ///
 /// # Supported Types
 ///
-/// Currently, FlowLog supports two types of constants:
+/// Currently, Macaron supports two types of constants:
 /// - [`ConstType::Integer`]: 32-bit signed integer values
 /// - [`ConstType::Text`]: UTF-8 string values
 ///
@@ -34,7 +34,7 @@ use std::fmt;
 /// assert_ne!(ConstType::Integer(5), ConstType::Integer(10));
 /// ```
 ///
-/// # Usage in FlowLog
+/// # Usage in Macaron
 ///
 /// Constants are typically used in:
 /// - Atom arguments: `myRelation(42, "test")`
@@ -104,7 +104,7 @@ impl fmt::Display for ConstType {
 impl Lexeme for ConstType {
     /// Parse a constant value from a Pest parse rule.
     ///
-    /// This method converts a parsed constant rule from the FlowLog grammar
+    /// This method converts a parsed constant rule from the Macaron grammar
     /// into a [`ConstType`] instance. It handles both integer and string
     /// constants, properly parsing and validating the values.
     ///
@@ -126,7 +126,7 @@ impl Lexeme for ConstType {
     /// # Examples
     ///
     /// This method is typically used internally by the parser when
-    /// processing FlowLog source code, not called directly by users.
+    /// processing Macaron source code, not called directly by users.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let inner = parsed_rule
             .into_inner()

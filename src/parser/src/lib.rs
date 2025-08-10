@@ -1,7 +1,7 @@
-//! FlowLog Parser Library
+//! Macaron Parser Library
 //!
-//! A parser for the FlowLog declarative logic programming language.
-//! Provides structured representations for FlowLog programs including
+//! A parser for the Macaron declarative logic programming language.
+//! Provides structured representations for Macaron programs including
 //! relation declarations, logic rules, and primitive types.
 
 pub mod declaration;
@@ -21,18 +21,18 @@ pub use program::Program;
 use pest::iterators::Pair;
 use pest_derive::Parser;
 
-/// FlowLog grammar parser using Pest.
+/// Macaron grammar parser using Pest.
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
-pub struct FlowLogParser;
+pub struct MacaronParser;
 
-/// FlowLog Parser is powered by Pest, a PEG parser framework.
+/// Macaron Parser is powered by Pest, a PEG parser framework.
 ///
-/// Trait for converting Pest parse trees into FlowLog types.
+/// Trait for converting Pest parse trees into Macaron types.
 ///
-/// All FlowLog language constructs implement this trait to enable
+/// All Macaron language constructs implement this trait to enable
 /// conversion from parse trees to structured types.
 pub trait Lexeme {
-    /// Converts a Pest parse rule into a structured FlowLog type.
+    /// Converts a Pest parse rule into a structured Macaron type.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self;
 }

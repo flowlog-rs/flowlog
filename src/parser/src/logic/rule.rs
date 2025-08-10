@@ -1,6 +1,6 @@
-//! FlowLog rule structures.
+//! Datalog rule structures (Macaron engine).
 //!
-//! This module provides types for representing complete FlowLog rules, which are the
+//! This module provides types for representing complete Datalog rules, which are the
 //! fundamental building blocks of logic programs. Rules define logical implications
 //! that specify how new facts can be derived from existing facts and conditions.
 //!
@@ -14,7 +14,7 @@
 //!
 //! # Rule Structure
 //!
-//! FlowLog rules follow the standard logical implication syntax:
+//! Macaron rules follow the standard logical implication syntax:
 //! ```text
 //! head :- body.
 //! ```
@@ -91,11 +91,11 @@ use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
-/// Represents a complete FlowLog rule.
+/// Represents a complete Macaron rule.
 ///
-/// A FlowLog rule encapsulates a logical implication that defines how new facts
+/// A Macaron rule encapsulates a logical implication that defines how new facts
 /// can be derived from existing facts and conditions. Rules are the core mechanism
-/// for expressing logical relationships and computational processes in FlowLog programs.
+/// for expressing logical relationships and computational processes in Macaron programs.
 ///
 /// # Structure
 ///
@@ -198,9 +198,9 @@ pub struct FLRule {
     is_planning: bool,
 }
 
-/// Provides string representation for FlowLog rules.
+/// Provides string representation for Macaron rules.
 ///
-/// Formats rules in standard FlowLog syntax: `head :- body.`
+/// Formats rules in standard Macaron syntax: `head :- body.`
 /// where the body predicates are comma-separated.
 ///
 /// # Format Structure
@@ -243,7 +243,7 @@ impl fmt::Display for FLRule {
 }
 
 impl FLRule {
-    /// Creates a new FlowLog rule with the specified components.
+    /// Creates a new Macaron rule with the specified components.
     ///
     /// # Arguments
     ///
@@ -578,7 +578,7 @@ impl FLRule {
     }
 }
 
-/// Enables parsing FlowLog rules from grammar tokens.
+/// Enables parsing Macaron rules from grammar tokens.
 ///
 /// Implements the [`Lexeme`] trait to support parsing rules from
 /// Pest grammar parse trees. This implementation handles the complete
@@ -593,7 +593,7 @@ impl FLRule {
 ///
 /// # Grammar Integration
 ///
-/// Expects parse tree structure corresponding to the FlowLog grammar rule:
+/// Expects parse tree structure corresponding to the Macaron grammar rule:
 /// ```pest
 /// rule = { head ~ ":-" ~ predicates ~ optimize? ~ "." }
 /// ```

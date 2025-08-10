@@ -1,10 +1,10 @@
 .in
-.decl Arc(a: number, b: number)
+.decl Arc(a: integer, b: integer)
 .input Arc.csv
 
 .out
-.decl CC2(cc: number)
-.decl CC(node: number, cc: number)
+.decl CC2(cc: integer)
+.decl CC(node: integer, cc: integer)
 
 .rule
 CC(node, min(node)) :- Arc(node, _).

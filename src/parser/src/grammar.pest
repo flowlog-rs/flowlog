@@ -1,7 +1,7 @@
 // =============================================================================
-// FLOWLOG GRAMMAR DEFINITION
+// Macaron GRAMMAR DEFINITION
 // =============================================================================
-// This grammar defines the syntax for FlowLog, a Datalog language
+// This grammar defines the syntax for Macaron, a Datalog language engine
 // for declarative data processing and rule-based queries.
 
 // Main grammar entry point
@@ -39,7 +39,7 @@ relation_name = { identifier }
 data_type = { integer_type | string_type }
 
 // Numeric data type for integers
-integer_type = { "number" }
+integer_type = { "integer" }
 
 // Text data type for strings
 string_type = { "string" }
@@ -65,7 +65,7 @@ boolean = { "True" | "False" }
 // =============================================================================
 // RELATION DECLARATIONS
 // =============================================================================
-// Relations are the core data structures in FlowLog. They can be:
+// Relations are the core data structures in Macaron. They can be:
 // - EDB (Extensional Database): Input relations with external data
 // - IDB (Intentional Database): Output relations computed by rules
 
@@ -76,23 +76,23 @@ edb_decl = { ".in" ~ edb_relation_decl+ }
 idb_decl = { ".out" ~ idb_relation_decl+ }
 
 // Input relation declaration
-// Example: .decl edge(src: number, dst: number) .input "graph.facts"
+// Example: .decl edge(src: integer, dst: integer) .input "graph.facts"
 edb_relation_decl = { 
     ".decl" ~ relation_name ~ "(" ~ attributes_decl ~ ")" ~ in_decl? 
 }
 
 // Output relation declaration
-// Example: .decl reachable(src: number, dst: number) .output "result.csv"
+// Example: .decl reachable(src: integer, dst: integer) .output "result.csv"
 idb_relation_decl = { 
     ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ out_decl? 
 }
 
 // Comma-separated list of attribute declarations
-// Example: src: number, dst: number, weight: string
+// Example: src: integer, dst: integer, weight: string
 attributes_decl = { attribute_decl ~ ("," ~ attribute_decl)* }
 
 // Single attribute with name and data type
-// Example: "src: number" 
+// Example: "src: integer" 
 attribute_decl = { attribute_name ~ ":" ~ data_type }
 
 // =============================================================================

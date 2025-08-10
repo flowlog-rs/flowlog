@@ -1,10 +1,9 @@
-//! Attribute declaration types for FlowLog relations.
+//! Attribute declaration types for Datalog relations (Macaron engine).
 
 use crate::primitive::DataType;
-
 use std::fmt;
 
-/// Represents an attribute declaration in a relation.
+/// Represents an attribute declaration in a Datalog relation.
 ///
 /// An attribute consists of a name and a data type, defining the schema
 /// for a column in a relation. Attributes are used to specify the structure
@@ -23,7 +22,7 @@ use std::fmt;
 ///
 /// // Create an attribute for a person's age
 /// let age_attr = Attribute::new("age".to_string(), DataType::Integer);
-/// assert_eq!(age_attr.to_string(), "age: number");
+/// assert_eq!(age_attr.to_string(), "age: integer");
 /// ```
 ///
 /// # Usage in Relations
@@ -103,7 +102,7 @@ impl Attribute {
 }
 
 impl fmt::Display for Attribute {
-    /// Format the attribute as "name: type" using FlowLog grammar syntax.
+    /// Format the attribute as "name: type" using Macaron grammar syntax.
     ///
     /// # Examples
     ///
@@ -112,7 +111,7 @@ impl fmt::Display for Attribute {
     /// use parser::primitive::DataType;
     ///
     /// let attr = Attribute::new("id".to_string(), DataType::Integer);
-    /// assert_eq!(attr.to_string(), "id: number");
+    /// assert_eq!(attr.to_string(), "id: integer");
     ///
     /// let attr2 = Attribute::new("name".to_string(), DataType::String);
     /// assert_eq!(attr2.to_string(), "name: string");
@@ -136,7 +135,7 @@ mod tests {
     #[test]
     fn test_attribute_display() {
         let int_attr = Attribute::new("id".to_string(), DataType::Integer);
-        assert_eq!(int_attr.to_string(), "id: number");
+    assert_eq!(int_attr.to_string(), "id: integer");
 
         let str_attr = Attribute::new("name".to_string(), DataType::String);
         assert_eq!(str_attr.to_string(), "name: string");

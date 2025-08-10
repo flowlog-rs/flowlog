@@ -1,8 +1,8 @@
-//! Declaration types for FlowLog programs.
+//! Declaration types for Datalog programs (Macaron engine).
 //!
 //! This module contains types for representing relation and attribute declarations
-//! in FlowLog programs. Relations define the schema and metadata for data tables
-//! that can be used throughout a FlowLog program.
+//! in Datalog programs parsed by Macaron. Relations define the schema and metadata for data tables
+//! that can be used throughout a Datalog program.
 //!
 //! # Components
 //!

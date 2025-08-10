@@ -1,6 +1,6 @@
-//! Rule head components for FlowLog.
+//! Rule head components for Datalog programs (Macaron engine).
 //!
-//! This module provides types for representing rule heads in FlowLog programs.
+//! This module provides types for representing rule heads in Datalog programs parsed by Macaron.
 //! Rule heads define what facts are derived when a rule fires, specifying the
 //! relation name and the arguments that will be produced. They form the consequent
 //! part of logical rules and determine the output structure of rule evaluation.
@@ -223,7 +223,7 @@ impl fmt::Display for HeadArg {
     /// - **Aggregates**: Displayed using standard function notation (e.g., "count(X)")
     ///
     /// The formatting is suitable for rule display, debugging, and generating
-    /// human-readable representations of FlowLog programs.
+    /// human-readable representations of Macaron programs.
     ///
     /// # Examples
     ///
@@ -267,7 +267,7 @@ impl Lexeme for HeadArg {
     /// Parses a head argument from a pest parsing rule.
     ///
     /// This method constructs a `HeadArg` from parsed grammar tokens, handling
-    /// the conversion from textual FlowLog syntax to the appropriate argument type.
+    /// the conversion from textual Macaron syntax to the appropriate argument type.
     /// It performs intelligent parsing to distinguish between simple variables
     /// and complex arithmetic expressions.
     ///
@@ -422,7 +422,7 @@ impl Head {
     /// Creates a new rule head.
     ///
     /// This is the primary constructor for building rule heads programmatically.
-    /// The relation name should follow FlowLog naming conventions, and arguments
+    /// The relation name should follow Macaron naming conventions, and arguments
     /// define the structure and computation of the derived facts.
     ///
     /// # Arguments
@@ -596,7 +596,7 @@ impl fmt::Display for Head {
     /// The format follows the standard pattern: `relation_name(arg1, arg2, ..., argN)`
     /// where arguments are separated by commas and spaces. This produces output
     /// suitable for rule display, debugging, and generating human-readable
-    /// FlowLog programs.
+    /// Macaron programs.
     ///
     /// # Examples
     ///
@@ -663,7 +663,7 @@ impl Lexeme for Head {
     ///
     /// This method constructs a `Head` from parsed grammar tokens, extracting
     /// the relation name and parsing each head argument. It handles the conversion
-    /// from textual FlowLog syntax to the structured head representation.
+    /// from textual Macaron syntax to the structured head representation.
     ///
     /// # Arguments
     ///

@@ -1,19 +1,19 @@
-//! Data type definitions for FlowLog programs.
+//! Data type definitions for Datalog programs (Macaron engine).
 
 use std::fmt;
 use std::str::FromStr;
 
-/// Data types supported in FlowLog.
+/// Data types supported in Datalog programs.
 ///
-/// FlowLog supports two primitive data types for relation attributes, which
-/// correspond to the basic types supported by the FlowLog language grammar.
+/// Macaron supports two primitive data types for relation attributes, which
+/// correspond to the basic types supported by the Datalog grammar.
 /// These types define what kind of values can be stored in relation columns.
 ///
 /// # Type Mapping
 ///
-/// The FlowLog grammar uses different names for types compared to the internal
+/// The Macaron grammar uses different names for types compared to the internal
 /// representation:
-/// - `"number"` in grammar → [`DataType::Integer`] internally
+/// - `"integer"` in grammar → [`DataType::Integer`] internally
 /// - `"string"` in grammar → [`DataType::String`] internally
 ///
 /// # Examples
@@ -22,15 +22,15 @@ use std::str::FromStr;
 /// use std::str::FromStr;
 /// use parser::primitive::DataType;
 ///
-/// // Parse from FlowLog grammar strings
-/// let int_type = DataType::from_str("number").unwrap();
+/// // Parse from Macaron grammar strings
+/// let int_type = DataType::from_str("integer").unwrap();
 /// let str_type = DataType::from_str("string").unwrap();
 ///
 /// assert_eq!(int_type, DataType::Integer);
 /// assert_eq!(str_type, DataType::String);
 ///
 /// // Display back as grammar strings
-/// assert_eq!(int_type.to_string(), "number");
+/// assert_eq!(int_type.to_string(), "integer");
 /// assert_eq!(str_type.to_string(), "string");
 /// ```
 ///
@@ -49,13 +49,13 @@ use std::str::FromStr;
 pub enum DataType {
     /// Numeric data type for integers.
     ///
-    /// Corresponds to the `"number"` type in FlowLog grammar.
+    /// Corresponds to the `"integer"` type in Macaron grammar.
     /// Used for storing integer values in relations.
     Integer,
 
     /// Text data type for strings.
     ///
-    /// Corresponds to the `"string"` type in FlowLog grammar.
+    /// Corresponds to the `"string"` type in Macaron grammar.
     /// Used for storing text values in relations.
     String,
 }
@@ -63,11 +63,11 @@ pub enum DataType {
 impl FromStr for DataType {
     type Err = String;
 
-    /// Parse a data type from its FlowLog grammar representation.
+    /// Parse a data type from its Macaron grammar representation.
     ///
     /// # Arguments
     ///
-    /// * `s` - The string representation from FlowLog grammar
+    /// * `s` - The string representation from Macaron grammar
     ///
     /// # Returns
     ///
@@ -80,35 +80,35 @@ impl FromStr for DataType {
     /// use std::str::FromStr;
     /// use parser::primitive::DataType;
     ///
-    /// assert_eq!(DataType::from_str("number").unwrap(), DataType::Integer);
+    /// assert_eq!(DataType::from_str("integer").unwrap(), DataType::Integer);
     /// assert_eq!(DataType::from_str("string").unwrap(), DataType::String);
     /// assert!(DataType::from_str("invalid").is_err());
     /// ```
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "number" => Ok(Self::Integer),
+            "integer" => Ok(Self::Integer),
             "string" => Ok(Self::String),
             _ => Err(format!(
-                "Invalid data type: '{s}'. Expected 'number' or 'string'"
+                "Invalid data type: '{s}'. Expected 'integer' or 'string'"
             )),
         }
     }
 }
 
 impl fmt::Display for DataType {
-    /// Format the data type as its FlowLog grammar representation.
+    /// Format the data type as its Macaron grammar representation.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use parser::primitive::DataType;
     ///
-    /// assert_eq!(DataType::Integer.to_string(), "number");
+    /// assert_eq!(DataType::Integer.to_string(), "integer");
     /// assert_eq!(DataType::String.to_string(), "string");
     /// ```
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let type_str = match self {
-            Self::Integer => "number",
+            Self::Integer => "integer",
             Self::String => "string",
         };
         write!(f, "{type_str}")
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_from_str_valid() {
-        assert_eq!(DataType::from_str("number").unwrap(), DataType::Integer);
+    assert_eq!(DataType::from_str("integer").unwrap(), DataType::Integer);
         assert_eq!(DataType::from_str("string").unwrap(), DataType::String);
     }
 
@@ -132,12 +132,12 @@ mod tests {
 
         let error = result.unwrap_err();
         assert!(error.contains("Invalid data type: 'invalid'"));
-        assert!(error.contains("Expected 'number' or 'string'"));
+    assert!(error.contains("Expected 'integer' or 'string'"));
     }
 
     #[test]
     fn test_display() {
-        assert_eq!(DataType::Integer.to_string(), "number");
+    assert_eq!(DataType::Integer.to_string(), "integer");
         assert_eq!(DataType::String.to_string(), "string");
     }
 
