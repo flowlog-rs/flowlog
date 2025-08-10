@@ -6,7 +6,7 @@
 //!
 //! # Overview
 //!
-//! The module defines the [`FLRule`] struct which represents complete logical rules
+//! The module defines the [`MacaronRule`] struct which represents complete logical rules
 //! consisting of:
 //! - **Head**: What fact is derived when the rule fires
 //! - **Body**: Conditions that must be satisfied for the rule to apply
@@ -46,7 +46,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use parser::logic::{FLRule, Head, HeadArg, Predicate, Atom, AtomArg};
+//! use parser::logic::{MacaronRule, Head, HeadArg, Predicate, Atom, AtomArg};
 //! use parser::logic::{ComparisonExpr, ComparisonOperator, Arithmetic, Factor};
 //! use parser::primitive::ConstType;
 //!
@@ -69,21 +69,20 @@
 //!     Predicate::ComparePredicate(age_check)
 //! ];
 //!
-//! let adult_rule = FLRule::new(adult_head, adult_body, false);
+//! let adult_rule = MacaronRule::new(adult_head, adult_body, false);
 //! assert_eq!(adult_rule.to_string(), "adult(Person) :- person(Person, Age), Age ≥ 18.");
 //!
 //! // Fact rule: connected() :- True
 //! let fact_head = Head::new("connected".to_string(), vec![]);
 //! let fact_body = vec![Predicate::BoolPredicate(true)];
-//! let fact_rule = FLRule::new(fact_head, fact_body, false);
+//! let fact_rule = MacaronRule::new(fact_head, fact_body, false);
 //! assert!(fact_rule.is_boolean());
 //!
 //! // Planning-optimized rule
 //! let opt_head = Head::new("optimized".to_string(), vec![HeadArg::Var("X".to_string())]);
 //! let opt_body = vec![Predicate::BoolPredicate(true)];
-//! let opt_rule = FLRule::new(opt_head, opt_body, true);
+//! let opt_rule = MacaronRule::new(opt_head, opt_body, true);
 //! assert!(opt_rule.is_planning());
-//! ```
 
 use super::{Factor, Head, HeadArg, Predicate};
 use crate::primitive::ConstType;
@@ -134,7 +133,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```rust
-/// use parser::logic::{FLRule, Head, HeadArg, Predicate, Atom, AtomArg};
+/// use parser::logic::{MacaronRule, Head, HeadArg, Predicate, Atom, AtomArg};
 /// use parser::logic::{ComparisonExpr, ComparisonOperator, Arithmetic, Factor};
 /// use parser::primitive::ConstType;
 ///
@@ -171,7 +170,7 @@ use std::fmt;
 ///     Predicate::NegatedAtomPredicate(dropped_atom)
 /// ];
 ///
-/// let eligible_rule = FLRule::new(eligible_head, eligible_body, false);
+/// let eligible_rule = MacaronRule::new(eligible_head, eligible_body, false);
 ///
 /// assert_eq!(eligible_rule.head().name(), "eligible");
 /// assert_eq!(eligible_rule.head().arity(), 2);
@@ -185,14 +184,14 @@ use std::fmt;
 ///     HeadArg::Arith(Arithmetic::new(Factor::Const(ConstType::Integer(1)), vec![])) // representing true
 /// ]);
 /// let config_body = vec![Predicate::BoolPredicate(true)];
-/// let config_rule = FLRule::new(config_head, config_body, false);
+/// let config_rule = MacaronRule::new(config_head, config_body, false);
 ///
 /// assert!(config_rule.is_boolean());
 /// let constants = config_rule.extract_constants_from_head();
 /// assert_eq!(constants.len(), 2);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FLRule {
+pub struct MacaronRule {
     head: Head,
     rhs: Vec<Predicate>,
     is_planning: bool,
@@ -213,7 +212,7 @@ pub struct FLRule {
 /// # Examples
 ///
 /// ```rust
-/// use parser::logic::{FLRule, Head, HeadArg, Predicate, Atom, AtomArg};
+/// use parser::logic::{MacaronRule, Head, HeadArg, Predicate, Atom, AtomArg};
 /// use std::fmt::Write;
 ///
 /// let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
@@ -222,12 +221,12 @@ pub struct FLRule {
 ///     Predicate::PositiveAtomPredicate(atom),
 ///     Predicate::BoolPredicate(true)
 /// ];
-/// let rule = FLRule::new(head, body, false);
+/// let rule = MacaronRule::new(head, body, false);
 ///
 /// let formatted = format!("{}", rule);
 /// assert!(formatted.contains("result(X) :- input(X), true."));
 /// ```
-impl fmt::Display for FLRule {
+impl fmt::Display for MacaronRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -242,7 +241,7 @@ impl fmt::Display for FLRule {
     }
 }
 
-impl FLRule {
+impl MacaronRule {
     /// Creates a new Macaron rule with the specified components.
     ///
     /// # Arguments
@@ -253,19 +252,19 @@ impl FLRule {
     ///
     /// # Returns
     ///
-    /// A new [`FLRule`] instance representing the logical rule
+    /// A new [`MacaronRule`] instance representing the logical rule
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use parser::logic::{FLRule, Head, HeadArg, Predicate, Atom, AtomArg};
+    /// use parser::logic::{MacaronRule, Head, HeadArg, Predicate, Atom, AtomArg};
     ///
     /// // Simple fact rule: user("alice") :- True.
     /// let head = Head::new("user".to_string(), vec![
     ///     HeadArg::Var("alice".to_string())
     /// ]);
     /// let body = vec![Predicate::BoolPredicate(true)];
-    /// let fact_rule = FLRule::new(head, body, false);
+    /// let fact_rule = MacaronRule::new(head, body, false);
     ///
     /// // Derivation rule with planning: result(X) :- input(X), condition(X).plan
     /// let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
@@ -275,7 +274,7 @@ impl FLRule {
     ///     Predicate::PositiveAtomPredicate(input_atom),
     ///     Predicate::PositiveAtomPredicate(condition_atom)
     /// ];
-    /// let derivation_rule = FLRule::new(head, body, true);
+    /// let derivation_rule = MacaronRule::new(head, body, true);
     ///
     /// assert!(derivation_rule.is_planning());
     /// assert_eq!(derivation_rule.rhs().len(), 2);
@@ -302,13 +301,13 @@ impl FLRule {
     /// # Examples
     ///
     /// ```rust
-    /// use parser::logic::{FLRule, Head, HeadArg, Predicate};
+    /// use parser::logic::{MacaronRule, Head, HeadArg, Predicate};
     ///
     /// let head = Head::new("output".to_string(), vec![
     ///     HeadArg::Var("X".to_string()),
     ///     HeadArg::Var("Y".to_string())
     /// ]);
-    /// let rule = FLRule::new(head, vec![Predicate::BoolPredicate(true)], false);
+    /// let rule = MacaronRule::new(head, vec![Predicate::BoolPredicate(true)], false);
     ///
     /// assert_eq!(rule.head().name(), "output");
     /// assert_eq!(rule.head().arity(), 2);
@@ -338,7 +337,7 @@ impl FLRule {
     /// # Examples
     ///
     /// ```rust
-    /// use parser::logic::{FLRule, Head, HeadArg, Predicate, Atom, AtomArg};
+    /// use parser::logic::{MacaronRule, Head, HeadArg, Predicate, Atom, AtomArg};
     /// use parser::logic::{ComparisonExpr, ComparisonOperator, Arithmetic, Factor};
     /// use parser::primitive::ConstType;
     ///
@@ -357,7 +356,7 @@ impl FLRule {
     ///     Predicate::ComparePredicate(comparison)
     /// ];
     ///
-    /// let rule = FLRule::new(head, body, false);
+    /// let rule = MacaronRule::new(head, body, false);
     ///
     /// assert_eq!(rule.rhs().len(), 3);
     /// // First predicate is positive atom
@@ -383,13 +382,13 @@ impl FLRule {
     /// # Examples
     ///
     /// ```rust
-    /// use parser::logic::{FLRule, Head, HeadArg, Predicate};
+    /// use parser::logic::{MacaronRule, Head, HeadArg, Predicate};
     ///
     /// let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
     /// let body = vec![Predicate::BoolPredicate(true)];
     ///
-    /// let regular_rule = FLRule::new(head.clone(), body.clone(), false);
-    /// let planning_rule = FLRule::new(head, body, true);
+    /// let regular_rule = MacaronRule::new(head.clone(), body.clone(), false);
+    /// let planning_rule = MacaronRule::new(head, body, true);
     ///
     /// assert!(!regular_rule.is_planning());
     /// assert!(planning_rule.is_planning());
@@ -412,7 +411,7 @@ impl FLRule {
     /// # Examples
     ///
     /// ```rust
-    /// use parser::logic::{FLRule, Head, HeadArg, Predicate, Atom, AtomArg};
+    /// use parser::logic::{MacaronRule, Head, HeadArg, Predicate, Atom, AtomArg};
     ///
     /// let head = Head::new("config".to_string(), vec![
     ///     HeadArg::Var("setting".to_string())
@@ -420,7 +419,7 @@ impl FLRule {
     ///
     /// // Boolean rule: config("setting") :- True.
     /// let boolean_body = vec![Predicate::BoolPredicate(true)];
-    /// let boolean_rule = FLRule::new(head.clone(), boolean_body, false);
+    /// let boolean_rule = MacaronRule::new(head.clone(), boolean_body, false);
     ///
     /// // Mixed rule: config(X) :- input(X), True.
     /// let input_atom = Atom::new("input", vec![AtomArg::Var("X".to_string())]);
@@ -428,7 +427,7 @@ impl FLRule {
     ///     Predicate::PositiveAtomPredicate(input_atom),
     ///     Predicate::BoolPredicate(true)
     /// ];
-    /// let mixed_rule = FLRule::new(head, mixed_body, false);
+    /// let mixed_rule = MacaronRule::new(head, mixed_body, false);
     ///
     /// assert!(boolean_rule.is_boolean());
     /// assert!(mixed_rule.is_boolean()); // Contains boolean predicate
@@ -459,7 +458,7 @@ impl FLRule {
     /// # Examples
     ///
     /// ```rust
-    /// use parser::logic::{FLRule, Head, HeadArg, Predicate, Atom, AtomArg};
+    /// use parser::logic::{MacaronRule, Head, HeadArg, Predicate, Atom, AtomArg};
     ///
     /// let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
     /// let atom1 = Atom::new("input", vec![AtomArg::Var("X".to_string())]);
@@ -468,7 +467,7 @@ impl FLRule {
     ///     Predicate::PositiveAtomPredicate(atom1),
     ///     Predicate::PositiveAtomPredicate(atom2)
     /// ];
-    /// let rule = FLRule::new(head, body, false);
+    /// let rule = MacaronRule::new(head, body, false);
     ///
     /// // Access first predicate
     /// if let Predicate::PositiveAtomPredicate(atom) = rule.get(0) {
@@ -523,7 +522,7 @@ impl FLRule {
     /// # Examples
     ///
     /// ```rust
-    /// use parser::logic::{FLRule, Head, HeadArg, Predicate, Arithmetic, Factor};
+    /// use parser::logic::{MacaronRule, Head, HeadArg, Predicate, Arithmetic, Factor};
     /// use parser::primitive::ConstType;
     ///
     /// // Rule: config("timeout", 300, true) :- True.
@@ -536,7 +535,7 @@ impl FLRule {
     ///     ))
     /// ]);
     /// let body = vec![Predicate::BoolPredicate(true)];
-    /// let rule = FLRule::new(head, body, false);
+    /// let rule = MacaronRule::new(head, body, false);
     ///
     /// let constants = rule.extract_constants_from_head();
     /// assert_eq!(constants.len(), 2);
@@ -611,7 +610,7 @@ impl FLRule {
 /// // Planning optimized rule  
 /// complex_query(X) :- condition1(X), condition2(X), condition3(X).plan
 /// ```
-impl Lexeme for FLRule {
+impl Lexeme for MacaronRule {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let mut inner = parsed_rule.into_inner();
 
@@ -691,7 +690,7 @@ mod tests {
     fn test_rule_creation() {
         let head = simple_head("result", vec![head_arg_var("X")]);
         let body = vec![positive_atom_predicate("input", vec![var_arg("X")])];
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
 
         assert!(!rule.is_planning());
         assert!(!rule.is_boolean());
@@ -703,7 +702,7 @@ mod tests {
     fn test_rule_with_planning() {
         let head = simple_head("optimized", vec![head_arg_var("Y")]);
         let body = vec![positive_atom_predicate("source", vec![var_arg("Y")])];
-        let rule = FLRule::new(head, body, true);
+        let rule = MacaronRule::new(head, body, true);
 
         assert!(rule.is_planning());
         assert!(!rule.is_boolean());
@@ -713,7 +712,7 @@ mod tests {
     fn test_rule_with_boolean_predicate() {
         let head = simple_head("fact", vec![head_arg_const(ConstType::Integer(42))]);
         let body = vec![bool_predicate(true)];
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
 
         assert!(!rule.is_planning());
         assert!(rule.is_boolean());
@@ -726,7 +725,7 @@ mod tests {
             positive_atom_predicate("rel1", vec![var_arg("A")]),
             negated_atom_predicate("rel2", vec![var_arg("B")]),
         ];
-        let rule = FLRule::new(head.clone(), body.clone(), true);
+        let rule = MacaronRule::new(head.clone(), body.clone(), true);
 
         assert_eq!(rule.head(), &head);
         assert_eq!(rule.rhs(), &body);
@@ -742,7 +741,7 @@ mod tests {
             simple_comparison(),
             bool_predicate(false),
         ];
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
 
         // Test accessing individual predicates
         match rule.get(0) {
@@ -766,7 +765,7 @@ mod tests {
         // Simple rule
         let head = simple_head("result", vec![head_arg_var("X")]);
         let body = vec![positive_atom_predicate("input", vec![var_arg("X")])];
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
         assert_eq!(rule.to_string(), "result(X) :- input(X).");
 
         // Rule with multiple predicates
@@ -776,7 +775,7 @@ mod tests {
             negated_atom_predicate("rel2", vec![var_arg("B")]),
             bool_predicate(true),
         ];
-        let rule2 = FLRule::new(head2, body2, false);
+        let rule2 = MacaronRule::new(head2, body2, false);
         assert_eq!(
             rule2.to_string(),
             "complex(A, B) :- rel1(A), !rel2(B), true."
@@ -788,7 +787,7 @@ mod tests {
             positive_atom_predicate("data", vec![var_arg("X")]),
             simple_comparison(),
         ];
-        let rule3 = FLRule::new(head3, body3, false);
+        let rule3 = MacaronRule::new(head3, body3, false);
         assert_eq!(rule3.to_string(), "filtered(X) :- data(X), X > 5.");
     }
 
@@ -803,7 +802,7 @@ mod tests {
             ],
         );
         let body = vec![bool_predicate(true)];
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
 
         let constants = rule.extract_constants_from_head();
         assert_eq!(constants.len(), 2);
@@ -822,7 +821,7 @@ mod tests {
             ],
         );
         let body = vec![bool_predicate(true)];
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
 
         let _ = rule.extract_constants_from_head(); // Should panic
     }
@@ -842,7 +841,7 @@ mod tests {
             ],
         );
         let body = vec![bool_predicate(true)];
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
 
         let _ = rule.extract_constants_from_head(); // Should panic
     }
@@ -859,7 +858,7 @@ mod tests {
         );
         let head = simple_head("invalid", vec![HeadArg::Arith(complex_arith)]);
         let body = vec![bool_predicate(true)];
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
 
         let _ = rule.extract_constants_from_head(); // Should panic
     }
@@ -868,7 +867,7 @@ mod tests {
     fn test_rule_clone_hash() {
         let head = simple_head("test", vec![head_arg_var("X")]);
         let body = vec![positive_atom_predicate("input", vec![var_arg("X")])];
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
         let cloned = rule.clone();
         assert_eq!(rule, cloned);
 
@@ -887,7 +886,7 @@ mod tests {
             positive_atom_predicate("input", vec![var_arg("X")]),
             simple_comparison(),
         ];
-        let rule1 = FLRule::new(head1, body1, false);
+        let rule1 = MacaronRule::new(head1, body1, false);
         assert!(!rule1.is_boolean());
 
         // Rule with boolean predicate
@@ -896,13 +895,13 @@ mod tests {
             positive_atom_predicate("input", vec![var_arg("X")]),
             bool_predicate(true),
         ];
-        let rule2 = FLRule::new(head2, body2, false);
+        let rule2 = MacaronRule::new(head2, body2, false);
         assert!(rule2.is_boolean());
 
         // Rule with only boolean predicate
         let head3 = simple_head("only_bool", vec![head_arg_const(ConstType::Integer(1))]);
         let body3 = vec![bool_predicate(false)];
-        let rule3 = FLRule::new(head3, body3, false);
+        let rule3 = MacaronRule::new(head3, body3, false);
         assert!(rule3.is_boolean());
     }
 
@@ -921,7 +920,7 @@ mod tests {
             negated_atom_predicate("blocked", vec![var_arg("Person")]),
         ];
 
-        let rule = FLRule::new(head, body, false);
+        let rule = MacaronRule::new(head, body, false);
 
         assert_eq!(rule.head().name(), "derived");
         assert_eq!(rule.head().arity(), 2);

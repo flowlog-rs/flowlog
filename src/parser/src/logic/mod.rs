@@ -15,12 +15,12 @@
 //! # Examples
 //!
 //! ```rust
-//! use parser::logic::{FLRule, Head, HeadArg, Predicate};
+//! use parser::logic::{MacaronRule, Head, HeadArg, Predicate};
 //!
 //! // Create a simple rule: result(X) :- input(X).
 //! let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
 //! let body = vec![Predicate::BoolPredicate(true)];
-//! let rule = FLRule::new(head, body, false);
+//! let rule = MacaronRule::new(head, body, false);
 //! ```
 
 pub mod aggregation;
@@ -38,4 +38,4 @@ pub use atom::{Atom, AtomArg};
 pub use comparison::{ComparisonExpr, ComparisonOperator};
 pub use head::{Head, HeadArg};
 pub use predicate::Predicate;
-pub use rule::FLRule;
+pub use rule::MacaronRule;

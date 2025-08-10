@@ -1,7 +1,7 @@
 //! Macaron Parser Library
 //!
-//! A parser for the Macaron declarative logic programming language.
-//! Provides structured representations for Macaron programs including
+//! A parser for the Macaron, an efficient, scalable and extensible Datalog language engine.
+//! Provides structured representations for Datalog programs including
 //! relation declarations, logic rules, and primitive types.
 
 pub mod declaration;
@@ -13,7 +13,7 @@ pub mod program;
 pub use declaration::{Attribute, Relation};
 pub use logic::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
-    ComparisonExpr, ComparisonOperator, FLRule, Factor, Head, HeadArg, Predicate,
+    ComparisonExpr, ComparisonOperator, MacaronRule, Factor, Head, HeadArg, Predicate,
 };
 pub use primitive::{ConstType, DataType};
 pub use program::Program;
@@ -21,13 +21,11 @@ pub use program::Program;
 use pest::iterators::Pair;
 use pest_derive::Parser;
 
-/// Macaron grammar parser using Pest.
+/// Macaron Parser is powered by Pest, a PEG parser framework.
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
 pub struct MacaronParser;
 
-/// Macaron Parser is powered by Pest, a PEG parser framework.
-///
 /// Trait for converting Pest parse trees into Macaron types.
 ///
 /// All Macaron language constructs implement this trait to enable

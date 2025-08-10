@@ -1,7 +1,7 @@
-//! Datalog program representation and manipulation for the Macaron engine.
+//! Datalog program representation and manipulation. (Macaron engine)
 //!
 //! This module provides the infrastructure for representing, parsing, and
-//! optimizing Datalog programs. Macaron is a Datalog engine targeting Datalog programs.
+//! optimizing Datalog programs. Macaron is an engine targeting Datalog programs.
 //!
 //! # Datalog Program Structure
 //!
@@ -34,12 +34,12 @@
 //! config("debug") :- True.  // Boolean fact
 //! ```
 //!
-//! # Program Processing Pipeline
+//! # Parser Processing Pipeline
 //!
 //! 1. **Parsing**: Convert Datalog source text to structured [`Program`] representation
 //! 2. **Boolean Extraction**: Extract constant facts from boolean rules
 //! 3. **Dead Code Analysis**: Identify unused components based on outputs
-//! 4. **Optimization**: Remove dead code to create minimal program
+//! 4. **Dead Code Removal**: Remove dead code to create minimal program
 //!
 //! # Examples
 //!
@@ -66,16 +66,15 @@ use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::{fmt, fs};
 use tracing::{info, warn};
-
 use super::{
     declaration::Relation,
-    logic::{FLRule, Predicate},
+    logic::{MacaronRule, Predicate},
     ConstType, MacaronParser, Lexeme, Rule,
 };
 
-/// Represents a complete Macaron program.
+/// Represents a complete Datalog program.
 ///
-/// A Macaron program encapsulates all components needed for declarative logic
+/// A Datalog program encapsulates all components needed for declarative logic
 /// programming: input/output relation schemas, transformation rules, and derived
 /// facts.
 ///
@@ -94,7 +93,7 @@ use super::{
 /// ```rust
 /// use parser::program::Program;
 /// use parser::declaration::Relation;
-/// use parser::logic::{FLRule, Head, HeadArg, Predicate};
+/// use parser::logic::{MacaronRule, Head, HeadArg, Predicate};
 ///
 /// // Parse from file (recommended approach)
 /// let program = Program::parse("../../example/tc.dl");
@@ -109,23 +108,15 @@ use super::{
 ///     println!("Relation {} has {} constant facts", relation, facts.len());
 /// }
 /// ```
-/// # Performance Considerations
-///
-/// - **File Parsing**: Use [`Program::parse()`] for best performance with file-based programs
-/// - **Memory Usage**: Call [`prune_dead_components()`] to minimize memory footprint
-/// - **Boolean Facts**: Automatic extraction reduces rule evaluation overhead
-///
-/// [`Program::parse()`]: Program::parse
-/// [`prune_dead_components()`]: Program::prune_dead_components
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     edbs: Vec<Relation>,
     idbs: Vec<Relation>,
-    rules: Vec<FLRule>,
+    rules: Vec<MacaronRule>,
     bool_facts: HashMap<String, Vec<(Vec<ConstType>, bool)>>,
 }
 
-/// Provides formatted string representation of Macaron programs.
+/// Provides formatted string representation of Datalog programs.
 ///
 /// Formats the complete program in standard Macaron syntax with proper section
 /// organization and readable structure. The output follows the canonical Macaron
@@ -218,9 +209,9 @@ impl fmt::Display for Program {
 }
 
 impl Program {
-    /// Parses a complete Macaron program from a file path.
+    /// Parses a complete Datalog program from a file path.
     ///
-    /// This is the primary entry point for loading Macaron programs from disk.
+    /// This is the primary entry point for loading Datalog programs from disk.
     /// The method handles the complete parsing pipeline including grammar parsing,
     /// AST construction, boolean fact extraction, and dead code elimination.
     ///
@@ -230,16 +221,15 @@ impl Program {
     ///
     /// # Returns
     ///
-    /// A fully parsed and optimized [`Program`] instance ready for execution
+    /// A fully parsed and optimized [`Program`] instance ready for plan and execution
     ///
     /// # Parsing Pipeline
     ///
     /// 1. **File Reading**: Loads the entire file content into memory
-    /// 2. **Lexical Analysis**: Tokenizes the Macaron source code
-    /// 3. **Syntax Parsing**: Constructs AST according to Macaron grammar
-    /// 4. **Semantic Analysis**: Builds typed program representation
-    /// 5. **Boolean Extraction**: Extracts constant facts from boolean rules
-    /// 6. **Dead Code Elimination**: Removes unused components for optimization
+    /// 2. **Lexical Analysis**: Tokenizes the Datalog source code
+    /// 3. **Syntax Parsing**: Constructs AST according to Datalog grammar
+    /// 4. **Boolean Extraction**: Extracts constant facts from boolean rules
+    /// 5. **Dead Code Elimination**: Removes unused components for optimization
     ///
     /// # Error Handling
     ///
@@ -271,8 +261,8 @@ impl Program {
     /// - **File Not Found**: The specified path does not exist or is not readable
     /// - **Permission Denied**: Insufficient permissions to read the file
     /// - **Invalid UTF-8**: File contains invalid UTF-8 sequences
-    /// - **Syntax Error**: Macaron source contains invalid syntax
-    /// - **Grammar Error**: Source doesn't conform to Macaron grammar rules
+    /// - **Syntax Error**: Datalog source contains invalid syntax
+    /// - **Grammar Error**: Source doesn't conform to Datalog grammar rules
     /// - **Empty Parse**: No valid program structure found in source
     pub fn parse(path: &str) -> Self {
         let unparsed_str = fs::read_to_string(path).expect("Failed to read file");
@@ -294,7 +284,7 @@ impl Program {
 
     /// Returns all extensional database (EDB) relations.
     ///
-    /// EDB relations represent the input data sources for the Macaron program.
+    /// EDB relations represent the input data sources for the Datalog program.
     /// These are typically loaded from external files, databases, or network
     /// sources and serve as the foundation for all derived computations.
     ///
@@ -417,7 +407,7 @@ impl Program {
     ///
     /// # Returns
     ///
-    /// A slice of [`FLRule`] references representing all transformation rules,
+    /// A slice of [`MacaronRule`] references representing all transformation rules,
     /// preserving the order they were declared in the source program
     ///
     /// Note: Boolean fact rules (rules with only `True`/`False` predicates)
@@ -473,7 +463,7 @@ impl Program {
     ///
     /// [`bool_facts()`]: Program::bool_facts
     #[must_use]
-    pub fn rules(&self) -> &[FLRule] {
+    pub fn rules(&self) -> &[MacaronRule] {
         &self.rules
     }
 
@@ -627,7 +617,7 @@ impl Program {
     /// # Examples
     ///
     /// A rule like `fact(1, 2) :- True.` becomes a boolean fact `fact -> [(1, 2), true]`.
-    pub fn extract_boolean_facts(&mut self) {
+    fn extract_boolean_facts(&mut self) {
         let mut bool_rules = Vec::new();
         let mut normal_rules = Vec::new();
 
@@ -672,7 +662,7 @@ impl Program {
     /// - `HashSet<usize>`: Indices of rules that are needed
     /// - `HashSet<String>`: Names of predicates (relations) that are needed
     #[must_use]
-    pub fn identify_needed_components(&self) -> (HashSet<usize>, HashSet<String>) {
+    fn identify_needed_components(&self) -> (HashSet<usize>, HashSet<String>) {
         let output_predicates: HashSet<String> = self
             .output_relations()
             .iter()
@@ -784,7 +774,7 @@ impl Program {
     ///
     /// A new `Program` instance with only the necessary components.
     #[must_use]
-    pub fn prune_dead_components(&self) -> Self {
+    fn prune_dead_components(&self) -> Self {
         let (needed_rules, needed_predicates) = self.identify_needed_components();
 
         // Check for dead EDBs
@@ -816,7 +806,7 @@ impl Program {
         }
 
         // Check for dead rules
-        let dead_rules: Vec<(usize, &FLRule)> = self
+        let dead_rules: Vec<(usize, &MacaronRule)> = self
             .rules
             .iter()
             .enumerate()
@@ -831,7 +821,7 @@ impl Program {
         }
 
         // Filter the rules to keep only needed ones
-        let pruned_rules: Vec<FLRule> = self
+        let pruned_rules: Vec<MacaronRule> = self
             .rules
             .iter()
             .enumerate()
@@ -986,7 +976,7 @@ impl Lexeme for Program {
         let inner_rules = parsed_rule.into_inner();
         let mut edbs: Vec<Relation> = Vec::new();
         let mut idbs: Vec<Relation> = Vec::new();
-        let mut rules: Vec<FLRule> = Vec::new();
+        let mut rules: Vec<MacaronRule> = Vec::new();
 
         // Parse relation declarations and collect them in the appropriate vector
         /// Parses relation declarations from a grammar section.
@@ -1029,7 +1019,7 @@ impl Lexeme for Program {
         /// Parses logic rules from the `.rule` section.
         ///
         /// This helper function processes all logic rules defined in the `.rule`
-        /// section of a Macaron program. It constructs [`FLRule`] objects that
+        /// section of a Macaron program. It constructs [`MacaronRule`] objects that
         /// define the computational logic of the program.
         ///
         /// # Arguments
@@ -1041,15 +1031,15 @@ impl Lexeme for Program {
         ///
         /// 1. **Rule Iteration**: Processes each rule definition in the section
         /// 2. **Type Validation**: Only processes actual rule grammar elements
-        /// 3. **Rule Construction**: Uses [`FLRule::from_parsed_rule()`] for parsing
+        /// 3. **Rule Construction**: Uses [`MacaronRule::from_parsed_rule()`] for parsing
         /// 4. **Collection**: Adds parsed rules to the provided vector
         ///
         /// Note: Boolean rules are later extracted separately during program finalization.
-        fn parse_rules(vec: &mut Vec<FLRule>, rule: Pair<Rule>) {
+        fn parse_rules(vec: &mut Vec<MacaronRule>, rule: Pair<Rule>) {
             let rules_iterator = rule.into_inner();
             for rule in rules_iterator {
                 if rule.as_rule() == Rule::rule {
-                    vec.push(FLRule::from_parsed_rule(rule));
+                    vec.push(MacaronRule::from_parsed_rule(rule));
                 }
             }
         }
