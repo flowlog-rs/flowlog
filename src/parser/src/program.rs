@@ -62,15 +62,15 @@
 //! }
 //! ```
 
+use super::{
+    declaration::Relation,
+    logic::{MacaronRule, Predicate},
+    ConstType, Lexeme, MacaronParser, Rule,
+};
 use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::{fmt, fs};
 use tracing::{info, warn};
-use super::{
-    declaration::Relation,
-    logic::{MacaronRule, Predicate},
-    ConstType, MacaronParser, Lexeme, Rule,
-};
 
 /// Represents a complete Datalog program.
 ///
@@ -141,29 +141,6 @@ pub struct Program {
 ///
 /// .rule
 /// output_relation(Result) :- input_relation(X, Y), condition(X, Y, Result).
-/// ```
-///
-/// # Examples
-///
-/// ```rust
-/// use parser::program::Program;
-/// use std::fs;
-///
-/// let program = Program::parse("../../example/tc.dl");
-///
-/// // Display complete program
-/// println!("{}", program);
-///
-/// // Save optimized program to file (this would normally work in a real environment)
-/// let optimized = program.prune_dead_components();
-/// // fs::write("optimized.dl", format!("{}", optimized))
-/// //     .expect("Failed to write optimized program");
-///
-/// // Compare original vs optimized size
-/// let original_size = format!("{}", program).len();
-/// let optimized_size = format!("{}", optimized).len();
-/// println!("Size reduction: {:.1}%",
-///          (1.0 - optimized_size as f64 / original_size as f64) * 100.0);
 /// ```
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

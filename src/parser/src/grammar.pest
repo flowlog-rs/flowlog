@@ -247,7 +247,7 @@ predicate = {
     atom |          // Positive atom: edge(x, y)
     neg_atom |      // Negated atom: !edge(x, y)  
     compare_expr |  // Comparison: x > y
-    boolean        // Boolean literal: True/False
+    boolean         // Boolean atom: True/False
 }
 
 // Optimization hint directives for query planning
