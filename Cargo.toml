@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "src/parser"
+    "crates/parser"
 ]
 resolver = "2"
 
