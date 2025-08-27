@@ -52,11 +52,6 @@ else
     echo "[WARNING] Skipping system package installation..."
 fi
 
-#!/usr/bin/env bash
-
-# This script installs the latest stable Rust toolchain for development purposes.
-set -e
-
 if ! command -v rustup &> /dev/null; then
     echo "rustup not found. Installing rustup..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
