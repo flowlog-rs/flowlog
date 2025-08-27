@@ -1,25 +1,21 @@
-//! Logic components for Datalog programs (Macaron engine).
+//! Logic components for Macaron Datalog programs.
 //!
-//! This module contains the core logic structures used in Datalog programs parsed by Macaron,
-//! including rules, predicates, arithmetic expressions, and atoms.
+//! This module exposes the core logic layer used by the parser and planner:
+//! - [`rule`]: rules (head + body)
+//! - [`head`]: rule heads and head arguments
+//! - [`predicate`]: predicates appearing in rule bodies
+//! - [`atom`]: atoms (relation + arguments)
+//! - [`arithmetic`]: arithmetic expressions and factors
+//! - [`comparison`]: comparison expressions and operators
+//! - [`aggregation`]: aggregation operators and wrappers
 //!
-//! # Components
-//!
-//! - [`rule`]: Macaron rules with heads and bodies
-//! - [`head`]: Rule heads with arguments
-//! - [`predicate`]: Predicates used in rule bodies
-//! - [`atom`]: Atom expressions used in predicates
-//! - [`arithmetic`]: Arithmetic expressions and operations used in predicates
-//! - [`comparison`]: Comparison expressions and operators used in predicates
-//!
-//! # Examples
-//!
+//! # Example
 //! ```rust
 //! use parser::logic::{MacaronRule, Head, HeadArg, Predicate};
 //!
-//! // Create a simple rule: result(X) :- input(X).
+//! // result(X) :- input(X).
 //! let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
-//! let body = vec![Predicate::BoolPredicate(true)];
+//! let body = vec![Predicate::BoolPredicate(true)]; // adjust to your real body/predicate
 //! let rule = MacaronRule::new(head, body, false);
 //! ```
 
@@ -31,7 +27,7 @@ pub mod head;
 pub mod predicate;
 pub mod rule;
 
-// Re-export main types for easier access
+// Re-exports for a convenient public surface.
 pub use aggregation::{Aggregation, AggregationOperator};
 pub use arithmetic::{Arithmetic, ArithmeticOperator, Factor};
 pub use atom::{Atom, AtomArg};

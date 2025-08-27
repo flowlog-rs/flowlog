@@ -13,7 +13,7 @@ pub mod program;
 pub use declaration::{Attribute, Relation};
 pub use logic::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
-    ComparisonExpr, ComparisonOperator, MacaronRule, Factor, Head, HeadArg, Predicate,
+    ComparisonExpr, ComparisonOperator, Factor, Head, HeadArg, MacaronRule, Predicate,
 };
 pub use primitive::{ConstType, DataType};
 pub use program::Program;

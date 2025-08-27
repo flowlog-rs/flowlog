@@ -1,4 +1,4 @@
-//! Primitive types for the Macaron Datalog parser.
+//! Primitive types for the Macaron Datalog programs.
 //!
 //! This module defines the core types used in the parser layer:
 //! - [`DataType`]: relation attribute types (`integer`, `string`)
