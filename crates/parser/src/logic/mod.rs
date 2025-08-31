@@ -1,10 +1,10 @@
 //! Logic components for Macaron Datalog programs.
 //!
 //! This module exposes the core logic layer used by the parser and planner:
-//! - [`rule`]: rules (head + body)
+//! - [`rule`][]: rules (head + body)
 //! - [`head`]: rule heads and head arguments
 //! - [`predicate`]: predicates appearing in rule bodies
-//! - [`atom`]: atoms (relation + arguments)
+//! - [`atom`][]: atoms (relation + arguments)
 //! - [`arithmetic`]: arithmetic expressions and factors
 //! - [`comparison`]: comparison expressions and operators
 //! - [`aggregation`]: aggregation operators and wrappers
