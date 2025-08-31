@@ -36,7 +36,7 @@ impl Lexeme for ConstType {
     ///
     /// Panics if:
     /// - no inner rule exists
-    /// - integer literal fails to parse as `i32`
+    /// - number literal fails to parse as `i32`
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let inner = parsed_rule
             .into_inner()
@@ -47,7 +47,7 @@ impl Lexeme for ConstType {
                 inner
                     .as_str()
                     .parse()
-                    .expect("Parser error: failed to parse integer literal as i32"),
+                    .expect("Parser error: failed to parse number literal as i32"),
             ),
             Rule::string => Self::Text(inner.as_str().trim_matches('"').to_string()),
             _ => unreachable!(

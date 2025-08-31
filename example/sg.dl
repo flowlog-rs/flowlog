@@ -1,9 +1,9 @@
 .in 
-.decl Arc(src: integer, dest: integer) 
+.decl Arc(src: number, dest: number) 
 .input Arc.csv
 
 .out 
-.decl Sg(src: integer, dest: integer) 
+.decl Sg(src: number, dest: number) 
 
 .rule
 

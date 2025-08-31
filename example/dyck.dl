@@ -1,11 +1,11 @@
 .in
-.decl Arc(x:integer, y:integer, l:integer)
+.decl Arc(x:number, y:number, l:number)
 .input Arc.csv
 
 .out
-.decl Zero(x:integer, y:integer)
-.decl One(x:integer, y:integer)
-.decl Dyck(x:integer, y:integer)
+.decl Zero(x:number, y:number)
+.decl One(x:number, y:number)
+.decl Dyck(x:number, y:number)
 
 
 .rule

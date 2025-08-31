@@ -1,12 +1,12 @@
 .in
-.decl NullEdge(x: integer, y: integer)
+.decl NullEdge(x: number, y: number)
 .input NullEdge.csv
 
-.decl Edge(x: integer, y: integer)
+.decl Edge(x: number, y: number)
 .input Edge.csv
 
 .out 
-.decl NullNode(x: integer, y: integer)
+.decl NullNode(x: number, y: number)
 
 .rule
 NullNode(x, y) :- NullEdge(x, y).

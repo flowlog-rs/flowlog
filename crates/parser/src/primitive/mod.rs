@@ -1,8 +1,8 @@
 //! Primitive types for the Macaron Datalog programs.
 //!
 //! This module defines the core types used in the parser layer:
-//! - [`DataType`]: relation attribute types (`integer`, `string`)
-//! - [`ConstType`]: literal constants (integers, text)
+//! - [`DataType`]: relation attribute types (`number`, `string`)
+//! - [`ConstType`]: literal constants (numbers, text)
 //!
 //! These types form the building blocks of Macaron Datalog programs and appear
 //! in atoms, expressions, and relation schemas.
@@ -12,9 +12,9 @@
 //! use parser::primitive::{DataType, ConstType};
 //! use std::str::FromStr;
 //!
-//! let ty = DataType::from_str("integer").unwrap();
+//! let ty = DataType::from_str("number").unwrap();
 //! let c = ConstType::Integer(42);
-//! assert_eq!(ty.to_string(), "integer");
+//! assert_eq!(ty.to_string(), "number");
 //! assert_eq!(c.to_string(), "42");
 //! ```
 

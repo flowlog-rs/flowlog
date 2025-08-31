@@ -1,118 +1,118 @@
 .in
-.decl DirectSuperclass(class:integer, superclass:integer)
+.decl DirectSuperclass(class:number, superclass:number)
 .input DirectSuperclass.csv
 
-.decl DirectSuperinterface(ref:integer, interface:integer)
+.decl DirectSuperinterface(ref:number, interface:number)
 .input DirectSuperinterface.csv
 
-.decl MainClass(class:integer)
+.decl MainClass(class:number)
 .input MainClass.csv
 
-.decl FormalParam(index:integer, method:integer, var:integer)
+.decl FormalParam(index:number, method:number, var:number)
 .input FormalParam.csv
 
-.decl ComponentType(arrayType:integer, componentType:integer)
+.decl ComponentType(arrayType:number, componentType:number)
 .input ComponentType.csv
 
-.decl AssignReturnValue(invocation:integer, to:integer)
+.decl AssignReturnValue(invocation:number, to:number)
 .input AssignReturnValue.csv
 
-.decl ActualParam(index:integer, invocation:integer, var:integer)
+.decl ActualParam(index:number, invocation:number, var:number)
 .input ActualParam.csv
 
-.decl Method_Modifier(mod:integer, method:integer)
+.decl Method_Modifier(mod:number, method:number)
 .input Method_Modifier.csv
-.decl Var_Type(var:integer, type:integer)
+.decl Var_Type(var:number, type:number)
 .input Var_Type.csv
-.decl HeapAllocation_Type(heap:integer, type:integer)
+.decl HeapAllocation_Type(heap:number, type:number)
 .input HeapAllocation_Type.csv # modified to be an EDB now
 
 
 # Main schema
-# .decl Method_Descriptor(method:integer, descriptor:integer)
+# .decl Method_Descriptor(method:number, descriptor:number)
 .out
-.decl isType(t:integer)
-.decl isReferenceType(t:integer)
-.decl isArrayType(t:integer)
-.decl isClassType(t:integer)
-.decl isInterfaceType(t:integer)
-.decl ApplicationClass(ref:integer)
-.decl Field_DeclaringType(field:integer, declaringClass:integer)
-.decl Method_DeclaringType(method:integer, declaringType:integer)
-.decl Method_ReturnType(method:integer, returnType:integer)
-.decl Method_SimpleName(method:integer, simpleName:integer)
-.decl Method_Params(method:integer, params:integer)
-.decl ThisVar(method:integer, var:integer)
-.decl Var_DeclaringMethod(var:integer, method:integer)
-# .decl HeapAllocation_Type(heap:integer, type:integer) move into input
-# .decl MainMethodArgArray(heap:integer) redundant
-# .decl MainMethodArgArrayContent(heap:integer) redundant
-.decl Instruction_Method(insn:integer, inMethod:integer)
-.decl isVirtualMethodInvocation_Insn(insn:integer)
-.decl isStaticMethodInvocation_Insn(insn:integer)
-.decl FieldInstruction_Signature(insn:integer, sign:integer)
-.decl LoadInstanceField_Base(insn:integer, var:integer)
-.decl LoadInstanceField_To(insn:integer, var:integer)
-.decl StoreInstanceField_From(insn:integer, var:integer)
-.decl StoreInstanceField_Base(insn:integer, var:integer)
-.decl LoadStaticField_To(insn:integer, var:integer)
-.decl StoreStaticField_From(insn:integer, var:integer)
-.decl LoadArrayIndex_Base(insn:integer, var:integer)
-.decl LoadArrayIndex_To(insn:integer, var:integer)
-.decl StoreArrayIndex_From(insn:integer, var:integer)
-.decl StoreArrayIndex_Base(insn:integer, var:integer)
-.decl AssignInstruction_To(insn:integer, to:integer)
-.decl AssignCast_From(insn:integer, from:integer)
-.decl AssignCast_Type(insn:integer, type:integer)
-.decl AssignLocal_From(insn:integer, from:integer)
-.decl AssignHeapAllocation_Heap(insn:integer, heap:integer)
-.decl ReturnNonvoid_Var(return:integer, var:integer)
-.decl MethodInvocation_Method(invocation:integer, signature:integer)
-.decl VirtualMethodInvocation_Base(invocation:integer, base:integer)
-.decl VirtualMethodInvocation_SimpleName(invocation:integer, simplename:integer)
-.decl VirtualMethodInvocation_Descriptor(invocation:integer, descriptor:integer)
-.decl SpecialMethodInvocation_Base(invocation:integer, base:integer)
-.decl MethodInvocation_Base(invocation:integer, base:integer)
+.decl isType(t:number)
+.decl isReferenceType(t:number)
+.decl isArrayType(t:number)
+.decl isClassType(t:number)
+.decl isInterfaceType(t:number)
+.decl ApplicationClass(ref:number)
+.decl Field_DeclaringType(field:number, declaringClass:number)
+.decl Method_DeclaringType(method:number, declaringType:number)
+.decl Method_ReturnType(method:number, returnType:number)
+.decl Method_SimpleName(method:number, simpleName:number)
+.decl Method_Params(method:number, params:number)
+.decl ThisVar(method:number, var:number)
+.decl Var_DeclaringMethod(var:number, method:number)
+# .decl HeapAllocation_Type(heap:number, type:number) move into input
+# .decl MainMethodArgArray(heap:number) redundant
+# .decl MainMethodArgArrayContent(heap:number) redundant
+.decl Instruction_Method(insn:number, inMethod:number)
+.decl isVirtualMethodInvocation_Insn(insn:number)
+.decl isStaticMethodInvocation_Insn(insn:number)
+.decl FieldInstruction_Signature(insn:number, sign:number)
+.decl LoadInstanceField_Base(insn:number, var:number)
+.decl LoadInstanceField_To(insn:number, var:number)
+.decl StoreInstanceField_From(insn:number, var:number)
+.decl StoreInstanceField_Base(insn:number, var:number)
+.decl LoadStaticField_To(insn:number, var:number)
+.decl StoreStaticField_From(insn:number, var:number)
+.decl LoadArrayIndex_Base(insn:number, var:number)
+.decl LoadArrayIndex_To(insn:number, var:number)
+.decl StoreArrayIndex_From(insn:number, var:number)
+.decl StoreArrayIndex_Base(insn:number, var:number)
+.decl AssignInstruction_To(insn:number, to:number)
+.decl AssignCast_From(insn:number, from:number)
+.decl AssignCast_Type(insn:number, type:number)
+.decl AssignLocal_From(insn:number, from:number)
+.decl AssignHeapAllocation_Heap(insn:number, heap:number)
+.decl ReturnNonvoid_Var(return:number, var:number)
+.decl MethodInvocation_Method(invocation:number, signature:number)
+.decl VirtualMethodInvocation_Base(invocation:number, base:number)
+.decl VirtualMethodInvocation_SimpleName(invocation:number, simplename:number)
+.decl VirtualMethodInvocation_Descriptor(invocation:number, descriptor:number)
+.decl SpecialMethodInvocation_Base(invocation:number, base:number)
+.decl MethodInvocation_Base(invocation:number, base:number)
 
 # Fat schema
-.decl LoadInstanceField(base:integer, sig:integer, to:integer, inmethod:integer)
-.decl StoreInstanceField(from:integer, base:integer, signature:integer, inmethod:integer)
-.decl LoadStaticField(sig:integer, to:integer, inmethod:integer)
-.decl StoreStaticField(from:integer, signature:integer, inmethod:integer)
-.decl LoadArrayIndex(base:integer, to:integer, inmethod:integer)
-.decl StoreArrayIndex(from:integer, base:integer, inmethod:integer)
-.decl AssignCast(type:integer, from:integer, to:integer, inmethod:integer)
-.decl AssignLocal(from:integer, to:integer, inmethod:integer)
-.decl AssignHeapAllocation(heap:integer, to:integer, inmethod:integer)
-.decl ReturnVar(var:integer, method:integer)
-.decl StaticMethodInvocation(invocation:integer, signature:integer, inmethod:integer)
+.decl LoadInstanceField(base:number, sig:number, to:number, inmethod:number)
+.decl StoreInstanceField(from:number, base:number, signature:number, inmethod:number)
+.decl LoadStaticField(sig:number, to:number, inmethod:number)
+.decl StoreStaticField(from:number, signature:number, inmethod:number)
+.decl LoadArrayIndex(base:number, to:number, inmethod:number)
+.decl StoreArrayIndex(from:number, base:number, inmethod:number)
+.decl AssignCast(type:number, from:number, to:number, inmethod:number)
+.decl AssignLocal(from:number, to:number, inmethod:number)
+.decl AssignHeapAllocation(heap:number, to:number, inmethod:number)
+.decl ReturnVar(var:number, method:number)
+.decl StaticMethodInvocation(invocation:number, signature:number, inmethod:number)
 
 
 # imports
 .in
-.decl _ClassType(class:integer)
+.decl _ClassType(class:number)
 .input ClassType.csv
-.decl _ArrayType(arrayType:integer)
+.decl _ArrayType(arrayType:number)
 .input ArrayType.csv
-.decl _InterfaceType(interface:integer)
+.decl _InterfaceType(interface:number)
 .input InterfaceType.csv
-.decl _Var_DeclaringMethod(var:integer, method:integer)
+.decl _Var_DeclaringMethod(var:number, method:number)
 .input Var_DeclaringMethod.csv 
-.decl _ApplicationClass(type:integer)
+.decl _ApplicationClass(type:number)
 .input ApplicationClass.csv
-.decl _ThisVar(method:integer, var:integer)
+.decl _ThisVar(method:number, var:number)
 .input ThisVar.csv
-.decl _NormalHeap(id:integer, type:integer)
+.decl _NormalHeap(id:number, type:number)
 .input NormalHeap.csv
-.decl _StringConstant(id:integer)
+.decl _StringConstant(id:number)
 .input StringConstant.csv
-.decl _AssignHeapAllocation(instruction:integer, index:integer, heap:integer, to:integer, inmethod:integer, linenumber:integer)
+.decl _AssignHeapAllocation(instruction:number, index:number, heap:number, to:number, inmethod:number, linenumber:number)
 .input AssignHeapAllocation.csv
-.decl _AssignLocal(instruction:integer, index:integer, from:integer, to:integer, inmethod:integer)
+.decl _AssignLocal(instruction:number, index:number, from:number, to:number, inmethod:number)
 .input AssignLocal.csv
-.decl _AssignCast(instruction:integer, index:integer, from:integer, to:integer, type:integer, inmethod:integer)
+.decl _AssignCast(instruction:number, index:number, from:number, to:number, type:number, inmethod:number)
 .input AssignCast.csv
-.decl _Field(signature:integer, declaringClass:integer, simplename:integer, type:integer)
+.decl _Field(signature:number, declaringClass:number, simplename:number, type:number)
 .input Field.csv
 
 .rule
@@ -172,29 +172,29 @@ MethodInvocation_Base(invocation, base) :- SpecialMethodInvocation_Base(invocati
 
 
 .in
-.decl _StaticMethodInvocation(instruction:integer, index:integer, signature:integer, method:integer)
+.decl _StaticMethodInvocation(instruction:number, index:number, signature:number, method:number)
 .input StaticMethodInvocation.csv
-.decl _SpecialMethodInvocation(instruction:integer, index:integer, signature:integer, base:integer, method:integer)
+.decl _SpecialMethodInvocation(instruction:number, index:number, signature:number, base:number, method:number)
 .input SpecialMethodInvocation.csv
-.decl _VirtualMethodInvocation(instruction:integer, index:integer, signature:integer, base:integer, method:integer)
+.decl _VirtualMethodInvocation(instruction:number, index:number, signature:number, base:number, method:number)
 .input VirtualMethodInvocation.csv
-.decl _Method(method:integer, simplename:integer, params:integer, declaringType:integer, returnType:integer, jvmDescriptor:integer, arity:integer)
+.decl _Method(method:number, simplename:number, params:number, declaringType:number, returnType:number, jvmDescriptor:number, arity:number)
 .input Method.csv
-.decl Method_Descriptor(method:integer, descriptor:integer)
+.decl Method_Descriptor(method:number, descriptor:number)
 .input Method_Descriptor.csv
-.decl _StoreInstanceField(instruction:integer, index:integer, from:integer, base:integer, signature:integer, method:integer)
+.decl _StoreInstanceField(instruction:number, index:number, from:number, base:number, signature:number, method:number)
 .input StoreInstanceField.csv
-.decl _LoadInstanceField(instruction:integer, index:integer, to:integer, base:integer, signature:integer, method:integer)
+.decl _LoadInstanceField(instruction:number, index:number, to:number, base:number, signature:number, method:number)
 .input LoadInstanceField.csv
-.decl _StoreStaticField(instruction:integer, index:integer, from:integer, signature:integer, method:integer)
+.decl _StoreStaticField(instruction:number, index:number, from:number, signature:number, method:number)
 .input StoreStaticField.csv
-.decl _LoadStaticField(instruction:integer, index:integer, to:integer, signature:integer, method:integer)
+.decl _LoadStaticField(instruction:number, index:number, to:number, signature:number, method:number)
 .input LoadStaticField.csv
-.decl _StoreArrayIndex(instruction:integer, index:integer, from:integer, base:integer, method:integer)
+.decl _StoreArrayIndex(instruction:number, index:number, from:number, base:number, method:number)
 .input StoreArrayIndex.csv
-.decl _LoadArrayIndex(instruction:integer, index:integer, to:integer, base:integer, method:integer)
+.decl _LoadArrayIndex(instruction:number, index:number, to:number, base:number, method:number)
 .input LoadArrayIndex.csv
-.decl _Return(instruction:integer, index:integer, var:integer, method:integer)
+.decl _Return(instruction:number, index:number, var:number, method:number)
 .input Return.csv
 
 .rule
@@ -354,16 +354,16 @@ VirtualMethodInvocation_Descriptor(invocation, descriptor) :-
 # Basic (type-based) analysis
 # .comp Basic {
 .out
-.decl MethodLookup(simplename:integer, descriptor:integer, type:integer, method:integer)
-.decl MethodImplemented(simplename:integer, descriptor:integer, type:integer, method:integer)
-.decl DirectSubclass(a:integer, c:integer)
-.decl Subclass(c:integer, a:integer)
-.decl Superclass(c:integer, a:integer)
-.decl Superinterface(k:integer, c:integer)
-.decl SubtypeOf(subtype:integer, type:integer)
-.decl SupertypeOf(supertype:integer, type:integer)
-.decl SubtypeOfDifferent(subtype:integer, type:integer)
-.decl MainMethodDeclaration(method:integer)
+.decl MethodLookup(simplename:number, descriptor:number, type:number, method:number)
+.decl MethodImplemented(simplename:number, descriptor:number, type:number, method:number)
+.decl DirectSubclass(a:number, c:number)
+.decl Subclass(c:number, a:number)
+.decl Superclass(c:number, a:number)
+.decl Superinterface(k:number, c:number)
+.decl SubtypeOf(subtype:number, type:number)
+.decl SupertypeOf(supertype:number, type:number)
+.decl SubtypeOfDifferent(subtype:number, type:number)
+.decl MainMethodDeclaration(method:number)
 
 
 
@@ -481,8 +481,8 @@ SubtypeOfDifferent(s, t) :-
 
 # class initialization
 .out
-.decl ClassInitializer(type:integer, method:integer)
-.decl InitializedClass(classOrInterface:integer)
+.decl ClassInitializer(type:number, method:number)
+.decl InitializedClass(classOrInterface:number)
 
 
 
@@ -525,13 +525,13 @@ Reachable(clinit) :-
 # Main (value-based) analysis
 # basic.MethodImplemented, basic.MainMethodDeclaration, basic.SupertypeOf, basic.MethodLookup
 .out
-.decl Assign(to:integer, from:integer)
-.decl VarPointsTo(heap:integer, var:integer)
-.decl InstanceFieldPointsTo(heap:integer , fld:integer, baseheap:integer)
-.decl StaticFieldPointsTo(heap:integer, fld:integer)
-.decl CallGraphEdge(invocation:integer, meth:integer)
-.decl ArrayIndexPointsTo(baseheap:integer, heap:integer)
-.decl Reachable(method:integer)
+.decl Assign(to:number, from:number)
+.decl VarPointsTo(heap:number, var:number)
+.decl InstanceFieldPointsTo(heap:number , fld:number, baseheap:number)
+.decl StaticFieldPointsTo(heap:number, fld:number)
+.decl CallGraphEdge(invocation:number, meth:number)
+.decl ArrayIndexPointsTo(baseheap:number, heap:number)
+.decl Reachable(method:number)
 
 
 

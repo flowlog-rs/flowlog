@@ -39,7 +39,7 @@ relation_name = { identifier }
 data_type = { integer_type | string_type }
 
 // Numeric data type for integers
-integer_type = { "integer" }
+integer_type = { "number" }
 
 // Text data type for strings
 string_type = { "string" }
@@ -76,23 +76,23 @@ edb_decl = { ".in" ~ edb_relation_decl+ }
 idb_decl = { ".out" ~ idb_relation_decl+ }
 
 // Input relation declaration
-// Example: .decl edge(src: integer, dst: integer) .input "graph.facts"
+// Example: .decl edge(src: number, dst: number) .input "graph.facts"
 edb_relation_decl = { 
     ".decl" ~ relation_name ~ "(" ~ attributes_decl ~ ")" ~ in_decl? 
 }
 
 // Output relation declaration
-// Example: .decl reachable(src: integer, dst: integer) .output "result.csv"
+// Example: .decl reachable(src: number, dst: number) .output "result.csv"
 idb_relation_decl = { 
     ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ out_decl? 
 }
 
 // Comma-separated list of attribute declarations
-// Example: src: integer, dst: integer, weight: string
+// Example: src: number, dst: number, weight: string
 attributes_decl = { attribute_decl ~ ("," ~ attribute_decl)* }
 
 // Single attribute with name and data type
-// Example: "src: integer" 
+// Example: "src: number" 
 attribute_decl = { attribute_name ~ ":" ~ data_type }
 
 // =============================================================================

@@ -1,118 +1,118 @@
 .in
 # -------------------- edbs ------------------- 
-.decl Arch_memory_access(AccessType:integer,EA:integer,DirectReg:integer,BaseReg:integer,IndexReg:integer,Offset:integer)
+.decl Arch_memory_access(AccessType:number,EA:number,DirectReg:number,BaseReg:number,IndexReg:number,Offset:number)
 .input Arch_memory_access_truncate.csv # cut -f1-2,5-7,9 Arch_memory_access.csv > Arch_memory_access_truncate.csv
 
-.decl Arch_reg_reg_arithmetic_operation(EA:integer,Dst:integer,Src1:integer,Src2:integer,Mult:integer,Offset:integer)
+.decl Arch_reg_reg_arithmetic_operation(EA:number,Dst:number,Src1:number,Src2:number,Mult:number,Offset:number)
 .input Arch_reg_reg_arithmetic_operation.csv
 
-.decl Arch_return_reg(Reg:integer)
+.decl Arch_return_reg(Reg:number)
 .input Arch_return_reg.csv
 
-.decl Block_next(Block:integer,BlockEnd:integer,NextBlock:integer)
+.decl Block_next(Block:number,BlockEnd:number,NextBlock:number)
 .input Block_next.csv
 
-.decl Block_last_instruction(Block:integer,EA:integer)
+.decl Block_last_instruction(Block:number,EA:number)
 .input Block_last_instruction.csv
 
-.decl Code_in_block(EA:integer,Block:integer)
+.decl Code_in_block(EA:number,Block:number)
 .input Code_in_block.csv
 
-.decl Direct_call(EA:integer,Dest:integer)
+.decl Direct_call(EA:number,Dest:number)
 .input Direct_call.csv
 
-.decl May_fallthrough(o:integer,d:integer)
+.decl May_fallthrough(o:number,d:number)
 .input May_fallthrough.csv
 
-.decl Reg_def_use_block_last_def(EA:integer,EA_def:integer,Var:integer)
+.decl Reg_def_use_block_last_def(EA:number,EA_def:number,Var:number)
 .input Reg_def_use_block_last_def.csv
 
-.decl Reg_def_use_defined_in_block(Block:integer,Var:integer)
+.decl Reg_def_use_defined_in_block(Block:number,Var:number)
 .input Reg_def_use_defined_in_block.csv
 
-.decl Reg_def_use_flow_def(EA:integer,Var:integer,EA_next:integer,Value:integer)
+.decl Reg_def_use_flow_def(EA:number,Var:number,EA_next:number,Value:number)
 .input Reg_def_use_flow_def.csv
 
-.decl Reg_def_use_live_var_def(Block:integer,VarIdentity:integer,LiveVar:integer,EA_def:integer)
+.decl Reg_def_use_live_var_def(Block:number,VarIdentity:number,LiveVar:number,EA_def:number)
 .input Reg_def_use_live_var_def.csv
 
-.decl Reg_def_use_ref_in_block(Block:integer,Var:integer)
+.decl Reg_def_use_ref_in_block(Block:number,Var:number)
 .input Reg_def_use_ref_in_block.csv
 
-.decl Reg_def_use_return_block_end(Callee:integer,CalleeEnd:integer,Block:integer,BlockEnd:integer)
+.decl Reg_def_use_return_block_end(Callee:number,CalleeEnd:number,Block:number,BlockEnd:number)
 .input Reg_def_use_return_block_end.csv
 
-.decl Reg_def_use_used(EA:integer,Var:integer,Index:integer)
+.decl Reg_def_use_used(EA:number,Var:number,Index:number)
 .input Reg_def_use_used.csv
 
-.decl Reg_def_use_used_in_block(Block:integer,EA_used:integer,Var:integer,Index:integer)
+.decl Reg_def_use_used_in_block(Block:number,EA_used:number,Var:number,Index:number)
 .input Reg_def_use_used_in_block.csv
 
-.decl Reg_used_for(EA:integer,Reg:integer,Type:integer)
+.decl Reg_used_for(EA:number,Reg:number,Type:number)
 .input Reg_used_for.csv
 
-.decl Relative_jump_table_entry_candidate(EA:integer,TableStart:integer,Size:integer,Reference:integer,Dest:integer,Scale:integer,Offset:integer)
+.decl Relative_jump_table_entry_candidate(EA:number,TableStart:number,Size:number,Reference:number,Dest:number,Scale:number,Offset:number)
 .input Relative_jump_table_entry_candidate.csv
 
-.decl Stack_def_use_def(EA:integer,VarReg:integer,VarPos:integer)
+.decl Stack_def_use_def(EA:number,VarReg:number,VarPos:number)
 .input Stack_def_use_def.csv
 
-.decl Stack_def_use_defined_in_block(Block:integer,VarReg:integer,VarPos:integer)
+.decl Stack_def_use_defined_in_block(Block:number,VarReg:number,VarPos:number)
 .input Stack_def_use_defined_in_block.csv
 
-.decl Stack_def_use_live_var_def(Block:integer,VarIdentityReg:integer,VarIdentityPos:integer,LiveVarReg:integer,LiveVarPos:integer,EA_def:integer)
+.decl Stack_def_use_live_var_def(Block:number,VarIdentityReg:number,VarIdentityPos:number,LiveVarReg:number,LiveVarPos:number,EA_def:number)
 .input Stack_def_use_live_var_def.csv
 
-.decl Stack_def_use_ref_in_block(Block:integer,VarReg:integer,VarPos:integer)
+.decl Stack_def_use_ref_in_block(Block:number,VarReg:number,VarPos:number)
 .input Stack_def_use_ref_in_block.csv
 
-.decl Stack_def_use_used_in_block(Block:integer,EA_used:integer,VarReg:integer,VarPos:integer,Index:integer)
+.decl Stack_def_use_used_in_block(Block:number,EA_used:number,VarReg:number,VarPos:number,Index:number)
 .input Stack_def_use_used_in_block.csv
 
-.decl Stack_def_use_used(EA:integer,VarReg:integer,VarPos:integer,Index:integer)
+.decl Stack_def_use_used(EA:number,VarReg:number,VarPos:number,Index:number)
 .input Stack_def_use_used.csv
 
 
 # -------------------- fake edbs ------------------- */
-# .decl Stack_def_use_live_var_used_in_block(Block:integer,EA:integer,LiveVar:stack_var,UsedVar:stack_var,EA_used:integer,Index:integer,Moves:integer)
+# .decl Stack_def_use_live_var_used_in_block(Block:number,EA:number,LiveVar:stack_var,UsedVar:stack_var,EA_used:number,Index:number,Moves:number)
 # .input Stack_def_use_live_var_used_in_block.csv
 
-.decl Stack_def_use_live_var_used(Block:integer,LiveVarReg:integer,LiveVarPos:integer,UsedVarReg:integer,UsedVarPos:integer,EA_used:integer,Index:integer,Moves:integer) # overridable
+.decl Stack_def_use_live_var_used(Block:number,LiveVarReg:number,LiveVarPos:number,UsedVarReg:number,UsedVarPos:number,EA_used:number,Index:number,Moves:number) # overridable
 .input Stack_def_use_live_var_used.csv
 
-.decl Jump_table_start(EA_jump:integer,Size:integer,TableStart:integer,TableRef:integer,Scale:integer)
+.decl Jump_table_start(EA_jump:number,Size:number,TableStart:number,TableRef:number,Scale:number)
 .input Jump_table_start.csv
 
-.decl def_used_for_address_0(EA_def:integer,Reg:integer,Type:integer)
+.decl def_used_for_address_0(EA_def:number,Reg:number,Type:number)
 .input Def_used_for_address.csv
 
-.decl Stack_def_use_block_last_def(EA:integer,EA_def:integer,VarReg:integer,VarPos:integer)
+.decl Stack_def_use_block_last_def(EA:number,EA_def:number,VarReg:number,VarPos:number)
 .input Stack_def_use_block_last_def.csv
 
 
 # -------------------- idbs ------------------- 
 .out
-.decl Stack_def_use_def_used(EA_def:integer,VarDefReg:integer,VarDefPos:integer,EA_used:integer,VarUsedReg:integer,VarUsedPos:integer)
+.decl Stack_def_use_def_used(EA_def:number,VarDefReg:number,VarDefPos:number,EA_used:number,VarUsedReg:number,VarUsedPos:number)
 .out
-.decl Reg_def_use_return_val_used(EA_call:integer,Callee:integer,Reg:integer,EA_used:integer,Index_used:integer)
+.decl Reg_def_use_return_val_used(EA_call:number,Callee:number,Reg:number,EA_used:number,Index_used:number)
 .out
-.decl Reg_def_use_live_var_used(Block:integer,LiveVar:integer,EA_used:integer,Index:integer) # overridable
+.decl Reg_def_use_live_var_used(Block:number,LiveVar:number,EA_used:number,Index:number) # overridable
 .out
-.decl Jump_table_target(EA:integer,Dest:integer)
+.decl Jump_table_target(EA:number,Dest:number)
 .out
-.decl Reg_def_use_def_used(EA_def:integer,Var:integer,EA_used:integer,Index_used:integer)
+.decl Reg_def_use_def_used(EA_def:number,Var:number,EA_used:number,Index_used:number)
 .out
-.decl Reg_def_use_live_var_at_prior_used(EA_used:integer,BlockUsed:integer,Var:integer)
+.decl Reg_def_use_live_var_at_prior_used(EA_used:number,BlockUsed:number,Var:number)
 .out
-.decl Reg_def_use_live_var_at_block_end(Block:integer,BlockUsed:integer,Var:integer)
+.decl Reg_def_use_live_var_at_block_end(Block:number,BlockUsed:number,Var:number)
 .out
-.decl Reg_reg_arithmetic_operation_defs(EA:integer,Reg_def:integer,EA_def1:integer,Reg1:integer,EA_def2:integer,Reg2:integer,Mult:integer,Offset:integer)
+.decl Reg_reg_arithmetic_operation_defs(EA:number,Reg_def:number,EA_def1:number,Reg1:number,EA_def2:number,Reg2:number,Mult:number,Offset:number)
 .out
-.decl Def_used_for_address(EA_def:integer,Reg:integer,Type:integer)
+.decl Def_used_for_address(EA_def:number,Reg:number,Type:number)
 .out
-.decl Stack_def_use_live_var_at_block_end(Block:integer,BlockUsed:integer,VarReg:integer,VarPos:integer)
+.decl Stack_def_use_live_var_at_block_end(Block:number,BlockUsed:number,VarReg:number,VarPos:number)
 .out
-.decl Stack_def_use_live_var_at_prior_used(EA_used:integer,BlockUsed:integer,VarReg:integer,VarPos:integer)
+.decl Stack_def_use_live_var_at_prior_used(EA_used:number,BlockUsed:number,VarReg:number,VarPos:number)
 
 
 

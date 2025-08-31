@@ -1,12 +1,12 @@
 .in 
-.decl arc(src: integer, dest: integer, weight: integer) 
+.decl arc(src: number, dest: number, weight: number) 
 .input Arc.csv
-.decl id(src: integer)
+.decl id(src: number)
 .input id.csv
 
 .out 
-.decl sssp2(x: integer, y: integer)
-.decl sssp(x: integer, y: integer)
+.decl sssp2(x: number, y: number)
+.decl sssp(x: number, y: number)
 
 .rule
 sssp2(x, min(0)) :- id(x).

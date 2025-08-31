@@ -1,27 +1,27 @@
 .in
-.decl P(X: integer, Z: integer)
+.decl P(X: number, Z: number)
 .input P.csv
 
-.decl Q(X: integer, Y: integer, Z: integer)
+.decl Q(X: number, Y: number, Z: number)
 .input Q.csv
 
-.decl R(R: integer, P: integer, E: integer)
+.decl R(R: number, P: number, E: number)
 .input R.csv
 
-.decl C(Y: integer, Z: integer, W: integer)
+.decl C(Y: number, Z: number, W: number)
 .input C.csv
 
-.decl U(R: integer, Z: integer, W: integer)
+.decl U(R: number, Z: number, W: number)
 .input U.csv
 
-.decl S(R: integer, P: integer)
+.decl S(R: number, P: number)
 .input S.csv
 
 .out 
-.decl OutP(X: integer, Z: integer)
+.decl OutP(X: number, Z: number)
 
 .out
-.decl OutQ(X: integer, Y: integer, Z: integer)
+.decl OutQ(X: number, Y: number, Z: number)
 
 .rule
 OutP(x,y) :- P(x,y).

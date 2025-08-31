@@ -210,18 +210,18 @@ mod tests {
         ];
 
         let basic = Relation::new("r", a.clone(), None, None);
-        assert_eq!(basic.to_string(), "r(x: integer, y: string)");
+        assert_eq!(basic.to_string(), "r(x: number, y: string)");
 
         let with_in = Relation::new("r", a.clone(), Some("data.csv"), None);
         assert_eq!(
             with_in.to_string(),
-            "r(x: integer, y: string) .input data.csv"
+            "r(x: number, y: string) .input data.csv"
         );
 
         let with_out = Relation::new("r", a, None, Some("out.csv"));
         assert_eq!(
             with_out.to_string(),
-            "r(x: integer, y: string) .output out.csv"
+            "r(x: number, y: string) .output out.csv"
         );
 
         let nullary = Relation::new("flag", vec![], None, None);

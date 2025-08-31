@@ -6,7 +6,7 @@ use std::str::FromStr;
 /// Data types supported in Macaron Datalog programs.
 ///
 /// These types correspond to the primitive types in the Macaron grammar:
-/// - `"integer"` → [`DataType::Integer`]
+/// - `"number"` → [`DataType::Integer`]
 /// - `"string"` → [`DataType::String`]
 ///
 /// They are used as attribute types in relations.
@@ -23,13 +23,13 @@ impl FromStr for DataType {
 
     /// Parse a [`DataType`] from its grammar string representation.
     ///
-    /// Returns `Err` if the string is not `"integer"` or `"string"`.
+    /// Returns `Err` if the string is not `"number"` or `"string"`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "integer" => Ok(Self::Integer),
+            "number" => Ok(Self::Integer),
             "string" => Ok(Self::String),
             _ => Err(format!(
-                "Parser error: '{s}'. Invalid data type, expected 'integer' or 'string'"
+                "Parser error: '{s}'. Invalid data type, expected 'number' or 'string'"
             )),
         }
     }
@@ -39,7 +39,7 @@ impl fmt::Display for DataType {
     /// Returns the grammar string representation of this type.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let type_str = match self {
-            Self::Integer => "integer",
+            Self::Integer => "number",
             Self::String => "string",
         };
         write!(f, "{type_str}")

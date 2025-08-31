@@ -1,38 +1,38 @@
 
 .in
-.decl Insert_input(a: integer, b: integer, c: integer, d: integer)
+.decl Insert_input(a: number, b: number, c: number, d: number)
 .input Insert_input.csv
-.decl Remove_input(a: integer, b: integer)
+.decl Remove_input(a: number, b: number)
 .input Remove_input.csv
 
 .out
 
 # definition of insertion into an ordered list (defines nextElem):
-.decl insert(a: integer, b: integer, c: integer, d: integer)
-.decl remove(IDCtr: integer, IDN: integer)
-.decl hasChild(ParentCtr: integer, ParentN: integer)
-.decl assign(IDCtr: integer, IDN: integer, ElemCtr: integer, ElemN: integer, Value: integer)
+.decl insert(a: number, b: number, c: number, d: number)
+.decl remove(IDCtr: number, IDN: number)
+.decl hasChild(ParentCtr: number, ParentN: number)
+.decl assign(IDCtr: number, IDN: number, ElemCtr: number, ElemN: number, Value: number)
 
-.decl laterChild(ParentCtr: integer, ParentN: integer, ChildCtr: integer, ChildN: integer)
-.decl firstChild(ParentCtr: integer, ParentN: integer, ChildCtr: integer, ChildN: integer)
-.decl sibling(ChildCtr1: integer, ChildN1: integer, ChildCtr2: integer, ChildN2: integer)
-.decl laterSibling(SibCtr1: integer, SibN1: integer, SibCtr2: integer, SibN2: integer)
-.decl laterSibling2(SibCtr1: integer, SibN1: integer, SibCtr3: integer, SibN3: integer)
-.decl nextSibling(SibCtr1: integer, SibN1: integer, SibCtr2: integer, SibN2: integer)
-.decl hasNextSibling(SibCtr1: integer, SibN1: integer)
-.decl nextSiblingAnc(StartCtr: integer, StartN: integer, NextCtr: integer, NextN: integer)
-.decl nextElem(PrevCtr: integer, PrevN: integer, NextCtr: integer, NextN: integer)
+.decl laterChild(ParentCtr: number, ParentN: number, ChildCtr: number, ChildN: number)
+.decl firstChild(ParentCtr: number, ParentN: number, ChildCtr: number, ChildN: number)
+.decl sibling(ChildCtr1: number, ChildN1: number, ChildCtr2: number, ChildN2: number)
+.decl laterSibling(SibCtr1: number, SibN1: number, SibCtr2: number, SibN2: number)
+.decl laterSibling2(SibCtr1: number, SibN1: number, SibCtr3: number, SibN3: number)
+.decl nextSibling(SibCtr1: number, SibN1: number, SibCtr2: number, SibN2: number)
+.decl hasNextSibling(SibCtr1: number, SibN1: number)
+.decl nextSiblingAnc(StartCtr: number, StartN: number, NextCtr: number, NextN: number)
+.decl nextElem(PrevCtr: number, PrevN: number, NextCtr: number, NextN: number)
 
 
-.decl currentValue(ElemCtr: integer, ElemN: integer, Value: integer)
-.decl hasValue(ElemCtr: integer, ElemN: integer)
-.decl valueStep(FromCtr: integer, FromN: integer, ToCtr: integer, ToN: integer)
-.decl blankStep(FromCtr: integer, FromN: integer, ToCtr: integer, ToN: integer)
+.decl currentValue(ElemCtr: number, ElemN: number, Value: number)
+.decl hasValue(ElemCtr: number, ElemN: number)
+.decl valueStep(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.decl blankStep(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
 
-.decl value_blank_star(FromCtr: integer, FromN: integer, ToCtr: integer, ToN: integer)
-.decl nextVisible(PrevCtr: integer, PrevN: integer, NextCtr: integer, NextN: integer)
+.decl value_blank_star(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.decl nextVisible(PrevCtr: number, PrevN: number, NextCtr: number, NextN: number)
 
-.decl result(ctr1: integer, ctr2: integer, value: integer)
+.decl result(ctr1: number, ctr2: number, value: number)
 
 
 

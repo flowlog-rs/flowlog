@@ -1,18 +1,18 @@
 .in
-.decl Assign(x: integer, y: integer)
+.decl Assign(x: number, y: number)
 .input Assign.csv
 
-.decl Dereference(x: integer, y: integer)
+.decl Dereference(x: number, y: number)
 .input Dereference.csv
 
 .out 
-.decl ValueFlow(x: integer, y: integer)
+.decl ValueFlow(x: number, y: number)
 
 .out 
-.decl MemoryAlias(x: integer, y: integer)
+.decl MemoryAlias(x: number, y: number)
 
 .out 
-.decl ValueAlias(x: integer, y: integer)
+.decl ValueAlias(x: number, y: number)
 
 .rule
 ValueFlow(y, x) :- Assign(y, x).

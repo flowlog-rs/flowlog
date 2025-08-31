@@ -1,9 +1,9 @@
 .in 
-.decl Arc(x: integer, y: integer)
+.decl Arc(x: number, y: number)
 .input Arc.csv
 
 .out 
-.decl Tc(x: integer, y: integer)
+.decl Tc(x: number, y: number)
 
 .rule
 Tc(x, y) :- Arc(x, y).

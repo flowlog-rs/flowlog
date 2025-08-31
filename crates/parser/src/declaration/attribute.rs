@@ -56,7 +56,7 @@ mod tests {
     fn display_golden() {
         let id = Attribute::new("id".into(), Integer);
         let nm = Attribute::new("name".into(), String);
-        assert_eq!(id.to_string(), "id: integer");
+        assert_eq!(id.to_string(), "id: number");
         assert_eq!(nm.to_string(), "name: string");
     }
 

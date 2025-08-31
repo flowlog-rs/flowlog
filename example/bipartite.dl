@@ -1,14 +1,14 @@
 .in
-.decl Arc(y:integer, x:integer)
+.decl Arc(y:number, x:number)
 .input Arc.csv
 
-.decl Source(x:integer)
+.decl Source(x:number)
 .input Source.csv
 
 .out
-.decl BipartiteViolation(x:integer)
-.decl Zero(x:integer)
-.decl One(x:integer)
+.decl BipartiteViolation(x:number)
+.decl Zero(x:number)
+.decl One(x:number)
 
 .rule
 Zero(x) :- Source(x).
