@@ -274,7 +274,9 @@ mod tests {
         assert_eq!(c.to_string(), "x + 5 * y - 10");
 
         let set = c.vars_set();
-        assert!(set.contains(&"x".to_string()));
-        assert!(set.contains(&"y".to_string()));
+        let x_str = "x".to_string();
+        let y_str = "y".to_string();
+        assert!(set.contains(&x_str));
+        assert!(set.contains(&y_str));
     }
 }

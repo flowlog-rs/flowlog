@@ -7,13 +7,8 @@
 // Main grammar entry point
 main_grammar = { 
     SOI ~ 
-    (
-        // Each program section must have either input declarations (.in),
-        // output declarations (.out), or both, followed by optional rules
-        (edb_decl ~ idb_decl | edb_decl | idb_decl) ~
-        rule_decl? 
-    )+
-    ~ EOI
+    (declaration | input_directive | output_directive | printsize_directive | rule)* ~
+    EOI
 } 
 
 // =============================================================================
@@ -67,24 +62,42 @@ boolean = { "True" | "False" }
 // =============================================================================
 // Relations are the core data structures in Macaron. They can be:
 // - EDB (Extensional Database): Input relations with external data
-// - IDB (Intentional Database): Output relations computed by rules
+// - IDB (Intentional Database): Computed relations defined by rules
 
-// .in keyword starts a section of input relation declarations
-edb_decl = { ".in" ~ edb_relation_decl+ }
-
-// .out keyword starts a section of output relation declarations  
-idb_decl = { ".out" ~ idb_relation_decl+ }
-
-// Input relation declaration
-// Example: .decl edge(src: number, dst: number) .input "graph.facts"
-edb_relation_decl = { 
-    ".decl" ~ relation_name ~ "(" ~ attributes_decl ~ ")" ~ in_decl? 
+// Declaration only defines the relation schema
+// I/O directives are separate and can appear anywhere in the program
+declaration = { 
+    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")"
 }
 
-// Output relation declaration
-// Example: .decl reachable(src: number, dst: number) .output "result.csv"
-idb_relation_decl = { 
-    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ out_decl? 
+// Input directive for EDB relations - separate from declaration
+// Example: .input Relation(IO="file", filename="data.csv", delimiter=",")
+input_directive = { 
+    ".input" ~ relation_name ~ "(" ~ input_params? ~ ")"
+}
+
+// Input parameters
+input_params = { input_param ~ ("," ~ input_param)* }
+
+// Individual input parameter
+input_param = { parameter_name ~ "=" ~ parameter_value }
+
+// Parameter name (IO, filename, delimiter, etc.)
+parameter_name = { identifier }
+
+// Parameter value (quoted string)
+parameter_value = { string }
+
+// Output directive for relations  
+// Example: .output Relation or .output Relation path/to/output
+output_directive = { 
+    ".output" ~ relation_name ~ string?
+}
+
+// Print size directive for relations - separate from declaration
+// Example: .printsize Relation
+printsize_directive = {
+    ".printsize" ~ relation_name
 }
 
 // Comma-separated list of attribute declarations
@@ -94,26 +107,6 @@ attributes_decl = { attribute_decl ~ ("," ~ attribute_decl)* }
 // Single attribute with name and data type
 // Example: "src: number" 
 attribute_decl = { attribute_name ~ ":" ~ data_type }
-
-// =============================================================================
-// INPUT/OUTPUT DIRECTIVES
-// =============================================================================
-// These directives specify where to read input data from or write output to
-
-// Specifies the input file path for a relation
-// Example: .input "edges.facts"
-in_decl = { ".input" ~ file_path }
-
-// Specifies the output file path for a relation
-// Example: .output "results.csv"
-out_decl = { ".output" ~ file_path}
-
-// Path to IO file with supported extensions
-// Examples: "_Method-Modifier.facts", "data.csv", "output.txt"
-file_path = @{ file_name ~ ("." ~ ( "facts" | "csv" | "txt" )) }
-
-// File name pattern (can start with underscore, contain letters, numbers, hyphens)
-file_name = @{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
 
 // =============================================================================
 // ARITHMETIC EXPRESSIONS
@@ -219,9 +212,6 @@ atom_arg = { variable | constant | placeholder }
 // Rules define how output relations are computed from input relations
 // Format: head :- body.
 // Example: reachable(x, z) :- edge(x, y), reachable(y, z).
-
-// Optional ".rule" keyword followed by one or more rules
-rule_decl = { (".rule")? ~ rule+ }
 
 // Single rule with head, body predicates, and optional optimization directive
 // Format: head :- predicate1, predicate2, ... .
