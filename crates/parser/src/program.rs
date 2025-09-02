@@ -38,7 +38,7 @@ impl fmt::Display for Program {
         let edb_relations = self.edbs();
         if !edb_relations.is_empty() {
             writeln!(f, "EDB Relations")?;
-            writeln!(f, "-------------------------------------------------")?;
+            writeln!(f, "---------------------------------------------")?;
             for relation in edb_relations {
                 writeln!(f, "{}", relation)?;
             }
@@ -49,7 +49,7 @@ impl fmt::Display for Program {
         let idb_relations = self.idbs();
         if !idb_relations.is_empty() {
             writeln!(f, "IDB Relations")?;
-            writeln!(f, "---------------------------------------------------")?;
+            writeln!(f, "---------------------------------------------")?;
             for relation in idb_relations {
                 writeln!(f, "{}", relation)?;
             }
@@ -59,7 +59,7 @@ impl fmt::Display for Program {
         // Rules Section
         if !self.rules.is_empty() {
             writeln!(f, "Rules")?;
-            writeln!(f, "--------------------------------")?;
+            writeln!(f, "---------------------------------------------")?;
             for rule in &self.rules {
                 writeln!(f, "{}", rule)?;
             }
@@ -69,7 +69,7 @@ impl fmt::Display for Program {
         // Boolean Facts Section
         if !self.bool_facts.is_empty() {
             writeln!(f, "Boolean Facts")?;
-            writeln!(f, "------------------------------------")?;
+            writeln!(f, "---------------------------------------------")?;
             for (rel_name, facts) in &self.bool_facts {
                 for (vals, boolean) in facts {
                     let values = vals
@@ -444,6 +444,11 @@ impl Lexeme for Program {
                 .find(|r| r.name() == input_dir.relation_name())
             {
                 relation.set_input_params(input_dir.parameters().clone());
+            } else {
+                panic!(
+                    "Parser error: input directive for UNKNOWN relation '{}'. Relation must be declared with .decl before using .input directive.",
+                    input_dir.relation_name()
+                );
             }
         }
 
@@ -454,6 +459,11 @@ impl Lexeme for Program {
                 .find(|r| r.name() == output_dir.relation_name())
             {
                 relation.set_output(output_dir.path().map(|s| s.to_string()));
+            } else {
+                panic!(
+                    "Parser error: output directive for UNKNOWN relation '{}'. Relation must be declared with .decl before using .output directive.",
+                    output_dir.relation_name()
+                );
             }
         }
 
@@ -464,6 +474,11 @@ impl Lexeme for Program {
                 .find(|r| r.name() == printsize_dir.relation_name())
             {
                 relation.set_printsize(true);
+            } else {
+                panic!(
+                    "Parser error: printsize directive for UNKNOWN relation '{}'. Relation must be declared with .decl before using .printsize directive.",
+                    printsize_dir.relation_name()
+                );
             }
         }
 
