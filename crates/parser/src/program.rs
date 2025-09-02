@@ -1,13 +1,15 @@
 //! Macaron Datalog program representation and manipulation.
 //!
 //! A program contains:
-//! - EDB declarations (inputs)
-//! - IDB declarations (computed relations; some may be final outputs)
+//! - Relation declarations (schema only)
+//! - Input directives (specify how to read EDB data)
+//! - Output directives (specify which relations to output)
+//! - Print size directives (specify which relations to print size for)
 //! - Rules
 //! - Boolean facts extracted from rules whose bodies are *pure* booleans
 
 use super::{
-    declaration::Relation,
+    declaration::{InputDirective, OutputDirective, PrintSizeDirective, Relation},
     logic::{MacaronRule, Predicate},
     ConstType, Lexeme, MacaronParser, Rule,
 };
@@ -19,8 +21,7 @@ use tracing::{info, warn};
 /// A complete Macaron program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    edbs: Vec<Relation>,
-    idbs: Vec<Relation>,
+    relations: Vec<Relation>,
     rules: Vec<MacaronRule>,
     /// Map: relation name -> [(constant tuple, boolean value)]
     bool_facts: HashMap<String, Vec<(Vec<ConstType>, bool)>>,
@@ -28,42 +29,61 @@ pub struct Program {
 
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let edbs = self
-            .edbs
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let idbs = self
-            .idbs
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let rules = self
-            .rules
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
+        writeln!(f, "=============================================")?;
+        writeln!(f, "MACARON DATALOG PROGRAM")?;
+        writeln!(f, "=============================================")?;
+        writeln!(f)?;
 
-        let mut bool_facts_str = String::new();
-        for (rel_name, facts) in &self.bool_facts {
-            for (vals, boolean) in facts {
-                let values = vals
-                    .iter()
-                    .map(|c| c.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let b = if *boolean { "True" } else { "False" };
-                bool_facts_str.push_str(&format!("{rel_name}({values}) :- {b}.\n"));
+        // EDB Section (Extensional Database - Input Relations)
+        let edb_relations = self.edbs();
+        if !edb_relations.is_empty() {
+            writeln!(f, "EDB Relations")?;
+            writeln!(f, "-------------------------------------------------")?;
+            for relation in edb_relations {
+                writeln!(f, "{}", relation)?;
+            }
+            writeln!(f)?;
+        }
+
+        // IDB Section (Intensional Database - Computed Relations)
+        let idb_relations = self.idbs();
+        if !idb_relations.is_empty() {
+            writeln!(f, "IDB Relations")?;
+            writeln!(f, "---------------------------------------------------")?;
+            for relation in idb_relations {
+                writeln!(f, "{}", relation)?;
+            }
+            writeln!(f)?;
+        }
+
+        // Rules Section
+        if !self.rules.is_empty() {
+            writeln!(f, "Rules")?;
+            writeln!(f, "--------------------------------")?;
+            for rule in &self.rules {
+                writeln!(f, "{}", rule)?;
+            }
+            writeln!(f)?;
+        }
+
+        // Boolean Facts Section
+        if !self.bool_facts.is_empty() {
+            writeln!(f, "Boolean Facts")?;
+            writeln!(f, "------------------------------------")?;
+            for (rel_name, facts) in &self.bool_facts {
+                for (vals, boolean) in facts {
+                    let values = vals
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let b = if *boolean { "True" } else { "False" };
+                    writeln!(f, "{}({}) :- {}.", rel_name, values, b)?;
+                }
             }
         }
 
-        write!(
-            f,
-            ".in \n{edbs}\n.out \n{idbs}\n.rule \n{rules}\n{bool_facts_str}"
-        )
+        Ok(())
     }
 }
 
@@ -86,18 +106,41 @@ impl Program {
         program.prune_dead_components()
     }
 
-    /// EDB (input) relations.
+    /// All relation declarations.
     #[must_use]
     #[inline]
-    pub fn edbs(&self) -> &[Relation] {
-        &self.edbs
+    pub fn relations(&self) -> &[Relation] {
+        &self.relations
     }
 
-    /// IDB (computed) relations (both intermediate and final).
+    /// EDB relations (those with input parameters).
     #[must_use]
-    #[inline]
-    pub fn idbs(&self) -> &[Relation] {
-        &self.idbs
+    pub fn edbs(&self) -> Vec<&Relation> {
+        self.relations.iter().filter(|rel| rel.is_edb()).collect()
+    }
+
+    /// IDB relations (those without input parameters).
+    #[must_use]
+    pub fn idbs(&self) -> Vec<&Relation> {
+        self.relations.iter().filter(|rel| !rel.is_edb()).collect()
+    }
+
+    /// Output relations (those marked for output).
+    #[must_use]
+    pub fn output_relations(&self) -> Vec<&Relation> {
+        self.relations
+            .iter()
+            .filter(|rel| rel.is_output())
+            .collect()
+    }
+
+    /// Relations marked for printsize.
+    #[must_use]
+    pub fn printsize_relations(&self) -> Vec<&Relation> {
+        self.relations
+            .iter()
+            .filter(|rel| rel.printsize())
+            .collect()
     }
 
     /// Transformation rules (boolean-only rules are extracted into `bool_facts`).
@@ -112,15 +155,6 @@ impl Program {
     #[inline]
     pub fn bool_facts(&self) -> &HashMap<String, Vec<(Vec<ConstType>, bool)>> {
         &self.bool_facts
-    }
-
-    /// IDB relations that are marked for final output.
-    #[must_use]
-    pub fn output_relations(&self) -> Vec<&Relation> {
-        self.idbs
-            .iter()
-            .filter(|r| r.output_path().is_some())
-            .collect()
     }
 
     /// Extract boolean facts from rules whose *entire* body is boolean.
@@ -179,10 +213,9 @@ impl Program {
         if needed_preds.is_empty() {
             let all_rules = (0..self.rules.len()).collect();
             let all_preds = self
-                .idbs
+                .relations
                 .iter()
                 .map(|d| d.name().to_string())
-                .chain(self.edbs.iter().map(|d| d.name().to_string()))
                 .collect();
             return (all_rules, all_preds);
         }
@@ -254,29 +287,16 @@ impl Program {
     fn prune_dead_components(&self) -> Self {
         let (needed_rules, needed_preds) = self.identify_needed_components();
 
-        // Dead EDBs
-        let dead_edbs: Vec<_> = self
-            .edbs
+        // Dead relations
+        let dead_relations: Vec<_> = self
+            .relations
             .iter()
             .filter(|d| !needed_preds.contains(d.name()))
             .collect();
-        if !dead_edbs.is_empty() {
-            warn!("Dead Input Relations (EDBs):");
-            for d in &dead_edbs {
+        if !dead_relations.is_empty() {
+            warn!("Dead Relations:");
+            for d in &dead_relations {
                 info!("  - {}", d.name());
-            }
-        }
-
-        // Dead IDBs
-        let dead_idbs: Vec<_> = self
-            .idbs
-            .iter()
-            .filter(|d| !needed_preds.contains(d.name()))
-            .collect();
-        if !dead_idbs.is_empty() {
-            warn!("Dead Output Relations (IDBs):");
-            for d in &dead_idbs {
-                warn!("  - {}", d.name());
             }
         }
 
@@ -303,14 +323,8 @@ impl Program {
             .map(|(_, r)| r.clone())
             .collect();
 
-        let pruned_idbs = self
-            .idbs
-            .iter()
-            .filter(|d| needed_preds.contains(d.name()))
-            .cloned()
-            .collect();
-        let pruned_edbs = self
-            .edbs
+        let pruned_relations = self
+            .relations
             .iter()
             .filter(|d| needed_preds.contains(d.name()))
             .cloned()
@@ -324,8 +338,7 @@ impl Program {
         }
 
         Self {
-            edbs: pruned_edbs,
-            idbs: pruned_idbs,
+            relations: pruned_relations,
             rules: pruned_rules,
             bool_facts: pruned_bool,
         }
@@ -337,46 +350,125 @@ impl Lexeme for Program {
     ///
     /// Performs section dispatch and boolean fact extraction.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
-        let mut edbs = Vec::new();
-        let mut idbs = Vec::new();
+        let mut relations = Vec::new();
+        let mut input_directives = Vec::new();
+        let mut output_directives = Vec::new();
+        let mut printsize_directives = Vec::new();
         let mut rules = Vec::new();
 
-        for section in parsed_rule.into_inner() {
-            match section.as_rule() {
-                Rule::edb_decl => {
-                    for node in section.into_inner() {
-                        if matches!(
-                            node.as_rule(),
-                            Rule::edb_relation_decl | Rule::idb_relation_decl
-                        ) {
-                            edbs.push(Relation::from_parsed_rule(node));
-                        }
-                    }
+        // First pass: collect all declarations and directives
+        for node in parsed_rule.into_inner() {
+            match node.as_rule() {
+                Rule::declaration => {
+                    let relation = Relation::from_parsed_rule(node);
+                    relations.push(relation);
                 }
-                Rule::idb_decl => {
-                    for node in section.into_inner() {
-                        if matches!(
-                            node.as_rule(),
-                            Rule::edb_relation_decl | Rule::idb_relation_decl
-                        ) {
-                            idbs.push(Relation::from_parsed_rule(node));
-                        }
-                    }
+                Rule::input_directive => {
+                    let input_dir = InputDirective::from_parsed_rule(node);
+                    input_directives.push(input_dir);
                 }
-                Rule::rule_decl => {
-                    for node in section.into_inner() {
-                        if node.as_rule() == Rule::rule {
-                            rules.push(MacaronRule::from_parsed_rule(node));
-                        }
-                    }
+                Rule::output_directive => {
+                    let output_dir = OutputDirective::from_parsed_rule(node);
+                    output_directives.push(output_dir);
+                }
+                Rule::printsize_directive => {
+                    let printsize_dir = PrintSizeDirective::from_parsed_rule(node);
+                    printsize_directives.push(printsize_dir);
+                }
+                Rule::rule => {
+                    rules.push(MacaronRule::from_parsed_rule(node));
                 }
                 _ => {}
             }
         }
 
+        // Second pass: validate and annotate relations with directives
+        // Check for duplicate input directives
+        let mut input_relation_names = HashSet::new();
+        for input_dir in &input_directives {
+            if !input_relation_names.insert(input_dir.relation_name()) {
+                panic!(
+                    "Parser error: duplicate input directive for relation '{}'",
+                    input_dir.relation_name()
+                );
+            }
+        }
+
+        // Check for duplicate output directives
+        let mut output_relation_names = HashSet::new();
+        for output_dir in &output_directives {
+            if !output_relation_names.insert(output_dir.relation_name()) {
+                panic!(
+                    "Parser error: duplicate output directive for relation '{}'",
+                    output_dir.relation_name()
+                );
+            }
+        }
+
+        // Check for duplicate printsize directives
+        let mut printsize_relation_names = HashSet::new();
+        for printsize_dir in &printsize_directives {
+            if !printsize_relation_names.insert(printsize_dir.relation_name()) {
+                panic!(
+                    "Parser error: duplicate printsize directive for relation '{}'",
+                    printsize_dir.relation_name()
+                );
+            }
+        }
+
+        // Check for invalid combinations: EDB relations cannot have output/printsize, IDB relations cannot have input
+        for input_dir in &input_directives {
+            let relation_name = input_dir.relation_name();
+
+            // Check if this relation also has output directive
+            if output_relation_names.contains(relation_name) {
+                panic!(
+                    "Parser error: relation '{}' cannot have both input and output directives. Relations must be either EDB (input only) or IDB (output/printsize only).",
+                    relation_name
+                );
+            }
+
+            // Check if this relation also has printsize directive
+            if printsize_relation_names.contains(relation_name) {
+                panic!(
+                    "Parser error: relation '{}' cannot have both input and printsize directives. Relations must be either EDB (input only) or IDB (output/printsize only).",
+                    relation_name
+                );
+            }
+        }
+
+        // Apply input directives (creates EDB relations)
+        for input_dir in input_directives {
+            if let Some(relation) = relations
+                .iter_mut()
+                .find(|r| r.name() == input_dir.relation_name())
+            {
+                relation.set_input_params(input_dir.parameters().clone());
+            }
+        }
+
+        // Apply output directives
+        for output_dir in output_directives {
+            if let Some(relation) = relations
+                .iter_mut()
+                .find(|r| r.name() == output_dir.relation_name())
+            {
+                relation.set_output(output_dir.path().map(|s| s.to_string()));
+            }
+        }
+
+        // Apply printsize directives
+        for printsize_dir in printsize_directives {
+            if let Some(relation) = relations
+                .iter_mut()
+                .find(|r| r.name() == printsize_dir.relation_name())
+            {
+                relation.set_printsize(true);
+            }
+        }
+
         let mut program = Self {
-            edbs,
-            idbs,
+            relations,
             rules,
             bool_facts: HashMap::new(),
         };

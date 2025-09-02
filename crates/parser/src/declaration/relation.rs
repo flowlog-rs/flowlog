@@ -4,33 +4,51 @@ use super::Attribute;
 use crate::primitive::DataType;
 use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-/// A relation schema with an optional input (EDB) and/or output (IDB) path.
+/// A relation schema with input/output annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Relation {
     name: String,
     attributes: Vec<Attribute>,
-    input_path: Option<String>,
-    output_path: Option<String>,
+    /// Input parameters (e.g., filename="file.csv", IO="file")
+    input_params: Option<HashMap<String, String>>,
+    /// Output path (None if not output, Some(None) for default path, Some(Some(path)) for custom path)
+    output_path: Option<Option<String>>,
+    /// Whether to print size
+    printsize: bool,
 }
 
 impl Relation {
     /// Create a new relation.
     #[must_use]
     #[inline]
-    pub fn new(
+    pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
+        Self {
+            name: name.to_string(),
+            attributes,
+            input_params: None,
+            output_path: None,
+            printsize: false,
+        }
+    }
+
+    /// Create a new relation with input parameters.
+    #[must_use]
+    #[inline]
+    pub fn new_with_input(
         name: &str,
         attributes: Vec<Attribute>,
-        input_path: Option<&str>,
-        output_path: Option<&str>,
+        input_params: HashMap<String, String>,
     ) -> Self {
         Self {
             name: name.to_string(),
             attributes,
-            input_path: input_path.map(str::to_string),
-            output_path: output_path.map(str::to_string),
+            input_params: Some(input_params),
+            output_path: None,
+            printsize: false,
         }
     }
 
@@ -48,25 +66,61 @@ impl Relation {
         &self.attributes
     }
 
+    /// Input parameters if this is an EDB relation.
+    #[must_use]
+    #[inline]
+    pub fn input_params(&self) -> Option<&HashMap<String, String>> {
+        self.input_params.as_ref()
+    }
+
+    /// Output path configuration.
+    #[must_use]
+    #[inline]
+    pub fn output_path(&self) -> Option<&Option<String>> {
+        self.output_path.as_ref()
+    }
+
+    /// Whether to print size for this relation.
+    #[must_use]
+    #[inline]
+    pub fn printsize(&self) -> bool {
+        self.printsize
+    }
+
+    /// Check if this is an EDB relation (has input parameters).
+    #[must_use]
+    #[inline]
+    pub fn is_edb(&self) -> bool {
+        self.input_params.is_some()
+    }
+
+    /// Check if this is an output relation.
+    #[must_use]
+    #[inline]
+    pub fn is_output(&self) -> bool {
+        self.output_path.is_some()
+    }
+
+    /// Set input parameters for this relation.
+    pub fn set_input_params(&mut self, params: HashMap<String, String>) {
+        self.input_params = Some(params);
+    }
+
+    /// Set output configuration (None for default path, Some(path) for custom path).
+    pub fn set_output(&mut self, path: Option<String>) {
+        self.output_path = Some(path);
+    }
+
+    /// Set printsize flag.
+    pub fn set_printsize(&mut self, printsize: bool) {
+        self.printsize = printsize;
+    }
+
     /// Number of attributes.
     #[must_use]
     #[inline]
     pub fn arity(&self) -> usize {
         self.attributes.len()
-    }
-
-    /// Optional EDB input path.
-    #[must_use]
-    #[inline]
-    pub fn input_path(&self) -> Option<&String> {
-        self.input_path.as_ref()
-    }
-
-    /// Optional IDB output path.
-    #[must_use]
-    #[inline]
-    pub fn output_path(&self) -> Option<&String> {
-        self.output_path.as_ref()
     }
 
     /// `true` if no attributes.
@@ -78,9 +132,9 @@ impl Relation {
 }
 
 impl fmt::Display for Relation {
-    /// Formats as `name(a: ty, b: ty) [.input path] [.output path]`.
+    /// Formats as `.decl name(a: ty, b: ty)` with optional input/output annotations on the same line.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}(", self.name)?;
+        write!(f, ".decl {}(", self.name)?;
         for (i, attr) in self.attributes.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
@@ -89,12 +143,30 @@ impl fmt::Display for Relation {
         }
         write!(f, ")")?;
 
-        if let Some(path) = &self.input_path {
-            write!(f, " .input {path}")?;
+        // Add input directive on the same line if present
+        if let Some(params) = &self.input_params {
+            write!(f, " .input(")?;
+            let mut param_strs: Vec<String> = params
+                .iter()
+                .map(|(k, v)| format!("{}=\"{}\"", k, v))
+                .collect();
+            param_strs.sort(); // Ensure consistent order
+            write!(f, "{})", param_strs.join(", "))?;
         }
-        if let Some(path) = &self.output_path {
-            write!(f, " .output {path}")?;
+
+        // Add output directive on the same line if present
+        if let Some(path_opt) = &self.output_path {
+            write!(f, " .output")?;
+            if let Some(path) = path_opt {
+                write!(f, "(\"{}\")", path)?;
+            }
         }
+
+        // Add printsize directive on the same line if present
+        if self.printsize {
+            write!(f, " .printsize")?;
+        }
+
         Ok(())
     }
 }
@@ -105,7 +177,6 @@ impl Lexeme for Relation {
     /// # Panics
     /// Panics if the grammar tree is malformed or contains unknown datatypes.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
-        let rule_type = parsed_rule.as_rule();
         let mut inner = parsed_rule.into_inner();
 
         // name
@@ -115,8 +186,6 @@ impl Lexeme for Relation {
             .as_str();
 
         let mut attributes: Vec<Attribute> = Vec::new();
-        let mut input_path: Option<String> = None;
-        let mut output_path: Option<String> = None;
 
         for rule in inner {
             match rule.as_rule() {
@@ -142,23 +211,6 @@ impl Lexeme for Relation {
                         })
                         .collect();
                 }
-                Rule::in_decl => {
-                    // inner is likely a quoted string; store unquoted path
-                    let raw = rule
-                        .into_inner()
-                        .next()
-                        .expect("Parser error: .input missing path")
-                        .as_str();
-                    input_path = Some(raw.trim_matches('"').to_string());
-                }
-                Rule::out_decl => {
-                    let raw = rule
-                        .into_inner()
-                        .next()
-                        .expect("Parser error: .output missing path")
-                        .as_str();
-                    output_path = Some(raw.trim_matches('"').to_string());
-                }
                 _ => {
                     unreachable!(
                         "Parser error: unexpected rule in relation declaration: {:?}",
@@ -168,14 +220,9 @@ impl Lexeme for Relation {
             }
         }
 
-        match rule_type {
-            Rule::edb_relation_decl => Self::new(name, attributes, input_path.as_deref(), None),
-            Rule::idb_relation_decl => Self::new(name, attributes, None, output_path.as_deref()),
-            _ => unreachable!(
-                "Parser error: unexpected relation declaration rule: {:?}",
-                rule_type
-            ),
-        }
+        // Always create relations with both input and output paths
+        // The program parser will decide whether it's EDB or IDB based on input_path
+        Self::new(name, attributes)
     }
 }
 
@@ -193,13 +240,14 @@ mod tests {
 
     #[test]
     fn new_and_accessors() {
-        let rel = Relation::new("users", attrs(), None, None);
+        let rel = Relation::new("users", attrs());
         assert_eq!(rel.name(), "users");
         assert_eq!(rel.arity(), 2);
         assert!(!rel.is_nullary());
-        assert!(rel.input_path().is_none());
-        assert!(rel.output_path().is_none());
         assert_eq!(rel.attributes()[0].name(), "id");
+        assert!(!rel.is_edb());
+        assert!(!rel.is_output());
+        assert!(!rel.printsize());
     }
 
     #[test]
@@ -209,38 +257,66 @@ mod tests {
             Attribute::new("y".into(), TString),
         ];
 
-        let basic = Relation::new("r", a.clone(), None, None);
-        assert_eq!(basic.to_string(), "r(x: number, y: string)");
+        let basic = Relation::new("r", a.clone());
+        assert_eq!(basic.to_string(), ".decl r(x: number, y: string)");
 
-        let with_in = Relation::new("r", a.clone(), Some("data.csv"), None);
+        let nullary = Relation::new("flag", vec![]);
+        assert_eq!(nullary.to_string(), ".decl flag()");
+
+        // Test with input params
+        let mut with_input = Relation::new("input_rel", a.clone());
+        let mut params = HashMap::new();
+        params.insert("filename".to_string(), "data.csv".to_string());
+        params.insert("IO".to_string(), "file".to_string());
+        with_input.set_input_params(params);
         assert_eq!(
-            with_in.to_string(),
-            "r(x: number, y: string) .input data.csv"
+            with_input.to_string(),
+            ".decl input_rel(x: number, y: string) .input(IO=\"file\", filename=\"data.csv\")"
         );
 
-        let with_out = Relation::new("r", a, None, Some("out.csv"));
+        // Test with output (default path)
+        let mut with_output = Relation::new("output_rel", a.clone());
+        with_output.set_output(None);
         assert_eq!(
-            with_out.to_string(),
-            "r(x: number, y: string) .output out.csv"
+            with_output.to_string(),
+            ".decl output_rel(x: number, y: string) .output"
         );
 
-        let nullary = Relation::new("flag", vec![], None, None);
-        assert_eq!(nullary.to_string(), "flag()");
+        // Test with output (custom path)
+        let mut with_output_path = Relation::new("output_rel", a.clone());
+        with_output_path.set_output(Some("custom/path.csv".to_string()));
+        assert_eq!(
+            with_output_path.to_string(),
+            ".decl output_rel(x: number, y: string) .output(\"custom/path.csv\")"
+        );
+
+        // Test with printsize
+        let mut with_printsize = Relation::new("print_rel", a.clone());
+        with_printsize.set_printsize(true);
+        assert_eq!(
+            with_printsize.to_string(),
+            ".decl print_rel(x: number, y: string) .printsize"
+        );
+
+        // Test with all annotations
+        let mut full_rel = Relation::new("full_rel", a);
+        let mut params = HashMap::new();
+        params.insert("filename".to_string(), "input.csv".to_string());
+        full_rel.set_input_params(params);
+        full_rel.set_output(Some("output.csv".to_string()));
+        full_rel.set_printsize(true);
+        assert_eq!(
+            full_rel.to_string(),
+            ".decl full_rel(x: number, y: string) .input(filename=\"input.csv\") .output(\"output.csv\") .printsize"
+        );
     }
 
     #[test]
     fn equality_semantics() {
-        let r1 = Relation::new("t", attrs(), None, None);
-        let r2 = Relation::new("t", attrs(), None, None);
-        let r3 = Relation::new("u", attrs(), None, None);
+        let r1 = Relation::new("t", attrs());
+        let r2 = Relation::new("t", attrs());
+        let r3 = Relation::new("u", attrs());
         assert_eq!(r1, r2);
         assert_ne!(r1, r3);
-    }
-
-    #[test]
-    fn with_paths() {
-        let r = Relation::new("e", attrs(), Some("in.csv"), Some("out.csv"));
-        assert_eq!(r.input_path(), Some(&"in.csv".to_string()));
-        assert_eq!(r.output_path(), Some(&"out.csv".to_string()));
     }
 }

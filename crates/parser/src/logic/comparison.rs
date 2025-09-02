@@ -216,8 +216,10 @@ mod tests {
         let e = ComparisonExpr::new(var("x"), NotEqual, var("y"));
         let set = e.vars_set();
         assert_eq!(set.len(), 2);
-        assert!(set.contains(&"x".to_string()));
-        assert!(set.contains(&"y".to_string()));
+        let x_str = "x".to_string();
+        let y_str = "y".to_string();
+        assert!(set.contains(&x_str));
+        assert!(set.contains(&y_str));
 
         assert_eq!(e.left_vars(), vec![&"x".to_string()]);
         assert_eq!(e.right_vars(), vec![&"y".to_string()]);
