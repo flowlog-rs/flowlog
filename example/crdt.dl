@@ -1,13 +1,13 @@
 
-.in
+// .in
 .decl Insert_input(a: number, b: number, c: number, d: number)
-.input Insert_input.csv
+.input Insert_input(IO="file", filename="Insert_input.csv", delimiter=",")
 .decl Remove_input(a: number, b: number)
-.input Remove_input.csv
+.input Remove_input(IO="file", filename="Remove_input.csv", delimiter=",")
 
-.out
+// .printsize
 
-# definition of insertion into an ordered list (defines nextElem):
+// definition of insertion into an ordered list (defines nextElem):
 .decl insert(a: number, b: number, c: number, d: number)
 .decl remove(IDCtr: number, IDN: number)
 .decl hasChild(ParentCtr: number, ParentN: number)
@@ -21,23 +21,34 @@
 .decl nextSibling(SibCtr1: number, SibN1: number, SibCtr2: number, SibN2: number)
 .decl hasNextSibling(SibCtr1: number, SibN1: number)
 .decl nextSiblingAnc(StartCtr: number, StartN: number, NextCtr: number, NextN: number)
+.printsize nextSiblingAnc
 .decl nextElem(PrevCtr: number, PrevN: number, NextCtr: number, NextN: number)
 
 
 .decl currentValue(ElemCtr: number, ElemN: number, Value: number)
+.printsize currentValue
+
 .decl hasValue(ElemCtr: number, ElemN: number)
+.printsize hasValue
+
 .decl valueStep(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.printsize valueStep
+
 .decl blankStep(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.printsize blankStep
 
 .decl value_blank_star(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.printsize value_blank_star
 .decl nextVisible(PrevCtr: number, PrevN: number, NextCtr: number, NextN: number)
+.printsize nextVisible
 
 .decl result(ctr1: number, ctr2: number, value: number)
+.printsize result
 
 
 
 
-.rule
+// .rule
 insert(a, b, c, d) :- Insert_input(a, b, c, d).
 remove(a, b) :- Remove_input(a, b).
 assign(ctr, n, ctr, n, n) :- insert(ctr, n, _, _).
@@ -47,7 +58,7 @@ laterChild(ParentCtr, ParentN, Ctr2, N2) :-
   insert(Ctr1, N1, ParentCtr, ParentN),
   insert(Ctr2, N2, ParentCtr, ParentN),
   Ctr1 * 10 + N1 > Ctr2 * 10 + N2.
-#  (Ctr1 > Ctr2; (Ctr1 = Ctr2, N1 > N2)). 
+//  (Ctr1 > Ctr2; (Ctr1 = Ctr2, N1 > N2)). 
 
 
 firstChild(ParentCtr, ParentN, ChildCtr, ChildN) :-
@@ -63,7 +74,7 @@ sibling(ChildCtr1, ChildN1, ChildCtr2, ChildN2) :-
 laterSibling(Ctr1, N1, Ctr2, N2) :-
   sibling(Ctr1, N1, Ctr2, N2),
   Ctr1 * 10 + N1 > Ctr2 * 10 + N2.
-#  (Ctr1 > Ctr2; (Ctr1 = Ctr2, N1 > N2)).
+//  (Ctr1 > Ctr2; (Ctr1 = Ctr2, N1 > N2)).
 
 
 laterSibling2(Ctr1, N1, Ctr3, N3) :-
@@ -71,8 +82,8 @@ laterSibling2(Ctr1, N1, Ctr3, N3) :-
   sibling(Ctr1, N1, Ctr3, N3),
   Ctr1 * 10 + N1 > Ctr2 * 10 + N2, 
   Ctr2 * 10 + N2 > Ctr3 * 10 + N3.
-#  (Ctr1 > Ctr2; (Ctr1 = Ctr2, N1 > N2)),
-#  (Ctr2 > Ctr3; (Ctr2 = Ctr3, N2 > N3)).
+//  (Ctr1 > Ctr2; (Ctr1 = Ctr2, N1 > N2)),
+//  (Ctr2 > Ctr3; (Ctr2 = Ctr3, N2 > N3)).
 
 
 nextSibling(Ctr1, N1, Ctr2, N2) :-
@@ -95,7 +106,7 @@ nextElem(PrevCtr, PrevN, NextCtr, NextN) :- !hasChild(PrevCtr, PrevN), nextSibli
 
 
 
-# Assigning values to list elements.
+// Assigning values to list elements.
 currentValue(ElemCtr, ElemN, Value) :- assign(IDCtr, IDN, ElemCtr, ElemN, Value), !remove(IDCtr, IDN).
 
 hasValue(ElemCtr, ElemN) :- currentValue(ElemCtr, ElemN, _).
@@ -114,3 +125,11 @@ nextVisible(PrevCtr, PrevN, NextCtr, NextN) :-
 result(ctr1, ctr2, value) :- 
     nextVisible(ctr1, _, ctr2, N2), 
     currentValue(ctr2, N2, value).
+
+
+// sed 's/[[:space:]]/,/g' remove.txt > remove.facts
+// .printsize result
+// .printsize nextVisible
+// .printsize value_blank_star
+// .printsize blankStep
+// .printsize valueStep

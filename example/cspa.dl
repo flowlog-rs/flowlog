@@ -1,20 +1,13 @@
-.in
 .decl Assign(x: number, y: number)
-.input Assign.csv
+.input Assign(IO="file", filename="Assign.csv", delimiter=",")
 
 .decl Dereference(x: number, y: number)
-.input Dereference.csv
+.input Dereference(IO="file", filename="Dereference.csv", delimiter=",")
 
-.out 
 .decl ValueFlow(x: number, y: number)
-
-.out 
 .decl MemoryAlias(x: number, y: number)
-
-.out 
 .decl ValueAlias(x: number, y: number)
 
-.rule
 ValueFlow(y, x) :- Assign(y, x).
 ValueFlow(x, y) :- Assign(x, z), MemoryAlias(z, y).
 ValueFlow(x, y) :- ValueFlow(x, z), ValueFlow(z, y).
@@ -25,3 +18,8 @@ ValueFlow(x, x) :- Assign(x, y).
 ValueFlow(x, x) :- Assign(y, x).
 MemoryAlias(x, x) :- Assign(y, x).
 MemoryAlias(x, x) :- Assign(x, y).
+
+.printsize ValueFlow
+// .printsize MemoryAlias
+// .printsize ValueAlias
+// TODO: allow print of multiple

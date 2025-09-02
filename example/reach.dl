@@ -1,13 +1,11 @@
-.in
 .decl Source(id: number)
-.input Source.csv
-
+.input Source(IO="file", filename="Source.csv", delimiter=",")
 .decl Arc(x: number, y: number)
-.input Arc.csv
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
-.out 
 .decl Reach(id: number)
 
-.rule
 Reach(y) :- Source(y).
 Reach(y) :- Reach(x), Arc(x,y).
+
+.printsize Reach

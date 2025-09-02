@@ -1,14 +1,13 @@
-.in
 .decl Arc(x:number, y:number, l:number)
-.input Arc.csv
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
-.out
 .decl Zero(x:number, y:number)
+.printsize Zero
 .decl One(x:number, y:number)
+.printsize One
 .decl Dyck(x:number, y:number)
+.printsize Dyck
 
-
-.rule
 Zero(x, y) :- Arc(x, y, 0).
 One(x, y) :- Arc(x, y, 1).
 
