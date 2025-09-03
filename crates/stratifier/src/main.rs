@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::process;
 use stratifier::{DependencyGraph, Stratifier};
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -54,14 +54,14 @@ fn main() {
 fn run_all_examples() {
     let example_dir = "example";
     if !Path::new(example_dir).exists() {
-        info!("Error: example directory '{}' not found", example_dir);
+        error!("Error: example directory '{}' not found", example_dir);
         process::exit(1);
     }
 
     let entries = match fs::read_dir(example_dir) {
         Ok(e) => e,
         Err(err) => {
-            info!("Error reading example directory: {err}");
+            error!("Error reading example directory: {err}");
             process::exit(1);
         }
     };
@@ -75,7 +75,7 @@ fn run_all_examples() {
     }
     files.sort();
     if files.is_empty() {
-        info!("No .dl files found in {example_dir} directory");
+        error!("No .dl files found in {example_dir} directory");
         process::exit(1);
     }
 
@@ -129,7 +129,7 @@ fn run_all_examples() {
     info!("  Failed: {}", failed);
 
     if failed > 0 {
-        info!("Some files failed. See errors above.");
+        error!("Some files failed. See errors above.");
         process::exit(1);
     } else {
         info!("All example files stratified successfully!");
