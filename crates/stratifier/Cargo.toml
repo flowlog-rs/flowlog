@@ -6,3 +6,6 @@ edition.workspace = true
 [dependencies]
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+itertools.workspace = true
+
+parser = { path = "../parser" }
