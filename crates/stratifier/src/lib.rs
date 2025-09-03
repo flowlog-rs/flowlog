@@ -1,0 +1,32 @@
+//! Macaron Stratifier Library
+//!
+//! This crate provides analysis utilities that operate on a parsed
+//! Macaron `Program` and help plan evaluation order:
+//!
+//! - [`DependencyGraph`]: builds the rule dependency map
+//!   identifying which rules reference predicates defined by other rules.
+//! - [`Stratifier`]: partitions rules into strata (layers) so every rule’s
+//!   dependencies are evaluated earlier; detects recursive strata (SCCs).
+//!
+//! # Example
+//! ```ignore
+//! use parser::Program;
+//! use stratifier::{DependencyGraph, Stratifier};
+//!
+//! // Parse a Macaron program (adjust path as needed)
+//! let program = Program::parse("example/reach.dl");
+//!
+//! // Build dependency graph
+//! let graph = DependencyGraph::from_program(&program);
+//! println!("{}", graph);
+//!
+//! // Compute stratum
+//! let stratum = Stratifier::from_program(program.clone());
+//! println!("{}", stratum);
+//! ```
+
+pub mod dependency_graph;
+pub mod stratifier;
+
+pub use dependency_graph::DependencyGraph;
+pub use stratifier::Stratifier;
