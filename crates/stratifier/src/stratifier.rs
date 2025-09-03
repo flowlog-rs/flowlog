@@ -100,7 +100,7 @@ impl Stratifier {
         for scc in sccs {
             let is_recursive = scc.len() > 1 || {
                 let r = scc[0];
-                dep_map.get(&r).map_or(false, |deps| deps.contains(&r))
+                dep_map.get(&r).is_some_and(|deps| deps.contains(&r))
             };
             strata.push(scc);
             recursive_bitmap.push(is_recursive);
@@ -111,10 +111,7 @@ impl Stratifier {
         // ones separate to preserve fixpoint boundaries.
         let mut merged: Vec<Vec<usize>> = Vec::new();
         let mut merged_bitmap: Vec<bool> = Vec::new();
-        let mut pending = strata
-            .into_iter()
-            .zip(recursive_bitmap.into_iter())
-            .collect::<Vec<_>>();
+        let mut pending = strata.into_iter().zip(recursive_bitmap).collect::<Vec<_>>();
 
         while !pending.is_empty() {
             // Partition strata by whether they still depend on *remaining* strata.
@@ -130,19 +127,17 @@ impl Stratifier {
             for (s, is_rec) in pending.into_iter() {
                 // Does this stratum depend on a rule that is still in another unprocessed stratum?
                 let external_dep_exists = s.iter().any(|rid| {
-                    dep_map.get(rid).map_or(false, |deps| {
+                    dep_map.get(rid).is_some_and(|deps| {
                         deps.iter()
                             .any(|d| remaining_ids.contains(d) && !s.contains(d))
                     })
                 });
                 if external_dep_exists {
                     still.push((s, is_rec));
+                } else if is_rec {
+                    batch_recursive.push((s, is_rec));
                 } else {
-                    if is_rec {
-                        batch_recursive.push((s, is_rec));
-                    } else {
-                        batch_non_recursive.extend(s);
-                    }
+                    batch_non_recursive.extend(s);
                 }
             }
             pending = still;
