@@ -1,4 +1,4 @@
-//! stratum for Macaron Datalog programs.
+//! Stratification for Macaron Datalog programs.
 
 use crate::dependency_graph::DependencyGraph;
 use itertools::Itertools;
@@ -143,7 +143,7 @@ impl Stratifier {
             pending = still;
 
             if !batch_non_recursive.is_empty() {
-                merged.push(batch_non_recursive.clone());
+                merged.push(batch_non_recursive);
                 merged_bitmap.push(false);
             }
             for (s, is_rec) in batch_recursive {
