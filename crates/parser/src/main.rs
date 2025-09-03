@@ -57,12 +57,10 @@ fn run_all_examples() {
     };
 
     let mut example_files = Vec::new();
-    for entry in entries {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("dl") {
-                example_files.push(path);
-            }
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("dl") {
+            example_files.push(path);
         }
     }
 
