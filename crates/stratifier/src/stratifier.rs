@@ -125,7 +125,7 @@ impl Stratifier {
 
             let mut still: Vec<(Vec<usize>, bool)> = Vec::new();
             for (s, is_rec) in pending.into_iter() {
-                // Does this stratum depend on a rule that is still in another unprocessed stratum?
+                // Check if this stratum depends on any rule that remains in another (unprocessed) stratum.
                 let external_dep_exists = s.iter().any(|rid| {
                     dep_map.get(rid).is_some_and(|deps| {
                         deps.iter()
