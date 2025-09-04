@@ -8,6 +8,7 @@ pub mod declaration;
 pub mod logic;
 pub mod primitive;
 pub mod program;
+pub mod error;
 
 // Re-export core types for convenient access
 pub use declaration::{Attribute, Relation};

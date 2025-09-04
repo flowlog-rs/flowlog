@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+thiserror = { workspace = true }
 
 # Parser-specific dependencies
 pest = "2.8"

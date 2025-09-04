@@ -11,12 +11,14 @@
 use super::{
     declaration::{InputDirective, OutputDirective, PrintSizeDirective, Relation},
     logic::{MacaronRule, Predicate},
-    ConstType, Lexeme, MacaronParser, Rule,
+    ConstType, Lexeme, MacaronParser, Rule, error
 };
 use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::{fmt, fs};
 use tracing::{info, warn};
+
+type Result<T> = std::result::Result<T, error::ParserError>;
 
 /// A complete Macaron program.
 #[derive(Debug, Clone, PartialEq, Eq)]
