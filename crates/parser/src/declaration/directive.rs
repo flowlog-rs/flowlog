@@ -1,6 +1,6 @@
 //! Input/Output directive types for Macaron Datalog programs.
 
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
@@ -35,13 +35,13 @@ impl InputDirective {
 }
 
 impl Lexeme for InputDirective {
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
         // First child is always the relation name
         let relation_name = inner
             .next()
-            .expect("Parser error: input directive missing relation name")
+            .ok_or_else(|| ParserError::IncompleteDirective("Input".to_string()))?
             .as_str()
             .to_string();
 
@@ -54,12 +54,12 @@ impl Lexeme for InputDirective {
                     let mut param_inner = input_param.into_inner();
                     let key = param_inner
                         .next()
-                        .expect("Parser error: input parameter missing name")
+                        .ok_or_else(|| ParserError::IncompleteInputParameter("key".to_string()))?
                         .as_str()
                         .to_string();
                     let value = param_inner
                         .next()
-                        .expect("Parser error: input parameter missing value")
+                        .ok_or_else(|| ParserError::IncompleteInputParameter("value".to_string()))?
                         .as_str()
                         .trim_matches('"')
                         .to_string();
@@ -68,7 +68,7 @@ impl Lexeme for InputDirective {
             }
         }
 
-        Self::new(relation_name, parameters)
+        Ok(Self::new(relation_name, parameters))
     }
 }
 
@@ -103,13 +103,13 @@ impl OutputDirective {
 }
 
 impl Lexeme for OutputDirective {
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
         // First child is relation name
         let relation_name = inner
             .next()
-            .expect("Parser error: output directive missing relation name")
+            .ok_or_else(|| ParserError::IncompleteDirective("Output".to_string()))?
             .as_str()
             .to_string();
 
@@ -118,7 +118,7 @@ impl Lexeme for OutputDirective {
             .next()
             .map(|p| p.as_str().trim_matches('"').to_string());
 
-        Self::new(relation_name, path)
+        Ok(Self::new(relation_name, path))
     }
 }
 
@@ -142,17 +142,17 @@ impl PrintSizeDirective {
 }
 
 impl Lexeme for PrintSizeDirective {
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
         // First child is the relation name
         let relation_name = inner
             .next()
-            .expect("Parser error: printsize directive missing relation name")
+            .ok_or_else(|| ParserError::IncompleteDirective("PrintSize".to_string()))?
             .as_str()
             .to_string();
 
-        Self::new(relation_name)
+        Ok(Self::new(relation_name))
     }
 }
 

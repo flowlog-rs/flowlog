@@ -2,7 +2,7 @@
 
 use super::Attribute;
 use crate::primitive::DataType;
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 use std::fmt;
@@ -174,15 +174,15 @@ impl fmt::Display for Relation {
 impl Lexeme for Relation {
     /// Build a `Relation` from a parsed grammar rule.
     ///
-    /// # Panics
-    /// Panics if the grammar tree is malformed or contains unknown datatypes.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if the grammar tree is malformed or contains unknown datatypes.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
         // name
         let name = inner
             .next()
-            .expect("Parser error: relation missing name")
+            .ok_or(ParserError::MissingName)?
             .as_str();
 
         let mut attributes: Vec<Attribute> = Vec::new();
@@ -196,33 +196,39 @@ impl Lexeme for Relation {
                             let mut parts = attr.into_inner();
                             let aname = parts
                                 .next()
-                                .expect("Parser error: attribute missing name")
+                                .ok_or_else(|| {
+                                    ParserError::IncompleteAttribute("name".to_string())
+                                })?
                                 .as_str();
                             let dts = parts
                                 .next()
-                                .expect("Parser error: attribute missing datatype")
+                                .ok_or_else(|| {
+                                    ParserError::IncompleteAttribute("datatype".to_string())
+                                })?
                                 .as_str();
-                            let dt = DataType::from_str(dts).unwrap_or_else(|e| {
-                                panic!(
-                                    "Parser error: invalid datatype `{dts}` for attribute `{aname}`: {e}"
-                                )
-                            });
-                            Attribute::new(aname.to_string(), dt)
+                            let dt = DataType::from_str(dts).map_err(|e| {
+                                ParserError::InvalidAttributeDatatype {
+                                    aname: aname.to_string(),
+                                    dts: dts.to_string(),
+                                    e: e.to_string(),
+                                }
+                            })?;
+                            Ok(Attribute::new(aname.to_string(), dt))
                         })
-                        .collect();
+                        .collect::<Result<Vec<Attribute>>>()?;
                 }
                 _ => {
-                    unreachable!(
-                        "Parser error: unexpected rule in relation declaration: {:?}",
-                        rule.as_rule()
-                    )
+                    return Err(ParserError::UnexpectedRule(
+                        "relation declaration".to_string(),
+                        rule.as_str().to_string(),
+                    ));
                 }
             }
         }
 
         // Always create relations with both input and output paths
         // The program parser will decide whether it's EDB or IDB based on input_path
-        Self::new(name, attributes)
+        Ok(Self::new(name, attributes))
     }
 }
 

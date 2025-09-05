@@ -17,7 +17,7 @@
 //! ```
 
 use crate::primitive::ConstType;
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
@@ -48,20 +48,23 @@ impl fmt::Display for ArithmeticOperator {
 impl Lexeme for ArithmeticOperator {
     /// Parse an operator from the grammar.
     ///
-    /// # Panics
-    /// Panics if the rule is not one of `plus|minus|times|divide|modulo`.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if the rule is not one of `plus|minus|times|divide|modulo`.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let op = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: operator missing inner token");
+            .ok_or_else(|| ParserError::IncompleteArithmeticOperator("inner token".to_string()))?;
         match op.as_rule() {
-            Rule::plus => Self::Plus,
-            Rule::minus => Self::Minus,
-            Rule::times => Self::Multiply,
-            Rule::divide => Self::Divide,
-            Rule::modulo => Self::Modulo,
-            other => panic!("Parser error: unknown arithmetic operator: {:?}", other),
+            Rule::plus => Ok(Self::Plus),
+            Rule::minus => Ok(Self::Minus),
+            Rule::times => Ok(Self::Multiply),
+            Rule::divide => Ok(Self::Divide),
+            Rule::modulo => Ok(Self::Modulo),
+            other => Err(ParserError::UnsupportedArithmeticOperator(format!(
+                "{:?}",
+                other
+            ))),
         }
     }
 }
@@ -112,17 +115,17 @@ impl fmt::Display for Factor {
 impl Lexeme for Factor {
     /// Parse a factor (variable or constant).
     ///
-    /// # Panics
-    /// Panics if the inner token is neither `variable` nor `constant`.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if the inner token is neither `variable` nor `constant`.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: factor missing inner token");
+            .ok_or_else(|| ParserError::IncompleteFactor("inner token".to_string()))?;
         match inner.as_rule() {
-            Rule::variable => Self::Var(inner.as_str().to_string()),
-            Rule::constant => Self::Const(ConstType::from_parsed_rule(inner)),
-            other => panic!("Parser error: invalid factor rule: {:?}", other),
+            Rule::variable => Ok(Self::Var(inner.as_str().to_string())),
+            Rule::constant => Ok(Self::Const(ConstType::from_parsed_rule(inner)?)),
+            other => Err(ParserError::InvalidFactorRule(format!("{:?}", other))),
         }
     }
 }
@@ -194,28 +197,28 @@ impl fmt::Display for Arithmetic {
 impl Lexeme for Arithmetic {
     /// Parse `factor (operator factor)*`.
     ///
-    /// # Panics
-    /// Panics if the sequence is malformed (e.g., operator without following factor).
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if the sequence is malformed (e.g., operator without following factor).
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
         let init = Factor::from_parsed_rule(
             inner
                 .next()
-                .expect("Parser error: arithmetic missing initial factor"),
-        );
+                .ok_or_else(|| ParserError::IncompleteArithmetic("initial factor".to_string()))?,
+        )?;
 
         let mut rest = Vec::new();
         while let Some(op_pair) = inner.next() {
-            let factor_pair = inner
-                .next()
-                .expect("Parser error: arithmetic expected (operator, factor) pair");
-            let op = ArithmeticOperator::from_parsed_rule(op_pair);
-            let factor = Factor::from_parsed_rule(factor_pair);
+            let factor_pair = inner.next().ok_or_else(|| {
+                ParserError::IncompleteArithmetic("factor after operator".to_string())
+            })?;
+            let op = ArithmeticOperator::from_parsed_rule(op_pair)?;
+            let factor = Factor::from_parsed_rule(factor_pair)?;
             rest.push((op, factor));
         }
 
-        Self { init, rest }
+        Ok(Self { init, rest })
     }
 }
 

@@ -10,15 +10,14 @@
 
 use super::{
     declaration::{InputDirective, OutputDirective, PrintSizeDirective, Relation},
+    error::ParserError,
     logic::{MacaronRule, Predicate},
-    ConstType, Lexeme, MacaronParser, Rule, error
+    ConstType, Lexeme, MacaronParser, Result, Rule,
 };
 use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::{fmt, fs};
 use tracing::{info, warn};
-
-type Result<T> = std::result::Result<T, error::ParserError>;
 
 /// A complete Macaron program.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,20 +91,19 @@ impl fmt::Display for Program {
 impl Program {
     /// Parse a program from a file, extract boolean facts, and prune dead components.
     ///
-    /// Panics on I/O or parse errors.
-    #[must_use]
-    pub fn parse(path: &str) -> Self {
-        let unparsed = fs::read_to_string(path).expect("Parser error: failed to read file");
+    /// Return errors on I/O or parse errors.
+    pub fn parse(path: &str) -> Result<Self> {
+        let unparsed = fs::read_to_string(path)?;
         let parsed = MacaronParser::parse(Rule::main_grammar, &unparsed)
-            .expect("Parser error: failed to parse Macaron program")
+            .map_err(|_| ParserError::FailedToParseProgram)?
             .next()
-            .expect("Parser error: no parsed rule found");
+            .ok_or(ParserError::FailedToParseRule)?;
 
         // Build structure + extract boolean facts inside `from_parsed_rule`.
-        let program = Self::from_parsed_rule(parsed);
+        let program = Self::from_parsed_rule(parsed)?;
 
         // Prune unused declarations and rules.
-        program.prune_dead_components()
+        Ok(program.prune_dead_components())
     }
 
     /// All relation declarations.
@@ -164,7 +162,7 @@ impl Program {
     /// - A rule is considered a boolean fact rule iff `rhs().iter().all(BoolPredicate)`.
     /// - The overall boolean value is the conjunction of those literals (all must be `true`).
     /// - Only `true` facts are materialized; `false` are ignored (can be added later).
-    fn extract_boolean_facts(&mut self) {
+    fn extract_boolean_facts(&mut self) -> Result<()> {
         let mut keep = Vec::with_capacity(self.rules.len());
 
         for rule in self.rules.drain(..) {
@@ -185,7 +183,7 @@ impl Program {
 
             if overall_true {
                 let rel_name = rule.head().name().to_string();
-                let tuple = rule.extract_constants_from_head(); // panics if head isn't constants
+                let tuple = rule.extract_constants_from_head()?; // propagate error
                 self.bool_facts
                     .entry(rel_name)
                     .or_default()
@@ -195,6 +193,7 @@ impl Program {
         }
 
         self.rules = keep;
+        Ok(())
     }
 
     /// Compute the transitive closure of dependencies needed by outputs + boolean facts.
@@ -351,7 +350,7 @@ impl Lexeme for Program {
     /// Build a program from the top-level grammar node.
     ///
     /// Performs section dispatch and boolean fact extraction.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut relations = Vec::new();
         let mut input_directives = Vec::new();
         let mut output_directives = Vec::new();
@@ -362,23 +361,23 @@ impl Lexeme for Program {
         for node in parsed_rule.into_inner() {
             match node.as_rule() {
                 Rule::declaration => {
-                    let relation = Relation::from_parsed_rule(node);
+                    let relation = Relation::from_parsed_rule(node)?;
                     relations.push(relation);
                 }
                 Rule::input_directive => {
-                    let input_dir = InputDirective::from_parsed_rule(node);
+                    let input_dir = InputDirective::from_parsed_rule(node)?;
                     input_directives.push(input_dir);
                 }
                 Rule::output_directive => {
-                    let output_dir = OutputDirective::from_parsed_rule(node);
+                    let output_dir = OutputDirective::from_parsed_rule(node)?;
                     output_directives.push(output_dir);
                 }
                 Rule::printsize_directive => {
-                    let printsize_dir = PrintSizeDirective::from_parsed_rule(node);
+                    let printsize_dir = PrintSizeDirective::from_parsed_rule(node)?;
                     printsize_directives.push(printsize_dir);
                 }
                 Rule::rule => {
-                    rules.push(MacaronRule::from_parsed_rule(node));
+                    rules.push(MacaronRule::from_parsed_rule(node)?);
                 }
                 _ => {}
             }
@@ -389,10 +388,9 @@ impl Lexeme for Program {
         let mut input_relation_names = HashSet::new();
         for input_dir in &input_directives {
             if !input_relation_names.insert(input_dir.relation_name()) {
-                panic!(
-                    "Parser error: duplicate input directive for relation '{}'",
-                    input_dir.relation_name()
-                );
+                return Err(ParserError::DuplicateDirective(
+                    input_dir.relation_name().to_string(),
+                ));
             }
         }
 
@@ -400,10 +398,9 @@ impl Lexeme for Program {
         let mut output_relation_names = HashSet::new();
         for output_dir in &output_directives {
             if !output_relation_names.insert(output_dir.relation_name()) {
-                panic!(
-                    "Parser error: duplicate output directive for relation '{}'",
-                    output_dir.relation_name()
-                );
+                return Err(ParserError::DuplicateDirective(
+                    output_dir.relation_name().to_string(),
+                ));
             }
         }
 
@@ -411,10 +408,9 @@ impl Lexeme for Program {
         let mut printsize_relation_names = HashSet::new();
         for printsize_dir in &printsize_directives {
             if !printsize_relation_names.insert(printsize_dir.relation_name()) {
-                panic!(
-                    "Parser error: duplicate printsize directive for relation '{}'",
-                    printsize_dir.relation_name()
-                );
+                return Err(ParserError::DuplicateDirective(
+                    printsize_dir.relation_name().to_string(),
+                ));
             }
         }
 
@@ -424,18 +420,16 @@ impl Lexeme for Program {
 
             // Check if this relation also has output directive
             if output_relation_names.contains(relation_name) {
-                panic!(
-                    "Parser error: relation '{}' cannot have both input and output directives. Relations must be either EDB (input only) or IDB (output/printsize only).",
-                    relation_name
-                );
+                return Err(ParserError::ConflictingDirectives(
+                    relation_name.to_string(),
+                ));
             }
 
             // Check if this relation also has printsize directive
             if printsize_relation_names.contains(relation_name) {
-                panic!(
-                    "Parser error: relation '{}' cannot have both input and printsize directives. Relations must be either EDB (input only) or IDB (output/printsize only).",
-                    relation_name
-                );
+                return Err(ParserError::ConflictingDirectives(
+                    relation_name.to_string(),
+                ));
             }
         }
 
@@ -447,10 +441,9 @@ impl Lexeme for Program {
             {
                 relation.set_input_params(input_dir.parameters().clone());
             } else {
-                panic!(
-                    "Parser error: input directive for UNKNOWN relation '{}'. Relation must be declared with .decl before using .input directive.",
-                    input_dir.relation_name()
-                );
+                return Err(ParserError::UnknownInputRelation(
+                    input_dir.relation_name().to_string(),
+                ));
             }
         }
 
@@ -462,10 +455,9 @@ impl Lexeme for Program {
             {
                 relation.set_output(output_dir.path().map(|s| s.to_string()));
             } else {
-                panic!(
-                    "Parser error: output directive for UNKNOWN relation '{}'. Relation must be declared with .decl before using .output directive.",
-                    output_dir.relation_name()
-                );
+                return Err(ParserError::UnknownOutputRelation(
+                    output_dir.relation_name().to_string(),
+                ));
             }
         }
 
@@ -477,10 +469,9 @@ impl Lexeme for Program {
             {
                 relation.set_printsize(true);
             } else {
-                panic!(
-                    "Parser error: printsize directive for UNKNOWN relation '{}'. Relation must be declared with .decl before using .printsize directive.",
-                    printsize_dir.relation_name()
-                );
+                return Err(ParserError::UnknownPrintSizeRelation(
+                    printsize_dir.relation_name().to_string(),
+                ));
             }
         }
 
@@ -491,7 +482,7 @@ impl Lexeme for Program {
         };
 
         // Extract boolean-only rules into `bool_facts`.
-        program.extract_boolean_facts();
-        program
+        program.extract_boolean_facts()?;
+        Ok(program)
     }
 }

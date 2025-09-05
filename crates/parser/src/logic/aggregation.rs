@@ -12,7 +12,7 @@
 //! ```
 
 use super::Arithmetic;
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -39,23 +39,19 @@ impl fmt::Display for AggregationOperator {
 impl Lexeme for AggregationOperator {
     /// Parse an aggregation operator from the grammar.
     ///
-    /// # Panics
-    /// Panics if the rule is not one of `min|max|count|sum`.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
-        let op = parsed_rule
-            .into_inner()
-            .next()
-            .expect("Parser error: aggregation operator missing inner token");
+    /// # Return errors
+    /// Return errors if the rule is not one of `min|max|count|sum`.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
+        let op = parsed_rule.into_inner().next().ok_or_else(|| {
+            ParserError::IncompleteAggregation("inner token of operator".to_string())
+        })?;
 
         match op.as_rule() {
-            Rule::min => Self::Min,
-            Rule::max => Self::Max,
-            Rule::count => Self::Count,
-            Rule::sum => Self::Sum,
-            other => panic!(
-                "Parser error: unexpected aggregation operator rule: {:?}",
-                other
-            ),
+            Rule::min => Ok(Self::Min),
+            Rule::max => Ok(Self::Max),
+            Rule::count => Ok(Self::Count),
+            Rule::sum => Ok(Self::Sum),
+            other => Err(ParserError::UnsupportedAggregation(format!("{:?}", other))),
         }
     }
 }
@@ -108,25 +104,25 @@ impl fmt::Display for Aggregation {
 impl Lexeme for Aggregation {
     /// Parse an aggregation from the grammar.
     ///
-    /// # Panics
-    /// Panics if the inner structure is malformed (missing operator or expression).
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if the inner structure is malformed (missing operator or expression).
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
         let op_pair = inner
             .next()
-            .expect("Parser error: aggregation missing operator");
-        let operator = AggregationOperator::from_parsed_rule(op_pair);
+            .ok_or_else(|| ParserError::IncompleteAggregation("operator".to_string()))?;
+        let operator = AggregationOperator::from_parsed_rule(op_pair)?;
 
-        let expr_pair = inner
-            .next()
-            .expect("Parser error: aggregation missing arithmetic expression");
-        let arithmetic = Arithmetic::from_parsed_rule(expr_pair);
+        let expr_pair = inner.next().ok_or_else(|| {
+            ParserError::IncompleteAggregation("arithmetic expression".to_string())
+        })?;
+        let arithmetic = Arithmetic::from_parsed_rule(expr_pair)?;
 
-        Self {
+        Ok(Self {
             operator,
             arithmetic,
-        }
+        })
     }
 }
 

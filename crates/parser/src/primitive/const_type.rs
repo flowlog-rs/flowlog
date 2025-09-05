@@ -1,6 +1,6 @@
 //! Constant value types for Macaron Datalog programs.
 
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -34,24 +34,24 @@ impl fmt::Display for ConstType {
 impl Lexeme for ConstType {
     /// Parses a constant from the grammar.
     ///
-    /// Panics if:
+    /// Return errors if:
     /// - no inner rule exists
     /// - number literal fails to parse as `i32`
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: constant rule had no inner value");
+            .ok_or_else(|| ParserError::IncompleteConstantRule("inner token".to_string()))?;
         match inner.as_rule() {
-            Rule::integer => Self::Integer(
+            Rule::integer => Ok(Self::Integer(
                 inner
                     .as_str()
                     .parse()
-                    .expect("Parser error: failed to parse number literal as i32"),
-            ),
-            Rule::string => Self::Text(inner.as_str().trim_matches('"').to_string()),
+                    .map_err(|_| ParserError::FailedToParseNumberLiteral)?,
+            )),
+            Rule::string => Ok(Self::Text(inner.as_str().trim_matches('"').to_string())),
             _ => unreachable!(
-                "Parser error: unexpected constant rule variant {:?}",
+                "Internal error: unexpected constant rule variant {:?}",
                 inner.as_rule()
             ),
         }

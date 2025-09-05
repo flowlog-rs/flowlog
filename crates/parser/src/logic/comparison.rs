@@ -14,7 +14,7 @@
 //! ```
 
 use super::Arithmetic;
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
@@ -55,21 +55,24 @@ impl fmt::Display for ComparisonOperator {
 impl Lexeme for ComparisonOperator {
     /// Parse a comparison operator from the grammar.
     ///
-    /// # Panics
-    /// Panics if the rule is not one of the expected operator tokens.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if the rule is not one of the expected operator tokens.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let op = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: comparison operator missing inner token");
+            .ok_or_else(|| ParserError::IncompleteComparisonOperator("inner token".to_string()))?;
         match op.as_rule() {
-            Rule::equal => Self::Equal,
-            Rule::not_equal => Self::NotEqual,
-            Rule::greater_than => Self::GreaterThan,
-            Rule::greater_equal_than => Self::GreaterEqualThan,
-            Rule::less_than => Self::LessThan,
-            Rule::less_equal_than => Self::LessEqualThan,
-            other => panic!("Parser error: unknown comparison operator: {:?}", other),
+            Rule::equal => Ok(Self::Equal),
+            Rule::not_equal => Ok(Self::NotEqual),
+            Rule::greater_than => Ok(Self::GreaterThan),
+            Rule::greater_equal_than => Ok(Self::GreaterEqualThan),
+            Rule::less_than => Ok(Self::LessThan),
+            Rule::less_equal_than => Ok(Self::LessEqualThan),
+            other => Err(ParserError::InvalidComparisonOperator(format!(
+                "{:?}",
+                other
+            ))),
         }
     }
 }
@@ -146,30 +149,30 @@ impl fmt::Display for ComparisonExpr {
 impl Lexeme for ComparisonExpr {
     /// Parse `arithmetic ~ comparison_operator ~ arithmetic`.
     ///
-    /// # Panics
-    /// Panics if any of the three parts are missing.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if any of the three parts are missing.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
         let left_pair = inner
             .next()
-            .expect("Parser error: comparison missing left expression");
+            .ok_or_else(|| ParserError::IncompleteComparison("left expression".to_string()))?;
         let op_pair = inner
             .next()
-            .expect("Parser error: comparison missing operator");
+            .ok_or_else(|| ParserError::IncompleteComparison("operator".to_string()))?;
         let right_pair = inner
             .next()
-            .expect("Parser error: comparison missing right expression");
+            .ok_or_else(|| ParserError::IncompleteComparison("right expression".to_string()))?;
 
-        let left = Arithmetic::from_parsed_rule(left_pair);
-        let operator = ComparisonOperator::from_parsed_rule(op_pair);
-        let right = Arithmetic::from_parsed_rule(right_pair);
+        let left = Arithmetic::from_parsed_rule(left_pair)?;
+        let operator = ComparisonOperator::from_parsed_rule(op_pair)?;
+        let right = Arithmetic::from_parsed_rule(right_pair)?;
 
-        Self {
+        Ok(Self {
             left,
             operator,
             right,
-        }
+        })
     }
 }
 

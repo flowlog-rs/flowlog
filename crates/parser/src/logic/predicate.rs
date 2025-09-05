@@ -8,7 +8,7 @@
 //! Predicates form the antecedent of rules: `head(...) :- p1, !p2, X > Y, true.`
 
 use super::{Atom, AtomArg, ComparisonExpr};
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -85,28 +85,31 @@ impl Lexeme for Predicate {
     /// - `neg_atom` → `!atom`
     /// - `compare_expr` → comparison
     /// - `boolean` → `True` | `False`
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: expected inner rule for predicate");
+            .ok_or_else(|| ParserError::IncompletePredicate("inner token".to_string()))?;
 
         match inner.as_rule() {
-            Rule::atom => Self::PositiveAtomPredicate(Atom::from_parsed_rule(inner)),
+            Rule::atom => Ok(Self::PositiveAtomPredicate(Atom::from_parsed_rule(inner)?)),
             Rule::neg_atom => {
-                let atom_rule = inner
-                    .into_inner()
-                    .next()
-                    .expect("Parser error: neg_atom missing inner atom");
-                Self::NegatedAtomPredicate(Atom::from_parsed_rule(atom_rule))
+                let atom_rule = inner.into_inner().next().ok_or_else(|| {
+                    ParserError::IncompletePredicate("inner atom of negation".to_string())
+                })?;
+                Ok(Self::NegatedAtomPredicate(Atom::from_parsed_rule(
+                    atom_rule,
+                )?))
             }
-            Rule::compare_expr => Self::ComparePredicate(ComparisonExpr::from_parsed_rule(inner)),
+            Rule::compare_expr => Ok(Self::ComparePredicate(ComparisonExpr::from_parsed_rule(
+                inner,
+            )?)),
             Rule::boolean => match inner.as_str() {
-                "True" => Self::BoolPredicate(true),
-                "False" => Self::BoolPredicate(false),
-                other => unreachable!("Parser error: invalid boolean literal: {other}"),
+                "True" => Ok(Self::BoolPredicate(true)),
+                "False" => Ok(Self::BoolPredicate(false)),
+                other => unreachable!("Internal error: invalid boolean literal: {other}"),
             },
-            other => unreachable!("Parser error: invalid predicate type: {:?}", other),
+            other => unreachable!("Internal error: invalid predicate type: {:?}", other),
         }
     }
 }
