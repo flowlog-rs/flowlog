@@ -128,10 +128,7 @@ impl Catalog {
     }
 
     /// For a variable string, returns its first-presence per positive atom (None if absent).
-    pub fn argument_presence_map(
-        &self,
-        argument_str: &String,
-    ) -> &Vec<Option<AtomArgumentSignature>> {
+    pub fn argument_presence_map(&self, argument_str: &str) -> &Vec<Option<AtomArgumentSignature>> {
         &self.argument_presence_map[argument_str]
     }
 
