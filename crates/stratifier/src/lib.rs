@@ -9,19 +9,19 @@
 //!   dependencies are evaluated earlier; detects recursive strata (SCCs).
 //!
 //! # Example
-//! ```ignore
+//! ```rust,no_run
 //! use parser::Program;
 //! use stratifier::{DependencyGraph, Stratifier};
 //!
-//! // Parse a Macaron program (adjust path as needed)
-//! let program = Program::parse("example/reach.dl");
+//! // Parse a Macaron program (example reach.dl, adjust path as needed)
+//! let program = Program::parse("../../example/reach.dl");
 //!
 //! // Build dependency graph
-//! let graph = DependencyGraph::from_program(&program);
+//! let graph = DependencyGraph::from_parser(&program);
 //! println!("{}", graph);
 //!
 //! // Compute stratum
-//! let stratum = Stratifier::from_program(program.clone());
+//! let stratum = Stratifier::from_parser(&program);
 //! println!("{}", stratum);
 //! ```
 

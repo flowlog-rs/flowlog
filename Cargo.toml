@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "crates/parser",
-    "crates/stratifier"
+    "crates/stratifier",
+    "crates/catalog"
 ]
 resolver = "2"
 
