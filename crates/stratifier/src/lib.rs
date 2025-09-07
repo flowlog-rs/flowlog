@@ -14,7 +14,7 @@
 //! use stratifier::{DependencyGraph, Stratifier};
 //!
 //! // Parse a Macaron program (example reach.dl, adjust path as needed)
-//! let program = Program::parse("/../../example/reach.dl");
+//! let program = Program::parse("../../example/reach.dl");
 //!
 //! // Build dependency graph
 //! let graph = DependencyGraph::from_parser(&program);
