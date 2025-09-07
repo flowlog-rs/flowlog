@@ -27,7 +27,7 @@ impl DependencyGraph {
 
     /// Constructs a dependency graph from a program.
     #[must_use]
-    pub fn from_parser(program: &Program) -> Self {
+    pub fn from_program(program: &Program) -> Self {
         let rules = program.rules();
         let rule_idb_names = rules
             .iter()

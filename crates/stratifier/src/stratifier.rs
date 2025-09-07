@@ -64,8 +64,8 @@ impl Stratifier {
     /// 4. Iteratively merge all currently dependency‑free non‑recursive strata
     ///    into a single wider stratum to reduce evaluation passes.
     #[must_use]
-    pub fn from_parser(program: &Program) -> Self {
-        let dependency_graph = DependencyGraph::from_parser(program);
+    pub fn from_program(program: &Program) -> Self {
+        let dependency_graph = DependencyGraph::from_program(program);
         let dep_map = dependency_graph.dependency_map();
 
         // Kosaraju step 1: order by finish time.

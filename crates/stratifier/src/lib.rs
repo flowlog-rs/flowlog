@@ -17,11 +17,11 @@
 //! let program = Program::parse("../../example/reach.dl");
 //!
 //! // Build dependency graph
-//! let graph = DependencyGraph::from_parser(&program);
+//! let graph = DependencyGraph::from_program(&program);
 //! println!("{}", graph);
 //!
 //! // Compute stratum
-//! let stratum = Stratifier::from_parser(&program);
+//! let stratum = Stratifier::from_program(&program);
 //! println!("{}", stratum);
 //! ```
 

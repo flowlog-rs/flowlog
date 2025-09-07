@@ -269,89 +269,11 @@ impl Catalog {
     pub fn head_arguments_map(&self) -> &HashMap<String, HeadArg> {
         &self.head_arguments_map
     }
-
-    /// Partition comparison predicates into join/left/right (left and right may overlap).
-    pub fn partition_comparison_predicates(
-        &self,
-        left_vars_set: &HashSet<&String>,
-        right_vars_set: &HashSet<&String>,
-        active_comparison_predicates: &[usize],
-    ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
-        // Every comparison predicate must be a subset of the union of left and right.
-        // If subset of left ⇒ left; subset of right ⇒ right; otherwise ⇒ join.
-        let mut join_predicates = Vec::new();
-        let mut left_predicates = Vec::new();
-        let mut right_predicates = Vec::new();
-
-        for &i in active_comparison_predicates {
-            let comparison_predicate = &self.comparison_predicates[i];
-            let vars_set = comparison_predicate.vars_set();
-            let union_vars_set: HashSet<&String> =
-                left_vars_set.union(right_vars_set).cloned().collect();
-
-            assert!(
-                vars_set.is_subset(&union_vars_set),
-                "comp vars {:?} not a subset of the subtree vars {:?}",
-                vars_set,
-                union_vars_set
-            );
-            if vars_set.is_subset(left_vars_set) {
-                left_predicates.push(i);
-            }
-
-            if vars_set.is_subset(right_vars_set) {
-                right_predicates.push(i);
-            }
-
-            if !vars_set.is_subset(left_vars_set) && !vars_set.is_subset(right_vars_set) {
-                join_predicates.push(i);
-            }
-        }
-
-        (join_predicates, left_predicates, right_predicates)
-    }
-
-    /// Isolate negated atoms that span both sides but are contained in their union; mark them inactive.
-    pub fn attach_negated_atoms_on_joins(
-        &self,
-        left_vars_set: &HashSet<&String>,
-        right_vars_set: &HashSet<&String>,
-        is_active_negation_bitmap: &mut [bool],
-    ) -> Vec<AtomSignature> {
-        let mut isolated_negated_atoms = Vec::new();
-
-        for (i, negated_atom_argument_signatures) in
-            self.negated_atom_argument_signatures.iter().enumerate()
-        {
-            // if it is not active, skip
-            if !is_active_negation_bitmap[i] {
-                continue;
-            }
-
-            let negated_atom_argument_strs =
-                self.signature_to_argument_strs(negated_atom_argument_signatures);
-            let negated_atom_argument_strs_set = negated_atom_argument_strs
-                .iter()
-                .collect::<HashSet<&String>>();
-
-            if !negated_atom_argument_strs_set.is_subset(left_vars_set)
-                && !negated_atom_argument_strs_set.is_subset(right_vars_set)
-                && negated_atom_argument_strs_set
-                    .is_subset(&left_vars_set.union(right_vars_set).cloned().collect())
-            {
-                // if the negated atom (1) is not a subset of both left and right, and (2) is a subset of the union of left and right, it should be attached on the join
-                isolated_negated_atoms.push(AtomSignature::new(false, i));
-                is_active_negation_bitmap[i] = false;
-            }
-        }
-
-        isolated_negated_atoms
-    }
 }
 
 impl Catalog {
     /// Build a Catalog from a single rule (derives signatures, filters and helper maps).
-    pub fn from_strata(rule: &MacaronRule) -> Self {
+    pub fn from_rule(rule: &MacaronRule) -> Self {
         let (
             signature_to_argument_str_map,
             positive_atom_names,
@@ -625,70 +547,90 @@ impl Catalog {
 
 impl fmt::Display for Catalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Catalog for Rule: {}", self.rule())?;
+        writeln!(f, "Catalog for rule: {}", self.rule())?;
 
-        // Positive Atom Names
-        writeln!(f, "\nPositive Atom Names (Core/Non-Core):")?;
-        for (i, atom_name) in self.positive_atom_names.iter().enumerate() {
-            let status = if self.is_core_atom_bitmap[i] {
-                "Core"
+        // Helper to render signatures with var names (skip those not in the reverse map)
+        let fmt_sig_list = |sigs: &Vec<AtomArgumentSignature>,
+                            map: &HashMap<AtomArgumentSignature, String>|
+         -> String {
+            let items: Vec<String> = sigs
+                .iter()
+                .filter_map(|s| map.get(s).map(|v| format!("{}:{}", s, v)))
+                .collect();
+            format!("[{}]", items.join(", "))
+        };
+
+        // Positive atoms with indices, core flag, and args
+        writeln!(f, "Positive atoms:")?;
+        for (i, name) in self.positive_atom_names.iter().enumerate() {
+            let core = if self.is_core_atom_bitmap[i] {
+                "core"
             } else {
-                "Non-Core"
+                "non-core"
             };
-            writeln!(f, "  - {} ({})", atom_name, status)?;
+            let args = fmt_sig_list(
+                &self.positive_atom_argument_signatures[i],
+                &self.signature_to_argument_str_map,
+            );
+            writeln!(f, "  [{:>2}] {:<} ({}) args: {}", i, name, core, args)?;
         }
 
-        // Positive Atom Argument Signatures
-        writeln!(f, "\nPositive Atom Argument Signatures:")?;
-        for atom_signatures in &self.positive_atom_argument_signatures {
-            writeln!(f, "  Atom:")?;
-            for signature in atom_signatures {
-                writeln!(f, "    Argument Signature: {}", signature)?;
+        // Negated atoms (if any)
+        writeln!(f, "\nNegated atoms:")?;
+        if self.negated_atom_names.is_empty() {
+            writeln!(f, "  (none)")?;
+        } else {
+            for (i, name) in self.negated_atom_names.iter().enumerate() {
+                let args = fmt_sig_list(
+                    &self.negated_atom_argument_signatures[i],
+                    &self.signature_to_argument_str_map,
+                );
+                writeln!(f, "  [{:>2}] {:<} args: {}", i, name, args)?;
             }
         }
 
-        // Negated Atom Names
-        writeln!(f, "\nNegated Atom Names:")?;
-        for negated_atom_name in &self.negated_atom_names {
-            writeln!(f, "  - {}", negated_atom_name)?;
+        // Signature map (compact)
+        let mut sig_entries: Vec<(String, String)> = self
+            .signature_to_argument_str_map
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        sig_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let sig_line = sig_entries
+            .into_iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(f, "\nSignature ↔ Var:")?;
+        if sig_line.is_empty() {
+            writeln!(f, "  (empty)")?;
+        } else {
+            writeln!(f, "  {}", sig_line)?;
         }
 
-        // Negated Atom Argument Signatures
-        writeln!(f, "\nNegated Atom Argument Signatures:")?;
-        for negated_signatures in &self.negated_atom_argument_signatures {
-            writeln!(f, "  Negated Atom:")?;
-            for signature in negated_signatures {
-                writeln!(f, "    Argument Signature: {:?}", signature)?;
+        // Argument presence map (sorted by var name), using '-' for None
+        writeln!(f, "\nArgument presence per positive atom:")?;
+        let mut vars: Vec<&String> = self.argument_presence_map.keys().collect();
+        vars.sort();
+        for var in vars {
+            let row = self.argument_presence_map[var]
+                .iter()
+                .map(|opt| opt.map(|s| s.to_string()).unwrap_or_else(|| "-".into()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(f, "  {}: [{}]", var, row)?;
+        }
+
+        // Base filters
+        writeln!(f, "\nBase filters:")?;
+        if self.filters.is_empty() {
+            writeln!(f, "  (none)")?
+        } else {
+            // Leverage Filters' own Display
+            for line in self.filters.to_string().lines() {
+                writeln!(f, "  {}", line)?;
             }
         }
-
-        // Signature to Argument String Map
-        writeln!(f, "\nSignature to Argument String Map:")?;
-        for (signature, arg_str) in &self.signature_to_argument_str_map {
-            writeln!(f, "  {} -> {}", signature, arg_str)?;
-        }
-
-        // Argument Presence Map
-        writeln!(f, "\nArgument Presence Map:")?;
-        for (arg_str, presence_vec) in &self.argument_presence_map {
-            write!(f, "  Argument {}: [", arg_str)?;
-            let mut first = true;
-            for presence in presence_vec {
-                if !first {
-                    write!(f, ", ")?;
-                }
-                match presence {
-                    Some(signature) => write!(f, "{}", signature)?,
-                    None => write!(f, "None")?,
-                }
-                first = false;
-            }
-            writeln!(f, "]")?;
-        }
-
-        // Base Filters
-        writeln!(f, "\nBase Filters:")?;
-        writeln!(f, "  {}", self.filters)?;
 
         Ok(())
     }
