@@ -17,7 +17,7 @@ impl Optimizer {
     }
 
     /// Get stored cardinality (if present) for a relation.
-    pub fn get_cardinality(&self, rel: &String) -> Option<u64> {
+    pub fn get_cardinality(&self, rel: &str) -> Option<u64> {
         self.relation_cardinality.get(rel).copied()
     }
 
