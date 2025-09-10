@@ -30,19 +30,23 @@ impl PlanTree {
     pub fn is_leaf(&self, x: usize) -> bool {
         self.tree
             .get(&x)
-            .expect(&format!(
-                "Optimizer error: node {} not found in plan tree (is_leaf)",
-                x
-            ))
+            .unwrap_or_else(|| {
+                panic!(
+                    "Optimizer error: node {} not found in plan tree (is_leaf)",
+                    x
+                )
+            })
             .is_empty()
     }
 
     /// Returns the children list for a node.
     pub fn children(&self, x: usize) -> &Vec<usize> {
-        self.tree.get(&x).expect(&format!(
-            "Optimizer error: node {} not found in plan tree (children)",
-            x
-        ))
+        self.tree.get(&x).unwrap_or_else(|| {
+            panic!(
+                "Optimizer error: node {} not found in plan tree (children)",
+                x
+            )
+        })
     }
 
     /// Build a plan tree from a Catalog.
