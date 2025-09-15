@@ -3,7 +3,8 @@ members = [
     "crates/parser",
     "crates/stratifier",
     "crates/catalog",
-    "crates/optimizer"
+    "crates/optimizer",
+    "crates/planner"
 ]
 resolver = "2"
 
