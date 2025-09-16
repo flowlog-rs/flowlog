@@ -1,30 +1,44 @@
+//! Transformation flows for query planning in Macaron Datalog programs.
+
 use crate::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
 };
-use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos};
+use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos};
 use parser::{AggregationOperator, ConstType};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
 /// Represents data transformation flows in query execution.
+///
+/// TransformationFlow defines how data is transformed as it flows through
+/// different stages of query execution, including filtering, projection,
+/// joins, and aggregations.
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub enum TransformationFlow {
     /// Single relation transformations: filtering, projection.
-    /// Example: `((x), y) -> ((), x + 1, y * 2)` with filter `x > 0`
+    /// Example: `((x), y) -> ((), x, y)` with filter `x > 0`.
+    ///
+    /// Note:
+    /// - Arithmetic expressions are only allowed in the last head transformation
+    ///   before output or aggregation.
     KVToKV {
-        /// Output key expressions (e.g., `[x + 1]`)
+        /// Output key expressions
         key: Arc<Vec<ArithmeticArgument>>,
-        /// Output value expressions (e.g., `[y * 2, x]`)
+        /// Output value expressions
         value: Arc<Vec<ArithmeticArgument>>,
-        /// Equality constraints (e.g., `x + 1 >= 5`)
+        /// Equality constraints (e.g., `x = 5`)
         constraints: Constraints,
-        /// Comparison filters (e.g., `x + 2 > y`)
+        /// Comparison filters (e.g., `x > y`)
         compares: Vec<ComparisonExprArgument>,
     },
 
     /// Join operations between two relations.
     /// Example: `((x), y) + ((x), z) -> ((), x, y, z)`
+    ///
+    /// Note:
+    /// - Only argument-level joins are considered. Any arithmetic inside
+    ///   a join key (e.g., `x + 1`) will be handled in the future.
     JnToKV {
         /// Output key expressions
         key: Arc<Vec<ArithmeticArgument>>,
@@ -35,12 +49,13 @@ pub enum TransformationFlow {
     },
 
     /// Aggregation operations on a relation.
-    /// Example: `(x, y) -> (x, SUM(y))`
-    /// Notice:
-    /// 1. we only consider argument level aggregation, any
-    ///    arithmetic inside aggregation (e.g., SUM(x + 1)) should
-    ///    be handled in the KVToKV transformation before the aggregation.
-    /// 2. we assume the input and output of this operator are both rows.
+    /// Example: `(x, y) -> (x, SUM(y))`.
+    ///
+    /// Note:
+    /// - Only argument-level aggregation is considered. Any arithmetic inside
+    ///   an aggregation (e.g., `SUM(x + 1)`) should be handled by a preceding
+    ///   KVToKV transformation.
+    /// - Both the input and output of this operator are rows.
     AggToRow {
         /// Output row expressions
         field: TransformationArgument,
@@ -106,86 +121,6 @@ impl TransformationFlow {
         }
     }
 
-    /// Creates a mapping from arithmetic position expression to transformation arguments for operator flows.
-    fn kv_argument_flow_map(
-        key_signatures: &[ArithmeticPos],
-        value_signatures: &[ArithmeticPos],
-    ) -> HashMap<ArithmeticPos, TransformationArgument> {
-        key_signatures
-            .iter()
-            .enumerate()
-            .map(|(id, signature)| (signature.clone(), TransformationArgument::KV((false, id))))
-            .chain(
-                value_signatures.iter().enumerate().map(|(id, signature)| {
-                    (signature.clone(), TransformationArgument::KV((true, id)))
-                }),
-            )
-            .collect()
-    }
-
-    /// Compose output arithmetic expressions from available input chunks.
-    ///
-    /// Given a map of available arithmetic positions to their transformation arguments,
-    /// build each requested output arithmetic by concatenating existing chunks.
-    /// Panics with context if no valid decomposition exists.
-    fn flow_over_signatures(
-        input_signature_map: &HashMap<ArithmeticPos, TransformationArgument>,
-        output_signatures: &[ArithmeticPos],
-        context: &str,
-    ) -> Vec<ArithmeticArgument> {
-        output_signatures
-            .iter()
-            .map(|target| {
-                Self::compose_from_chunks(target, input_signature_map).unwrap_or_else(|e| {
-                    panic!(
-                        "Planner error: {}, failed to compose {:?} from inputs: {} ({} inputs)",
-                        context,
-                        target,
-                        e,
-                        input_signature_map.len()
-                    )
-                })
-            })
-            .collect()
-    }
-
-    /// Compose a target arithmetic from available exact chunks.
-    ///
-    /// Simplified: Just look up the target directly in the input map.
-    fn compose_from_chunks(
-        target: &ArithmeticPos,
-        input_map: &HashMap<ArithmeticPos, TransformationArgument>,
-    ) -> Result<ArithmeticArgument, String> {
-        // Direct lookup - if target exists in input map, use it directly
-        if let Some(arg) = input_map.get(target) {
-            let init = FactorArgument::Var(*arg);
-            let rest = Vec::new(); // Single chunk, no additional parts
-            return Ok(ArithmeticArgument { init, rest });
-        }
-
-        Err("no exact match found in input map".to_string())
-    }
-
-    /// Build a map from single-variable inputs to their transformation arguments.
-    fn build_var_map(
-        input_signature_map: &HashMap<ArithmeticPos, TransformationArgument>,
-    ) -> HashMap<AtomArgumentSignature, TransformationArgument> {
-        input_signature_map
-            .iter()
-            .filter_map(|(arith, arg)| {
-                if arith.is_var() {
-                    if let FactorPos::Var(sig) = arith.init() {
-                        Some((*sig, *arg))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
     /// Creates a KVToKV transformation flow from input/output expressions and constraints.
     pub fn kv_to_kv(
         input_key_exprs: &[ArithmeticPos],
@@ -196,84 +131,43 @@ impl TransformationFlow {
         var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
         compare_exprs: &[ComparisonExprPos],
     ) -> Self {
-        let input_signature_map = Self::kv_argument_flow_map(input_key_exprs, input_value_exprs);
+        let input_expr_map = Self::kv_argument_flow_map(input_key_exprs, input_value_exprs);
 
-        let flow_key_signatures = Self::flow_over_signatures(
-            &input_signature_map,
+        let flow_key_args = Self::flow_over_exprs(
+            &input_expr_map,
             output_key_exprs,
             "TransformationFlow::kv_to_kv key",
         );
-        let flow_value_signatures = Self::flow_over_signatures(
-            &input_signature_map,
+        let flow_value_args = Self::flow_over_exprs(
+            &input_expr_map,
             output_value_exprs,
             "TransformationFlow::kv_to_kv value",
         );
+        // Process constant and variable equality constraints via helpers
+        let flow_const_args = Self::build_const_eq_constraints(
+            &input_expr_map,
+            const_eq_constraints,
+            "(TransformationFlow::kv_to_kv)",
+        );
 
-        // Build var map from available single-variable inputs
-        let var_map = Self::build_var_map(&input_signature_map);
-
-        // Process constant constraints: var equals const
-        let flow_const_signatures = const_eq_constraints
-            .iter()
-            .map(|(sig, c)| {
-                let arg = *var_map.get(sig).unwrap_or_else(|| {
-                    panic!(
-                        "Planner error: TransformationFlow::kv_to_kv const - variable signature {} not found in inputs",
-                        sig
-                    )
-                });
-                (arg, c.clone())
-            })
-            .collect();
-
-        // Process variable equality constraints: var equals var
-        let flow_var_eq_signatures = var_eq_constraints
-            .iter()
-            .map(|(l, r)| {
-                let la = *var_map.get(l).unwrap_or_else(|| {
-                    panic!(
-                        "Planner error: TransformationFlow::kv_to_kv var left - variable signature {} not found in inputs",
-                        l
-                    )
-                });
-                let ra = *var_map.get(r).unwrap_or_else(|| {
-                    panic!(
-                        "Planner error: TransformationFlow::kv_to_kv var right - variable signature {} not found in inputs",
-                        r
-                    )
-                });
-                (la, ra)
-            })
-            .collect();
+        let flow_var_eq_args = Self::build_var_eq_constraints(
+            &input_expr_map,
+            var_eq_constraints,
+            "(TransformationFlow::kv_to_kv)",
+        );
 
         // Process comparison constraints
-        let flow_compare_signatures = compare_exprs
-            .iter()
-            .map(|comp| {
-                let left_arg = Self::compose_from_chunks(comp.left(), &input_signature_map)
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "Planner error: TransformationFlow::kv_to_kv compare left - failed to compose {:?}: {}",
-                            comp.left(), e
-                        )
-                    });
-                let right_arg = Self::compose_from_chunks(comp.right(), &input_signature_map)
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "Planner error: TransformationFlow::kv_to_kv compare right - failed to compose {:?}: {}",
-                            comp.right(), e
-                        )
-                    });
-
-                ComparisonExprArgument::new(comp.operator().clone(), left_arg, right_arg)
-            })
-            .collect();
+        let flow_compares = Self::build_compare_arguments(
+            &input_expr_map,
+            compare_exprs,
+            "(TransformationFlow::kv_to_kv)",
+        );
 
         Self::KVToKV {
-            key: Arc::new(flow_key_signatures),
-            value: Arc::new(flow_value_signatures),
-            constraints: Constraints::new(flow_const_signatures, flow_var_eq_signatures),
-            compares: flow_compare_signatures,
+            key: Arc::new(flow_key_args),
+            value: Arc::new(flow_value_args),
+            constraints: Constraints::new(flow_const_args, flow_var_eq_args),
+            compares: flow_compares,
         }
     }
 
@@ -287,7 +181,7 @@ impl TransformationFlow {
         compare_exprs: &[ComparisonExprPos],
     ) -> Self {
         // Map left-side inputs to join transformation arguments
-        let left_signature_map =
+        let left_expr_map =
             Self::kv_argument_flow_map(input_left_key_exprs, input_left_value_exprs)
                 .into_iter()
                 .map(|(signature, trace)| {
@@ -296,7 +190,7 @@ impl TransformationFlow {
                             TransformationArgument::Jn((false, key_or_value, id))
                         }
                         _ => panic!(
-                            "Planner error: TransformationFlow::Jn expects kv in left input: {:?}",
+                            "TransformationFlow::Jn expects kv in left input: {:?}",
                             trace
                         ),
                     };
@@ -304,7 +198,7 @@ impl TransformationFlow {
                 });
 
         // Map right-side inputs to join transformation arguments (only values, no keys)
-        let right_signature_map = Self::kv_argument_flow_map(&[], input_right_value_exprs)
+        let right_expr_map = Self::kv_argument_flow_map(&vec![], input_right_value_exprs) // Self::kv_argument_flow_map(input_right_key_signatures, input_right_value_signatures)
             .into_iter()
             .map(|(signature, trace)| {
                 let join_trace = match trace {
@@ -312,55 +206,268 @@ impl TransformationFlow {
                         TransformationArgument::Jn((true, key_or_value, id))
                     }
                     _ => panic!(
-                        "Planner error: TransformationFlow::join_to_kv expects kv in right input: {:?}",
+                        "TransformationFlow::join_to_kv expects kv in right input: {:?}",
                         trace
                     ),
                 };
                 (signature, join_trace)
             });
 
-        // Combine left and right signature maps
-        let input_signature_map = left_signature_map.chain(right_signature_map).collect();
+        // Combine left and right expression maps
+        let input_expr_map = left_expr_map.chain(right_expr_map).collect();
 
-        let flow_key_signatures = Self::flow_over_signatures(
-            &input_signature_map,
+        let flow_key_args = Self::flow_over_exprs(
+            &input_expr_map,
             output_key_exprs,
             "TransformationFlow::join_to_kv key",
         );
-        let flow_value_signatures = Self::flow_over_signatures(
-            &input_signature_map,
+        let flow_value_args = Self::flow_over_exprs(
+            &input_expr_map,
             output_value_exprs,
             "TransformationFlow::join_to_kv value",
         );
 
         // Process comparison constraints
-        let flow_compare_signatures = compare_exprs
-            .iter()
-            .map(|comp| {
-                let left_arg = Self::compose_from_chunks(comp.left(), &input_signature_map)
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "Planner error: TransformationFlow::join_to_kv compare left - failed to compose {:?}: {}",
-                            comp.left(), e
-                        )
-                    });
-                let right_arg = Self::compose_from_chunks(comp.right(), &input_signature_map)
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "Planner error: TransformationFlow::join_to_kv compare right - failed to compose {:?}: {}",
-                            comp.right(), e
-                        )
-                    });
-
-                ComparisonExprArgument::new(comp.operator().clone(), left_arg, right_arg)
-            })
-            .collect();
+        let flow_compares = Self::build_compare_arguments(
+            &input_expr_map,
+            compare_exprs,
+            "(TransformationFlow::join_to_kv)",
+        );
 
         Self::JnToKV {
-            key: Arc::new(flow_key_signatures),
-            value: Arc::new(flow_value_signatures),
-            compares: flow_compare_signatures,
+            key: Arc::new(flow_key_args),
+            value: Arc::new(flow_value_args),
+            compares: flow_compares,
         }
+    }
+
+    /// Creates an AggToRow transformation flow for aggregation operations.
+    pub fn agg_to_row(
+        input_value_exprs: &[ArithmeticPos],
+        output_field_expr: &ArithmeticPos,
+        operator: AggregationOperator,
+    ) -> Self {
+        // For aggregation, we guarantee that the output expression should directly
+        // be found in the input value expressions, so we iterate and find the index
+        let field_index = input_value_exprs
+            .iter()
+            .position(|input_expr| input_expr == output_field_expr)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Planner error: TransformationFlow::agg_to_row - output field {:?} not found in input expressions {:?}",
+                    output_field_expr, input_value_exprs
+                )
+            });
+
+        // Manually create the transformation argument for the aggregation field
+        let field = TransformationArgument::KV((true, field_index));
+
+        Self::AggToRow { field, operator }
+    }
+}
+
+// ========================
+// Internal helper methods
+// ========================
+impl TransformationFlow {
+    /// Creates a mapping from arithmetic position expressions to transformation arguments for operator flows.
+    fn kv_argument_flow_map(
+        key_exprs: &[ArithmeticPos],
+        value_exprs: &[ArithmeticPos],
+    ) -> HashMap<ArithmeticPos, TransformationArgument> {
+        key_exprs
+            .iter()
+            .enumerate()
+            .map(|(id, expr)| (expr.clone(), TransformationArgument::KV((false, id))))
+            .chain(
+                value_exprs
+                    .iter()
+                    .enumerate()
+                    .map(|(id, expr)| (expr.clone(), TransformationArgument::KV((true, id)))),
+            )
+            .collect()
+    }
+
+    /// Composes output arithmetic expressions from available input chunks.
+    ///
+    /// This method handles both direct expression lookup and factor-by-factor
+    /// construction when the complete expression isn't found in the input map.
+    fn flow_over_exprs(
+        input_exprs_map: &HashMap<ArithmeticPos, TransformationArgument>,
+        output_exprs: &[ArithmeticPos],
+        context: &str,
+    ) -> Vec<ArithmeticArgument> {
+        output_exprs
+            .iter()
+            .map(|expr| {
+                // First try to find the entire expression in the map
+                if let Some(&trans_arg) = input_exprs_map.get(expr) {
+                    // Found the complete expression - create a simple variable reference
+                    ArithmeticArgument {
+                        init: FactorArgument::Var(trans_arg),
+                        rest: vec![],
+                    }
+                } else {
+                    // Not found as complete expression - build factor by factor
+                    // Find the init factor
+                    let init_factor = match expr.init() {
+                        catalog::FactorPos::Var(sig) => {
+                            // Look up the single-var expression directly
+                            let key = ArithmeticPos::from_var_signature(sig.clone());
+                            let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
+                                panic!(
+                                    "Planner error: {} - init variable signature {:?} not found in input expressions map",
+                                    context, sig
+                                )
+                            });
+                            FactorArgument::Var(trans_arg)
+                        }
+                        catalog::FactorPos::Const(c) => FactorArgument::Const(c.clone()),
+                    };
+
+                    // Find the rest factors
+                    let rest_factors: Vec<(parser::ArithmeticOperator, FactorArgument)> = expr
+                        .rest()
+                        .iter()
+                        .map(|(op, factor)| {
+                            let factor_arg = match factor {
+                                catalog::FactorPos::Var(sig) => {
+                                    // Look up the single-var expression directly
+                                    let key = ArithmeticPos::from_var_signature(sig.clone());
+                                    let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
+                                        panic!(
+                                            "Planner error: {} - rest variable signature {:?} not found in input expressions map",
+                                            context, sig
+                                        )
+                                    });
+                                    FactorArgument::Var(trans_arg)
+                                }
+                                catalog::FactorPos::Const(c) => FactorArgument::Const(c.clone()),
+                            };
+                            (op.clone(), factor_arg)
+                        })
+                        .collect();
+
+                    // Create ArithmeticArgument using the operators and factors
+                    ArithmeticArgument {
+                        init: init_factor,
+                        rest: rest_factors,
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// Helper to construct constant equality constraints: (var = const)
+    fn build_const_eq_constraints(
+        input_expr_map: &HashMap<ArithmeticPos, TransformationArgument>,
+        const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
+        context: &str,
+    ) -> Vec<(TransformationArgument, ConstType)> {
+        let const_exprs: Vec<ArithmeticPos> = const_eq_constraints
+            .iter()
+            .map(|(signature, _)| ArithmeticPos::from_var_signature(signature.clone()))
+            .collect();
+
+        TransformationArgument::from_arithmetic_arguments(
+            Self::flow_over_exprs(input_expr_map, &const_exprs, &format!("{} const", context)),
+            &format!("{} constant constraints", context),
+        )
+        .into_iter()
+        .zip(
+            const_eq_constraints
+                .iter()
+                .map(|(_, constant)| constant.clone()),
+        )
+        .collect::<Vec<(TransformationArgument, ConstType)>>()
+    }
+
+    /// Helper to construct variable equality constraints: (var = var)
+    fn build_var_eq_constraints(
+        input_expr_map: &HashMap<ArithmeticPos, TransformationArgument>,
+        var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
+        context: &str,
+    ) -> Vec<(TransformationArgument, TransformationArgument)> {
+        let left_exprs: Vec<ArithmeticPos> = var_eq_constraints
+            .iter()
+            .map(|(left_signature, _)| ArithmeticPos::from_var_signature(left_signature.clone()))
+            .collect();
+
+        let right_exprs: Vec<ArithmeticPos> = var_eq_constraints
+            .iter()
+            .map(|(_, right_signature)| ArithmeticPos::from_var_signature(right_signature.clone()))
+            .collect();
+
+        let left_args = TransformationArgument::from_arithmetic_arguments(
+            Self::flow_over_exprs(
+                input_expr_map,
+                &left_exprs,
+                &format!("{} var left", context),
+            ),
+            &format!("{} variable equality (left)", context),
+        );
+        let right_args = TransformationArgument::from_arithmetic_arguments(
+            Self::flow_over_exprs(
+                input_expr_map,
+                &right_exprs,
+                &format!("{} var right", context),
+            ),
+            &format!("{} variable equality (right)", context),
+        );
+
+        left_args
+            .into_iter()
+            .zip(right_args.into_iter())
+            .collect::<Vec<(TransformationArgument, TransformationArgument)>>()
+    }
+
+    /// Helper to construct comparison arguments from input expression map and comparison positions.
+    fn build_compare_arguments(
+        input_expr_map: &HashMap<ArithmeticPos, TransformationArgument>,
+        compare_exprs: &[ComparisonExprPos],
+        context: &str,
+    ) -> Vec<ComparisonExprArgument> {
+        compare_exprs
+            .iter()
+            .map(|comp| {
+                let left_exprs = comp
+                    .left()
+                    .signatures()
+                    .iter()
+                    .map(|&signature| ArithmeticPos::from_var_signature(signature.clone()))
+                    .collect::<Vec<_>>();
+                let right_exprs = comp
+                    .right()
+                    .signatures()
+                    .iter()
+                    .map(|&signature| ArithmeticPos::from_var_signature(signature.clone()))
+                    .collect::<Vec<_>>();
+
+                let left_trans_args = TransformationArgument::from_arithmetic_arguments(
+                    Self::flow_over_exprs(
+                        input_expr_map,
+                        &left_exprs,
+                        &format!("{} compare left", context),
+                    ),
+                    &format!("{} (left)", context),
+                );
+
+                let right_trans_args = TransformationArgument::from_arithmetic_arguments(
+                    Self::flow_over_exprs(
+                        input_expr_map,
+                        &right_exprs,
+                        &format!("{} compare right", context),
+                    ),
+                    &format!("{} (right)", context),
+                );
+
+                ComparisonExprArgument::from_comparison_expr(
+                    comp,
+                    &left_trans_args,
+                    &right_trans_args,
+                )
+            })
+            .collect::<Vec<ComparisonExprArgument>>()
     }
 }
 

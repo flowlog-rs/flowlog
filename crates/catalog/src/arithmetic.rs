@@ -44,6 +44,14 @@ pub struct ArithmeticPos {
 }
 
 impl ArithmeticPos {
+    /// Creates a simple ArithmeticPos for a single variable from an AtomArgumentSignature.
+    pub fn from_var_signature(signature: AtomArgumentSignature) -> Self {
+        ArithmeticPos {
+            init: FactorPos::Var(signature),
+            rest: vec![],
+        }
+    }
+
     /// Constructs a positional arithmetic expression from a parsed arithmetic expression.
     pub fn from_arithmetic(arith: &Arithmetic, var_signatures: &[AtomArgumentSignature]) -> Self {
         let mut var_id = 0usize;

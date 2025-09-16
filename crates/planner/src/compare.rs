@@ -1,6 +1,7 @@
 //! Comparison expression representation for query planning in Macaron Datalog programs.
 
 use crate::{argument::TransformationArgument, arithmetic::ArithmeticArgument};
+use catalog::ComparisonExprPos;
 use parser::ComparisonOperator;
 use std::fmt;
 
@@ -19,11 +20,15 @@ pub struct ComparisonExprArgument {
 
 impl ComparisonExprArgument {
     /// Creates a new ComparisonExprArgument from constituent parts.
-    pub fn new(
-        operator: ComparisonOperator,
-        left: ArithmeticArgument,
-        right: ArithmeticArgument,
+    pub fn from_comparison_expr(
+        compare_expr: &ComparisonExprPos,
+        left_arguments: &Vec<TransformationArgument>,
+        right_arguments: &Vec<TransformationArgument>,
     ) -> Self {
+        let left = ArithmeticArgument::from_arithmeticpos(compare_expr.left(), left_arguments);
+        let right = ArithmeticArgument::from_arithmeticpos(compare_expr.right(), right_arguments);
+        let operator = compare_expr.operator().clone();
+
         Self {
             left,
             operator,
