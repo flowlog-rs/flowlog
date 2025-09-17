@@ -64,8 +64,8 @@ impl Stratifier {
     /// 4. Iteratively merge all currently dependency‑free non‑recursive strata
     ///    into a single wider stratum to reduce evaluation passes.
     #[must_use]
-    pub fn from_program(program: Program) -> Self {
-        let dependency_graph = DependencyGraph::from_program(&program);
+    pub fn from_program(program: &Program) -> Self {
+        let dependency_graph = DependencyGraph::from_program(program);
         let dep_map = dependency_graph.dependency_map();
 
         // Kosaraju step 1: order by finish time.
@@ -125,7 +125,7 @@ impl Stratifier {
 
             let mut still: Vec<(Vec<usize>, bool)> = Vec::new();
             for (s, is_rec) in pending.into_iter() {
-                // Does this stratum depend on a rule that is still in another unprocessed stratum?
+                // Check if this stratum depends on any rule that remains in another (unprocessed) stratum.
                 let external_dep_exists = s.iter().any(|rid| {
                     dep_map.get(rid).is_some_and(|deps| {
                         deps.iter()
@@ -153,7 +153,7 @@ impl Stratifier {
         }
 
         Self {
-            program,
+            program: program.clone(),
             dependency_graph,
             stratum: merged,
             is_recursive_stratum_bitmap: merged_bitmap,

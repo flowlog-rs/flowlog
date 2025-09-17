@@ -37,7 +37,7 @@ fn main() {
         "Dependency Graph:{}",
         DependencyGraph::from_program(&program)
     );
-    let stratifier = Stratifier::from_program(program);
+    let stratifier = Stratifier::from_program(&program);
     let recursive_cnt = stratifier
         .is_recursive_stratum_bitmap()
         .iter()
@@ -96,7 +96,7 @@ fn run_all_examples() {
                 info!("  SUCCESS: {}", file_name);
                 info!("    Statistics:");
                 info!("     Rules: {}", program.rules().len());
-                let stratifier = Stratifier::from_program(program);
+                let stratifier = Stratifier::from_program(&program);
                 let recursive_cnt = stratifier
                     .is_recursive_stratum_bitmap()
                     .iter()
