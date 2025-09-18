@@ -2,12 +2,12 @@ use std::{env, fs, path::Path, process};
 
 use catalog::rule::Catalog;
 use optimizer::{Optimizer, PlanTree};
-use parser::Program;
+use parser::{Program, error::ParserError};
 use stratifier::Stratifier;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-fn main() {
+fn main() -> Result<(), ParserError> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("info"))
         .init();
@@ -21,12 +21,12 @@ fn main() {
 
     let argument = &args[1];
     if argument == "--all" {
-        run_all_examples();
-        return;
+        run_all_examples()?;
+        return Ok(());
     }
 
     // Parse and process single file
-    let program = Program::parse(argument);
+    let program = Program::parse(argument)?;
     info!("Parsed program: {} rules", program.rules().len());
 
     // Stratify the program
@@ -39,6 +39,7 @@ fn main() {
     // Optimize each stratum
     let mut optimizer = Optimizer::new();
     optimize_and_print(&mut optimizer, &stratifier);
+    Ok(())
 }
 
 /// Print usage information
@@ -84,7 +85,7 @@ fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 }
 
 /// Run optimizer on all example files in the example directory
-fn run_all_examples() {
+fn run_all_examples() -> Result<(), ParserError> {
     let example_dir = "example";
 
     // Check if example directory exists
@@ -94,13 +95,7 @@ fn run_all_examples() {
     }
 
     // Read and collect .dl files
-    let entries = match fs::read_dir(example_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            error!("Error reading example dir: {}", e);
-            process::exit(1);
-        }
-    };
+    let entries = fs::read_dir(example_dir).map_err(|e| ParserError::Io(e.to_string()))?;
 
     let mut files = Vec::new();
     for entry in entries.flatten() {
@@ -125,33 +120,26 @@ fn run_all_examples() {
     for file_path in &files {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
-        match std::panic::catch_unwind(|| {
-            let program = Program::parse(file_path.to_str().unwrap());
-            let stratifier = Stratifier::from_program(&program);
-            let optimizer = Optimizer::new();
-
-            // Just run optimization without printing details
-            for rule_refs in stratifier.stratum().iter() {
-                let catalogs: Vec<Catalog> = rule_refs
-                    .iter()
-                    .map(|rule| Catalog::from_rule(rule))
-                    .collect();
-                let catalog_refs: Vec<&Catalog> = catalogs.iter().collect();
-                let _plans: Vec<PlanTree> = optimizer.plan_stratum(catalog_refs);
-            }
-
-            (program.rules().len(), stratifier.stratum().len())
-        }) {
-            Ok((rule_count, strata_count)) => {
+        match Program::parse(file_path.to_str().unwrap()) {
+            Ok(program) => {
+                let stratifier = Stratifier::from_program(&program);
+                let optimizer = Optimizer::new();
+                for rule_refs in stratifier.stratum().iter() {
+                    let catalogs: Vec<Catalog> = rule_refs.iter().map(|rule| Catalog::from_rule(rule)).collect();
+                    let catalog_refs: Vec<&Catalog> = catalogs.iter().collect();
+                    let _plans: Vec<PlanTree> = optimizer.plan_stratum(catalog_refs);
+                }
+                let rule_count = program.rules().len();
+                let strata_count = stratifier.stratum().len();
                 success_count += 1;
                 info!(
                     "SUCCESS: {} (rules={}, strata={})",
                     file_name, rule_count, strata_count
                 );
             }
-            Err(_) => {
+            Err(err) => {
                 failure_count += 1;
-                error!("FAILED: {}", file_name);
+                error!("FAILED: {} ({err})", file_name);
             }
         }
     }
@@ -169,4 +157,5 @@ fn run_all_examples() {
     } else {
         println!("\nAll example files optimized successfully!");
     }
+    Ok(())
 }

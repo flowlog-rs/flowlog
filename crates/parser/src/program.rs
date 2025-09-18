@@ -285,7 +285,7 @@ impl Program {
 
     /// Return a copy of the program with dead rules/relations removed, logging what was dropped.
     #[must_use]
-    fn prune_dead_components(&self) -> Self {
+    pub fn prune_dead_components(&self) -> Self {
         let (needed_rules, needed_preds) = self.identify_needed_components();
 
         // Dead relations

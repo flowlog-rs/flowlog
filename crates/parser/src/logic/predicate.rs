@@ -86,14 +86,15 @@ impl Lexeme for Predicate {
     /// - `compare_expr` → comparison
     /// - `boolean` → `True` | `False`
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
-        let inner = parsed_rule
-            .into_inner()
-            .next()
-            .ok_or_else(|| ParserError::IncompletePredicate("inner token".to_string()))?;
+        // Defensive: predicate ::= atom | neg_atom | compare_expr | boolean.
+        let inner = parsed_rule.into_inner().next().ok_or_else(|| {
+            ParserError::IncompletePredicate("inner token".to_string())
+        })?;
 
         match inner.as_rule() {
             Rule::atom => Ok(Self::PositiveAtomPredicate(Atom::from_parsed_rule(inner)?)),
             Rule::neg_atom => {
+                // Defensive: neg_atom always wraps an atom.
                 let atom_rule = inner.into_inner().next().ok_or_else(|| {
                     ParserError::IncompletePredicate("inner atom of negation".to_string())
                 })?;
@@ -105,8 +106,8 @@ impl Lexeme for Predicate {
                 inner,
             )?)),
             Rule::boolean => match inner.as_str() {
-                "True" => Ok(Self::BoolPredicate(true)),
-                "False" => Ok(Self::BoolPredicate(false)),
+                "True" | "true" => Ok(Self::BoolPredicate(true)),
+                "False" | "false" => Ok(Self::BoolPredicate(false)),
                 other => unreachable!("Internal error: invalid boolean literal: {other}"),
             },
             other => unreachable!("Internal error: invalid predicate type: {:?}", other),

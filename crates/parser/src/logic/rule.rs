@@ -261,19 +261,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Boolean rule head must contain only constants")]
-    fn extract_constants_panics_on_var() {
+    fn extract_constants_error_on_var() {
         let head = head_named(
             "invalid",
             vec![head_const(ConstType::Integer(1)), head_var("X")],
         );
         let r = MacaronRule::new(head, vec![bool_pred(true)], false);
-        let _ = r.extract_constants_from_head();
+        let err = r.extract_constants_from_head().expect_err("should err");
+        matches!(err, ParserError::InvalidBoolRule(_));
     }
 
     #[test]
-    #[should_panic(expected = "Boolean rule head must contain only constants")]
-    fn extract_constants_panics_on_aggregation() {
+    fn extract_constants_error_on_aggregation() {
         use crate::logic::{Aggregation, AggregationOperator};
         let arith = Arithmetic::new(Factor::Var("X".into()), vec![]);
         let agg = Aggregation::new(AggregationOperator::Sum, arith);
@@ -282,12 +281,12 @@ mod tests {
             vec![head_const(ConstType::Integer(1)), HeadArg::Aggregation(agg)],
         );
         let r = MacaronRule::new(head, vec![bool_pred(true)], false);
-        let _ = r.extract_constants_from_head();
+        let err = r.extract_constants_from_head().expect_err("should err");
+        matches!(err, ParserError::InvalidBoolRule(_));
     }
 
     #[test]
-    #[should_panic(expected = "Boolean rule head must contain only constants")]
-    fn extract_constants_panics_on_complex_arith() {
+    fn extract_constants_error_on_complex_arith() {
         let complex = Arithmetic::new(
             Factor::Var("X".into()),
             vec![(
@@ -297,7 +296,8 @@ mod tests {
         );
         let head = head_named("invalid", vec![HeadArg::Arith(complex)]);
         let r = MacaronRule::new(head, vec![bool_pred(true)], false);
-        let _ = r.extract_constants_from_head();
+        let err = r.extract_constants_from_head().expect_err("should err");
+        matches!(err, ParserError::InvalidBoolRule(_));
     }
 
     #[test]

@@ -51,10 +51,10 @@ impl Lexeme for ArithmeticOperator {
     /// # Return errors
     /// Return errors if the rule is not one of `plus|minus|times|divide|modulo`.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
-        let op = parsed_rule
-            .into_inner()
-            .next()
-            .ok_or_else(|| ParserError::IncompleteArithmeticOperator("inner token".to_string()))?;
+        // Defensive: arithmetic_op rule is a single alternative; missing inner token indicates malformed parse tree.
+        let op = parsed_rule.into_inner().next().ok_or_else(|| {
+            ParserError::IncompleteArithmeticOperator("inner token".to_string())
+        })?;
         match op.as_rule() {
             Rule::plus => Ok(Self::Plus),
             Rule::minus => Ok(Self::Minus),
@@ -118,10 +118,10 @@ impl Lexeme for Factor {
     /// # Return errors
     /// Return errors if the inner token is neither `variable` nor `constant`.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
-        let inner = parsed_rule
-            .into_inner()
-            .next()
-            .ok_or_else(|| ParserError::IncompleteFactor("inner token".to_string()))?;
+        // Defensive: factor = variable | constant ; missing inner token cannot occur with valid grammar.
+        let inner = parsed_rule.into_inner().next().ok_or_else(|| {
+            ParserError::IncompleteFactor("inner token".to_string())
+        })?;
         match inner.as_rule() {
             Rule::variable => Ok(Self::Var(inner.as_str().to_string())),
             Rule::constant => Ok(Self::Const(ConstType::from_parsed_rule(inner)?)),

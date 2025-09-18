@@ -29,6 +29,9 @@ type Result<T> = std::result::Result<T, error::ParserError>;
 #[grammar = "grammar.pest"]
 pub struct MacaronParser;
 
+#[cfg(test)]
+mod tests;
+
 /// Trait for converting Pest parse trees into Macaron types.
 ///
 /// All Macaron language constructs implement this trait to enable

@@ -42,6 +42,7 @@ impl Lexeme for AggregationOperator {
     /// # Return errors
     /// Return errors if the rule is not one of `min|max|count|sum`.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
+        // Defensive: grammar always provides exactly one inner token for aggregation operator.
         let op = parsed_rule.into_inner().next().ok_or_else(|| {
             ParserError::IncompleteAggregation("inner token of operator".to_string())
         })?;
@@ -109,14 +110,15 @@ impl Lexeme for Aggregation {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
-        let op_pair = inner
-            .next()
-            .ok_or_else(|| ParserError::IncompleteAggregation("operator".to_string()))?;
+        // Defensive: sequence is guaranteed by grammar: aggregate_op "(" arithmetic ")".
+        let op_pair = inner.next().ok_or_else(|| {
+            ParserError::IncompleteAggregation("operator".to_string())
+        })?;
         let operator = AggregationOperator::from_parsed_rule(op_pair)?;
 
         let expr_pair = inner.next().ok_or_else(|| {
             ParserError::IncompleteAggregation("arithmetic expression".to_string())
-        })?;
+        })?; // Defensive: see above comment.
         let arithmetic = Arithmetic::from_parsed_rule(expr_pair)?;
 
         Ok(Self {

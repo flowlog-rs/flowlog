@@ -70,10 +70,10 @@ impl Lexeme for AtomArg {
     /// # Return errors
     /// Return errors if the inner token is not `variable|constant|placeholder`.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
-        let inner = parsed_rule
-            .into_inner()
-            .next()
-            .ok_or_else(|| ParserError::IncompleteAtomArg("inner token".to_string()))?;
+        // Defensive: atom_arg ::= variable | constant | placeholder.
+        let inner = parsed_rule.into_inner().next().ok_or_else(|| {
+            ParserError::IncompleteAtomArg("inner token".to_string())
+        })?;
 
         match inner.as_rule() {
             Rule::variable => Ok(Self::Var(inner.as_str().to_string())),
@@ -147,11 +147,10 @@ impl Lexeme for Atom {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
-        let name = inner
-            .next()
-            .ok_or_else(|| ParserError::IncompleteAtomArg("relation name".to_string()))?
-            .as_str()
-            .to_string();
+        // Defensive: atom starts with a relation_name; this only fails if parse tree is corrupted.
+        let name = inner.next().ok_or_else(|| {
+            ParserError::IncompleteAtomArg("relation name".to_string())
+        })?.as_str().to_string();
 
         let mut arguments = Vec::new();
         for pair in inner {

@@ -55,7 +55,7 @@ string = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 placeholder = { "_" } 
 
 // Boolean values used in expressions
-boolean = { "True" | "False" } 
+boolean = { "True" | "False" | "true" | "false" } 
 
 // =============================================================================
 // RELATION DECLARATIONS

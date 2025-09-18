@@ -58,10 +58,10 @@ impl Lexeme for ComparisonOperator {
     /// # Return errors
     /// Return errors if the rule is not one of the expected operator tokens.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
-        let op = parsed_rule
-            .into_inner()
-            .next()
-            .ok_or_else(|| ParserError::IncompleteComparisonOperator("inner token".to_string()))?;
+        // Defensive: comparison operator rule always yields exactly one inner token.
+        let op = parsed_rule.into_inner().next().ok_or_else(|| {
+            ParserError::IncompleteComparisonOperator("inner token".to_string())
+        })?;
         match op.as_rule() {
             Rule::equal => Ok(Self::Equal),
             Rule::not_equal => Ok(Self::NotEqual),
@@ -154,15 +154,16 @@ impl Lexeme for ComparisonExpr {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
-        let left_pair = inner
-            .next()
-            .ok_or_else(|| ParserError::IncompleteComparison("left expression".to_string()))?;
-        let op_pair = inner
-            .next()
-            .ok_or_else(|| ParserError::IncompleteComparison("operator".to_string()))?;
-        let right_pair = inner
-            .next()
-            .ok_or_else(|| ParserError::IncompleteComparison("right expression".to_string()))?;
+        // Defensive: comparison_expr = arithmetic compare_op arithmetic.
+        let left_pair = inner.next().ok_or_else(|| {
+            ParserError::IncompleteComparison("left expression".to_string())
+        })?;
+        let op_pair = inner.next().ok_or_else(|| {
+            ParserError::IncompleteComparison("operator".to_string())
+        })?; // Defensive
+        let right_pair = inner.next().ok_or_else(|| {
+            ParserError::IncompleteComparison("right expression".to_string())
+        })?; // Defensive
 
         let left = Arithmetic::from_parsed_rule(left_pair)?;
         let operator = ComparisonOperator::from_parsed_rule(op_pair)?;
