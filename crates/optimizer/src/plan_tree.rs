@@ -51,25 +51,13 @@ impl PlanTree {
 
     /// Build a plan tree from a Catalog.
     ///
-    /// For now, this function simply keeps the join order from left to right
-    /// as the atoms appear in the rule, without any reordering or optimization.
+    /// The catalog is assumed to have already been processed by GYO optimization,
+    /// so all positive atoms in the catalog are core atoms. This function builds
+    /// a left-deep join tree from left to right as the atoms appear in the rule,
+    /// without any reordering or optimization.
     /// Future versions may implement cost-based or heuristic join reordering.
     pub fn from_catalog(catalog: &Catalog) -> Self {
-        // Collect indices of core atoms in the rule.
-        let core_atoms: Vec<usize> = catalog
-            .is_core_atom_bitmap()
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &is_core)| if is_core { Some(i) } else { None })
-            .collect();
-
-        // Panic if there are no core atoms (should not happen for valid rules).
-        if core_atoms.is_empty() {
-            panic!(
-                "Optimizer error: No core atoms for the rule {}",
-                catalog.rule()
-            );
-        }
+        let core_atoms: Vec<usize> = (0..catalog.positive_atom_names().len()).collect();
 
         // The root of the plan tree is the last core atom (rightmost in join order).
         let root = *core_atoms.last().unwrap();

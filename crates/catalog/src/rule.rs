@@ -16,14 +16,12 @@ pub struct Catalog {
     signature_to_argument_str_map: HashMap<AtomArgumentSignature, String>,
     /// For each variable string, the first presence (if any) in every positive atom.
     /// Example: for `tc(x, z) :- arc(x, y), tc(y, z)` → `{ x: [Some(0.0), None], y: [Some(0.1), Some(1.0)], z: [None, Some(1.1)] }`.
-    argument_presence_map: HashMap<String, Vec<Option<AtomArgumentSignature>>>,
+    argument_presence_in_positive_atom_map: HashMap<String, Vec<Option<AtomArgumentSignature>>>,
 
     /// RHS positive atom names.
     positive_atom_names: Vec<String>,
     /// For each RHS positive atom, its argument signatures.
     positive_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
-    /// Bitmap indicating if an atom is a core atom (not a subset of another's variables).
-    is_core_atom_bitmap: Vec<bool>,
 
     /// RHS negated atom names.
     negated_atom_names: Vec<String>,
@@ -45,6 +43,7 @@ pub struct Catalog {
 // Getters and basic accessors
 impl Catalog {
     /// The underlying rule.
+    #[inline]
     pub fn rule(&self) -> &MacaronRule {
         &self.rule
     }
@@ -59,6 +58,7 @@ impl Catalog {
     }
 
     /// Reverse map from signatures to their variable strings.
+    #[inline]
     pub fn signature_to_argument_str_map(&self) -> &HashMap<AtomArgumentSignature, String> {
         &self.signature_to_argument_str_map
     }
@@ -72,33 +72,6 @@ impl Catalog {
             .iter()
             .filter_map(|signature| self.signature_to_argument_str_map.get(signature).cloned())
             .collect::<Vec<String>>()
-    }
-
-    /// Subatoms w.r.t. the given signature arguments (non-core atoms whose vars are a subset).
-    pub fn sub_atoms(&self, signature_arguments: &[AtomArgumentSignature]) -> Vec<AtomSignature> {
-        let signature_arguments_str_set = self
-            .signature_to_argument_strs(signature_arguments)
-            .into_iter()
-            .collect::<HashSet<String>>();
-        self.is_core_atom_bitmap()
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &is_core)| {
-                if !is_core {
-                    let atom_argument_strs_set = self
-                        .signature_to_argument_strs(&self.positive_atom_argument_signatures()[i])
-                        .into_iter()
-                        .collect::<HashSet<String>>();
-                    if atom_argument_strs_set.is_subset(&signature_arguments_str_set) {
-                        Some(AtomSignature::new(true, i))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<AtomSignature>>()
     }
 
     /// Active negated atoms w.r.t. the given signature arguments (subset check).
@@ -128,46 +101,52 @@ impl Catalog {
     }
 
     /// For a variable string, returns its first-presence per positive atom (None if absent).
-    pub fn argument_presence_map(&self, argument_str: &str) -> &Vec<Option<AtomArgumentSignature>> {
-        &self.argument_presence_map[argument_str]
+    #[inline]
+    pub fn argument_presence_in_positive_atom_map(
+        &self,
+        argument_str: &str,
+    ) -> &Vec<Option<AtomArgumentSignature>> {
+        &self.argument_presence_in_positive_atom_map[argument_str]
     }
 
     /// Positive atom names in the rule body (RHS), in source order.
+    #[inline]
     pub fn positive_atom_names(&self) -> &Vec<String> {
         &self.positive_atom_names
     }
 
     /// Argument signatures for each positive atom (order matches `positive_atom_names`).
+    #[inline]
     pub fn positive_atom_argument_signatures(&self) -> &Vec<Vec<AtomArgumentSignature>> {
         &self.positive_atom_argument_signatures
     }
 
-    /// Bitmap indicating which positive atoms are core (not strictly contained in another's vars).
-    pub fn is_core_atom_bitmap(&self) -> &Vec<bool> {
-        &self.is_core_atom_bitmap
-    }
-
     /// Negated atom names in the rule body (RHS), in source order.
+    #[inline]
     pub fn negated_atom_names(&self) -> &Vec<String> {
         &self.negated_atom_names
     }
 
     /// Argument signatures for each negated atom (order matches `negated_atom_names`).
+    #[inline]
     pub fn negated_atom_argument_signatures(&self) -> &Vec<Vec<AtomArgumentSignature>> {
         &self.negated_atom_argument_signatures
     }
 
     /// Base constraint filters (var==var, var==const, placeholders).
+    #[inline]
     pub fn filters(&self) -> &Filters {
         &self.filters
     }
 
     /// Name of the head relation.
+    #[inline]
     pub fn head_name(&self) -> &str {
         self.rule.head().name()
     }
 
     /// Structured head arguments in order.
+    #[inline]
     pub fn head_arguments(&self) -> &[HeadArg] {
         self.rule.head().head_arguments()
     }
@@ -181,6 +160,7 @@ impl Catalog {
     }
 
     /// Whether a signature is constrained by a const, var equality, or placeholder filter.
+    #[inline]
     pub fn is_const_or_var_eq_or_placeholder(&self, signature: &AtomArgumentSignature) -> bool {
         self.filters.is_const_or_var_eq_or_placeholder(signature)
     }
@@ -253,6 +233,7 @@ impl Catalog {
     }
 
     /// All comparison predicates in the body, in source order.
+    #[inline]
     pub fn comparison_predicates(&self) -> &Vec<ComparisonExpr> {
         &self.comparison_predicates
     }
@@ -266,66 +247,73 @@ impl Catalog {
     }
 
     /// Mapping from head argument text to its structured form.
+    #[inline]
     pub fn head_arguments_map(&self) -> &HashMap<String, HeadArg> {
         &self.head_arguments_map
     }
 }
 
+// Construction and updates
 impl Catalog {
     /// Build a Catalog from a single rule (derives signatures, filters and helper maps).
     pub fn from_rule(rule: &MacaronRule) -> Self {
-        let (
-            signature_to_argument_str_map,
-            positive_atom_names,
-            positive_atom_argument_signatures, // all non-repeating variables
-            negated_atom_names,
-            negated_atom_argument_signatures,
-            filters,
-            comparison_predicates,
-        ) = Self::populate_argument_signatures(rule);
+        let mut catalog = Self {
+            rule: rule.clone(),
+            signature_to_argument_str_map: HashMap::new(),
+            argument_presence_in_positive_atom_map: HashMap::new(),
+            positive_atom_names: Vec::new(),
+            positive_atom_argument_signatures: Vec::new(),
+            negated_atom_names: Vec::new(),
+            negated_atom_argument_signatures: Vec::new(),
+            filters: Filters::new(HashMap::new(), HashMap::new(), HashSet::new()),
+            comparison_predicates: Vec::new(),
+            comparison_predicates_vars_set: Vec::new(),
+            head_arguments_map: HashMap::new(),
+        };
+        catalog.populate_all_metadata();
+        catalog
+    }
 
-        let argument_presence_map = Self::populate_argument_presence_map(
-            &signature_to_argument_str_map,
-            &positive_atom_argument_signatures,
-            &filters,
-        );
-        let is_core_atom_bitmap = Self::populate_is_core_atom_bitmap(
-            &signature_to_argument_str_map,
-            &positive_atom_argument_signatures,
-        );
+    /// Update the catalog with a new rule, recomputing all metadata.
+    pub fn update_rule(&mut self, rule: &MacaronRule) {
+        // Update the rule first
+        self.rule = rule.clone();
 
-        let comparison_predicates_vars_set =
-            Self::populate_comparison_predicates_vars_set(&comparison_predicates);
+        // Clear all existing metadata
+        self.clear();
 
-        // Map each head arg's string to the argument itself, e.g., "x" -> Var(x), "x + y" -> Arith(x + y)
-        let head_arguments_map: HashMap<String, HeadArg> = rule
+        // Recompute all metadata with correct ordering
+        self.populate_all_metadata();
+    }
+
+    /// Populate all metadata with the correct ordering.
+    /// Order is important: signatures first, then presence map (depends on signatures),
+    /// then comparison predicates vars (depends on comparison_predicates from signatures),
+    /// finally head arguments map.
+    fn populate_all_metadata(&mut self) {
+        // 1. Populate argument signatures and related data (includes filters, comparison_predicates)
+        self.populate_argument_signatures();
+
+        // 2. Populate argument presence map (depends on signatures and filters from step 1)
+        self.populate_argument_presence_in_positive_atom_map();
+
+        // 3. Populate comparison predicates vars set (depends on comparison_predicates from step 1)
+        self.populate_comparison_predicates_vars_set();
+
+        // 4. Map each head arg's string to the argument itself
+        self.head_arguments_map = self
+            .rule
             .head()
             .head_arguments()
             .iter()
             .map(|head_arg| (head_arg.to_string(), head_arg.clone()))
             .collect();
-
-        Self {
-            rule: rule.clone(),
-            signature_to_argument_str_map,
-            argument_presence_map,
-            positive_atom_names,
-            positive_atom_argument_signatures,
-            is_core_atom_bitmap,
-            negated_atom_names,
-            negated_atom_argument_signatures,
-            filters,
-            comparison_predicates,
-            comparison_predicates_vars_set,
-            head_arguments_map,
-        }
     }
 
     /// Compute the deduplicated variable set for each comparison predicate.
-    fn populate_comparison_predicates_vars_set(
-        comparison_predicates: &[ComparisonExpr],
-    ) -> Vec<HashSet<String>> {
-        comparison_predicates
+    fn populate_comparison_predicates_vars_set(&mut self) {
+        self.comparison_predicates_vars_set = self
+            .comparison_predicates
             .iter()
             .map(|comparison_expr| {
                 comparison_expr
@@ -334,32 +322,12 @@ impl Catalog {
                     .cloned()
                     .collect::<HashSet<String>>()
             })
-            .collect()
+            .collect();
     }
 
-    #[allow(clippy::type_complexity)]
-    fn populate_argument_signatures(
-        r: &MacaronRule,
-    ) -> (
-        HashMap<AtomArgumentSignature, String>,
-        Vec<String>,
-        Vec<Vec<AtomArgumentSignature>>,
-        Vec<String>,
-        Vec<Vec<AtomArgumentSignature>>,
-        Filters,
-        Vec<ComparisonExpr>,
-    ) {
+    fn populate_argument_signatures(&mut self) {
         // Track variables seen in positive atoms; only these are safe in negations.
         let mut is_safe_set = HashSet::new();
-        // Map each rule atom signature to the variable string.
-        let mut signature_to_argument_str_map = HashMap::new();
-
-        let mut atom_names = Vec::new();
-        // For each positive atom, the vector of its argument signatures.
-        let mut atom_argument_signatures = Vec::new();
-
-        let mut negated_atom_names = Vec::new();
-        let mut negated_atom_argument_signatures = Vec::new();
 
         // Local filters for the rule: x==y, x==1, x==_.
         let mut local_var_eq_map = HashMap::new();
@@ -370,7 +338,7 @@ impl Catalog {
         let mut local_placeholder_set = HashSet::new();
 
         let (positive_atoms, negated_atoms, comparison_predicates): (Vec<_>, Vec<_>, Vec<_>) =
-            r.rhs().iter().fold(
+            self.rule.rhs().iter().fold(
                 (Vec::new(), Vec::new(), Vec::new()),
                 |(mut pos, mut neg, mut comp), p| {
                     match p {
@@ -385,7 +353,7 @@ impl Catalog {
 
         // (i) populate the signatures of positive atoms
         for (rhs_id, atom) in positive_atoms.iter().enumerate() {
-            atom_names.push(atom.name().to_owned());
+            self.positive_atom_names.push(atom.name().to_owned());
             let mut atom_signatures = Vec::new();
             for (argument_id, argument) in atom.arguments().iter().enumerate() {
                 let rule_argument_signature =
@@ -395,7 +363,7 @@ impl Catalog {
                 match argument {
                     AtomArg::Var(var) => {
                         is_safe_set.insert(var);
-                        signature_to_argument_str_map
+                        self.signature_to_argument_str_map
                             .insert(rule_argument_signature, var.to_string());
 
                         if let Some(first_occurence) = local_var_first_occurrence_map.get(var) {
@@ -417,13 +385,13 @@ impl Catalog {
                     }
                 }
             }
-            atom_argument_signatures.push(atom_signatures);
+            self.positive_atom_argument_signatures.push(atom_signatures);
             local_var_first_occurrence_map.clear();
         }
 
         // (ii) populate the signatures of negated atoms
         for (neg_rhs_id, atom) in negated_atoms.iter().enumerate() {
-            negated_atom_names.push(atom.name().to_owned());
+            self.negated_atom_names.push(atom.name().to_owned());
             let mut negated_atom_signatures = Vec::new();
             for (argument_id, argument) in atom.arguments().iter().enumerate() {
                 let rule_argument_signature =
@@ -433,7 +401,7 @@ impl Catalog {
                 match argument {
                     AtomArg::Var(var) => {
                         if is_safe_set.contains(var) {
-                            signature_to_argument_str_map
+                            self.signature_to_argument_str_map
                                 .insert(rule_argument_signature, var.to_string());
 
                             if let Some(first_occurence) = local_var_first_occurrence_map.get(var) {
@@ -445,7 +413,10 @@ impl Catalog {
                                     .insert(var.to_string(), rule_argument_signature);
                             }
                         } else {
-                            panic!("unsafe var detected at negation !{} of rule {}", atom, r);
+                            panic!(
+                                "unsafe var detected at negation !{} of rule {}",
+                                atom, self.rule
+                            );
                         }
                     }
 
@@ -458,78 +429,38 @@ impl Catalog {
                     }
                 }
             }
-            negated_atom_argument_signatures.push(negated_atom_signatures);
+            self.negated_atom_argument_signatures
+                .push(negated_atom_signatures);
             local_var_first_occurrence_map.clear();
         }
 
-        (
-            signature_to_argument_str_map,
-            atom_names,
-            atom_argument_signatures,
-            negated_atom_names,
-            negated_atom_argument_signatures,
-            Filters::new(local_var_eq_map, local_const_map, local_placeholder_set),
-            comparison_predicates,
-        )
-    }
-
-    /// Identify core atoms: positive atoms not strictly contained in another's variable set.
-    fn populate_is_core_atom_bitmap(
-        signature_to_argument_str_map: &HashMap<AtomArgumentSignature, String>,
-        atom_argument_signatures: &[Vec<AtomArgumentSignature>], // only positive atoms
-    ) -> Vec<bool> {
-        let mut is_core_atom_bitmap = vec![true; atom_argument_signatures.len()];
-
-        let core_atom_argument_strs_set = atom_argument_signatures
-            .iter()
-            .map(|atom_argument_signatures| {
-                atom_argument_signatures
-                    .iter()
-                    .filter_map(|signature| signature_to_argument_str_map.get(signature).cloned())
-                    .collect::<HashSet<String>>()
-            })
-            .collect::<Vec<HashSet<String>>>();
-
-        for (i, core_atom_argument_strs) in core_atom_argument_strs_set.iter().enumerate() {
-            for (j, other_core_atom_argument_strs) in core_atom_argument_strs_set.iter().enumerate()
-            {
-                if i != j && core_atom_argument_strs.is_subset(other_core_atom_argument_strs) {
-                    // if they are strictly equal, the larger index is not a core atom
-                    if core_atom_argument_strs.len() < other_core_atom_argument_strs.len() {
-                        // if other_core_atom_argument_strs is a strict superset
-                        is_core_atom_bitmap[i] = false;
-                    } else {
-                        // if they are identical, the larger one is not a core atom
-                        let larger = if i > j { i } else { j };
-                        is_core_atom_bitmap[larger] = false;
-                    }
-                }
-            }
-        }
-        is_core_atom_bitmap
+        // Update filters and comparison predicates
+        self.filters = Filters::new(local_var_eq_map, local_const_map, local_placeholder_set);
+        self.comparison_predicates = comparison_predicates;
     }
 
     /// Map each variable string to its first presence per positive atom (None if absent).
-    fn populate_argument_presence_map(
-        signature_to_argument_str_map: &HashMap<AtomArgumentSignature, String>,
-        atom_argument_signatures: &[Vec<AtomArgumentSignature>], /* only positive atoms */
-        filters: &Filters,
-    ) -> HashMap<String, Vec<Option<AtomArgumentSignature>>> {
-        let mut argument_presence_map: HashMap<String, Vec<Option<AtomArgumentSignature>>> =
-            HashMap::new();
+    fn populate_argument_presence_in_positive_atom_map(&mut self) {
+        self.argument_presence_in_positive_atom_map.clear();
 
-        for (rhs_id, argument_signatures) in atom_argument_signatures.iter().enumerate() {
+        for (rhs_id, argument_signatures) in
+            self.positive_atom_argument_signatures.iter().enumerate()
+        {
             for argument_signature in argument_signatures {
                 // skip if it is a filter
-                if filters.is_const_or_var_eq_or_placeholder(argument_signature) {
+                if self
+                    .filters
+                    .is_const_or_var_eq_or_placeholder(argument_signature)
+                {
                     continue;
                 }
 
-                if let Some(variable) = signature_to_argument_str_map.get(argument_signature) {
+                if let Some(variable) = self.signature_to_argument_str_map.get(argument_signature) {
                     // Initialize the entry with a vector of None.
-                    let entry = argument_presence_map
+                    let entry = self
+                        .argument_presence_in_positive_atom_map
                         .entry(variable.clone())
-                        .or_insert(vec![None; atom_argument_signatures.len()]);
+                        .or_insert(vec![None; self.positive_atom_argument_signatures.len()]);
 
                     // Record the first presence for this atom.
                     if entry[rhs_id].is_none() {
@@ -540,8 +471,20 @@ impl Catalog {
                 }
             }
         }
+    }
 
-        argument_presence_map
+    /// Clear all metadata (but keep the rule).
+    fn clear(&mut self) {
+        self.signature_to_argument_str_map.clear();
+        self.argument_presence_in_positive_atom_map.clear();
+        self.positive_atom_names.clear();
+        self.positive_atom_argument_signatures.clear();
+        self.negated_atom_names.clear();
+        self.negated_atom_argument_signatures.clear();
+        self.filters = Filters::new(HashMap::new(), HashMap::new(), HashSet::new());
+        self.comparison_predicates.clear();
+        self.comparison_predicates_vars_set.clear();
+        self.head_arguments_map.clear();
     }
 }
 
@@ -563,16 +506,11 @@ impl fmt::Display for Catalog {
         // Positive atoms with indices, core flag, and args
         writeln!(f, "Positive atoms:")?;
         for (i, name) in self.positive_atom_names.iter().enumerate() {
-            let core = if self.is_core_atom_bitmap[i] {
-                "core"
-            } else {
-                "non-core"
-            };
             let args = fmt_sig_list(
                 &self.positive_atom_argument_signatures[i],
                 &self.signature_to_argument_str_map,
             );
-            writeln!(f, "  [{:>2}] {:<} ({}) args: {}", i, name, core, args)?;
+            writeln!(f, "  [{:>2}] {:<} args: {}", i, name, args)?;
         }
 
         // Negated atoms (if any)
@@ -610,10 +548,10 @@ impl fmt::Display for Catalog {
 
         // Argument presence map (sorted by var name), using '-' for None
         writeln!(f, "\nArgument presence per positive atom:")?;
-        let mut vars: Vec<&String> = self.argument_presence_map.keys().collect();
+        let mut vars: Vec<&String> = self.argument_presence_in_positive_atom_map.keys().collect();
         vars.sort();
         for var in vars {
-            let row = self.argument_presence_map[var]
+            let row = self.argument_presence_in_positive_atom_map[var]
                 .iter()
                 .map(|opt| opt.map(|s| s.to_string()).unwrap_or_else(|| "-".into()))
                 .collect::<Vec<_>>()
@@ -629,6 +567,30 @@ impl fmt::Display for Catalog {
             // Leverage Filters' own Display
             for line in self.filters.to_string().lines() {
                 writeln!(f, "  {}", line)?;
+            }
+        }
+
+        // Comparison predicates (if any)
+        writeln!(f, "\nComparison predicates:")?;
+        if self.comparison_predicates.is_empty() {
+            writeln!(f, "  (none)")?;
+        } else {
+            for (i, comp_pred) in self.comparison_predicates.iter().enumerate() {
+                let vars_set = if i < self.comparison_predicates_vars_set.len() {
+                    let mut vars: Vec<&String> =
+                        self.comparison_predicates_vars_set[i].iter().collect();
+                    vars.sort();
+                    format!(
+                        "vars: [{}]",
+                        vars.iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    "vars: []".to_string()
+                };
+                writeln!(f, "  [{:>2}] {} ({})", i, comp_pred, vars_set)?;
             }
         }
 
