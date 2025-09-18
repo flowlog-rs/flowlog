@@ -7,7 +7,7 @@
 
 use super::{Factor, Head, HeadArg, Predicate};
 use crate::primitive::ConstType;
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -81,14 +81,13 @@ impl MacaronRule {
 
     /// Extract constants from a boolean rule's head.
     ///
-    /// Panics if any head argument is not a simple constant.
-    #[must_use]
-    pub fn extract_constants_from_head(&self) -> Vec<ConstType> {
+    /// Return errors if any head argument is not a simple constant.
+    pub fn extract_constants_from_head(&self) -> Result<Vec<ConstType>> {
         let mut out = Vec::new();
         for arg in self.head.head_arguments() {
             match arg {
                 HeadArg::Var(_) | HeadArg::Aggregation(_) => {
-                    panic!("Boolean rule head must contain only constants: {self}")
+                    return Err(ParserError::InvalidBoolRule(self.to_string()));
                 }
                 HeadArg::Arith(arith) => {
                     if arith.is_const() {
@@ -96,36 +95,37 @@ impl MacaronRule {
                             out.push(c.clone());
                         } else {
                             // Defensive (shouldn't happen if is_const() is true).
-                            panic!("Boolean rule head must contain only constants: {self}");
+                            return Err(ParserError::InvalidBoolRule(self.to_string()));
                         }
                     } else {
-                        panic!("Boolean rule head must contain only constants: {self}");
+                        return Err(ParserError::InvalidBoolRule(self.to_string()));
                     }
                 }
             }
         }
-        out
+        Ok(out)
     }
 }
 
 impl Lexeme for MacaronRule {
     /// Parse `head ~ ":-" ~ predicates ~ optimize? ~ "."`
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
-        let head = Head::from_parsed_rule(inner.next().expect("Missing rule head"));
+        let inner_head = inner.next().ok_or(ParserError::MissingHead)?;
+        let head = Head::from_parsed_rule(inner_head)?;
 
         // predicates
-        let predicates_rule = inner.next().expect("Missing rule predicates");
+        let predicates_rule = inner.next().ok_or(ParserError::MissingPredicate)?;
         let rhs: Vec<Predicate> = predicates_rule
             .into_inner()
             .map(Predicate::from_parsed_rule)
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         // optional optimize marker
         let is_planning = inner.next().is_some();
 
-        Self::new(head, rhs, is_planning)
+        Ok(Self::new(head, rhs, is_planning))
     }
 }
 
@@ -253,26 +253,25 @@ mod tests {
         );
         let r = MacaronRule::new(head, vec![bool_pred(true)], false);
 
-        let c = r.extract_constants_from_head();
+        let c = r.extract_constants_from_head().expect("extract constants");
         assert_eq!(c.len(), 2);
         assert_eq!(c[0], ConstType::Integer(42));
         assert_eq!(c[1], ConstType::Text("hello".into()));
     }
 
     #[test]
-    #[should_panic(expected = "Boolean rule head must contain only constants")]
-    fn extract_constants_panics_on_var() {
+    fn extract_constants_error_on_var() {
         let head = head_named(
             "invalid",
             vec![head_const(ConstType::Integer(1)), head_var("X")],
         );
         let r = MacaronRule::new(head, vec![bool_pred(true)], false);
-        let _ = r.extract_constants_from_head();
+        let err = r.extract_constants_from_head().expect_err("should err");
+        matches!(err, ParserError::InvalidBoolRule(_));
     }
 
     #[test]
-    #[should_panic(expected = "Boolean rule head must contain only constants")]
-    fn extract_constants_panics_on_aggregation() {
+    fn extract_constants_error_on_aggregation() {
         use crate::logic::{Aggregation, AggregationOperator};
         let arith = Arithmetic::new(Factor::Var("X".into()), vec![]);
         let agg = Aggregation::new(AggregationOperator::Sum, arith);
@@ -281,12 +280,12 @@ mod tests {
             vec![head_const(ConstType::Integer(1)), HeadArg::Aggregation(agg)],
         );
         let r = MacaronRule::new(head, vec![bool_pred(true)], false);
-        let _ = r.extract_constants_from_head();
+        let err = r.extract_constants_from_head().expect_err("should err");
+        matches!(err, ParserError::InvalidBoolRule(_));
     }
 
     #[test]
-    #[should_panic(expected = "Boolean rule head must contain only constants")]
-    fn extract_constants_panics_on_complex_arith() {
+    fn extract_constants_error_on_complex_arith() {
         let complex = Arithmetic::new(
             Factor::Var("X".into()),
             vec![(
@@ -296,7 +295,8 @@ mod tests {
         );
         let head = head_named("invalid", vec![HeadArg::Arith(complex)]);
         let r = MacaronRule::new(head, vec![bool_pred(true)], false);
-        let _ = r.extract_constants_from_head();
+        let err = r.extract_constants_from_head().expect_err("should err");
+        matches!(err, ParserError::InvalidBoolRule(_));
     }
 
     #[test]

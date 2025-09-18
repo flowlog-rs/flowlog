@@ -55,7 +55,7 @@ string = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 placeholder = { "_" } 
 
 // Boolean values used in expressions
-boolean = { "True" | "False" } 
+boolean = { "True" | "False" | "true" | "false" } 
 
 // =============================================================================
 // RELATION DECLARATIONS
@@ -122,11 +122,12 @@ factor = { variable | constant }
 
 // Arithmetic operators
 arithmetic_op = { 
-    plus |    // +
-    minus |   // -
-    times |   // *
-    divide |  // /
-    modulo    // %
+    plus |       // +
+    minus |      // -
+    times |      // *
+    divide |     // /
+    modulo |     // %
+    exponent     // ^ (currently unsupported, will raise UnsupportedArithmeticOperator)
 }
 
 // Individual arithmetic operators
@@ -135,6 +136,8 @@ minus = { "-" }
 times = { "*" }
 divide = { "/" }
 modulo = { "%" }
+// Unsupported (parsed but rejected semantically)
+exponent = { "^" }
 
 // =============================================================================
 // COMPARISON EXPRESSIONS  

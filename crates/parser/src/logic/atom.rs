@@ -16,7 +16,7 @@
 //! ```
 
 use crate::primitive::ConstType;
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -44,7 +44,7 @@ impl AtomArg {
         matches!(self, Self::Placeholder)
     }
 
-    /// Return the variable name; panics if not a variable.
+    /// Return the variable name; return errors if not a variable.
     #[must_use]
     pub fn as_var(&self) -> &String {
         match self {
@@ -67,19 +67,20 @@ impl fmt::Display for AtomArg {
 impl Lexeme for AtomArg {
     /// Parse an atom argument from the grammar.
     ///
-    /// # Panics
-    /// Panics if the inner token is not `variable|constant|placeholder`.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if the inner token is not `variable|constant|placeholder`.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
+        // Defensive: atom_arg ::= variable | constant | placeholder.
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: atom_arg missing inner token");
+            .ok_or_else(|| ParserError::IncompleteAtomArg("inner token".to_string()))?;
 
         match inner.as_rule() {
-            Rule::variable => Self::Var(inner.as_str().to_string()),
-            Rule::constant => Self::Const(ConstType::from_parsed_rule(inner)),
-            Rule::placeholder => Self::Placeholder,
-            other => panic!("Parser error: invalid atom argument rule: {:?}", other),
+            Rule::variable => Ok(Self::Var(inner.as_str().to_string())),
+            Rule::constant => Ok(Self::Const(ConstType::from_parsed_rule(inner)?)),
+            Rule::placeholder => Ok(Self::Placeholder),
+            other => Err(ParserError::InvalidAtomArgRule(format!("{:?}", other))),
         }
     }
 }
@@ -142,25 +143,26 @@ impl fmt::Display for Atom {
 impl Lexeme for Atom {
     /// Parse `name("(" (atom_arg ("," atom_arg)*)? ")")`.
     ///
-    /// # Panics
-    /// Panics if the structure is malformed.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if the structure is malformed.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
+        // Defensive: atom starts with a relation_name; this only fails if parse tree is corrupted.
         let name = inner
             .next()
-            .expect("Parser error: atom missing relation name")
+            .ok_or_else(|| ParserError::IncompleteAtomArg("relation name".to_string()))?
             .as_str()
             .to_string();
 
         let mut arguments = Vec::new();
         for pair in inner {
             if pair.as_rule() == Rule::atom_arg {
-                arguments.push(AtomArg::from_parsed_rule(pair));
+                arguments.push(AtomArg::from_parsed_rule(pair)?);
             }
         }
 
-        Self { name, arguments }
+        Ok(Self { name, arguments })
     }
 }
 

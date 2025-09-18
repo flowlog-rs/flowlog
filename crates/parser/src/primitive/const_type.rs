@@ -1,6 +1,6 @@
 //! Constant value types for Macaron Datalog programs.
 
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -34,26 +34,23 @@ impl fmt::Display for ConstType {
 impl Lexeme for ConstType {
     /// Parses a constant from the grammar.
     ///
-    /// Panics if:
+    /// Return errors if:
     /// - no inner rule exists
     /// - number literal fails to parse as `i32`
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
-        let inner = parsed_rule
-            .into_inner()
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
+        let mut inner_iter = parsed_rule.into_inner();
+        let inner = inner_iter
             .next()
-            .expect("Parser error: constant rule had no inner value");
+            .ok_or_else(|| ParserError::IncompleteConstantRule("inner token".to_string()))?;
         match inner.as_rule() {
-            Rule::integer => Self::Integer(
+            Rule::integer => Ok(Self::Integer(
                 inner
                     .as_str()
                     .parse()
-                    .expect("Parser error: failed to parse number literal as i32"),
-            ),
-            Rule::string => Self::Text(inner.as_str().trim_matches('"').to_string()),
-            _ => unreachable!(
-                "Parser error: unexpected constant rule variant {:?}",
-                inner.as_rule()
-            ),
+                    .map_err(|_| ParserError::FailedToParseNumberLiteral)?,
+            )),
+            Rule::string => Ok(Self::Text(inner.as_str().trim_matches('"').to_string())),
+            other => Err(ParserError::InvalidConstantRule(format!("{:?}", other))),
         }
     }
 }
@@ -84,5 +81,19 @@ mod tests {
     #[test]
     fn equality_cross_type() {
         assert_ne!(ConstType::Integer(42), ConstType::Text("42".into()));
+    }
+
+    #[test]
+    fn failed_to_parse_number_literal_overflow() {
+        use crate::error::ParserError;
+        use pest::Parser;
+
+        let big = "9223372036854775807"; // > i32::MAX
+        let pair = crate::MacaronParser::parse(Rule::constant, big)
+            .unwrap()
+            .next()
+            .unwrap();
+        let err = ConstType::from_parsed_rule(pair).unwrap_err();
+        assert!(matches!(err, ParserError::FailedToParseNumberLiteral));
     }
 }

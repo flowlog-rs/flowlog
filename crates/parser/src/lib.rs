@@ -5,6 +5,7 @@
 //! relation declarations, logic rules, and primitive types.
 
 pub mod declaration;
+pub mod error;
 pub mod logic;
 pub mod primitive;
 pub mod program;
@@ -21,16 +22,21 @@ pub use program::Program;
 use pest::iterators::Pair;
 use pest_derive::Parser;
 
+type Result<T> = std::result::Result<T, error::ParserError>;
+
 /// Macaron Parser is powered by Pest, a PEG parser framework.
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
 pub struct MacaronParser;
 
+#[cfg(test)]
+mod tests;
+
 /// Trait for converting Pest parse trees into Macaron types.
 ///
 /// All Macaron language constructs implement this trait to enable
 /// conversion from parse trees to structured types.
-pub trait Lexeme {
+pub trait Lexeme: Sized {
     /// Converts a Pest parse rule into a structured Macaron type.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self;
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self>;
 }

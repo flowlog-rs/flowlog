@@ -1,4 +1,4 @@
-use parser::Program;
+use parser::{Program, error::ParserError};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -7,7 +7,7 @@ use stratifier::{DependencyGraph, Stratifier};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-fn main() {
+fn main() -> Result<(), ParserError> {
     // Initialize tracing similar to parser main
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("info"))
@@ -25,11 +25,11 @@ fn main() {
 
     let argument = &args[1];
     if argument == "--all" {
-        run_all_examples();
-        return;
+        run_all_examples()?;
+        return Ok(());
     }
 
-    let program = Program::parse(argument);
+    let program = Program::parse(argument)?;
     info!("Success parse program (rules={})", program.rules().len());
 
     // Show dependency graph then stratification summary
@@ -49,22 +49,17 @@ fn main() {
         recursive_cnt,
         stratifier
     );
+    Ok(())
 }
 
-fn run_all_examples() {
+fn run_all_examples() -> Result<(), ParserError> {
     let example_dir = "example";
     if !Path::new(example_dir).exists() {
         error!("Error: example directory '{}' not found", example_dir);
         process::exit(1);
     }
 
-    let entries = match fs::read_dir(example_dir) {
-        Ok(e) => e,
-        Err(err) => {
-            error!("Error reading example directory: {err}");
-            process::exit(1);
-        }
-    };
+    let entries = fs::read_dir(example_dir).map_err(|e| ParserError::Io(e.to_string()))?;
 
     let mut files = Vec::new();
     for entry in entries.flatten() {
@@ -90,7 +85,7 @@ fn run_all_examples() {
         info!("[{}/{}] Processing: {}", i + 1, files.len(), file_name);
         info!("{}", "-".repeat(40));
 
-        match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
+        match Program::parse(file_path.to_str().unwrap()) {
             Ok(program) => {
                 successful += 1;
                 info!("  SUCCESS: {}", file_name);
@@ -108,16 +103,10 @@ fn run_all_examples() {
                 );
                 info!("     Recursive strata: {}", recursive_cnt);
             }
-            Err(panic_info) => {
+            Err(err) => {
                 failed += 1;
                 info!("  FAILED: {}", file_name);
-                if let Some(s) = panic_info.downcast_ref::<String>() {
-                    info!("  Error: {}", s);
-                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    info!("  Error: {}", s);
-                } else {
-                    info!("  Error: Unknown panic occurred");
-                }
+                info!("  Error: {err}");
             }
         }
     }
@@ -134,4 +123,5 @@ fn run_all_examples() {
     } else {
         info!("All example files stratified successfully!");
     }
+    Ok(())
 }

@@ -1,5 +1,5 @@
 use catalog::rule::Catalog;
-use parser::Program;
+use parser::{Program, error::ParserError};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -7,7 +7,7 @@ use std::process;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-fn main() {
+fn main() -> Result<(), ParserError> {
     // Initialize tracing similar to parser/stratifier mains
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("info"))
@@ -25,11 +25,11 @@ fn main() {
 
     let argument = &args[1];
     if argument == "--all" {
-        run_all_examples();
-        return;
+        run_all_examples()?;
+        return Ok(());
     }
 
-    let program = Program::parse(argument);
+    let program = Program::parse(argument)?;
     info!(
         "Parsed program: {} rules ({} EDBs, {} IDBs)",
         program.rules().len(),
@@ -37,6 +37,7 @@ fn main() {
         program.idbs().len()
     );
     print_catalogs(&program);
+    Ok(())
 }
 
 fn print_catalogs(program: &Program) {
@@ -48,20 +49,14 @@ fn print_catalogs(program: &Program) {
     }
 }
 
-fn run_all_examples() {
+fn run_all_examples() -> Result<(), ParserError> {
     let example_dir = "example";
     if !Path::new(example_dir).exists() {
         error!("Error: example directory '{}' not found", example_dir);
         process::exit(1);
     }
 
-    let entries = match fs::read_dir(example_dir) {
-        Ok(e) => e,
-        Err(err) => {
-            error!("Error reading example directory: {err}");
-            process::exit(1);
-        }
-    };
+    let entries = fs::read_dir(example_dir).map_err(|e| ParserError::Io(e.to_string()))?;
 
     let mut files = Vec::new();
     for entry in entries.flatten() {
@@ -84,15 +79,9 @@ fn run_all_examples() {
     for file_path in files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
-        match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
-            Ok(_program) => {
-                successful += 1;
-                println!("SUCCESS: {}", file_name);
-            }
-            Err(_panic_info) => {
-                failed += 1;
-                println!("FAILED: {}", file_name);
-            }
+        match Program::parse(file_path.to_str().unwrap()) {
+            Ok(_program) => { successful += 1; println!("SUCCESS: {}", file_name); }
+            Err(err) => { failed += 1; println!("FAILED: {} ({err})", file_name); }
         }
     }
 
@@ -107,4 +96,5 @@ fn run_all_examples() {
     } else {
         println!("\nAll example files processed successfully!");
     }
+    Ok(())
 }

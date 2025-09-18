@@ -33,7 +33,10 @@ fn main() {
         run_all_examples();
     } else {
         // Parse single program file
-        let program = Program::parse(argument);
+        let program = Program::parse(argument).unwrap_or_else(|e| {
+            eprintln!("Error parsing file '{}': {}", argument, e);
+            process::exit(1);
+        });
         info!("Success parse program\n{program}");
     }
 }
@@ -89,7 +92,7 @@ fn run_all_examples() {
         );
         println!("{}", "-".repeat(40));
 
-        match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
+        match Program::parse(file_path.to_str().unwrap()) {
             Ok(program) => {
                 successful += 1;
                 info!("  SUCCESS: {}", file_name);
@@ -104,18 +107,10 @@ fn run_all_examples() {
                 println!("     IDB relations: {}", idbs.len());
                 println!("     Rules: {}", rules.len());
             }
-            Err(panic_info) => {
+            Err(parser_error) => {
                 failed += 1;
                 eprintln!("  FAILED: {}", file_name);
-
-                // Try to extract panic message
-                if let Some(s) = panic_info.downcast_ref::<String>() {
-                    eprintln!("  Error: {}", s);
-                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    eprintln!("  Error: {}", s);
-                } else {
-                    eprintln!("  Error: Unknown panic occurred");
-                }
+                eprintln!("    Error: {}", parser_error);
             }
         }
     }

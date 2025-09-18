@@ -1,5 +1,6 @@
 //! Data type definitions for Macaron Datalog programs.
 
+use crate::{error::ParserError, Result};
 use std::fmt;
 use std::str::FromStr;
 
@@ -19,18 +20,16 @@ pub enum DataType {
 }
 
 impl FromStr for DataType {
-    type Err = String;
+    type Err = ParserError;
 
     /// Parse a [`DataType`] from its grammar string representation.
     ///
     /// Returns `Err` if the string is not `"number"` or `"string"`.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "number" => Ok(Self::Integer),
             "string" => Ok(Self::String),
-            _ => Err(format!(
-                "Parser error: '{s}'. Invalid data type, expected 'number' or 'string'"
-            )),
+            _ => Err(ParserError::InvalidDataType(s.to_string())),
         }
     }
 }
@@ -63,6 +62,6 @@ mod tests {
     #[test]
     fn from_str_invalid_returns_err() {
         let err = DataType::from_str("invalid").unwrap_err();
-        assert!(err.contains("Invalid data type"));
+        assert_eq!(err, ParserError::InvalidDataType("invalid".to_string()));
     }
 }

@@ -18,3 +18,4 @@ anyhow = "1.0"
 itertools = "0.14.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+thiserror = "2.0.16"

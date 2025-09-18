@@ -16,7 +16,7 @@
 //! ```
 
 use super::{Aggregation, Arithmetic};
-use crate::{Lexeme, Rule};
+use crate::{error::ParserError, Lexeme, Result, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -58,17 +58,18 @@ impl Lexeme for HeadArg {
     ///
     /// Optimization: if the arithmetic is a single variable (`is_var()`), emit `Var` instead of `Arith`.
     ///
-    /// # Panics
-    /// Panics on unknown/unsupported inner rule.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors on unknown/unsupported inner rule.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
+        // Defensive: head_arg inner must be arithmetic_expr or aggregate_expr.
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: head_arg missing inner token");
+            .ok_or_else(|| ParserError::IncompleteHeadArg("inner token".to_string()))?;
 
         match inner.as_rule() {
             Rule::arithmetic_expr => {
-                let arith = Arithmetic::from_parsed_rule(inner);
+                let arith = Arithmetic::from_parsed_rule(inner)?;
                 if arith.is_var() {
                     // `init()` must be a `Factor::Var` when `is_var()` is true.
                     let name = arith
@@ -78,13 +79,16 @@ impl Lexeme for HeadArg {
                         .next()
                         .expect("Parser bug: is_var() but no variable in init")
                         .clone();
-                    Self::Var(name)
+                    Ok(Self::Var(name))
                 } else {
-                    Self::Arith(arith)
+                    Ok(Self::Arith(arith))
                 }
             }
-            Rule::aggregate_expr => Self::Aggregation(Aggregation::from_parsed_rule(inner)),
-            other => panic!("Parser error: unexpected rule for HeadArg: {:?}", other),
+            Rule::aggregate_expr => Ok(Self::Aggregation(Aggregation::from_parsed_rule(inner)?)),
+            other => Err(ParserError::UnexpectedRule(
+                "head argument".to_string(),
+                format!("{:?}", other),
+            )),
         }
     }
 }
@@ -146,25 +150,26 @@ impl fmt::Display for Head {
 impl Lexeme for Head {
     /// Parse `relation_name "(" (head_arg ("," head_arg)*)? ")"`.
     ///
-    /// # Panics
-    /// Panics if the name or argument list is malformed/missing.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// # Return errors
+    /// Return errors if the name or argument list is malformed/missing.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         let mut inner = parsed_rule.into_inner();
 
+        // Defensive: head begins with relation_name per grammar.
         let name = inner
             .next()
-            .expect("Parser error: head missing relation name")
+            .ok_or_else(|| ParserError::IncompleteHead("relation name".to_string()))?
             .as_str()
             .to_string();
 
         let mut args = Vec::new();
         for pair in inner {
             if pair.as_rule() == Rule::head_arg {
-                args.push(HeadArg::from_parsed_rule(pair));
+                args.push(HeadArg::from_parsed_rule(pair)?);
             }
         }
 
-        Self::new(name, args)
+        Ok(Self::new(name, args))
     }
 }
 
