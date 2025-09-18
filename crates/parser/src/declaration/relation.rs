@@ -180,9 +180,9 @@ impl Lexeme for Relation {
         let mut inner = parsed_rule.into_inner();
 
         // name
-    // Defensive: grammar `declaration` always supplies a relation_name; this branch only triggers
-    // if the Pest parse tree is synthetically altered or grammar is changed inconsistently.
-    let name = inner.next().ok_or(ParserError::MissingName)?.as_str();
+        // Defensive: grammar `declaration` always supplies a relation_name; this branch only triggers
+        // if the Pest parse tree is synthetically altered or grammar is changed inconsistently.
+        let name = inner.next().ok_or(ParserError::MissingName)?.as_str();
 
         let mut attributes: Vec<Attribute> = Vec::new();
 
@@ -196,12 +196,18 @@ impl Lexeme for Relation {
                             // Defensive: `attribute_decl = attribute_name ":" data_type` ensures both parts exist.
                             // IncompleteAttribute errors are not reachable with valid grammar input and serve as
                             // internal consistency guards.
-                            let aname = parts.next().ok_or_else(|| {
-                                ParserError::IncompleteAttribute("name".to_string())
-                            })?.as_str();
-                            let dts = parts.next().ok_or_else(|| {
-                                ParserError::IncompleteAttribute("datatype".to_string())
-                            })?.as_str();
+                            let aname = parts
+                                .next()
+                                .ok_or_else(|| {
+                                    ParserError::IncompleteAttribute("name".to_string())
+                                })?
+                                .as_str();
+                            let dts = parts
+                                .next()
+                                .ok_or_else(|| {
+                                    ParserError::IncompleteAttribute("datatype".to_string())
+                                })?
+                                .as_str();
                             let dt = DataType::from_str(dts).map_err(|e| {
                                 ParserError::InvalidAttributeDatatype {
                                     aname: aname.to_string(),
@@ -324,5 +330,4 @@ mod tests {
         assert_eq!(r1, r2);
         assert_ne!(r1, r3);
     }
-    
 }

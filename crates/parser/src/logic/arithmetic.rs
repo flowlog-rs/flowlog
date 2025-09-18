@@ -1,6 +1,6 @@
 //! Arithmetic expressions for Macaron Datalog Programs.
 //!
-//! - [`ArithmeticOperator`]: `+ | - | * | / | %`
+//! - [`ArithmeticOperator`]: `+ | - | * | / | %` (caret `^` is parsed by grammar but rejected as unsupported)
 //! - [`Factor`]: variables or constants
 //! - [`Arithmetic`]: `factor (op, factor)*`
 //!
@@ -52,9 +52,10 @@ impl Lexeme for ArithmeticOperator {
     /// Return errors if the rule is not one of `plus|minus|times|divide|modulo`.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         // Defensive: arithmetic_op rule is a single alternative; missing inner token indicates malformed parse tree.
-        let op = parsed_rule.into_inner().next().ok_or_else(|| {
-            ParserError::IncompleteArithmeticOperator("inner token".to_string())
-        })?;
+        let op = parsed_rule
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParserError::IncompleteArithmeticOperator("inner token".to_string()))?;
         match op.as_rule() {
             Rule::plus => Ok(Self::Plus),
             Rule::minus => Ok(Self::Minus),
@@ -119,9 +120,10 @@ impl Lexeme for Factor {
     /// Return errors if the inner token is neither `variable` nor `constant`.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         // Defensive: factor = variable | constant ; missing inner token cannot occur with valid grammar.
-        let inner = parsed_rule.into_inner().next().ok_or_else(|| {
-            ParserError::IncompleteFactor("inner token".to_string())
-        })?;
+        let inner = parsed_rule
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParserError::IncompleteFactor("inner token".to_string()))?;
         match inner.as_rule() {
             Rule::variable => Ok(Self::Var(inner.as_str().to_string())),
             Rule::constant => Ok(Self::Const(ConstType::from_parsed_rule(inner)?)),
@@ -281,5 +283,17 @@ mod tests {
         let y_str = "y".to_string();
         assert!(set.contains(&x_str));
         assert!(set.contains(&y_str));
+    }
+
+    #[test]
+    fn unsupported_exponent_operator() {
+        use pest::Parser;
+        // Parse an arithmetic expression containing '^'. Grammar accepts it, semantic layer rejects.
+        let pair = crate::MacaronParser::parse(Rule::arithmetic_expr, "x ^ 1")
+            .unwrap()
+            .next()
+            .unwrap();
+        let err = Arithmetic::from_parsed_rule(pair).unwrap_err();
+        assert!(matches!(err, ParserError::UnsupportedArithmeticOperator(op) if op == "exponent"));
     }
 }

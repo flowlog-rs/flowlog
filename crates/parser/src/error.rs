@@ -43,6 +43,14 @@ pub enum ParserError {
     IncompleteComparisonOperator(String),
     #[error("Parser error: Invalid comparison operator '{0}'")]
     InvalidComparisonOperator(String),
+    #[error(
+        "Parser error: Invalid boolean literal '{0}', expected 'True', 'False', 'true' or 'false'"
+    )]
+    InvalidBooleanLiteral(String),
+    #[error("Parser error: Invalid predicate type: {0}")]
+    InvalidPredicateType(String),
+    #[error("Parser error: Invalid constant rule variant '{0}' (expected integer|string)")]
+    InvalidConstantRule(String),
     #[error("Parser error: Missing '{0}' for comparison")]
     IncompleteComparison(String),
     #[error("Parser error: Missing '{0}' for head argument")]

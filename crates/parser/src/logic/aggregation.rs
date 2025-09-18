@@ -111,9 +111,9 @@ impl Lexeme for Aggregation {
         let mut inner = parsed_rule.into_inner();
 
         // Defensive: sequence is guaranteed by grammar: aggregate_op "(" arithmetic ")".
-        let op_pair = inner.next().ok_or_else(|| {
-            ParserError::IncompleteAggregation("operator".to_string())
-        })?;
+        let op_pair = inner
+            .next()
+            .ok_or_else(|| ParserError::IncompleteAggregation("operator".to_string()))?;
         let operator = AggregationOperator::from_parsed_rule(op_pair)?;
 
         let expr_pair = inner.next().ok_or_else(|| {
@@ -183,5 +183,21 @@ mod tests {
             Arithmetic::new(Factor::Const(ConstType::Integer(0)), vec![]),
         );
         assert!(c.vars().is_empty());
+    }
+
+    #[test]
+    fn unsupported_average_aggregation() {
+        use crate::error::ParserError;
+        use crate::{MacaronParser, Program, Rule};
+        use pest::Parser;
+
+        // average/AVG is accepted by grammar but not implemented in AggregationOperator
+        let src = ".decl S(x: number)\n.decl R(y: number)\nR(average(x)) :- S(x).\n";
+        let mut pairs = MacaronParser::parse(Rule::main_grammar, src)
+            .expect("grammar should accept average token");
+        let top = pairs.next().unwrap();
+        let err =
+            Program::from_parsed_rule(top).expect_err("should get UnsupportedAggregation error");
+        matches!(err, ParserError::UnsupportedAggregation(_));
     }
 }

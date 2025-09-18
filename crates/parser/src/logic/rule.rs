@@ -120,7 +120,6 @@ impl Lexeme for MacaronRule {
         let rhs: Vec<Predicate> = predicates_rule
             .into_inner()
             .map(Predicate::from_parsed_rule)
-            // Collect iterator of Result<Predicate, ParserError> into Result<Vec<Predicate>> then ?
             .collect::<Result<Vec<_>>>()?;
 
         // optional optimize marker

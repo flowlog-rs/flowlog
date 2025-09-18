@@ -183,7 +183,7 @@ impl Program {
 
             if overall_true {
                 let rel_name = rule.head().name().to_string();
-                let tuple = rule.extract_constants_from_head()?; // propagate error
+                let tuple = rule.extract_constants_from_head()?;
                 self.bool_facts
                     .entry(rel_name)
                     .or_default()

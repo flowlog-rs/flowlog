@@ -87,9 +87,10 @@ impl Lexeme for Predicate {
     /// - `boolean` → `True` | `False`
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         // Defensive: predicate ::= atom | neg_atom | compare_expr | boolean.
-        let inner = parsed_rule.into_inner().next().ok_or_else(|| {
-            ParserError::IncompletePredicate("inner token".to_string())
-        })?;
+        let inner = parsed_rule
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParserError::IncompletePredicate("inner token".to_string()))?;
 
         match inner.as_rule() {
             Rule::atom => Ok(Self::PositiveAtomPredicate(Atom::from_parsed_rule(inner)?)),
@@ -105,12 +106,18 @@ impl Lexeme for Predicate {
             Rule::compare_expr => Ok(Self::ComparePredicate(ComparisonExpr::from_parsed_rule(
                 inner,
             )?)),
-            Rule::boolean => match inner.as_str() {
-                "True" | "true" => Ok(Self::BoolPredicate(true)),
-                "False" | "false" => Ok(Self::BoolPredicate(false)),
-                other => unreachable!("Internal error: invalid boolean literal: {other}"),
-            },
-            other => unreachable!("Internal error: invalid predicate type: {:?}", other),
+            Rule::boolean => {
+                // Defensive: grammar restricts to True|False|true|false; any other string indicates corrupted parse tree.
+                match inner.as_str() {
+                    "True" | "true" => Ok(Self::BoolPredicate(true)),
+                    "False" | "false" => Ok(Self::BoolPredicate(false)),
+                    other => Err(ParserError::InvalidBooleanLiteral(other.to_string())),
+                }
+            }
+            other => {
+                // Defensive: should never happen unless parse tree is corrupted or grammar changed without updating code.
+                Err(ParserError::InvalidPredicateType(format!("{:?}", other)))
+            }
         }
     }
 }

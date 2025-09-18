@@ -54,4 +54,72 @@ mod program_tests {
         assert!(pruned.relations().iter().any(|r| r.name() == "B"));
         assert!(!pruned.relations().iter().any(|r| r.name() == "C"));
     }
+
+    // Helper to parse a full program string and return the error.
+    fn parse_program_err(src: &str) -> ParserError {
+        let mut pairs = MacaronParser::parse(Rule::main_grammar, src)
+            .map_err(|_| ParserError::FailedToParseProgram)
+            .unwrap();
+        let top = pairs.next().expect("no top rule");
+        Program::from_parsed_rule(top).expect_err("expected error")
+    }
+
+    #[test]
+    fn error_duplicate_input_directive() {
+        let src = "
+            .decl A()
+            .input A(IO=\"file\")
+            .input A(IO=\"file\")
+        ";
+        let e = parse_program_err(src);
+        matches!(e, ParserError::DuplicateDirective(_));
+    }
+
+    #[test]
+    fn error_conflicting_directives_input_output() {
+        let src = "
+            .decl A()
+            .input A(IO=\"file\")
+            .output A
+        ";
+        let e = parse_program_err(src);
+        matches!(e, ParserError::ConflictingDirectives(_));
+    }
+
+    #[test]
+    fn error_unknown_input_relation() {
+        let src = "
+            .input A(IO=\"file\")
+        "; // no declaration
+        let e = parse_program_err(src);
+        matches!(e, ParserError::UnknownInputRelation(_));
+    }
+
+    #[test]
+    fn error_unknown_output_relation() {
+        let src = "
+            .output A
+        "; // no declaration
+        let e = parse_program_err(src);
+        matches!(e, ParserError::UnknownOutputRelation(_));
+    }
+
+    #[test]
+    fn error_unknown_printsize_relation() {
+        let src = "
+            .printsize A
+        "; // no declaration
+        let e = parse_program_err(src);
+        matches!(e, ParserError::UnknownPrintSizeRelation(_));
+    }
+
+    #[test]
+    fn error_incomplete_input_directive_missing_name() {
+        let src = ".input \n"; // Incomplete: missing relation name + parentheses.
+        let pairs = MacaronParser::parse(Rule::main_grammar, src);
+        assert!(
+            pairs.is_err(),
+            "expected pest parse error for incomplete input directive"
+        );
+    }
 }

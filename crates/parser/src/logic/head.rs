@@ -62,9 +62,10 @@ impl Lexeme for HeadArg {
     /// Return errors on unknown/unsupported inner rule.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         // Defensive: head_arg inner must be arithmetic_expr or aggregate_expr.
-        let inner = parsed_rule.into_inner().next().ok_or_else(|| {
-            ParserError::IncompleteHeadArg("inner token".to_string())
-        })?;
+        let inner = parsed_rule
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParserError::IncompleteHeadArg("inner token".to_string()))?;
 
         match inner.as_rule() {
             Rule::arithmetic_expr => {
@@ -155,9 +156,11 @@ impl Lexeme for Head {
         let mut inner = parsed_rule.into_inner();
 
         // Defensive: head begins with relation_name per grammar.
-        let name = inner.next().ok_or_else(|| {
-            ParserError::IncompleteHead("relation name".to_string())
-        })?.as_str().to_string();
+        let name = inner
+            .next()
+            .ok_or_else(|| ParserError::IncompleteHead("relation name".to_string()))?
+            .as_str()
+            .to_string();
 
         let mut args = Vec::new();
         for pair in inner {

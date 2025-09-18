@@ -59,9 +59,10 @@ impl Lexeme for ComparisonOperator {
     /// Return errors if the rule is not one of the expected operator tokens.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Result<Self> {
         // Defensive: comparison operator rule always yields exactly one inner token.
-        let op = parsed_rule.into_inner().next().ok_or_else(|| {
-            ParserError::IncompleteComparisonOperator("inner token".to_string())
-        })?;
+        let op = parsed_rule
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParserError::IncompleteComparisonOperator("inner token".to_string()))?;
         match op.as_rule() {
             Rule::equal => Ok(Self::Equal),
             Rule::not_equal => Ok(Self::NotEqual),
@@ -69,6 +70,7 @@ impl Lexeme for ComparisonOperator {
             Rule::greater_equal_than => Ok(Self::GreaterEqualThan),
             Rule::less_than => Ok(Self::LessThan),
             Rule::less_equal_than => Ok(Self::LessEqualThan),
+            // Defensive: should not happen if grammar is correct.
             other => Err(ParserError::InvalidComparisonOperator(format!(
                 "{:?}",
                 other
@@ -155,15 +157,15 @@ impl Lexeme for ComparisonExpr {
         let mut inner = parsed_rule.into_inner();
 
         // Defensive: comparison_expr = arithmetic compare_op arithmetic.
-        let left_pair = inner.next().ok_or_else(|| {
-            ParserError::IncompleteComparison("left expression".to_string())
-        })?;
-        let op_pair = inner.next().ok_or_else(|| {
-            ParserError::IncompleteComparison("operator".to_string())
-        })?; // Defensive
-        let right_pair = inner.next().ok_or_else(|| {
-            ParserError::IncompleteComparison("right expression".to_string())
-        })?; // Defensive
+        let left_pair = inner
+            .next()
+            .ok_or_else(|| ParserError::IncompleteComparison("left expression".to_string()))?;
+        let op_pair = inner
+            .next()
+            .ok_or_else(|| ParserError::IncompleteComparison("operator".to_string()))?; // Defensive
+        let right_pair = inner
+            .next()
+            .ok_or_else(|| ParserError::IncompleteComparison("right expression".to_string()))?; // Defensive
 
         let left = Arithmetic::from_parsed_rule(left_pair)?;
         let operator = ComparisonOperator::from_parsed_rule(op_pair)?;
