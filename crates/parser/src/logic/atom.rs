@@ -18,7 +18,9 @@
 use crate::primitive::ConstType;
 use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// An argument to an atom: variable, constant, or `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -89,15 +91,17 @@ impl Lexeme for AtomArg {
 pub struct Atom {
     name: String,
     arguments: Vec<AtomArg>,
+    signature: u64,
 }
 
 impl Atom {
     /// Create a new atom.
     #[must_use]
-    pub fn new(name: &str, arguments: Vec<AtomArg>) -> Self {
+    pub fn new(name: &str, arguments: Vec<AtomArg>, signature: u64) -> Self {
         Self {
             name: name.to_string(),
             arguments,
+            signature,
         }
     }
 
@@ -123,6 +127,12 @@ impl Atom {
     pub fn arity(&self) -> usize {
         self.arguments.len()
     }
+
+    /// Get the signature.
+    #[must_use]
+    pub fn signature(&self) -> u64 {
+        self.signature
+    }
 }
 
 impl fmt::Display for Atom {
@@ -135,7 +145,7 @@ impl fmt::Display for Atom {
             }
             write!(f, "{arg}")?;
         }
-        write!(f, ")")
+        write!(f, ") [sig: 0x{:x}]", self.signature)
     }
 }
 
@@ -160,7 +170,17 @@ impl Lexeme for Atom {
             }
         }
 
-        Self { name, arguments }
+        // Generate signature
+        let mut hasher = DefaultHasher::new();
+        "atom".hash(&mut hasher);
+        name.hash(&mut hasher);
+        let signature = hasher.finish();
+
+        Self {
+            name,
+            arguments,
+            signature,
+        }
     }
 }
 
@@ -206,17 +226,17 @@ mod tests {
     #[test]
     fn atom_smoke() {
         // nullary
-        let a0 = Atom::new("flag", vec![]);
+        let a0 = Atom::new("flag", vec![], 0);
         assert_eq!(a0.arity(), 0);
         assert_eq!(a0.to_string(), "flag()");
 
         // unary
-        let a1 = Atom::new("student", vec![v("X")]);
+        let a1 = Atom::new("student", vec![v("X")], 1);
         assert_eq!(a1.arity(), 1);
         assert_eq!(a1.to_string(), "student(X)");
 
         // mixed
-        let a = Atom::new("person", vec![s("Alice"), i(25), Placeholder, v("Z")]);
+        let a = Atom::new("person", vec![s("Alice"), i(25), Placeholder, v("Z")], 2);
         assert_eq!(a.arity(), 4);
         assert_eq!(a.name(), "person");
         assert_eq!(a.to_string(), "person(\"Alice\", 25, _, Z)");
@@ -224,7 +244,7 @@ mod tests {
 
     #[test]
     fn push_arg() {
-        let mut a = Atom::new("r", vec![]);
+        let mut a = Atom::new("r", vec![], 3);
         a.push_arg(v("X"));
         a.push_arg(i(7));
         assert_eq!(a.arity(), 2);
