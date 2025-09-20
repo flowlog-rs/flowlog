@@ -91,17 +91,17 @@ impl Lexeme for AtomArg {
 pub struct Atom {
     name: String,
     arguments: Vec<AtomArg>,
-    signature: u64,
+    fingerprint: u64,
 }
 
 impl Atom {
     /// Create a new atom.
     #[must_use]
-    pub fn new(name: &str, arguments: Vec<AtomArg>, signature: u64) -> Self {
+    pub fn new(name: &str, arguments: Vec<AtomArg>, fingerprint: u64) -> Self {
         Self {
             name: name.to_string(),
             arguments,
-            signature,
+            fingerprint,
         }
     }
 
@@ -128,10 +128,10 @@ impl Atom {
         self.arguments.len()
     }
 
-    /// Get the signature.
+    /// Get the fingerprint.
     #[must_use]
-    pub fn signature(&self) -> u64 {
-        self.signature
+    pub fn fingerprint(&self) -> u64 {
+        self.fingerprint
     }
 }
 
@@ -145,7 +145,7 @@ impl fmt::Display for Atom {
             }
             write!(f, "{arg}")?;
         }
-        write!(f, ") [sig: 0x{:x}]", self.signature)
+        write!(f, ") [fp: 0x{:x}]", self.fingerprint)
     }
 }
 
@@ -174,12 +174,12 @@ impl Lexeme for Atom {
         let mut hasher = DefaultHasher::new();
         "atom".hash(&mut hasher);
         name.hash(&mut hasher);
-        let signature = hasher.finish();
+        let fingerprint = hasher.finish();
 
         Self {
             name,
             arguments,
-            signature,
+            fingerprint,
         }
     }
 }
