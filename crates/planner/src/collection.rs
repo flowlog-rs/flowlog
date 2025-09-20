@@ -1,64 +1,46 @@
 //! Collection types for query planning in Macaron Datalog programs.
 
+use crate::TransformationFlow;
 use catalog::ArithmeticPos;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-/// Identifies a data collection and tracks its transformation lineage.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum CollectionSignature {
-    /// Base atom collection from the program
-    Atom { name: String },
-
-    /// Result of a unary transformation (projection, filtering, etc.)
-    UnaryTransformationOutput { name: String },
-
-    /// Result of a join operation
-    JnOutput { name: String },
-
-    /// Result of a negated join operation
-    NegJnOutput { name: String },
-}
+/// Identifies a data collection and tracks its transformation structure.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CollectionSignature(pub u64);
 
 impl CollectionSignature {
-    /// Creates a new atom collection signature.
-    pub fn new_atom(name: &str) -> Self {
-        Self::Atom {
-            name: name.to_string(),
-        }
+    pub fn from_unary(input: Self, flow: &TransformationFlow) -> Self {
+        let mut hasher = DefaultHasher::new();
+        "unary".hash(&mut hasher);
+        input.0.hash(&mut hasher);
+        flow.hash(&mut hasher);
+        Self(hasher.finish())
     }
 
-    /// Returns the name of this collection.
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Atom { name }
-            | Self::UnaryTransformationOutput { name }
-            | Self::JnOutput { name }
-            | Self::NegJnOutput { name } => name,
-        }
+    pub fn from_join(left: Self, right: Self, flow: &TransformationFlow) -> Self {
+        let mut hasher = DefaultHasher::new();
+        "join".hash(&mut hasher);
+        left.0.hash(&mut hasher);
+        right.0.hash(&mut hasher);
+        flow.hash(&mut hasher);
+        Self(hasher.finish())
     }
-
-    /// Returns `true` if this is a base atom collection.
-    pub fn is_atom(&self) -> bool {
-        matches!(self, Self::Atom { .. })
+    pub fn from_neg_join(left: Self, right: Self, flow: &TransformationFlow) -> Self {
+        let mut hasher = DefaultHasher::new();
+        "anti_join".hash(&mut hasher);
+        left.0.hash(&mut hasher);
+        right.0.hash(&mut hasher);
+        flow.hash(&mut hasher);
+        Self(hasher.finish())
     }
 }
 
 impl fmt::Display for CollectionSignature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = self.name();
-        let mut display_name = String::new();
-        let mut skip = false;
-
-        for c in name.chars() {
-            if c == '|' {
-                skip = !skip;
-            } else if !skip {
-                display_name.push(c);
-            }
-        }
-
-        write!(f, "{}", display_name)
+        write!(f, "{:016x}", self.0)
     }
 }
 

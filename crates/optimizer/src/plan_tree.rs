@@ -57,7 +57,7 @@ impl PlanTree {
     /// without any reordering or optimization.
     /// Future versions may implement cost-based or heuristic join reordering.
     pub fn from_catalog(catalog: &Catalog) -> Self {
-        let core_atoms: Vec<usize> = (0..catalog.positive_atom_names().len()).collect();
+        let core_atoms: Vec<usize> = (0..catalog.positive_atom_fingerprints().len()).collect();
 
         // The root of the plan tree is the last core atom (rightmost in join order).
         let root = *core_atoms.last().unwrap();

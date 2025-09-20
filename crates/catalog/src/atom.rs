@@ -81,6 +81,12 @@ impl AtomArgumentSignature {
     pub fn atom_signature(&self) -> &AtomSignature {
         &self.atom_signature
     }
+
+    /// Index of the argument within the atom (zero-based).
+    #[inline]
+    pub fn argument_id(&self) -> usize {
+        self.argument_id
+    }
 }
 
 impl fmt::Display for AtomArgumentSignature {

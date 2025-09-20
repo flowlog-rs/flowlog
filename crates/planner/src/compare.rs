@@ -22,8 +22,8 @@ impl ComparisonExprArgument {
     /// Creates a new ComparisonExprArgument from constituent parts.
     pub fn from_comparison_expr(
         compare_expr: &ComparisonExprPos,
-        left_arguments: &Vec<TransformationArgument>,
-        right_arguments: &Vec<TransformationArgument>,
+        left_arguments: &[TransformationArgument],
+        right_arguments: &[TransformationArgument],
     ) -> Self {
         let left = ArithmeticArgument::from_arithmeticpos(compare_expr.left(), left_arguments);
         let right = ArithmeticArgument::from_arithmeticpos(compare_expr.right(), right_arguments);

@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
-use parser::{AtomArg, ComparisonExpr, ConstType, HeadArg, MacaronRule, Predicate};
+use parser::{Atom, AtomArg, ComparisonExpr, ConstType, HeadArg, MacaronRule, Predicate};
 
 /// Per-rule catalog with precomputed metadata.
 #[derive(Debug)]
@@ -18,13 +18,13 @@ pub struct Catalog {
     /// Example: for `tc(x, z) :- arc(x, y), tc(y, z)` → `{ x: [Some(0.0), None], y: [Some(0.1), Some(1.0)], z: [None, Some(1.1)] }`.
     argument_presence_in_positive_atom_map: HashMap<String, Vec<Option<AtomArgumentSignature>>>,
 
-    /// RHS positive atom names.
-    positive_atom_names: Vec<String>,
+    /// RHS positive atom fingerprints.
+    positive_atom_fingerprints: Vec<u64>,
     /// For each RHS positive atom, its argument signatures.
     positive_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
 
-    /// RHS negated atom names.
-    negated_atom_names: Vec<String>,
+    /// RHS negated atom fingerprints.
+    negated_atom_fingerprints: Vec<u64>,
     /// For each RHS negated atom, its argument signatures.
     negated_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
 
@@ -48,13 +48,13 @@ impl Catalog {
         &self.rule
     }
 
-    /// All dependent relation names (positive and negated) in the body.
-    pub fn dependent_atom_names(&self) -> HashSet<String> {
-        self.positive_atom_names
+    /// All dependent relation fingerprints (positive and negated) in the body.
+    pub fn dependent_atom_fingerprints(&self) -> HashSet<u64> {
+        self.positive_atom_fingerprints
             .iter()
-            .chain(self.negated_atom_names.iter())
+            .chain(self.negated_atom_fingerprints.iter())
             .cloned()
-            .collect::<HashSet<String>>()
+            .collect()
     }
 
     /// Reverse map from signatures to their variable strings.
@@ -109,10 +109,10 @@ impl Catalog {
         &self.argument_presence_in_positive_atom_map[argument_str]
     }
 
-    /// Positive atom names in the rule body (RHS), in source order.
+    /// Positive atom fingerprints in the rule body (RHS), in source order.
     #[inline]
-    pub fn positive_atom_names(&self) -> &Vec<String> {
-        &self.positive_atom_names
+    pub fn positive_atom_fingerprints(&self) -> &Vec<u64> {
+        &self.positive_atom_fingerprints
     }
 
     /// Argument signatures for each positive atom (order matches `positive_atom_names`).
@@ -121,10 +121,10 @@ impl Catalog {
         &self.positive_atom_argument_signatures
     }
 
-    /// Negated atom names in the rule body (RHS), in source order.
+    /// Negated atom fingerprints in the rule body (RHS), in source order.
     #[inline]
-    pub fn negated_atom_names(&self) -> &Vec<String> {
-        &self.negated_atom_names
+    pub fn negated_atom_fingerprints(&self) -> &Vec<u64> {
+        &self.negated_atom_fingerprints
     }
 
     /// Argument signatures for each negated atom (order matches `negated_atom_names`).
@@ -253,7 +253,7 @@ impl Catalog {
     }
 }
 
-// Construction and updates
+// Construction
 impl Catalog {
     /// Build a Catalog from a single rule (derives signatures, filters and helper maps).
     pub fn from_rule(rule: &MacaronRule) -> Self {
@@ -261,9 +261,9 @@ impl Catalog {
             rule: rule.clone(),
             signature_to_argument_str_map: HashMap::new(),
             argument_presence_in_positive_atom_map: HashMap::new(),
-            positive_atom_names: Vec::new(),
+            positive_atom_fingerprints: Vec::new(),
             positive_atom_argument_signatures: Vec::new(),
-            negated_atom_names: Vec::new(),
+            negated_atom_fingerprints: Vec::new(),
             negated_atom_argument_signatures: Vec::new(),
             filters: Filters::new(HashMap::new(), HashMap::new(), HashSet::new()),
             comparison_predicates: Vec::new(),
@@ -353,7 +353,7 @@ impl Catalog {
 
         // (i) populate the signatures of positive atoms
         for (rhs_id, atom) in positive_atoms.iter().enumerate() {
-            self.positive_atom_names.push(atom.name().to_owned());
+            self.positive_atom_fingerprints.push(atom.fingerprint());
             let mut atom_signatures = Vec::new();
             for (argument_id, argument) in atom.arguments().iter().enumerate() {
                 let rule_argument_signature =
@@ -391,7 +391,7 @@ impl Catalog {
 
         // (ii) populate the signatures of negated atoms
         for (neg_rhs_id, atom) in negated_atoms.iter().enumerate() {
-            self.negated_atom_names.push(atom.name().to_owned());
+            self.negated_atom_fingerprints.push(atom.fingerprint());
             let mut negated_atom_signatures = Vec::new();
             for (argument_id, argument) in atom.arguments().iter().enumerate() {
                 let rule_argument_signature =
@@ -477,14 +477,195 @@ impl Catalog {
     fn clear(&mut self) {
         self.signature_to_argument_str_map.clear();
         self.argument_presence_in_positive_atom_map.clear();
-        self.positive_atom_names.clear();
+        self.positive_atom_fingerprints.clear();
         self.positive_atom_argument_signatures.clear();
-        self.negated_atom_names.clear();
+        self.negated_atom_fingerprints.clear();
         self.negated_atom_argument_signatures.clear();
         self.filters = Filters::new(HashMap::new(), HashMap::new(), HashSet::new());
         self.comparison_predicates.clear();
         self.comparison_predicates_vars_set.clear();
         self.head_arguments_map.clear();
+    }
+}
+
+/// Modification.
+impl Catalog {
+    /// Projection modify: delete specified arguments from an atom and update its name and fingerprint.
+    pub fn projection_modify(
+        &mut self,
+        atom_signature: AtomSignature,
+        arguments_to_delete: Vec<AtomArgumentSignature>,
+        new_name: String,
+        new_fingerprint: u64,
+    ) {
+        // We allow arguments_to_delete to be empty for cases like key-value projection
+        // where we're just renaming/re-signaturing without deleting arguments
+
+        // If arguments provided, validate they all belong to the specified atom
+        for arg_sig in &arguments_to_delete {
+            if *arg_sig.atom_signature() != atom_signature {
+                panic!("Catalog error: All argument signatures must belong to the specified atom");
+            }
+        }
+
+        let rhs_index = self
+            .rhs_index_from_signature(atom_signature)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Catalog error: Atom not found for signature {}",
+                    atom_signature
+                )
+            });
+
+        // Collect argument IDs to delete and sort them in descending order
+        // (so we can remove from highest index to lowest to avoid index shifting)
+        let mut arg_ids_to_delete: Vec<usize> = arguments_to_delete
+            .iter()
+            .map(|sig| sig.argument_id())
+            .collect();
+        arg_ids_to_delete.sort_unstable();
+        arg_ids_to_delete.reverse();
+
+        // Prepare a new predicate with the requested arguments removed and updated name/signature
+        let new_atom = match &self.rule.rhs()[rhs_index] {
+            Predicate::PositiveAtomPredicate(atom) | Predicate::NegatedAtomPredicate(atom) => {
+                // Validate all argument IDs are in bounds
+                for &arg_id in &arg_ids_to_delete {
+                    if arg_id >= atom.arity() {
+                        panic!(
+                            "Catalog error: Argument id {} out of bounds for atom '{}' with arity {}",
+                            arg_id,
+                            atom.name(),
+                            atom.arity()
+                        );
+                    }
+                }
+
+                let mut new_args: Vec<AtomArg> = atom.arguments().to_vec();
+                // Remove arguments in descending order to avoid index issues
+                for &arg_id in &arg_ids_to_delete {
+                    new_args.remove(arg_id);
+                }
+
+                let new_atom = Atom::new(&new_name, new_args, new_fingerprint);
+
+                // Reconstruct the appropriate predicate type
+                match &self.rule.rhs()[rhs_index] {
+                    Predicate::PositiveAtomPredicate(_) => {
+                        Predicate::PositiveAtomPredicate(new_atom)
+                    }
+                    Predicate::NegatedAtomPredicate(_) => Predicate::NegatedAtomPredicate(new_atom),
+                    _ => unreachable!(),
+                }
+            }
+            other => {
+                panic!(
+                    "Catalog error: Target predicate at rhs index {} is not an atom: {}",
+                    rhs_index, other
+                )
+            }
+        };
+
+        // Rebuild RHS with the updated atom
+        let mut new_rhs = self.rule.rhs().to_vec();
+        new_rhs[rhs_index] = new_atom;
+
+        let new_rule = MacaronRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
+        self.update_rule(&new_rule);
+    }
+
+    /// Join modify: remove two atoms and create a new joined atom at the end of RHS.
+    pub fn join_modify(
+        &mut self,
+        left_atom_signature: AtomSignature,
+        right_atom_signature: AtomSignature,
+        new_arguments: Vec<AtomArgumentSignature>,
+        new_name: String,
+        new_fingerprint: u64,
+    ) {
+        // Find the RHS indices for both atoms
+        let left_rhs_index = self
+            .rhs_index_from_signature(left_atom_signature)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Catalog error: Left atom not found for signature {}",
+                    left_atom_signature
+                )
+            });
+
+        let right_rhs_index = self
+            .rhs_index_from_signature(right_atom_signature)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Catalog error: Right atom not found for signature {}",
+                    right_atom_signature
+                )
+            });
+
+        // Validate that both are atoms
+        match (
+            &self.rule.rhs()[left_rhs_index],
+            &self.rule.rhs()[right_rhs_index],
+        ) {
+            (
+                Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_),
+                Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_),
+            ) => {}
+            _ => panic!("Catalog error: Both left and right predicates must be atoms"),
+        }
+
+        // Build the new arguments by looking up their string representations
+        let mut new_atom_args = Vec::new();
+        for arg_signature in new_arguments {
+            if let Some(arg_str) = self.signature_to_argument_str_map.get(&arg_signature) {
+                // Try to parse the argument string back to AtomArg
+                // For now, we'll create variables - this could be enhanced to handle constants/placeholders
+                new_atom_args.push(AtomArg::Var(arg_str.clone()));
+            } else {
+                panic!(
+                    "Catalog error: Argument signature {:?} not found in signature map",
+                    arg_signature
+                );
+            }
+        }
+
+        // Create the new joined atom
+        let new_atom =
+            Predicate::PositiveAtomPredicate(Atom::new(&new_name, new_atom_args, new_fingerprint));
+
+        // Remove the two original atoms (remove higher index first to avoid shifting)
+        let mut new_rhs = self.rule.rhs().to_vec();
+        let (first_index, second_index) = if left_rhs_index > right_rhs_index {
+            (left_rhs_index, right_rhs_index)
+        } else {
+            (right_rhs_index, left_rhs_index)
+        };
+        new_rhs.remove(first_index);
+        new_rhs.remove(second_index);
+
+        // Add the new joined atom at the end
+        new_rhs.push(new_atom);
+
+        let new_rule = MacaronRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
+        self.update_rule(&new_rule);
+    }
+
+    /// Map an atom signature (polarity + position among atoms of that polarity)
+    /// back to the global RHS index in the rule's predicate vector.
+    fn rhs_index_from_signature(&self, sig: AtomSignature) -> Option<usize> {
+        self.rule
+            .rhs()
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                matches!(
+                    (p, sig.is_positive()),
+                    (Predicate::PositiveAtomPredicate(_), true)
+                        | (Predicate::NegatedAtomPredicate(_), false)
+                )
+            })
+            .nth(sig.rhs_id())
+            .map(|(i, _)| i)
     }
 }
 
@@ -505,25 +686,25 @@ impl fmt::Display for Catalog {
 
         // Positive atoms with indices, core flag, and args
         writeln!(f, "Positive atoms:")?;
-        for (i, name) in self.positive_atom_names.iter().enumerate() {
+        for (i, fingerprint) in self.positive_atom_fingerprints.iter().enumerate() {
             let args = fmt_sig_list(
                 &self.positive_atom_argument_signatures[i],
                 &self.signature_to_argument_str_map,
             );
-            writeln!(f, "  [{:>2}] {:<} args: {}", i, name, args)?;
+            writeln!(f, "  [{:>2}] 0x{:x} args: {}", i, fingerprint, args)?;
         }
 
         // Negated atoms (if any)
         writeln!(f, "\nNegated atoms:")?;
-        if self.negated_atom_names.is_empty() {
+        if self.negated_atom_fingerprints.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
-            for (i, name) in self.negated_atom_names.iter().enumerate() {
+            for (i, fingerprint) in self.negated_atom_fingerprints.iter().enumerate() {
                 let args = fmt_sig_list(
                     &self.negated_atom_argument_signatures[i],
                     &self.signature_to_argument_str_map,
                 );
-                writeln!(f, "  [{:>2}] {:<} args: {}", i, name, args)?;
+                writeln!(f, "  [{:>2}] 0x{:x} args: {}", i, fingerprint, args)?;
             }
         }
 

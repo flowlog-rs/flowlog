@@ -65,7 +65,7 @@ impl TransformationArgument {
                         context, arith_arg.rest
                     );
                 }
-                
+
                 match arith_arg.init {
                     FactorArgument::Var(trans_arg) => trans_arg,
                     _ => panic!(

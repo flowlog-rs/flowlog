@@ -225,16 +225,8 @@ impl Transformation {
                     .iter()
                     .chain(output_value_signatures.iter()));
 
-        let input_signature_name = input.signature().name();
-        let output_name = match (is_row_out, is_key_only_out) {
-            (true, false) => format!("Row({}){}", input_signature_name, flow), // Row output with values
-            (false, true) => format!("K({}){}", input_signature_name, flow),   // Key-only output
-            (false, false) => format!("Kv({}){}", input_signature_name, flow), // Key-value output
-            (true, true) => panic!("Planner error: kv_to_kv - null signatures not allowed"),
-        };
-
         let output = Arc::new(Collection::new(
-            CollectionSignature::UnaryTransformationOutput { name: output_name },
+            CollectionSignature::from_unary(**input.signature(), &flow),
             output_key_signatures,
             output_value_signatures,
         ));
@@ -300,18 +292,8 @@ impl Transformation {
         let is_key_only_right = right_value_signatures.is_empty(); // Right collection has only keys
         let is_cartesian = left_key_signatures.is_empty(); // No join keys = cartesian product
 
-        let left_name = input.0.signature().name();
-        let right_name = input.1.signature().name();
-        let output_name = match (is_cartesian, is_key_only_left, is_key_only_right) {
-            (true, _, _) => format!("Cartesian({}, {}){}", left_name, right_name, flow), // Cartesian product
-            (_, true, true) => format!("JnKK({}, {}){}", left_name, right_name, flow), // Key-Key join
-            (_, false, true) => format!("JnKvK({}, {}){}", left_name, right_name, flow), // KeyValue-Key join
-            (_, false, false) => format!("JnKvKv({}, {}){}", left_name, right_name, flow), // KeyValue-KeyValue join
-            (_, true, false) => format!("JnKKv({}, {}){}", left_name, right_name, flow), // Key-KeyValue join
-        };
-
         let output = Arc::new(Collection::new(
-            CollectionSignature::JnOutput { name: output_name },
+            CollectionSignature::from_join(**input.0.signature(), **input.1.signature(), &flow),
             output_key_signatures,
             output_value_signatures,
         ));
@@ -382,16 +364,8 @@ impl Transformation {
         // Determine antijoin type based on left collection characteristics
         let is_key_only_left = left_value_signatures.is_empty(); // Left collection has only keys
 
-        let left_name = input.0.signature().name();
-        let right_name = input.1.signature().name();
-        let output_name = if is_key_only_left {
-            format!("NjKK({}, {}){}", left_name, right_name, flow) // Key-only antijoin
-        } else {
-            format!("NjKvK({}, {}){}", left_name, right_name, flow) // Key-value antijoin
-        };
-
         let output = Arc::new(Collection::new(
-            CollectionSignature::NegJnOutput { name: output_name },
+            CollectionSignature::from_neg_join(**input.0.signature(), **input.1.signature(), &flow),
             output_key_signatures,
             output_value_signatures,
         ));
@@ -422,17 +396,13 @@ impl Transformation {
         operator: AggregationOperator,
     ) -> Self {
         // Create the aggregation flow using the flow module
-        let flow = TransformationFlow::agg_to_row(input_exprs, output_field_expr, operator.clone());
-
-        // Generate descriptive name for the output collection
-        let input_signature_name = input.signature().name();
-        let output_name = format!("Agg({}){}", input_signature_name, flow);
+        let flow = TransformationFlow::agg_to_row(input_exprs, output_field_expr, operator);
 
         // Create the output collection
         // Note: Both key and value signatures are empty for row-based aggregation results
         // TODO: here is actually a bit confusing, since from the collection you can tell no difference
         let output = Arc::new(Collection::new(
-            CollectionSignature::UnaryTransformationOutput { name: output_name },
+            CollectionSignature::from_unary(**input.signature(), &flow),
             &[],          // No keys for row-based output
             output_exprs, // All outputs are values in row-based aggregation
         ));

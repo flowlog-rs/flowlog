@@ -198,7 +198,7 @@ impl TransformationFlow {
                 });
 
         // Map right-side inputs to join transformation arguments (only values, no keys)
-        let right_expr_map = Self::kv_argument_flow_map(&vec![], input_right_value_exprs) // Self::kv_argument_flow_map(input_right_key_signatures, input_right_value_signatures)
+        let right_expr_map = Self::kv_argument_flow_map(&[], input_right_value_exprs) // Self::kv_argument_flow_map(input_right_key_signatures, input_right_value_signatures)
             .into_iter()
             .map(|(signature, trace)| {
                 let join_trace = match trace {
@@ -313,7 +313,7 @@ impl TransformationFlow {
                     let init_factor = match expr.init() {
                         catalog::FactorPos::Var(sig) => {
                             // Look up the single-var expression directly
-                            let key = ArithmeticPos::from_var_signature(sig.clone());
+                            let key = ArithmeticPos::from_var_signature(*sig);
                             let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
                                 panic!(
                                     "Planner error: {} - init variable signature {:?} not found in input expressions map",
@@ -333,7 +333,7 @@ impl TransformationFlow {
                             let factor_arg = match factor {
                                 catalog::FactorPos::Var(sig) => {
                                     // Look up the single-var expression directly
-                                    let key = ArithmeticPos::from_var_signature(sig.clone());
+                                    let key = ArithmeticPos::from_var_signature(*sig);
                                     let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
                                         panic!(
                                             "Planner error: {} - rest variable signature {:?} not found in input expressions map",
@@ -366,7 +366,7 @@ impl TransformationFlow {
     ) -> Vec<(TransformationArgument, ConstType)> {
         let const_exprs: Vec<ArithmeticPos> = const_eq_constraints
             .iter()
-            .map(|(signature, _)| ArithmeticPos::from_var_signature(signature.clone()))
+            .map(|(signature, _)| ArithmeticPos::from_var_signature(*signature))
             .collect();
 
         TransformationArgument::from_arithmetic_arguments(
@@ -390,12 +390,12 @@ impl TransformationFlow {
     ) -> Vec<(TransformationArgument, TransformationArgument)> {
         let left_exprs: Vec<ArithmeticPos> = var_eq_constraints
             .iter()
-            .map(|(left_signature, _)| ArithmeticPos::from_var_signature(left_signature.clone()))
+            .map(|(left_signature, _)| ArithmeticPos::from_var_signature(*left_signature))
             .collect();
 
         let right_exprs: Vec<ArithmeticPos> = var_eq_constraints
             .iter()
-            .map(|(_, right_signature)| ArithmeticPos::from_var_signature(right_signature.clone()))
+            .map(|(_, right_signature)| ArithmeticPos::from_var_signature(*right_signature))
             .collect();
 
         let left_args = TransformationArgument::from_arithmetic_arguments(
@@ -417,7 +417,7 @@ impl TransformationFlow {
 
         left_args
             .into_iter()
-            .zip(right_args.into_iter())
+            .zip(right_args)
             .collect::<Vec<(TransformationArgument, TransformationArgument)>>()
     }
 
@@ -434,13 +434,13 @@ impl TransformationFlow {
                     .left()
                     .signatures()
                     .iter()
-                    .map(|&signature| ArithmeticPos::from_var_signature(signature.clone()))
+                    .map(|&signature| ArithmeticPos::from_var_signature(*signature))
                     .collect::<Vec<_>>();
                 let right_exprs = comp
                     .right()
                     .signatures()
                     .iter()
-                    .map(|&signature| ArithmeticPos::from_var_signature(signature.clone()))
+                    .map(|&signature| ArithmeticPos::from_var_signature(*signature))
                     .collect::<Vec<_>>();
 
                 let left_trans_args = TransformationArgument::from_arithmetic_arguments(
