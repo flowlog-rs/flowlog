@@ -22,11 +22,15 @@ pub struct Catalog {
     positive_atom_fingerprints: Vec<u64>,
     /// For each RHS positive atom, its argument signatures.
     positive_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
+    /// For each RHS positive atom, its superset positive atoms.
+    positive_supersets: Vec<Vec<usize>>,
 
     /// RHS negated atom fingerprints.
     negated_atom_fingerprints: Vec<u64>,
     /// For each RHS negated atom, its argument signatures.
     negated_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
+    /// For each RHS negated atom, its superset positive atoms.
+    negated_supersets: Vec<Vec<usize>>,
 
     /// Local filters: variable equality constraints, constant equality constraints, placeholders.
     filters: Filters,
@@ -35,9 +39,16 @@ pub struct Catalog {
     comparison_predicates: Vec<ComparisonExpr>,
     /// Variable sets per comparison predicate (deduplicated).
     comparison_predicates_vars_set: Vec<HashSet<String>>,
+    /// For each comparison predicate, its superset positive atoms.
+    comparison_supersets: Vec<Vec<usize>>,
 
     /// For each head argument's string form, a copy of the argument.
     head_arguments_map: HashMap<String, HeadArg>,
+
+    /// Atom argument signatures whose variable string occurs exactly once across
+    /// all predicates in the rule body (positive atoms, negated atoms, comparisons).
+    /// Grouped unused arguments per atom signature for convenience in planners.
+    unused_arguments_per_atom: HashMap<AtomSignature, Vec<AtomArgumentSignature>>,
 }
 
 // Getters and basic accessors
@@ -238,6 +249,24 @@ impl Catalog {
         &self.comparison_predicates
     }
 
+    /// For each positive atom, indices of positive atoms with superset var sets.
+    #[inline]
+    pub fn positive_supersets(&self) -> &Vec<Vec<usize>> {
+        &self.positive_supersets
+    }
+
+    /// For each negative atom, indices of positive atoms with superset var sets.
+    #[inline]
+    pub fn negated_supersets(&self) -> &Vec<Vec<usize>> {
+        &self.negated_supersets
+    }
+
+    /// For each comparison predicate, indices of positive atoms with superset var sets.
+    #[inline]
+    pub fn comparison_supersets(&self) -> &Vec<Vec<usize>> {
+        &self.comparison_supersets
+    }
+
     /// Flattened variable strings referenced by the selected comparison predicates.
     pub fn comparison_predicates_vars_set(&self, comp_ids: &[usize]) -> Vec<&String> {
         comp_ids
@@ -251,6 +280,34 @@ impl Catalog {
     pub fn head_arguments_map(&self) -> &HashMap<String, HeadArg> {
         &self.head_arguments_map
     }
+
+    /// Grouped unused arguments by atom signature.
+    #[inline]
+    pub fn unused_arguments_per_atom(&self) -> &HashMap<AtomSignature, Vec<AtomArgumentSignature>> {
+        &self.unused_arguments_per_atom
+    }
+
+    /// Resolve an atom's context by its signature.
+    #[inline]
+    pub fn resolve_atom(
+        &self,
+        atom_signature: &AtomSignature,
+    ) -> (&[AtomArgumentSignature], u64, usize) {
+        let atom_id = atom_signature.rhs_id();
+        if atom_signature.is_positive() {
+            (
+                &self.positive_atom_argument_signatures[atom_id],
+                self.positive_atom_fingerprints[atom_id],
+                atom_id,
+            )
+        } else {
+            (
+                &self.negated_atom_argument_signatures[atom_id],
+                self.negated_atom_fingerprints[atom_id],
+                atom_id,
+            )
+        }
+    }
 }
 
 // Construction
@@ -263,12 +320,16 @@ impl Catalog {
             argument_presence_in_positive_atom_map: HashMap::new(),
             positive_atom_fingerprints: Vec::new(),
             positive_atom_argument_signatures: Vec::new(),
+            positive_supersets: Vec::new(),
             negated_atom_fingerprints: Vec::new(),
             negated_atom_argument_signatures: Vec::new(),
+            negated_supersets: Vec::new(),
             filters: Filters::new(HashMap::new(), HashMap::new(), HashSet::new()),
             comparison_predicates: Vec::new(),
             comparison_predicates_vars_set: Vec::new(),
+            comparison_supersets: Vec::new(),
             head_arguments_map: HashMap::new(),
+            unused_arguments_per_atom: HashMap::new(),
         };
         catalog.populate_all_metadata();
         catalog
@@ -300,6 +361,9 @@ impl Catalog {
         // 3. Populate comparison predicates vars set (depends on comparison_predicates from step 1)
         self.populate_comparison_predicates_vars_set();
 
+        // 3.5. Identify unused arguments (variables that occur exactly once across atoms/negations/comparisons)
+        self.populate_unused_arguments();
+
         // 4. Map each head arg's string to the argument itself
         self.head_arguments_map = self
             .rule
@@ -308,6 +372,9 @@ impl Catalog {
             .iter()
             .map(|head_arg| (head_arg.to_string(), head_arg.clone()))
             .collect();
+
+        // 5. Compute superset relationships for predicates vs positive atoms
+        self.populate_supersets();
     }
 
     /// Compute the deduplicated variable set for each comparison predicate.
@@ -473,18 +540,165 @@ impl Catalog {
         }
     }
 
+    /// Compute the list of unused atom arguments as those whose variable occurs in exactly one
+    /// predicate across the rule body (counting per-predicate participation, not per-position).
+    /// A variable used in the rule head is excluded (i.e., considered contributing to output).
+    /// Only variables that correspond to atom positions are returned as signatures.
+    fn populate_unused_arguments(&mut self) {
+        use std::collections::HashSet;
+
+        // Count occurrences per variable string across atoms/negated atoms/comparisons,
+        // ensuring each predicate contributes at most once per variable.
+        let mut var_occurrence_counts: HashMap<String, usize> = HashMap::new();
+
+        // Positive atoms: unique vars per atom
+        for sigs in &self.positive_atom_argument_signatures {
+            let mut local: HashSet<String> = HashSet::new();
+            for sig in sigs {
+                if let Some(var) = self.signature_to_argument_str_map.get(sig) {
+                    local.insert(var.clone());
+                }
+            }
+            for var in local {
+                *var_occurrence_counts.entry(var).or_insert(0) += 1;
+            }
+        }
+
+        // Negated atoms: unique vars per atom
+        for sigs in &self.negated_atom_argument_signatures {
+            let mut local: HashSet<String> = HashSet::new();
+            for sig in sigs {
+                if let Some(var) = self.signature_to_argument_str_map.get(sig) {
+                    local.insert(var.clone());
+                }
+            }
+            for var in local {
+                *var_occurrence_counts.entry(var).or_insert(0) += 1;
+            }
+        }
+
+        // Comparisons: unique vars per comparison expr
+        for comp in &self.comparison_predicates {
+            let mut local: HashSet<String> = HashSet::new();
+            for var in comp.vars_set() {
+                local.insert(var.clone());
+            }
+            for var in local {
+                *var_occurrence_counts.entry(var).or_insert(0) += 1;
+            }
+        }
+
+        // Head variables should not be considered unused
+        let mut head_vars: HashSet<String> = HashSet::new();
+        for ha in self.rule.head().head_arguments() {
+            for v in ha.vars() {
+                head_vars.insert(v.clone());
+            }
+        }
+
+        // Build grouped view by atom: collect signatures whose variable occurs in exactly
+        // one predicate overall and is not a head variable.
+        self.unused_arguments_per_atom.clear();
+        for (sig, var) in &self.signature_to_argument_str_map {
+            if matches!(var_occurrence_counts.get(var), Some(1)) && !head_vars.contains(var) {
+                self.unused_arguments_per_atom
+                    .entry(*sig.atom_signature())
+                    .or_default()
+                    .push(*sig);
+            }
+        }
+    }
+
+    /// Compute, for each predicate, the set of positive atom indices that are supersets of it.
+    fn populate_supersets(&mut self) {
+        // Build variable sets for positive atoms (excluding const/eq/placeholders)
+        let pos_len = self.positive_atom_argument_signatures.len();
+        let mut pos_var_sets: Vec<HashSet<String>> = Vec::with_capacity(pos_len);
+        for sigs in &self.positive_atom_argument_signatures {
+            let mut set: HashSet<String> = HashSet::new();
+            for sig in sigs {
+                if !self.is_const_or_var_eq_or_placeholder(sig) {
+                    if let Some(var) = self.signature_to_argument_str_map.get(sig) {
+                        set.insert(var.clone());
+                    }
+                }
+            }
+            pos_var_sets.push(set);
+        }
+
+        // For each positive atom i, collect positive atoms j where vars(i) ⊆ vars(j)
+        self.positive_supersets = Vec::with_capacity(pos_len);
+        for i in 0..pos_len {
+            let mut supers: Vec<usize> = Vec::new();
+            for j in 0..pos_len {
+                if i == j {
+                    continue; // exclude itself
+                }
+                if pos_var_sets[i].is_subset(&pos_var_sets[j])
+                    && pos_var_sets[i].len() < pos_var_sets[j].len()
+                {
+                    supers.push(j);
+                }
+            }
+            self.positive_supersets.push(supers);
+        }
+
+        // For each negated atom, compute its var set and find positive supersets
+        let neg_len = self.negated_atom_argument_signatures.len();
+        self.negated_supersets = Vec::with_capacity(neg_len);
+        for sigs in &self.negated_atom_argument_signatures {
+            let mut set: HashSet<String> = HashSet::new();
+            for sig in sigs {
+                if !self.is_const_or_var_eq_or_placeholder(sig) {
+                    if let Some(var) = self.signature_to_argument_str_map.get(sig) {
+                        set.insert(var.clone());
+                    }
+                }
+            }
+            let mut supers: Vec<usize> = Vec::new();
+            for (j, pos_set) in pos_var_sets.iter().enumerate() {
+                if set.is_subset(pos_set) && set.len() < pos_set.len() {
+                    supers.push(j);
+                }
+            }
+            self.negated_supersets.push(supers);
+        }
+
+        // For each comparison predicate, use its variable set and find positive supersets
+        let comp_len = self.comparison_predicates.len();
+        self.comparison_supersets = Vec::with_capacity(comp_len);
+        for i in 0..comp_len {
+            let set = if i < self.comparison_predicates_vars_set.len() {
+                self.comparison_predicates_vars_set[i].clone()
+            } else {
+                HashSet::new()
+            };
+            let mut supers: Vec<usize> = Vec::new();
+            for (j, pos_set) in pos_var_sets.iter().enumerate() {
+                if set.is_subset(pos_set) && set.len() < pos_set.len() {
+                    supers.push(j);
+                }
+            }
+            self.comparison_supersets.push(supers);
+        }
+    }
+
     /// Clear all metadata (but keep the rule).
     fn clear(&mut self) {
         self.signature_to_argument_str_map.clear();
         self.argument_presence_in_positive_atom_map.clear();
         self.positive_atom_fingerprints.clear();
         self.positive_atom_argument_signatures.clear();
+        self.positive_supersets.clear();
         self.negated_atom_fingerprints.clear();
         self.negated_atom_argument_signatures.clear();
+        self.negated_supersets.clear();
         self.filters = Filters::new(HashMap::new(), HashMap::new(), HashSet::new());
         self.comparison_predicates.clear();
         self.comparison_predicates_vars_set.clear();
+        self.comparison_supersets.clear();
         self.head_arguments_map.clear();
+        self.unused_arguments_per_atom.clear();
     }
 }
 
@@ -574,16 +788,27 @@ impl Catalog {
         self.update_rule(&new_rule);
     }
 
-    /// Join modify: remove two atoms and create a new joined atom at the end of RHS.
+    /// Join modify (multi-right): remove the left atom and all right atoms, then create
+    /// one or more new joined atoms at the end of RHS. This supports semijoins where a
+    /// single left can semijoin with multiple rights.
     pub fn join_modify(
         &mut self,
         left_atom_signature: AtomSignature,
-        right_atom_signature: AtomSignature,
-        new_arguments: Vec<AtomArgumentSignature>,
-        new_name: String,
-        new_fingerprint: u64,
+        right_atom_signatures: Vec<AtomSignature>,
+        new_arguments_list: Vec<Vec<AtomArgumentSignature>>,
+        new_names: Vec<String>,
+        new_fingerprints: Vec<u64>,
     ) {
-        // Find the RHS indices for both atoms
+        if right_atom_signatures.len() != new_arguments_list.len()
+            || right_atom_signatures.len() != new_names.len()
+            || right_atom_signatures.len() != new_fingerprints.len()
+        {
+            panic!(
+                "Catalog error: right_atom_signatures, new_arguments_list, new_names, and new_fingerprints must have the same length"
+            );
+        }
+
+        // Find RHS indices
         let left_rhs_index = self
             .rhs_index_from_signature(left_atom_signature)
             .unwrap_or_else(|| {
@@ -593,58 +818,56 @@ impl Catalog {
                 )
             });
 
-        let right_rhs_index = self
-            .rhs_index_from_signature(right_atom_signature)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Catalog error: Right atom not found for signature {}",
-                    right_atom_signature
-                )
+        // Validate left is an atom
+        match &self.rule.rhs()[left_rhs_index] {
+            Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_) => {}
+            _ => panic!("Catalog error: Left predicate must be an atom"),
+        }
+
+        let mut right_indices: Vec<usize> = Vec::with_capacity(right_atom_signatures.len());
+        for sig in &right_atom_signatures {
+            let idx = self.rhs_index_from_signature(*sig).unwrap_or_else(|| {
+                panic!("Catalog error: Right atom not found for signature {}", sig)
             });
-
-        // Validate that both are atoms
-        match (
-            &self.rule.rhs()[left_rhs_index],
-            &self.rule.rhs()[right_rhs_index],
-        ) {
-            (
-                Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_),
-                Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_),
-            ) => {}
-            _ => panic!("Catalog error: Both left and right predicates must be atoms"),
-        }
-
-        // Build the new arguments by looking up their string representations
-        let mut new_atom_args = Vec::new();
-        for arg_signature in new_arguments {
-            if let Some(arg_str) = self.signature_to_argument_str_map.get(&arg_signature) {
-                // Try to parse the argument string back to AtomArg
-                // For now, we'll create variables - this could be enhanced to handle constants/placeholders
-                new_atom_args.push(AtomArg::Var(arg_str.clone()));
-            } else {
-                panic!(
-                    "Catalog error: Argument signature {:?} not found in signature map",
-                    arg_signature
-                );
+            // Validate atom type
+            match &self.rule.rhs()[idx] {
+                Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_) => {}
+                _ => panic!("Catalog error: Right predicate must be an atom"),
             }
+            right_indices.push(idx);
         }
 
-        // Create the new joined atom
-        let new_atom =
-            Predicate::PositiveAtomPredicate(Atom::new(&new_name, new_atom_args, new_fingerprint));
+        // Build new joined atoms, one per right
+        let mut new_joined_atoms: Vec<Predicate> = Vec::with_capacity(right_indices.len());
+        for i in 0..right_indices.len() {
+            let new_args_signatures = &new_arguments_list[i];
+            let mut new_atom_args: Vec<AtomArg> = Vec::with_capacity(new_args_signatures.len());
+            for arg_signature in new_args_signatures {
+                if let Some(arg_str) = self.signature_to_argument_str_map.get(arg_signature) {
+                    new_atom_args.push(AtomArg::Var(arg_str.clone()));
+                } else {
+                    panic!(
+                        "Catalog error: Argument signature {:?} not found in signature map",
+                        arg_signature
+                    );
+                }
+            }
+            let name = &new_names[i];
+            let fingerprint = new_fingerprints[i];
+            let new_atom =
+                Predicate::PositiveAtomPredicate(Atom::new(name, new_atom_args, fingerprint));
+            new_joined_atoms.push(new_atom);
+        }
 
-        // Remove the two original atoms (remove higher index first to avoid shifting)
+        // Build new RHS: remove left and all rights, then append the new joined atoms
         let mut new_rhs = self.rule.rhs().to_vec();
-        let (first_index, second_index) = if left_rhs_index > right_rhs_index {
-            (left_rhs_index, right_rhs_index)
-        } else {
-            (right_rhs_index, left_rhs_index)
-        };
-        new_rhs.remove(first_index);
-        new_rhs.remove(second_index);
-
-        // Add the new joined atom at the end
-        new_rhs.push(new_atom);
+        let mut indices_to_remove = right_indices;
+        indices_to_remove.push(left_rhs_index);
+        indices_to_remove.sort_unstable();
+        indices_to_remove.drain(..).rev().for_each(|idx| {
+            new_rhs.remove(idx);
+        });
+        new_rhs.extend(new_joined_atoms);
 
         let new_rule = MacaronRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
         self.update_rule(&new_rule);
@@ -772,6 +995,60 @@ impl fmt::Display for Catalog {
                     "vars: []".to_string()
                 };
                 writeln!(f, "  [{:>2}] {} ({})", i, comp_pred, vars_set)?;
+            }
+        }
+
+        // Superset relationships
+        writeln!(f, "\nSupersets (per predicate → positive atom ids):")?;
+        if self.positive_supersets.is_empty() {
+            writeln!(f, "  positives: (none)")?;
+        } else {
+            writeln!(f, "  positives:")?;
+            for (i, supers) in self.positive_supersets.iter().enumerate() {
+                writeln!(
+                    f,
+                    "    [{}] -> [{}]",
+                    i,
+                    supers
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?;
+            }
+        }
+        if self.negated_supersets.is_empty() {
+            writeln!(f, "  negated: (none)")?;
+        } else {
+            writeln!(f, "  negated:")?;
+            for (i, supers) in self.negated_supersets.iter().enumerate() {
+                writeln!(
+                    f,
+                    "    [{}] -> [{}]",
+                    i,
+                    supers
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?;
+            }
+        }
+        if self.comparison_supersets.is_empty() {
+            writeln!(f, "  comparisons: (none)")?;
+        } else {
+            writeln!(f, "  comparisons:")?;
+            for (i, supers) in self.comparison_supersets.iter().enumerate() {
+                writeln!(
+                    f,
+                    "    [{}] -> [{}]",
+                    i,
+                    supers
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?;
             }
         }
 

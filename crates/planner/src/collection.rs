@@ -1,7 +1,7 @@
 //! Collection types for query planning in Macaron Datalog programs.
 
 use crate::TransformationFlow;
-use catalog::ArithmeticPos;
+use catalog::{ArithmeticPos, AtomArgumentSignature};
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -28,6 +28,7 @@ impl CollectionSignature {
         flow.hash(&mut hasher);
         Self(hasher.finish())
     }
+
     pub fn from_neg_join(left: Self, right: Self, flow: &TransformationFlow) -> Self {
         let mut hasher = DefaultHasher::new();
         "anti_join".hash(&mut hasher);
@@ -68,6 +69,28 @@ impl Collection {
             signature: Arc::new(signature),
             key_argument_signatures: key_argument_signatures.to_vec(),
             value_argument_signatures: value_argument_signatures.to_vec(),
+        }
+    }
+
+    /// Creates a collection from an atom with the given argument signatures and fingerprint.
+    pub fn from_atom(
+        atom_argument_signatures: &[AtomArgumentSignature],
+        atom_fingerprint: u64,
+    ) -> Self {
+        // Convert each AtomArgumentSignature to ArithmeticPos
+        let value_argument_signatures: Vec<ArithmeticPos> = atom_argument_signatures
+            .iter()
+            .map(|sig| ArithmeticPos::from_var_signature(*sig))
+            .collect();
+
+        // Use the atom fingerprint as the collection signature
+        let signature = CollectionSignature(atom_fingerprint);
+
+        // Create collection with no keys (row-based) and all arguments as values
+        Self {
+            signature: Arc::new(signature),
+            key_argument_signatures: Vec::new(), // No keys for atom collections
+            value_argument_signatures,
         }
     }
 

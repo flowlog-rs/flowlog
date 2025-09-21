@@ -189,8 +189,8 @@ impl Transformation {
     /// Creates a key-value to key-value transformation.
     pub fn kv_to_kv(
         input: Arc<Collection>,
-        output_key_signatures: &[ArithmeticPos],
-        output_value_signatures: &[ArithmeticPos],
+        output_key_exprs: &[ArithmeticPos],
+        output_value_exprs: &[ArithmeticPos],
         const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
         var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
         compare_exprs: &[ComparisonExprPos],
@@ -201,16 +201,16 @@ impl Transformation {
         let flow = TransformationFlow::kv_to_kv(
             input_key_signatures,
             input_value_signatures,
-            output_key_signatures,
-            output_value_signatures,
+            output_key_exprs,
+            output_value_exprs,
             const_eq_constraints,
             var_eq_constraints,
             compare_exprs,
         );
 
         let is_row_in = input_key_signatures.is_empty(); // Input is row-based (no keys)
-        let is_row_out = output_key_signatures.is_empty(); // Output is row-based (no keys)
-        let is_key_only_out = output_value_signatures.is_empty(); // Output has keys but no values
+        let is_row_out = output_key_exprs.is_empty(); // Output is row-based (no keys)
+        let is_key_only_out = output_value_exprs.is_empty(); // Output has keys but no values
 
         // Check if this transformation is a no-op (identity transformation)
         let is_no_op = is_row_in
@@ -221,14 +221,12 @@ impl Transformation {
             && input_key_signatures
                 .iter()
                 .chain(input_value_signatures.iter())
-                .eq(output_key_signatures
-                    .iter()
-                    .chain(output_value_signatures.iter()));
+                .eq(output_key_exprs.iter().chain(output_value_exprs.iter()));
 
         let output = Arc::new(Collection::new(
             CollectionSignature::from_unary(**input.signature(), &flow),
-            output_key_signatures,
-            output_value_signatures,
+            output_key_exprs,
+            output_value_exprs,
         ));
 
         match (is_row_in, is_row_out, is_key_only_out) {
@@ -419,35 +417,97 @@ impl fmt::Display for Transformation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RowToRow {
-                output, is_no_op, ..
+                input,
+                output,
+                flow,
+                is_no_op,
             } => {
-                write!(f, "{} {}", if *is_no_op { "∅" } else { "→" }, output)
+                if *is_no_op {
+                    write!(f, "{} =={}==> {} [no-op]", input, flow, output)
+                } else {
+                    write!(f, "{} ----{}----> {}", input, flow, output)
+                }
             }
             Self::RowToK {
-                output, is_no_op, ..
+                input,
+                output,
+                flow,
+                is_no_op,
             } => {
-                write!(f, "{} {}", if *is_no_op { "∅" } else { "⟶" }, output)
+                if *is_no_op {
+                    write!(f, "{} =={}==> {} [no-op]", input, flow, output)
+                } else {
+                    write!(f, "{} ----{}----> {}", input, flow, output)
+                }
             }
-            Self::RowToKv { output, .. } => {
-                write!(f, "⟶ {}", output)
+            Self::RowToKv {
+                input,
+                output,
+                flow,
+            } => {
+                write!(f, "{} ----{}----> {}", input, flow, output)
             }
-            Self::KvToKv { output, .. } | Self::KvToK { output, .. } => {
-                write!(f, "⟶ {}", output)
+            Self::KvToKv {
+                input,
+                output,
+                flow,
+            } => {
+                write!(f, "{} ----{}----> {}", input, flow, output)
             }
-            Self::AggToRow { output, .. } => {
-                write!(f, "Agg {}", output)
+            Self::KvToK {
+                input,
+                output,
+                flow,
+            } => {
+                write!(f, "{} ----{}----> {}", input, flow, output)
             }
-            Self::JnKK { output, .. }
-            | Self::JnKKv { output, .. }
-            | Self::JnKvK { output, .. }
-            | Self::JnKvKv { output, .. } => {
-                write!(f, "⋈ {}", output)
+            Self::AggToRow {
+                input,
+                output,
+                flow,
+            } => {
+                write!(f, "{} ----{}----> {}", input, flow, output)
             }
-            Self::Cartesian { output, .. } => {
-                write!(f, "⨯ {}", output)
+            Self::JnKK {
+                input: (l, r),
+                output,
+                flow,
             }
-            Self::NjKvK { output, .. } | Self::NjKK { output, .. } => {
-                write!(f, "¬ {}", output)
+            | Self::JnKKv {
+                input: (l, r),
+                output,
+                flow,
+            }
+            | Self::JnKvK {
+                input: (l, r),
+                output,
+                flow,
+            }
+            | Self::JnKvKv {
+                input: (l, r),
+                output,
+                flow,
+            } => {
+                write!(f, "({} ⋈ {}) ----{}----> {}", l, r, flow, output)
+            }
+            Self::Cartesian {
+                input: (l, r),
+                output,
+                flow,
+            } => {
+                write!(f, "({} × {}) ----{}----> {}", l, r, flow, output)
+            }
+            Self::NjKvK {
+                input: (l, r),
+                output,
+                flow,
+            }
+            | Self::NjKK {
+                input: (l, r),
+                output,
+                flow,
+            } => {
+                write!(f, "({} ¬ {}) ----{}----> {}", l, r, flow, output)
             }
         }
     }
