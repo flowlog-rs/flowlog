@@ -4,6 +4,7 @@ use std::fmt;
 
 use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
+use crate::ComparisonExprPos;
 use parser::{Atom, AtomArg, ComparisonExpr, ConstType, HeadArg, MacaronRule, Predicate};
 
 /// Per-rule catalog with precomputed metadata.
@@ -22,14 +23,14 @@ pub struct Catalog {
     positive_atom_fingerprints: Vec<u64>,
     /// For each RHS positive atom, its argument signatures.
     positive_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
-    /// For each RHS positive atom, its superset positive atoms.
+    /// For each RHS positive atom, its superset positive atoms index.
     positive_supersets: Vec<Vec<usize>>,
 
     /// RHS negated atom fingerprints.
     negated_atom_fingerprints: Vec<u64>,
     /// For each RHS negated atom, its argument signatures.
     negated_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
-    /// For each RHS negated atom, its superset positive atoms.
+    /// For each RHS negated atom, its superset positive atoms index.
     negated_supersets: Vec<Vec<usize>>,
 
     /// Local filters: variable equality constraints, constant equality constraints, placeholders.
@@ -39,7 +40,7 @@ pub struct Catalog {
     comparison_predicates: Vec<ComparisonExpr>,
     /// Variable sets per comparison predicate (deduplicated).
     comparison_predicates_vars_set: Vec<HashSet<String>>,
-    /// For each comparison predicate, its superset positive atoms.
+    /// For each comparison predicate, its superset positive atoms index.
     comparison_supersets: Vec<Vec<usize>>,
 
     /// For each head argument's string form, a copy of the argument.
@@ -59,15 +60,6 @@ impl Catalog {
         &self.rule
     }
 
-    /// All dependent relation fingerprints (positive and negated) in the body.
-    pub fn dependent_atom_fingerprints(&self) -> HashSet<u64> {
-        self.positive_atom_fingerprints
-            .iter()
-            .chain(self.negated_atom_fingerprints.iter())
-            .cloned()
-            .collect()
-    }
-
     /// Reverse map from signatures to their variable strings.
     #[inline]
     pub fn signature_to_argument_str_map(&self) -> &HashMap<AtomArgumentSignature, String> {
@@ -83,32 +75,6 @@ impl Catalog {
             .iter()
             .filter_map(|signature| self.signature_to_argument_str_map.get(signature).cloned())
             .collect::<Vec<String>>()
-    }
-
-    /// Active negated atoms w.r.t. the given signature arguments (subset check).
-    pub fn sub_negated_atoms(
-        &self,
-        signature_arguments: &[AtomArgumentSignature],
-    ) -> Vec<AtomSignature> {
-        let signature_arguments_str_set = self
-            .signature_to_argument_strs(signature_arguments)
-            .into_iter()
-            .collect::<HashSet<String>>();
-        self.negated_atom_argument_signatures
-            .iter()
-            .enumerate()
-            .filter_map(|(i, negated_atom_argument_signatures)| {
-                let negated_atom_argument_strs_set = self
-                    .signature_to_argument_strs(negated_atom_argument_signatures)
-                    .into_iter()
-                    .collect::<HashSet<String>>();
-                if negated_atom_argument_strs_set.is_subset(&signature_arguments_str_set) {
-                    Some(AtomSignature::new(false, i))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<AtomSignature>>()
     }
 
     /// For a variable string, returns its first-presence per positive atom (None if absent).
@@ -267,12 +233,38 @@ impl Catalog {
         &self.comparison_supersets
     }
 
-    /// Flattened variable strings referenced by the selected comparison predicates.
-    pub fn comparison_predicates_vars_set(&self, comp_ids: &[usize]) -> Vec<&String> {
-        comp_ids
+    pub fn comparison_predicates_filter_pos(
+        &self,
+        pos_atom_id: usize,
+        comp_id: usize,
+    ) -> ComparisonExprPos {
+        let comp_exprs = &self.comparison_predicates[comp_id];
+
+        let left_var_signatures = comp_exprs
+            .left()
+            .vars()
             .iter()
-            .flat_map(|&comp_id| self.comparison_predicates_vars_set[comp_id].iter())
-            .collect()
+            .map(|&var| {
+                self.argument_presence_in_positive_atom_map[var][pos_atom_id]
+                    .expect("variable in comparison lhs not found in positive atom")
+            })
+            .collect::<Vec<AtomArgumentSignature>>();
+
+        let right_var_signatures = comp_exprs
+            .right()
+            .vars()
+            .iter()
+            .map(|&var| {
+                self.argument_presence_in_positive_atom_map[var][pos_atom_id]
+                    .expect("variable in comparison rhs not found in positive atom")
+            })
+            .collect::<Vec<AtomArgumentSignature>>();
+
+        ComparisonExprPos::from_comparison_expr(
+            comp_exprs,
+            &left_var_signatures,
+            &right_var_signatures,
+        )
     }
 
     /// Mapping from head argument text to its structured form.
@@ -665,6 +657,7 @@ impl Catalog {
         }
 
         // For each comparison predicate, use its variable set and find positive supersets
+        // Unlike atoms, comparisons should include equal sets as well as strict supersets
         let comp_len = self.comparison_predicates.len();
         self.comparison_supersets = Vec::with_capacity(comp_len);
         for i in 0..comp_len {
@@ -675,7 +668,7 @@ impl Catalog {
             };
             let mut supers: Vec<usize> = Vec::new();
             for (j, pos_set) in pos_var_sets.iter().enumerate() {
-                if set.is_subset(pos_set) && set.len() < pos_set.len() {
+                if set.is_subset(pos_set) {
                     supers.push(j);
                 }
             }
@@ -873,22 +866,119 @@ impl Catalog {
         self.update_rule(&new_rule);
     }
 
-    /// Map an atom signature (polarity + position among atoms of that polarity)
-    /// back to the global RHS index in the rule's predicate vector.
-    fn rhs_index_from_signature(&self, sig: AtomSignature) -> Option<usize> {
-        self.rule
+    /// Comparison modify (multi-right): remove the left comparison and all right atoms, then create
+    /// one or more new atoms at the end of RHS. This supports filtering where a
+    /// single left can filter with multiple rights.
+    pub fn comparison_modify(
+        &mut self,
+        comparison_index: usize,
+        right_atom_signatures: Vec<AtomSignature>,
+        new_names: Vec<String>,
+        new_fingerprints: Vec<u64>,
+    ) {
+        if right_atom_signatures.len() != new_names.len()
+            || right_atom_signatures.len() != new_fingerprints.len()
+        {
+            panic!(
+                "Catalog error: right_atom_signatures, new_names, and new_fingerprints must have the same length"
+            );
+        }
+
+        // Find comparison RHS index by iterating through rule predicates and finding exact match
+        let comparison_predicate = &self.comparison_predicates[comparison_index];
+        let left_rhs_index = self
+            .rule
             .rhs()
             .iter()
             .enumerate()
-            .filter(|(_, p)| {
-                matches!(
-                    (p, sig.is_positive()),
-                    (Predicate::PositiveAtomPredicate(_), true)
-                        | (Predicate::NegatedAtomPredicate(_), false)
-                )
+            .find_map(|(rhs_idx, predicate)| {
+                if let Predicate::ComparePredicate(comp_expr) = predicate {
+                    if comp_expr == comparison_predicate {
+                        Some(rhs_idx)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             })
-            .nth(sig.rhs_id())
-            .map(|(i, _)| i)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Catalog error: Comparison predicate at index {} not found in rule RHS",
+                    comparison_index
+                )
+            });
+
+        let mut right_indices: Vec<usize> = Vec::with_capacity(right_atom_signatures.len());
+        for sig in &right_atom_signatures {
+            let idx = self.rhs_index_from_signature(*sig).unwrap_or_else(|| {
+                panic!("Catalog error: Right atom not found for signature {}", sig)
+            });
+            // Validate atom type
+            match &self.rule.rhs()[idx] {
+                Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_) => {}
+                _ => panic!("Catalog error: Right predicate must be an atom"),
+            }
+            right_indices.push(idx);
+        }
+
+        // Build new filtered atoms, one per right (keeping same arguments as right atoms)
+        let mut new_filtered_atoms: Vec<Predicate> = Vec::with_capacity(right_indices.len());
+        for i in 0..right_indices.len() {
+            let right_predicate = &self.rule.rhs()[right_indices[i]];
+            let new_atom_args = match right_predicate {
+                Predicate::PositiveAtomPredicate(atom) | Predicate::NegatedAtomPredicate(atom) => {
+                    atom.arguments().to_vec()
+                }
+                _ => panic!("Catalog error: Expected atom predicate"),
+            };
+            let name = &new_names[i];
+            let fingerprint = new_fingerprints[i];
+            let new_atom =
+                Predicate::PositiveAtomPredicate(Atom::new(name, new_atom_args, fingerprint));
+            new_filtered_atoms.push(new_atom);
+        }
+
+        // Build new RHS: remove comparison and all rights, then append the new filtered atoms
+        let mut new_rhs = self.rule.rhs().to_vec();
+        let mut indices_to_remove = right_indices;
+        indices_to_remove.push(left_rhs_index);
+        indices_to_remove.sort_unstable();
+        indices_to_remove.drain(..).rev().for_each(|idx| {
+            new_rhs.remove(idx);
+        });
+        new_rhs.extend(new_filtered_atoms);
+
+        let new_rule = MacaronRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
+        self.update_rule(&new_rule);
+    }
+
+    /// Map an atom signature (polarity + position among atoms of that polarity)
+    /// back to the global RHS index in the rule's predicate vector.
+    fn rhs_index_from_signature(&self, sig: AtomSignature) -> Option<usize> {
+        let mut positive_count = 0;
+        let mut negative_count = 0;
+
+        for (global_idx, predicate) in self.rule.rhs().iter().enumerate() {
+            match predicate {
+                Predicate::PositiveAtomPredicate(_) => {
+                    if sig.is_positive() && positive_count == sig.rhs_id() {
+                        return Some(global_idx);
+                    }
+                    positive_count += 1;
+                }
+                Predicate::NegatedAtomPredicate(_) => {
+                    if !sig.is_positive() && negative_count == sig.rhs_id() {
+                        return Some(global_idx);
+                    }
+                    negative_count += 1;
+                }
+                _ => {
+                    // Skip non-atom predicates (comparisons, bools, etc.)
+                }
+            }
+        }
+        None
     }
 }
 

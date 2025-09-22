@@ -364,9 +364,16 @@ impl RulePlanner {
                     .iter()
                     .map(|&sig| ArithmeticPos::from_var_signature(sig))
                     .collect();
+                let input_key_str = lhs_pos_args
+                    .iter()
+                    .map(|sig| catalog.signature_to_argument_str_map().get(sig).unwrap())
+                    .collect::<HashSet<_>>();
                 let input_value_exprs: Vec<ArithmeticPos> = rhs_pos_args
                     .iter()
-                    .filter(|&sig| !lhs_pos_args.contains(sig))
+                    .filter(|&sig| {
+                        !input_key_str
+                            .contains(catalog.signature_to_argument_str_map().get(sig).unwrap())
+                    })
                     .map(|&sig| ArithmeticPos::from_var_signature(sig))
                     .collect();
 
@@ -385,7 +392,7 @@ impl RulePlanner {
                 );
 
                 new_names.push(format!(
-                    "atom_{}_semijoin_atom_{}",
+                    "atom_{}_pos_semijoin_atom_{}",
                     lhs_pos_idx, super_pos_idx
                 ));
                 new_fingerprints.push(fk_tx.fake_output_sig());
@@ -409,14 +416,69 @@ impl RulePlanner {
                 .enumerate()
                 .find(|(_, v)| !v.is_empty())
             {
-                // TODO: Semijoin a negated atom (lhs_neg_idx) against its positive supersets (rhs_pos_indices)
-                // - Map lhs_neg_idx -> AtomSignature::new(false, lhs_neg_idx)
-                // - Map rhs_pos_indices -> Vec<AtomSignature::new(true, j)>
-                // - Build join replacements and call catalog.join_modify_multi(...)
-                // - Record fake transformations if desired
-                // - Return true once implemented
-                let _ = (lhs_neg_idx, rhs_pos_indices);
-                return false;
+                let mut new_names: Vec<String> = Vec::new();
+                let mut new_fingerprints: Vec<u64> = Vec::new();
+                let mut new_arguments_list: Vec<Vec<AtomArgumentSignature>> = Vec::new();
+                let mut right_atom_signatures: Vec<AtomSignature> = Vec::new();
+
+                let lhs_neg_args = catalog.negated_atom_argument_signatures()[lhs_neg_idx].clone();
+                let lhs_neg_fp = catalog.negated_atom_fingerprints()[lhs_neg_idx];
+                let left_atom_signature = AtomSignature::new(false, lhs_neg_idx);
+                for super_pos_idx in rhs_pos_indices {
+                    let rhs_pos_args =
+                        catalog.positive_atom_argument_signatures()[*super_pos_idx].clone();
+                    new_arguments_list.push(rhs_pos_args.clone());
+                    let rhs_pos_fp = catalog.positive_atom_fingerprints()[*super_pos_idx];
+                    right_atom_signatures.push(AtomSignature::new(true, *super_pos_idx));
+
+                    let input_key_exprs: Vec<ArithmeticPos> = lhs_neg_args
+                        .iter()
+                        .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                        .collect();
+                    let input_key_str = lhs_neg_args
+                        .iter()
+                        .map(|sig| catalog.signature_to_argument_str_map().get(sig).unwrap())
+                        .collect::<HashSet<_>>();
+                    let input_value_exprs: Vec<ArithmeticPos> = rhs_pos_args
+                        .iter()
+                        .filter(|&sig| {
+                            !input_key_str
+                                .contains(catalog.signature_to_argument_str_map().get(sig).unwrap())
+                        })
+                        .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                        .collect();
+
+                    let (fake_output_key_exprs, fake_output_value_exprs) =
+                        (input_key_exprs.clone(), input_value_exprs.clone());
+
+                    let fk_tx = FakeTransformation::fake_join_to_kv(
+                        lhs_neg_fp,
+                        rhs_pos_fp,
+                        input_key_exprs,
+                        vec![],
+                        input_value_exprs,
+                        fake_output_key_exprs,
+                        fake_output_value_exprs,
+                        vec![], // no comparisons here
+                    );
+
+                    new_names.push(format!(
+                        "atom_{}_neg_semijoin_atom_{}",
+                        lhs_neg_idx, super_pos_idx
+                    ));
+                    new_fingerprints.push(fk_tx.fake_output_sig());
+                    self.fake_prepare_transformations.push(fk_tx);
+                }
+
+                catalog.join_modify(
+                    left_atom_signature,
+                    right_atom_signatures,
+                    new_arguments_list,
+                    new_names,
+                    new_fingerprints,
+                );
+
+                return true;
             } else {
                 // 3) Comparison predicate has positive supersets
                 if let Some((lhs_comp_idx, rhs_pos_indices)) = comp_supersets
@@ -424,13 +486,65 @@ impl RulePlanner {
                     .enumerate()
                     .find(|(_, v)| !v.is_empty())
                 {
-                    // TODO: Semijoin a comparison (lhs_comp_idx) with positive supersets (rhs_pos_indices)
-                    // - There is no AtomSignature for comparisons; decide how to rewrite RHS
-                    // - Potentially project/guard via the superset positive atoms
-                    // - Update catalog appropriately and record transformations
-                    // - Return true once implemented
-                    let _ = (lhs_comp_idx, rhs_pos_indices);
-                    return false;
+                    let mut new_names: Vec<String> = Vec::new();
+                    let mut new_fingerprints: Vec<u64> = Vec::new();
+                    let mut right_atom_signatures: Vec<AtomSignature> = Vec::new();
+
+                    let comparison_exprs = catalog.comparison_predicates()[lhs_comp_idx].clone();
+                    for super_pos_idx in rhs_pos_indices {
+                        let rhs_pos_args =
+                            catalog.positive_atom_argument_signatures()[*super_pos_idx].clone();
+                        let rhs_pos_fp = catalog.positive_atom_fingerprints()[*super_pos_idx];
+                        right_atom_signatures.push(AtomSignature::new(true, *super_pos_idx));
+
+                        let (input_key_exprs, input_value_exprs) = self
+                            .fake_kv_layouts
+                            .get(&rhs_pos_fp)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                let input_key_exprs = Vec::new(); // Row-based input
+                                let input_value_exprs: Vec<ArithmeticPos> = rhs_pos_args
+                                    .iter()
+                                    .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                                    .collect();
+                                self.fake_kv_layouts.insert(
+                                    rhs_pos_fp,
+                                    (input_key_exprs.clone(), input_value_exprs.clone()),
+                                );
+                                (input_key_exprs, input_value_exprs)
+                            });
+
+                        let (fake_output_key_exprs, fake_output_value_exprs) =
+                            (input_key_exprs.clone(), input_value_exprs.clone());
+
+                        let fk_tx = FakeTransformation::fake_kv_to_kv(
+                            rhs_pos_fp,
+                            input_key_exprs,
+                            input_value_exprs,
+                            fake_output_key_exprs,
+                            fake_output_value_exprs,
+                            vec![], // no const-eq constraints here
+                            vec![], // var-eq constraint
+                            vec![catalog
+                                .comparison_predicates_filter_pos(*super_pos_idx, lhs_comp_idx)], // no comparisons here
+                        );
+
+                        new_names.push(format!(
+                            "comparison_{}_filter_atom_{}",
+                            comparison_exprs, super_pos_idx
+                        ));
+                        new_fingerprints.push(fk_tx.fake_output_sig());
+                        self.fake_prepare_transformations.push(fk_tx);
+                    }
+
+                    catalog.comparison_modify(
+                        lhs_comp_idx,
+                        right_atom_signatures,
+                        new_names,
+                        new_fingerprints,
+                    );
+
+                    return true;
                 }
             }
         }
