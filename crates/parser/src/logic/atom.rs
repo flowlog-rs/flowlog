@@ -19,6 +19,7 @@ use crate::primitive::ConstType;
 use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
@@ -132,6 +133,20 @@ impl Atom {
     #[must_use]
     pub fn fingerprint(&self) -> u64 {
         self.fingerprint
+    }
+
+    /// Get the set of variable names in this atom's arguments.
+    pub fn vars_set(&self) -> HashSet<&String> {
+        self.arguments
+            .iter()
+            .filter_map(|arg| {
+                if let AtomArg::Var(v) = arg {
+                    Some(v)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 

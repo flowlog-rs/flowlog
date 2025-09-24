@@ -350,14 +350,17 @@ impl RulePlanner {
             let mut new_arguments_list: Vec<Vec<AtomArgumentSignature>> = Vec::new();
             let mut right_atom_signatures: Vec<AtomSignature> = Vec::new();
 
-            let lhs_pos_args = catalog.positive_atom_argument_signatures()[lhs_pos_idx].clone();
-            let lhs_pos_fp = catalog.positive_atom_fingerprints()[lhs_pos_idx];
+            let lhs_pos_args = catalog
+                .positive_atom_argument_signature(lhs_pos_idx)
+                .clone();
+            let lhs_pos_fp = catalog.positive_atom_fingerprint(lhs_pos_idx);
             let left_atom_signature = AtomSignature::new(true, lhs_pos_idx);
             for super_pos_idx in rhs_pos_indices {
-                let rhs_pos_args =
-                    catalog.positive_atom_argument_signatures()[*super_pos_idx].clone();
+                let rhs_pos_args = catalog
+                    .positive_atom_argument_signature(*super_pos_idx)
+                    .clone();
                 new_arguments_list.push(rhs_pos_args.clone());
-                let rhs_pos_fp = catalog.positive_atom_fingerprints()[*super_pos_idx];
+                let rhs_pos_fp = catalog.positive_atom_fingerprint(*super_pos_idx);
                 right_atom_signatures.push(AtomSignature::new(true, *super_pos_idx));
 
                 let input_key_exprs: Vec<ArithmeticPos> = lhs_pos_args
@@ -421,14 +424,15 @@ impl RulePlanner {
                 let mut new_arguments_list: Vec<Vec<AtomArgumentSignature>> = Vec::new();
                 let mut right_atom_signatures: Vec<AtomSignature> = Vec::new();
 
-                let lhs_neg_args = catalog.negated_atom_argument_signatures()[lhs_neg_idx].clone();
-                let lhs_neg_fp = catalog.negated_atom_fingerprints()[lhs_neg_idx];
+                let lhs_neg_args = catalog.negated_atom_argument_signature(lhs_neg_idx).clone();
+                let lhs_neg_fp = catalog.negated_atom_fingerprint(lhs_neg_idx);
                 let left_atom_signature = AtomSignature::new(false, lhs_neg_idx);
                 for super_pos_idx in rhs_pos_indices {
-                    let rhs_pos_args =
-                        catalog.positive_atom_argument_signatures()[*super_pos_idx].clone();
+                    let rhs_pos_args = catalog
+                        .positive_atom_argument_signature(*super_pos_idx)
+                        .clone();
                     new_arguments_list.push(rhs_pos_args.clone());
-                    let rhs_pos_fp = catalog.positive_atom_fingerprints()[*super_pos_idx];
+                    let rhs_pos_fp = catalog.positive_atom_fingerprint(*super_pos_idx);
                     right_atom_signatures.push(AtomSignature::new(true, *super_pos_idx));
 
                     let input_key_exprs: Vec<ArithmeticPos> = lhs_neg_args
@@ -490,11 +494,12 @@ impl RulePlanner {
                     let mut new_fingerprints: Vec<u64> = Vec::new();
                     let mut right_atom_signatures: Vec<AtomSignature> = Vec::new();
 
-                    let comparison_exprs = catalog.comparison_predicates()[lhs_comp_idx].clone();
+                    let comparison_exprs = catalog.comparison_predicate(lhs_comp_idx);
                     for super_pos_idx in rhs_pos_indices {
-                        let rhs_pos_args =
-                            catalog.positive_atom_argument_signatures()[*super_pos_idx].clone();
-                        let rhs_pos_fp = catalog.positive_atom_fingerprints()[*super_pos_idx];
+                        let rhs_pos_args = catalog
+                            .positive_atom_argument_signature(*super_pos_idx)
+                            .clone();
+                        let rhs_pos_fp = catalog.positive_atom_fingerprint(*super_pos_idx);
                         right_atom_signatures.push(AtomSignature::new(true, *super_pos_idx));
 
                         let (input_key_exprs, input_value_exprs) = self
@@ -525,8 +530,9 @@ impl RulePlanner {
                             fake_output_value_exprs,
                             vec![], // no const-eq constraints here
                             vec![], // var-eq constraint
-                            vec![catalog
-                                .comparison_predicates_filter_pos(*super_pos_idx, lhs_comp_idx)], // no comparisons here
+                            vec![
+                                catalog.resolve_comparison_predicates(*super_pos_idx, lhs_comp_idx)
+                            ], // no comparisons here
                         );
 
                         new_names.push(format!(
