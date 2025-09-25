@@ -11,63 +11,91 @@ use std::hash::{Hash, Hasher};
 use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos};
 use parser::ConstType;
 
-#[derive(PartialEq, Clone, Eq, Hash)]
+/// Key/Value layout of a collection: which positions form the key-value.
+#[derive(PartialEq, Clone, Eq, Hash, Debug)]
 pub struct KeyValueLayout {
     pub key: Vec<ArithmeticPos>,
     pub value: Vec<ArithmeticPos>,
 }
 
 impl KeyValueLayout {
-    /// Creates a new KeyValueLayout.
+    /// Construct a new Key-Value layout.
+    #[inline]
     pub fn new(key: Vec<ArithmeticPos>, value: Vec<ArithmeticPos>) -> Self {
         Self { key, value }
     }
 
-    /// Get a reference to the key arithmetic positions.
+    /// Reference to key positions.
+    #[inline]
     pub fn key(&self) -> &[ArithmeticPos] {
         &self.key
     }
 
-    /// Get a reference to the value arithmetic positions.
+    /// Reference to value positions.
+    #[inline]
     pub fn value(&self) -> &[ArithmeticPos] {
         &self.value
     }
 }
 
+/// Transformation information, prior to translate to real executable transformation.
 #[derive(PartialEq, Clone, Eq, Hash)]
 pub enum TransformationInfo {
+    /// Unary Key-Value to Key-Value transformation (filter, map, projection, etc.).
     KVToKV {
+        /// Upstream (input) collection fingerprint (fake until resolved).
         input_info_fp: u64,
+        /// This transformation's output fingerprint (fake until resolved).
         output_info_fp: u64,
+        /// Input layout (key/value positions).
         input_kv_layout: KeyValueLayout,
+        /// Output layout (key/value positions) (fake until resolved).
         output_kv_layout: KeyValueLayout,
+        /// Constant equality constraints (lhs = const).
         const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
+        /// Variable equality constraints (lhs = rhs).
         var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
+        /// Comparison expressions (e.g., x < y).
         compare_exprs_pos: Vec<ComparisonExprPos>,
     },
 
+    /// Binary Join to Key-Value transformation.
     JoinToKV {
+        /// Left input fingerprint.
         left_input_info_fp: u64,
+        /// Right input fingerprint.
         right_input_info_fp: u64,
+        /// Output fingerprint (fake until resolved).
         output_info_fp: u64,
+        /// Left input layout (its key is the join key).
         left_input_kv_layout: KeyValueLayout,
+        /// Right input layout (its value contributes to output value).
         right_input_kv_layout: KeyValueLayout,
+        /// Output layout (key/value positions) (fake until resolved).
         output_kv_layout: KeyValueLayout,
+        /// Join comparisons (if any).
         compare_exprs_pos: Vec<ComparisonExprPos>,
     },
 
+    /// Binary Anti-Join to Key-Value transformation.
     AntiJoinToKV {
+        /// Left input fingerprint.
         left_input_info_fp: u64,
+        /// Right input fingerprint.
         right_input_info_fp: u64,
+        /// Output fingerprint (fake until resolved).
         output_info_fp: u64,
+        /// Left input layout (its key is the anti-join key).
         left_input_kv_layout: KeyValueLayout,
+        /// Right input layout (its value is ignored in the output, but key participates).
         right_input_kv_layout: KeyValueLayout,
+        /// Output layout (key/value positions) (fake until resolved).
         output_kv_layout: KeyValueLayout,
     },
 }
 
 impl TransformationInfo {
-    /// Get input information fingerprint(s); for joins, returns (left, Some(right))
+    /// Input fingerprint(s); for joins/anti-joins returns `(left, Some(right))`.
     #[inline]
     pub fn input_info_fp(&self) -> (u64, Option<u64>) {
         match self {
@@ -85,7 +113,7 @@ impl TransformationInfo {
         }
     }
 
-    /// Get output information fingerprint.
+    /// Output fingerprint (fake until resolved).
     #[inline]
     pub fn output_info_fp(&self) -> u64 {
         match self {
@@ -95,7 +123,7 @@ impl TransformationInfo {
         }
     }
 
-    /// Get a reference to the input key-value layouts; for joins, returns (left, Some(right)).
+    /// Input layout(s); for joins/anti-joins returns `(left, Some(right))`.
     #[inline]
     pub fn input_kv_layout(&self) -> (&KeyValueLayout, Option<&KeyValueLayout>) {
         match self {
@@ -115,7 +143,7 @@ impl TransformationInfo {
         }
     }
 
-    /// Get a reference to the output key-value layout.
+    /// Output layout (key/value positions).
     #[inline]
     pub fn output_kv_layout(&self) -> &KeyValueLayout {
         match self {
@@ -131,7 +159,7 @@ impl TransformationInfo {
         }
     }
 
-    /// Get a reference to the constant equality constraints (key-value to key-value only).
+    /// Constant equality constraints (Key-Value to Key-Value only).
     #[inline]
     pub fn const_eq_constraints(&self) -> &[(AtomArgumentSignature, ConstType)] {
         match self {
@@ -144,7 +172,7 @@ impl TransformationInfo {
         }
     }
 
-    /// Get a reference to the variable equality constraints (key-value to key-value only).
+    /// Variable equality constraints (Key-Value to Key-Value only).
     #[inline]
     pub fn var_eq_constraints(&self) -> &[(AtomArgumentSignature, AtomArgumentSignature)] {
         match self {
@@ -156,7 +184,7 @@ impl TransformationInfo {
         }
     }
 
-    /// Get a reference to the comparison expressions (key-value to key-value & join to key-value).
+    /// Comparison expressions (Key-Value to Key-Value and Join to Key-Value).
     #[inline]
     pub fn compare_exprs(&self) -> &[ComparisonExprPos] {
         match self {
@@ -170,7 +198,11 @@ impl TransformationInfo {
         }
     }
 
-    /// Build a key-value to key-value transformation with a derived (fake) output signature.
+    // ------------------------------------------------------------------------
+    // Constructors (produce fake output fingerprints)
+    // ------------------------------------------------------------------------
+
+    /// Build a Key-Value to Key-Value transformation with a derived (fake) output fingerprint.
     pub fn kv_to_kv(
         input_fake_sig: u64,
         input_kv_layout: KeyValueLayout,
@@ -200,7 +232,7 @@ impl TransformationInfo {
         }
     }
 
-    /// Build a join to key-value transformation with a derived (fake) output signature.
+    /// Build a Join to Key-Value transformation with a derived (fake) output fingerprint.
     pub fn join_to_kv(
         left_fake_sig: u64,
         right_fake_sig: u64,
@@ -230,7 +262,7 @@ impl TransformationInfo {
         }
     }
 
-    /// Build a negated join to key-value transformation with a derived (fake) output signature.
+    /// Build an AntiJoin to Key-Value transformation with a derived (fake) output fingerprint.
     pub fn anti_join_to_kv(
         left_fake_sig: u64,
         right_fake_sig: u64,
@@ -257,10 +289,13 @@ impl TransformationInfo {
         }
     }
 
-    /// Updates the placeholder (fake) input info fingerprint with the resolved (real) info fingerprint.
+    // ------------------------------------------------------------------------
+    // Patching placeholders with resolved fingerprints/layouts
+    // ------------------------------------------------------------------------
+
+    /// Replace a placeholder (fake) input fingerprint with the resolved (real) one.
     ///
-    /// Call this after a prior transformation has produced a real output info fingerprint
-    /// for the upstream collection (e.g., after key/value layout changes or map-fusion).
+    /// Call this after an upstream transformation finalizes its output fingerprint.
     pub fn update_input_fake_info_fp(&mut self, input_real_sig: u64, left: bool) {
         match self {
             Self::KVToKV { input_info_fp, .. } => {
@@ -285,10 +320,10 @@ impl TransformationInfo {
         }
     }
 
-    /// Updates the placeholder (fake) output key/value layouts with resolved real layouts.
+    /// Replace a placeholder (fake) output layout with its resolved (real) positions.
     ///
-    /// This step is necessary once the actual output layout is known, since later
-    /// operators—particularly joins—require concrete key/value layouts to proceed.
+    /// Necessary once the actual output schema is known, since downstream operators
+    /// (e.g., joins) require concrete key/value layouts.
     pub fn update_output_key_value_layout(&mut self, real_output_kv_layout: KeyValueLayout) {
         match self {
             Self::KVToKV {
@@ -305,6 +340,9 @@ impl TransformationInfo {
         }
     }
 
+    /// Recompute the (fake) output fingerprint using the current resolved fields.
+    ///
+    /// Call this after all relevant inputs/layouts/constraints are up-to-date.
     pub fn update_output_fake_sig(&mut self) {
         match self {
             Self::KVToKV {
@@ -396,7 +434,7 @@ impl fmt::Display for TransformationInfo {
                 } else {
                     write!(
                         f,
-                        "   ┌─ In   : {}\n         └─> Out : {}\n      WHERE {}\n",
+                        "   ┌─ In   : {}\n         └─> Out : {}\n       WHERE {}\n",
                         in_coll, out_coll, filters
                     )
                 }
@@ -412,8 +450,16 @@ impl fmt::Display for TransformationInfo {
                 compare_exprs_pos,
             } => {
                 let l = fmt_collection(left_input_info_fp, left_input_kv_layout);
-                // Right side uses the *join key* for display, and its own value positions.
-                let r = fmt_collection(right_input_info_fp, right_input_kv_layout);
+
+                // Right display uses the *join key* from the left and value positions from the right.
+                let r = fmt_collection(
+                    right_input_info_fp,
+                    &KeyValueLayout::new(
+                        left_input_kv_layout.key().to_vec(),
+                        right_input_kv_layout.value().to_vec(),
+                    ),
+                );
+
                 let out = fmt_collection(output_info_fp, output_kv_layout);
                 let filters = fmt_flow_kv(output_kv_layout, &[], &[], compare_exprs_pos);
 
@@ -426,7 +472,7 @@ impl fmt::Display for TransformationInfo {
                 } else {
                     write!(
                         f,
-                        "   ┌─ Left : {}\n         ├─ Right: {}\n         └─> Out : {}\n      WHERE {}\n",
+                        "   ┌─ Left : {}\n         ├─ Right: {}\n         └─> Out : {}\n       WHERE {}\n",
                         l, r, out, filters
                     )
                 }
@@ -441,8 +487,16 @@ impl fmt::Display for TransformationInfo {
                 output_kv_layout,
             } => {
                 let l = fmt_collection(left_input_info_fp, left_input_kv_layout);
-                // Right side uses the *join key* for display, and its own value positions.
-                let r = fmt_collection(right_input_info_fp, right_input_kv_layout);
+
+                // Right display uses the *join key* from the left and value positions from the right.
+                let r = fmt_collection(
+                    right_input_info_fp,
+                    &KeyValueLayout::new(
+                        left_input_kv_layout.key().to_vec(),
+                        right_input_kv_layout.value().to_vec(),
+                    ),
+                );
+
                 let out = fmt_collection(output_info_fp, output_kv_layout);
 
                 write!(
@@ -461,16 +515,22 @@ impl fmt::Debug for TransformationInfo {
     }
 }
 
-/* --- helpers -------------------------------------------------------------- */
+/* ------------------------------- Helpers ---------------------------------- */
 
-/// Computes a derived signature by hashing all identifying inputs together.
+/// Computes a derived fingerprint by hashing all identifying inputs together.
+///
+/// NOTE: Uses `DefaultHasher` which is deterministic within a build but not
+/// guaranteed stable across Rust versions. If you need long-term stability,
+/// use a fixed hash (e.g., blake3) over a stable serialization.
 fn compute_sig<T: Hash>(t: T) -> u64 {
     let mut h = DefaultHasher::new();
     t.hash(&mut h);
     h.finish()
 }
 
-/// Formats a collection-like string
+/// Formats a collection as:
+/// - with keys:    `ffffffffffffffff [key: (k1, k2), value: (v1, v2)]`
+/// - without keys: `ffffffffffffffff [key: (), value: (v1, v2)]`
 fn fmt_collection(sig: &u64, kv_layout: &KeyValueLayout) -> String {
     let k = kv_layout
         .key()
@@ -492,26 +552,13 @@ fn fmt_collection(sig: &u64, kv_layout: &KeyValueLayout) -> String {
     }
 }
 
-/// Formats a flow-like string: returns only the combined filter expression (no wrappers)
+/// Formats filters (const-eq, var-eq, comparisons) joined by `AND`.
 fn fmt_flow_kv(
-    out_kv_layout: &KeyValueLayout,
+    _out_kv_layout: &KeyValueLayout,
     consts: &[(AtomArgumentSignature, ConstType)],
     vars: &[(AtomArgumentSignature, AtomArgumentSignature)],
     comps: &[ComparisonExprPos],
 ) -> String {
-    let _k = out_kv_layout
-        .key()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let _v = out_kv_layout
-        .value()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-
     let consts_str = consts
         .iter()
         .map(|(sig, c)| format!("{} = {:?}", sig, c))
@@ -540,6 +587,5 @@ fn fmt_flow_kv(
     if !comps.is_empty() {
         parts.push(comps_str);
     }
-
     parts.join(" AND ")
 }
