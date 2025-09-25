@@ -12,123 +12,122 @@ use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos};
 use parser::ConstType;
 
 #[derive(PartialEq, Clone, Eq, Hash)]
+pub struct KeyValueLayout {
+    pub key: Vec<ArithmeticPos>,
+    pub value: Vec<ArithmeticPos>,
+}
+
+impl KeyValueLayout {
+    /// Creates a new KeyValueLayout.
+    pub fn new(key: Vec<ArithmeticPos>, value: Vec<ArithmeticPos>) -> Self {
+        Self { key, value }
+    }
+
+    /// Get a reference to the key arithmetic positions.
+    pub fn key(&self) -> &[ArithmeticPos] {
+        &self.key
+    }
+
+    /// Get a reference to the value arithmetic positions.
+    pub fn value(&self) -> &[ArithmeticPos] {
+        &self.value
+    }
+}
+
+#[derive(PartialEq, Clone, Eq, Hash)]
 pub enum TransformationInfo {
     KVToKV {
-        input_sig: u64,
-        output_sig: u64,
-        input_key: Vec<ArithmeticPos>,
-        input_value: Vec<ArithmeticPos>,
-        output_key: Vec<ArithmeticPos>,
-        output_value: Vec<ArithmeticPos>,
+        input_info_fp: u64,
+        output_info_fp: u64,
+        input_kv_layout: KeyValueLayout,
+        output_kv_layout: KeyValueLayout,
         const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
         var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
-        compare_exprs: Vec<ComparisonExprPos>,
+        compare_exprs_pos: Vec<ComparisonExprPos>,
     },
 
     JoinToKV {
-        left_input_sig: u64,
-        right_input_sig: u64,
-        output_sig: u64,
-        left_input_key: Vec<ArithmeticPos>,
-        left_input_value: Vec<ArithmeticPos>,
-        right_input_value: Vec<ArithmeticPos>,
-        output_key: Vec<ArithmeticPos>,
-        output_value: Vec<ArithmeticPos>,
-        compare_exprs: Vec<ComparisonExprPos>,
+        left_input_info_fp: u64,
+        right_input_info_fp: u64,
+        output_info_fp: u64,
+        left_input_kv_layout: KeyValueLayout,
+        right_input_kv_layout: KeyValueLayout,
+        output_kv_layout: KeyValueLayout,
+        compare_exprs_pos: Vec<ComparisonExprPos>,
     },
 
     AntiJoinToKV {
-        left_input_sig: u64,
-        right_input_sig: u64,
-        output_sig: u64,
-        left_input_key: Vec<ArithmeticPos>,
-        left_input_value: Vec<ArithmeticPos>,
-        right_input_value: Vec<ArithmeticPos>,
-        output_key: Vec<ArithmeticPos>,
-        output_value: Vec<ArithmeticPos>,
+        left_input_info_fp: u64,
+        right_input_info_fp: u64,
+        output_info_fp: u64,
+        left_input_kv_layout: KeyValueLayout,
+        right_input_kv_layout: KeyValueLayout,
+        output_kv_layout: KeyValueLayout,
     },
 }
 
 impl TransformationInfo {
-    /// Get input signature(s); for joins, returns (left, Some(right))
+    /// Get input information fingerprint(s); for joins, returns (left, Some(right))
     #[inline]
-    pub fn input_sig(&self) -> (u64, Option<u64>) {
+    pub fn input_info_fp(&self) -> (u64, Option<u64>) {
         match self {
-            Self::KVToKV { input_sig, .. } => (*input_sig, None),
+            Self::KVToKV { input_info_fp, .. } => (*input_info_fp, None),
             Self::JoinToKV {
-                left_input_sig,
-                right_input_sig,
+                left_input_info_fp,
+                right_input_info_fp,
                 ..
             }
             | Self::AntiJoinToKV {
-                left_input_sig,
-                right_input_sig,
+                left_input_info_fp,
+                right_input_info_fp,
                 ..
-            } => (*left_input_sig, Some(*right_input_sig)),
+            } => (*left_input_info_fp, Some(*right_input_info_fp)),
         }
     }
 
-    /// Get output signature.
+    /// Get output information fingerprint.
     #[inline]
-    pub fn output_sig(&self) -> u64 {
+    pub fn output_info_fp(&self) -> u64 {
         match self {
-            Self::KVToKV { output_sig, .. }
-            | Self::JoinToKV { output_sig, .. }
-            | Self::AntiJoinToKV { output_sig, .. } => *output_sig,
+            Self::KVToKV { output_info_fp, .. }
+            | Self::JoinToKV { output_info_fp, .. }
+            | Self::AntiJoinToKV { output_info_fp, .. } => *output_info_fp,
         }
     }
 
-    /// Get a reference to the input keys' arithmetic positions; for joins, returns (left, Some(right)).
+    /// Get a reference to the input key-value layouts; for joins, returns (left, Some(right)).
     #[inline]
-    pub fn input_key(&self) -> &[ArithmeticPos] {
+    pub fn input_kv_layout(&self) -> (&KeyValueLayout, Option<&KeyValueLayout>) {
         match self {
-            Self::KVToKV { input_key, .. }
+            Self::KVToKV {
+                input_kv_layout, ..
+            } => (input_kv_layout, None),
+            Self::JoinToKV {
+                left_input_kv_layout,
+                right_input_kv_layout,
+                ..
+            }
+            | Self::AntiJoinToKV {
+                left_input_kv_layout,
+                right_input_kv_layout,
+                ..
+            } => (left_input_kv_layout, Some(right_input_kv_layout)),
+        }
+    }
+
+    /// Get a reference to the output key-value layout.
+    #[inline]
+    pub fn output_kv_layout(&self) -> &KeyValueLayout {
+        match self {
+            Self::KVToKV {
+                output_kv_layout, ..
+            }
             | Self::JoinToKV {
-                left_input_key: input_key,
-                ..
+                output_kv_layout, ..
             }
             | Self::AntiJoinToKV {
-                left_input_key: input_key,
-                ..
-            } => input_key,
-        }
-    }
-
-    /// Get a reference to the input values' arithmetic positions; for joins, returns (left, Some(right)).
-    #[inline]
-    pub fn input_value(&self) -> (&[ArithmeticPos], Option<&[ArithmeticPos]>) {
-        match self {
-            Self::KVToKV { input_value, .. } => (input_value, None),
-            Self::JoinToKV {
-                left_input_value,
-                right_input_value,
-                ..
-            }
-            | Self::AntiJoinToKV {
-                left_input_value,
-                right_input_value,
-                ..
-            } => (left_input_value, Some(right_input_value)),
-        }
-    }
-
-    /// Get a reference to the output key arithmetic positions.
-    #[inline]
-    pub fn output_key(&self) -> &[ArithmeticPos] {
-        match self {
-            Self::KVToKV { output_key, .. }
-            | Self::JoinToKV { output_key, .. }
-            | Self::AntiJoinToKV { output_key, .. } => output_key,
-        }
-    }
-
-    /// Get a reference to the output value arithmetic positions.
-    #[inline]
-    pub fn output_value(&self) -> &[ArithmeticPos] {
-        match self {
-            Self::KVToKV { output_value, .. }
-            | Self::JoinToKV { output_value, .. }
-            | Self::AntiJoinToKV { output_value, .. } => output_value,
+                output_kv_layout, ..
+            } => output_kv_layout,
         }
     }
 
@@ -161,9 +160,12 @@ impl TransformationInfo {
     #[inline]
     pub fn compare_exprs(&self) -> &[ComparisonExprPos] {
         match self {
-            Self::KVToKV { compare_exprs, .. } | Self::JoinToKV { compare_exprs, .. } => {
-                compare_exprs
+            Self::KVToKV {
+                compare_exprs_pos, ..
             }
+            | Self::JoinToKV {
+                compare_exprs_pos, ..
+            } => compare_exprs_pos,
             Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no compare_exprs"),
         }
     }
@@ -171,36 +173,30 @@ impl TransformationInfo {
     /// Build a key-value to key-value transformation with a derived (fake) output signature.
     pub fn kv_to_kv(
         input_fake_sig: u64,
-        input_key: Vec<ArithmeticPos>,
-        input_value: Vec<ArithmeticPos>,
-        output_fake_key: Vec<ArithmeticPos>,
-        output_fake_value: Vec<ArithmeticPos>,
+        input_kv_layout: KeyValueLayout,
+        output_fake_kv_layout: KeyValueLayout,
         const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
         var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
-        compare_exprs: Vec<ComparisonExprPos>,
+        compare_exprs_pos: Vec<ComparisonExprPos>,
     ) -> Self {
         let fake_output_sig = compute_sig((
             "kv_to_kv",
             &input_fake_sig,
-            &input_key,
-            &input_value,
-            &output_fake_key,
-            &output_fake_value,
+            &input_kv_layout,
+            &output_fake_kv_layout,
             &const_eq_constraints,
             &var_eq_constraints,
-            &compare_exprs,
+            &compare_exprs_pos,
         ));
 
         Self::KVToKV {
-            input_sig: input_fake_sig,
-            output_sig: fake_output_sig,
-            input_key,
-            input_value,
-            output_key: output_fake_key,
-            output_value: output_fake_value,
+            input_info_fp: input_fake_sig,
+            output_info_fp: fake_output_sig,
+            input_kv_layout,
+            output_kv_layout: output_fake_kv_layout,
             const_eq_constraints,
             var_eq_constraints,
-            compare_exprs,
+            compare_exprs_pos,
         }
     }
 
@@ -208,35 +204,29 @@ impl TransformationInfo {
     pub fn join_to_kv(
         left_fake_sig: u64,
         right_fake_sig: u64,
-        left_key: Vec<ArithmeticPos>,
-        left_value: Vec<ArithmeticPos>,
-        right_value: Vec<ArithmeticPos>,
-        output_fake_key: Vec<ArithmeticPos>,
-        output_fake_value: Vec<ArithmeticPos>,
-        compare_exprs: Vec<ComparisonExprPos>,
+        left_kv_layout: KeyValueLayout,
+        right_kv_layout: KeyValueLayout,
+        output_fake_kv_layout: KeyValueLayout,
+        compare_exprs_pos: Vec<ComparisonExprPos>,
     ) -> Self {
         let fake_output_sig = compute_sig((
             "join_to_kv",
             &left_fake_sig,
             &right_fake_sig,
-            &left_key,
-            &left_value,
-            &right_value,
-            &output_fake_key,
-            &output_fake_value,
-            &compare_exprs,
+            &left_kv_layout,
+            &right_kv_layout,
+            &output_fake_kv_layout,
+            &compare_exprs_pos,
         ));
 
         Self::JoinToKV {
-            left_input_sig: left_fake_sig,
-            right_input_sig: right_fake_sig,
-            output_sig: fake_output_sig,
-            left_input_key: left_key,
-            left_input_value: left_value,
-            right_input_value: right_value,
-            output_key: output_fake_key,
-            output_value: output_fake_value,
-            compare_exprs,
+            left_input_info_fp: left_fake_sig,
+            right_input_info_fp: right_fake_sig,
+            output_info_fp: fake_output_sig,
+            left_input_kv_layout: left_kv_layout,
+            right_input_kv_layout: right_kv_layout,
+            output_kv_layout: output_fake_kv_layout,
+            compare_exprs_pos,
         }
     }
 
@@ -244,58 +234,52 @@ impl TransformationInfo {
     pub fn anti_join_to_kv(
         left_fake_sig: u64,
         right_fake_sig: u64,
-        left_key: Vec<ArithmeticPos>,
-        left_value: Vec<ArithmeticPos>,
-        right_value: Vec<ArithmeticPos>,
-        output_fake_key: Vec<ArithmeticPos>,
-        output_fake_value: Vec<ArithmeticPos>,
+        left_kv_layout: KeyValueLayout,
+        right_kv_layout: KeyValueLayout,
+        output_fake_kv_layout: KeyValueLayout,
     ) -> Self {
         let fake_output_sig = compute_sig((
             "anti_join_to_kv",
             &left_fake_sig,
             &right_fake_sig,
-            &left_key,
-            &left_value,
-            &right_value,
-            &output_fake_key,
-            &output_fake_value,
+            &left_kv_layout,
+            &right_kv_layout,
+            &output_fake_kv_layout,
         ));
 
         Self::AntiJoinToKV {
-            left_input_sig: left_fake_sig,
-            right_input_sig: right_fake_sig,
-            output_sig: fake_output_sig,
-            left_input_key: left_key,
-            left_input_value: left_value,
-            right_input_value: right_value,
-            output_key: output_fake_key,
-            output_value: output_fake_value,
+            left_input_info_fp: left_fake_sig,
+            right_input_info_fp: right_fake_sig,
+            output_info_fp: fake_output_sig,
+            left_input_kv_layout: left_kv_layout,
+            right_input_kv_layout: right_kv_layout,
+            output_kv_layout: output_fake_kv_layout,
         }
     }
 
-    /// Updates the placeholder (fake) input signature with the resolved (real) signature.
+    /// Updates the placeholder (fake) input info fingerprint with the resolved (real) info fingerprint.
     ///
-    /// Call this after a prior transformation has produced a real output signature
+    /// Call this after a prior transformation has produced a real output info fingerprint
     /// for the upstream collection (e.g., after key/value layout changes or map-fusion).
-    pub fn update_input_fake_sig(&mut self, input_real_sig: u64, left: bool) {
+    pub fn update_input_fake_info_fp(&mut self, input_real_sig: u64, left: bool) {
         match self {
-            Self::KVToKV { input_sig, .. } => {
-                *input_sig = input_real_sig;
+            Self::KVToKV { input_info_fp, .. } => {
+                *input_info_fp = input_real_sig;
             }
             Self::JoinToKV {
-                left_input_sig,
-                right_input_sig,
+                left_input_info_fp,
+                right_input_info_fp,
                 ..
             }
             | Self::AntiJoinToKV {
-                left_input_sig,
-                right_input_sig,
+                left_input_info_fp,
+                right_input_info_fp,
                 ..
             } => {
                 if left {
-                    *left_input_sig = input_real_sig;
+                    *left_input_info_fp = input_real_sig;
                 } else {
-                    *right_input_sig = input_real_sig;
+                    *right_input_info_fp = input_real_sig;
                 }
             }
         }
@@ -305,29 +289,18 @@ impl TransformationInfo {
     ///
     /// This step is necessary once the actual output layout is known, since later
     /// operators—particularly joins—require concrete key/value layouts to proceed.
-    pub fn update_output_key_value(
-        &mut self,
-        real_output_key: Vec<ArithmeticPos>,
-        real_output_value: Vec<ArithmeticPos>,
-    ) {
+    pub fn update_output_key_value_layout(&mut self, real_output_kv_layout: KeyValueLayout) {
         match self {
             Self::KVToKV {
-                output_key,
-                output_value,
-                ..
+                output_kv_layout, ..
             }
             | Self::JoinToKV {
-                output_key,
-                output_value,
-                ..
+                output_kv_layout, ..
             }
             | Self::AntiJoinToKV {
-                output_key,
-                output_value,
-                ..
+                output_kv_layout, ..
             } => {
-                *output_key = real_output_key;
-                *output_value = real_output_value;
+                *output_kv_layout = real_output_kv_layout;
             }
         }
     }
@@ -335,71 +308,58 @@ impl TransformationInfo {
     pub fn update_output_fake_sig(&mut self) {
         match self {
             Self::KVToKV {
-                input_sig,
-                input_key,
-                input_value,
-                output_key,
-                output_value,
+                input_info_fp,
+                input_kv_layout,
+                output_kv_layout,
                 const_eq_constraints,
                 var_eq_constraints,
-                compare_exprs,
-                output_sig,
+                compare_exprs_pos,
+                output_info_fp,
             } => {
-                *output_sig = compute_sig((
+                *output_info_fp = compute_sig((
                     "kv_to_kv",
-                    input_sig,
-                    input_key,
-                    input_value,
-                    output_key,
-                    output_value,
+                    input_info_fp,
+                    input_kv_layout,
+                    output_kv_layout,
                     const_eq_constraints,
                     var_eq_constraints,
-                    compare_exprs,
+                    compare_exprs_pos,
                 ));
             }
             Self::JoinToKV {
-                left_input_sig,
-                right_input_sig,
-                left_input_key,
-                left_input_value,
-                right_input_value,
-                output_key,
-                output_value,
-                compare_exprs,
-
-                output_sig,
+                left_input_info_fp,
+                right_input_info_fp,
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
+                compare_exprs_pos,
+                output_info_fp,
             } => {
-                *output_sig = compute_sig((
+                *output_info_fp = compute_sig((
                     "join_to_kv",
-                    left_input_sig,
-                    right_input_sig,
-                    left_input_key,
-                    left_input_value,
-                    right_input_value,
-                    output_key,
-                    output_value,
-                    compare_exprs,
+                    left_input_info_fp,
+                    right_input_info_fp,
+                    left_input_kv_layout,
+                    right_input_kv_layout,
+                    output_kv_layout,
+                    compare_exprs_pos,
                 ));
             }
             Self::AntiJoinToKV {
-                left_input_sig,
-                right_input_sig,
-                left_input_key,
-                left_input_value,
-                right_input_value,
-                output_key,
-                output_value,
-                output_sig,
+                left_input_info_fp,
+                right_input_info_fp,
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
+                output_info_fp,
             } => {
-                *output_sig = compute_sig((
+                *output_info_fp = compute_sig((
                     "anti_join_to_kv",
-                    left_input_sig,
-                    right_input_sig,
-                    left_input_key,
-                    left_input_value,
-                    right_input_value,
-                    output_key,
-                    output_value,
+                    left_input_info_fp,
+                    right_input_info_fp,
+                    left_input_kv_layout,
+                    right_input_kv_layout,
+                    output_kv_layout,
                 ));
             }
         }
@@ -410,24 +370,21 @@ impl fmt::Display for TransformationInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::KVToKV {
-                input_sig,
-                input_key,
-                input_value,
-                output_sig,
-                output_key,
-                output_value,
+                input_info_fp,
+                input_kv_layout,
+                output_info_fp,
+                output_kv_layout,
                 const_eq_constraints,
                 var_eq_constraints,
-                compare_exprs,
+                compare_exprs_pos,
             } => {
-                let in_coll = fmt_collection(input_sig, input_key, input_value);
-                let out_coll = fmt_collection(output_sig, output_key, output_value);
+                let in_coll = fmt_collection(input_info_fp, input_kv_layout);
+                let out_coll = fmt_collection(output_info_fp, output_kv_layout);
                 let filters = fmt_flow_kv(
-                    output_key,
-                    output_value,
+                    output_kv_layout,
                     const_eq_constraints,
                     var_eq_constraints,
-                    compare_exprs,
+                    compare_exprs_pos,
                 );
 
                 if filters.is_empty() {
@@ -446,21 +403,19 @@ impl fmt::Display for TransformationInfo {
             }
 
             Self::JoinToKV {
-                left_input_sig,
-                right_input_sig,
-                output_sig,
-                left_input_key,
-                left_input_value,
-                right_input_value,
-                output_key,
-                output_value,
-                compare_exprs,
+                left_input_info_fp,
+                right_input_info_fp,
+                output_info_fp,
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
+                compare_exprs_pos,
             } => {
-                let l = fmt_collection(left_input_sig, left_input_key, left_input_value);
+                let l = fmt_collection(left_input_info_fp, left_input_kv_layout);
                 // Right side uses the *join key* for display, and its own value positions.
-                let r = fmt_collection(right_input_sig, left_input_key, right_input_value);
-                let out = fmt_collection(output_sig, output_key, output_value);
-                let filters = fmt_flow_kv(output_key, output_value, &[], &[], compare_exprs);
+                let r = fmt_collection(right_input_info_fp, right_input_kv_layout);
+                let out = fmt_collection(output_info_fp, output_kv_layout);
+                let filters = fmt_flow_kv(output_kv_layout, &[], &[], compare_exprs_pos);
 
                 if filters.is_empty() {
                     write!(
@@ -478,19 +433,17 @@ impl fmt::Display for TransformationInfo {
             }
 
             Self::AntiJoinToKV {
-                left_input_sig,
-                right_input_sig,
-                output_sig,
-                left_input_key,
-                left_input_value,
-                right_input_value,
-                output_key,
-                output_value,
+                left_input_info_fp,
+                right_input_info_fp,
+                output_info_fp,
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
             } => {
-                let l = fmt_collection(left_input_sig, left_input_key, left_input_value);
+                let l = fmt_collection(left_input_info_fp, left_input_kv_layout);
                 // Right side uses the *join key* for display, and its own value positions.
-                let r = fmt_collection(right_input_sig, left_input_key, right_input_value);
-                let out = fmt_collection(output_sig, output_key, output_value);
+                let r = fmt_collection(right_input_info_fp, right_input_kv_layout);
+                let out = fmt_collection(output_info_fp, output_kv_layout);
 
                 write!(
                     f,
@@ -518,19 +471,21 @@ fn compute_sig<T: Hash>(t: T) -> u64 {
 }
 
 /// Formats a collection-like string
-fn fmt_collection(sig: &u64, key: &[ArithmeticPos], value: &[ArithmeticPos]) -> String {
-    let k = key
+fn fmt_collection(sig: &u64, kv_layout: &KeyValueLayout) -> String {
+    let k = kv_layout
+        .key()
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    let v = value
+    let v = kv_layout
+        .value()
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ");
 
-    if key.is_empty() {
+    if k.is_empty() {
         format!("{:016x} [key: (), value: ({})]", sig, v)
     } else {
         format!("{:016x} [key: ({}), value: ({})]", sig, k, v)
@@ -539,18 +494,19 @@ fn fmt_collection(sig: &u64, key: &[ArithmeticPos], value: &[ArithmeticPos]) -> 
 
 /// Formats a flow-like string: returns only the combined filter expression (no wrappers)
 fn fmt_flow_kv(
-    out_key: &[ArithmeticPos],
-    out_value: &[ArithmeticPos],
+    out_kv_layout: &KeyValueLayout,
     consts: &[(AtomArgumentSignature, ConstType)],
     vars: &[(AtomArgumentSignature, AtomArgumentSignature)],
     comps: &[ComparisonExprPos],
 ) -> String {
-    let _k = out_key
+    let _k = out_kv_layout
+        .key()
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    let _v = out_value
+    let _v = out_kv_layout
+        .value()
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()

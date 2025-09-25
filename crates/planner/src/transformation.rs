@@ -10,7 +10,7 @@ pub mod flow;
 pub mod info;
 
 pub use flow::TransformationFlow;
-pub use info::TransformationInfo;
+pub use info::{KeyValueLayout, TransformationInfo};
 
 /// Represents a data transformation operation in a query execution plan.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -195,18 +195,16 @@ impl Transformation {
     pub fn kv_to_kv(info: &TransformationInfo) -> Self {
         // Create the transformation flow that defines how data moves through the operation
         let flow = TransformationFlow::kv_to_kv(
-            info.input_key(),
-            info.input_value().0,
-            info.output_key(),
-            info.output_value(),
+            info.input_kv_layout().0,
+            info.output_kv_layout(),
             info.const_eq_constraints(),
             info.var_eq_constraints(),
             info.compare_exprs(),
         );
 
-        let is_row_in = info.input_key().is_empty(); // Input is row-based (no keys)
-        let is_row_out = info.output_key().is_empty(); // Output is row-based (no keys)
-        let is_key_only_out = info.output_value().is_empty(); // Output has keys but no values
+        let is_row_in = info.input_kv_layout().0.key().is_empty(); // Input is row-based (no keys)
+        let is_row_out = info.output_kv_layout().key().is_empty(); // Output is row-based (no keys)
+        let is_key_only_out = info.output_kv_layout().value().is_empty(); // Output has keys but no values
 
         // Check if this transformation is a no-op (identity transformation)
         let is_no_op = is_row_in
@@ -215,21 +213,27 @@ impl Transformation {
             && info.var_eq_constraints().is_empty()
             && info.compare_exprs().is_empty()
             && info
-                .input_key()
+                .input_kv_layout()
+                .0
+                .key()
                 .iter()
-                .chain(info.input_value().0.iter())
-                .eq(info.output_key().iter().chain(info.output_value().iter()));
+                .chain(info.input_kv_layout().0.value().iter())
+                .eq(info
+                    .output_kv_layout()
+                    .key()
+                    .iter()
+                    .chain(info.output_kv_layout().value().iter()));
 
         let input = Arc::new(Collection::new(
-            CollectionSignature::from_unary(CollectionSignature(info.input_sig().0), &flow),
-            info.input_key(),
-            info.input_value().0,
+            CollectionSignature(info.input_info_fp().0),
+            info.input_kv_layout().0.key(),
+            info.input_kv_layout().0.value(),
         ));
 
         let output = Arc::new(Collection::new(
-            CollectionSignature::from_unary(CollectionSignature(info.output_sig()), &flow),
-            info.output_key(),
-            info.output_value(),
+            CollectionSignature::from_unary(CollectionSignature(info.output_info_fp()), &flow),
+            info.output_kv_layout().key(),
+            info.output_kv_layout().value(),
         ));
 
         match (is_row_in, is_row_out, is_key_only_out) {
@@ -273,42 +277,37 @@ impl Transformation {
     pub fn join(info: &TransformationInfo) -> Self {
         // Create transformation flow that defines how the join operation processes data
         let flow = TransformationFlow::join_to_kv(
-            info.input_key(),
-            info.input_value().0,
-            info.input_value().1.unwrap(),
-            info.output_key(),
-            info.output_value(),
+            info.input_kv_layout().0,
+            info.input_kv_layout().1.unwrap(),
+            info.output_kv_layout(),
             info.compare_exprs(),
         );
 
-        let is_key_only_left = info.input_value().0.is_empty(); // Left collection has only keys
-        let is_key_only_right = info.input_value().1.unwrap().is_empty(); // Right collection has only keys
-        let is_cartesian = info.input_key().is_empty(); // No join keys = cartesian product
+        let is_key_only_left = info.input_kv_layout().0.value().is_empty(); // Left collection has only keys
+        let is_key_only_right = info.input_kv_layout().1.unwrap().value().is_empty(); // Right collection has only keys
+        let is_cartesian = info.input_kv_layout().0.key().is_empty(); // No join keys = cartesian product
 
         let input = (
             Arc::new(Collection::new(
-                CollectionSignature::from_unary(CollectionSignature(info.input_sig().0), &flow),
-                info.input_key(),
-                info.input_value().0,
+                CollectionSignature(info.input_info_fp().0),
+                info.input_kv_layout().0.key(),
+                info.input_kv_layout().0.value(),
             )),
             Arc::new(Collection::new(
-                CollectionSignature::from_unary(
-                    CollectionSignature(info.input_sig().1.unwrap()),
-                    &flow,
-                ),
-                info.input_key(),
-                info.input_value().1.unwrap(),
+                CollectionSignature(info.input_info_fp().1.unwrap()),
+                info.input_kv_layout().1.unwrap().key(),
+                info.input_kv_layout().1.unwrap().value(),
             )),
         );
 
         let output = Arc::new(Collection::new(
             CollectionSignature::from_join(
-                CollectionSignature(info.input_sig().0),
-                CollectionSignature(info.input_sig().1.unwrap()),
+                CollectionSignature(info.input_info_fp().0),
+                CollectionSignature(info.input_info_fp().1.unwrap()),
                 &flow,
             ),
-            info.output_key(),
-            info.output_value(),
+            info.output_kv_layout().key(),
+            info.output_kv_layout().value(),
         ));
 
         if is_cartesian {
@@ -353,47 +352,42 @@ impl Transformation {
     pub fn antijoin(info: &TransformationInfo) -> Self {
         // Antijoins require the right collection to be key-only (used for filtering)
         assert!(
-            info.input_value().1.unwrap().is_empty(),
+            info.input_kv_layout().1.unwrap().value().is_empty(),
             "Planner error: antijoin - right collection must be key-only"
         );
 
         // Create transformation flow (no comparison expressions for antijoins)
         let flow = TransformationFlow::join_to_kv(
-            info.input_key(),
-            info.input_value().0,
-            info.input_value().1.unwrap(),
-            info.output_key(),
-            info.output_value(),
+            info.input_kv_layout().0,
+            info.input_kv_layout().1.unwrap(),
+            info.output_kv_layout(),
             &[], // No comparison expressions for antijoins
         );
 
         // Determine antijoin type based on left collection characteristics
-        let is_key_only_left = info.input_value().0.is_empty(); // Left collection has only keys
+        let is_key_only_left = info.input_kv_layout().0.value().is_empty(); // Left collection has only keys
 
         let input = (
             Arc::new(Collection::new(
-                CollectionSignature::from_unary(CollectionSignature(info.input_sig().0), &flow),
-                info.input_key(),
-                info.input_value().0,
+                CollectionSignature(info.input_info_fp().0),
+                info.input_kv_layout().0.key(),
+                info.input_kv_layout().0.value(),
             )),
             Arc::new(Collection::new(
-                CollectionSignature::from_unary(
-                    CollectionSignature(info.input_sig().1.unwrap()),
-                    &flow,
-                ),
-                info.input_key(),
-                info.input_value().1.unwrap(),
+                CollectionSignature(info.input_info_fp().1.unwrap()),
+                info.input_kv_layout().1.unwrap().key(),
+                info.input_kv_layout().1.unwrap().value(),
             )),
         );
 
         let output = Arc::new(Collection::new(
             CollectionSignature::from_neg_join(
-                CollectionSignature(info.input_sig().0),
-                CollectionSignature(info.input_sig().1.unwrap()),
+                CollectionSignature(info.input_info_fp().0),
+                CollectionSignature(info.input_info_fp().1.unwrap()),
                 &flow,
             ),
-            info.output_key(),
-            info.output_value(),
+            info.output_kv_layout().key(),
+            info.output_kv_layout().value(),
         ));
 
         if is_key_only_left {

@@ -1,5 +1,6 @@
 //! Transformation flows for query planning in Macaron Datalog programs.
 
+use super::KeyValueLayout;
 use crate::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
 };
@@ -123,24 +124,22 @@ impl TransformationFlow {
 
     /// Creates a KVToKV transformation flow from input/output expressions and constraints.
     pub fn kv_to_kv(
-        input_key_exprs: &[ArithmeticPos],
-        input_value_exprs: &[ArithmeticPos],
-        output_key_exprs: &[ArithmeticPos],
-        output_value_exprs: &[ArithmeticPos],
+        input_kv_layout: &KeyValueLayout,
+        output_kv_layout: &KeyValueLayout,
         const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
         var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
         compare_exprs: &[ComparisonExprPos],
     ) -> Self {
-        let input_expr_map = Self::kv_argument_flow_map(input_key_exprs, input_value_exprs);
+        let input_expr_map = Self::kv_argument_flow_map(input_kv_layout);
 
         let flow_key_args = Self::flow_over_exprs(
             &input_expr_map,
-            output_key_exprs,
+            output_kv_layout.key(),
             "TransformationFlow::kv_to_kv key",
         );
         let flow_value_args = Self::flow_over_exprs(
             &input_expr_map,
-            output_value_exprs,
+            output_kv_layout.value(),
             "TransformationFlow::kv_to_kv value",
         );
         // Process constant and variable equality constraints via helpers
@@ -173,32 +172,29 @@ impl TransformationFlow {
 
     /// Creates a JnToKV transformation flow from input/output expressions and join conditions.
     pub fn join_to_kv(
-        input_left_key_exprs: &[ArithmeticPos],
-        input_left_value_exprs: &[ArithmeticPos],
-        input_right_value_exprs: &[ArithmeticPos],
-        output_key_exprs: &[ArithmeticPos],
-        output_value_exprs: &[ArithmeticPos],
+        input_left_kv_layout: &KeyValueLayout,
+        input_right_kv_layout: &KeyValueLayout,
+        output_kv_layout: &KeyValueLayout,
         compare_exprs: &[ComparisonExprPos],
     ) -> Self {
         // Map left-side inputs to join transformation arguments
-        let left_expr_map =
-            Self::kv_argument_flow_map(input_left_key_exprs, input_left_value_exprs)
-                .into_iter()
-                .map(|(signature, trace)| {
-                    let join_trace = match trace {
-                        TransformationArgument::KV((key_or_value, id)) => {
-                            TransformationArgument::Jn((false, key_or_value, id))
-                        }
-                        _ => panic!(
-                            "TransformationFlow::Jn expects kv in left input: {:?}",
-                            trace
-                        ),
-                    };
-                    (signature, join_trace)
-                });
+        let left_expr_map = Self::kv_argument_flow_map(input_left_kv_layout)
+            .into_iter()
+            .map(|(signature, trace)| {
+                let join_trace = match trace {
+                    TransformationArgument::KV((key_or_value, id)) => {
+                        TransformationArgument::Jn((false, key_or_value, id))
+                    }
+                    _ => panic!(
+                        "TransformationFlow::Jn expects kv in left input: {:?}",
+                        trace
+                    ),
+                };
+                (signature, join_trace)
+            });
 
         // Map right-side inputs to join transformation arguments (only values, no keys)
-        let right_expr_map = Self::kv_argument_flow_map(&[], input_right_value_exprs) // Self::kv_argument_flow_map(input_right_key_signatures, input_right_value_signatures)
+        let right_expr_map = Self::kv_argument_flow_map(input_right_kv_layout)
             .into_iter()
             .map(|(signature, trace)| {
                 let join_trace = match trace {
@@ -218,12 +214,12 @@ impl TransformationFlow {
 
         let flow_key_args = Self::flow_over_exprs(
             &input_expr_map,
-            output_key_exprs,
+            output_kv_layout.key(),
             "TransformationFlow::join_to_kv key",
         );
         let flow_value_args = Self::flow_over_exprs(
             &input_expr_map,
-            output_value_exprs,
+            output_kv_layout.value(),
             "TransformationFlow::join_to_kv value",
         );
 
@@ -272,20 +268,19 @@ impl TransformationFlow {
 impl TransformationFlow {
     /// Creates a mapping from arithmetic position expressions to transformation arguments for operator flows.
     fn kv_argument_flow_map(
-        key_exprs: &[ArithmeticPos],
-        value_exprs: &[ArithmeticPos],
+        kv_layout: &KeyValueLayout,
     ) -> HashMap<ArithmeticPos, TransformationArgument> {
-        key_exprs
-            .iter()
-            .enumerate()
-            .map(|(id, expr)| (expr.clone(), TransformationArgument::KV((false, id))))
-            .chain(
-                value_exprs
-                    .iter()
-                    .enumerate()
-                    .map(|(id, expr)| (expr.clone(), TransformationArgument::KV((true, id)))),
-            )
-            .collect()
+        let mut map = HashMap::new();
+
+        for (id, expr) in kv_layout.key().iter().enumerate() {
+            map.insert(expr.clone(), TransformationArgument::KV((false, id)));
+        }
+
+        for (id, expr) in kv_layout.value().iter().enumerate() {
+            map.insert(expr.clone(), TransformationArgument::KV((true, id)));
+        }
+
+        map
     }
 
     /// Composes output arithmetic expressions from available input chunks.

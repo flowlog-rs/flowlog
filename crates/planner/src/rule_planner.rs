@@ -1,8 +1,11 @@
 //! Rule planner implementing the per-rule preparation planning.
 
-use crate::{Transformation, TransformationInfo};
+use crate::{transformation::KeyValueLayout, TransformationInfo};
 use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    vec,
+};
 
 /// Rule planner for the per-rule planning.
 #[derive(Debug, Default)]
@@ -12,9 +15,6 @@ pub struct RulePlanner {
 
     /// The map of key-value layout indexed by transformation signature.
     kv_layouts: HashMap<u64, (Vec<ArithmeticPos>, Vec<ArithmeticPos>)>,
-
-    /// The list of transformations generated during the core plan phase.
-    core_transformations: Vec<Transformation>,
 }
 
 impl RulePlanner {
@@ -22,7 +22,6 @@ impl RulePlanner {
     pub fn new() -> Self {
         Self {
             transformation_infos: Vec::new(),
-            core_transformations: Vec::new(),
             kv_layouts: HashMap::new(),
         }
     }
@@ -101,10 +100,8 @@ impl RulePlanner {
             // Step 4: Create the fake transformation
             let fk_tx = TransformationInfo::kv_to_kv(
                 atom_fg,
-                input_key_exprs,
-                input_value_exprs,
-                fake_output_key_exprs,
-                fake_output_value_exprs,
+                KeyValueLayout::new(input_key_exprs, input_value_exprs),
+                KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
                 vec![],                     // no const-eq constraints here
                 vec![(var1_sig, var2_sig)], // var-eq constraint
                 vec![],                     // no comparisons here
@@ -123,7 +120,7 @@ impl RulePlanner {
                 *atom_signature,
                 vec![var2_sig],
                 new_name,
-                fk_tx.output_sig(),
+                fk_tx.output_info_fp(),
             );
 
             // Step 6: Record the transformation in the prepared phase pipeline
@@ -161,10 +158,8 @@ impl RulePlanner {
             // Step 4: Create the fake transformation
             let fk_tx = TransformationInfo::kv_to_kv(
                 atom_fp,
-                input_key_exprs,
-                input_value_exprs,
-                fake_output_key_exprs,
-                fake_output_value_exprs,
+                KeyValueLayout::new(input_key_exprs, input_value_exprs),
+                KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
                 vec![(var_sig, const_val.clone())], // no const-eq constraints here
                 vec![],                             // var-eq constraint
                 vec![],                             // no comparisons here
@@ -179,7 +174,12 @@ impl RulePlanner {
                     format!("neg_atom_{}", atom_id)
                 }
             );
-            catalog.projection_modify(*atom_signature, vec![var_sig], new_name, fk_tx.output_sig());
+            catalog.projection_modify(
+                *atom_signature,
+                vec![var_sig],
+                new_name,
+                fk_tx.output_info_fp(),
+            );
 
             // Step 6: Record the transformation in the prepared phase pipeline
             self.transformation_infos.push(fk_tx);
@@ -216,10 +216,8 @@ impl RulePlanner {
             // Step 4: Create the fake transformation
             let fk_tx = TransformationInfo::kv_to_kv(
                 atom_fp,
-                input_key_exprs,
-                input_value_exprs,
-                fake_output_key_exprs,
-                fake_output_value_exprs,
+                KeyValueLayout::new(input_key_exprs, input_value_exprs),
+                KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
                 vec![], // no const-eq constraints here
                 vec![], // var-eq constraint
                 vec![], // no comparisons here
@@ -234,7 +232,12 @@ impl RulePlanner {
                     format!("neg_atom_{}", atom_id)
                 }
             );
-            catalog.projection_modify(*atom_signature, vec![var_sig], new_name, fk_tx.output_sig());
+            catalog.projection_modify(
+                *atom_signature,
+                vec![var_sig],
+                new_name,
+                fk_tx.output_info_fp(),
+            );
 
             // Step 6: Record the transformation in the prepared phase pipeline
             self.transformation_infos.push(fk_tx);
@@ -281,10 +284,8 @@ impl RulePlanner {
             // Build transformation and compute new fingerprint
             let fk_tx = TransformationInfo::kv_to_kv(
                 atom_fp,
-                input_key_exprs,
-                input_value_exprs,
-                vec![],
-                out_values,
+                KeyValueLayout::new(input_key_exprs, input_value_exprs),
+                KeyValueLayout::new(vec![], out_values),
                 vec![],
                 vec![],
                 vec![],
@@ -299,7 +300,7 @@ impl RulePlanner {
                     format!("neg_atom_{}", atom_id)
                 }
             );
-            catalog.projection_modify(atom_signature, to_delete, new_name, fk_tx.output_sig());
+            catalog.projection_modify(atom_signature, to_delete, new_name, fk_tx.output_info_fp());
 
             // Record the transformation
             self.transformation_infos.push(fk_tx);
@@ -363,11 +364,9 @@ impl RulePlanner {
                 let fk_tx = TransformationInfo::join_to_kv(
                     lhs_pos_fp,
                     rhs_pos_fp,
-                    input_key_exprs,
-                    vec![],
-                    input_value_exprs,
-                    fake_output_key_exprs,
-                    fake_output_value_exprs,
+                    KeyValueLayout::new(input_key_exprs, vec![]),
+                    KeyValueLayout::new(vec![], input_value_exprs),
+                    KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
                     vec![], // no comparisons here
                 );
 
@@ -375,7 +374,7 @@ impl RulePlanner {
                     "atom_{}_pos_semijoin_atom_{}",
                     lhs_pos_idx, super_pos_idx
                 ));
-                new_fingerprints.push(fk_tx.output_sig());
+                new_fingerprints.push(fk_tx.output_info_fp());
                 self.transformation_infos.push(fk_tx);
             }
 
@@ -435,18 +434,16 @@ impl RulePlanner {
                     let fk_tx = TransformationInfo::anti_join_to_kv(
                         lhs_neg_fp,
                         rhs_pos_fp,
-                        input_key_exprs,
-                        vec![],
-                        input_value_exprs,
-                        fake_output_key_exprs,
-                        fake_output_value_exprs,
+                        KeyValueLayout::new(input_key_exprs, vec![]),
+                        KeyValueLayout::new(vec![], input_value_exprs),
+                        KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
                     );
 
                     new_names.push(format!(
                         "atom_{}_neg_semijoin_atom_{}",
                         lhs_neg_idx, super_pos_idx
                     ));
-                    new_fingerprints.push(fk_tx.output_sig());
+                    new_fingerprints.push(fk_tx.output_info_fp());
                     self.transformation_infos.push(fk_tx);
                 }
 
@@ -500,10 +497,8 @@ impl RulePlanner {
 
                         let fk_tx = TransformationInfo::kv_to_kv(
                             rhs_pos_fp,
-                            input_key_exprs,
-                            input_value_exprs,
-                            fake_output_key_exprs,
-                            fake_output_value_exprs,
+                            KeyValueLayout::new(input_key_exprs, input_value_exprs),
+                            KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
                             vec![], // no const-eq constraints here
                             vec![], // var-eq constraint
                             vec![
@@ -515,7 +510,7 @@ impl RulePlanner {
                             "comparison_{}_filter_atom_{}",
                             comparison_exprs, super_pos_idx
                         ));
-                        new_fingerprints.push(fk_tx.output_sig());
+                        new_fingerprints.push(fk_tx.output_info_fp());
                         self.transformation_infos.push(fk_tx);
                     }
 
