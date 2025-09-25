@@ -1,11 +1,16 @@
 //! Transformation operations for query planning in Macaron Datalog programs.
 
 use crate::collection::{Collection, CollectionSignature};
-use crate::flow::TransformationFlow;
-use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos};
-use parser::{AggregationOperator, ConstType};
+use catalog::ArithmeticPos;
+use parser::AggregationOperator;
 use std::fmt;
 use std::sync::Arc;
+
+pub mod flow;
+pub mod info;
+
+pub use flow::TransformationFlow;
+pub use info::TransformationInfo;
 
 /// Represents a data transformation operation in a query execution plan.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -187,46 +192,44 @@ impl Transformation {
     }
 
     /// Creates a key-value to key-value transformation.
-    pub fn kv_to_kv(
-        input: Arc<Collection>,
-        output_key_exprs: &[ArithmeticPos],
-        output_value_exprs: &[ArithmeticPos],
-        const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
-        var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
-        compare_exprs: &[ComparisonExprPos],
-    ) -> Self {
-        let (input_key_signatures, input_value_signatures) = input.kv_argument_signatures();
-
+    pub fn kv_to_kv(info: &TransformationInfo) -> Self {
         // Create the transformation flow that defines how data moves through the operation
         let flow = TransformationFlow::kv_to_kv(
-            input_key_signatures,
-            input_value_signatures,
-            output_key_exprs,
-            output_value_exprs,
-            const_eq_constraints,
-            var_eq_constraints,
-            compare_exprs,
+            info.input_key(),
+            info.input_value().0,
+            info.output_key(),
+            info.output_value(),
+            info.const_eq_constraints(),
+            info.var_eq_constraints(),
+            info.compare_exprs(),
         );
 
-        let is_row_in = input_key_signatures.is_empty(); // Input is row-based (no keys)
-        let is_row_out = output_key_exprs.is_empty(); // Output is row-based (no keys)
-        let is_key_only_out = output_value_exprs.is_empty(); // Output has keys but no values
+        let is_row_in = info.input_key().is_empty(); // Input is row-based (no keys)
+        let is_row_out = info.output_key().is_empty(); // Output is row-based (no keys)
+        let is_key_only_out = info.output_value().is_empty(); // Output has keys but no values
 
         // Check if this transformation is a no-op (identity transformation)
         let is_no_op = is_row_in
             && (is_row_out || is_key_only_out)
-            && const_eq_constraints.is_empty()
-            && var_eq_constraints.is_empty()
-            && compare_exprs.is_empty()
-            && input_key_signatures
+            && info.const_eq_constraints().is_empty()
+            && info.var_eq_constraints().is_empty()
+            && info.compare_exprs().is_empty()
+            && info
+                .input_key()
                 .iter()
-                .chain(input_value_signatures.iter())
-                .eq(output_key_exprs.iter().chain(output_value_exprs.iter()));
+                .chain(info.input_value().0.iter())
+                .eq(info.output_key().iter().chain(info.output_value().iter()));
+
+        let input = Arc::new(Collection::new(
+            CollectionSignature::from_unary(CollectionSignature(info.input_sig().0), &flow),
+            info.input_key(),
+            info.input_value().0,
+        ));
 
         let output = Arc::new(Collection::new(
-            CollectionSignature::from_unary(**input.signature(), &flow),
-            output_key_exprs,
-            output_value_exprs,
+            CollectionSignature::from_unary(CollectionSignature(info.output_sig()), &flow),
+            info.output_key(),
+            info.output_value(),
         ));
 
         match (is_row_in, is_row_out, is_key_only_out) {
@@ -267,33 +270,45 @@ impl Transformation {
     }
 
     /// Creates a join transformation between two collections.
-    pub fn join(
-        input: (Arc<Collection>, Arc<Collection>),
-        output_key_signatures: &[ArithmeticPos],
-        output_value_signatures: &[ArithmeticPos],
-        compare_exprs: &[ComparisonExprPos],
-    ) -> Self {
-        let (left_key_signatures, left_value_signatures) = input.0.kv_argument_signatures();
-        let (_, right_value_signatures) = input.1.kv_argument_signatures();
-
+    pub fn join(info: &TransformationInfo) -> Self {
         // Create transformation flow that defines how the join operation processes data
         let flow = TransformationFlow::join_to_kv(
-            left_key_signatures,
-            left_value_signatures,
-            right_value_signatures,
-            output_key_signatures,
-            output_value_signatures,
-            compare_exprs,
+            info.input_key(),
+            info.input_value().0,
+            info.input_value().1.unwrap(),
+            info.output_key(),
+            info.output_value(),
+            info.compare_exprs(),
         );
 
-        let is_key_only_left = left_value_signatures.is_empty(); // Left collection has only keys
-        let is_key_only_right = right_value_signatures.is_empty(); // Right collection has only keys
-        let is_cartesian = left_key_signatures.is_empty(); // No join keys = cartesian product
+        let is_key_only_left = info.input_value().0.is_empty(); // Left collection has only keys
+        let is_key_only_right = info.input_value().1.unwrap().is_empty(); // Right collection has only keys
+        let is_cartesian = info.input_key().is_empty(); // No join keys = cartesian product
+
+        let input = (
+            Arc::new(Collection::new(
+                CollectionSignature::from_unary(CollectionSignature(info.input_sig().0), &flow),
+                info.input_key(),
+                info.input_value().0,
+            )),
+            Arc::new(Collection::new(
+                CollectionSignature::from_unary(
+                    CollectionSignature(info.input_sig().1.unwrap()),
+                    &flow,
+                ),
+                info.input_key(),
+                info.input_value().1.unwrap(),
+            )),
+        );
 
         let output = Arc::new(Collection::new(
-            CollectionSignature::from_join(**input.0.signature(), **input.1.signature(), &flow),
-            output_key_signatures,
-            output_value_signatures,
+            CollectionSignature::from_join(
+                CollectionSignature(info.input_sig().0),
+                CollectionSignature(info.input_sig().1.unwrap()),
+                &flow,
+            ),
+            info.output_key(),
+            info.output_value(),
         ));
 
         if is_cartesian {
@@ -335,37 +350,50 @@ impl Transformation {
     }
 
     /// Creates an antijoin transformation.
-    pub fn antijoin(
-        input: (Arc<Collection>, Arc<Collection>),
-        output_key_signatures: &[ArithmeticPos],
-        output_value_signatures: &[ArithmeticPos],
-    ) -> Self {
-        let (left_key_signatures, left_value_signatures) = input.0.kv_argument_signatures();
-        let (_, right_value_signatures) = input.1.kv_argument_signatures();
-
+    pub fn antijoin(info: &TransformationInfo) -> Self {
         // Antijoins require the right collection to be key-only (used for filtering)
         assert!(
-            right_value_signatures.is_empty(),
+            info.input_value().1.unwrap().is_empty(),
             "Planner error: antijoin - right collection must be key-only"
         );
 
         // Create transformation flow (no comparison expressions for antijoins)
         let flow = TransformationFlow::join_to_kv(
-            left_key_signatures,
-            left_value_signatures,
-            right_value_signatures,
-            output_key_signatures,
-            output_value_signatures,
+            info.input_key(),
+            info.input_value().0,
+            info.input_value().1.unwrap(),
+            info.output_key(),
+            info.output_value(),
             &[], // No comparison expressions for antijoins
         );
 
         // Determine antijoin type based on left collection characteristics
-        let is_key_only_left = left_value_signatures.is_empty(); // Left collection has only keys
+        let is_key_only_left = info.input_value().0.is_empty(); // Left collection has only keys
+
+        let input = (
+            Arc::new(Collection::new(
+                CollectionSignature::from_unary(CollectionSignature(info.input_sig().0), &flow),
+                info.input_key(),
+                info.input_value().0,
+            )),
+            Arc::new(Collection::new(
+                CollectionSignature::from_unary(
+                    CollectionSignature(info.input_sig().1.unwrap()),
+                    &flow,
+                ),
+                info.input_key(),
+                info.input_value().1.unwrap(),
+            )),
+        );
 
         let output = Arc::new(Collection::new(
-            CollectionSignature::from_neg_join(**input.0.signature(), **input.1.signature(), &flow),
-            output_key_signatures,
-            output_value_signatures,
+            CollectionSignature::from_neg_join(
+                CollectionSignature(info.input_sig().0),
+                CollectionSignature(info.input_sig().1.unwrap()),
+                &flow,
+            ),
+            info.output_key(),
+            info.output_value(),
         ));
 
         if is_key_only_left {

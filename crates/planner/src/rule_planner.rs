@@ -1,18 +1,17 @@
 //! Rule planner implementing the per-rule preparation planning.
 
-use crate::fake_transformation::FakeTransformation;
-use crate::transformation::Transformation;
+use crate::{Transformation, TransformationInfo};
 use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Rule planner for the per-rule planning.
 #[derive(Debug, Default)]
 pub struct RulePlanner {
-    /// The list of transformations generated during the alpha elimination prepare phase.
-    fake_prepare_transformations: Vec<FakeTransformation>,
+    /// The list of transformation info generated during the alpha elimination prepare phase.
+    transformation_infos: Vec<TransformationInfo>,
 
-    /// The map of key-value layout indexed by fake transformation signature.
-    fake_kv_layouts: std::collections::HashMap<u64, (Vec<ArithmeticPos>, Vec<ArithmeticPos>)>,
+    /// The map of key-value layout indexed by transformation signature.
+    kv_layouts: HashMap<u64, (Vec<ArithmeticPos>, Vec<ArithmeticPos>)>,
 
     /// The list of transformations generated during the core plan phase.
     core_transformations: Vec<Transformation>,
@@ -22,9 +21,9 @@ impl RulePlanner {
     /// Creates a new empty `RulePlanner`.
     pub fn new() -> Self {
         Self {
-            fake_prepare_transformations: Vec::new(),
+            transformation_infos: Vec::new(),
             core_transformations: Vec::new(),
-            fake_kv_layouts: std::collections::HashMap::new(),
+            kv_layouts: HashMap::new(),
         }
     }
 
@@ -55,8 +54,8 @@ impl RulePlanner {
         todo!("Implement the core planning phase");
     }
 
-    pub fn fake_transformations(&self) -> Vec<FakeTransformation> {
-        self.fake_prepare_transformations.clone()
+    pub fn transformation_infos(&self) -> Vec<TransformationInfo> {
+        self.transformation_infos.clone()
     }
 
     /// Applies the first available filter and updates the catalog.
@@ -79,17 +78,14 @@ impl RulePlanner {
             let (args, atom_fg, atom_id) = catalog.resolve_atom(atom_signature);
 
             // Step 2: Build the input key-value layout
-            let (input_key_exprs, input_value_exprs) = self
-                .fake_kv_layouts
-                .get(&atom_fg)
-                .cloned()
-                .unwrap_or_else(|| {
+            let (input_key_exprs, input_value_exprs) =
+                self.kv_layouts.get(&atom_fg).cloned().unwrap_or_else(|| {
                     let input_key_exprs = Vec::new(); // Row-based input
                     let input_value_exprs: Vec<ArithmeticPos> = args
                         .iter()
                         .map(|&sig| ArithmeticPos::from_var_signature(sig))
                         .collect();
-                    self.fake_kv_layouts.insert(
+                    self.kv_layouts.insert(
                         atom_fg,
                         (input_key_exprs.clone(), input_value_exprs.clone()),
                     );
@@ -103,7 +99,7 @@ impl RulePlanner {
             ) = (Vec::new(), Self::out_values_excluding(args, var2_sig));
 
             // Step 4: Create the fake transformation
-            let fk_tx = FakeTransformation::fake_kv_to_kv(
+            let fk_tx = TransformationInfo::kv_to_kv(
                 atom_fg,
                 input_key_exprs,
                 input_value_exprs,
@@ -127,11 +123,11 @@ impl RulePlanner {
                 *atom_signature,
                 vec![var2_sig],
                 new_name,
-                fk_tx.fake_output_sig(),
+                fk_tx.output_sig(),
             );
 
             // Step 6: Record the transformation in the prepared phase pipeline
-            self.fake_prepare_transformations.push(fk_tx);
+            self.transformation_infos.push(fk_tx);
 
             return true;
         }
@@ -142,17 +138,14 @@ impl RulePlanner {
             let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
 
             // Step 2: Build the input key-value layout
-            let (input_key_exprs, input_value_exprs) = self
-                .fake_kv_layouts
-                .get(&atom_fp)
-                .cloned()
-                .unwrap_or_else(|| {
+            let (input_key_exprs, input_value_exprs) =
+                self.kv_layouts.get(&atom_fp).cloned().unwrap_or_else(|| {
                     let input_key_exprs = Vec::new(); // Row-based input
                     let input_value_exprs: Vec<ArithmeticPos> = args
                         .iter()
                         .map(|&sig| ArithmeticPos::from_var_signature(sig))
                         .collect();
-                    self.fake_kv_layouts.insert(
+                    self.kv_layouts.insert(
                         atom_fp,
                         (input_key_exprs.clone(), input_value_exprs.clone()),
                     );
@@ -166,7 +159,7 @@ impl RulePlanner {
             ) = (Vec::new(), Self::out_values_excluding(args, var_sig));
 
             // Step 4: Create the fake transformation
-            let fk_tx = FakeTransformation::fake_kv_to_kv(
+            let fk_tx = TransformationInfo::kv_to_kv(
                 atom_fp,
                 input_key_exprs,
                 input_value_exprs,
@@ -186,15 +179,10 @@ impl RulePlanner {
                     format!("neg_atom_{}", atom_id)
                 }
             );
-            catalog.projection_modify(
-                *atom_signature,
-                vec![var_sig],
-                new_name,
-                fk_tx.fake_output_sig(),
-            );
+            catalog.projection_modify(*atom_signature, vec![var_sig], new_name, fk_tx.output_sig());
 
             // Step 6: Record the transformation in the prepared phase pipeline
-            self.fake_prepare_transformations.push(fk_tx);
+            self.transformation_infos.push(fk_tx);
 
             return true;
         }
@@ -205,17 +193,14 @@ impl RulePlanner {
             let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
 
             // Step 2: Build the input key-value layout
-            let (input_key_exprs, input_value_exprs) = self
-                .fake_kv_layouts
-                .get(&atom_fp)
-                .cloned()
-                .unwrap_or_else(|| {
+            let (input_key_exprs, input_value_exprs) =
+                self.kv_layouts.get(&atom_fp).cloned().unwrap_or_else(|| {
                     let input_key_exprs = Vec::new(); // Row-based input
                     let input_value_exprs: Vec<ArithmeticPos> = args
                         .iter()
                         .map(|&sig| ArithmeticPos::from_var_signature(sig))
                         .collect();
-                    self.fake_kv_layouts.insert(
+                    self.kv_layouts.insert(
                         atom_fp,
                         (input_key_exprs.clone(), input_value_exprs.clone()),
                     );
@@ -229,7 +214,7 @@ impl RulePlanner {
             ) = (Vec::new(), Self::out_values_excluding(args, var_sig));
 
             // Step 4: Create the fake transformation
-            let fk_tx = FakeTransformation::fake_kv_to_kv(
+            let fk_tx = TransformationInfo::kv_to_kv(
                 atom_fp,
                 input_key_exprs,
                 input_value_exprs,
@@ -249,15 +234,10 @@ impl RulePlanner {
                     format!("neg_atom_{}", atom_id)
                 }
             );
-            catalog.projection_modify(
-                *atom_signature,
-                vec![var_sig],
-                new_name,
-                fk_tx.fake_output_sig(),
-            );
+            catalog.projection_modify(*atom_signature, vec![var_sig], new_name, fk_tx.output_sig());
 
             // Step 6: Record the transformation in the prepared phase pipeline
-            self.fake_prepare_transformations.push(fk_tx);
+            self.transformation_infos.push(fk_tx);
 
             return true;
         }
@@ -279,17 +259,14 @@ impl RulePlanner {
 
             // Build projected output excluding all to_delete
             let drop_set: HashSet<AtomArgumentSignature> = to_delete.iter().copied().collect();
-            let (input_key_exprs, input_value_exprs) = self
-                .fake_kv_layouts
-                .get(&atom_fp)
-                .cloned()
-                .unwrap_or_else(|| {
+            let (input_key_exprs, input_value_exprs) =
+                self.kv_layouts.get(&atom_fp).cloned().unwrap_or_else(|| {
                     let input_key_exprs = Vec::new(); // Row-based input
                     let input_value_exprs: Vec<ArithmeticPos> = args
                         .iter()
                         .map(|&sig| ArithmeticPos::from_var_signature(sig))
                         .collect();
-                    self.fake_kv_layouts.insert(
+                    self.kv_layouts.insert(
                         atom_fp,
                         (input_key_exprs.clone(), input_value_exprs.clone()),
                     );
@@ -302,7 +279,7 @@ impl RulePlanner {
                 .collect();
 
             // Build transformation and compute new fingerprint
-            let fk_tx = FakeTransformation::fake_kv_to_kv(
+            let fk_tx = TransformationInfo::kv_to_kv(
                 atom_fp,
                 input_key_exprs,
                 input_value_exprs,
@@ -322,10 +299,10 @@ impl RulePlanner {
                     format!("neg_atom_{}", atom_id)
                 }
             );
-            catalog.projection_modify(atom_signature, to_delete, new_name, fk_tx.fake_output_sig());
+            catalog.projection_modify(atom_signature, to_delete, new_name, fk_tx.output_sig());
 
             // Record the transformation
-            self.fake_prepare_transformations.push(fk_tx);
+            self.transformation_infos.push(fk_tx);
             applied_any = true;
         }
 
@@ -383,7 +360,7 @@ impl RulePlanner {
                 let (fake_output_key_exprs, fake_output_value_exprs) =
                     (input_key_exprs.clone(), input_value_exprs.clone());
 
-                let fk_tx = FakeTransformation::fake_join_to_kv(
+                let fk_tx = TransformationInfo::join_to_kv(
                     lhs_pos_fp,
                     rhs_pos_fp,
                     input_key_exprs,
@@ -398,8 +375,8 @@ impl RulePlanner {
                     "atom_{}_pos_semijoin_atom_{}",
                     lhs_pos_idx, super_pos_idx
                 ));
-                new_fingerprints.push(fk_tx.fake_output_sig());
-                self.fake_prepare_transformations.push(fk_tx);
+                new_fingerprints.push(fk_tx.output_sig());
+                self.transformation_infos.push(fk_tx);
             }
 
             catalog.join_modify(
@@ -455,7 +432,7 @@ impl RulePlanner {
                     let (fake_output_key_exprs, fake_output_value_exprs) =
                         (input_key_exprs.clone(), input_value_exprs.clone());
 
-                    let fk_tx = FakeTransformation::fake_join_to_kv(
+                    let fk_tx = TransformationInfo::anti_join_to_kv(
                         lhs_neg_fp,
                         rhs_pos_fp,
                         input_key_exprs,
@@ -463,15 +440,14 @@ impl RulePlanner {
                         input_value_exprs,
                         fake_output_key_exprs,
                         fake_output_value_exprs,
-                        vec![], // no comparisons here
                     );
 
                     new_names.push(format!(
                         "atom_{}_neg_semijoin_atom_{}",
                         lhs_neg_idx, super_pos_idx
                     ));
-                    new_fingerprints.push(fk_tx.fake_output_sig());
-                    self.fake_prepare_transformations.push(fk_tx);
+                    new_fingerprints.push(fk_tx.output_sig());
+                    self.transformation_infos.push(fk_tx);
                 }
 
                 catalog.join_modify(
@@ -503,7 +479,7 @@ impl RulePlanner {
                         right_atom_signatures.push(AtomSignature::new(true, *super_pos_idx));
 
                         let (input_key_exprs, input_value_exprs) = self
-                            .fake_kv_layouts
+                            .kv_layouts
                             .get(&rhs_pos_fp)
                             .cloned()
                             .unwrap_or_else(|| {
@@ -512,7 +488,7 @@ impl RulePlanner {
                                     .iter()
                                     .map(|&sig| ArithmeticPos::from_var_signature(sig))
                                     .collect();
-                                self.fake_kv_layouts.insert(
+                                self.kv_layouts.insert(
                                     rhs_pos_fp,
                                     (input_key_exprs.clone(), input_value_exprs.clone()),
                                 );
@@ -522,7 +498,7 @@ impl RulePlanner {
                         let (fake_output_key_exprs, fake_output_value_exprs) =
                             (input_key_exprs.clone(), input_value_exprs.clone());
 
-                        let fk_tx = FakeTransformation::fake_kv_to_kv(
+                        let fk_tx = TransformationInfo::kv_to_kv(
                             rhs_pos_fp,
                             input_key_exprs,
                             input_value_exprs,
@@ -539,8 +515,8 @@ impl RulePlanner {
                             "comparison_{}_filter_atom_{}",
                             comparison_exprs, super_pos_idx
                         ));
-                        new_fingerprints.push(fk_tx.fake_output_sig());
-                        self.fake_prepare_transformations.push(fk_tx);
+                        new_fingerprints.push(fk_tx.output_sig());
+                        self.transformation_infos.push(fk_tx);
                     }
 
                     catalog.comparison_modify(

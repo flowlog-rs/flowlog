@@ -406,55 +406,76 @@ impl fmt::Display for Catalog {
             }
         }
         writeln!(f, "\nSupersets (per predicate → positive atom ids):")?;
-        if self.positive_supersets.is_empty() {
+        if self.positive_supersets.is_empty()
+            || self
+                .positive_supersets
+                .iter()
+                .all(|supers| supers.is_empty())
+        {
             writeln!(f, "  positives: (none)")?;
         } else {
             writeln!(f, "  positives:")?;
             for (i, supers) in self.positive_supersets.iter().enumerate() {
-                writeln!(
-                    f,
-                    "    [{}] -> [{}]",
-                    i,
-                    supers
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )?;
+                if !supers.is_empty() {
+                    writeln!(
+                        f,
+                        "    [{}] -> [{}]",
+                        i,
+                        supers
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )?;
+                }
             }
         }
-        if self.negated_supersets.is_empty() {
+        if self.negated_supersets.is_empty()
+            || self
+                .negated_supersets
+                .iter()
+                .all(|supers| supers.is_empty())
+        {
             writeln!(f, "  negated: (none)")?;
         } else {
             writeln!(f, "  negated:")?;
             for (i, supers) in self.negated_supersets.iter().enumerate() {
-                writeln!(
-                    f,
-                    "    [{}] -> [{}]",
-                    i,
-                    supers
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )?;
+                if !supers.is_empty() {
+                    writeln!(
+                        f,
+                        "    [{}] -> [{}]",
+                        i,
+                        supers
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )?;
+                }
             }
         }
-        if self.comparison_supersets.is_empty() {
+        if self.comparison_supersets.is_empty()
+            || self
+                .comparison_supersets
+                .iter()
+                .all(|supers| supers.is_empty())
+        {
             writeln!(f, "  comparisons: (none)")?;
         } else {
             writeln!(f, "  comparisons:")?;
             for (i, supers) in self.comparison_supersets.iter().enumerate() {
-                writeln!(
-                    f,
-                    "    [{}] -> [{}]",
-                    i,
-                    supers
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )?;
+                if !supers.is_empty() {
+                    writeln!(
+                        f,
+                        "    [{}] -> [{}]",
+                        i,
+                        supers
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )?;
+                }
             }
         }
         Ok(())

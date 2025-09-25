@@ -4,8 +4,15 @@ use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
 use stratifier::Stratifier;
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 
 fn main() {
+    // Initialize simple tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("info"))
+        .init();
+
     // Parse command line arguments
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -21,11 +28,11 @@ fn main() {
 
     // Parse and process single file
     let program = Program::parse(argument);
-    println!("Parsed program: {} rules", program.rules().len());
+    info!("Parsed program: {} rules", program.rules().len());
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program);
-    println!(
+    info!(
         "Stratified program into {} strata",
         stratifier.stratum().len()
     );
@@ -37,9 +44,9 @@ fn main() {
 
 /// Print usage information
 fn print_usage(program_name: &str) {
-    eprintln!("Usage: {} <program_file>", program_name);
-    eprintln!("       {} --all", program_name);
-    eprintln!(
+    info!("Usage: {} <program_file>", program_name);
+    info!("       {} --all", program_name);
+    info!(
         "Examples:\n  {} ./example/reach.dl\n  {} --all",
         program_name, program_name
     );
@@ -55,25 +62,25 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 
         let sp = StratumPlanner::from_rules(&rules, optimizer);
 
-        println!("{}", "=".repeat(80));
-        println!(
+        info!("{}", "=".repeat(80));
+        info!(
             "[Stratum {}] {} rules (recursive: {})",
             stratum_idx,
             rule_refs.len(),
             is_recursive
         );
 
-        println!("Per-rule transformations:");
-        for (rule_idx, txs) in sp.per_rule().iter().enumerate() {
+        info!("Per-rule transformations:");
+        for (rule_idx, txs) in sp.rule_transformation_infos().iter().enumerate() {
             // Print the original rule text for context
             if let Some(rule) = rules.get(rule_idx) {
-                println!("  - Rule {}: {}", rule_idx, rule);
+                info!("  - Rule {}: {}", rule_idx, rule);
             } else {
-                println!("  - Rule {}:", rule_idx);
+                info!("  - Rule {}:", rule_idx);
             }
-            println!("    {} transformations", txs.len());
+            info!("    {} transformations", txs.len());
             for (i, t) in txs.iter().enumerate() {
-                println!("      [{:>3}] {}", i, t);
+                info!("\n[{:>3}] {}", i, t);
             }
         }
     }
@@ -85,7 +92,7 @@ fn run_all_examples() {
 
     // Check if example directory exists
     if !Path::new(example_dir).exists() {
-        eprintln!("Directory '{}' not found", example_dir);
+        error!("Directory '{}' not found", example_dir);
         process::exit(1);
     }
 
@@ -93,7 +100,7 @@ fn run_all_examples() {
     let entries = match fs::read_dir(example_dir) {
         Ok(entries) => entries,
         Err(e) => {
-            eprintln!("Error reading example dir: {}", e);
+            error!("Error reading example dir: {}", e);
             process::exit(1);
         }
     };
@@ -109,12 +116,12 @@ fn run_all_examples() {
     files.sort();
 
     if files.is_empty() {
-        eprintln!("No .dl files found in {}", example_dir);
+        error!("No .dl files found in {}", example_dir);
         process::exit(1);
     }
 
     // Process all files
-    println!("Running planner on {} example files...", files.len());
+    info!("Running planner on {} example files...", files.len());
     let mut success_count = 0;
     let mut failure_count = 0;
 
@@ -136,29 +143,29 @@ fn run_all_examples() {
         }) {
             Ok((rule_count, strata_count)) => {
                 success_count += 1;
-                println!(
+                info!(
                     "SUCCESS: {} (rules={}, strata={})",
                     file_name, rule_count, strata_count
                 );
             }
             Err(_) => {
                 failure_count += 1;
-                eprintln!("FAILED: {}", file_name);
+                error!("FAILED: {}", file_name);
             }
         }
     }
 
     // Print summary
-    println!("\n{}", "=".repeat(80));
-    println!("SUMMARY:");
-    println!("  Total files: {}", files.len());
-    println!("  Successful: {}", success_count);
-    println!("  Failed: {}", failure_count);
+    info!("\n{}", "=".repeat(80));
+    info!("SUMMARY:");
+    info!("  Total files: {}", files.len());
+    info!("  Successful: {}", success_count);
+    info!("  Failed: {}", failure_count);
 
     if failure_count > 0 {
-        println!("\nSome files failed to plan. Check the errors above for details.");
+        info!("\nSome files failed to plan. Check the errors above for details.");
         process::exit(1);
     } else {
-        println!("\nAll example files planned successfully!");
+        info!("\nAll example files planned successfully!");
     }
 }

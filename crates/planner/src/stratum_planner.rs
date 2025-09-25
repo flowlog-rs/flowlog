@@ -1,16 +1,17 @@
-//! Stratum planner that plans a group of rules (a stratum).
+//! Stratum planner that plans a stratum (a group of rules).
 
+use crate::{RulePlanner, TransformationInfo};
 use catalog::Catalog;
 use optimizer::Optimizer;
 use parser::logic::MacaronRule;
 
-use crate::{fake_transformation::FakeTransformation, rule_planner::RulePlanner};
-
-/// Planner for a single stratum (group of rules).
+/// Planner for a single stratum (a group of rules).
 #[derive(Debug, Default)]
 pub struct StratumPlanner {
     /// Per-rule transformations, preserving rule grouping and order.
-    pub per_rule_transformations: Vec<Vec<FakeTransformation>>,
+    pub rule_transformation_infos: Vec<Vec<TransformationInfo>>,
+
+    pub rule_real_transformations: Vec<Vec<String>>, // reserved for future use
 }
 
 impl StratumPlanner {
@@ -22,7 +23,7 @@ impl StratumPlanner {
     ///   (currently unused but executed to keep the flow consistent).
     #[must_use]
     pub fn from_rules(rules: &[MacaronRule], optimizer: &mut Optimizer) -> Self {
-        let mut per_rule_transformations: Vec<Vec<FakeTransformation>> =
+        let mut rule_transformation_infos: Vec<Vec<TransformationInfo>> =
             Vec::with_capacity(rules.len());
         let mut catalogs: Vec<Catalog> = Vec::with_capacity(rules.len());
 
@@ -34,8 +35,7 @@ impl StratumPlanner {
             rp.prepare(&mut catalog);
             // rp.core(&mut catalog); // reserved for future core planning
 
-            let per_rule = rp.fake_transformations();
-            per_rule_transformations.push(per_rule);
+            rule_transformation_infos.push(rp.transformation_infos());
             catalogs.push(catalog);
         }
 
@@ -44,13 +44,14 @@ impl StratumPlanner {
         let _plan_trees = optimizer.plan_stratum(catalog_refs);
 
         Self {
-            per_rule_transformations,
+            rule_transformation_infos,
+            ..Default::default()
         }
     }
 
     /// Read-only access to per-rule transformations.
     #[inline]
-    pub fn per_rule(&self) -> &[Vec<FakeTransformation>] {
-        &self.per_rule_transformations
+    pub fn rule_transformation_infos(&self) -> &[Vec<TransformationInfo>] {
+        &self.rule_transformation_infos
     }
 }

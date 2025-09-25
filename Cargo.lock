@@ -216,6 +216,8 @@ dependencies = [
  "optimizer",
  "parser",
  "stratifier",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
