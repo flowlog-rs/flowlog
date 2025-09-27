@@ -13,7 +13,7 @@ use pest::iterators::Pair;
 use std::fmt;
 
 /// A predicate in a rule body.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Predicate {
     /// Positive atom, e.g. `edge(X, Y)`.
     PositiveAtomPredicate(Atom),
@@ -76,6 +76,13 @@ impl fmt::Display for Predicate {
             Self::ComparePredicate(expr) => write!(f, "{expr}"),
             Self::BoolPredicate(b) => write!(f, "{b}"),
         }
+    }
+}
+
+impl fmt::Debug for Predicate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Delegate Debug to Display
+        fmt::Display::fmt(self, f)
     }
 }
 

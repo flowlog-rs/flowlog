@@ -32,14 +32,7 @@ impl Catalog {
         }
 
         // Find the global RHS position of the target atom
-        let rhs_index = self
-            .rhs_index_from_signature(atom_signature)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Catalog error: Atom not found for signature {}",
-                    atom_signature
-                )
-            });
+        let rhs_index = self.rhs_index_from_signature(atom_signature);
 
         // Convert argument signatures to IDs and sort in reverse order
         // (reverse order ensures removal doesn't affect subsequent indices)
@@ -107,14 +100,7 @@ impl Catalog {
         }
 
         // Find and validate the left atom
-        let left_rhs_index = self
-            .rhs_index_from_signature(left_atom_signature)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Catalog error: Left atom not found for signature {}",
-                    left_atom_signature
-                )
-            });
+        let left_rhs_index = self.rhs_index_from_signature(left_atom_signature);
 
         // Ensure left predicate is an atom (not a comparison or filter)
         match &self.rule.rhs()[left_rhs_index] {
@@ -126,9 +112,7 @@ impl Catalog {
         let right_indices: Vec<usize> = right_atom_signatures
             .iter()
             .map(|&sig| {
-                let idx = self.rhs_index_from_signature(sig).unwrap_or_else(|| {
-                    panic!("Catalog error: Right atom not found for signature {}", sig)
-                });
+                let idx = self.rhs_index_from_signature(sig);
                 // Ensure each right predicate is an atom
                 match &self.rule.rhs()[idx] {
                     Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_) => {}
@@ -205,9 +189,7 @@ impl Catalog {
         let right_indices: Vec<usize> = right_atom_signatures
             .iter()
             .map(|&sig| {
-                let idx = self.rhs_index_from_signature(sig).unwrap_or_else(|| {
-                    panic!("Catalog error: Right atom not found for signature {}", sig)
-                });
+                let idx = self.rhs_index_from_signature(sig);
                 // Ensure the target predicate is an atom
                 match &self.rule.rhs()[idx] {
                     Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_) => {}
@@ -276,37 +258,5 @@ impl Catalog {
         new_rhs.extend(new_predicates);
         let new_rule = MacaronRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
         self.update_rule(&new_rule);
-    }
-
-    /// Finds the global RHS index of an atom given its signature.
-    fn rhs_index_from_signature(&self, sig: AtomSignature) -> Option<usize> {
-        // Track counts for positive and negative atoms separately
-        let mut positive_count = 0;
-        let mut negative_count = 0;
-
-        // Scan through all RHS predicates to find the matching atom
-        for (global_idx, predicate) in self.rule.rhs().iter().enumerate() {
-            match predicate {
-                Predicate::PositiveAtomPredicate(_) => {
-                    // Check if this is the positive atom we're looking for
-                    if sig.is_positive() && positive_count == sig.rhs_id() {
-                        return Some(global_idx);
-                    }
-                    positive_count += 1;
-                }
-                Predicate::NegatedAtomPredicate(_) => {
-                    // Check if this is the negative atom we're looking for
-                    if !sig.is_positive() && negative_count == sig.rhs_id() {
-                        return Some(global_idx);
-                    }
-                    negative_count += 1;
-                }
-                // Skip non-atom predicates (comparisons, filters, etc.)
-                _ => {}
-            }
-        }
-
-        // Atom not found
-        None
     }
 }

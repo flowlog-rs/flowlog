@@ -3,7 +3,7 @@
 use std::fmt;
 
 /// A signature uniquely identifying an atom occurring in a RHS position per rule.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Ord, PartialOrd)]
 pub struct AtomSignature {
     is_positive: bool,
     rhs_id: usize,
@@ -53,8 +53,15 @@ impl fmt::Display for AtomSignature {
     }
 }
 
+impl fmt::Debug for AtomSignature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Delegate Debug to Display
+        fmt::Display::fmt(self, f)
+    }
+}
+
 /// A signature referencing a specific argument within an atom.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct AtomArgumentSignature {
     atom_signature: AtomSignature,
     argument_id: usize,
@@ -93,5 +100,12 @@ impl fmt::Display for AtomArgumentSignature {
     // e.g. !2.0
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}.{}", self.atom_signature, self.argument_id)
+    }
+}
+
+impl fmt::Debug for AtomArgumentSignature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Delegate Debug to Display
+        fmt::Display::fmt(self, f)
     }
 }

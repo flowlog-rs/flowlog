@@ -10,7 +10,7 @@ use tracing_subscriber::EnvFilter;
 fn main() {
     // Initialize simple tracing
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("info"))
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     // Parse command line arguments

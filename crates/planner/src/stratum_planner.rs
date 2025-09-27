@@ -4,6 +4,7 @@ use crate::{RulePlanner, TransformationInfo};
 use catalog::Catalog;
 use optimizer::Optimizer;
 use parser::logic::MacaronRule;
+use tracing::debug;
 
 /// Planner for a single stratum (a group of rules).
 #[derive(Debug, Default)]
@@ -27,21 +28,36 @@ impl StratumPlanner {
             Vec::with_capacity(rules.len());
         let mut catalogs: Vec<Catalog> = Vec::with_capacity(rules.len());
 
-        // Phase 1: per-rule prepare
-        for rule in rules {
+        for (i, rule) in rules.iter().enumerate() {
             let mut catalog = Catalog::from_rule(rule);
+            debug!("{}", "-".repeat(40));
+            debug!("rule[{i}] init:\n{catalog}");
+            debug!("{}", "-".repeat(40));
 
             let mut rp = RulePlanner::new();
             rp.prepare(&mut catalog);
-            // rp.core(&mut catalog); // reserved for future core planning
 
-            rule_transformation_infos.push(rp.transformation_infos());
+            let txs = rp.transformation_infos(); // (clone; your API returns Vec)
+            debug!("rule[{i}] prepare: {} transformations", txs.len());
+            debug!("rule[{i}] after prepare:\n{catalog}");
+            debug!("{}", "-".repeat(40));
+
+            rule_transformation_infos.push(txs);
             catalogs.push(catalog);
         }
 
-        // Phase 2: single optimizer pass for the whole stratum
         let catalog_refs: Vec<&Catalog> = catalogs.iter().collect();
-        let _plan_trees = optimizer.plan_stratum(catalog_refs);
+        debug!(
+            "optimizer: planning stratum over {} catalogs",
+            catalog_refs.len()
+        );
+        debug!("{}", "-".repeat(40));
+        let plan_trees = optimizer.plan_stratum(catalog_refs);
+
+        for (i, tree) in plan_trees.iter().enumerate() {
+            debug!("rule[{i}] plan tree:\n{tree}");
+            debug!("{}", "-".repeat(40));
+        }
 
         Self {
             rule_transformation_infos,

@@ -35,6 +35,8 @@ pub struct Catalog {
     positive_atom_argument_vars_str_sets: Vec<HashSet<String>>,
     /// For each RHS positive atom, indices of positive atoms that are supersets.
     positive_supersets: Vec<Vec<usize>>,
+    /// For each RHS positive atom, its RHS id (index).
+    positive_atom_rhs_ids: Vec<usize>,
 
     /// RHS negated atom fingerprints (in source order).
     negated_atom_fingerprints: Vec<u64>,
@@ -44,6 +46,8 @@ pub struct Catalog {
     negated_atom_argument_vars_str_sets: Vec<HashSet<String>>,
     /// For each RHS negated atom, indices of positive atoms that are supersets.
     negated_supersets: Vec<Vec<usize>>,
+    /// For each RHS negated atom, its RHS id (index).
+    negated_atom_rhs_ids: Vec<usize>,
 
     /// Local filters: variable equality constraints, constant equality constraints, placeholders.
     filters: Filters,
@@ -76,10 +80,12 @@ impl Catalog {
             positive_atom_argument_signatures: Vec::new(),
             positive_atom_argument_vars_str_sets: Vec::new(),
             positive_supersets: Vec::new(),
+            positive_atom_rhs_ids: Vec::new(),
             negated_atom_fingerprints: Vec::new(),
             negated_atom_argument_signatures: Vec::new(),
             negated_atom_argument_vars_str_sets: Vec::new(),
             negated_supersets: Vec::new(),
+            negated_atom_rhs_ids: Vec::new(),
             filters: Filters::new(HashMap::new(), HashMap::new(), HashSet::new()),
             comparison_predicates: Vec::new(),
             comparison_predicates_vars_str_set: Vec::new(),
@@ -100,10 +106,12 @@ impl Catalog {
         self.positive_atom_argument_signatures.clear();
         self.positive_atom_argument_vars_str_sets.clear();
         self.positive_supersets.clear();
+        self.positive_atom_rhs_ids.clear();
         self.negated_atom_fingerprints.clear();
         self.negated_atom_argument_signatures.clear();
         self.negated_atom_argument_vars_str_sets.clear();
         self.negated_supersets.clear();
+        self.negated_atom_rhs_ids.clear();
         self.filters = Filters::new(HashMap::new(), HashMap::new(), HashSet::new());
         self.comparison_predicates.clear();
         self.comparison_predicates_vars_str_set.clear();
@@ -128,10 +136,10 @@ impl Catalog {
         &self.rule
     }
 
-    /// Get the reverse map from signatures to their variable strings.
+    /// Get the argument string for a specific signature.
     #[inline]
-    pub fn signature_to_argument_str_map(&self) -> &HashMap<AtomArgumentSignature, String> {
-        &self.signature_to_argument_str_map
+    pub fn signature_to_argument_str(&self, sig: &AtomArgumentSignature) -> &String {
+        &self.signature_to_argument_str_map.get(sig).unwrap()
     }
 
     /// Get the core atom count for rules with no supersets or filters.
@@ -180,6 +188,12 @@ impl Catalog {
         &self.positive_supersets
     }
 
+    /// Get the RHS id (index) of a positive atom by its index.
+    #[inline]
+    pub fn positive_atom_rhs_id(&self, index: usize) -> usize {
+        self.positive_atom_rhs_ids[index]
+    }
+
     // === Negated Atoms ===
 
     /// Get the fingerprint of a negated atom by its index.
@@ -198,6 +212,12 @@ impl Catalog {
     #[inline]
     pub fn negated_supersets(&self) -> &Vec<Vec<usize>> {
         &self.negated_supersets
+    }
+
+    /// Get the RHS id (index) of a negated atom by its index.
+    #[inline]
+    pub fn negated_atom_rhs_id(&self, index: usize) -> usize {
+        self.negated_atom_rhs_ids[index]
     }
 
     // === Atom Resolution ===
@@ -221,6 +241,15 @@ impl Catalog {
                 self.negated_atom_fingerprints[atom_id],
                 atom_id,
             )
+        }
+    }
+
+    /// Finds the global RHS index of an atom given its signature.
+    pub fn rhs_index_from_signature(&self, sig: AtomSignature) -> usize {
+        if sig.is_positive() {
+            self.positive_atom_rhs_ids[sig.rhs_id()]
+        } else {
+            self.negated_atom_rhs_ids[sig.rhs_id()]
         }
     }
 
@@ -317,7 +346,7 @@ impl Catalog {
 
 impl fmt::Display for Catalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Catalog for rule: {}", self.rule())?;
+        writeln!(f, "Rule:\n  {}", self.rule())?;
 
         let fmt_sig_list = |sigs: &[AtomArgumentSignature],
                             map: &HashMap<AtomArgumentSignature, String>|
@@ -330,7 +359,18 @@ impl fmt::Display for Catalog {
             format!("[{}]", items.join(", "))
         };
 
-        writeln!(f, "Positive atoms:")?;
+        // NEW: simple index vector pretty-printer (keeps original order)
+        let fmt_idx_list = |idxs: &[usize]| -> String {
+            format!(
+                "[{}]",
+                idxs.iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+
+        writeln!(f, "\nPositive atoms:")?;
         for (i, fp) in self.positive_atom_fingerprints.iter().enumerate() {
             let args = fmt_sig_list(
                 &self.positive_atom_argument_signatures[i],
@@ -350,6 +390,27 @@ impl fmt::Display for Catalog {
                 );
                 writeln!(f, "  [{:>2}] 0x{:x} args: {}", i, fp, args)?;
             }
+        }
+
+        // NEW: print RHS index vectors with per-entry mapping
+        writeln!(f, "\nRHS indices (by atom kind):")?;
+        writeln!(
+            f,
+            "  positive_atom_rhs_ids ({}): {}",
+            self.positive_atom_rhs_ids.len(),
+            fmt_idx_list(&self.positive_atom_rhs_ids)
+        )?;
+        for (i, rhs_id) in self.positive_atom_rhs_ids.iter().copied().enumerate() {
+            writeln!(f, "    pos[{:>2}] -> rhs[{:>2}]", i, rhs_id)?;
+        }
+        writeln!(
+            f,
+            "  negated_atom_rhs_ids  ({}): {}",
+            self.negated_atom_rhs_ids.len(),
+            fmt_idx_list(&self.negated_atom_rhs_ids)
+        )?;
+        for (i, rhs_id) in self.negated_atom_rhs_ids.iter().copied().enumerate() {
+            writeln!(f, "    neg[{:>2}] -> rhs[{:>2}]", i, rhs_id)?;
         }
 
         let mut sig_entries: Vec<_> = self.signature_to_argument_str_map.iter().collect();

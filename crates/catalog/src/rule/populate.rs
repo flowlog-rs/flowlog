@@ -57,12 +57,18 @@ impl Catalog {
 
         // Partition RHS predicates into positive atoms, negated atoms, and comparisons
         let (positive_atoms, negated_atoms, comparison_predicates): (Vec<_>, Vec<_>, Vec<_>) =
-            self.rule.rhs().iter().fold(
+            self.rule.rhs().iter().enumerate().fold(
                 (Vec::new(), Vec::new(), Vec::new()),
-                |(mut pos, mut neg, mut comp), p| {
+                |(mut pos, mut neg, mut comp), (i, p)| {
                     match p {
-                        Predicate::PositiveAtomPredicate(a) => pos.push(a),
-                        Predicate::NegatedAtomPredicate(a) => neg.push(a),
+                        Predicate::PositiveAtomPredicate(a) => {
+                            pos.push(a);
+                            self.positive_atom_rhs_ids.push(i);
+                        }
+                        Predicate::NegatedAtomPredicate(a) => {
+                            neg.push(a);
+                            self.negated_atom_rhs_ids.push(i);
+                        }
                         Predicate::ComparePredicate(expr) => comp.push(expr.clone()),
                         Predicate::BoolPredicate(_) => {}
                     };
