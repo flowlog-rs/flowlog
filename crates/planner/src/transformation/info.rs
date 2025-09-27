@@ -320,6 +320,46 @@ impl TransformationInfo {
         }
     }
 
+    /// Replace a placeholder (fake) input layout with its resolved (real) positions.
+    ///
+    /// Necessary once the actual input schema is known, since downstream operators
+    /// (e.g., joins) require concrete key/value layouts.
+    pub fn update_input_key_value_layout(
+        &mut self,
+        real_input_kv_layout: KeyValueLayout,
+        left: bool,
+    ) {
+        match self {
+            Self::KVToKV {
+                input_kv_layout, ..
+            } => {
+                *input_kv_layout = real_input_kv_layout;
+            }
+            Self::JoinToKV {
+                left_input_kv_layout,
+                right_input_kv_layout,
+                ..
+            } => {
+                if left {
+                    *left_input_kv_layout = real_input_kv_layout;
+                } else {
+                    *right_input_kv_layout = real_input_kv_layout;
+                }
+            }
+            Self::AntiJoinToKV {
+                left_input_kv_layout,
+                right_input_kv_layout,
+                ..
+            } => {
+                if left {
+                    *left_input_kv_layout = real_input_kv_layout;
+                } else {
+                    *right_input_kv_layout = real_input_kv_layout;
+                }
+            }
+        }
+    }
+
     /// Replace a placeholder (fake) output layout with its resolved (real) positions.
     ///
     /// Necessary once the actual output schema is known, since downstream operators

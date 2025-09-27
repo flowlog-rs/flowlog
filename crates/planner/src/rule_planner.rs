@@ -2,10 +2,7 @@
 
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
-use std::{
-    collections::{HashMap, HashSet},
-    vec,
-};
+use std::collections::{HashMap, HashSet};
 
 /// Rule planner for the per-rule planning.
 #[derive(Debug, Default)]
@@ -13,8 +10,9 @@ pub struct RulePlanner {
     /// The list of transformation info generated during the alpha elimination prepare phase.
     transformation_infos: Vec<TransformationInfo>,
 
-    /// The map of key-value layout indexed by transformation signature.
-    kv_layouts: HashMap<u64, (Vec<ArithmeticPos>, Vec<ArithmeticPos>)>,
+    /// The map of key-value layout indexed by transformation fingerprint.
+    /// We cache the index of the start of value columns.
+    kv_layouts: HashMap<u64, usize>,
 }
 
 impl RulePlanner {
@@ -26,25 +24,25 @@ impl RulePlanner {
         }
     }
 
-    /// Executes the alpha elimination prepare phase of per-rule planning.
+    /// Executes the alpha-elimination prepare phase of per-rule planning.
     pub fn prepare(&mut self, catalog: &mut Catalog) {
         loop {
-            // Try to apply the next available filter; continue looping on success
+            // Try to apply the next available filter; continue looping on success.
             if self.apply_filter(catalog) {
                 continue;
             }
 
-            // Try the second step (TODO: implement)
+            // Try semijoin-like prep step.
             if self.apply_semijoin(catalog) {
                 continue;
             }
 
-            // Try to remove arguments not contributing to the output
+            // Try to remove arguments not contributing to the output.
             if self.remove_unused_arguments(catalog) {
                 continue;
             }
 
-            // Neither step could apply — we've done alpha elimination
+            // Neither step could apply — we've done alpha elimination.
             break;
         }
     }
@@ -53,481 +51,377 @@ impl RulePlanner {
         todo!("Implement the core planning phase");
     }
 
+    /// NOTE: keeps original API (clone) to avoid breaking callers.
     pub fn transformation_infos(&self) -> Vec<TransformationInfo> {
         self.transformation_infos.clone()
     }
 
-    /// Applies the first available filter and updates the catalog.
+    /// Applies available filters in priority order, mutating the catalog if applied.
     fn apply_filter(&mut self, catalog: &mut Catalog) -> bool {
         let filters = catalog.filters();
 
         // Priority 1: Variable equality filter (var1 == var2)
-        if let Some((&sig_a, &sig_b)) = filters.var_eq_map().iter().next() {
-            // Always order pair so that var1_sig < var2_sig (by atom signature, then argument id)
-            let (var1_sig, var2_sig) = if (*sig_a.atom_signature(), sig_a.argument_id())
-                <= (*sig_b.atom_signature(), sig_b.argument_id())
+        if let Some((&a, &b)) = filters.var_eq_map().iter().next() {
+            // Canonicalize order: (smaller atom sig, then smaller arg id) comes first.
+            let (var1_sig, var2_sig) = if (*a.atom_signature(), a.argument_id())
+                <= (*b.atom_signature(), b.argument_id())
             {
-                (sig_a, sig_b)
+                (a, b)
             } else {
-                (sig_b, sig_a)
+                (b, a)
             };
 
-            // Step 1: Locate the target atom and fetch its args
             let atom_signature = var1_sig.atom_signature();
-            let (args, atom_fg, atom_id) = catalog.resolve_atom(atom_signature);
+            let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
 
-            // Step 2: Build the input key-value layout
-            let (input_key_exprs, input_value_exprs) =
-                self.kv_layouts.get(&atom_fg).cloned().unwrap_or_else(|| {
-                    let input_key_exprs = Vec::new(); // Row-based input
-                    let input_value_exprs: Vec<ArithmeticPos> = args
-                        .iter()
-                        .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                        .collect();
-                    self.kv_layouts.insert(
-                        atom_fg,
-                        (input_key_exprs.clone(), input_value_exprs.clone()),
-                    );
-                    (input_key_exprs, input_value_exprs)
-                });
+            let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
+            let out_vals = Self::out_values_excluding(args, var2_sig);
 
-            // Step 3: Create default output key-value layout as row based (no keys).
-            let (fake_output_key_exprs, fake_output_value_exprs): (
-                Vec<ArithmeticPos>,
-                Vec<ArithmeticPos>,
-            ) = (Vec::new(), Self::out_values_excluding(args, var2_sig));
-
-            // Step 4: Create the fake transformation
-            let fk_tx = TransformationInfo::kv_to_kv(
-                atom_fg,
-                KeyValueLayout::new(input_key_exprs, input_value_exprs),
-                KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
-                vec![],                     // no const-eq constraints here
-                vec![(var1_sig, var2_sig)], // var-eq constraint
-                vec![],                     // no comparisons here
+            // Build a “filter then project-away-dropped-var” KV→KV transformation.
+            let tx = TransformationInfo::kv_to_kv(
+                atom_fp,
+                KeyValueLayout::new(in_keys, in_vals),
+                KeyValueLayout::new(Vec::new(), out_vals),
+                vec![],                     // no const-eq
+                vec![(var1_sig, var2_sig)], // var-eq
+                vec![],                     // no comparisons
             );
 
-            // Step 4: Mutate catalog — project away the constrained var and update its identity
-            let new_name = format!(
-                "{}_proj",
-                if atom_signature.is_positive() {
-                    format!("atom_{}", atom_id)
-                } else {
-                    format!("neg_atom_{}", atom_id)
-                }
-            );
+            let new_name = Self::projection_name(atom_signature, atom_id);
             catalog.projection_modify(
                 *atom_signature,
                 vec![var2_sig],
                 new_name,
-                fk_tx.output_info_fp(),
+                tx.output_info_fp(),
             );
 
-            // Step 6: Record the transformation in the prepared phase pipeline
-            self.transformation_infos.push(fk_tx);
+            // Update key-value layout cache
+            self.kv_layouts.insert(tx.output_info_fp(), 0);
 
+            self.transformation_infos.push(tx);
             return true;
         }
-        // Priority 2: Constant equality filters (var == const)
-        else if let Some((&var_sig, const_val)) = filters.const_map().iter().next() {
-            // Step 1: Locate the target atom and fetch its (args, fingerprint)
+
+        // Priority 2: Constant equality filter (var == const)
+        if let Some((&var_sig, const_val)) = filters.const_map().iter().next() {
             let atom_signature = var_sig.atom_signature();
             let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
 
-            // Step 2: Build the input key-value layout
-            let (input_key_exprs, input_value_exprs) =
-                self.kv_layouts.get(&atom_fp).cloned().unwrap_or_else(|| {
-                    let input_key_exprs = Vec::new(); // Row-based input
-                    let input_value_exprs: Vec<ArithmeticPos> = args
-                        .iter()
-                        .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                        .collect();
-                    self.kv_layouts.insert(
-                        atom_fp,
-                        (input_key_exprs.clone(), input_value_exprs.clone()),
-                    );
-                    (input_key_exprs, input_value_exprs)
-                });
+            let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
+            let out_vals = Self::out_values_excluding(args, var_sig);
 
-            // Step 3: Create default output key-value layout as row based (no keys).
-            let (fake_output_key_exprs, fake_output_value_exprs): (
-                Vec<ArithmeticPos>,
-                Vec<ArithmeticPos>,
-            ) = (Vec::new(), Self::out_values_excluding(args, var_sig));
-
-            // Step 4: Create the fake transformation
-            let fk_tx = TransformationInfo::kv_to_kv(
+            let tx = TransformationInfo::kv_to_kv(
                 atom_fp,
-                KeyValueLayout::new(input_key_exprs, input_value_exprs),
-                KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
-                vec![(var_sig, const_val.clone())], // no const-eq constraints here
-                vec![],                             // var-eq constraint
-                vec![],                             // no comparisons here
+                KeyValueLayout::new(in_keys, in_vals),
+                KeyValueLayout::new(Vec::new(), out_vals),
+                vec![(var_sig, const_val.clone())],
+                vec![], // no var-eq
+                vec![], // no comparisons
             );
 
-            // Step 5: Mutate catalog — project away the constrained var and update its identity
-            let new_name = format!(
-                "{}_proj",
-                if atom_signature.is_positive() {
-                    format!("atom_{}", atom_id)
-                } else {
-                    format!("neg_atom_{}", atom_id)
-                }
-            );
+            let new_name = Self::projection_name(atom_signature, atom_id);
             catalog.projection_modify(
                 *atom_signature,
                 vec![var_sig],
                 new_name,
-                fk_tx.output_info_fp(),
+                tx.output_info_fp(),
             );
 
-            // Step 6: Record the transformation in the prepared phase pipeline
-            self.transformation_infos.push(fk_tx);
+            // Update key-value layout cache
+            self.kv_layouts.insert(tx.output_info_fp(), 0);
 
+            self.transformation_infos.push(tx);
             return true;
         }
+
         // Priority 3: Placeholder filters
-        else if let Some(&var_sig) = filters.placeholder_set().iter().next() {
-            // Step 1: Locate the target atom and fetch its (args, fingerprint)
+        if let Some(&var_sig) = filters.placeholder_set().iter().next() {
             let atom_signature = var_sig.atom_signature();
             let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
 
-            // Step 2: Build the input key-value layout
-            let (input_key_exprs, input_value_exprs) =
-                self.kv_layouts.get(&atom_fp).cloned().unwrap_or_else(|| {
-                    let input_key_exprs = Vec::new(); // Row-based input
-                    let input_value_exprs: Vec<ArithmeticPos> = args
-                        .iter()
-                        .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                        .collect();
-                    self.kv_layouts.insert(
-                        atom_fp,
-                        (input_key_exprs.clone(), input_value_exprs.clone()),
-                    );
-                    (input_key_exprs, input_value_exprs)
-                });
+            let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
+            let out_vals = Self::out_values_excluding(args, var_sig);
 
-            // Step 3: Create default output key-value layout as row based (no keys).
-            let (fake_output_key_exprs, fake_output_value_exprs): (
-                Vec<ArithmeticPos>,
-                Vec<ArithmeticPos>,
-            ) = (Vec::new(), Self::out_values_excluding(args, var_sig));
-
-            // Step 4: Create the fake transformation
-            let fk_tx = TransformationInfo::kv_to_kv(
+            let tx = TransformationInfo::kv_to_kv(
                 atom_fp,
-                KeyValueLayout::new(input_key_exprs, input_value_exprs),
-                KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
-                vec![], // no const-eq constraints here
-                vec![], // var-eq constraint
-                vec![], // no comparisons here
+                KeyValueLayout::new(in_keys, in_vals),
+                KeyValueLayout::new(Vec::new(), out_vals),
+                vec![], // no const-eq
+                vec![], // no var-eq
+                vec![], // no comparisons
             );
 
-            // Step 5: Mutate catalog — project away the constrained var and update its identity
-            let new_name = format!(
-                "{}_proj",
-                if atom_signature.is_positive() {
-                    format!("atom_{}", atom_id)
-                } else {
-                    format!("neg_atom_{}", atom_id)
-                }
-            );
+            let new_name = Self::projection_name(atom_signature, atom_id);
             catalog.projection_modify(
                 *atom_signature,
                 vec![var_sig],
                 new_name,
-                fk_tx.output_info_fp(),
+                tx.output_info_fp(),
             );
 
-            // Step 6: Record the transformation in the prepared phase pipeline
-            self.transformation_infos.push(fk_tx);
+            // Update key-value layout cache
+            self.kv_layouts.insert(tx.output_info_fp(), 0);
 
+            self.transformation_infos.push(tx);
             return true;
         }
 
         false
     }
 
+    /// Removes unused arguments across atoms (batched).
     fn remove_unused_arguments(&mut self, catalog: &mut Catalog) -> bool {
         let groups = catalog.unused_arguments_per_atom();
         if groups.is_empty() {
             return false;
         }
 
-        let mut applied_any = false;
-
+        let mut applied = false;
         for (atom_signature, to_delete) in groups.clone() {
-            // Resolve current atom state
             let (args, atom_fp, atom_id) = catalog.resolve_atom(&atom_signature);
 
-            // Build projected output excluding all to_delete
-            let drop_set: HashSet<AtomArgumentSignature> = to_delete.iter().copied().collect();
-            let (input_key_exprs, input_value_exprs) =
-                self.kv_layouts.get(&atom_fp).cloned().unwrap_or_else(|| {
-                    let input_key_exprs = Vec::new(); // Row-based input
-                    let input_value_exprs: Vec<ArithmeticPos> = args
-                        .iter()
-                        .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                        .collect();
-                    self.kv_layouts.insert(
-                        atom_fp,
-                        (input_key_exprs.clone(), input_value_exprs.clone()),
-                    );
-                    (input_key_exprs, input_value_exprs)
-                });
-            let out_values: Vec<ArithmeticPos> = args
+            let drop_set: HashSet<ArithmeticPos> = to_delete
                 .iter()
-                .filter(|&sig| !drop_set.contains(sig))
                 .map(|&sig| ArithmeticPos::from_var_signature(sig))
                 .collect();
 
-            // Build transformation and compute new fingerprint
-            let fk_tx = TransformationInfo::kv_to_kv(
+            let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
+
+            let out_keys: Vec<ArithmeticPos> = in_keys
+                .iter()
+                .filter(|&sig| !drop_set.contains(sig))
+                .cloned()
+                .collect();
+            let out_vals: Vec<ArithmeticPos> = in_vals
+                .iter()
+                .filter(|&sig| !drop_set.contains(sig))
+                .cloned()
+                .collect();
+            let out_value_start_idx = out_keys.len();
+
+            let tx = TransformationInfo::kv_to_kv(
                 atom_fp,
-                KeyValueLayout::new(input_key_exprs, input_value_exprs),
-                KeyValueLayout::new(vec![], out_values),
+                KeyValueLayout::new(in_keys, in_vals),
+                KeyValueLayout::new(out_keys, out_vals),
                 vec![],
                 vec![],
                 vec![],
             );
 
-            // Mutate catalog for this atom
-            let new_name = format!(
-                "{}_proj",
-                if atom_signature.is_positive() {
-                    format!("atom_{}", atom_id)
-                } else {
-                    format!("neg_atom_{}", atom_id)
-                }
-            );
-            catalog.projection_modify(atom_signature, to_delete, new_name, fk_tx.output_info_fp());
+            let new_name = Self::projection_name(&atom_signature, atom_id);
+            catalog.projection_modify(atom_signature, to_delete, new_name, tx.output_info_fp());
 
-            // Record the transformation
-            self.transformation_infos.push(fk_tx);
-            applied_any = true;
+            // Update key-value layout cache
+            self.kv_layouts
+                .insert(tx.output_info_fp(), out_value_start_idx);
+
+            self.transformation_infos.push(tx);
+            applied = true;
         }
 
-        applied_any
+        applied
     }
 
-    /// Second step after applying the first filter.
-    /// TODO: implement the additional preparation action; return true if something was applied.
+    /// Second step after applying the first filter: prepare via (anti-)semijoin or comparison pushdown.
+    /// Returns true if something was applied.
     fn apply_semijoin(&mut self, catalog: &mut Catalog) -> bool {
         // (1) Positive predicate has positive supersets
-        let pos_supersets = catalog.positive_supersets();
-        let neg_supersets = catalog.negated_supersets();
-        let comp_supersets = catalog.comparison_supersets();
-
-        if let Some((lhs_pos_idx, rhs_pos_indices)) = pos_supersets
+        if let Some((lhs_pos_idx, rhs_pos_indices)) = catalog
+            .positive_supersets()
             .iter()
             .enumerate()
             .find(|(_, v)| !v.is_empty())
         {
-            let mut new_names: Vec<String> = Vec::new();
-            let mut new_fingerprints: Vec<u64> = Vec::new();
-            let mut new_arguments_list: Vec<Vec<AtomArgumentSignature>> = Vec::new();
-            let mut right_atom_signatures: Vec<AtomSignature> = Vec::new();
-
             let lhs_pos_args = catalog
                 .positive_atom_argument_signature(lhs_pos_idx)
                 .clone();
             let lhs_pos_fp = catalog.positive_atom_fingerprint(lhs_pos_idx);
             let left_atom_signature = AtomSignature::new(true, lhs_pos_idx);
-            for super_pos_idx in rhs_pos_indices {
-                let rhs_pos_args = catalog
-                    .positive_atom_argument_signature(*super_pos_idx)
-                    .clone();
-                new_arguments_list.push(rhs_pos_args.clone());
-                let rhs_pos_fp = catalog.positive_atom_fingerprint(*super_pos_idx);
-                right_atom_signatures.push(AtomSignature::new(true, *super_pos_idx));
 
-                let input_key_exprs: Vec<ArithmeticPos> = lhs_pos_args
-                    .iter()
-                    .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                    .collect();
-                let input_key_str = lhs_pos_args
-                    .iter()
-                    .map(|sig| catalog.signature_to_argument_str_map().get(sig).unwrap())
-                    .collect::<HashSet<_>>();
-                let input_value_exprs: Vec<ArithmeticPos> = rhs_pos_args
+            let mut new_names = Vec::new();
+            let mut new_fps = Vec::new();
+            let mut new_arg_lists = Vec::new();
+            let mut right_sigs = Vec::new();
+
+            let lhs_keys: Vec<ArithmeticPos> = lhs_pos_args
+                .iter()
+                .map(|&s| ArithmeticPos::from_var_signature(s))
+                .collect();
+            let out_value_start_idx = lhs_keys.len();
+
+            // Precompute set of LHS argument strings for “value-only” cols on RHS.
+            let lhs_arg_names = Self::arg_names_set(&lhs_pos_args, catalog);
+
+            for &rhs_idx in rhs_pos_indices {
+                let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
+                let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
+
+                new_arg_lists.push(rhs_args.clone());
+                right_sigs.push(AtomSignature::new(true, rhs_idx));
+
+                let rhs_vals: Vec<ArithmeticPos> = rhs_args
                     .iter()
                     .filter(|&sig| {
-                        !input_key_str
+                        !lhs_arg_names
                             .contains(catalog.signature_to_argument_str_map().get(sig).unwrap())
                     })
-                    .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                    .map(|&s| ArithmeticPos::from_var_signature(s))
                     .collect();
 
-                let (fake_output_key_exprs, fake_output_value_exprs) =
-                    (input_key_exprs.clone(), input_value_exprs.clone());
-
-                let fk_tx = TransformationInfo::join_to_kv(
+                let tx = TransformationInfo::join_to_kv(
                     lhs_pos_fp,
-                    rhs_pos_fp,
-                    KeyValueLayout::new(input_key_exprs, vec![]),
-                    KeyValueLayout::new(vec![], input_value_exprs),
-                    KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
-                    vec![], // no comparisons here
+                    rhs_fp,
+                    KeyValueLayout::new(lhs_keys.clone(), Vec::new()), // join keys from LHS
+                    KeyValueLayout::new(Vec::new(), rhs_vals.clone()), // RHS “payload” as values
+                    KeyValueLayout::new(lhs_keys.clone(), rhs_vals), // output preserves keys+payload
+                    vec![],                                          // no extra comparisons
                 );
 
                 new_names.push(format!(
                     "atom_{}_pos_semijoin_atom_{}",
-                    lhs_pos_idx, super_pos_idx
+                    lhs_pos_idx, rhs_idx
                 ));
-                new_fingerprints.push(fk_tx.output_info_fp());
-                self.transformation_infos.push(fk_tx);
+                new_fps.push(tx.output_info_fp());
+
+                // Update key-value layout cache
+                self.kv_layouts
+                    .insert(tx.output_info_fp(), out_value_start_idx);
+
+                self.transformation_infos.push(tx);
             }
 
             catalog.join_modify(
                 left_atom_signature,
-                right_atom_signatures,
-                new_arguments_list,
+                right_sigs,
+                new_arg_lists,
                 new_names,
-                new_fingerprints,
+                new_fps,
             );
-
             return true;
-        } else {
-            // 2) Negated predicate has positive supersets
+        }
 
-            if let Some((lhs_neg_idx, rhs_pos_indices)) = neg_supersets
+        // (2) Negated predicate has positive supersets
+        if let Some((lhs_neg_idx, rhs_pos_indices)) = catalog
+            .negated_supersets()
+            .iter()
+            .enumerate()
+            .find(|(_, v)| !v.is_empty())
+        {
+            let lhs_neg_args = catalog.negated_atom_argument_signature(lhs_neg_idx).clone();
+            let lhs_neg_fp = catalog.negated_atom_fingerprint(lhs_neg_idx);
+            let left_atom_signature = AtomSignature::new(false, lhs_neg_idx);
+
+            let mut new_names = Vec::new();
+            let mut new_fps = Vec::new();
+            let mut new_arg_lists = Vec::new();
+            let mut right_sigs = Vec::new();
+
+            let lhs_keys: Vec<ArithmeticPos> = lhs_neg_args
                 .iter()
-                .enumerate()
-                .find(|(_, v)| !v.is_empty())
-            {
-                let mut new_names: Vec<String> = Vec::new();
-                let mut new_fingerprints: Vec<u64> = Vec::new();
-                let mut new_arguments_list: Vec<Vec<AtomArgumentSignature>> = Vec::new();
-                let mut right_atom_signatures: Vec<AtomSignature> = Vec::new();
+                .map(|&s| ArithmeticPos::from_var_signature(s))
+                .collect();
+            let lhs_arg_names = Self::arg_names_set(&lhs_neg_args, catalog);
+            let out_value_start_idx = lhs_keys.len();
 
-                let lhs_neg_args = catalog.negated_atom_argument_signature(lhs_neg_idx).clone();
-                let lhs_neg_fp = catalog.negated_atom_fingerprint(lhs_neg_idx);
-                let left_atom_signature = AtomSignature::new(false, lhs_neg_idx);
-                for super_pos_idx in rhs_pos_indices {
-                    let rhs_pos_args = catalog
-                        .positive_atom_argument_signature(*super_pos_idx)
-                        .clone();
-                    new_arguments_list.push(rhs_pos_args.clone());
-                    let rhs_pos_fp = catalog.positive_atom_fingerprint(*super_pos_idx);
-                    right_atom_signatures.push(AtomSignature::new(true, *super_pos_idx));
+            for &rhs_idx in rhs_pos_indices {
+                let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
+                let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
 
-                    let input_key_exprs: Vec<ArithmeticPos> = lhs_neg_args
-                        .iter()
-                        .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                        .collect();
-                    let input_key_str = lhs_neg_args
-                        .iter()
-                        .map(|sig| catalog.signature_to_argument_str_map().get(sig).unwrap())
-                        .collect::<HashSet<_>>();
-                    let input_value_exprs: Vec<ArithmeticPos> = rhs_pos_args
-                        .iter()
-                        .filter(|&sig| {
-                            !input_key_str
-                                .contains(catalog.signature_to_argument_str_map().get(sig).unwrap())
-                        })
-                        .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                        .collect();
+                new_arg_lists.push(rhs_args.clone());
+                right_sigs.push(AtomSignature::new(true, rhs_idx));
 
-                    let (fake_output_key_exprs, fake_output_value_exprs) =
-                        (input_key_exprs.clone(), input_value_exprs.clone());
+                let rhs_vals: Vec<ArithmeticPos> = rhs_args
+                    .iter()
+                    .filter(|&sig| {
+                        !lhs_arg_names
+                            .contains(catalog.signature_to_argument_str_map().get(sig).unwrap())
+                    })
+                    .map(|&s| ArithmeticPos::from_var_signature(s))
+                    .collect();
 
-                    let fk_tx = TransformationInfo::anti_join_to_kv(
-                        lhs_neg_fp,
-                        rhs_pos_fp,
-                        KeyValueLayout::new(input_key_exprs, vec![]),
-                        KeyValueLayout::new(vec![], input_value_exprs),
-                        KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
-                    );
-
-                    new_names.push(format!(
-                        "atom_{}_neg_semijoin_atom_{}",
-                        lhs_neg_idx, super_pos_idx
-                    ));
-                    new_fingerprints.push(fk_tx.output_info_fp());
-                    self.transformation_infos.push(fk_tx);
-                }
-
-                catalog.join_modify(
-                    left_atom_signature,
-                    right_atom_signatures,
-                    new_arguments_list,
-                    new_names,
-                    new_fingerprints,
+                let tx = TransformationInfo::anti_join_to_kv(
+                    lhs_neg_fp,
+                    rhs_fp,
+                    KeyValueLayout::new(lhs_keys.clone(), Vec::new()),
+                    KeyValueLayout::new(Vec::new(), rhs_vals.clone()),
+                    KeyValueLayout::new(lhs_keys.clone(), rhs_vals),
                 );
 
-                return true;
-            } else {
-                // 3) Comparison predicate has positive supersets
-                if let Some((lhs_comp_idx, rhs_pos_indices)) = comp_supersets
-                    .iter()
-                    .enumerate()
-                    .find(|(_, v)| !v.is_empty())
-                {
-                    let mut new_names: Vec<String> = Vec::new();
-                    let mut new_fingerprints: Vec<u64> = Vec::new();
-                    let mut right_atom_signatures: Vec<AtomSignature> = Vec::new();
+                new_names.push(format!(
+                    "atom_{}_neg_semijoin_atom_{}",
+                    lhs_neg_idx, rhs_idx
+                ));
+                new_fps.push(tx.output_info_fp());
 
-                    let comparison_exprs = catalog.comparison_predicate(lhs_comp_idx);
-                    for super_pos_idx in rhs_pos_indices {
-                        let rhs_pos_args = catalog
-                            .positive_atom_argument_signature(*super_pos_idx)
-                            .clone();
-                        let rhs_pos_fp = catalog.positive_atom_fingerprint(*super_pos_idx);
-                        right_atom_signatures.push(AtomSignature::new(true, *super_pos_idx));
+                // Update key-value layout cache
+                self.kv_layouts
+                    .insert(tx.output_info_fp(), out_value_start_idx);
 
-                        let (input_key_exprs, input_value_exprs) = self
-                            .kv_layouts
-                            .get(&rhs_pos_fp)
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                let input_key_exprs = Vec::new(); // Row-based input
-                                let input_value_exprs: Vec<ArithmeticPos> = rhs_pos_args
-                                    .iter()
-                                    .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                                    .collect();
-                                self.kv_layouts.insert(
-                                    rhs_pos_fp,
-                                    (input_key_exprs.clone(), input_value_exprs.clone()),
-                                );
-                                (input_key_exprs, input_value_exprs)
-                            });
-
-                        let (fake_output_key_exprs, fake_output_value_exprs) =
-                            (input_key_exprs.clone(), input_value_exprs.clone());
-
-                        let fk_tx = TransformationInfo::kv_to_kv(
-                            rhs_pos_fp,
-                            KeyValueLayout::new(input_key_exprs, input_value_exprs),
-                            KeyValueLayout::new(fake_output_key_exprs, fake_output_value_exprs),
-                            vec![], // no const-eq constraints here
-                            vec![], // var-eq constraint
-                            vec![
-                                catalog.resolve_comparison_predicates(*super_pos_idx, lhs_comp_idx)
-                            ], // no comparisons here
-                        );
-
-                        new_names.push(format!(
-                            "comparison_{}_filter_atom_{}",
-                            comparison_exprs, super_pos_idx
-                        ));
-                        new_fingerprints.push(fk_tx.output_info_fp());
-                        self.transformation_infos.push(fk_tx);
-                    }
-
-                    catalog.comparison_modify(
-                        lhs_comp_idx,
-                        right_atom_signatures,
-                        new_names,
-                        new_fingerprints,
-                    );
-
-                    return true;
-                }
+                self.transformation_infos.push(tx);
             }
+
+            catalog.join_modify(
+                left_atom_signature,
+                right_sigs,
+                new_arg_lists,
+                new_names,
+                new_fps,
+            );
+            return true;
+        }
+
+        // (3) Comparison predicate has positive supersets
+        if let Some((lhs_comp_idx, rhs_pos_indices)) = catalog
+            .comparison_supersets()
+            .iter()
+            .enumerate()
+            .find(|(_, v)| !v.is_empty())
+        {
+            let comparison_exprs = catalog.comparison_predicate(lhs_comp_idx);
+
+            let mut new_names = Vec::new();
+            let mut new_fps = Vec::new();
+            let mut right_sigs = Vec::new();
+
+            for &rhs_idx in rhs_pos_indices {
+                let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
+                let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
+
+                right_sigs.push(AtomSignature::new(true, rhs_idx));
+
+                let (in_keys, in_vals) = self.get_or_init_row_kv_layout(rhs_fp, &rhs_args);
+                let out_value_start_idx = in_keys.len();
+
+                let tx = TransformationInfo::kv_to_kv(
+                    rhs_fp,
+                    KeyValueLayout::new(in_keys.clone(), in_vals.clone()),
+                    KeyValueLayout::new(in_keys, in_vals),
+                    vec![], // no const-eq
+                    vec![], // no var-eq
+                    vec![catalog.resolve_comparison_predicates(rhs_idx, lhs_comp_idx)],
+                );
+
+                new_names.push(format!(
+                    "comparison_{}_filter_atom_{}",
+                    comparison_exprs, rhs_idx
+                ));
+                new_fps.push(tx.output_info_fp());
+
+                // Update key-value layout cache
+                self.kv_layouts
+                    .insert(tx.output_info_fp(), out_value_start_idx);
+
+                self.transformation_infos.push(tx);
+            }
+
+            catalog.comparison_modify(lhs_comp_idx, right_sigs, new_names, new_fps);
+            return true;
         }
 
         false
     }
+
+    // -------- Helpers -------------------------------------------------------
 
     /// Build output value expressions excluding a specific argument signature.
     fn out_values_excluding(
@@ -535,8 +429,58 @@ impl RulePlanner {
         drop_sig: AtomArgumentSignature,
     ) -> Vec<ArithmeticPos> {
         args.iter()
-            .filter(|&sig| sig != &drop_sig)
+            .filter(|&sig| *sig != drop_sig)
             .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect()
+    }
+
+    /// Returns an existing KV layout for atom fingerprint, or initializes a row-based (no key) layout
+    /// We cache only the split index: before that index = keys, from that index = values.
+    fn get_or_init_row_kv_layout(
+        &mut self,
+        atom_fp: u64,
+        args: &[AtomArgumentSignature],
+    ) -> (Vec<ArithmeticPos>, Vec<ArithmeticPos>) {
+        if let Some(&split_idx) = self.kv_layouts.get(&atom_fp) {
+            // Already cached: split according to stored index
+            let all: Vec<ArithmeticPos> = args
+                .iter()
+                .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                .collect();
+            let (keys, vals) = all.split_at(split_idx);
+            return (keys.to_vec(), vals.to_vec());
+        }
+
+        // Not cached: default row-based (all values, no keys)
+        let keys = Vec::new();
+        let vals: Vec<ArithmeticPos> = args
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect();
+
+        // Cache split index (0 means no keys, all values)
+        self.kv_layouts.insert(atom_fp, 0);
+
+        (keys, vals)
+    }
+
+    /// Formats a new projection name based on atom kind and id.
+    fn projection_name(atom_signature: &AtomSignature, atom_id: usize) -> String {
+        let base = if atom_signature.is_positive() {
+            format!("atom_{}", atom_id)
+        } else {
+            format!("neg_atom_{}", atom_id)
+        };
+        format!("{}_proj", base)
+    }
+
+    /// Builds a set of display strings for the given argument signatures (used for RHS payload pick).
+    fn arg_names_set<'a>(
+        args: &'a [AtomArgumentSignature],
+        catalog: &'a Catalog,
+    ) -> HashSet<&'a String> {
+        args.iter()
+            .map(|sig| catalog.signature_to_argument_str_map().get(sig).unwrap())
             .collect()
     }
 }

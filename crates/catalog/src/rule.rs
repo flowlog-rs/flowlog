@@ -318,15 +318,18 @@ impl Catalog {
 impl fmt::Display for Catalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Catalog for rule: {}", self.rule())?;
-        let fmt_sig_list = |sigs: &Vec<AtomArgumentSignature>,
+
+        let fmt_sig_list = |sigs: &[AtomArgumentSignature],
                             map: &HashMap<AtomArgumentSignature, String>|
          -> String {
-            let items: Vec<String> = sigs
+            let mut items: Vec<String> = sigs
                 .iter()
                 .filter_map(|s| map.get(s).map(|v| format!("{}:{}", s, v)))
                 .collect();
+            items.sort();
             format!("[{}]", items.join(", "))
         };
+
         writeln!(f, "Positive atoms:")?;
         for (i, fp) in self.positive_atom_fingerprints.iter().enumerate() {
             let args = fmt_sig_list(
@@ -335,6 +338,7 @@ impl fmt::Display for Catalog {
             );
             writeln!(f, "  [{:>2}] 0x{:x} args: {}", i, fp, args)?;
         }
+
         writeln!(f, "\nNegated atoms:")?;
         if self.negated_atom_fingerprints.is_empty() {
             writeln!(f, "  (none)")?;
@@ -347,14 +351,11 @@ impl fmt::Display for Catalog {
                 writeln!(f, "  [{:>2}] 0x{:x} args: {}", i, fp, args)?;
             }
         }
-        let mut sig_entries: Vec<(String, String)> = self
-            .signature_to_argument_str_map
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect();
-        sig_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut sig_entries: Vec<_> = self.signature_to_argument_str_map.iter().collect();
+        sig_entries.sort_by(|(a, _), (b, _)| a.to_string().cmp(&b.to_string()));
         let sig_line = sig_entries
-            .into_iter()
+            .iter()
             .map(|(k, v)| format!("{}={}", k, v))
             .collect::<Vec<_>>()
             .join(", ");
@@ -364,8 +365,9 @@ impl fmt::Display for Catalog {
         } else {
             writeln!(f, "  {}", sig_line)?;
         }
+
         writeln!(f, "\nArgument presence per positive atom:")?;
-        let mut vars: Vec<&String> = self.argument_presence_in_positive_atom_map.keys().collect();
+        let mut vars: Vec<_> = self.argument_presence_in_positive_atom_map.keys().collect();
         vars.sort();
         for var in vars {
             let row = self.argument_presence_in_positive_atom_map[var]
@@ -375,6 +377,7 @@ impl fmt::Display for Catalog {
                 .join(", ");
             writeln!(f, "  {}: [{}]", var, row)?;
         }
+
         writeln!(f, "\nBase filters:")?;
         if self.filters.is_empty() {
             writeln!(f, "  (none)")?
@@ -383,13 +386,14 @@ impl fmt::Display for Catalog {
                 writeln!(f, "  {}", line)?;
             }
         }
+
         writeln!(f, "\nComparison predicates:")?;
         if self.comparison_predicates.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
             for (i, comp_pred) in self.comparison_predicates.iter().enumerate() {
                 let vars_set = if i < self.comparison_predicates_vars_str_set.len() {
-                    let mut vars: Vec<&String> =
+                    let mut vars: Vec<_> =
                         self.comparison_predicates_vars_str_set[i].iter().collect();
                     vars.sort();
                     format!(
@@ -405,79 +409,43 @@ impl fmt::Display for Catalog {
                 writeln!(f, "  [{:>2}] {} ({})", i, comp_pred, vars_set)?;
             }
         }
+
         writeln!(f, "\nSupersets (per predicate → positive atom ids):")?;
-        if self.positive_supersets.is_empty()
-            || self
-                .positive_supersets
-                .iter()
-                .all(|supers| supers.is_empty())
-        {
-            writeln!(f, "  positives: (none)")?;
-        } else {
-            writeln!(f, "  positives:")?;
-            for (i, supers) in self.positive_supersets.iter().enumerate() {
-                if !supers.is_empty() {
-                    writeln!(
-                        f,
-                        "    [{}] -> [{}]",
-                        i,
-                        supers
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )?;
+        let mut print_supersets = |label: &str, supersets: &Vec<Vec<usize>>| -> fmt::Result {
+            if supersets.is_empty() || supersets.iter().all(|supers| supers.is_empty()) {
+                writeln!(f, "  {}: (none)", label)
+            } else {
+                writeln!(f, "  {}:", label)?;
+                for (i, supers) in supersets.iter().enumerate() {
+                    if !supers.is_empty() {
+                        writeln!(
+                            f,
+                            "    [{}] -> [{}]",
+                            i,
+                            supers
+                                .iter()
+                                .map(|x| x.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )?;
+                    }
                 }
+                Ok(())
+            }
+        };
+        print_supersets("positives", &self.positive_supersets)?;
+        print_supersets("negated", &self.negated_supersets)?;
+        print_supersets("comparisons", &self.comparison_supersets)?;
+
+        writeln!(f, "\nUnused arguments per atom:")?;
+        if self.unused_arguments_per_atom.is_empty() {
+            writeln!(f, "  (none)")?;
+        } else {
+            for (atom_sig, args) in &self.unused_arguments_per_atom {
+                writeln!(f, "  {:?} -> {:?}", atom_sig, args)?;
             }
         }
-        if self.negated_supersets.is_empty()
-            || self
-                .negated_supersets
-                .iter()
-                .all(|supers| supers.is_empty())
-        {
-            writeln!(f, "  negated: (none)")?;
-        } else {
-            writeln!(f, "  negated:")?;
-            for (i, supers) in self.negated_supersets.iter().enumerate() {
-                if !supers.is_empty() {
-                    writeln!(
-                        f,
-                        "    [{}] -> [{}]",
-                        i,
-                        supers
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )?;
-                }
-            }
-        }
-        if self.comparison_supersets.is_empty()
-            || self
-                .comparison_supersets
-                .iter()
-                .all(|supers| supers.is_empty())
-        {
-            writeln!(f, "  comparisons: (none)")?;
-        } else {
-            writeln!(f, "  comparisons:")?;
-            for (i, supers) in self.comparison_supersets.iter().enumerate() {
-                if !supers.is_empty() {
-                    writeln!(
-                        f,
-                        "    [{}] -> [{}]",
-                        i,
-                        supers
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )?;
-                }
-            }
-        }
+
         Ok(())
     }
 }

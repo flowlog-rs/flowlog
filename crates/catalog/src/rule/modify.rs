@@ -85,7 +85,7 @@ impl Catalog {
         };
 
         // Replace the original atom with the projected atom and update the rule
-        self.remove_and_update_rule(vec![rhs_index], vec![new_atom]);
+        self.update_rule_in_place(rhs_index, new_atom);
     }
 
     /// Joins multiple atoms into new atoms with specified argument mappings.
@@ -244,6 +244,17 @@ impl Catalog {
     // ========================================================================================
     // === PRIVATE HELPER METHODS ===
     // ========================================================================================
+
+    /// Remove specified indices from RHS, add new predicates, and update the rule.
+    /// Indices are removed in descending order to preserve correctness.
+    fn update_rule_in_place(&mut self, index_to_change: usize, new_predicate: Predicate) {
+        let mut new_rhs = self.rule.rhs().to_vec();
+
+        // Update the rule
+        new_rhs[index_to_change] = new_predicate;
+        let new_rule = MacaronRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
+        self.update_rule(&new_rule);
+    }
 
     /// Remove specified indices from RHS, add new predicates, and update the rule.
     /// Indices are removed in descending order to preserve correctness.
