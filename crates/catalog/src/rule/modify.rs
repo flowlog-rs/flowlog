@@ -147,10 +147,8 @@ impl Catalog {
             })
             .collect();
 
-        // Remove original atoms (left + all right atoms) and add new joined atoms
-        let mut indices_to_remove = right_indices;
-        indices_to_remove.push(left_rhs_index);
-        self.remove_and_update_rule(indices_to_remove, new_joined_atoms);
+        // Remove left atoms and update new joined atoms
+        self.remove_and_update_rule(left_rhs_index, right_indices, new_joined_atoms);
     }
 
     /// Applies a comparison predicate to atoms, creating filtered versions of the atoms.
@@ -217,10 +215,8 @@ impl Catalog {
             })
             .collect();
 
-        // Remove original atoms and comparison predicate, then add filtered atoms
-        let mut indices_to_remove = right_indices;
-        indices_to_remove.push(comparison_rhs_index);
-        self.remove_and_update_rule(indices_to_remove, new_filtered_atoms);
+        // Remove comparison predicate, then update rule with new filtered atoms
+        self.remove_and_update_rule(comparison_rhs_index, right_indices, new_filtered_atoms);
     }
 
     // ========================================================================================
@@ -242,20 +238,19 @@ impl Catalog {
     /// Indices are removed in descending order to preserve correctness.
     fn remove_and_update_rule(
         &mut self,
-        indices_to_remove: Vec<usize>,
+        index_to_remove: usize,
+        indices_to_update: Vec<usize>,
         new_predicates: Vec<Predicate>,
     ) {
         let mut new_rhs = self.rule.rhs().to_vec();
 
-        // Sort in descending order so removal doesn't affect subsequent indices
-        let mut sorted_indices = indices_to_remove;
-        sorted_indices.sort_unstable();
-        sorted_indices.into_iter().rev().for_each(|idx| {
-            new_rhs.remove(idx);
+        // Update the rule
+        indices_to_update.iter().enumerate().for_each(|(i, idx)| {
+            new_rhs[*idx] = new_predicates[i].clone();
         });
+        new_rhs.remove(index_to_remove);
 
         // Add new predicates and update the rule
-        new_rhs.extend(new_predicates);
         let new_rule = MacaronRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
         self.update_rule(&new_rule);
     }

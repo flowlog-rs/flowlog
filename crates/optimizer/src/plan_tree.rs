@@ -2,12 +2,12 @@
 use catalog::rule::Catalog;
 use std::collections::HashMap;
 use std::fmt;
+use tracing::trace;
 
 #[derive(Debug, Clone)]
 pub struct PlanTree {
     root: usize,
     tree: HashMap<usize, Vec<usize>>, // parent -> child; leaf -> []
-    sub_trees: HashMap<usize, Vec<usize>>, // cached preorder traversal per subtree root
 }
 
 impl PlanTree {
@@ -19,11 +19,6 @@ impl PlanTree {
     /// Returns the parent -> children mapping.
     pub fn tree(&self) -> &HashMap<usize, Vec<usize>> {
         &self.tree
-    }
-
-    /// Returns cached preorder traversals per subtree root.
-    pub fn sub_trees(&self) -> &HashMap<usize, Vec<usize>> {
-        &self.sub_trees
     }
 
     /// Returns true if the node has no children.
@@ -75,44 +70,15 @@ impl PlanTree {
             tree.insert(first, vec![]);
         }
 
-        // Precompute preorder traversals for each subtree root.
-        let mut sub_trees: HashMap<usize, Vec<usize>> = HashMap::new();
-        for &n in tree.keys() {
-            Self::populate_subtree(n, &tree, &mut sub_trees);
-        }
+        let plan_tree = Self { root, tree };
+        trace!("Plan tree:\n{}", plan_tree);
 
         // Return the constructed plan tree.
-        Self {
-            root,
-            tree,
-            sub_trees,
-        }
+        plan_tree
     }
 
-    /// Populate preorder cache for subtree rooted at node.
-    fn populate_subtree(
-        node: usize,
-        tree: &HashMap<usize, Vec<usize>>,
-        cache: &mut HashMap<usize, Vec<usize>>,
-    ) -> Vec<usize> {
-        // If we've already computed the subtree for this node, return it from cache.
-        if let Some(existing) = cache.get(&node) {
-            return existing.clone();
-        }
-
-        // Start the preorder traversal with the current node.
-        let mut acc = vec![node];
-
-        // Recursively add all children and their subtrees.
-        if let Some(children) = tree.get(&node) {
-            for &c in children {
-                acc.extend(Self::populate_subtree(c, tree, cache));
-            }
-        }
-
-        // Cache the result for future lookups.
-        cache.insert(node, acc.clone());
-        acc
+    pub fn get_first_join_tuple_index(&self) -> (usize, usize) {
+        (self.root, self.children(self.root)[0])
     }
 }
 

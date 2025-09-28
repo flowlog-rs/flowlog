@@ -342,6 +342,15 @@ impl Catalog {
     pub fn unused_arguments_per_atom(&self) -> &HashMap<AtomSignature, Vec<AtomArgumentSignature>> {
         &self.unused_arguments_per_atom
     }
+
+    // === Plan Logic ===
+    /// Check if current rule planning is done.
+    pub fn is_planned(&self) -> bool {
+        self.positive_atom_fingerprints.len() == 1
+            && self.negated_atom_fingerprints.is_empty()
+            && self.filters.is_empty()
+            && self.comparison_predicates.is_empty()
+    }
 }
 
 impl fmt::Display for Catalog {

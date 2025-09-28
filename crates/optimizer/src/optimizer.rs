@@ -27,7 +27,22 @@ impl Optimizer {
     }
 
     /// Plan a stratum producing one `PlanTree` per rule.
-    pub fn plan_stratum(&self, catalogs: Vec<&Catalog>) -> Vec<PlanTree> {
-        catalogs.into_iter().map(PlanTree::from_catalog).collect()
+    pub fn plan_stratum(
+        &self,
+        catalogs: &Vec<Catalog>,
+        is_planned: Vec<bool>,
+    ) -> Vec<Option<(usize, usize)>> {
+        catalogs
+            .iter()
+            .zip(is_planned)
+            .map(|(catalog, is_planned)| {
+                if is_planned {
+                    None
+                } else {
+                    let plan_tree = PlanTree::from_catalog(catalog);
+                    Some(plan_tree.get_first_join_tuple_index())
+                }
+            })
+            .collect()
     }
 }

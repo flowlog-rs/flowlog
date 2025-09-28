@@ -1,15 +1,18 @@
 use std::{env, fs, path::Path, process};
 
 use catalog::rule::Catalog;
-use optimizer::{Optimizer, PlanTree};
+use optimizer::Optimizer;
 use parser::Program;
 use stratifier::Stratifier;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 fn main() {
+    // Initialize simple tracing
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("info"))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace")),
+        )
         .init();
 
     // Parse command line arguments
@@ -61,11 +64,9 @@ fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
             .iter()
             .map(|rule| Catalog::from_rule(rule))
             .collect();
-
-        let catalog_refs: Vec<&Catalog> = catalogs.iter().collect();
-
+        let is_planned = vec![false; catalogs.len()];
         // Plan the entire stratum
-        let plans: Vec<PlanTree> = optimizer.plan_stratum(catalog_refs);
+        let _ = optimizer.plan_stratum(&catalogs, is_planned);
 
         info!("{}", "=".repeat(80));
         info!(
@@ -74,12 +75,6 @@ fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
             rule_refs.len(),
             is_recursive
         );
-
-        for (rule_idx, (rule, plan)) in rule_refs.iter().zip(plans.iter()).enumerate() {
-            info!("{}", "-".repeat(40));
-            info!("[Rule {}] {}", rule_idx, rule);
-            info!("Plan tree:\n{}", plan);
-        }
     }
 }
 
@@ -136,8 +131,8 @@ fn run_all_examples() {
                     .iter()
                     .map(|rule| Catalog::from_rule(rule))
                     .collect();
-                let catalog_refs: Vec<&Catalog> = catalogs.iter().collect();
-                let _plans: Vec<PlanTree> = optimizer.plan_stratum(catalog_refs);
+                let is_planned = vec![false; catalogs.len()];
+                let _ = optimizer.plan_stratum(&catalogs, is_planned);
             }
 
             (program.rules().len(), stratifier.stratum().len())

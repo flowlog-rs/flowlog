@@ -46,19 +46,12 @@ impl StratumPlanner {
             catalogs.push(catalog);
         }
 
-        let catalog_refs: Vec<&Catalog> = catalogs.iter().collect();
-        debug!(
-            "optimizer: planning stratum over {} catalogs",
-            catalog_refs.len()
-        );
-        debug!("{}", "-".repeat(40));
-        let plan_trees = optimizer.plan_stratum(catalog_refs);
-
-        for (i, tree) in plan_trees.iter().enumerate() {
-            debug!("rule[{i}] plan tree:\n{tree}");
-            debug!("{}", "-".repeat(40));
+        while !catalogs.iter().all(|c| c.is_planned()) {
+            let is_planned = catalogs.iter().map(|c| c.is_planned()).collect::<Vec<_>>();
+            let first_joins = optimizer.plan_stratum(&catalogs, is_planned);
         }
 
+        debug!("{}", "-".repeat(40));
         Self {
             rule_transformation_infos,
             ..Default::default()
