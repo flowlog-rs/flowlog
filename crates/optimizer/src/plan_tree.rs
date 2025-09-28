@@ -78,7 +78,7 @@ impl PlanTree {
     }
 
     pub fn get_first_join_tuple_index(&self) -> (usize, usize) {
-        (self.root, self.children(self.root)[0])
+        (0, 1)
     }
 }
 

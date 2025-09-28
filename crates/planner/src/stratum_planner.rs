@@ -27,6 +27,7 @@ impl StratumPlanner {
         let mut rule_transformation_infos: Vec<Vec<TransformationInfo>> =
             Vec::with_capacity(rules.len());
         let mut catalogs: Vec<Catalog> = Vec::with_capacity(rules.len());
+        let mut rps: Vec<RulePlanner> = Vec::with_capacity(rules.len());
 
         for (i, rule) in rules.iter().enumerate() {
             let mut catalog = Catalog::from_rule(rule);
@@ -42,16 +43,27 @@ impl StratumPlanner {
             debug!("rule[{i}] after prepare:\n{catalog}");
             debug!("{}", "-".repeat(40));
 
-            rule_transformation_infos.push(txs);
             catalogs.push(catalog);
+            rps.push(rp);
         }
 
         while !catalogs.iter().all(|c| c.is_planned()) {
             let is_planned = catalogs.iter().map(|c| c.is_planned()).collect::<Vec<_>>();
             let first_joins = optimizer.plan_stratum(&catalogs, is_planned);
+            rps.iter_mut()
+                .zip(catalogs.iter_mut())
+                .zip(first_joins.into_iter())
+                .for_each(|((rp, catalog), first_join)| {
+                    if let Some(join_tuple_index) = first_join {
+                        rp.core(catalog, join_tuple_index);
+                    }
+                });
         }
 
-        debug!("{}", "-".repeat(40));
+        for rp in rps.into_iter() {
+            rule_transformation_infos.push(rp.transformation_infos());
+        }
+
         Self {
             rule_transformation_infos,
             ..Default::default()

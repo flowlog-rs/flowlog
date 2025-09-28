@@ -3,6 +3,7 @@
 use crate::TransformationInfo;
 use std::collections::HashMap;
 
+mod common;
 mod core;
 mod prepare;
 
