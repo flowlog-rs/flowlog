@@ -3,6 +3,6 @@
 
 .decl Tc(x: number, y: number)
 
-Tc(x, y, z) :- A(x), B(x, y), !C(x, y), D(x, z, y), x < y.
+Tc(x) :- A(x, y), B(y, z), !D(x), E(x, y, z), x < y + z.
 
 .printsize Tc

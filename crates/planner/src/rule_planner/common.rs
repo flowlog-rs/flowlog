@@ -123,8 +123,24 @@ impl RulePlanner {
         let lhs_arg_names = Self::arg_names_set(&lhs_pos_args, catalog);
 
         for &rhs_idx in rhs_pos_indices {
+            let transformation_index = self.get_current_transformation_index();
+
+            // Update consumer transformation index for LHS atom
+            self.insert_consumer(
+                catalog.original_atom_fingerprints(),
+                lhs_pos_fp,
+                transformation_index,
+            );
+
             let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
             let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
+
+            // Update consumer transformation index for RHS atom
+            self.insert_consumer(
+                catalog.original_atom_fingerprints(),
+                rhs_fp,
+                transformation_index,
+            );
 
             new_arg_lists.push(rhs_args.clone());
             right_sigs.push(AtomSignature::new(true, rhs_idx));
@@ -156,6 +172,9 @@ impl RulePlanner {
 
             let new_name = format!("atom_pos{}_pos_semijoin_atom_pos{}", lhs_pos_idx, rhs_idx);
             let new_fp = tx.output_info_fp();
+
+            // Update producer transformation index
+            self.insert_producer(new_fp, transformation_index);
 
             trace!("Positive semijoin transformation:\n      {}", tx);
 
@@ -212,8 +231,24 @@ impl RulePlanner {
         let out_value_start_idx = lhs_keys.len();
 
         for &rhs_idx in rhs_pos_indices {
+            let transformation_index = self.get_current_transformation_index();
+
+            // Update consumer transformation index for LHS atom
+            self.insert_consumer(
+                catalog.original_atom_fingerprints(),
+                lhs_neg_fp,
+                transformation_index,
+            );
+
             let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
             let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
+
+            // Update consumer transformation index for RHS atom
+            self.insert_consumer(
+                catalog.original_atom_fingerprints(),
+                rhs_fp,
+                transformation_index,
+            );
 
             new_arg_lists.push(rhs_args.clone());
             right_sigs.push(AtomSignature::new(true, rhs_idx));
@@ -244,6 +279,9 @@ impl RulePlanner {
 
             let new_name = format!("atom_neg{}_neg_semijoin_atom_pos{}", lhs_neg_idx, rhs_idx);
             let new_fp = tx.output_info_fp();
+
+            // Update producer transformation index
+            self.insert_producer(new_fp, transformation_index);
 
             trace!("Anti semijoin transformation:\n      {}", tx);
 
@@ -278,8 +316,16 @@ impl RulePlanner {
         let mut right_sigs = Vec::new();
 
         for &rhs_idx in rhs_pos_indices {
+            let transformation_index = self.get_current_transformation_index();
             let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
             let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
+
+            // Update consumer transformation index for RHS atom
+            self.insert_consumer(
+                catalog.original_atom_fingerprints(),
+                rhs_fp,
+                transformation_index,
+            );
 
             right_sigs.push(AtomSignature::new(true, rhs_idx));
 
@@ -298,6 +344,9 @@ impl RulePlanner {
 
             let new_name = format!("comparison_{}_filter_atom_pos{}", comparison_exprs, rhs_idx);
             let new_fp = tx.output_info_fp();
+
+            // Update producer transformation index
+            self.insert_producer(new_fp, transformation_index);
 
             trace!("Comparison transformation:\n      {}", tx);
 
@@ -326,6 +375,7 @@ impl RulePlanner {
         let mut applied = false;
 
         for (atom_signature, to_delete) in groups.clone() {
+            let transformation_index = self.get_current_transformation_index();
             trace!(
                 "Unused-arg removal:\n  Atom: {}, {}\n  To delete: {:?}",
                 catalog.rule().rhs()[catalog.rhs_index_from_signature(atom_signature)],
@@ -337,6 +387,13 @@ impl RulePlanner {
             );
 
             let (args, atom_fp, atom_id) = catalog.resolve_atom(&atom_signature);
+
+            // Update consumer transformation index for the atom
+            self.insert_consumer(
+                catalog.original_atom_fingerprints(),
+                atom_fp,
+                transformation_index,
+            );
 
             let drop_set: HashSet<ArithmeticPos> = to_delete
                 .iter()
@@ -376,6 +433,9 @@ impl RulePlanner {
             let new_name = Self::projection_name(&atom_signature, atom_id);
             let new_fp = tx.output_info_fp();
 
+            // Update producer transformation index
+            self.insert_producer(new_fp, transformation_index);
+
             trace!("Unused transformation:\n      {}", tx);
 
             catalog.projection_modify(atom_signature, to_delete, new_name, new_fp);
@@ -390,7 +450,7 @@ impl RulePlanner {
     }
 
     // =========================================================================
-    // Small utilities (private)
+    // TransformationInfo small utilities (private)
     // =========================================================================
 
     /// Build output payload expressions excluding a specific argument signature.
@@ -463,5 +523,52 @@ impl RulePlanner {
         args.iter()
             .map(|sig| catalog.signature_to_argument_str(sig).clone())
             .collect()
+    }
+
+    // =========================================================================
+    // Producer Consumer utilities (private)
+    // =========================================================================
+
+    /// Get the transformation index
+    pub(super) fn get_current_transformation_index(&self) -> usize {
+        self.transformation_infos.len()
+    }
+
+    /// Create a producer mapping for a transformation fingerprint.
+    pub(super) fn insert_producer(&mut self, producer_fp: u64, producer_idx: usize) {
+        // It is impossible to have two producers for the same transformation fingerprint.
+        assert!(
+            self.producer_consumer
+                .insert(producer_fp, (producer_idx, None))
+                .is_none(),
+            "Producer already exists for transformation fingerprint: {:x}",
+            producer_fp
+        );
+    }
+
+    /// Create a consumer mapping for a transformation fingerprint.
+    pub(super) fn insert_consumer(
+        &mut self,
+        original_atom_fp: &HashSet<u64>,
+        producer_fp: u64,
+        consumer_idx: usize,
+    ) {
+        // If this is an original atom fingerprint (read-in atom),
+        // it's not produced by any transformation, so just return
+        if original_atom_fp.contains(&producer_fp) {
+            return;
+        }
+
+        self.producer_consumer
+            .entry(producer_fp)
+            .and_modify(|(_, consumers)| {
+                consumers.get_or_insert_with(Vec::new).push(consumer_idx);
+            })
+            .or_insert_with(|| {
+                panic!(
+                    "No producer for transformation fingerprint: {:#018x}",
+                    producer_fp
+                )
+            });
     }
 }

@@ -39,15 +39,30 @@ impl RulePlanner {
     }
 
     fn apply_join(&mut self, catalog: &mut Catalog, join_tuple_index: (usize, usize)) {
+        let transformation_index = self.get_current_transformation_index();
         let (lhs_idx, rhs_idx) = join_tuple_index;
 
         let lhs_pos_fp = catalog.positive_atom_fingerprint(lhs_idx);
         let left_atom_signature = AtomSignature::new(true, lhs_idx);
         let left_atom_argument_signatures = catalog.positive_atom_argument_signature(lhs_idx);
 
+        // Update consumer transformation index for LHS atom
+        self.insert_consumer(
+            catalog.original_atom_fingerprints(),
+            lhs_pos_fp,
+            transformation_index,
+        );
+
         let rhs_pos_fp = catalog.positive_atom_fingerprint(rhs_idx);
         let right_atom_signatures = vec![AtomSignature::new(true, rhs_idx)];
         let right_atom_argument_signatures = catalog.positive_atom_argument_signature(rhs_idx);
+
+        // Update consumer transformation index for RHS atom
+        self.insert_consumer(
+            catalog.original_atom_fingerprints(),
+            rhs_pos_fp,
+            transformation_index,
+        );
 
         let (lhs_keys, lhs_vals, rhs_vals) = Self::partition_shared_keys(
             catalog,
@@ -107,6 +122,9 @@ impl RulePlanner {
 
         let new_name = format!("atom_pos{}_join_atom_pos{}", lhs_idx, rhs_idx);
         let new_fp = tx.output_info_fp();
+
+        // Update producer transformation index
+        self.insert_producer(new_fp, transformation_index);
 
         trace!("Join transformation:\n      {}", tx);
 

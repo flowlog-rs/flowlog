@@ -26,6 +26,8 @@ pub struct Catalog {
     /// For each variable string, the first presence (if any) in every positive atom.
     /// Example: for `tc(x, z) :- arc(x, y), tc(y, z)` → `{ x: [Some(0.0), None], y: [Some(0.1), Some(1.0)], z: [None, Some(1.1)] }`.
     argument_presence_in_positive_atom_map: HashMap<String, Vec<Option<AtomArgumentSignature>>>,
+    /// Original rule atom fingerprints
+    original_atom_fingerprints: HashSet<u64>,
 
     /// RHS positive atom fingerprints (in source order).
     positive_atom_fingerprints: Vec<u64>,
@@ -76,6 +78,7 @@ impl Catalog {
             rule: rule.clone(),
             signature_to_argument_str_map: HashMap::new(),
             argument_presence_in_positive_atom_map: HashMap::new(),
+            original_atom_fingerprints: HashSet::new(),
             positive_atom_fingerprints: Vec::new(),
             positive_atom_argument_signatures: Vec::new(),
             positive_atom_argument_vars_str_sets: Vec::new(),
@@ -94,6 +97,20 @@ impl Catalog {
             unused_arguments_per_atom: HashMap::new(),
         };
         catalog.populate_all_metadata();
+
+        // Store original atom fingerprints for reference
+        for predicate in rule.rhs() {
+            match predicate {
+                parser::Predicate::PositiveAtomPredicate(atom)
+                | parser::Predicate::NegatedAtomPredicate(atom) => {
+                    catalog
+                        .original_atom_fingerprints
+                        .insert(atom.fingerprint());
+                }
+                _ => {}
+            }
+        }
+
         catalog
     }
 
@@ -166,6 +183,12 @@ impl Catalog {
             "Rule has filters - not a core rule"
         );
         self.positive_atom_fingerprints.len()
+    }
+
+    // Get original atom fingerprints
+    #[inline]
+    pub fn original_atom_fingerprints(&self) -> &HashSet<u64> {
+        &self.original_atom_fingerprints
     }
 
     // === Positive Atoms ===

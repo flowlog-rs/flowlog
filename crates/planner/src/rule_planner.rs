@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 mod common;
 mod core;
+mod fuse;
 mod prepare;
 
 /// Rule planner for the per-rule planning.
@@ -16,6 +17,9 @@ pub struct RulePlanner {
     /// The map of key-value layout indexed by transformation fingerprint.
     /// We cache the index of the start of value columns.
     kv_layouts: HashMap<u64, usize>,
+
+    /// The map of producer and consumer indexed by transformation fingerprint.
+    producer_consumer: HashMap<u64, (usize, Option<Vec<usize>>)>,
 }
 
 impl RulePlanner {
@@ -24,6 +28,7 @@ impl RulePlanner {
         Self {
             transformation_infos: Vec::new(),
             kv_layouts: HashMap::new(),
+            producer_consumer: HashMap::new(),
         }
     }
 
