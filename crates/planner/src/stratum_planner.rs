@@ -60,6 +60,14 @@ impl StratumPlanner {
                 });
         }
 
+        rps.iter_mut()
+            .zip(catalogs.iter())
+            .for_each(|(rp, catalog)| rp.fuse(catalog.original_atom_fingerprints()));
+
+        rps.iter_mut()
+            .zip(catalogs.iter_mut())
+            .for_each(|(rp, catalog)| rp.post(catalog));
+
         for rp in rps.into_iter() {
             rule_transformation_infos.push(rp.transformation_infos());
         }

@@ -156,7 +156,7 @@ impl Catalog {
     /// Get the argument string for a specific signature.
     #[inline]
     pub fn signature_to_argument_str(&self, sig: &AtomArgumentSignature) -> &String {
-        &self.signature_to_argument_str_map.get(sig).unwrap()
+        self.signature_to_argument_str_map.get(sig).unwrap()
     }
 
     /// Get the core atom count for rules with no supersets or filters.

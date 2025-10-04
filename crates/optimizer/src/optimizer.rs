@@ -29,7 +29,7 @@ impl Optimizer {
     /// Plan a stratum producing one `PlanTree` per rule.
     pub fn plan_stratum(
         &self,
-        catalogs: &Vec<Catalog>,
+        catalogs: &[Catalog],
         is_planned: Vec<bool>,
     ) -> Vec<Option<(usize, usize)>> {
         catalogs

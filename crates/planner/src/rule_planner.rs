@@ -6,6 +6,7 @@ use std::collections::HashMap;
 mod common;
 mod core;
 mod fuse;
+mod post;
 mod prepare;
 
 /// Rule planner for the per-rule planning.

@@ -95,6 +95,18 @@ pub enum TransformationInfo {
 }
 
 impl TransformationInfo {
+    /// Whether this is a neg join transformation info.
+    #[inline]
+    pub fn is_neg_join(&self) -> bool {
+        matches!(self, Self::AntiJoinToKV { .. })
+    }
+
+    /// Whether this is a join transformation info.
+    #[inline]
+    pub fn is_join(&self) -> bool {
+        matches!(self, Self::AntiJoinToKV { .. } | Self::JoinToKV { .. })
+    }
+
     /// Input fingerprint(s); for joins/anti-joins returns `(left, Some(right))`.
     #[inline]
     pub fn input_info_fp(&self) -> (u64, Option<u64>) {
@@ -296,7 +308,7 @@ impl TransformationInfo {
     /// Replace a placeholder (fake) input fingerprint with the resolved (real) one.
     ///
     /// Call this after an upstream transformation finalizes its output fingerprint.
-    pub fn update_input_fake_info_fp(&mut self, input_real_sig: u64, left: bool) {
+    pub fn update_input_fake_info_fp(&mut self, input_real_sig: u64, input_fake_sig: &u64) {
         match self {
             Self::KVToKV { input_info_fp, .. } => {
                 *input_info_fp = input_real_sig;
@@ -311,7 +323,7 @@ impl TransformationInfo {
                 right_input_info_fp,
                 ..
             } => {
-                if left {
+                if left_input_info_fp == input_fake_sig {
                     *left_input_info_fp = input_real_sig;
                 } else {
                     *right_input_info_fp = input_real_sig;
@@ -376,6 +388,49 @@ impl TransformationInfo {
                 output_kv_layout, ..
             } => {
                 *output_kv_layout = real_output_kv_layout;
+            }
+        }
+    }
+
+    pub fn refactor_output_key_value_layout(&mut self, real_key_offset: usize) {
+        match self {
+            Self::KVToKV {
+                output_kv_layout, ..
+            }
+            | Self::JoinToKV {
+                output_kv_layout, ..
+            }
+            | Self::AntiJoinToKV {
+                output_kv_layout, ..
+            } => {
+                let all_positions: Vec<ArithmeticPos> = output_kv_layout
+                    .key()
+                    .iter()
+                    .chain(output_kv_layout.value().iter())
+                    .cloned()
+                    .collect();
+                let (new_key, new_value) = all_positions.split_at(real_key_offset);
+                *output_kv_layout = KeyValueLayout::new(new_key.to_vec(), new_value.to_vec());
+            }
+        }
+    }
+
+    pub fn update_comparisons(&mut self, compare_exprs_pos: Vec<ComparisonExprPos>) {
+        match self {
+            Self::KVToKV {
+                compare_exprs_pos: cmp,
+                ..
+            } => {
+                cmp.extend(compare_exprs_pos);
+            }
+            Self::JoinToKV {
+                compare_exprs_pos: cmp,
+                ..
+            } => {
+                cmp.extend(compare_exprs_pos);
+            }
+            Self::AntiJoinToKV { .. } => {
+                panic!("AntiJoinToKV has no comparisons to update");
             }
         }
     }

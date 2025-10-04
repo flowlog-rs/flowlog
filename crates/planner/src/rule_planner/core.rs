@@ -66,8 +66,8 @@ impl RulePlanner {
 
         let (lhs_keys, lhs_vals, rhs_vals) = Self::partition_shared_keys(
             catalog,
-            &left_atom_argument_signatures,
-            &right_atom_argument_signatures,
+            left_atom_argument_signatures,
+            right_atom_argument_signatures,
         );
         trace!(
             "Join keys: {:?}",
