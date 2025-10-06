@@ -9,6 +9,7 @@ use parser::{AggregationOperator, ConstType};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use tracing::trace;
 
 /// Represents data transformation flows in query execution.
 ///
@@ -292,6 +293,12 @@ impl TransformationFlow {
         output_exprs: &[ArithmeticPos],
         context: &str,
     ) -> Vec<ArithmeticArgument> {
+        trace!(
+            "flow_over_exprs: input_exprs_map = {:?}, output_exprs = {:?}",
+            input_exprs_map,
+            output_exprs
+        );
+
         output_exprs
             .iter()
             .map(|expr| {

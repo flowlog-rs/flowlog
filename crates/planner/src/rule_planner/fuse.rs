@@ -1,16 +1,24 @@
+use catalog::ArithmeticPos;
 use std::collections::HashSet;
 use tracing::{trace, warn};
 
 use super::RulePlanner;
-use crate::TransformationInfo;
+use crate::{transformation::KeyValueLayout, TransformationInfo};
 
 /// Here is some rule we should always follow,
 /// 1. We always do filter first, so it is impossible to fuse any filters map
 /// 2. We assume comparisons are always done before project unused arguments
 
 impl RulePlanner {
+    // -----------------------------
+    // Public entry
+    // -----------------------------
     /// Plan a single rule, producing a list of transformation infos.
     pub fn fuse(&mut self, original_atom_fp: &HashSet<u64>) {
+        trace!(
+            "transformations before fusing maps\n {:?}",
+            self.transformation_infos,
+        );
         self.fuse_map(original_atom_fp);
         self.fuse_kv_layout(original_atom_fp);
     }
@@ -21,7 +29,7 @@ impl RulePlanner {
 
         // Iterate in reverse order to get indices
         for index in (0..self.transformation_infos.len()).rev() {
-            let (input_fp, output_fp, out_kv_layout, cmp) =
+            let (input_fp, output_fp, out_kv_layout, cmp_exprs) =
                 match self.transformation_infos.get(index) {
                     Some(TransformationInfo::KVToKV {
                         input_info_fp,
@@ -39,7 +47,6 @@ impl RulePlanner {
                             );
                             continue;
                         }
-
                         (
                             *input_info_fp,
                             *output_info_fp,
@@ -50,16 +57,7 @@ impl RulePlanner {
                     _ => continue,
                 };
 
-            let input_producer_index = self
-                .producer_consumer
-                .get(&input_fp)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Producer not found for transformation fingerprint: {:#018x}",
-                        input_fp
-                    )
-                })
-                .0;
+            let input_producer_index = self.producer_index_or_panic(input_fp);
 
             if self.transformation_infos[input_producer_index].is_neg_join() {
                 // Skip if the input producer is a neg join (cannot fuse)
@@ -71,17 +69,7 @@ impl RulePlanner {
                 continue;
             }
 
-            let output_consumer_indices = self
-                .producer_consumer
-                .get(&output_fp)
-                .and_then(|(_, consumers)| consumers.clone())
-                .unwrap_or_else(|| {
-                    warn!(
-                        "Consumer not found for transformation fingerprint: {:#018x}",
-                        output_fp
-                    );
-                    Vec::new()
-                });
+            let output_consumer_indices = self.consumer_indices(output_fp);
 
             // Update the input producer
             trace!(
@@ -91,18 +79,56 @@ impl RulePlanner {
                 output_fp,
                 input_producer_index
             );
+            // Extract output key/value argument ids from ArithmeticPos expressions
+            let key_argument_ids: Vec<usize> = out_kv_layout
+                .key()
+                .iter()
+                .flat_map(|pos| pos.signatures())
+                .map(|sig| sig.argument_id())
+                .collect();
+            let value_argument_ids: Vec<usize> = out_kv_layout
+                .value()
+                .iter()
+                .flat_map(|pos| pos.signatures())
+                .map(|sig| sig.argument_id())
+                .collect();
+            trace!(
+                "[fuse_map]   -> key ids: {:?}, value ids: {:?}",
+                key_argument_ids,
+                value_argument_ids
+            );
+
+            // Build the new output layout by selecting positions from the current producer output
+            let all_positions = self.collect_output_positions_of(input_producer_index);
+            let new_out_kv_layout = self.layout_from_argument_ids(
+                &all_positions,
+                &key_argument_ids,
+                &value_argument_ids,
+            );
+
+            // Update producer output layout
             self.transformation_infos[input_producer_index]
-                .update_output_key_value_layout(out_kv_layout);
-            self.transformation_infos[input_producer_index].update_comparisons(cmp);
+                .update_output_key_value_layout(new_out_kv_layout);
+
+            // Rebuild comparison expressions using the new output layout mapping
+            let remapped_cmps = Self::remap_comparisons(&all_positions, &cmp_exprs);
+            self.transformation_infos[input_producer_index].update_comparisons(remapped_cmps);
             self.transformation_infos[input_producer_index].update_output_fake_sig();
 
             let input_producer_output_fp =
                 self.transformation_infos[input_producer_index].output_info_fp();
 
+            self.insert_producer(input_producer_output_fp, input_producer_index);
+
             // Update all consumers to point to the producer's new output
             for output_consumer_index in output_consumer_indices {
                 self.transformation_infos[output_consumer_index]
                     .update_input_fake_info_fp(input_producer_output_fp, &output_fp);
+                self.insert_consumer(
+                    original_atom_fp,
+                    input_producer_output_fp,
+                    output_consumer_index,
+                );
                 trace!(
                     "[fuse_map]   -> updated consumer idx {} to input {:#018x}",
                     output_consumer_index,
@@ -113,14 +139,20 @@ impl RulePlanner {
                 // We iterate in reverse order, so the consumers will only be joins or output.
             }
 
-            // Update the producer_consumer map
+            trace!("\n{:?}", self.transformation_infos);
 
+            // Update the producer_consumer map
             fused_map_indices.push(index);
         }
 
         for index in fused_map_indices {
             self.transformation_infos.remove(index);
         }
+
+        trace!(
+            "transformations after fusing maps\n {:?}",
+            self.transformation_infos,
+        );
 
         // After removing fused maps, rebuild the producer-consumer and kv-layout caches
         self.rebuild_producer_consumer(original_atom_fp);
@@ -244,5 +276,119 @@ impl RulePlanner {
             self.producer_consumer.len(),
             self.kv_layouts.len()
         );
+    }
+}
+
+// -----------------------------
+// Small helpers (private)
+// -----------------------------
+impl RulePlanner {
+    #[inline]
+    fn producer_index_or_panic(&self, fp: u64) -> usize {
+        self.producer_consumer
+            .get(&fp)
+            .map(|(idx, _)| *idx)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Producer not found for transformation fingerprint: {:#018x}",
+                    fp
+                )
+            })
+    }
+
+    #[inline]
+    fn consumer_indices(&self, fp: u64) -> Vec<usize> {
+        self.producer_consumer
+            .get(&fp)
+            .and_then(|(_, consumers)| consumers.clone())
+            .unwrap_or_else(|| {
+                warn!(
+                    "Consumer not found for transformation fingerprint: {:#018x}",
+                    fp
+                );
+                Vec::new()
+            })
+    }
+
+    #[inline]
+    fn collect_output_positions_of(&self, producer_idx: usize) -> Vec<ArithmeticPos> {
+        self.transformation_infos[producer_idx]
+            .output_kv_layout()
+            .key()
+            .iter()
+            .chain(
+                self.transformation_infos[producer_idx]
+                    .output_kv_layout()
+                    .value()
+                    .iter(),
+            )
+            .cloned()
+            .collect()
+    }
+
+    #[inline]
+    fn layout_from_argument_ids(
+        &self,
+        positions: &[ArithmeticPos],
+        key_ids: &[usize],
+        value_ids: &[usize],
+    ) -> KeyValueLayout {
+        let new_key: Vec<_> = key_ids
+            .iter()
+            .map(|id| {
+                positions.get(*id).cloned().unwrap_or_else(|| {
+                    panic!(
+                        "[fuse_map] missing key argument id {} in output layout ({} positions)",
+                        id,
+                        positions.len()
+                    )
+                })
+            })
+            .collect();
+        let new_value: Vec<_> = value_ids
+            .iter()
+            .map(|id| {
+                positions.get(*id).cloned().unwrap_or_else(|| {
+                    panic!(
+                        "[fuse_map] missing value argument id {} in output layout ({} positions)",
+                        id,
+                        positions.len()
+                    )
+                })
+            })
+            .collect();
+        KeyValueLayout::new(new_key, new_value)
+    }
+
+    /// Remap comparison expressions by converting each variable signature to the
+    /// corresponding ArithmeticPos from the provided positions and rebuilding.
+    fn remap_comparisons(
+        positions: &[ArithmeticPos],
+        cmps: &[catalog::ComparisonExprPos],
+    ) -> Vec<catalog::ComparisonExprPos> {
+        cmps.iter()
+            .map(|c| {
+                let remap_expr = |expr: &ArithmeticPos| -> ArithmeticPos {
+                    // Only support variable-only expressions during fusing; otherwise keep as-is
+                    if expr.is_var() {
+                        let sig = expr
+                            .signatures()
+                            .into_iter()
+                            .next()
+                            .expect("var expression should have one signature");
+                        let id = sig.argument_id();
+                        positions
+                            .get(id)
+                            .cloned()
+                            .unwrap_or_else(|| panic!("missing argument id {} in positions", id))
+                    } else {
+                        expr.clone()
+                    }
+                };
+                let left = remap_expr(c.left());
+                let right = remap_expr(c.right());
+                catalog::ComparisonExprPos::from_parts(left, c.operator().clone(), right)
+            })
+            .collect()
     }
 }

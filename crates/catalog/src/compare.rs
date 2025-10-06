@@ -30,6 +30,19 @@ impl ComparisonExprPos {
         }
     }
 
+    /// Construct a positional comparison expression directly from parts.
+    pub fn from_parts(
+        left: ArithmeticPos,
+        operator: ComparisonOperator,
+        right: ArithmeticPos,
+    ) -> Self {
+        Self {
+            left,
+            operator,
+            right,
+        }
+    }
+
     /// Returns the comparison operator.
     #[inline]
     pub fn operator(&self) -> &ComparisonOperator {

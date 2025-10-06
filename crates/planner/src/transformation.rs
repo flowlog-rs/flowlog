@@ -5,6 +5,7 @@ use catalog::ArithmeticPos;
 use parser::AggregationOperator;
 use std::fmt;
 use std::sync::Arc;
+use tracing::trace;
 
 pub mod flow;
 pub mod info;
@@ -13,7 +14,7 @@ pub use flow::TransformationFlow;
 pub use info::{KeyValueLayout, TransformationInfo};
 
 /// Represents a data transformation operation in a query execution plan.
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq)]
 pub enum Transformation {
     // === Unary Transformations ===
     /// Row-to-row transformation (filtering, projection, aggregation)
@@ -23,90 +24,84 @@ pub enum Transformation {
         flow: TransformationFlow,
         is_no_op: bool,
     },
-
-    /// Row-to-key transformation
+    /// Row-to-key transformation (extract keys from rows)
     RowToK {
         input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
         is_no_op: bool,
     },
-
-    /// Row-to-key-value transformation
+    /// Row-to-key-value transformation (structure rows into KV pairs)
     RowToKv {
         input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-
-    /// Key-value-to-key-value transformation (filtering intermediates)
+    /// Key-value to key-value transformation
     KvToKv {
         input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-
-    /// Key-value-to-key transformation
+    /// Key-value to key-only transformation
     KvToK {
+        input: Arc<Collection>,
+        output: Arc<Collection>,
+        flow: TransformationFlow,
+    },
+    /// Key-value to row transformation (drop keys)
+    KvToRow {
+        input: Arc<Collection>,
+        output: Arc<Collection>,
+        flow: TransformationFlow,
+    },
+    /// Aggregation from row input to row output
+    AggToRow {
         input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
 
     // === Binary Transformations ===
-    /// Join between two key-only collections
+    /// Join: Key-only ⋈ Key-only
     JnKK {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-
-    /// Join between key-only and key-value collections
+    /// Join: Key-only ⋈ Key-value (right has values)
     JnKKv {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-
-    /// Join between key-value and key-only collections
+    /// Join: Key-value ⋈ Key-only (left has values)
     JnKvK {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-
-    /// Join between two key-value collections
+    /// Join: Key-value ⋈ Key-value
     JnKvKv {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-
-    /// Cartesian product of two collections
+    /// Cartesian product (no join keys)
     Cartesian {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-
-    /// Antijoin between key-value and key-only collections
+    /// Antijoin: Key-value ¬ Key-only
     NjKvK {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-
-    /// Antijoin between two key-only collections
+    /// Antijoin: Key-only ¬ Key-only
     NjKK {
         input: (Arc<Collection>, Arc<Collection>),
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
-
-    // === Aggregation Transformations ===
-    /// Row-to-row aggregation transformation (GROUP BY with aggregation functions)
-    AggToRow {
-        input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
@@ -121,6 +116,7 @@ impl Transformation {
             | Self::RowToK { input, .. }
             | Self::KvToKv { input, .. }
             | Self::KvToK { input, .. }
+            | Self::KvToRow { input, .. }
             | Self::AggToRow { input, .. } => input,
             _ => panic!("Planner error: unary_input called on binary transformation"),
         }
@@ -135,6 +131,7 @@ impl Transformation {
                 | Self::RowToK { .. }
                 | Self::KvToKv { .. }
                 | Self::KvToK { .. }
+                | Self::KvToRow { .. }
                 | Self::AggToRow { .. }
         )
     }
@@ -161,6 +158,7 @@ impl Transformation {
             | Self::RowToK { output, .. }
             | Self::KvToKv { output, .. }
             | Self::KvToK { output, .. }
+            | Self::KvToRow { output, .. }
             | Self::AggToRow { output, .. }
             | Self::JnKK { output, .. }
             | Self::JnKKv { output, .. }
@@ -180,6 +178,7 @@ impl Transformation {
             | Self::RowToK { flow, .. }
             | Self::KvToKv { flow, .. }
             | Self::KvToK { flow, .. }
+            | Self::KvToRow { flow, .. }
             | Self::AggToRow { flow, .. }
             | Self::JnKK { flow, .. }
             | Self::JnKKv { flow, .. }
@@ -193,6 +192,7 @@ impl Transformation {
 
     /// Creates a key-value to key-value transformation.
     pub fn kv_to_kv(info: &TransformationInfo) -> Self {
+        trace!("Creating kv_to_kv transformation with info: {:?}", info);
         // Create the transformation flow that defines how data moves through the operation
         let flow = TransformationFlow::kv_to_kv(
             info.input_kv_layout().0,
@@ -231,7 +231,7 @@ impl Transformation {
         ));
 
         let output = Arc::new(Collection::new(
-            CollectionSignature::from_unary(CollectionSignature(info.output_info_fp()), &flow),
+            CollectionSignature(info.output_info_fp()),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
         ));
@@ -269,7 +269,12 @@ impl Transformation {
                 output,
                 flow,
             },
-            _ => panic!("Planner error: kv_to_kv - unexpected transformation type"),
+            // Key-value input -> Row output: drop keys and produce rows
+            (false, true, _) => Self::KvToRow {
+                input,
+                output,
+                flow,
+            },
         }
     }
 
@@ -301,11 +306,7 @@ impl Transformation {
         );
 
         let output = Arc::new(Collection::new(
-            CollectionSignature::from_join(
-                CollectionSignature(info.input_info_fp().0),
-                CollectionSignature(info.input_info_fp().1.unwrap()),
-                &flow,
-            ),
+            CollectionSignature(info.output_info_fp()),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
         ));
@@ -350,10 +351,10 @@ impl Transformation {
 
     /// Creates an antijoin transformation.
     pub fn antijoin(info: &TransformationInfo) -> Self {
-        // Antijoins require the right collection to be key-only (used for filtering)
+        // Antijoins require the left collection to be key-only (used for filtering)
         assert!(
-            info.input_kv_layout().1.unwrap().value().is_empty(),
-            "Planner error: antijoin - right collection must be key-only"
+            info.input_kv_layout().0.value().is_empty(),
+            "Planner error: antijoin - left collection must be key-only"
         );
 
         // Create transformation flow (no comparison expressions for antijoins)
@@ -381,11 +382,7 @@ impl Transformation {
         );
 
         let output = Arc::new(Collection::new(
-            CollectionSignature::from_neg_join(
-                CollectionSignature(info.input_info_fp().0),
-                CollectionSignature(info.input_info_fp().1.unwrap()),
-                &flow,
-            ),
+            CollectionSignature(info.output_info_fp()),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
         ));
@@ -444,11 +441,12 @@ impl fmt::Display for Transformation {
                 flow,
                 is_no_op,
             } => {
-                if *is_no_op {
-                    write!(f, "{} =={}==> {} [no-op]", input, flow, output)
-                } else {
-                    write!(f, "{} ----{}----> {}", input, flow, output)
-                }
+                let no_op = if *is_no_op { " [no-op]" } else { "" };
+                write!(
+                    f,
+                    "[RowToRow]{}\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    no_op, input, flow, output
+                )
             }
             Self::RowToK {
                 input,
@@ -456,81 +454,151 @@ impl fmt::Display for Transformation {
                 flow,
                 is_no_op,
             } => {
-                if *is_no_op {
-                    write!(f, "{} =={}==> {} [no-op]", input, flow, output)
-                } else {
-                    write!(f, "{} ----{}----> {}", input, flow, output)
-                }
+                let no_op = if *is_no_op { " [no-op]" } else { "" };
+                write!(
+                    f,
+                    "[RowToK]{}\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    no_op, input, flow, output
+                )
             }
             Self::RowToKv {
                 input,
                 output,
                 flow,
             } => {
-                write!(f, "{} ----{}----> {}", input, flow, output)
+                write!(
+                    f,
+                    "[RowToKv]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    input, flow, output
+                )
             }
             Self::KvToKv {
                 input,
                 output,
                 flow,
             } => {
-                write!(f, "{} ----{}----> {}", input, flow, output)
+                write!(
+                    f,
+                    "[KvToKv]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    input, flow, output
+                )
             }
             Self::KvToK {
                 input,
                 output,
                 flow,
             } => {
-                write!(f, "{} ----{}----> {}", input, flow, output)
+                write!(
+                    f,
+                    "[KvToK]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    input, flow, output
+                )
+            }
+            Self::KvToRow {
+                input,
+                output,
+                flow,
+            } => {
+                write!(
+                    f,
+                    "[KvToRow]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    input, flow, output
+                )
             }
             Self::AggToRow {
                 input,
                 output,
                 flow,
             } => {
-                write!(f, "{} ----{}----> {}", input, flow, output)
+                write!(
+                    f,
+                    "[AggToRow]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    input, flow, output
+                )
             }
             Self::JnKK {
                 input: (l, r),
                 output,
                 flow,
+            } => {
+                write!(
+                    f,
+                    "[JnKK]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    l, r, flow, output
+                )
             }
-            | Self::JnKKv {
-                input: (l, r),
-                output,
-                flow,
-            }
-            | Self::JnKvK {
-                input: (l, r),
-                output,
-                flow,
-            }
-            | Self::JnKvKv {
+            Self::JnKKv {
                 input: (l, r),
                 output,
                 flow,
             } => {
-                write!(f, "({} ⋈ {}) ----{}----> {}", l, r, flow, output)
+                write!(
+                    f,
+                    "[JnKKv]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    l, r, flow, output
+                )
+            }
+            Self::JnKvK {
+                input: (l, r),
+                output,
+                flow,
+            } => {
+                write!(
+                    f,
+                    "[JnKvK]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    l, r, flow, output
+                )
+            }
+            Self::JnKvKv {
+                input: (l, r),
+                output,
+                flow,
+            } => {
+                write!(
+                    f,
+                    "[JnKvKv]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    l, r, flow, output
+                )
             }
             Self::Cartesian {
                 input: (l, r),
                 output,
                 flow,
             } => {
-                write!(f, "({} × {}) ----{}----> {}", l, r, flow, output)
+                write!(
+                    f,
+                    "[Cartesian]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    l, r, flow, output
+                )
             }
             Self::NjKvK {
                 input: (l, r),
                 output,
                 flow,
+            } => {
+                write!(
+                    f,
+                    "[NjKvK]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    l, r, flow, output
+                )
             }
-            | Self::NjKK {
+            Self::NjKK {
                 input: (l, r),
                 output,
                 flow,
             } => {
-                write!(f, "({} ¬ {}) ----{}----> {}", l, r, flow, output)
+                write!(
+                    f,
+                    "[NjKK]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    l, r, flow, output
+                )
             }
         }
+    }
+}
+
+impl fmt::Debug for Transformation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
