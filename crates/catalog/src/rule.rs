@@ -408,7 +408,7 @@ impl fmt::Display for Catalog {
                 &self.positive_atom_argument_signatures[i],
                 &self.signature_to_argument_str_map,
             );
-            writeln!(f, "  [{:>2}] 0x{:x} args: {}", i, fp, args)?;
+            writeln!(f, "  [{:>2}] 0x{:016x} args: {}", i, fp, args)?;
         }
 
         writeln!(f, "\nNegated atoms:")?;
@@ -420,7 +420,7 @@ impl fmt::Display for Catalog {
                     &self.negated_atom_argument_signatures[i],
                     &self.signature_to_argument_str_map,
                 );
-                writeln!(f, "  [{:>2}] 0x{:x} args: {}", i, fp, args)?;
+                writeln!(f, "  [{:>2}] 0x{:016x} args: {}", i, fp, args)?;
             }
         }
 

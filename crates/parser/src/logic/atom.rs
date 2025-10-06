@@ -160,7 +160,7 @@ impl fmt::Display for Atom {
             }
             write!(f, "{arg}")?;
         }
-        write!(f, ") [fp: 0x{:x}]", self.fingerprint)
+        write!(f, ") [fp: 0x{:016x}]", self.fingerprint)
     }
 }
 

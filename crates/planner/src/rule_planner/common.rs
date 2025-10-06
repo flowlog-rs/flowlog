@@ -479,7 +479,7 @@ impl RulePlanner {
                 .collect();
             let (keys, vals) = all.split_at(split_idx);
             trace!(
-                "Cached KV layout [atom 0x{:x}]: keys={:?}, values={:?}",
+                "Cached KV layout [atom 0x{:016x}]: keys={:?}, values={:?}",
                 atom_fp,
                 keys,
                 vals
@@ -495,7 +495,7 @@ impl RulePlanner {
             .collect();
 
         trace!(
-            "Initialize KV layout [atom 0x{:x}]: keys=[], values={:?}",
+            "Initialize KV layout [atom 0x{:016x}]: keys=[], values={:?}",
             atom_fp,
             vals
         );
@@ -541,7 +541,7 @@ impl RulePlanner {
             self.producer_consumer
                 .insert(producer_fp, (producer_idx, None))
                 .is_none(),
-            "Producer already exists for transformation fingerprint: {:x}",
+            "Producer already exists for transformation fingerprint: {:016x}",
             producer_fp
         );
     }
