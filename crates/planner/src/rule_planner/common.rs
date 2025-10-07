@@ -6,11 +6,12 @@
 //! - Projection and unused argument removal
 //! - Producer-consumer relationship management
 
+use std::collections::HashSet;
+use tracing::trace;
+
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
-use std::collections::HashSet;
-use tracing::trace;
 
 // =========================================================================
 // Semijoin & Comparison Operations
@@ -602,11 +603,11 @@ impl RulePlanner {
     }
 
     /// Registers a consumer transformation for data with a given fingerprint.
-    /// 
+    ///
     /// Multiple transformations can consume the same data (i.e., multiple consumers per producer).
     /// This function tracks these consumption relationships, but ignores original atom fingerprints
     /// since those represent input data rather than transformation outputs.
-    /// 
+    ///
     /// # Arguments
     /// * `original_atom_fp` - Set of fingerprints for original input atoms
     /// * `producer_fp` - Fingerprint of the data being consumed

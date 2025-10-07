@@ -3,17 +3,17 @@
 //! This module implements the core rule planning algorithm, focusing on joining
 //! two positive atoms and applying optimization transformations in a fixed-point loop.
 //!
-//! Core logic depends on optimizer give the index of the two atoms to join.
+//! Core logic relies on optimizer to give the index of the two atoms to join.
 
 use std::collections::{HashMap, HashSet};
+use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
-use tracing::trace;
 
 // =========================================================================
-// Core Rule Planning Logic
+// Core Planning
 // =========================================================================
 impl RulePlanner {
     /// This is the main entry point for the rule planning process. It performs a join
