@@ -601,7 +601,16 @@ impl RulePlanner {
         );
     }
 
-    /// Create a consumer mapping for a transformation fingerprint.
+    /// Registers a consumer transformation for data with a given fingerprint.
+    /// 
+    /// Multiple transformations can consume the same data (i.e., multiple consumers per producer).
+    /// This function tracks these consumption relationships, but ignores original atom fingerprints
+    /// since those represent input data rather than transformation outputs.
+    /// 
+    /// # Arguments
+    /// * `original_atom_fp` - Set of fingerprints for original input atoms
+    /// * `producer_fp` - Fingerprint of the data being consumed
+    /// * `consumer_idx` - Index of the transformation that consumes this data
     pub(super) fn insert_consumer(
         &mut self,
         original_atom_fp: &HashSet<u64>,
