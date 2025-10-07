@@ -39,7 +39,7 @@ impl RulePlanner {
     }
 
     fn apply_join(&mut self, catalog: &mut Catalog, join_tuple_index: (usize, usize)) {
-        let transformation_index = self.get_current_transformation_index();
+        let current_transformation_index = self.transformation_infos.len();
         let (lhs_idx, rhs_idx) = join_tuple_index;
 
         let lhs_pos_fp = catalog.positive_atom_fingerprint(lhs_idx);
@@ -50,7 +50,7 @@ impl RulePlanner {
         self.insert_consumer(
             catalog.original_atom_fingerprints(),
             lhs_pos_fp,
-            transformation_index,
+            current_transformation_index,
         );
 
         let rhs_pos_fp = catalog.positive_atom_fingerprint(rhs_idx);
@@ -61,7 +61,7 @@ impl RulePlanner {
         self.insert_consumer(
             catalog.original_atom_fingerprints(),
             rhs_pos_fp,
-            transformation_index,
+            current_transformation_index,
         );
 
         let (lhs_keys, lhs_vals, rhs_vals) = Self::partition_shared_keys(
@@ -124,7 +124,7 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
 
         // Update producer transformation index
-        self.insert_producer(new_fp, transformation_index);
+        self.insert_producer(new_fp, current_transformation_index);
 
         trace!("Join transformation:\n      {}", tx);
 

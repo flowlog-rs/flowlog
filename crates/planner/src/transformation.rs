@@ -1,8 +1,6 @@
 //! Transformation operations for query planning in Macaron Datalog programs.
 
-use crate::collection::{Collection, CollectionSignature};
-use catalog::ArithmeticPos;
-use parser::AggregationOperator;
+use crate::collection::Collection;
 use std::fmt;
 use std::sync::Arc;
 use tracing::trace;
@@ -225,13 +223,13 @@ impl Transformation {
                     .chain(info.output_kv_layout().value().iter()));
 
         let input = Arc::new(Collection::new(
-            CollectionSignature(info.input_info_fp().0),
+            info.input_info_fp().0,
             info.input_kv_layout().0.key(),
             info.input_kv_layout().0.value(),
         ));
 
         let output = Arc::new(Collection::new(
-            CollectionSignature(info.output_info_fp()),
+            info.output_info_fp(),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
         ));
@@ -294,19 +292,19 @@ impl Transformation {
 
         let input = (
             Arc::new(Collection::new(
-                CollectionSignature(info.input_info_fp().0),
+                info.input_info_fp().0,
                 info.input_kv_layout().0.key(),
                 info.input_kv_layout().0.value(),
             )),
             Arc::new(Collection::new(
-                CollectionSignature(info.input_info_fp().1.unwrap()),
+                info.input_info_fp().1.unwrap(),
                 info.input_kv_layout().1.unwrap().key(),
                 info.input_kv_layout().1.unwrap().value(),
             )),
         );
 
         let output = Arc::new(Collection::new(
-            CollectionSignature(info.output_info_fp()),
+            info.output_info_fp(),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
         ));
@@ -370,19 +368,19 @@ impl Transformation {
 
         let input = (
             Arc::new(Collection::new(
-                CollectionSignature(info.input_info_fp().0),
+                info.input_info_fp().0,
                 info.input_kv_layout().0.key(),
                 info.input_kv_layout().0.value(),
             )),
             Arc::new(Collection::new(
-                CollectionSignature(info.input_info_fp().1.unwrap()),
+                info.input_info_fp().1.unwrap(),
                 info.input_kv_layout().1.unwrap().key(),
                 info.input_kv_layout().1.unwrap().value(),
             )),
         );
 
         let output = Arc::new(Collection::new(
-            CollectionSignature(info.output_info_fp()),
+            info.output_info_fp(),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
         ));
@@ -401,33 +399,6 @@ impl Transformation {
                 output,
                 flow,
             }
-        }
-    }
-
-    /// Creates an aggregation transformation from row input to row output.
-    pub fn agg_to_row(
-        input: Arc<Collection>,
-        input_exprs: &[ArithmeticPos],
-        output_exprs: &[ArithmeticPos],
-        output_field_expr: &ArithmeticPos,
-        operator: AggregationOperator,
-    ) -> Self {
-        // Create the aggregation flow using the flow module
-        let flow = TransformationFlow::agg_to_row(input_exprs, output_field_expr, operator);
-
-        // Create the output collection
-        // Note: Both key and value signatures are empty for row-based aggregation results
-        // TODO: here is actually a bit confusing, since from the collection you can tell no difference
-        let output = Arc::new(Collection::new(
-            CollectionSignature::from_unary(**input.signature(), &flow),
-            &[],          // No keys for row-based output
-            output_exprs, // All outputs are values in row-based aggregation
-        ));
-
-        Self::AggToRow {
-            input,
-            output,
-            flow,
         }
     }
 }

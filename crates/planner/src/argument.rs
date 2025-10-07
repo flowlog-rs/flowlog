@@ -51,26 +51,23 @@ impl TransformationArgument {
 
     /// Converts ArithmeticArgument(s) to TransformationArgument(s).
     /// Each ArithmeticArgument is expected to contain only a single variable reference.
-    pub fn from_arithmetic_arguments(
-        arith_args: Vec<ArithmeticArgument>,
-        context: &str,
-    ) -> Vec<Self> {
+    pub fn from_arithmetic_arguments(arith_args: Vec<ArithmeticArgument>) -> Vec<Self> {
         arith_args
             .into_iter()
             .map(|arith_arg| {
                 // Assert that there are no additional arithmetic operations
                 if !arith_arg.rest.is_empty() {
                     panic!(
-                        "Planner error: {} - expected simple variable reference in ArithmeticArgument, but found operations: {:?}",
-                        context, arith_arg.rest
+                        "Planner error: expected simple variable reference in ArithmeticArgument, but found operations: {:?}",
+                        arith_arg.rest
                     );
                 }
 
                 match arith_arg.init {
                     FactorArgument::Var(trans_arg) => trans_arg,
                     _ => panic!(
-                        "Planner error: {} - expected only variable references in ArithmeticArgument, got: {:?}",
-                        context, arith_arg.init
+                        "Planner error: expected only variable references in ArithmeticArgument, got: {:?}",
+                        arith_arg.init
                     ),
                 }
             })

@@ -92,7 +92,7 @@ impl RulePlanner {
             b
         );
 
-        let transformation_index = self.get_current_transformation_index();
+        let current_transformation_index = self.transformation_infos.len();
 
         // Canonicalize the kept/dropped order by signature then arg-id.
         let (var1_sig, var2_sig) =
@@ -108,7 +108,7 @@ impl RulePlanner {
         self.insert_consumer(
             catalog.original_atom_fingerprints(),
             atom_fp,
-            transformation_index,
+            current_transformation_index,
         );
 
         let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
@@ -131,7 +131,7 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
 
         // Update producer transformation index
-        self.insert_producer(new_fp, transformation_index);
+        self.insert_producer(new_fp, current_transformation_index);
 
         trace!("Var-eq transformation:\n     {}", tx);
 
@@ -158,7 +158,7 @@ impl RulePlanner {
             const_val
         );
 
-        let transformation_index = self.get_current_transformation_index();
+        let current_transformation_index = self.transformation_infos.len();
 
         let atom_signature = var_sig.atom_signature();
         let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
@@ -167,7 +167,7 @@ impl RulePlanner {
         self.insert_consumer(
             catalog.original_atom_fingerprints(),
             atom_fp,
-            transformation_index,
+            current_transformation_index,
         );
 
         let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
@@ -188,7 +188,7 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
 
         // Update producer transformation index
-        self.insert_producer(new_fp, transformation_index);
+        self.insert_producer(new_fp, current_transformation_index);
 
         trace!("Const-eq transformation:\n     {}", tx);
 
@@ -212,7 +212,7 @@ impl RulePlanner {
             var_sig
         );
 
-        let transformation_index = self.get_current_transformation_index();
+        let current_transformation_index = self.transformation_infos.len();
 
         let atom_signature = var_sig.atom_signature();
         let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
@@ -221,7 +221,7 @@ impl RulePlanner {
         self.insert_consumer(
             catalog.original_atom_fingerprints(),
             atom_fp,
-            transformation_index,
+            current_transformation_index,
         );
 
         let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
@@ -242,7 +242,7 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
 
         // Update producer transformation index
-        self.insert_producer(new_fp, transformation_index);
+        self.insert_producer(new_fp, current_transformation_index);
 
         trace!("Placeholder transformation:\n      {}", tx);
 

@@ -1,55 +1,17 @@
-//! Collection types for query planning in Macaron Datalog programs.
+//! Collection types used during planning.
+//!
+//! A Collection models a relation of tuples represented by key/value
+//! positions (as `ArithmeticPos`). Collections can be row-based (no keys) or
+//! key/value-based and are identified by a fingerprint.
 
-use crate::TransformationFlow;
 use catalog::{ArithmeticPos, AtomArgumentSignature};
-use std::collections::hash_map::DefaultHasher;
 use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-
-/// Identifies a data collection and tracks its transformation structure.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CollectionSignature(pub u64);
-
-impl CollectionSignature {
-    pub fn from_unary(input: Self, flow: &TransformationFlow) -> Self {
-        let mut hasher = DefaultHasher::new();
-        "unary".hash(&mut hasher);
-        input.0.hash(&mut hasher);
-        flow.hash(&mut hasher);
-        Self(hasher.finish())
-    }
-
-    pub fn from_join(left: Self, right: Self, flow: &TransformationFlow) -> Self {
-        let mut hasher = DefaultHasher::new();
-        "join".hash(&mut hasher);
-        left.0.hash(&mut hasher);
-        right.0.hash(&mut hasher);
-        flow.hash(&mut hasher);
-        Self(hasher.finish())
-    }
-
-    pub fn from_neg_join(left: Self, right: Self, flow: &TransformationFlow) -> Self {
-        let mut hasher = DefaultHasher::new();
-        "anti_join".hash(&mut hasher);
-        left.0.hash(&mut hasher);
-        right.0.hash(&mut hasher);
-        flow.hash(&mut hasher);
-        Self(hasher.finish())
-    }
-}
-
-impl fmt::Display for CollectionSignature {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:016x}", self.0)
-    }
-}
 
 /// Represents a data collection with key-value structure.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Collection {
-    /// A signature identifying the collection type and lineage
-    signature: Arc<CollectionSignature>,
+    /// A fingerprint identifying the collection type and lineage
+    fingerprint: u64,
 
     /// Key argument signatures (empty for row-only collections)
     key_argument_signatures: Vec<ArithmeticPos>,
@@ -59,14 +21,14 @@ pub struct Collection {
 }
 
 impl Collection {
-    /// Creates a new collection with the given signature and argument signatures.
+    /// Creates a new collection with the given fingerprint and argument signatures.
     pub fn new(
-        signature: CollectionSignature,
+        fingerprint: u64,
         key_argument_signatures: &[ArithmeticPos],
         value_argument_signatures: &[ArithmeticPos],
     ) -> Self {
         Self {
-            signature: Arc::new(signature),
+            fingerprint,
             key_argument_signatures: key_argument_signatures.to_vec(),
             value_argument_signatures: value_argument_signatures.to_vec(),
         }
@@ -83,13 +45,10 @@ impl Collection {
             .map(|sig| ArithmeticPos::from_var_signature(*sig))
             .collect();
 
-        // Use the atom fingerprint as the collection signature
-        let signature = CollectionSignature(atom_fingerprint);
-
         // Create collection with no keys (row-based) and all arguments as values
         Self {
-            signature: Arc::new(signature),
-            key_argument_signatures: Vec::new(), // No keys for atom collections
+            fingerprint: atom_fingerprint,
+            key_argument_signatures: Vec::new(), // No keys for row-based atom
             value_argument_signatures,
         }
     }
@@ -112,9 +71,9 @@ impl Collection {
         self.value_argument_signatures.is_empty()
     }
 
-    /// Returns the collection signature.
-    pub fn signature(&self) -> &Arc<CollectionSignature> {
-        &self.signature
+    /// Returns the collection fingerprint.
+    pub fn fingerprint(&self) -> u64 {
+        self.fingerprint
     }
 
     /// Returns references to both key and value argument signatures.
@@ -138,33 +97,23 @@ impl Collection {
 
 impl fmt::Display for Collection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_kv() {
-            write!(
-                f,
-                "{}({}: {})",
-                self.signature,
-                self.key_argument_signatures
-                    .iter()
-                    .map(|sig| sig.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                self.value_argument_signatures
-                    .iter()
-                    .map(|sig| sig.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else {
-            write!(
-                f,
-                "{}({})",
-                self.signature,
-                self.value_argument_signatures
-                    .iter()
-                    .map(|sig| sig.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
+        let key = self
+            .key_argument_signatures
+            .iter()
+            .map(|sig| sig.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let value = self
+            .value_argument_signatures
+            .iter()
+            .map(|sig| sig.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        write!(
+            f,
+            "0x{:16x}, key:({}), value:({})",
+            self.fingerprint, key, value
+        )
     }
 }

@@ -3,6 +3,6 @@
 
 .decl Tc(x: number, y: number)
 
-Tc(x) :- A(x, y), B(y, z), !D(x), E(x, y, z), x < y + z.
+errors(loan, point) :- loan_invalidated_at(loan, point), loan_live_at(loan, point).
 
 .printsize Tc

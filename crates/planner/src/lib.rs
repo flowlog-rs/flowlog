@@ -9,7 +9,7 @@ pub mod transformation;
 
 pub use argument::TransformationArgument;
 pub use arithmetic::{ArithmeticArgument, FactorArgument};
-pub use collection::{Collection, CollectionSignature};
+pub use collection::Collection;
 pub use compare::ComparisonExprArgument;
 pub use constraint::Constraints;
 pub use rule_planner::RulePlanner;

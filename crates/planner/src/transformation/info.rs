@@ -1,8 +1,16 @@
-//! Transformation information for query planning in Macaron Datalog programs.
+//! Transformation information used during query planning.
 //!
-//! This module stores all metadata needed to generate transformations during
-//! the query planning phase. `TransformationInfo` captures the essential info
-//! about planned transformations before they are converted to executable ones.
+//! A transformation info describes how to transform input collections
+//! (with their key/value layouts) into an output collection (with its
+//! key/value layout), along with any constraints (constant/variable
+//! equalities, comparisons) that must hold for the transformation to
+//! produce an output tuple.
+//!
+//! These are high-level descriptions that do not yet refer to concrete
+//! collections (with their actual schemas). Instead, they use fake
+//! fingerprints and key/value layouts as placeholders, which are later
+//! replaced with real ones once they are known. This allows building
+//! a transformation plan before all details are finalized.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
@@ -38,14 +46,15 @@ impl KeyValueLayout {
     }
 }
 
-/// Transformation information, prior to translate to real executable transformation.
+/// Transformation information, describing how to transform input collection(s)
+/// into an output collection, along with any constraints that must hold.
 #[derive(PartialEq, Clone, Eq, Hash)]
 pub enum TransformationInfo {
     /// Unary Key-Value to Key-Value transformation (filter, map, projection, etc.).
     KVToKV {
         /// Upstream (input) collection fingerprint (fake until resolved).
         input_info_fp: u64,
-        /// This transformation's output fingerprint (fake until resolved).
+        /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
         /// Input layout (key/value positions).
         input_kv_layout: KeyValueLayout,
@@ -61,11 +70,11 @@ pub enum TransformationInfo {
 
     /// Binary Join to Key-Value transformation.
     JoinToKV {
-        /// Left input fingerprint.
+        /// Left input collection fingerprint.
         left_input_info_fp: u64,
-        /// Right input fingerprint.
+        /// Right input collection fingerprint.
         right_input_info_fp: u64,
-        /// Output fingerprint (fake until resolved).
+        /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
         /// Left input layout (its key is the join key).
         left_input_kv_layout: KeyValueLayout,
@@ -79,11 +88,11 @@ pub enum TransformationInfo {
 
     /// Binary Anti-Join to Key-Value transformation.
     AntiJoinToKV {
-        /// Left input fingerprint.
+        /// Left input collection fingerprint.
         left_input_info_fp: u64,
-        /// Right input fingerprint.
+        /// Right input collection fingerprint.
         right_input_info_fp: u64,
-        /// Output fingerprint (fake until resolved).
+        /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
         /// Left input layout (its key is the anti-join key).
         left_input_kv_layout: KeyValueLayout,
@@ -94,126 +103,10 @@ pub enum TransformationInfo {
     },
 }
 
+// ========================
+// Constructors
+// ========================
 impl TransformationInfo {
-    /// Whether this is a neg join transformation info.
-    #[inline]
-    pub fn is_neg_join(&self) -> bool {
-        matches!(self, Self::AntiJoinToKV { .. })
-    }
-
-    /// Whether this is a join transformation info.
-    #[inline]
-    pub fn is_join(&self) -> bool {
-        matches!(self, Self::AntiJoinToKV { .. } | Self::JoinToKV { .. })
-    }
-
-    /// Input fingerprint(s); for joins/anti-joins returns `(left, Some(right))`.
-    #[inline]
-    pub fn input_info_fp(&self) -> (u64, Option<u64>) {
-        match self {
-            Self::KVToKV { input_info_fp, .. } => (*input_info_fp, None),
-            Self::JoinToKV {
-                left_input_info_fp,
-                right_input_info_fp,
-                ..
-            }
-            | Self::AntiJoinToKV {
-                left_input_info_fp,
-                right_input_info_fp,
-                ..
-            } => (*left_input_info_fp, Some(*right_input_info_fp)),
-        }
-    }
-
-    /// Output fingerprint (fake until resolved).
-    #[inline]
-    pub fn output_info_fp(&self) -> u64 {
-        match self {
-            Self::KVToKV { output_info_fp, .. }
-            | Self::JoinToKV { output_info_fp, .. }
-            | Self::AntiJoinToKV { output_info_fp, .. } => *output_info_fp,
-        }
-    }
-
-    /// Input layout(s); for joins/anti-joins returns `(left, Some(right))`.
-    #[inline]
-    pub fn input_kv_layout(&self) -> (&KeyValueLayout, Option<&KeyValueLayout>) {
-        match self {
-            Self::KVToKV {
-                input_kv_layout, ..
-            } => (input_kv_layout, None),
-            Self::JoinToKV {
-                left_input_kv_layout,
-                right_input_kv_layout,
-                ..
-            }
-            | Self::AntiJoinToKV {
-                left_input_kv_layout,
-                right_input_kv_layout,
-                ..
-            } => (left_input_kv_layout, Some(right_input_kv_layout)),
-        }
-    }
-
-    /// Output layout (key/value positions).
-    #[inline]
-    pub fn output_kv_layout(&self) -> &KeyValueLayout {
-        match self {
-            Self::KVToKV {
-                output_kv_layout, ..
-            }
-            | Self::JoinToKV {
-                output_kv_layout, ..
-            }
-            | Self::AntiJoinToKV {
-                output_kv_layout, ..
-            } => output_kv_layout,
-        }
-    }
-
-    /// Constant equality constraints (Key-Value to Key-Value only).
-    #[inline]
-    pub fn const_eq_constraints(&self) -> &[(AtomArgumentSignature, ConstType)] {
-        match self {
-            Self::KVToKV {
-                const_eq_constraints,
-                ..
-            } => const_eq_constraints,
-            Self::JoinToKV { .. } => panic!("JoinToKV has no const_eq_constraints"),
-            Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no const_eq_constraints"),
-        }
-    }
-
-    /// Variable equality constraints (Key-Value to Key-Value only).
-    #[inline]
-    pub fn var_eq_constraints(&self) -> &[(AtomArgumentSignature, AtomArgumentSignature)] {
-        match self {
-            Self::KVToKV {
-                var_eq_constraints, ..
-            } => var_eq_constraints,
-            Self::JoinToKV { .. } => panic!("JoinToKV has no var_eq_constraints"),
-            Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no var_eq_constraints"),
-        }
-    }
-
-    /// Comparison expressions (Key-Value to Key-Value and Join to Key-Value).
-    #[inline]
-    pub fn compare_exprs(&self) -> &[ComparisonExprPos] {
-        match self {
-            Self::KVToKV {
-                compare_exprs_pos, ..
-            }
-            | Self::JoinToKV {
-                compare_exprs_pos, ..
-            } => compare_exprs_pos,
-            Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no compare_exprs"),
-        }
-    }
-
-    // ------------------------------------------------------------------------
-    // Constructors (produce fake output fingerprints)
-    // ------------------------------------------------------------------------
-
     /// Build a Key-Value to Key-Value transformation with a derived (fake) output fingerprint.
     pub fn kv_to_kv(
         input_fake_sig: u64,
@@ -300,11 +193,132 @@ impl TransformationInfo {
             output_kv_layout: output_fake_kv_layout,
         }
     }
+}
 
-    // ------------------------------------------------------------------------
-    // Patching placeholders with resolved fingerprints/layouts
-    // ------------------------------------------------------------------------
+// ========================
+// Getters
+// ========================
+impl TransformationInfo {
+    /// Whether this is a neg join transformation info.
+    #[inline]
+    pub fn is_neg_join(&self) -> bool {
+        matches!(self, Self::AntiJoinToKV { .. })
+    }
 
+    /// Whether this is a join transformation info.
+    #[inline]
+    pub fn is_join(&self) -> bool {
+        matches!(self, Self::AntiJoinToKV { .. } | Self::JoinToKV { .. })
+    }
+
+    /// Input fingerprint(s); for joins/anti-joins returns `(left, Some(right))`.
+    #[inline]
+    pub fn input_info_fp(&self) -> (u64, Option<u64>) {
+        match self {
+            Self::KVToKV { input_info_fp, .. } => (*input_info_fp, None),
+            Self::JoinToKV {
+                left_input_info_fp,
+                right_input_info_fp,
+                ..
+            }
+            | Self::AntiJoinToKV {
+                left_input_info_fp,
+                right_input_info_fp,
+                ..
+            } => (*left_input_info_fp, Some(*right_input_info_fp)),
+        }
+    }
+
+    /// Output fingerprint.
+    #[inline]
+    pub fn output_info_fp(&self) -> u64 {
+        match self {
+            Self::KVToKV { output_info_fp, .. }
+            | Self::JoinToKV { output_info_fp, .. }
+            | Self::AntiJoinToKV { output_info_fp, .. } => *output_info_fp,
+        }
+    }
+
+    /// Input layout(s); for joins/anti-joins returns `(left, Some(right))`.
+    #[inline]
+    pub fn input_kv_layout(&self) -> (&KeyValueLayout, Option<&KeyValueLayout>) {
+        match self {
+            Self::KVToKV {
+                input_kv_layout, ..
+            } => (input_kv_layout, None),
+            Self::JoinToKV {
+                left_input_kv_layout,
+                right_input_kv_layout,
+                ..
+            }
+            | Self::AntiJoinToKV {
+                left_input_kv_layout,
+                right_input_kv_layout,
+                ..
+            } => (left_input_kv_layout, Some(right_input_kv_layout)),
+        }
+    }
+
+    /// Output layout (key/value positions).
+    #[inline]
+    pub fn output_kv_layout(&self) -> &KeyValueLayout {
+        match self {
+            Self::KVToKV {
+                output_kv_layout, ..
+            }
+            | Self::JoinToKV {
+                output_kv_layout, ..
+            }
+            | Self::AntiJoinToKV {
+                output_kv_layout, ..
+            } => output_kv_layout,
+        }
+    }
+
+    /// Constant equality constraints (Key-Value to Key-Value only).
+    #[inline]
+    pub fn const_eq_constraints(&self) -> &[(AtomArgumentSignature, ConstType)] {
+        match self {
+            Self::KVToKV {
+                const_eq_constraints,
+                ..
+            } => const_eq_constraints,
+            Self::JoinToKV { .. } => panic!("JoinToKV has no const_eq_constraints"),
+            Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no const_eq_constraints"),
+        }
+    }
+
+    /// Variable equality constraints (Key-Value to Key-Value only).
+    #[inline]
+    pub fn var_eq_constraints(&self) -> &[(AtomArgumentSignature, AtomArgumentSignature)] {
+        match self {
+            Self::KVToKV {
+                var_eq_constraints, ..
+            } => var_eq_constraints,
+            Self::JoinToKV { .. } => panic!("JoinToKV has no var_eq_constraints"),
+            Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no var_eq_constraints"),
+        }
+    }
+
+    /// Comparison expressions (Key-Value to Key-Value and Join to Key-Value).
+    #[inline]
+    pub fn compare_exprs(&self) -> &[ComparisonExprPos] {
+        match self {
+            Self::KVToKV {
+                compare_exprs_pos, ..
+            }
+            | Self::JoinToKV {
+                compare_exprs_pos, ..
+            } => compare_exprs_pos,
+            Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no compare_exprs"),
+        }
+    }
+}
+
+// ========================
+// Helper Functions
+// ========================
+impl TransformationInfo {
     /// Replace a placeholder (fake) input fingerprint with the resolved (real) one.
     ///
     /// Call this after an upstream transformation finalizes its output fingerprint.
@@ -332,46 +346,6 @@ impl TransformationInfo {
         }
     }
 
-    /// Replace a placeholder (fake) input layout with its resolved (real) positions.
-    ///
-    /// Necessary once the actual input schema is known, since downstream operators
-    /// (e.g., joins) require concrete key/value layouts.
-    pub fn update_input_key_value_layout(
-        &mut self,
-        real_input_kv_layout: KeyValueLayout,
-        left: bool,
-    ) {
-        match self {
-            Self::KVToKV {
-                input_kv_layout, ..
-            } => {
-                *input_kv_layout = real_input_kv_layout;
-            }
-            Self::JoinToKV {
-                left_input_kv_layout,
-                right_input_kv_layout,
-                ..
-            } => {
-                if left {
-                    *left_input_kv_layout = real_input_kv_layout;
-                } else {
-                    *right_input_kv_layout = real_input_kv_layout;
-                }
-            }
-            Self::AntiJoinToKV {
-                left_input_kv_layout,
-                right_input_kv_layout,
-                ..
-            } => {
-                if left {
-                    *left_input_kv_layout = real_input_kv_layout;
-                } else {
-                    *right_input_kv_layout = real_input_kv_layout;
-                }
-            }
-        }
-    }
-
     /// Replace a placeholder (fake) output layout with its resolved (real) positions.
     ///
     /// Necessary once the actual output schema is known, since downstream operators
@@ -392,6 +366,10 @@ impl TransformationInfo {
         }
     }
 
+    /// Refactor the output key/value layout by splitting at a given key offset.
+    ///
+    /// Neccessary when the actual key/value split is known, e.g., after downstream
+    /// join operators determine the key-value layout.
     pub fn refactor_output_key_value_layout(&mut self, real_key_offset: usize) {
         match self {
             Self::KVToKV {
@@ -415,6 +393,9 @@ impl TransformationInfo {
         }
     }
 
+    /// Update comparison expressions for transformations that support them.
+    ///
+    /// Comparison expressions should be added incrementally.
     pub fn update_comparisons(&mut self, compare_exprs_pos: Vec<ComparisonExprPos>) {
         match self {
             Self::KVToKV {
@@ -523,13 +504,13 @@ impl fmt::Display for TransformationInfo {
                 if filters.is_empty() {
                     write!(
                         f,
-                        "   ┌─ In   : {}\n         └─> Out : {}\n",
+                        "[KVToKV]\n   ┌─ In   : {}\n   └─> Out : {}\n",
                         in_coll, out_coll
                     )
                 } else {
                     write!(
                         f,
-                        "   ┌─ In   : {}\n         └─> Out : {}\n       WHERE {}\n",
+                        "[KVToKV]\n   ┌─ In   : {}\n   └─> Out : {}\n       WHERE {}\n",
                         in_coll, out_coll, filters
                     )
                 }
@@ -561,13 +542,13 @@ impl fmt::Display for TransformationInfo {
                 if filters.is_empty() {
                     write!(
                         f,
-                        "   ┌─ Left : {}\n         ├─ Right: {}\n         └─> Out : {}\n",
+                        "[JoinToKV]\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n",
                         l, r, out
                     )
                 } else {
                     write!(
                         f,
-                        "   ┌─ Left : {}\n         ├─ Right: {}\n         └─> Out : {}\n       WHERE {}\n",
+                        "[JoinToKV]\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n       WHERE {}\n",
                         l, r, out, filters
                     )
                 }
@@ -596,7 +577,7 @@ impl fmt::Display for TransformationInfo {
 
                 write!(
                     f,
-                    "   ┌─ Left : {}\n         ├─ Right: {}\n         └─> Out : {}\n",
+                    "[AntiJoinToKV]\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n",
                     l, r, out
                 )
             }
@@ -610,13 +591,14 @@ impl fmt::Debug for TransformationInfo {
     }
 }
 
-/* ------------------------------- Helpers ---------------------------------- */
+// ========================
+// Private Helper Functions
+// ========================
 
 /// Computes a derived fingerprint by hashing all identifying inputs together.
 ///
 /// NOTE: Uses `DefaultHasher` which is deterministic within a build but not
-/// guaranteed stable across Rust versions. If you need long-term stability,
-/// use a fixed hash (e.g., blake3) over a stable serialization.
+/// guaranteed stable across Rust versions.
 fn compute_sig<T: Hash>(t: T) -> u64 {
     let mut h = DefaultHasher::new();
     t.hash(&mut h);

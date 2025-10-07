@@ -98,12 +98,12 @@ impl RulePlanner {
         let all_positions = output_layout
             .key()
             .iter()
-            .map(|pos| pos.init().signature().unwrap().clone())
+            .map(|pos| *pos.init().signature().unwrap())
             .chain(
                 output_layout
                     .value()
                     .iter()
-                    .map(|pos| pos.init().signature().unwrap().clone()),
+                    .map(|pos| *pos.init().signature().unwrap()),
             );
         let atom_sigs = catalog.positive_atom_argument_signature(0);
 

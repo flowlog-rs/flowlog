@@ -1,6 +1,6 @@
 use catalog::ArithmeticPos;
 use std::collections::HashSet;
-use tracing::{trace, warn};
+use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
@@ -8,7 +8,6 @@ use crate::{transformation::KeyValueLayout, TransformationInfo};
 /// Here is some rule we should always follow,
 /// 1. We always do filter first, so it is impossible to fuse any filters map
 /// 2. We assume comparisons are always done before project unused arguments
-
 impl RulePlanner {
     // -----------------------------
     // Public entry
@@ -301,13 +300,7 @@ impl RulePlanner {
         self.producer_consumer
             .get(&fp)
             .and_then(|(_, consumers)| consumers.clone())
-            .unwrap_or_else(|| {
-                warn!(
-                    "Consumer not found for transformation fingerprint: {:#018x}",
-                    fp
-                );
-                Vec::new()
-            })
+            .unwrap_or_default()
     }
 
     #[inline]
