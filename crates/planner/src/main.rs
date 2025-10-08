@@ -1,8 +1,8 @@
 use std::{env, fs, path::Path, process};
 
-use catalog::rule::Catalog;
 use optimizer::Optimizer;
 use parser::Program;
+use planner::StratumPlanner;
 use stratifier::Stratifier;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -11,7 +11,7 @@ fn main() {
     // Initialize simple tracing
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -23,7 +23,7 @@ fn main() {
     }
 
     let argument = &args[1];
-    if argument == "--all" {
+    if argument == "--all" || argument == "all" {
         run_all_examples();
         return;
     }
@@ -39,34 +39,30 @@ fn main() {
         stratifier.stratum().len()
     );
 
-    // Optimize each stratum
+    // Plan each stratum using StratumPlanner
     let mut optimizer = Optimizer::new();
-    optimize_and_print(&mut optimizer, &stratifier);
+    plan_and_print(&mut optimizer, &stratifier);
 }
 
 /// Print usage information
 fn print_usage(program_name: &str) {
-    eprintln!("Usage: {} <program_file>", program_name);
-    eprintln!("       {} --all", program_name);
-    eprintln!(
+    info!("Usage: {} <program_file>", program_name);
+    info!("       {} --all", program_name);
+    info!(
         "Examples:\n  {} ./example/reach.dl\n  {} --all",
         program_name, program_name
     );
 }
 
-/// Optimize and print results for each stratum in the stratified program
-fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
+/// Plan and print results for each stratum in the stratified program
+fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
         let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
 
-        // Create catalogs for all rules in this stratum
-        let catalogs: Vec<Catalog> = rule_refs
-            .iter()
-            .map(|rule| Catalog::from_rule(rule))
-            .collect();
-        let is_planned = vec![false; catalogs.len()];
-        // Plan the entire stratum
-        let _ = optimizer.plan_stratum(&catalogs, is_planned);
+        // Clone rules into a local Vec to satisfy StratumPlanner signature
+        let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
+
+        let sp = StratumPlanner::from_rules(&rules, optimizer);
 
         info!("{}", "=".repeat(80));
         info!(
@@ -75,10 +71,24 @@ fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
             rule_refs.len(),
             is_recursive
         );
+
+        // List all rules in this stratum for clarity
+        info!("Rules in this stratum ({}):", rule_refs.len());
+        for (i, r) in rule_refs.iter().enumerate() {
+            info!("\n({:>2}) {}", i, r);
+        }
+
+        info!(
+            "Transformations (shared, de-duplicated): {}",
+            sp.transformations().len()
+        );
+        for (i, t) in sp.transformations().iter().enumerate() {
+            info!("\n[{:>3}] {}", i, t);
+        }
     }
 }
 
-/// Run optimizer on all example files in the example directory
+/// Run planner on all example files in the example directory
 fn run_all_examples() {
     let example_dir = "example";
 
@@ -113,7 +123,7 @@ fn run_all_examples() {
     }
 
     // Process all files
-    info!("Running optimizer on {} example files...", files.len());
+    info!("Running planner on {} example files...", files.len());
     let mut success_count = 0;
     let mut failure_count = 0;
 
@@ -123,16 +133,12 @@ fn run_all_examples() {
         match std::panic::catch_unwind(|| {
             let program = Program::parse(file_path.to_str().unwrap());
             let stratifier = Stratifier::from_program(&program);
-            let optimizer = Optimizer::new();
+            let mut optimizer = Optimizer::new();
 
-            // Just run optimization without printing details
+            // Run stratum planner without printing details
             for rule_refs in stratifier.stratum().iter() {
-                let catalogs: Vec<Catalog> = rule_refs
-                    .iter()
-                    .map(|rule| Catalog::from_rule(rule))
-                    .collect();
-                let is_planned = vec![false; catalogs.len()];
-                let _ = optimizer.plan_stratum(&catalogs, is_planned);
+                let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
+                let _sp = StratumPlanner::from_rules(&rules, &mut optimizer);
             }
 
             (program.rules().len(), stratifier.stratum().len())
@@ -152,16 +158,16 @@ fn run_all_examples() {
     }
 
     // Print summary
-    println!("\n{}", "=".repeat(80));
-    println!("SUMMARY:");
-    println!("  Total files: {}", files.len());
-    println!("  Successful: {}", success_count);
-    println!("  Failed: {}", failure_count);
+    info!("\n{}", "=".repeat(80));
+    info!("SUMMARY:");
+    info!("  Total files: {}", files.len());
+    info!("  Successful: {}", success_count);
+    info!("  Failed: {}", failure_count);
 
     if failure_count > 0 {
-        println!("\nSome files failed to optimize. Check the errors above for details.");
+        info!("\nSome files failed to plan. Check the errors above for details.");
         process::exit(1);
     } else {
-        println!("\nAll example files optimized successfully!");
+        info!("\nAll example files planned successfully!");
     }
 }

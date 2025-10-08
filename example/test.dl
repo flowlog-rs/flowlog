@@ -1,0 +1,8 @@
+.decl Arc(x: number, y: number)
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
+
+.decl Tc(x: number, y: number)
+
+errors(loan, point) :- loan_invalidated_at(loan, point), loan_live_at(loan, point).
+
+.printsize Tc

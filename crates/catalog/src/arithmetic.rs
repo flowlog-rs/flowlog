@@ -16,10 +16,10 @@ pub enum FactorPos {
 
 impl FactorPos {
     /// Returns a vector of argument signatures contained in this factor.
-    pub fn signatures(&self) -> Vec<&AtomArgumentSignature> {
+    pub fn signature(&self) -> Option<&AtomArgumentSignature> {
         match self {
-            FactorPos::Var(atom_arg_signature) => vec![atom_arg_signature],
-            FactorPos::Const(_) => vec![],
+            FactorPos::Var(atom_arg_signature) => Some(atom_arg_signature),
+            FactorPos::Const(_) => None,
         }
     }
 }
@@ -35,7 +35,7 @@ impl fmt::Display for FactorPos {
 
 /// Positional arithmetic expression with variables resolved to their
 /// concrete argument signatures.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct ArithmeticPos {
     /// The initial factor (left-most term)
     init: FactorPos,
@@ -44,6 +44,14 @@ pub struct ArithmeticPos {
 }
 
 impl ArithmeticPos {
+    /// Creates a simple ArithmeticPos for a single variable from an AtomArgumentSignature.
+    pub fn from_var_signature(signature: AtomArgumentSignature) -> Self {
+        ArithmeticPos {
+            init: FactorPos::Var(signature),
+            rest: vec![],
+        }
+    }
+
     /// Constructs a positional arithmetic expression from a parsed arithmetic expression.
     pub fn from_arithmetic(arith: &Arithmetic, var_signatures: &[AtomArgumentSignature]) -> Self {
         let mut var_id = 0usize;
@@ -103,11 +111,11 @@ impl ArithmeticPos {
 
     /// Returns a vector of all variable signatures referenced in this expression.
     pub fn signatures(&self) -> Vec<&AtomArgumentSignature> {
-        let mut signatures = self.init.signatures();
-        for (_, factor) in &self.rest {
-            signatures.extend(factor.signatures());
-        }
-        signatures
+        self.init
+            .signature()
+            .into_iter()
+            .chain(self.rest.iter().filter_map(|(_, f)| f.signature()))
+            .collect()
     }
 }
 
@@ -118,5 +126,12 @@ impl fmt::Display for ArithmeticPos {
             write!(f, " {} {}", op, factor)?;
         }
         Ok(())
+    }
+}
+
+impl fmt::Debug for ArithmeticPos {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Delegate Debug to Display
+        fmt::Display::fmt(self, f)
     }
 }

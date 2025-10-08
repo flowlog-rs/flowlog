@@ -21,3 +21,4 @@ pub use arithmetic::{ArithmeticPos, FactorPos};
 pub use atom::{AtomArgumentSignature, AtomSignature};
 pub use compare::ComparisonExprPos;
 pub use filter::Filters;
+pub use rule::Catalog;

@@ -1,5 +1,5 @@
 [package]
-name = "optimizer"
+name = "planner"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -11,4 +11,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 catalog = { path = "../catalog" }
 parser = { path = "../parser" }
+optimizer = { path = "../optimizer" }
 stratifier = { path = "../stratifier" }
+
