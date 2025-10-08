@@ -1,30 +1,52 @@
-//! Rule planner implementing the per-rule preparation planning.
+//! Rule planner for per-rule transformation planning.
+//!
+//! This component turns a single rule into a sequence of executable
+//! transformations. The planning pipeline is split into phases:
+//!
+//! - `prepare`: applies local filters (var==var, var==const, placeholders), may
+//!   perform (anti-)semijoins and comparison pushdown, and removes unused
+//!   arguments to simplify the rule before joining.
+//! - `core`: performs the initial join between two selected positive atoms and
+//!   then iterates semijoin/pushdown and projection removal to a fixed point.
+//! - `fuse`: merges compatible KV-to-KV map steps into their producers and
+//!   propagates key/value layout requirements upstream.
+//! - `post`: aligns the final pipeline output with the rule head (variables and
+//!   arithmetic expressions). Aggregation in the head is handled earlier at the
+//!   stratum planning phase.
+//!
+//! The planner maintains a vector of transformation descriptors along with two
+//! caches to accelerate shape and dependency analyses. These caches are always
+//! rebuilt after structural changes (see `fuse` phase).
 
 use crate::TransformationInfo;
 use std::collections::HashMap;
 
-mod common;
-mod core;
-mod fuse;
-mod post;
-mod prepare;
+mod common; // small utilities shared by planner phases
+mod core; // initial join + fixed-point of semijoin/pushdown and projection removal
+mod fuse; // fuse KV-to-KV maps and propagate key/value layout constraints upstream
+mod post; // align final output to the rule head (vars and arithmetic)
+mod prepare; // local filters and simplifications before the join
 
-/// Rule planner for the per-rule planning.
+/// Planner state for a single rule.
 #[derive(Debug, Default)]
 pub struct RulePlanner {
-    /// The list of transformation info generated during the alpha elimination prepare phase.
+    /// Linear list of planned transformation infos for the current rule.
     transformation_infos: Vec<TransformationInfo>,
 
-    /// The map of key-value layout indexed by transformation fingerprint.
-    /// We cache the index of the start of value columns.
+    /// Required key/value layout for a given transformation output fingerprint.
+    ///
+    /// The stored `usize` is the split index such that:
+    /// - `[0, split)` are key columns
+    /// - `[split, ..)` are value columns
     kv_layouts: HashMap<u64, usize>,
 
-    /// The map of producer and consumer indexed by transformation fingerprint.
+    /// Mapping from an fingerprint to its producer index and optional
+    /// list of consumer indices.
     producer_consumer: HashMap<u64, (usize, Option<Vec<usize>>)>,
 }
 
 impl RulePlanner {
-    /// Creates a new empty `RulePlanner`.
+    /// Creates a new empty RulePlanner.
     pub fn new() -> Self {
         Self {
             transformation_infos: Vec::new(),
@@ -33,8 +55,9 @@ impl RulePlanner {
         }
     }
 
-    /// NOTE: keeps original API (clone) to avoid breaking callers.
-    pub fn transformation_infos(&self) -> Vec<TransformationInfo> {
-        self.transformation_infos.clone()
+    /// Returns the planned transformations for this rule.
+    #[inline]
+    pub fn transformation_infos(&self) -> &Vec<TransformationInfo> {
+        &self.transformation_infos
     }
 }

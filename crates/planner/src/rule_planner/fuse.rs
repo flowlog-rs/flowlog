@@ -160,7 +160,7 @@ impl RulePlanner {
             // Copy out the producer index and current consumers (if any), then mutate
             let Some((producer_idx, consumers)) = self
                 .producer_consumer
-                .get(&tx_fp)
+                .get(tx_fp)
                 .map(|(p, c)| (*p, c.clone()))
             else {
                 // No producer found - likely an original atom; ignore
@@ -179,7 +179,7 @@ impl RulePlanner {
             if let Some(consumers) = consumers {
                 for consumer_idx in consumers {
                     self.transformation_infos[consumer_idx]
-                        .update_input_fake_info_fp(new_output_fp, &tx_fp);
+                        .update_input_fake_info_fp(new_output_fp, tx_fp);
                 }
             }
         }
