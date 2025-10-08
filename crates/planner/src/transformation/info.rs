@@ -44,6 +44,19 @@ impl KeyValueLayout {
     pub fn value(&self) -> &[ArithmeticPos] {
         &self.value
     }
+
+    // Extract argument IDs from key/value positions in the layout.
+    #[inline]
+    pub fn extract_argument_ids_from_layout(&self) -> (Vec<usize>, Vec<usize>) {
+        let extract = |positions: &[ArithmeticPos]| -> Vec<usize> {
+            positions
+                .iter()
+                .flat_map(|pos| pos.signatures())
+                .map(|sig| sig.argument_id())
+                .collect()
+        };
+        (extract(self.key()), extract(self.value()))
+    }
 }
 
 /// Transformation information, describing how to transform input collection(s)

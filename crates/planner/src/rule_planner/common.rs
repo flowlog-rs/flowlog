@@ -636,4 +636,20 @@ impl RulePlanner {
                 )
             });
     }
+
+    #[inline]
+    pub(super) fn producer_index(&self, fp: u64) -> usize {
+        self.producer_consumer
+            .get(&fp)
+            .map(|(idx, _)| *idx)
+            .unwrap_or_else(|| panic!("No producer for transformation fingerprint: {:#018x}", fp))
+    }
+
+    #[inline]
+    pub(super) fn consumer_indices(&self, fp: u64) -> Vec<usize> {
+        self.producer_consumer
+            .get(&fp)
+            .and_then(|(_, consumers)| consumers.clone())
+            .unwrap_or_default()
+    }
 }
