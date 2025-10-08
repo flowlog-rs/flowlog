@@ -62,7 +62,7 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
         // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
 
-        let mut sp = StratumPlanner::from_rules(&rules, optimizer);
+        let sp = StratumPlanner::from_rules(&rules, optimizer);
 
         info!("{}", "=".repeat(80));
         info!(
@@ -78,13 +78,11 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
             info!("\n({:>2}) {}", i, r);
         }
 
-        // Build and print shared (de-duplicated) real transformations for this stratum
-        sp.materialize_shared_transformations();
         info!(
             "Transformations (shared, de-duplicated): {}",
-            sp.real_transformations.len()
+            sp.transformations().len()
         );
-        for (i, t) in sp.real_transformations.iter().enumerate() {
+        for (i, t) in sp.transformations().iter().enumerate() {
             info!("\n[{:>3}] {}", i, t);
         }
     }

@@ -10,98 +10,113 @@ use tracing::debug;
 use crate::{RulePlanner, Transformation, TransformationInfo};
 
 /// Planner for a single stratum (a group of rules).
+///
+/// A stratum contains one or more rules that can be evaluated together.
+/// The planner processes all rules in the stratum, deduplicates shared
+/// transformations, and produces executable transformation steps.
 #[derive(Debug, Default)]
 pub struct StratumPlanner {
-    /// Per-rule transformations, preserving rule grouping and order.
-    pub rule_transformation_infos: Vec<Vec<TransformationInfo>>,
+    /// Per-rule planners that own the transformation infos.
+    rule_planners: Vec<RulePlanner>,
 
-    pub real_transformations: Vec<Transformation>, // reserved for future use
+    /// Deduplicated executable transformations for the entire stratum.
+    transformations: Vec<Transformation>,
 }
 
 impl StratumPlanner {
-    /// Build a `StratumPlanner` directly from a slice of rules.
-    ///
-    /// Steps:
-    /// - For each rule, build its catalog and run per-rule `prepare`.
-    /// - Repeatedly run optimizer passes until all catalogs are planned (`core`).
-    /// - Perform `fuse` and `post` per rule to finalize transformations.
+    /// Build a stratum planner from a stratum.
     #[must_use]
     pub fn from_rules(rules: &[MacaronRule], optimizer: &mut Optimizer) -> Self {
-        let mut rule_transformation_infos: Vec<Vec<TransformationInfo>> =
-            Vec::with_capacity(rules.len());
-        let mut catalogs: Vec<Catalog> = Vec::with_capacity(rules.len());
-        let mut rps: Vec<RulePlanner> = Vec::with_capacity(rules.len());
+        let mut catalogs = Vec::with_capacity(rules.len());
+        let mut rule_planners = Vec::with_capacity(rules.len());
 
+        // Phase 1: Initialize catalogs and run prepare phase
         for (i, rule) in rules.iter().enumerate() {
             let mut catalog = Catalog::from_rule(rule);
             debug!("{}", "-".repeat(40));
             debug!("rule[{i}] init:\n{catalog}");
             debug!("{}", "-".repeat(40));
 
-            let mut rp = RulePlanner::new();
-            rp.prepare(&mut catalog);
+            let mut planner = RulePlanner::new();
+            planner.prepare(&mut catalog);
 
-            let txs = rp.transformation_infos(); // (clone; your API returns Vec)
-            debug!("rule[{i}] prepare: {} transformations", txs.len());
+            debug!(
+                "rule[{i}] prepare: {} transformations",
+                planner.transformation_infos().len()
+            );
             debug!("rule[{i}] after prepare:\n{catalog}");
             debug!("{}", "-".repeat(40));
 
             catalogs.push(catalog);
-            rps.push(rp);
+            rule_planners.push(planner);
         }
 
+        // Phase 2: Core planning with optimizer guidance
         while !catalogs.iter().all(|c| c.is_planned()) {
-            let is_planned = catalogs.iter().map(|c| c.is_planned()).collect::<Vec<_>>();
-            let first_joins = optimizer.plan_stratum(&catalogs, is_planned);
-            rps.iter_mut()
+            let planning_status: Vec<_> = catalogs.iter().map(|c| c.is_planned()).collect();
+            let join_decisions = optimizer.plan_stratum(&catalogs, planning_status);
+
+            for ((planner, catalog), join_decision) in rule_planners
+                .iter_mut()
                 .zip(catalogs.iter_mut())
-                .zip(first_joins.into_iter())
-                .for_each(|((rp, catalog), first_join)| {
-                    if let Some(join_tuple_index) = first_join {
-                        rp.core(catalog, join_tuple_index);
-                    }
-                });
+                .zip(join_decisions)
+            {
+                if let Some(join_tuple_index) = join_decision {
+                    planner.core(catalog, join_tuple_index);
+                }
+            }
         }
 
-        rps.iter_mut()
-            .zip(catalogs.iter())
-            .for_each(|(rp, catalog)| rp.fuse(catalog.original_atom_fingerprints()));
-
-        rps.iter_mut()
-            .zip(catalogs.iter_mut())
-            .for_each(|(rp, catalog)| rp.post(catalog));
-
-        for rp in rps.into_iter() {
-            rule_transformation_infos.push(rp.transformation_infos().clone());
+        // Phase 3: Fusion and post-processing
+        for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
+            planner.fuse(catalog.original_atom_fingerprints());
         }
 
-        Self {
-            rule_transformation_infos,
-            ..Default::default()
+        for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
+            planner.post(catalog);
         }
+
+        // Phase 4: Materialize deduplicated transformations
+        let mut stratum_planner = Self {
+            rule_planners,
+            transformations: Vec::new(),
+        };
+        stratum_planner.materialize_transformations();
+        stratum_planner
     }
+}
 
-    /// Read-only access to per-rule transformations.
+// =========================================================================
+// Getters
+// =========================================================================
+impl StratumPlanner {
+    /// Read-only access to per-rule transformation infos as borrowed slices.
     #[inline]
-    pub fn rule_transformation_infos(&self) -> &[Vec<TransformationInfo>] {
-        &self.rule_transformation_infos
-    }
-
-    /// Read-only access to all transformations.
-    #[inline]
-    pub fn real_transformations(&self) -> &[Transformation] {
-        &self.real_transformations
-    }
-
-    /// Flatten all per-rule transformation infos, enable sharing by removing duplicates
-    /// (preserving the first occurrence), and build concrete `real_transformations`.
-    pub fn materialize_shared_transformations(&mut self) {
-        let unique_infos = self.flatten_unique_infos();
-
-        // Build real transformations from unique infos
-        self.real_transformations = unique_infos
+    pub fn transformation_infos(&self) -> Vec<&[TransformationInfo]> {
+        self.rule_planners
             .iter()
-            .map(|info| match info {
+            .map(|planner| planner.transformation_infos().as_slice())
+            .collect()
+    }
+
+    /// Read-only access to the deduplicated executable transformations.
+    #[inline]
+    pub fn transformations(&self) -> &[Transformation] {
+        &self.transformations
+    }
+}
+
+// =========================================================================
+// Sharing Optimization
+// =========================================================================
+impl StratumPlanner {
+    /// Deduplicate transformation infos across all rules and build executable transformations.
+    fn materialize_transformations(&mut self) {
+        let unique_infos = self.deduplicate_transformation_infos();
+
+        self.transformations = unique_infos
+            .iter()
+            .map(|&info| match info {
                 TransformationInfo::KVToKV { .. } => Transformation::kv_to_kv(info),
                 TransformationInfo::JoinToKV { .. } => Transformation::join(info),
                 TransformationInfo::AntiJoinToKV { .. } => Transformation::antijoin(info),
@@ -109,19 +124,19 @@ impl StratumPlanner {
             .collect();
     }
 
-    /// Flatten per-rule infos and return a unique list (first occurrence wins).
-    fn flatten_unique_infos(&self) -> Vec<TransformationInfo> {
-        let mut seen: HashSet<TransformationInfo> = HashSet::new();
-        let mut unique_infos: Vec<TransformationInfo> = Vec::new();
+    /// Flatten and deduplicate transformation infos from all rules.
+    /// Returns references to unique transformation infos (first occurrence wins).
+    fn deduplicate_transformation_infos(&self) -> Vec<&TransformationInfo> {
+        let mut seen = HashSet::new();
+        let mut unique_infos = Vec::new();
 
-        self.rule_transformation_infos
-            .iter()
-            .flat_map(|group| group.iter())
-            .for_each(|info| {
-                if seen.insert(info.clone()) {
-                    unique_infos.push(info.clone());
+        for planner in &self.rule_planners {
+            for info in planner.transformation_infos() {
+                if seen.insert(info) {
+                    unique_infos.push(info);
                 }
-            });
+            }
+        }
 
         unique_infos
     }
