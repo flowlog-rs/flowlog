@@ -115,30 +115,6 @@ impl ArithmeticArgument {
 
         args
     }
-
-    /// Creates a new ArithmeticArgument with all join arguments flipped.
-    pub fn jn_flip(&self) -> Self {
-        // Flip the initial factor if it's a variable
-        let init = match &self.init {
-            FactorArgument::Var(arg) => FactorArgument::Var(arg.jn_flip()),
-            FactorArgument::Const(constant) => FactorArgument::Const(constant.clone()),
-        };
-
-        // Flip all remaining factors if they're variables
-        let rest = self
-            .rest
-            .iter()
-            .map(|(op, factor)| {
-                let factor = match factor {
-                    FactorArgument::Var(arg) => FactorArgument::Var(arg.jn_flip()),
-                    FactorArgument::Const(constant) => FactorArgument::Const(constant.clone()),
-                };
-                (op.clone(), factor)
-            })
-            .collect();
-
-        Self { init, rest }
-    }
 }
 
 impl fmt::Display for ArithmeticArgument {

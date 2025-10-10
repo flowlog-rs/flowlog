@@ -45,7 +45,16 @@ impl KeyValueLayout {
         &self.value
     }
 
-    // Extract argument IDs from key/value positions in the layout.
+    /// Extract argument IDs from key/value positions in the layout.
+    ///
+    /// This method flattens all signatures within the key and value positions
+    /// and extracts their argument IDs. It returns a tuple of (key_arg_ids, value_arg_ids).
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// - `Vec<usize>`: Argument IDs from all key positions
+    /// - `Vec<usize>`: Argument IDs from all value positions
     #[inline]
     pub fn extract_argument_ids_from_layout(&self) -> (Vec<usize>, Vec<usize>) {
         let extract = |positions: &[ArithmeticPos]| -> Vec<usize> {
@@ -212,6 +221,8 @@ impl TransformationInfo {
 // Getters
 // ========================
 impl TransformationInfo {
+    // Type checking methods
+
     /// Whether this is a neg join transformation info.
     #[inline]
     pub fn is_neg_join(&self) -> bool {
@@ -220,9 +231,11 @@ impl TransformationInfo {
 
     /// Whether this is a join transformation info.
     #[inline]
-    pub fn is_join(&self) -> bool {
+    pub fn is_general_join(&self) -> bool {
         matches!(self, Self::AntiJoinToKV { .. } | Self::JoinToKV { .. })
     }
+
+    // Fingerprint getters
 
     /// Input fingerprint(s); for joins/anti-joins returns `(left, Some(right))`.
     #[inline]
@@ -251,6 +264,8 @@ impl TransformationInfo {
             | Self::AntiJoinToKV { output_info_fp, .. } => *output_info_fp,
         }
     }
+
+    // Layout getters
 
     /// Input layout(s); for joins/anti-joins returns `(left, Some(right))`.
     #[inline]
@@ -288,6 +303,8 @@ impl TransformationInfo {
         }
     }
 
+    // Constraint getters
+
     /// Constant equality constraints (Key-Value to Key-Value only).
     #[inline]
     pub fn const_eq_constraints(&self) -> &[(AtomArgumentSignature, ConstType)] {
@@ -296,8 +313,10 @@ impl TransformationInfo {
                 const_eq_constraints,
                 ..
             } => const_eq_constraints,
-            Self::JoinToKV { .. } => panic!("JoinToKV has no const_eq_constraints"),
-            Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no const_eq_constraints"),
+            Self::JoinToKV { .. } => panic!("Planner error: JoinToKV has no const_eq_constraints"),
+            Self::AntiJoinToKV { .. } => {
+                panic!("Planner error: AntiJoinToKV has no const_eq_constraints")
+            }
         }
     }
 
@@ -308,8 +327,10 @@ impl TransformationInfo {
             Self::KVToKV {
                 var_eq_constraints, ..
             } => var_eq_constraints,
-            Self::JoinToKV { .. } => panic!("JoinToKV has no var_eq_constraints"),
-            Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no var_eq_constraints"),
+            Self::JoinToKV { .. } => panic!("Planner error: JoinToKV has no var_eq_constraints"),
+            Self::AntiJoinToKV { .. } => {
+                panic!("Planner error: AntiJoinToKV has no var_eq_constraints")
+            }
         }
     }
 
@@ -323,18 +344,31 @@ impl TransformationInfo {
             | Self::JoinToKV {
                 compare_exprs_pos, ..
             } => compare_exprs_pos,
-            Self::AntiJoinToKV { .. } => panic!("AntiJoinToKV has no compare_exprs"),
+            Self::AntiJoinToKV { .. } => panic!("Planner error: AntiJoinToKV has no compare_exprs"),
         }
     }
 }
 
 // ========================
-// Helper Functions
+// Mutating Methods
 // ========================
 impl TransformationInfo {
     /// Replace a placeholder (fake) input fingerprint with the resolved (real) one.
     ///
-    /// Call this after an upstream transformation finalizes its output fingerprint.
+    /// This method updates the input fingerprint after an upstream transformation
+    /// finalizes its output fingerprint. For binary operations (joins/anti-joins),
+    /// it automatically determines which input (left or right) to update based on
+    /// the provided fake signature.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_real_sig` - The resolved (real) fingerprint to use
+    /// * `input_fake_sig` - The placeholder fingerprint to replace
+    ///
+    /// # Panics
+    ///
+    /// For binary operations, panics if `input_fake_sig` doesn't match either
+    /// the left or right input fingerprint.
     pub fn update_input_fake_info_fp(&mut self, input_real_sig: u64, input_fake_sig: &u64) {
         match self {
             Self::KVToKV { input_info_fp, .. } => {
@@ -381,7 +415,7 @@ impl TransformationInfo {
 
     /// Refactor the output key/value layout by splitting at a given key offset.
     ///
-    /// Neccessary when the actual key/value split is known, e.g., after downstream
+    /// Necessary when the actual key/value split is known, e.g., after downstream
     /// join operators determine the key-value layout.
     pub fn refactor_output_key_value_layout(&mut self, real_key_offset: usize) {
         match self {
@@ -424,7 +458,7 @@ impl TransformationInfo {
                 cmp.extend(compare_exprs_pos);
             }
             Self::AntiJoinToKV { .. } => {
-                panic!("AntiJoinToKV has no comparisons to update");
+                panic!("Planner error: AntiJoinToKV has no comparisons to update");
             }
         }
     }

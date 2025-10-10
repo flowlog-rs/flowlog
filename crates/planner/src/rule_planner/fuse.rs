@@ -18,7 +18,7 @@ use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::ArithmeticPos;
+use catalog::{ArithmeticPos, ComparisonExprPos, FactorPos};
 
 // =========================================================================
 // Fusion
@@ -282,31 +282,39 @@ impl RulePlanner {
     /// corresponding ArithmeticPos from the provided positions and rebuilding.
     fn remap_comparisons(
         positions: &[ArithmeticPos],
-        cmps: &[catalog::ComparisonExprPos],
-    ) -> Vec<catalog::ComparisonExprPos> {
+        cmps: &[ComparisonExprPos],
+    ) -> Vec<ComparisonExprPos> {
         cmps.iter()
             .map(|c| {
-                let remap_expr = |expr: &ArithmeticPos| -> ArithmeticPos {
-                    // Only support variable-only expressions during fusing; otherwise keep as-is
-                    if expr.is_var() {
-                        let sig = expr
-                            .signatures()
-                            .into_iter()
-                            .next()
-                            .expect("Planner error: var expression should have one signature");
-                        let id = sig.argument_id();
-                        positions.get(id).cloned().unwrap_or_else(|| {
-                            panic!("Planner error: missing argument id {} in positions", id)
-                        })
-                    } else {
-                        panic!(
-                            "Planner error: only variable expressions are supported during fusion"
-                        );
+                let remap_factor = |factor: &FactorPos| -> FactorPos {
+                    match factor {
+                        FactorPos::Var(sig) => {
+                            let id = sig.argument_id();
+                            positions
+                                .get(id)
+                                .unwrap_or_else(|| {
+                                    panic!("Planner error: missing argument id {} in positions", id)
+                                })
+                                .init()
+                                .clone()
+                        }
+                        FactorPos::Const(c) => FactorPos::Const(c.clone()),
                     }
                 };
+
+                let remap_expr = |expr: &ArithmeticPos| -> ArithmeticPos {
+                    let init = remap_factor(expr.init());
+                    let rest = expr
+                        .rest()
+                        .iter()
+                        .map(|(op, f)| (op.clone(), remap_factor(f)))
+                        .collect();
+                    ArithmeticPos::new(init, rest)
+                };
+
                 let left = remap_expr(c.left());
                 let right = remap_expr(c.right());
-                catalog::ComparisonExprPos::from_parts(left, c.operator().clone(), right)
+                ComparisonExprPos::from_parts(left, c.operator().clone(), right)
             })
             .collect()
     }
@@ -339,7 +347,7 @@ impl RulePlanner {
             let (left_fp, right_fp_opt, key_split_opt) = {
                 let tx = &self.transformation_infos[index];
                 let (left_fp, right_fp_opt) = tx.input_info_fp();
-                let key_split_opt = if tx.is_join() {
+                let key_split_opt = if tx.is_general_join() {
                     let (left_kv_layout, ..) = tx.input_kv_layout();
                     Some(left_kv_layout.key().len())
                 } else {

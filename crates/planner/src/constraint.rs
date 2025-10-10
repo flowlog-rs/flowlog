@@ -61,23 +61,6 @@ impl Constraints {
 
         args
     }
-
-    /// Creates a new Constraints instance with all join arguments flipped.
-    pub fn jn_flip(&self) -> Self {
-        let constant_eq_constraints = self
-            .constant_eq_constraints
-            .iter()
-            .map(|(arg, constant)| (arg.jn_flip(), constant.clone()))
-            .collect();
-
-        let variable_eq_constraints = self
-            .variable_eq_constraints
-            .iter()
-            .map(|(left_arg, right_arg)| (left_arg.jn_flip(), right_arg.jn_flip()))
-            .collect();
-
-        Self::new(constant_eq_constraints, variable_eq_constraints)
-    }
 }
 
 impl fmt::Display for Constraints {

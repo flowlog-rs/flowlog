@@ -36,19 +36,6 @@ impl TransformationArgument {
         }
     }
 
-    /// Flips the left/right flag in a Jn variant.
-    pub fn jn_flip(&self) -> Self {
-        match self {
-            Self::Jn((left_or_right, key_or_value, id)) => {
-                Self::Jn((!left_or_right, *key_or_value, *id))
-            }
-            _ => panic!(
-                "Planner error: TransformationArgument::jn_flip expects Jn variant, got: {:?}",
-                self
-            ),
-        }
-    }
-
     /// Converts ArithmeticArgument(s) to TransformationArgument(s).
     /// Each ArithmeticArgument is expected to contain only a single variable reference.
     pub fn from_arithmetic_arguments(arith_args: Vec<ArithmeticArgument>) -> Vec<Self> {

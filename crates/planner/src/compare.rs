@@ -57,15 +57,6 @@ impl ComparisonExprArgument {
         transformation_arguments.extend(self.right.transformation_arguments());
         transformation_arguments
     }
-
-    /// Creates a new ComparisonExprArgument with all join arguments flipped.
-    pub fn jn_flip(&self) -> Self {
-        Self {
-            left: self.left.jn_flip(),
-            operator: self.operator.clone(),
-            right: self.right.jn_flip(),
-        }
-    }
 }
 
 impl fmt::Display for ComparisonExprArgument {

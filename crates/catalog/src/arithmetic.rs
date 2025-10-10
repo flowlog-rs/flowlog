@@ -44,6 +44,11 @@ pub struct ArithmeticPos {
 }
 
 impl ArithmeticPos {
+    /// Creates a new positional arithmetic expression.
+    pub fn new(init: FactorPos, rest: Vec<(ArithmeticOperator, FactorPos)>) -> Self {
+        Self { init, rest }
+    }
+
     /// Creates a simple ArithmeticPos for a single variable from an AtomArgumentSignature.
     pub fn from_var_signature(signature: AtomArgumentSignature) -> Self {
         ArithmeticPos {

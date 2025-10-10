@@ -1,8 +1,14 @@
 //! Transformation flows used during query planning.
 //!
-//! A TransformationFlow represents how data is transformed as it flows
+//! A `TransformationFlow` represents how data is transformed as it flows
 //! through different stages of query execution, including filtering,
-//! projection, and joins.
+//! projection, and joins. This module provides the core abstractions
+//! for building and executing data transformation pipelines.
+
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
+use tracing::trace;
 
 use super::KeyValueLayout;
 use crate::{
@@ -10,10 +16,6 @@ use crate::{
 };
 use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos};
 use parser::ConstType;
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::Arc;
-use tracing::trace;
 
 /// Represents data transformation flows in query execution.
 ///
@@ -60,6 +62,22 @@ pub enum TransformationFlow {
 // ========================
 impl TransformationFlow {
     /// Creates a KVToKV transformation flow from input/output expressions and constraints.
+    ///
+    /// This constructor builds a transformation that processes a single input relation,
+    /// applying filters, projections, and potentially reordering the output key-value layout.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_kv_layout` - The key-value layout of the input relation
+    /// * `output_kv_layout` - The desired key-value layout for the output  
+    /// * `const_eq_constraints` - Constant equality filters (e.g., `x = 42`)
+    /// * `var_eq_constraints` - Variable equality filters (e.g., `x = y`)
+    /// * `compare_exprs` - Comparison filters (e.g., `x < y`, `x >= 10`)
+    ///
+    /// # Returns
+    ///
+    /// A new `KVToKV` transformation flow that can transform input data according
+    /// to the specified layout and constraints.
     pub fn kv_to_kv(
         input_kv_layout: &KeyValueLayout,
         output_kv_layout: &KeyValueLayout,
@@ -91,6 +109,21 @@ impl TransformationFlow {
     }
 
     /// Creates a JnToKV transformation flow from input/output expressions and join conditions.
+    ///
+    /// This constructor builds a transformation that combines two input relations through
+    /// a join operation, producing a single output relation with the specified layout.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_left_kv_layout` - The key-value layout of the left input relation
+    /// * `input_right_kv_layout` - The key-value layout of the right input relation
+    /// * `output_kv_layout` - The desired key-value layout for the joined output
+    /// * `compare_exprs` - Comparison filters to apply during the join
+    ///
+    /// # Returns
+    ///
+    /// A new `JnToKV` transformation flow that can join the two input relations
+    /// according to their shared keys and produce the specified output layout.
     pub fn join_to_kv(
         input_left_kv_layout: &KeyValueLayout,
         input_right_kv_layout: &KeyValueLayout,
@@ -120,7 +153,27 @@ impl TransformationFlow {
 // Getters
 // ========================
 impl TransformationFlow {
+    /// Returns the output key expressions.
+    pub fn key(&self) -> &Arc<Vec<ArithmeticArgument>> {
+        match self {
+            Self::KVToKV { key, .. } => key,
+            Self::JnToKV { key, .. } => key,
+        }
+    }
+
+    /// Returns the output value expressions.
+    pub fn value(&self) -> &Arc<Vec<ArithmeticArgument>> {
+        match self {
+            Self::KVToKV { value, .. } => value,
+            Self::JnToKV { value, .. } => value,
+        }
+    }
+
     /// Returns the constraints for flows that support them.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a `JnToKV` flow, which doesn't support constraints.
     pub fn constraints(&self) -> &Constraints {
         match self {
             Self::KVToKV { constraints, .. } => constraints,
@@ -137,45 +190,16 @@ impl TransformationFlow {
             Self::JnToKV { compares, .. } => compares,
         }
     }
-
-    /// Returns the output key expressions.
-    pub fn key(&self) -> &Arc<Vec<ArithmeticArgument>> {
-        match self {
-            Self::KVToKV { key, .. } => key,
-            Self::JnToKV { key, .. } => key,
-        }
-    }
-
-    /// Returns the output value expressions.
-    pub fn value(&self) -> &Arc<Vec<ArithmeticArgument>> {
-        match self {
-            Self::KVToKV { value, .. } => value,
-            Self::JnToKV { value, .. } => value,
-        }
-    }
 }
 
 // ========================
-// Helper Functions
+// Analysis and Utility Methods
 // ========================
 impl TransformationFlow {
-    /// Creates a new flow with join arguments flipped from left to right side.
-    pub fn jn_flip(&self) -> Self {
-        match self {
-            Self::JnToKV {
-                key,
-                value,
-                compares,
-            } => Self::JnToKV {
-                key: Arc::new(key.iter().map(|arg| arg.jn_flip()).collect()),
-                value: Arc::new(value.iter().map(|arg| arg.jn_flip()).collect()),
-                compares: compares.iter().map(|comp| comp.jn_flip()).collect(),
-            },
-            _ => panic!("Planner error: TransformationFlow::jn_flip can only be called on JnToKV"),
-        }
-    }
-
     /// Checks if this flow has any constraints or filters applied.
+    ///
+    /// Returns `true` if the flow has constant constraints, variable constraints,
+    /// or comparison filters that would affect the output data.
     pub fn is_constrained(&self) -> bool {
         match self {
             Self::KVToKV {
@@ -184,14 +208,6 @@ impl TransformationFlow {
                 ..
             } => !constraints.is_empty() || !compares.is_empty(),
             Self::JnToKV { compares, .. } => !compares.is_empty(),
-        }
-    }
-
-    /// Checks if the output key is empty (indicating flat tuple output).
-    pub fn is_key_empty(&self) -> bool {
-        match self {
-            Self::KVToKV { key, .. } => key.is_empty(),
-            Self::JnToKV { key, .. } => key.is_empty(),
         }
     }
 }
@@ -253,8 +269,23 @@ impl TransformationFlow {
 
     /// Composes output arithmetic expressions from available input chunks.
     ///
-    /// This method handles both direct expression lookup and factor-by-factor
-    /// construction when the complete expression isn't found in the input map.
+    /// This method is the core expression transformation logic. It attempts to map
+    /// output expressions to input transformation arguments, handling both direct
+    /// expression lookup and factor-by-factor construction when needed.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_exprs_map` - Map from input arithmetic positions to transformation arguments
+    /// * `output_exprs` - List of output expressions to be constructed
+    ///
+    /// # Returns
+    ///
+    /// Vector of `ArithmeticArgument`s representing the transformed expressions
+    ///
+    /// # Panics
+    ///
+    /// Panics if a required variable signature is not found in the input expression map,
+    /// indicating an inconsistency in the transformation setup.
     fn flow_over_exprs(
         input_exprs_map: &HashMap<ArithmeticPos, TransformationArgument>,
         output_exprs: &[ArithmeticPos],
