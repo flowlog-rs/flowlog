@@ -1,4 +1,8 @@
 //! Transformation operations for query planning in Macaron Datalog programs.
+//!
+//! This module provides the core transformation abstractions that define how data flows
+//! through query execution plans. Transformations represent operations like filtering,
+//! projection, joins, and aggregation that convert input collections into output collections.
 
 use crate::collection::Collection;
 use std::fmt;
@@ -20,14 +24,12 @@ pub enum Transformation {
         input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
-        is_no_op: bool,
     },
     /// Row-to-key transformation (extract keys from rows)
     RowToK {
         input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
-        is_no_op: bool,
     },
     /// Row-to-key-value transformation (structure rows into KV pairs)
     RowToKv {
@@ -105,21 +107,10 @@ pub enum Transformation {
     },
 }
 
+// ========================
+// Inspectors
+// ========================
 impl Transformation {
-    /// Returns the input collection for unary transformations.
-    pub fn unary_input(&self) -> &Arc<Collection> {
-        match self {
-            Self::RowToRow { input, .. }
-            | Self::RowToKv { input, .. }
-            | Self::RowToK { input, .. }
-            | Self::KvToKv { input, .. }
-            | Self::KvToK { input, .. }
-            | Self::KvToRow { input, .. }
-            | Self::AggToRow { input, .. } => input,
-            _ => panic!("Planner error: unary_input called on binary transformation"),
-        }
-    }
-
     /// Returns `true` if this is a unary transformation.
     pub fn is_unary(&self) -> bool {
         matches!(
@@ -133,8 +124,35 @@ impl Transformation {
                 | Self::AggToRow { .. }
         )
     }
+}
+
+// ========================
+// Getters
+// ========================
+impl Transformation {
+    /// Returns the input collection for unary transformations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a binary transformation. Use `is_unary()` to check first.
+    pub fn unary_input(&self) -> &Arc<Collection> {
+        match self {
+            Self::RowToRow { input, .. }
+            | Self::RowToKv { input, .. }
+            | Self::RowToK { input, .. }
+            | Self::KvToKv { input, .. }
+            | Self::KvToK { input, .. }
+            | Self::KvToRow { input, .. }
+            | Self::AggToRow { input, .. } => input,
+            _ => panic!("Planner error: unary_input called on binary transformation"),
+        }
+    }
 
     /// Returns the input collections for binary transformations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a unary transformation. Use `is_unary()` to check first.
     pub fn binary_input(&self) -> &(Arc<Collection>, Arc<Collection>) {
         match self {
             Self::JnKK { input, .. }
@@ -187,8 +205,31 @@ impl Transformation {
             | Self::NjKK { flow, .. } => flow,
         }
     }
+}
 
+// ========================
+// Constructors
+// ========================
+impl Transformation {
     /// Creates a key-value to key-value transformation.
+    ///
+    /// This method analyzes the input and output layouts to determine the specific
+    /// transformation type needed (RowToRow, RowToK, RowToKv, KvToKv, KvToK, or KvToRow).
+    /// It automatically detects whether the transformation is a no-op optimization.
+    ///
+    /// # Arguments
+    ///
+    /// * `info` - TransformationInfo containing input/output layouts and constraints
+    ///
+    /// # Returns
+    ///
+    /// A Transformation variant appropriate for the input/output layout combination:
+    /// - `RowToRow`: Row input → Row output (filtering/projection)
+    /// - `RowToK`: Row input → Key-only output (key extraction)
+    /// - `RowToKv`: Row input → Key-value output (structuring)
+    /// - `KvToKv`: Key-value input → Key-value output (transformation)
+    /// - `KvToK`: Key-value input → Key-only output (key extraction)
+    /// - `KvToRow`: Key-value input → Row output (flattening)
     pub fn kv_to_kv(info: &TransformationInfo) -> Self {
         trace!("Creating kv_to_kv transformation with info: {:?}", info);
         // Create the transformation flow that defines how data moves through the operation
@@ -203,24 +244,6 @@ impl Transformation {
         let is_row_in = info.input_kv_layout().0.key().is_empty(); // Input is row-based (no keys)
         let is_row_out = info.output_kv_layout().key().is_empty(); // Output is row-based (no keys)
         let is_key_only_out = info.output_kv_layout().value().is_empty(); // Output has keys but no values
-
-        // Check if this transformation is a no-op (identity transformation)
-        let is_no_op = is_row_in
-            && (is_row_out || is_key_only_out)
-            && info.const_eq_constraints().is_empty()
-            && info.var_eq_constraints().is_empty()
-            && info.compare_exprs().is_empty()
-            && info
-                .input_kv_layout()
-                .0
-                .key()
-                .iter()
-                .chain(info.input_kv_layout().0.value().iter())
-                .eq(info
-                    .output_kv_layout()
-                    .key()
-                    .iter()
-                    .chain(info.output_kv_layout().value().iter()));
 
         let input = Arc::new(Collection::new(
             info.input_info_fp().0,
@@ -240,14 +263,12 @@ impl Transformation {
                 input,
                 output,
                 flow,
-                is_no_op,
             },
             // Row input -> Key-only output: extract keys from row data
             (true, false, true) => Self::RowToK {
                 input,
                 output,
                 flow,
-                is_no_op,
             },
             // Row input -> Key-value output: structure row data into key-value pairs
             (true, false, false) => Self::RowToKv {
@@ -277,6 +298,23 @@ impl Transformation {
     }
 
     /// Creates a join transformation between two collections.
+    ///
+    /// This method automatically determines the appropriate join type based on the
+    /// input collection characteristics and join key presence. It supports equi-joins,
+    /// cartesian products, and various key/value combinations.
+    ///
+    /// # Arguments
+    ///
+    /// * `info` - TransformationInfo containing both input layouts and output structure
+    ///
+    /// # Returns
+    ///
+    /// A binary Transformation variant based on the input collection types:
+    /// - `JnKK`: Key-only ⋈ Key-only join
+    /// - `JnKKv`: Key-only ⋈ Key-value join (right has values)
+    /// - `JnKvK`: Key-value ⋈ Key-only join (left has values)
+    /// - `JnKvKv`: Key-value ⋈ Key-value join (both have values)
+    /// - `Cartesian`: Cartesian product (no join keys)
     pub fn join(info: &TransformationInfo) -> Self {
         // Create transformation flow that defines how the join operation processes data
         let flow = TransformationFlow::join_to_kv(
@@ -348,6 +386,25 @@ impl Transformation {
     }
 
     /// Creates an antijoin transformation.
+    ///
+    /// Antijoins are used for filtering operations where tuples from the left collection
+    /// are excluded if they have matching keys in the right collection. This is commonly
+    /// used for implementing logical negation in Datalog rules.
+    ///
+    /// # Arguments
+    ///
+    /// * `info` - TransformationInfo containing both input layouts (left must be key-only)
+    ///
+    /// # Returns
+    ///
+    /// A binary antijoin Transformation variant:
+    /// - `NjKK`: Key-only ¬⋈ Key-only antijoin
+    /// - `NjKvK`: Key-value ¬⋈ Key-only antijoin
+    ///
+    /// # Panics
+    ///
+    /// Panics if the left collection is not key-only, as antijoins require the left
+    /// collection to contain only keys for filtering purposes.
     pub fn antijoin(info: &TransformationInfo) -> Self {
         // Antijoins require the left collection to be key-only (used for filtering)
         assert!(
@@ -410,26 +467,22 @@ impl fmt::Display for Transformation {
                 input,
                 output,
                 flow,
-                is_no_op,
             } => {
-                let no_op = if *is_no_op { " [no-op]" } else { "" };
                 write!(
                     f,
-                    "[RowToRow]{}\n   In   : {}\n   Flow : {}\n   Out  : {}",
-                    no_op, input, flow, output
+                    "[RowToRow]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    input, flow, output
                 )
             }
             Self::RowToK {
                 input,
                 output,
                 flow,
-                is_no_op,
             } => {
-                let no_op = if *is_no_op { " [no-op]" } else { "" };
                 write!(
                     f,
-                    "[RowToK]{}\n   In   : {}\n   Flow : {}\n   Out  : {}",
-                    no_op, input, flow, output
+                    "[RowToK]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    input, flow, output
                 )
             }
             Self::RowToKv {
