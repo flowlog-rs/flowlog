@@ -79,13 +79,9 @@ impl RulePlanner {
             // Short-lived borrow to check if producer is a neg join
             let producer_tx = &self.transformation_infos[input_producer_index];
             if producer_tx.is_neg_join() && !cmp_exprs.is_empty() {
-                // Skip if the input producer is a neg join and has comparison expressions (cannot fuse)
-                trace!(
-                    "[fuse_map] skip at idx {}: input producer {} is neg join",
-                    index,
-                    input_producer_index
-                );
-                continue;
+                // We always apply possible comparisons before neg joins, so it is impossible
+                // to fuse a map with a neg join producer if there are any comparisons.
+                panic!("Planner error: [fuse_map] impossible fusion of map with neg join producer");
             }
 
             let output_consumer_indices = self.consumer_indices(output_fp);

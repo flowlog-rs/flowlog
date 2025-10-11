@@ -20,13 +20,39 @@ impl RulePlanner {
     /// Attempts to apply semijoin or comparison pushdown optimizations.
     ///
     /// This method tries the following optimizations in order:
-    /// 1. Positive semijoin: When a positive atom has positive supersets
-    /// 2. Anti-semijoin: When a negated atom has positive supersets  
-    /// 3. Comparison pushdown: When a comparison predicate can be pushed to atoms
+    /// 1. Comparison pushdown: When a comparison predicate can be pushed to atoms
+    /// 2. Positive semijoin: When a positive atom has positive supersets
+    /// 3. Anti-semijoin: When a negated atom has positive supersets  
+    ///
+    /// The reason why we try comparison pushdown first is that it can avoid fuse a comparison
+    /// with a neg join producer, which is undefined in my understanding.
     ///
     /// Returns `true` if any optimization was applied, `false` otherwise.
     pub(super) fn apply_semijoin(&mut self, catalog: &mut Catalog) -> bool {
-        // (1) Positive semijoin optimization
+        // (1) Comparison predicate pushdown
+        // When a comparison can be evaluated against specific atoms
+        if let Some((lhs_comp_idx, rhs_pos_indices)) = catalog
+            .comparison_supersets()
+            .iter()
+            .enumerate()
+            .find(|(_, v)| !v.is_empty())
+            .map(|(idx, indices)| (idx, indices.clone()))
+        {
+            trace!(
+                "Comparison pushdown:\n  Comparison: {}\n  RHS atoms: {:?}",
+                catalog.comparison_predicate(lhs_comp_idx),
+                rhs_pos_indices
+                    .iter()
+                    .map(|&i| (
+                        &catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)],
+                        catalog.positive_atom_rhs_id(i)
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            return self.apply_comparison_pushdown(catalog, lhs_comp_idx, &rhs_pos_indices);
+        }
+
+        // (2) Positive semijoin optimization
         // When a positive atom has positive supersets, we can join them
         if let Some((lhs_pos_idx, rhs_pos_indices)) = catalog
             .positive_supersets()
@@ -50,7 +76,7 @@ impl RulePlanner {
             return self.apply_positive_semijoin(catalog, lhs_pos_idx, &rhs_pos_indices);
         }
 
-        // (2) Anti-semijoin optimization
+        // (3) Anti-semijoin optimization
         // When a negated atom has positive supersets, we can anti-join them
         if let Some((lhs_neg_idx, rhs_pos_indices)) = catalog
             .negated_supersets()
@@ -72,29 +98,6 @@ impl RulePlanner {
                     .collect::<Vec<_>>()
             );
             return self.apply_anti_semijoin(catalog, lhs_neg_idx, &rhs_pos_indices);
-        }
-
-        // (3) Comparison predicate pushdown
-        // When a comparison can be evaluated against specific atoms
-        if let Some((lhs_comp_idx, rhs_pos_indices)) = catalog
-            .comparison_supersets()
-            .iter()
-            .enumerate()
-            .find(|(_, v)| !v.is_empty())
-            .map(|(idx, indices)| (idx, indices.clone()))
-        {
-            trace!(
-                "Comparison pushdown:\n  Comparison: {}\n  RHS atoms: {:?}",
-                catalog.comparison_predicate(lhs_comp_idx),
-                rhs_pos_indices
-                    .iter()
-                    .map(|&i| (
-                        &catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)],
-                        catalog.positive_atom_rhs_id(i)
-                    ))
-                    .collect::<Vec<_>>()
-            );
-            return self.apply_comparison_pushdown(catalog, lhs_comp_idx, &rhs_pos_indices);
         }
 
         false
