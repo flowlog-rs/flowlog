@@ -7,6 +7,6 @@
 .decl NullNode(x: number, y: number)
 
 NullNode(x, y) :- NullEdge(x, y).
-NullNode(x, y) :-NullNode(x, w), Edge(w, y).
+NullNode(x, y) :- NullNode(x, w), Edge(w, y).
 
 .printsize NullNode

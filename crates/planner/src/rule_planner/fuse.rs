@@ -78,8 +78,8 @@ impl RulePlanner {
 
             // Short-lived borrow to check if producer is a neg join
             let producer_tx = &self.transformation_infos[input_producer_index];
-            if producer_tx.is_neg_join() {
-                // Skip if the input producer is a neg join (cannot fuse)
+            if producer_tx.is_neg_join() && !cmp_exprs.is_empty() {
+                // Skip if the input producer is a neg join and has comparison expressions (cannot fuse)
                 trace!(
                     "[fuse_map] skip at idx {}: input producer {} is neg join",
                     index,
@@ -201,7 +201,7 @@ impl RulePlanner {
         producer_idx: usize,
         key_argument_ids: &[usize],
         value_argument_ids: &[usize],
-        cmp_exprs: &[catalog::ComparisonExprPos],
+        cmp_exprs: &[ComparisonExprPos],
     ) -> u64 {
         // Build the new output layout by selecting positions from the current producer output
         let all_positions = self.collect_output_positions(producer_idx);
@@ -215,8 +215,10 @@ impl RulePlanner {
         {
             let producer_tx = &mut self.transformation_infos[producer_idx];
             producer_tx.update_output_key_value_layout(new_out_kv_layout);
-            let remapped_cmps = Self::remap_comparisons(&all_positions, cmp_exprs);
-            producer_tx.update_comparisons(remapped_cmps);
+            if !cmp_exprs.is_empty() {
+                let remapped_cmps = Self::remap_comparisons(&all_positions, cmp_exprs);
+                producer_tx.update_comparisons(remapped_cmps);
+            }
             producer_tx.update_output_fake_sig();
         }
 

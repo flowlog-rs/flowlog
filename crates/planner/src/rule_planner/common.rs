@@ -42,7 +42,7 @@ impl RulePlanner {
                 rhs_pos_indices
                     .iter()
                     .map(|&i| (
-                        catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)].clone(),
+                        &catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)],
                         catalog.positive_atom_rhs_id(i)
                     ))
                     .collect::<Vec<_>>()
@@ -66,7 +66,7 @@ impl RulePlanner {
                 rhs_pos_indices
                     .iter()
                     .map(|&i| (
-                        catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)].clone(),
+                        &catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)],
                         catalog.positive_atom_rhs_id(i)
                     ))
                     .collect::<Vec<_>>()
@@ -89,7 +89,7 @@ impl RulePlanner {
                 rhs_pos_indices
                     .iter()
                     .map(|&i| (
-                        catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)].clone(),
+                        &catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)],
                         catalog.positive_atom_rhs_id(i)
                     ))
                     .collect::<Vec<_>>()
@@ -508,7 +508,7 @@ impl RulePlanner {
 }
 
 // =========================================================================
-// TransformationInfo small utilities (private)
+// Private Utilities
 // =========================================================================
 impl RulePlanner {
     /// Build output payload expressions excluding a specific argument signature.
