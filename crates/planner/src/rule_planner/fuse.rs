@@ -9,7 +9,7 @@
 //!
 //! Recommended rules when reasoning about fusion order:
 //! 1. Always apply base filters before any further operations.
-//! 2. Always perform possible comparisons before projection.
+//! 2. Always perform possible comparisons before any semijoins.
 //!
 //! Not following these rules might introduce subtle bugs.
 

@@ -27,6 +27,10 @@ impl RulePlanner {
     /// The reason why we try comparison pushdown first is that it can avoid fuse a comparison
     /// with a neg join producer, which is undefined in my understanding.
     ///
+    /// WARNING: this method should be called as a total instead of calling individual
+    /// semijoin or comparison methods, because they may interfere with each other in fuse logic,
+    /// as the reason showed above.
+    ///
     /// Returns `true` if any optimization was applied, `false` otherwise.
     pub(super) fn apply_semijoin(&mut self, catalog: &mut Catalog) -> bool {
         // (1) Comparison predicate pushdown
