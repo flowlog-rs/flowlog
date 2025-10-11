@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use catalog::Catalog;
 use optimizer::Optimizer;
 use parser::logic::MacaronRule;
+use parser::{AggregationOperator, HeadArg};
 use tracing::debug;
 
 use crate::{RulePlanner, Transformation, TransformationInfo};
@@ -25,6 +26,11 @@ pub struct StratumPlanner {
     /// Mapping from rule head IDB fingerprint to final output collection fingerprint.
     /// This allows the executor to find where each rule's result is stored.
     idb_to_output_map: HashMap<u64, u64>,
+
+    /// Mapping from rule head IDB fingerprint to aggregation requirement.
+    /// Only contains entries for rules with aggregation in their heads.
+    /// Tuple format: (AggregationOperator, position_in_head_args)
+    idb_to_aggregation_map: HashMap<u64, (AggregationOperator, usize)>,
 }
 
 impl StratumPlanner {
@@ -85,9 +91,11 @@ impl StratumPlanner {
             rule_planners,
             transformations: Vec::new(),
             idb_to_output_map: HashMap::new(),
+            idb_to_aggregation_map: HashMap::new(),
         };
         stratum_planner.materialize_transformations();
         stratum_planner.build_idb_to_output_map(&catalogs);
+        stratum_planner.build_idb_to_aggregation_map(&catalogs);
         stratum_planner
     }
 }
@@ -115,6 +123,13 @@ impl StratumPlanner {
     #[inline]
     pub fn idb_to_output_map(&self) -> &HashMap<u64, u64> {
         &self.idb_to_output_map
+    }
+
+    /// Get the mapping from rule head IDB fingerprint to aggregation requirement.
+    /// Returns tuples of (AggregationOperator, position_in_head_args).
+    #[inline]
+    pub fn idb_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize)> {
+        &self.idb_to_aggregation_map
     }
 }
 
@@ -165,6 +180,40 @@ impl StratumPlanner {
                 let final_output_fingerprint = final_transformation.output_info_fp();
                 self.idb_to_output_map
                     .insert(head_idb_fingerprint, final_output_fingerprint);
+            }
+        }
+    }
+
+    /// Build the mapping from rule head IDB fingerprint to aggregation requirement.
+    /// This validates that rules with the same head name have consistent aggregation.
+    fn build_idb_to_aggregation_map(&mut self, catalogs: &[Catalog]) {
+        for catalog in catalogs {
+            let head_idb_fp = catalog.head_idb_fingerprint();
+
+            // Parser allows at most one aggregation in head; grab it if present
+            if let Some((pos, op)) =
+                catalog
+                    .head_arguments()
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, arg)| match arg {
+                        HeadArg::Aggregation(agg) => Some((i, *agg.operator())),
+                        _ => None,
+                    })
+            {
+                match self.idb_to_aggregation_map.get(&head_idb_fp) {
+                    Some(&(existing_op, existing_pos)) => {
+                        if existing_op != op || existing_pos != pos {
+                            panic!(
+                                "Planner error: inconsistent aggregation for head fingerprint {:#018x}, found {:?} at position {} but expected {:?} at position {}",
+                                head_idb_fp, op, pos, existing_op, existing_pos
+                            );
+                        }
+                    }
+                    None => {
+                        self.idb_to_aggregation_map.insert(head_idb_fp, (op, pos));
+                    }
+                }
             }
         }
     }
