@@ -1,6 +1,6 @@
 //! Stratum planner that plans a stratum (a group of rules).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use catalog::Catalog;
 use optimizer::Optimizer;
@@ -21,6 +21,10 @@ pub struct StratumPlanner {
 
     /// Deduplicated executable transformations for the entire stratum.
     transformations: Vec<Transformation>,
+
+    /// Mapping from rule head IDB fingerprint to final output collection fingerprint.
+    /// This allows the executor to find where each rule's result is stored.
+    idb_to_output_map: HashMap<u64, u64>,
 }
 
 impl StratumPlanner {
@@ -80,8 +84,10 @@ impl StratumPlanner {
         let mut stratum_planner = Self {
             rule_planners,
             transformations: Vec::new(),
+            idb_to_output_map: HashMap::new(),
         };
         stratum_planner.materialize_transformations();
+        stratum_planner.build_idb_to_output_map(&catalogs);
         stratum_planner
     }
 }
@@ -103,6 +109,12 @@ impl StratumPlanner {
     #[inline]
     pub fn transformations(&self) -> &[Transformation] {
         &self.transformations
+    }
+
+    /// Get the mapping from rule head IDB fingerprint to final output collection fingerprint.
+    #[inline]
+    pub fn idb_to_output_map(&self) -> &HashMap<u64, u64> {
+        &self.idb_to_output_map
     }
 }
 
@@ -139,5 +151,21 @@ impl StratumPlanner {
         }
 
         unique_infos
+    }
+
+    /// Build the mapping from rule head IDB fingerprint to final output collection fingerprint.
+    fn build_idb_to_output_map(&mut self, catalogs: &[Catalog]) {
+        for (rule_idx, catalog) in catalogs.iter().enumerate() {
+            let head_idb_fingerprint = catalog.head_idb_fingerprint();
+
+            // Get the final transformation's output fingerprint for this rule
+            if let Some(final_transformation) =
+                self.rule_planners[rule_idx].transformation_infos().last()
+            {
+                let final_output_fingerprint = final_transformation.output_info_fp();
+                self.idb_to_output_map
+                    .insert(head_idb_fingerprint, final_output_fingerprint);
+            }
+        }
     }
 }

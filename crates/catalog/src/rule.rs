@@ -1,7 +1,9 @@
 //! Catalog of per-rule metadata and signatures for Macaron Datalog programs.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
@@ -63,6 +65,8 @@ pub struct Catalog {
 
     /// Mapping from head argument string representation to structured form.
     head_arguments_map: HashMap<String, HeadArg>,
+    /// Head IDB fingerprint.
+    head_idb_fingerprint: u64,
 
     /// Atom argument signatures whose variable string occurs exactly once across
     /// all predicates in the rule body (positive atoms, negated atoms, comparisons).
@@ -94,6 +98,13 @@ impl Catalog {
             comparison_predicates_vars_str_set: Vec::new(),
             comparison_supersets: Vec::new(),
             head_arguments_map: HashMap::new(),
+            head_idb_fingerprint: {
+                // Generate head IDB fingerprint following the same pattern as atom fingerprints
+                let mut hasher = DefaultHasher::new();
+                "head".hash(&mut hasher);
+                rule.head().name().hash(&mut hasher);
+                hasher.finish()
+            },
             unused_arguments_per_atom: HashMap::new(),
         };
         catalog.populate_all_metadata();
@@ -336,6 +347,12 @@ impl Catalog {
     #[inline]
     pub fn head_name(&self) -> &str {
         self.rule.head().name()
+    }
+
+    /// Get the head IDB fingerprint.
+    #[inline]
+    pub fn head_idb_fingerprint(&self) -> u64 {
+        self.head_idb_fingerprint
     }
 
     /// Get the head arguments.
