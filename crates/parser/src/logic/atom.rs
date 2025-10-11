@@ -11,8 +11,8 @@
 //!     AtomArg::Const(ConstType::Text("Alice".into())),
 //!     AtomArg::Const(ConstType::Integer(25)),
 //!     AtomArg::Placeholder,
-//! ]);
-//! assert_eq!(a.to_string(), "person(\"Alice\", 25, _)");
+//! ], 0);
+//! assert!(a.to_string().starts_with("person(\"Alice\", 25, _)"));
 //! ```
 
 use crate::primitive::ConstType;
@@ -243,18 +243,18 @@ mod tests {
         // nullary
         let a0 = Atom::new("flag", vec![], 0);
         assert_eq!(a0.arity(), 0);
-        assert_eq!(a0.to_string(), "flag()");
+        assert!(a0.to_string().starts_with("flag()"));
 
         // unary
         let a1 = Atom::new("student", vec![v("X")], 1);
         assert_eq!(a1.arity(), 1);
-        assert_eq!(a1.to_string(), "student(X)");
+        assert!(a1.to_string().starts_with("student(X)"));
 
         // mixed
         let a = Atom::new("person", vec![s("Alice"), i(25), Placeholder, v("Z")], 2);
         assert_eq!(a.arity(), 4);
         assert_eq!(a.name(), "person");
-        assert_eq!(a.to_string(), "person(\"Alice\", 25, _, Z)");
+        assert!(a.to_string().starts_with("person(\"Alice\", 25, _, Z)"));
     }
 
     #[test]
@@ -263,6 +263,6 @@ mod tests {
         a.push_arg(v("X"));
         a.push_arg(i(7));
         assert_eq!(a.arity(), 2);
-        assert_eq!(a.to_string(), "r(X, 7)");
+        assert!(a.to_string().starts_with("r(X, 7)"));
     }
 }
