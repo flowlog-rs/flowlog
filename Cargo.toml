@@ -4,7 +4,8 @@ members = [
     "crates/stratifier",
     "crates/catalog",
     "crates/optimizer",
-    "crates/planner"
+    "crates/planner",
+    "crates/executor"
 ]
 resolver = "2"
 
