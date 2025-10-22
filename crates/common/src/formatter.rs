@@ -4,14 +4,14 @@ use std::process;
 use tracing::{error, info};
 
 /// Unified output formatting for processing all examples
-pub struct AllResultsFormatter {
+pub struct TestResult {
     tool_name: String,
     total_files: usize,
     successful: usize,
     failed: usize,
 }
 
-impl AllResultsFormatter {
+impl TestResult {
     pub fn new(tool_name: &str, total_files: usize) -> Self {
         info!("Running {} on {} example files...", tool_name, total_files);
         info!("{}", "=".repeat(80));

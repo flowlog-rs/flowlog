@@ -5,4 +5,4 @@ pub mod formatter;
 
 // Re-export main types for backwards compatibility
 pub use args::{get_example_files, Args};
-pub use formatter::AllResultsFormatter;
+pub use formatter::TestResult;

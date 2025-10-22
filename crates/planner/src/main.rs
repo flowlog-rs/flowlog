@@ -1,5 +1,5 @@
 use clap::Parser;
-use common::{get_example_files, AllResultsFormatter, Args};
+use common::{get_example_files, Args, TestResult};
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
@@ -76,7 +76,7 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 /// Run planner on all example files in the example directory
 fn run_all_examples() {
     let example_files = get_example_files();
-    let mut formatter = AllResultsFormatter::new("planner", example_files.len());
+    let mut formatter = TestResult::new("planner", example_files.len());
 
     for file_path in &example_files {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();

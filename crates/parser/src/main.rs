@@ -1,5 +1,5 @@
 use clap::Parser;
-use common::{get_example_files, AllResultsFormatter, Args};
+use common::{get_example_files, Args, TestResult};
 use parser::program::Program;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -25,7 +25,7 @@ fn main() {
 
 fn run_all_examples() {
     let example_files = get_example_files();
-    let mut formatter = AllResultsFormatter::new("parser", example_files.len());
+    let mut formatter = TestResult::new("parser", example_files.len());
 
     for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
