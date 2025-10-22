@@ -1,8 +1,8 @@
-use parser::Program;
-use std::env;
-use std::fs;
-use std::path::Path;
 use std::process;
+
+use args::{get_example_files, Args};
+use clap::Parser;
+use parser::Program;
 use stratifier::{DependencyGraph, Stratifier};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -13,23 +13,14 @@ fn main() {
         .with_env_filter(EnvFilter::new("info"))
         .init();
 
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <program_file>", args[0]);
-        eprintln!("       {} --all", args[0]);
-        eprintln!("Examples:");
-        eprintln!("  {} ./example/reach.dl", args[0]);
-        eprintln!("  {} --all", args[0]);
-        process::exit(1);
-    }
+    let args = Args::parse();
 
-    let argument = &args[1];
-    if argument == "--all" {
+    if args.should_process_all() {
         run_all_examples();
         return;
     }
 
-    let program = Program::parse(argument);
+    let program = Program::parse(args.program());
     info!("Success parse program (rules={})", program.rules().len());
 
     // Show dependency graph then stratification summary
@@ -52,42 +43,17 @@ fn main() {
 }
 
 fn run_all_examples() {
-    let example_dir = "example";
-    if !Path::new(example_dir).exists() {
-        error!("Error: example directory '{}' not found", example_dir);
-        process::exit(1);
-    }
+    let example_files = get_example_files();
 
-    let entries = match fs::read_dir(example_dir) {
-        Ok(e) => e,
-        Err(err) => {
-            error!("Error reading example directory: {err}");
-            process::exit(1);
-        }
-    };
-
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("dl") {
-            files.push(path);
-        }
-    }
-    files.sort();
-    if files.is_empty() {
-        error!("No .dl files found in {example_dir} directory");
-        process::exit(1);
-    }
-
-    info!("Running stratifier on {} example files...", files.len());
+    info!("Running stratifier on {} example files...", example_files.len());
     info!("{}", "=".repeat(80));
 
     let mut successful = 0usize;
     let mut failed = 0usize;
 
-    for (i, file_path) in files.iter().enumerate() {
+    for (i, file_path) in example_files.iter().enumerate() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
-        info!("[{}/{}] Processing: {}", i + 1, files.len(), file_name);
+        info!("[{}/{}] Processing: {}", i + 1, example_files.len(), file_name);
         info!("{}", "-".repeat(40));
 
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
@@ -124,7 +90,7 @@ fn run_all_examples() {
 
     info!("{}", "=".repeat(80));
     info!("SUMMARY:");
-    info!("  Total files: {}", files.len());
+    info!("  Total files: {}", example_files.len());
     info!("  Successful: {}", successful);
     info!("  Failed: {}", failed);
 

@@ -1,7 +1,8 @@
 use std::{fs, path::Path, process};
 
+use args::Args;
 use clap::Parser;
-use executor::{args::Args, Executor};
+use generator::Generator;
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
@@ -21,7 +22,7 @@ fn main() {
     let args = Args::parse();
 
     // Backward-compat convenience: allow `--program all` or `--program --all`
-    if args.program() == "all" || args.program() == "--all" {
+    if args.should_process_all() {
         run_all_examples();
         return;
     }
@@ -37,13 +38,13 @@ fn main() {
         stratifier.stratum().len()
     );
 
-    // Plan each stratum using StratumPlanner then hand transformations to executor
+    // Plan each stratum using StratumPlanner then hand transformations to generator
     let mut optimizer = Optimizer::new();
-    let executor = Executor::new();
-    execute_program(&executor, &mut optimizer, &stratifier);
+    let generator = Generator::new();
+    generate_program(&generator, &mut optimizer, &stratifier);
 }
 
-fn execute_program(executor: &Executor, optimizer: &mut Optimizer, stratifier: &Stratifier) {
+fn generate_program(generator: &Generator, optimizer: &mut Optimizer, stratifier: &Stratifier) {
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
         let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
 
@@ -58,12 +59,12 @@ fn execute_program(executor: &Executor, optimizer: &mut Optimizer, stratifier: &
             rule_refs.len(),
             is_recursive
         );
-        // Execute the deduplicated transformation list for this stratum
-        executor.execute(sp.transformations());
+        // Generate code for the deduplicated transformation list for this stratum
+        generator.generate(sp.transformations());
     }
 }
 
-/// Run executor on all example files in the example directory
+/// Run generator on all example files in the example directory
 fn run_all_examples() {
     let example_dir = "example";
 
@@ -98,7 +99,7 @@ fn run_all_examples() {
     }
 
     // Process all files
-    info!("Running executor on {} example files...", files.len());
+    info!("Running generator on {} example files...", files.len());
     let mut success_count = 0;
     let mut failure_count = 0;
 
@@ -109,12 +110,12 @@ fn run_all_examples() {
             let program = Program::parse(file_path.to_str().unwrap());
             let stratifier = Stratifier::from_program(&program);
             let mut optimizer = Optimizer::new();
-            let executor = Executor::new();
+            let generator = Generator::new();
 
             for rule_refs in stratifier.stratum().iter() {
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
                 let sp = StratumPlanner::from_rules(&rules, &mut optimizer);
-                executor.execute(sp.transformations());
+                generator.generate(sp.transformations());
             }
 
             (program.rules().len(), stratifier.stratum().len())
@@ -141,9 +142,9 @@ fn run_all_examples() {
     println!("  Failed: {}", failure_count);
 
     if failure_count > 0 {
-        println!("\nSome files failed to execute. Check the errors above for details.");
+        println!("\nSome files failed to generate. Check the errors above for details.");
         process::exit(1);
     } else {
-        println!("\nAll example files executed successfully!");
+        println!("\nAll example files generated successfully!");
     }
 }

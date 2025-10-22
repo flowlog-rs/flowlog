@@ -62,6 +62,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "args"
+version = "0.1.0"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -74,6 +81,8 @@ dependencies = [
 name = "catalog"
 version = "0.1.0"
 dependencies = [
+ "args",
+ "clap",
  "parser",
  "tracing",
  "tracing-subscriber",
@@ -167,9 +176,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
-name = "executor"
+name = "generator"
 version = "0.1.0"
 dependencies = [
+ "args",
  "catalog",
  "clap",
  "optimizer",
@@ -269,7 +279,9 @@ checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 name = "optimizer"
 version = "0.1.0"
 dependencies = [
+ "args",
  "catalog",
+ "clap",
  "parser",
  "stratifier",
  "tracing",
@@ -280,6 +292,8 @@ dependencies = [
 name = "parser"
 version = "0.1.0"
 dependencies = [
+ "args",
+ "clap",
  "pest",
  "pest_derive",
  "tracing",
@@ -340,7 +354,9 @@ checksum = "3b3cff922bd51709b605d9ead9aa71031d81447142d828eb4a6eba76fe619f9b"
 name = "planner"
 version = "0.1.0"
 dependencies = [
+ "args",
  "catalog",
+ "clap",
  "optimizer",
  "parser",
  "stratifier",
@@ -413,6 +429,8 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 name = "stratifier"
 version = "0.1.0"
 dependencies = [
+ "args",
+ "clap",
  "itertools",
  "parser",
  "tracing",

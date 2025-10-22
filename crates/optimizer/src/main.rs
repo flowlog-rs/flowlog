@@ -1,6 +1,8 @@
-use std::{env, fs, path::Path, process};
+use std::process;
 
+use args::{get_example_files, Args};
 use catalog::rule::Catalog;
+use clap::Parser;
 use optimizer::Optimizer;
 use parser::Program;
 use stratifier::Stratifier;
@@ -16,20 +18,15 @@ fn main() {
         .init();
 
     // Parse command line arguments
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        print_usage(&args[0]);
-        process::exit(1);
-    }
+    let args = Args::parse();
 
-    let argument = &args[1];
-    if argument == "--all" {
+    if args.should_process_all() {
         run_all_examples();
         return;
     }
 
     // Parse and process single file
-    let program = Program::parse(argument);
+    let program = Program::parse(args.program());
     info!("Parsed program: {} rules", program.rules().len());
 
     // Stratify the program
@@ -42,16 +39,6 @@ fn main() {
     // Optimize each stratum
     let mut optimizer = Optimizer::new();
     optimize_and_print(&mut optimizer, &stratifier);
-}
-
-/// Print usage information
-fn print_usage(program_name: &str) {
-    eprintln!("Usage: {} <program_file>", program_name);
-    eprintln!("       {} --all", program_name);
-    eprintln!(
-        "Examples:\n  {} ./example/reach.dl\n  {} --all",
-        program_name, program_name
-    );
 }
 
 /// Optimize and print results for each stratum in the stratified program
@@ -80,44 +67,14 @@ fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 
 /// Run optimizer on all example files in the example directory
 fn run_all_examples() {
-    let example_dir = "example";
-
-    // Check if example directory exists
-    if !Path::new(example_dir).exists() {
-        error!("Directory '{}' not found", example_dir);
-        process::exit(1);
-    }
-
-    // Read and collect .dl files
-    let entries = match fs::read_dir(example_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            error!("Error reading example dir: {}", e);
-            process::exit(1);
-        }
-    };
-
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("dl") {
-            files.push(path);
-        }
-    }
-
-    files.sort();
-
-    if files.is_empty() {
-        error!("No .dl files found in {}", example_dir);
-        process::exit(1);
-    }
+    let example_files = get_example_files();
 
     // Process all files
-    info!("Running optimizer on {} example files...", files.len());
+    info!("Running optimizer on {} example files...", example_files.len());
     let mut success_count = 0;
     let mut failure_count = 0;
 
-    for file_path in &files {
+    for file_path in &example_files {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| {
@@ -154,7 +111,7 @@ fn run_all_examples() {
     // Print summary
     println!("\n{}", "=".repeat(80));
     println!("SUMMARY:");
-    println!("  Total files: {}", files.len());
+    println!("  Total files: {}", example_files.len());
     println!("  Successful: {}", success_count);
     println!("  Failed: {}", failure_count);
 

@@ -1,10 +1,10 @@
-use catalog::rule::Catalog;
-use parser::Program;
-use std::env;
-use std::fs;
-use std::path::Path;
 use std::process;
-use tracing::{error, info};
+
+use args::{get_example_files, Args};
+use catalog::rule::Catalog;
+use clap::Parser;
+use parser::Program;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -13,23 +13,14 @@ fn main() {
         .with_env_filter(EnvFilter::new("info"))
         .init();
 
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <program_file>", args[0]);
-        eprintln!("       {} --all", args[0]);
-        eprintln!("Examples:");
-        eprintln!("  {} ./example/reach.dl", args[0]);
-        eprintln!("  {} --all", args[0]);
-        process::exit(1);
-    }
+    let args = Args::parse();
 
-    let argument = &args[1];
-    if argument == "--all" {
+    if args.should_process_all() {
         run_all_examples();
         return;
     }
 
-    let program = Program::parse(argument);
+    let program = Program::parse(args.program());
     info!(
         "Parsed program: {} rules ({} EDBs, {} IDBs)",
         program.rules().len(),
@@ -49,39 +40,14 @@ fn print_catalogs(program: &Program) {
 }
 
 fn run_all_examples() {
-    let example_dir = "example";
-    if !Path::new(example_dir).exists() {
-        error!("Error: example directory '{}' not found", example_dir);
-        process::exit(1);
-    }
+    let example_files = get_example_files();
 
-    let entries = match fs::read_dir(example_dir) {
-        Ok(e) => e,
-        Err(err) => {
-            error!("Error reading example directory: {err}");
-            process::exit(1);
-        }
-    };
-
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("dl") {
-            files.push(path);
-        }
-    }
-    files.sort();
-    if files.is_empty() {
-        error!("No .dl files found in {example_dir} directory");
-        process::exit(1);
-    }
-
-    info!("Running catalog on {} example files...", files.len());
+    info!("Running catalog on {} example files...", example_files.len());
 
     let mut successful = 0usize;
     let mut failed = 0usize;
 
-    for file_path in files.iter() {
+    for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
@@ -97,7 +63,7 @@ fn run_all_examples() {
     }
 
     println!("\nSUMMARY:");
-    println!("  Total files: {}", files.len());
+    println!("  Total files: {}", example_files.len());
     println!("  Successful: {}", successful);
     println!("  Failed: {}", failed);
 

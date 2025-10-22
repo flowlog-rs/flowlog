@@ -24,7 +24,7 @@ pub struct StratumPlanner {
     transformations: Vec<Transformation>,
 
     /// Mapping from rule head IDB fingerprint to final output collection fingerprint.
-    /// This allows the executor to find where each rule's result is stored.
+    /// This allows the generator to find where each rule's result is stored.
     idb_to_output_map: HashMap<u64, u64>,
 
     /// Mapping from rule head IDB fingerprint to aggregation requirement.
