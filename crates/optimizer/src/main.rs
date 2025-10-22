@@ -1,12 +1,10 @@
-use std::process;
-
-use args::{get_example_files, Args};
 use catalog::rule::Catalog;
 use clap::Parser;
+use common::{get_example_files, AllResultsFormatter, Args};
 use optimizer::Optimizer;
 use parser::Program;
 use stratifier::Stratifier;
-use tracing::{error, info};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -68,14 +66,10 @@ fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 /// Run optimizer on all example files in the example directory
 fn run_all_examples() {
     let example_files = get_example_files();
-
-    // Process all files
-    info!("Running optimizer on {} example files...", example_files.len());
-    let mut success_count = 0;
-    let mut failure_count = 0;
+    let mut formatter = AllResultsFormatter::new("optimizer", example_files.len());
 
     for file_path in &example_files {
-        let file_name = file_path.file_name().unwrap().to_str().unwrap();
+        let file_name = file_path.file_stem().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| {
             let program = Program::parse(file_path.to_str().unwrap());
@@ -95,30 +89,14 @@ fn run_all_examples() {
             (program.rules().len(), stratifier.stratum().len())
         }) {
             Ok((rule_count, strata_count)) => {
-                success_count += 1;
-                info!(
-                    "SUCCESS: {} (rules={}, strata={})",
-                    file_name, rule_count, strata_count
-                );
+                let stats = format!("rules={}, strata={}", rule_count, strata_count);
+                formatter.report_success(file_name, Some(&stats));
             }
             Err(_) => {
-                failure_count += 1;
-                error!("FAILED: {}", file_name);
+                formatter.report_failure(file_name, Some("Optimization failed"));
             }
         }
     }
 
-    // Print summary
-    println!("\n{}", "=".repeat(80));
-    println!("SUMMARY:");
-    println!("  Total files: {}", example_files.len());
-    println!("  Successful: {}", success_count);
-    println!("  Failed: {}", failure_count);
-
-    if failure_count > 0 {
-        println!("\nSome files failed to optimize. Check the errors above for details.");
-        process::exit(1);
-    } else {
-        println!("\nAll example files optimized successfully!");
-    }
+    formatter.finish();
 }

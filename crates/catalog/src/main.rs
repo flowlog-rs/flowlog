@@ -1,8 +1,6 @@
-use std::process;
-
-use args::{get_example_files, Args};
 use catalog::rule::Catalog;
 use clap::Parser;
+use common::{get_example_files, AllResultsFormatter, Args};
 use parser::Program;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -41,36 +39,26 @@ fn print_catalogs(program: &Program) {
 
 fn run_all_examples() {
     let example_files = get_example_files();
-
-    info!("Running catalog on {} example files...", example_files.len());
-
-    let mut successful = 0usize;
-    let mut failed = 0usize;
+    let mut formatter = AllResultsFormatter::new("catalog", example_files.len());
 
     for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
-            Ok(_program) => {
-                successful += 1;
-                println!("SUCCESS: {}", file_name);
+            Ok(program) => {
+                let stats = format!(
+                    "rules={}, edbs={}, idbs={}",
+                    program.rules().len(),
+                    program.edbs().len(),
+                    program.idbs().len()
+                );
+                formatter.report_success(file_name, Some(&stats));
             }
             Err(_panic_info) => {
-                failed += 1;
-                println!("FAILED: {}", file_name);
+                formatter.report_failure(file_name, None);
             }
         }
     }
 
-    println!("\nSUMMARY:");
-    println!("  Total files: {}", example_files.len());
-    println!("  Successful: {}", successful);
-    println!("  Failed: {}", failed);
-
-    if failed > 0 {
-        // Non-zero exit so CI can catch failures
-        process::exit(1);
-    } else {
-        println!("\nAll example files processed successfully!");
-    }
+    formatter.finish();
 }

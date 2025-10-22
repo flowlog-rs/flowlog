@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/args",
+    "crates/common",
     "crates/parser",
     "crates/stratifier",
     "crates/catalog",

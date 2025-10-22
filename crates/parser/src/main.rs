@@ -1,7 +1,5 @@
-use std::process;
-
-use args::{get_example_files, Args};
 use clap::Parser;
+use common::{get_example_files, AllResultsFormatter, Args};
 use parser::program::Program;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -27,66 +25,36 @@ fn main() {
 
 fn run_all_examples() {
     let example_files = get_example_files();
+    let mut formatter = AllResultsFormatter::new("parser", example_files.len());
 
-    info!("Running parser on {} example files...", example_files.len());
-    println!("{}", "=".repeat(80));
-
-    let mut successful = 0;
-    let mut failed = 0;
-
-    for (i, file_path) in example_files.iter().enumerate() {
+    for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
-
-        println!(
-            "\n[{}/{}] Processing: {}",
-            i + 1,
-            example_files.len(),
-            file_name
-        );
-        println!("{}", "-".repeat(40));
 
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
             Ok(program) => {
-                successful += 1;
-                info!("  SUCCESS: {}", file_name);
-
-                // Print basic statistics
                 let edbs = program.edbs();
                 let idbs = program.idbs();
                 let rules = program.rules();
-
-                println!("    Statistics:");
-                println!("     EDB relations: {}", edbs.len());
-                println!("     IDB relations: {}", idbs.len());
-                println!("     Rules: {}", rules.len());
+                let stats = format!(
+                    "rules={}, edbs={}, idbs={}",
+                    rules.len(),
+                    edbs.len(),
+                    idbs.len()
+                );
+                formatter.report_success(file_name, Some(&stats));
             }
             Err(panic_info) => {
-                failed += 1;
-                eprintln!("  FAILED: {}", file_name);
-
-                // Try to extract panic message
-                if let Some(s) = panic_info.downcast_ref::<String>() {
-                    eprintln!("  Error: {}", s);
+                let error_msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
                 } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    eprintln!("  Error: {}", s);
+                    s.to_string()
                 } else {
-                    eprintln!("  Error: Unknown panic occurred");
-                }
+                    "Unknown panic occurred".to_string()
+                };
+                formatter.report_failure(file_name, Some(&error_msg));
             }
         }
     }
 
-    // Summary
-    println!("\n{}", "=".repeat(80));
-    println!("SUMMARY:");
-    println!("  Total files: {}", example_files.len());
-    println!("  Successful: {}", successful);
-    println!("  Failed: {}", failed);
-
-    if failed > 0 {
-        println!("\nSome files failed to parse. Check the errors above for details.");
-        process::exit(1);
-    } else {
-        println!("\nAll example files parsed successfully!");
-    }
+    formatter.finish();
 }

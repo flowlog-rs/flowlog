@@ -1,7 +1,7 @@
 use std::{fs, path::Path, process};
 
-use args::Args;
 use clap::Parser;
+use common::Args;
 use generator::Generator;
 use optimizer::Optimizer;
 use parser::Program;

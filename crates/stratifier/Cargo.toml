@@ -11,5 +11,5 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 itertools.workspace = true
 clap = { version = "4.5.15", features = ["derive"] }
 
-args = { path = "../args" }
+common = { path = "../common" }
 parser = { path = "../parser" }

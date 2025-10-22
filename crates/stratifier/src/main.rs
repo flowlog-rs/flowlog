@@ -1,10 +1,8 @@
-use std::process;
-
-use args::{get_example_files, Args};
 use clap::Parser;
+use common::{get_example_files, AllResultsFormatter, Args};
 use parser::Program;
 use stratifier::{DependencyGraph, Stratifier};
-use tracing::{error, info};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -44,60 +42,39 @@ fn main() {
 
 fn run_all_examples() {
     let example_files = get_example_files();
+    let mut formatter = AllResultsFormatter::new("stratifier", example_files.len());
 
-    info!("Running stratifier on {} example files...", example_files.len());
-    info!("{}", "=".repeat(80));
-
-    let mut successful = 0usize;
-    let mut failed = 0usize;
-
-    for (i, file_path) in example_files.iter().enumerate() {
+    for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
-        info!("[{}/{}] Processing: {}", i + 1, example_files.len(), file_name);
-        info!("{}", "-".repeat(40));
 
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
             Ok(program) => {
-                successful += 1;
-                info!("  SUCCESS: {}", file_name);
-                info!("    Statistics:");
-                info!("     Rules: {}", program.rules().len());
                 let stratifier = Stratifier::from_program(&program);
                 let recursive_cnt = stratifier
                     .is_recursive_stratum_bitmap()
                     .iter()
                     .filter(|b| **b)
                     .count();
-                info!(
-                    "     Strata: {}",
-                    stratifier.is_recursive_stratum_bitmap().len()
+                let stats = format!(
+                    "rules={}, strata={}, recursive={}",
+                    program.rules().len(),
+                    stratifier.is_recursive_stratum_bitmap().len(),
+                    recursive_cnt
                 );
-                info!("     Recursive strata: {}", recursive_cnt);
+                formatter.report_success(file_name, Some(&stats));
             }
             Err(panic_info) => {
-                failed += 1;
-                info!("  FAILED: {}", file_name);
-                if let Some(s) = panic_info.downcast_ref::<String>() {
-                    info!("  Error: {}", s);
+                let error_msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
                 } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    info!("  Error: {}", s);
+                    s.to_string()
                 } else {
-                    info!("  Error: Unknown panic occurred");
-                }
+                    "Unknown panic occurred".to_string()
+                };
+                formatter.report_failure(file_name, Some(&error_msg));
             }
         }
     }
 
-    info!("{}", "=".repeat(80));
-    info!("SUMMARY:");
-    info!("  Total files: {}", example_files.len());
-    info!("  Successful: {}", successful);
-    info!("  Failed: {}", failed);
-
-    if failed > 0 {
-        error!("Some files failed. See errors above.");
-        process::exit(1);
-    } else {
-        info!("All example files stratified successfully!");
-    }
+    formatter.finish();
 }

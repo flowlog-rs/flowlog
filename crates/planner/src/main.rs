@@ -1,12 +1,10 @@
-use std::process;
-
-use args::{get_example_files, Args};
 use clap::Parser;
+use common::{get_example_files, AllResultsFormatter, Args};
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
 use stratifier::Stratifier;
-use tracing::{error, info};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -78,11 +76,7 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 /// Run planner on all example files in the example directory
 fn run_all_examples() {
     let example_files = get_example_files();
-
-    // Process all files
-    info!("Running planner on {} example files...", example_files.len());
-    let mut success_count = 0;
-    let mut failure_count = 0;
+    let mut formatter = AllResultsFormatter::new("planner", example_files.len());
 
     for file_path in &example_files {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
@@ -101,30 +95,14 @@ fn run_all_examples() {
             (program.rules().len(), stratifier.stratum().len())
         }) {
             Ok((rule_count, strata_count)) => {
-                success_count += 1;
-                info!(
-                    "SUCCESS: {} (rules={}, strata={})",
-                    file_name, rule_count, strata_count
-                );
+                let stats = format!("rules={}, strata={}", rule_count, strata_count);
+                formatter.report_success(file_name, Some(&stats));
             }
             Err(_) => {
-                failure_count += 1;
-                error!("FAILED: {}", file_name);
+                formatter.report_failure(file_name, None);
             }
         }
     }
 
-    // Print summary
-    info!("\n{}", "=".repeat(80));
-    info!("SUMMARY:");
-    info!("  Total files: {}", example_files.len());
-    info!("  Successful: {}", success_count);
-    info!("  Failed: {}", failure_count);
-
-    if failure_count > 0 {
-        info!("\nSome files failed to plan. Check the errors above for details.");
-        process::exit(1);
-    } else {
-        info!("\nAll example files planned successfully!");
-    }
+    formatter.finish();
 }

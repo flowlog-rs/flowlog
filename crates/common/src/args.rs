@@ -1,4 +1,4 @@
-//! Shared argument types for Macaron Datalog programs.
+//! Command line argument parsing for Macaron tools.
 
 use clap::Parser;
 use std::{fs, path::Path, process};
@@ -51,12 +51,16 @@ impl Args {
 
     /// For generator/executor: get fact_dir with validation
     pub fn fact_dir_required(&self) -> &str {
-        self.fact_dir.as_ref().expect("--fact-dir is required for this tool")
+        self.fact_dir
+            .as_ref()
+            .expect("--fact-dir is required for this tool")
     }
 
     /// For generator/executor: get output_dir with validation  
     pub fn output_dir_required(&self) -> &str {
-        self.output_dir.as_ref().expect("--output-dir is required for this tool")
+        self.output_dir
+            .as_ref()
+            .expect("--output-dir is required for this tool")
     }
 }
 
