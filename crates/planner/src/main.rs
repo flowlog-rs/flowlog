@@ -62,7 +62,7 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
         // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
 
-        let sp = StratumPlanner::from_rules(&rules, optimizer);
+        let sp = StratumPlanner::from_rules(&rules, optimizer, is_recursive);
 
         info!("{}", "=".repeat(80));
         info!(
@@ -136,9 +136,10 @@ fn run_all_examples() {
             let mut optimizer = Optimizer::new();
 
             // Run stratum planner without printing details
-            for rule_refs in stratifier.stratum().iter() {
+            for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
+                let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
-                let _sp = StratumPlanner::from_rules(&rules, &mut optimizer);
+                let _sp = StratumPlanner::from_rules(&rules, &mut optimizer, is_recursive);
             }
 
             (program.rules().len(), stratifier.stratum().len())

@@ -101,7 +101,7 @@ impl Catalog {
             head_idb_fingerprint: {
                 // Generate head IDB fingerprint following the same pattern as atom fingerprints
                 let mut hasher = DefaultHasher::new();
-                "head".hash(&mut hasher);
+                "atom".hash(&mut hasher);
                 rule.head().name().hash(&mut hasher);
                 hasher.finish()
             },
