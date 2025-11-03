@@ -20,8 +20,17 @@ pub struct StratumPlanner {
     /// Per-rule planners that own the transformation infos.
     rule_planners: Vec<RulePlanner>,
 
-    /// Deduplicated executable transformations for the entire stratum.
+    /// Temporary storage for all deduplicated transformations during analysis.
+    /// After static/dynamic separation, prefer using static_transformations and dynamic_transformations.
     transformations: Vec<Transformation>,
+
+    /// Static transformations that depend only on EDBs.
+    /// These transformations can be computed once outside recursion loops.
+    static_transformations: Vec<Transformation>,
+
+    /// Dynamic transformations that depend on IDB collections.
+    /// These transformations must be re-evaluated during recursion.
+    dynamic_transformations: Vec<Transformation>,
 
     /// Mapping from rule head IDB fingerprint to final output collection fingerprint.
     /// This allows the generator to find where each rule's result is stored.
@@ -36,7 +45,11 @@ pub struct StratumPlanner {
 impl StratumPlanner {
     /// Build a stratum planner from a stratum.
     #[must_use]
-    pub fn from_rules(rules: &[MacaronRule], optimizer: &mut Optimizer) -> Self {
+    pub fn from_rules(
+        rules: &[MacaronRule],
+        optimizer: &mut Optimizer,
+        is_recursive_stratum: bool,
+    ) -> Self {
         let mut catalogs = Vec::with_capacity(rules.len());
         let mut rule_planners = Vec::with_capacity(rules.len());
 
@@ -90,11 +103,14 @@ impl StratumPlanner {
         let mut stratum_planner = Self {
             rule_planners,
             transformations: Vec::new(),
+            static_transformations: Vec::new(),
+            dynamic_transformations: Vec::new(),
             idb_to_output_map: HashMap::new(),
             idb_to_aggregation_map: HashMap::new(),
         };
         stratum_planner.materialize_transformations();
         stratum_planner.build_idb_to_output_map(&catalogs);
+        stratum_planner.identify_static_transformations(is_recursive_stratum);
         stratum_planner.build_idb_to_aggregation_map(&catalogs);
         stratum_planner
     }
@@ -113,10 +129,26 @@ impl StratumPlanner {
             .collect()
     }
 
-    /// Read-only access to the deduplicated executable transformations.
+    /// Read-only access to all deduplicated executable transformations.
+    /// Note: Prefer using static_transformations() and dynamic_transformations()
+    /// for better optimization in recursive scenarios.
     #[inline]
     pub fn transformations(&self) -> &[Transformation] {
         &self.transformations
+    }
+
+    /// Get static transformations that depend only on EDBs.
+    /// These transformations can be computed once outside recursion loops.
+    #[inline]
+    pub fn static_transformations(&self) -> &[Transformation] {
+        &self.static_transformations
+    }
+
+    /// Get dynamic transformations that depend on IDB collections.
+    /// These transformations must be re-evaluated during recursion.
+    #[inline]
+    pub fn dynamic_transformations(&self) -> &[Transformation] {
+        &self.dynamic_transformations
     }
 
     /// Get the mapping from rule head IDB fingerprint to final output collection fingerprint.
@@ -166,6 +198,83 @@ impl StratumPlanner {
         }
 
         unique_infos
+    }
+
+    /// Identify static and dynamic transformations for optimization.
+    ///
+    /// Static transformations depend only on EDB (base) relations and can be computed
+    /// once outside of recursive evaluation loops.
+    ///
+    /// Dynamic transformations depend on IDB (derived) relations and must be
+    /// re-evaluated during recursive fixed-point computation.
+    ///
+    /// # Algorithm
+    ///
+    /// - Non-recursive strata: All transformations are static since no recursion occurs.
+    /// - Recursive strata: Use left-to-right propagation:
+    ///   1. Start with IDB fingerprints (head relations produced in this stratum)
+    ///   2. For each transformation from left to right:
+    ///      - If any input fingerprint is dynamic, mark transformation as dynamic
+    ///      - Add the transformation's output fingerprint to the dynamic set
+    ///   3. Remaining transformations are static
+    fn identify_static_transformations(&mut self, is_recursive_stratum: bool) {
+        // Clear any previous results
+        self.static_transformations.clear();
+        self.dynamic_transformations.clear();
+
+        if !is_recursive_stratum {
+            // Non-recursive stratum: all transformations are static
+            self.static_transformations
+                .extend(self.transformations.iter().cloned());
+            debug!(
+                "Non-recursive stratum: all {} transformations are static",
+                self.transformations.len()
+            );
+            return;
+        }
+
+        // Recursive stratum: propagate dynamic dependencies
+
+        // Step 1: Initialize with IDB fingerprints (head relations)
+        let mut dynamic_fingerprints: HashSet<u64> =
+            self.idb_to_output_map.keys().cloned().collect();
+
+        // Step 2: Left-to-right propagation through transformations
+        let mut dynamic_indices = HashSet::new();
+
+        for (i, transformation) in self.transformations.iter().enumerate() {
+            // Check if this transformation consumes any dynamic fingerprints
+            let consumes_dynamic = if transformation.is_unary() {
+                let input_fp = transformation.unary_input().fingerprint();
+                dynamic_fingerprints.contains(&input_fp)
+            } else {
+                let (left, right) = transformation.binary_input();
+                dynamic_fingerprints.contains(&left.fingerprint())
+                    || dynamic_fingerprints.contains(&right.fingerprint())
+            };
+
+            if consumes_dynamic {
+                // Mark as dynamic and propagate output fingerprint
+                dynamic_indices.insert(i);
+                dynamic_fingerprints.insert(transformation.output().fingerprint());
+            }
+        }
+
+        // Step 3: Separate transformations into static and dynamic vectors
+        for (i, transformation) in self.transformations.iter().enumerate() {
+            if dynamic_indices.contains(&i) {
+                self.dynamic_transformations.push(transformation.clone());
+            } else {
+                self.static_transformations.push(transformation.clone());
+            }
+        }
+
+        debug!(
+            "Recursive stratum: separated {} static, {} dynamic transformations (total: {})",
+            self.static_transformations.len(),
+            self.dynamic_transformations.len(),
+            self.transformations.len()
+        );
     }
 
     /// Build the mapping from rule head IDB fingerprint to final output collection fingerprint.
