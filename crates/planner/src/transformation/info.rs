@@ -12,11 +12,11 @@
 //! replaced with real ones once they are known. This allows building
 //! a transformation plan before all details are finalized.
 
-use std::collections::hash_map::DefaultHasher;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos};
+use common::compute_fp;
 use parser::ConstType;
 
 /// Key/Value layout of a collection: which positions form the key-value.
@@ -138,7 +138,7 @@ impl TransformationInfo {
         var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
         compare_exprs_pos: Vec<ComparisonExprPos>,
     ) -> Self {
-        let fake_output_sig = compute_sig((
+        let fake_output_sig = compute_fp((
             "kv_to_kv",
             &input_fake_sig,
             &input_kv_layout,
@@ -168,7 +168,7 @@ impl TransformationInfo {
         output_fake_kv_layout: KeyValueLayout,
         compare_exprs_pos: Vec<ComparisonExprPos>,
     ) -> Self {
-        let fake_output_sig = compute_sig((
+        let fake_output_sig = compute_fp((
             "join_to_kv",
             &left_fake_sig,
             &right_fake_sig,
@@ -197,7 +197,7 @@ impl TransformationInfo {
         right_kv_layout: KeyValueLayout,
         output_fake_kv_layout: KeyValueLayout,
     ) -> Self {
-        let fake_output_sig = compute_sig((
+        let fake_output_sig = compute_fp((
             "anti_join_to_kv",
             &left_fake_sig,
             &right_fake_sig,
@@ -477,7 +477,7 @@ impl TransformationInfo {
                 compare_exprs_pos,
                 output_info_fp,
             } => {
-                *output_info_fp = compute_sig((
+                *output_info_fp = compute_fp((
                     "kv_to_kv",
                     input_info_fp,
                     input_kv_layout,
@@ -496,7 +496,7 @@ impl TransformationInfo {
                 compare_exprs_pos,
                 output_info_fp,
             } => {
-                *output_info_fp = compute_sig((
+                *output_info_fp = compute_fp((
                     "join_to_kv",
                     left_input_info_fp,
                     right_input_info_fp,
@@ -514,7 +514,7 @@ impl TransformationInfo {
                 output_kv_layout,
                 output_info_fp,
             } => {
-                *output_info_fp = compute_sig((
+                *output_info_fp = compute_fp((
                     "anti_join_to_kv",
                     left_input_info_fp,
                     right_input_info_fp,
@@ -641,16 +641,6 @@ impl fmt::Debug for TransformationInfo {
 // ========================
 // Private Helper Functions
 // ========================
-
-/// Computes a derived fingerprint by hashing all identifying inputs together.
-///
-/// NOTE: Uses `DefaultHasher` which is deterministic within a build but not
-/// guaranteed stable across Rust versions.
-fn compute_sig<T: Hash>(t: T) -> u64 {
-    let mut h = DefaultHasher::new();
-    t.hash(&mut h);
-    h.finish()
-}
 
 /// Formats a collection as:
 /// - with keys:    `ffffffffffffffff [key: (k1, k2), value: (v1, v2)]`

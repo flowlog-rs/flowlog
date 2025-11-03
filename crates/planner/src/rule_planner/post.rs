@@ -23,6 +23,7 @@ impl RulePlanner {
     pub fn post(&mut self, catalog: &mut Catalog) {
         let head_args = catalog.head_arguments();
 
+        // Note: here we always create row output layout for rule heads.
         if self.needs_post_transformation() {
             self.create_post_transformation(catalog, head_args);
         } else {

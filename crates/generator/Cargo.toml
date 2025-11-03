@@ -6,9 +6,13 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+clap = { workspace = true, features = ["derive"] }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-clap = { version = "4.5.15", features = ["derive"] }
+toml_edit = { workspace = true }
 
 common = { path = "../common" }
 catalog = { path = "../catalog" }

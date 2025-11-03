@@ -1,13 +1,12 @@
 //! Catalog of per-rule metadata and signatures for Macaron Datalog programs.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::hash::{Hash, Hasher};
 
 use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
 use crate::ComparisonExprPos;
+use common::compute_fp;
 use parser::{ComparisonExpr, HeadArg, MacaronRule};
 
 // Implementation modules
@@ -98,13 +97,7 @@ impl Catalog {
             comparison_predicates_vars_str_set: Vec::new(),
             comparison_supersets: Vec::new(),
             head_arguments_map: HashMap::new(),
-            head_idb_fingerprint: {
-                // Generate head IDB fingerprint following the same pattern as atom fingerprints
-                let mut hasher = DefaultHasher::new();
-                "atom".hash(&mut hasher);
-                rule.head().name().hash(&mut hasher);
-                hasher.finish()
-            },
+            head_idb_fingerprint: compute_fp(("atom", rule.head().name())),
             unused_arguments_per_atom: HashMap::new(),
         };
         catalog.populate_all_metadata();

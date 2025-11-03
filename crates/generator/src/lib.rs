@@ -5,5 +5,5 @@
 //! process. Later it can be extended to generate optimized execution code.
 
 pub mod generator;
-
-pub use generator::Generator;
+pub mod io;
+pub mod scaffold;

@@ -8,15 +8,26 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
+use common::compute_fp;
+
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Relation {
+    /// Relation name.
     name: String,
+
+    /// Relation fingerprint.
+    fingerprint: u64,
+
+    /// Attributes of the relation.
     attributes: Vec<Attribute>,
+
     /// Input parameters (e.g., filename="file.csv", IO="file")
     input_params: Option<HashMap<String, String>>,
+
     /// Output path (None if not output, Some(None) for default path, Some(Some(path)) for custom path)
     output_path: Option<Option<String>>,
+
     /// Whether to print size
     printsize: bool,
 }
@@ -28,6 +39,7 @@ impl Relation {
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
         Self {
             name: name.to_string(),
+            fingerprint: compute_fp(("atom", &name, &attributes)),
             attributes,
             input_params: None,
             output_path: None,
@@ -45,6 +57,7 @@ impl Relation {
     ) -> Self {
         Self {
             name: name.to_string(),
+            fingerprint: compute_fp(("atom", &name, &attributes)),
             attributes,
             input_params: Some(input_params),
             output_path: None,
@@ -59,11 +72,25 @@ impl Relation {
         &self.name
     }
 
+    /// Relation fingerprint.
+    #[must_use]
+    #[inline]
+    pub fn fingerprint(&self) -> u64 {
+        self.fingerprint
+    }
+
     /// Attributes of the relation.
     #[must_use]
     #[inline]
     pub fn attributes(&self) -> &[Attribute] {
         &self.attributes
+    }
+
+    /// Data types of the relation.
+    #[must_use]
+    #[inline]
+    pub fn data_type(&self) -> &DataType {
+        self.attributes[0].data_type()
     }
 
     /// Input parameters if this is an EDB relation.

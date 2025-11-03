@@ -18,10 +18,11 @@
 use crate::primitive::ConstType;
 use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
+
+use common::compute_fp;
 
 /// An argument to an atom: variable, constant, or `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -186,10 +187,7 @@ impl Lexeme for Atom {
         }
 
         // Generate signature
-        let mut hasher = DefaultHasher::new();
-        "atom".hash(&mut hasher);
-        name.hash(&mut hasher);
-        let fingerprint = hasher.finish();
+        let fingerprint = compute_fp(("atom", &name, &arguments));
 
         Self {
             name,

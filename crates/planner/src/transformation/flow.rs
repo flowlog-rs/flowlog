@@ -478,12 +478,12 @@ impl fmt::Display for TransformationFlow {
 
                 let key_str = key
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|k| format!("{}", k))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let value_str = value
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|v| format!("{}", v))
                     .collect::<Vec<_>>()
                     .join(", ");
 
@@ -514,12 +514,12 @@ impl fmt::Display for TransformationFlow {
 
                 let key_str = key
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|k| format!("{}", k))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let value_str = value
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|v| format!("{}", v))
                     .collect::<Vec<_>>()
                     .join(", ");
 
