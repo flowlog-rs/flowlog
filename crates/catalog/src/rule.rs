@@ -195,6 +195,36 @@ impl Catalog {
         &self.original_atom_fingerprints
     }
 
+    // Get original atom arguments
+    #[inline]
+    pub fn original_atom_arguments(&self, origin_atom_fp: u64) -> Vec<AtomArgumentSignature> {
+        assert!(
+            self.original_atom_fingerprints.contains(&origin_atom_fp),
+            "Requested original atom arguments for non original fingerprint: 0x{:016x}",
+            origin_atom_fp
+        );
+
+        // Check positive atoms
+        if let Some(index) = self
+            .positive_atom_fingerprints
+            .iter()
+            .position(|&fp| fp == origin_atom_fp)
+        {
+            return self.positive_atom_argument_signatures[index].clone();
+        }
+
+        // Check negated atoms
+        if let Some(index) = self
+            .negated_atom_fingerprints
+            .iter()
+            .position(|&fp| fp == origin_atom_fp)
+        {
+            return self.negated_atom_argument_signatures[index].clone();
+        }
+
+        unreachable!("Original atom fingerprint should exist in either positive or negated atoms");
+    }
+
     // === Positive Atoms ===
 
     /// Get the fingerprint of a positive atom by its index.

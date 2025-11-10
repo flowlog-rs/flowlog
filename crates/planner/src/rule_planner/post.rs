@@ -64,6 +64,8 @@ impl RulePlanner {
         let name_to_sig = Self::build_name_to_output_signatures_from_atom(catalog);
         let output_values = Self::resolve_head_arguments(&name_to_sig, head_args);
 
+        // We default here assume the input layout is all values from the first positive atom.
+        // No additional mapping is needed.
         let (input_fake_sig, input_kv_layout) = (
             catalog.positive_atom_fingerprint(0),
             KeyValueLayout::new(

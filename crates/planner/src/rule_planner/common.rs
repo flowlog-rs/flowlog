@@ -65,6 +65,7 @@ impl RulePlanner {
             .find(|(_, v)| !v.is_empty())
             .map(|(idx, indices)| (idx, indices.clone()))
         {
+            self.apply_positive_semijoin_premap(catalog, lhs_pos_idx, &rhs_pos_indices);
             trace!(
                 "Positive semijoin:\n  LHS atom: ({}, {})\n  RHS atoms: {:?}",
                 catalog.rule().rhs()[catalog.positive_atom_rhs_id(lhs_pos_idx)],
@@ -89,6 +90,7 @@ impl RulePlanner {
             .find(|(_, v)| !v.is_empty())
             .map(|(idx, indices)| (idx, indices.clone()))
         {
+            self.apply_anti_semijoin_premap(catalog, lhs_neg_idx, &rhs_pos_indices);
             trace!(
                 "Anti-semijoin:\n  LHS negated atom: ({}, !{})\n  RHS atoms: {:?}",
                 catalog.rule().rhs()[catalog.negated_atom_rhs_id(lhs_neg_idx)],
@@ -105,6 +107,46 @@ impl RulePlanner {
         }
 
         false
+    }
+
+    /// Apply premap for positive semijoin optimization.
+    fn apply_positive_semijoin_premap(
+        &mut self,
+        catalog: &mut Catalog,
+        lhs_pos_idx: usize,
+        rhs_pos_indices: &[usize],
+    ) {
+        // Extract LHS atom information
+        let lhs_pos_args = catalog
+            .positive_atom_argument_signature(lhs_pos_idx)
+            .clone();
+        let lhs_arg_names = Self::arg_names_set(&lhs_pos_args, catalog);
+
+        // Process each RHS atom for semijoin
+        for &rhs_idx in rhs_pos_indices {
+            // Extract RHS atom information
+            let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
+            let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
+
+            // Partition RHS arguments into keys (shared with LHS) and values (unique to RHS)
+            let (rhs_keys, rhs_vals): (Vec<_>, Vec<_>) = rhs_args
+                .iter()
+                .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                .partition(|pos| {
+                    lhs_arg_names.contains(
+                        catalog.signature_to_argument_str(&pos.init().signature().unwrap()),
+                    )
+                });
+
+            if catalog.original_atom_fingerprints().contains(&rhs_fp) && !rhs_keys.is_empty() {
+                // RHS atom is not in key-only format; need to create a map
+                self.create_edb_premap_transformations(
+                    catalog,
+                    rhs_idx,
+                    &KeyValueLayout::new(rhs_keys, rhs_vals),
+                );
+            }
+        }
     }
 
     /// Applies positive semijoin optimization.
@@ -225,6 +267,44 @@ impl RulePlanner {
             new_fps,
         );
         true
+    }
+
+    /// Apply premap for anti-semijoin optimization.
+    fn apply_anti_semijoin_premap(
+        &mut self,
+        catalog: &mut Catalog,
+        lhs_neg_idx: usize,
+        rhs_pos_indices: &[usize],
+    ) {
+        // Extract LHS negated atom information
+        let lhs_neg_args = catalog.negated_atom_argument_signature(lhs_neg_idx).clone();
+        let lhs_arg_names = Self::arg_names_set(&lhs_neg_args, catalog);
+
+        // Process each RHS atom for anti-semijoin
+        for &rhs_idx in rhs_pos_indices {
+            // Extract RHS atom information
+            let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
+            let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
+
+            // Partition RHS arguments into keys (shared with LHS) and values (unique to RHS)
+            let (rhs_keys, rhs_vals): (Vec<_>, Vec<_>) = rhs_args
+                .iter()
+                .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                .partition(|pos| {
+                    lhs_arg_names.contains(
+                        catalog.signature_to_argument_str(&pos.init().signature().unwrap()),
+                    )
+                });
+
+            if catalog.original_atom_fingerprints().contains(&rhs_fp) && !rhs_keys.is_empty() {
+                // RHS atom is not in key-only format; need to create a map
+                self.create_edb_premap_transformations(
+                    catalog,
+                    rhs_idx,
+                    &KeyValueLayout::new(rhs_keys, rhs_vals),
+                );
+            }
+        }
     }
 
     /// Applies anti-semijoin optimization.
@@ -511,6 +591,63 @@ impl RulePlanner {
         }
 
         applied
+    }
+}
+
+// =========================================================================
+// Premap for EDB relations
+// =========================================================================
+impl RulePlanner {
+    /// Creates premap transformations for EDB relations that are not in row format.
+    pub(super) fn create_edb_premap_transformations(
+        &mut self,
+        catalog: &mut Catalog,
+        atom_idx: usize,
+        target_kv_layout: &KeyValueLayout,
+    ) {
+        // Note: only positive EDB atoms need premap transformations
+        let edb_fp = catalog.positive_atom_fingerprint(atom_idx);
+        let edb_args = catalog.positive_atom_argument_signature(atom_idx);
+        let edb_atom_signature = AtomSignature::new(true, atom_idx);
+        let current_transformation_index = self.transformation_infos.len();
+
+        let edb_layout = KeyValueLayout::new(
+            Vec::new(),
+            edb_args
+                .iter()
+                .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                .collect(),
+        );
+
+        let tx = TransformationInfo::kv_to_kv(
+            edb_fp,
+            edb_layout,               // input layout
+            target_kv_layout.clone(), // output row layout
+            vec![],                   // no constant equality constraints
+            vec![],                   // no variable equality constraints
+            vec![],                   // no comparison constraints
+        );
+
+        // Generate descriptive name for the projected atom
+        let new_name = format!("edb_{}_premap", edb_fp);
+        let new_fp = tx.output_info_fp();
+
+        // Store the key-value layout split point
+        self.kv_layouts.insert(new_fp, target_kv_layout.key().len());
+        self.transformation_infos.push(tx);
+
+        // Register this transformation as consumer of EDB atom
+        self.insert_consumer(
+            catalog.original_atom_fingerprints(),
+            edb_fp,
+            current_transformation_index,
+        );
+
+        // Register this transformation as a producer
+        self.insert_producer(new_fp, current_transformation_index);
+
+        // Update catalog to reflect the premap atom
+        catalog.map_modify(edb_atom_signature, new_name, new_fp);
     }
 }
 

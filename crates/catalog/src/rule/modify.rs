@@ -16,6 +16,46 @@ use parser::{Atom, AtomArg, MacaronRule, Predicate};
 
 /// Public API for modifying rules and updating catalog metadata accordingly.
 impl Catalog {
+    /// Map an EDB atom to a required key/value layout.
+    /// This function do not change the arity of the atom.
+    /// Only premap of an original atom should use this function.
+    pub fn map_modify(
+        &mut self,
+        atom_signature: AtomSignature,
+        new_atom_name: String,
+        new_atom_fingerprint: u64,
+    ) {
+        // Find the global RHS position of the target atom
+        let rhs_index = self.rhs_index_from_signature(atom_signature);
+
+        // Create a new mapped atom with the same arguments but a new name
+        // Only positive atoms needs to be premapped
+        let new_atom = match &self.rule.rhs()[rhs_index] {
+            Predicate::PositiveAtomPredicate(atom) => {
+                let new_atom = Atom::new(
+                    &new_atom_name,
+                    atom.arguments().to_vec(),
+                    new_atom_fingerprint,
+                );
+                match &self.rule.rhs()[rhs_index] {
+                    Predicate::PositiveAtomPredicate(_) => {
+                        Predicate::PositiveAtomPredicate(new_atom)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            other => {
+                panic!(
+                    "Catalog error: Target predicate at rhs index {} is not an positive atom: {}",
+                    rhs_index, other
+                )
+            }
+        };
+
+        // Replace the original atom with the mapped atom and update the rule
+        self.update_rule_in_place(rhs_index, new_atom);
+    }
+
     /// Projects out specified arguments from an atom, creating a new atom with reduced arity.
     pub fn projection_modify(
         &mut self,
@@ -223,8 +263,7 @@ impl Catalog {
     // === PRIVATE HELPER METHODS ===
     // ========================================================================================
 
-    /// Remove specified indices from RHS, add new predicates, and update the rule.
-    /// Indices are removed in descending order to preserve correctness.
+    /// Update the rule by replacing the predicate at the specified index.
     fn update_rule_in_place(&mut self, index_to_change: usize, new_predicate: Predicate) {
         let mut new_rhs = self.rule.rhs().to_vec();
 
