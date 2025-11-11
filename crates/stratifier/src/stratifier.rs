@@ -16,8 +16,15 @@ use std::fmt;
 pub struct Stratifier {
     program: Program,
     dependency_graph: DependencyGraph,
-    stratum: Vec<Vec<usize>>, // rule IDs per stratum in evaluation order
-    is_recursive_stratum_bitmap: Vec<bool>, // true iff corresponding stratum is recursive
+
+    // rule IDs per stratum in evaluation order
+    stratum: Vec<Vec<usize>>,
+    // true iff corresponding stratum is recursive
+    is_recursive_stratum_bitmap: Vec<bool>,
+
+    recursive_stratum_enter_relation: Vec<Vec<u64>>,
+    recursive_stratum_exit_relation: Vec<Vec<u64>>,
+    recursive_stratum_iterative_relation: Vec<Vec<u64>>,
 }
 
 impl Stratifier {
@@ -152,12 +159,18 @@ impl Stratifier {
             }
         }
 
-        Self {
+        let mut instance = Self {
             program: program.clone(),
             dependency_graph,
             stratum: merged,
             is_recursive_stratum_bitmap: merged_bitmap,
-        }
+            recursive_stratum_enter_relation: Vec::new(),
+            recursive_stratum_exit_relation: Vec::new(),
+            recursive_stratum_iterative_relation: Vec::new(),
+        };
+
+        instance.build_recursive_metadata();
+        instance
     }
 
     /// Build the reverse adjacency map (transpose of the dependency graph).
@@ -213,25 +226,112 @@ impl Stratifier {
             }
         }
     }
+
+    fn build_recursive_metadata(&mut self) {
+        // Relations already computed before the current recursive stratum (EDBs + previous strata heads).
+        let mut input_relations: HashSet<u64> = self
+            .program
+            .edbs()
+            .iter()
+            .map(|r| r.fingerprint())
+            .collect();
+
+        for stratum in self.stratum.iter() {
+            let mut enter_rels: HashSet<u64> = HashSet::new();
+            let mut iterative_rels: HashSet<u64> = HashSet::new();
+            let mut exit_rels: HashSet<u64> = HashSet::new();
+
+            for &rid in stratum {
+                let rule = &self.program.rules()[rid];
+
+                // Extract atom fingerprints from RHS predicates.
+                for atom_fp in rule.rhs().iter().filter_map(|p| match p {
+                    parser::logic::Predicate::PositiveAtomPredicate(atom)
+                    | parser::logic::Predicate::NegatedAtomPredicate(atom) => {
+                        Some(atom.fingerprint())
+                    }
+                    _ => None,
+                }) {
+                    if input_relations.contains(&atom_fp) {
+                        // Relation originating outside current recursive stratum – enter relation.
+                        enter_rels.insert(atom_fp);
+                    }
+                    if rule.head().head_fingerprint() == atom_fp {
+                        // Derived inside the recursive stratum – iterative relation.
+                        iterative_rels.insert(atom_fp);
+                    }
+                }
+
+                // Head relation produced by this rule – exit relation.
+                exit_rels.insert(rule.head().head_fingerprint());
+            }
+
+            // Newly produced relations become available to later strata.
+            input_relations.extend(&exit_rels);
+
+            self.recursive_stratum_enter_relation
+                .push(enter_rels.into_iter().collect());
+            self.recursive_stratum_exit_relation
+                .push(exit_rels.into_iter().collect());
+            self.recursive_stratum_iterative_relation
+                .push(iterative_rels.into_iter().collect());
+        }
+    }
 }
 
 impl fmt::Display for Stratifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\nStratum:")?;
         writeln!(f, "{}", "-".repeat(45))?;
+
+        // Build a lookup from relation fingerprint to relation name for nicer printing.
+        let fp2name: HashMap<u64, String> = self
+            .program
+            .relations()
+            .iter()
+            .map(|r| (r.fingerprint(), r.name().to_string()))
+            .collect();
+
+        let fmt_fps = |fps: &[u64]| -> String {
+            let mut names: Vec<String> = fps
+                .iter()
+                .map(|fp| {
+                    fp2name
+                        .get(fp)
+                        .cloned()
+                        .unwrap_or_else(|| format!("0x{:x}", fp))
+                })
+                .collect();
+            names.sort();
+            names.dedup();
+            names.join(", ")
+        };
+
         for (idx, stratum) in self.stratum.iter().enumerate() {
+            let recursive = self.is_recursive_stratum(idx);
             write!(
                 f,
-                "#{}:{} ",
+                "#{} [{}] ",
                 idx + 1,
-                if self.is_recursive_stratum(idx) {
-                    " (rec)"
+                if recursive {
+                    "recursive"
                 } else {
-                    ""
+                    "non-recursive"
                 }
             )?;
             let ids = stratum.iter().sorted().map(|r| r.to_string()).join(", ");
             writeln!(f, "[{}]", ids)?;
+
+            let enters = &self.recursive_stratum_enter_relation[idx];
+            let iters = &self.recursive_stratum_iterative_relation[idx];
+            let exits = &self.recursive_stratum_exit_relation[idx];
+
+            writeln!(f, "  enter:     [{}]", fmt_fps(enters))?;
+            if recursive {
+                writeln!(f, "  iterative: [{}]", fmt_fps(iters))?;
+            }
+            writeln!(f, "  exit:      [{}]", fmt_fps(exits))?;
+
             for rid in stratum {
                 writeln!(f, "{}", self.program.rules()[*rid])?;
             }

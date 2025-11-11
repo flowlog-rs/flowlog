@@ -187,7 +187,7 @@ impl Lexeme for Atom {
         }
 
         // Generate signature
-        let fingerprint = compute_fp(("atom", &name, &arguments));
+        let fingerprint = compute_fp(("atom", &name));
 
         Self {
             name,

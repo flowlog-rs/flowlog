@@ -17,6 +17,7 @@
 
 use super::{Aggregation, Arithmetic};
 use crate::{Lexeme, Rule};
+use common::compute_fp;
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -93,6 +94,7 @@ impl Lexeme for HeadArg {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Head {
     name: String,
+    head_fingerprint: u64,
     head_arguments: Vec<HeadArg>,
 }
 
@@ -100,8 +102,10 @@ impl Head {
     /// Create a new rule head.
     #[must_use]
     pub fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
+        let head_fingerprint = compute_fp(("atom", &name));
         Self {
             name,
+            head_fingerprint,
             head_arguments,
         }
     }
@@ -111,6 +115,13 @@ impl Head {
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Head fingerprint.
+    #[must_use]
+    #[inline]
+    pub fn head_fingerprint(&self) -> u64 {
+        self.head_fingerprint
     }
 
     /// Arguments.

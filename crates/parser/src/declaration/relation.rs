@@ -39,7 +39,7 @@ impl Relation {
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
         Self {
             name: name.to_string(),
-            fingerprint: compute_fp(("atom", &name, &attributes)),
+            fingerprint: compute_fp(("atom", &name)),
             attributes,
             input_params: None,
             output_path: None,
@@ -57,7 +57,7 @@ impl Relation {
     ) -> Self {
         Self {
             name: name.to_string(),
-            fingerprint: compute_fp(("atom", &name, &attributes)),
+            fingerprint: compute_fp(("atom", &name)),
             attributes,
             input_params: Some(input_params),
             output_path: None,

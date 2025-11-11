@@ -6,7 +6,6 @@ use std::fmt;
 use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
 use crate::ComparisonExprPos;
-use common::compute_fp;
 use parser::{ComparisonExpr, HeadArg, MacaronRule};
 
 // Implementation modules
@@ -97,7 +96,7 @@ impl Catalog {
             comparison_predicates_vars_str_set: Vec::new(),
             comparison_supersets: Vec::new(),
             head_arguments_map: HashMap::new(),
-            head_idb_fingerprint: compute_fp(("atom", rule.head().name())),
+            head_idb_fingerprint: rule.head().head_fingerprint(),
             unused_arguments_per_atom: HashMap::new(),
         };
         catalog.populate_all_metadata();
