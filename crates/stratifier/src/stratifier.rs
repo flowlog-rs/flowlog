@@ -22,9 +22,11 @@ pub struct Stratifier {
     // true iff corresponding stratum is recursive
     is_recursive_stratum_bitmap: Vec<bool>,
 
-    recursive_stratum_enter_relation: Vec<Vec<u64>>,
-    recursive_stratum_exit_relation: Vec<Vec<u64>>,
-    recursive_stratum_iterative_relation: Vec<Vec<u64>>,
+    // Mapping of stratum IDs to their entered relations (rule IDs).
+    // Later in planner, we will determine exact data collection needs for dynamic transformations.
+    stratum_enter_relation: Vec<Vec<u64>>,
+    // Mapping of stratum IDs to their iterative relations (rule IDs) (recursive strata only).
+    stratum_iterative_relation: Vec<Vec<u64>>,
 }
 
 impl Stratifier {
@@ -60,6 +62,18 @@ impl Stratifier {
             out.push(s.iter().map(|&rid| &self.program.rules()[rid]).collect());
         }
         out
+    }
+
+    /// Return enter relations.
+    #[must_use]
+    pub fn stratum_enter_relation(&self, idx: usize) -> &Vec<u64> {
+        &self.stratum_enter_relation[idx]
+    }
+
+    /// Return iterative relations.
+    #[must_use]
+    pub fn stratum_iterative_relation(&self, idx: usize) -> &Vec<u64> {
+        &self.stratum_iterative_relation[idx]
     }
 
     /// Build strata by computing SCCs then merging independent non‑recursive strata.
@@ -164,9 +178,8 @@ impl Stratifier {
             dependency_graph,
             stratum: merged,
             is_recursive_stratum_bitmap: merged_bitmap,
-            recursive_stratum_enter_relation: Vec::new(),
-            recursive_stratum_exit_relation: Vec::new(),
-            recursive_stratum_iterative_relation: Vec::new(),
+            stratum_enter_relation: Vec::new(),
+            stratum_iterative_relation: Vec::new(),
         };
 
         instance.build_recursive_metadata();
@@ -269,11 +282,9 @@ impl Stratifier {
             // Newly produced relations become available to later strata.
             input_relations.extend(&exit_rels);
 
-            self.recursive_stratum_enter_relation
+            self.stratum_enter_relation
                 .push(enter_rels.into_iter().collect());
-            self.recursive_stratum_exit_relation
-                .push(exit_rels.into_iter().collect());
-            self.recursive_stratum_iterative_relation
+            self.stratum_iterative_relation
                 .push(iterative_rels.into_iter().collect());
         }
     }
@@ -322,15 +333,13 @@ impl fmt::Display for Stratifier {
             let ids = stratum.iter().sorted().map(|r| r.to_string()).join(", ");
             writeln!(f, "[{}]", ids)?;
 
-            let enters = &self.recursive_stratum_enter_relation[idx];
-            let iters = &self.recursive_stratum_iterative_relation[idx];
-            let exits = &self.recursive_stratum_exit_relation[idx];
+            let enters = &self.stratum_enter_relation[idx];
+            let iters = &self.stratum_iterative_relation[idx];
 
             writeln!(f, "  enter:     [{}]", fmt_fps(enters))?;
             if recursive {
                 writeln!(f, "  iterative: [{}]", fmt_fps(iters))?;
             }
-            writeln!(f, "  exit:      [{}]", fmt_fps(exits))?;
 
             for rid in stratum {
                 writeln!(f, "{}", self.program.rules()[*rid])?;
