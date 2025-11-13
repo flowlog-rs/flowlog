@@ -123,10 +123,7 @@ impl Lexeme for Aggregation {
             .expect("Parser error: aggregation missing arithmetic expression");
         let arithmetic = Arithmetic::from_parsed_rule(expr_pair);
 
-        Self {
-            operator,
-            arithmetic,
-        }
+        Self::new(operator, arithmetic)
     }
 }
 

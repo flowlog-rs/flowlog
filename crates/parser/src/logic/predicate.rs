@@ -126,7 +126,7 @@ mod tests {
 
     // Helpers
     fn atom(name: &str, args: Vec<AtomArg>) -> Atom {
-        Atom::new(name, args, 0)
+        Atom::new(name, args)
     }
     fn var(name: &str) -> AtomArg {
         AtomArg::Var(name.into())

@@ -102,7 +102,7 @@ impl Head {
     /// Create a new rule head.
     #[must_use]
     pub fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
-        let head_fingerprint = compute_fp(("atom", &name));
+        let head_fingerprint = compute_fp(&name);
         Self {
             name,
             head_fingerprint,

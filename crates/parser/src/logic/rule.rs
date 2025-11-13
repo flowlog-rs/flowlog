@@ -141,7 +141,7 @@ mod tests {
         AtomArg::Var(name.into())
     }
     fn atom(name: &str, args: Vec<AtomArg>) -> Atom {
-        Atom::new(name, args, 0)
+        Atom::new(name, args)
     }
     fn head_var(name: &str) -> HeadArg {
         HeadArg::Var(name.into())

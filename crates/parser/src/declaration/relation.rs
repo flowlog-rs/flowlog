@@ -39,27 +39,9 @@ impl Relation {
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
         Self {
             name: name.to_string(),
-            fingerprint: compute_fp(("atom", &name)),
+            fingerprint: compute_fp(&name),
             attributes,
             input_params: None,
-            output_path: None,
-            printsize: false,
-        }
-    }
-
-    /// Create a new relation with input parameters.
-    #[must_use]
-    #[inline]
-    pub fn new_with_input(
-        name: &str,
-        attributes: Vec<Attribute>,
-        input_params: HashMap<String, String>,
-    ) -> Self {
-        Self {
-            name: name.to_string(),
-            fingerprint: compute_fp(("atom", &name)),
-            attributes,
-            input_params: Some(input_params),
             output_path: None,
             printsize: false,
         }
