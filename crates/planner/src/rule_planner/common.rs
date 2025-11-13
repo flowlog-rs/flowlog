@@ -731,19 +731,15 @@ impl RulePlanner {
 // Producer-Consumer Relationship Management
 // =========================================================================
 impl RulePlanner {
-    /// Registers a producer transformation for a given fingerprint.
+    /// Registers a producer transformation for data with a given fingerprint.
     ///
-    /// Each transformation fingerprint can have exactly one producer - the transformation
-    /// that generates data with that fingerprint.
+    /// Multiple transformations can produce the same data (i.e., multiple producers per output).
+    /// We will deduplicate in the later fusion logic.
     pub(super) fn insert_producer(&mut self, producer_fp: u64, producer_idx: usize) {
-        // It is impossible to have two producers for the same transformation fingerprint.
-        assert!(
-            self.producer_consumer
-                .insert(producer_fp, (producer_idx, None))
-                .is_none(),
-            "Producer already exists for transformation fingerprint: {:016x}",
-            producer_fp
-        );
+        self.producer_consumer
+            .entry(producer_fp)
+            .and_modify(|(producers, _)| producers.push(producer_idx))
+            .or_insert((vec![producer_idx], vec![]));
     }
 
     /// Registers a consumer transformation for data with a given fingerprint.
@@ -771,7 +767,7 @@ impl RulePlanner {
         self.producer_consumer
             .entry(producer_fp)
             .and_modify(|(_, consumers)| {
-                consumers.get_or_insert_with(Vec::new).push(consumer_idx);
+                consumers.push(consumer_idx);
             })
             .or_insert_with(|| {
                 panic!(
@@ -782,10 +778,10 @@ impl RulePlanner {
     }
 
     #[inline]
-    pub(super) fn producer_index(&self, fp: u64) -> usize {
+    pub(super) fn producer_indices(&self, fp: u64) -> Vec<usize> {
         self.producer_consumer
             .get(&fp)
-            .map(|(idx, _)| *idx)
+            .map(|(producers, _)| producers.clone())
             .unwrap_or_else(|| panic!("No producer for transformation fingerprint: {:#018x}", fp))
     }
 
@@ -793,7 +789,7 @@ impl RulePlanner {
     pub(super) fn consumer_indices(&self, fp: u64) -> Vec<usize> {
         self.producer_consumer
             .get(&fp)
-            .and_then(|(_, consumers)| consumers.clone())
-            .unwrap_or_default()
+            .map(|(_, consumers)| consumers.clone())
+            .unwrap_or_else(|| panic!("No consumers for transformation fingerprint: {:#018x}", fp))
     }
 }

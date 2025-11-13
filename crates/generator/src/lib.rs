@@ -7,3 +7,5 @@
 pub mod generator;
 pub mod io;
 pub mod scaffold;
+
+pub use generator::generate_project_at;

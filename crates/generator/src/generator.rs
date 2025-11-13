@@ -4,7 +4,7 @@ mod arg;
 mod build;
 mod comm;
 mod ingest;
-mod recursion;
-mod static_flow;
+mod non_recursive_flow;
+mod recursive_flow;
 
 pub use build::{generate_main, generate_project_at};

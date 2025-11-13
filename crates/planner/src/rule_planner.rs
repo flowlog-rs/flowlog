@@ -40,9 +40,11 @@ pub struct RulePlanner {
     /// - `[split, ..)` are value columns
     kv_layouts: HashMap<u64, usize>,
 
-    /// Mapping from an fingerprint to its producer index and optional
+    /// Mapping from an fingerprint to its producer indices and optional
     /// list of consumer indices.
-    producer_consumer: HashMap<u64, (usize, Option<Vec<usize>>)>,
+    ///
+    /// Final transformation outputs have no consumers.
+    producer_consumer: HashMap<u64, (Vec<usize>, Vec<usize>)>,
 }
 
 impl RulePlanner {

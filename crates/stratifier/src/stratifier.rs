@@ -22,9 +22,6 @@ pub struct Stratifier {
     // true iff corresponding stratum is recursive
     is_recursive_stratum_bitmap: Vec<bool>,
 
-    // Mapping of stratum IDs to their entered relations (rule IDs).
-    // Later in planner, we will determine exact data collection needs for dynamic transformations.
-    stratum_enter_relation: Vec<Vec<u64>>,
     // Mapping of stratum IDs to their iterative relations (rule IDs) (recursive strata only).
     stratum_iterative_relation: Vec<Vec<u64>>,
 }
@@ -62,12 +59,6 @@ impl Stratifier {
             out.push(s.iter().map(|&rid| &self.program.rules()[rid]).collect());
         }
         out
-    }
-
-    /// Return enter relations.
-    #[must_use]
-    pub fn stratum_enter_relation(&self, idx: usize) -> &Vec<u64> {
-        &self.stratum_enter_relation[idx]
     }
 
     /// Return iterative relations.
@@ -178,7 +169,6 @@ impl Stratifier {
             dependency_graph,
             stratum: merged,
             is_recursive_stratum_bitmap: merged_bitmap,
-            stratum_enter_relation: Vec::new(),
             stratum_iterative_relation: Vec::new(),
         };
 
@@ -241,51 +231,38 @@ impl Stratifier {
     }
 
     fn build_recursive_metadata(&mut self) {
-        // Relations already computed before the current recursive stratum (EDBs + previous strata heads).
-        let mut input_relations: HashSet<u64> = self
-            .program
-            .edbs()
-            .iter()
-            .map(|r| r.fingerprint())
-            .collect();
-
-        for stratum in self.stratum.iter() {
-            let mut enter_rels: HashSet<u64> = HashSet::new();
-            let mut iterative_rels: HashSet<u64> = HashSet::new();
-            let mut exit_rels: HashSet<u64> = HashSet::new();
-
-            for &rid in stratum {
-                let rule = &self.program.rules()[rid];
-
-                // Extract atom fingerprints from RHS predicates.
-                for atom_fp in rule.rhs().iter().filter_map(|p| match p {
-                    parser::logic::Predicate::PositiveAtomPredicate(atom)
-                    | parser::logic::Predicate::NegatedAtomPredicate(atom) => {
-                        Some(atom.fingerprint())
-                    }
-                    _ => None,
-                }) {
-                    if input_relations.contains(&atom_fp) {
-                        // Relation originating outside current recursive stratum – enter relation.
-                        enter_rels.insert(atom_fp);
-                    }
-                    if rule.head().head_fingerprint() == atom_fp {
-                        // Derived inside the recursive stratum – iterative relation.
-                        iterative_rels.insert(atom_fp);
-                    }
-                }
-
-                // Head relation produced by this rule – exit relation.
-                exit_rels.insert(rule.head().head_fingerprint());
+        self.stratum_iterative_relation.clear();
+        for (idx, stratum) in self.stratum.iter().enumerate() {
+            if !self.is_recursive_stratum(idx) {
+                // Non-recursive strata have no iterative relations.
+                self.stratum_iterative_relation.push(Vec::new());
+                continue;
             }
 
-            // Newly produced relations become available to later strata.
-            input_relations.extend(&exit_rels);
+            // Collect all head fingerprints in this stratum.
+            let heads: HashSet<u64> = stratum
+                .iter()
+                .map(|rid| self.program.rules()[*rid].head().head_fingerprint())
+                .collect();
 
-            self.stratum_enter_relation
-                .push(enter_rels.into_iter().collect());
-            self.stratum_iterative_relation
-                .push(iterative_rels.into_iter().collect());
+            // Collect all atom fingerprints appearing in any rule body in this stratum.
+            let body_atoms: HashSet<u64> = stratum
+                .iter()
+                .flat_map(|rid| {
+                    let rule = &self.program.rules()[*rid];
+                    rule.rhs().iter().filter_map(|p| match p {
+                        parser::logic::Predicate::PositiveAtomPredicate(atom)
+                        | parser::logic::Predicate::NegatedAtomPredicate(atom) => {
+                            Some(atom.fingerprint())
+                        }
+                        _ => None,
+                    })
+                })
+                .collect();
+
+            // Iterative relations are heads that also occur in some body within the same recursive stratum.
+            let iterative: Vec<u64> = heads.intersection(&body_atoms).copied().collect();
+            self.stratum_iterative_relation.push(iterative);
         }
     }
 }
@@ -310,7 +287,7 @@ impl fmt::Display for Stratifier {
                     fp2name
                         .get(fp)
                         .cloned()
-                        .unwrap_or_else(|| format!("0x{:x}", fp))
+                        .unwrap_or_else(|| format!("0x{:016x}", fp))
                 })
                 .collect();
             names.sort();
@@ -333,10 +310,7 @@ impl fmt::Display for Stratifier {
             let ids = stratum.iter().sorted().map(|r| r.to_string()).join(", ");
             writeln!(f, "[{}]", ids)?;
 
-            let enters = &self.stratum_enter_relation[idx];
             let iters = &self.stratum_iterative_relation[idx];
-
-            writeln!(f, "  enter:     [{}]", fmt_fps(enters))?;
             if recursive {
                 writeln!(f, "  iterative: [{}]", fmt_fps(iters))?;
             }

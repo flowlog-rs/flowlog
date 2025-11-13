@@ -112,7 +112,7 @@ impl fmt::Display for Collection {
 
         write!(
             f,
-            "0x{:16x}, key:({}), value:({})",
+            "0x{:016x}, key:({}), value:({})",
             self.fingerprint, key, value
         )
     }

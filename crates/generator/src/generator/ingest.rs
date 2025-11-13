@@ -13,7 +13,7 @@ use parser::{DataType, Relation};
 
 /// Declare inputs as `(handle, collection)` pairs:
 /// `let (h_<name>, c_<name>) = scope.new_collection::<_, Diff>();`
-pub fn gen_input_decls(input_relations: &[Relation]) -> Vec<TokenStream> {
+pub fn gen_input_decls(input_relations: Vec<&Relation>) -> Vec<TokenStream> {
     input_relations
         .iter()
         .map(|rel| {
@@ -48,7 +48,7 @@ pub fn build_handle_binding(input_names: &[String]) -> (TokenStream, TokenStream
 /// Generate CSV ingestion loops per input, using the configured file paths.
 ///
 /// Each input is sharded on its first field to distribute records across workers.
-pub fn gen_ingest_stmts(input_relations: &[Relation]) -> Vec<TokenStream> {
+pub fn gen_ingest_stmts(input_relations: Vec<&Relation>) -> Vec<TokenStream> {
     input_relations
         .iter()
         .map(|rel| {

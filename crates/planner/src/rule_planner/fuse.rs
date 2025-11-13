@@ -74,42 +74,47 @@ impl RulePlanner {
                     _ => continue,
                 };
 
-            let input_producer_index = self.producer_index(input_fp);
+            let input_producer_indices = self.producer_indices(input_fp);
+            let mut input_producer_output_fp = 0u64;
 
-            // Short-lived borrow to check if producer is a neg join
-            let producer_tx = &self.transformation_infos[input_producer_index];
-            if producer_tx.is_neg_join() && !cmp_exprs.is_empty() {
-                // We always apply possible comparisons before neg joins, so it is impossible
-                // to fuse a map with a neg join producer if there are any comparisons.
-                panic!("Planner error: [fuse_map] impossible fusion of map with neg join producer");
+            for input_producer_index in input_producer_indices {
+                // Short-lived borrow to check if producer is a neg join
+                let producer_tx = &self.transformation_infos[input_producer_index];
+                if producer_tx.is_neg_join() && !cmp_exprs.is_empty() {
+                    // We always apply possible comparisons before neg joins, so it is impossible
+                    // to fuse a map with a neg join producer if there are any comparisons.
+                    panic!(
+                        "Planner error: [fuse_map] impossible fusion of map with neg join producer"
+                    );
+                }
+
+                trace!(
+                    "[fuse_map] fuse at idx {}: input {:#018x} -> output {:#018x}; producer idx {}",
+                    index,
+                    input_fp,
+                    output_fp,
+                    input_producer_index
+                );
+
+                // Extract output key/value argument ids from ArithmeticPos expressions
+                let (key_argument_ids, value_argument_ids) =
+                    out_kv_layout.extract_argument_ids_from_layout();
+                trace!(
+                    "[fuse_map]   -> key ids: {:?}, value ids: {:?}",
+                    key_argument_ids,
+                    value_argument_ids
+                );
+
+                // Apply fused layout + comparisons to producer, and get new output fp
+                input_producer_output_fp = self.apply_fused_layout_and_comparisons(
+                    input_producer_index,
+                    &key_argument_ids,
+                    &value_argument_ids,
+                    &cmp_exprs,
+                );
             }
 
             let output_consumer_indices = self.consumer_indices(output_fp);
-
-            trace!(
-                "[fuse_map] fuse at idx {}: input {:#018x} -> output {:#018x}; producer idx {}",
-                index,
-                input_fp,
-                output_fp,
-                input_producer_index
-            );
-
-            // Extract output key/value argument ids from ArithmeticPos expressions
-            let (key_argument_ids, value_argument_ids) =
-                out_kv_layout.extract_argument_ids_from_layout();
-            trace!(
-                "[fuse_map]   -> key ids: {:?}, value ids: {:?}",
-                key_argument_ids,
-                value_argument_ids
-            );
-
-            // Apply fused layout + comparisons to producer, and get new output fp
-            let input_producer_output_fp = self.apply_fused_layout_and_comparisons(
-                input_producer_index,
-                &key_argument_ids,
-                &value_argument_ids,
-                &cmp_exprs,
-            );
 
             // Update all consumers to point to the producer's new output
             for output_consumer_index in output_consumer_indices {
@@ -154,29 +159,30 @@ impl RulePlanner {
     fn fuse_kv_layout(&mut self, original_atom_fp: &HashSet<u64>) {
         for (tx_fp, key_split) in self.kv_layouts.iter() {
             // Copy out the producer index and current consumers (if any), then mutate
-            let Some((producer_idx, consumers)) = self
+            let Some((producer_indices, consumers)) = self
                 .producer_consumer
                 .get(tx_fp)
-                .map(|(p, c)| (*p, c.clone()))
+                .map(|(p, c)| (p.clone(), c.clone()))
             else {
                 // No producer found - likely an original atom; ignore
                 continue;
             };
 
             // Update producer layout and fingerprint
-            let new_output_fp = {
-                let producer_tx = &mut self.transformation_infos[producer_idx];
-                producer_tx.refactor_output_key_value_layout(*key_split);
-                producer_tx.update_output_fake_sig();
-                producer_tx.output_info_fp()
-            };
+            let mut new_output_fp = 0u64;
+            for producer_idx in producer_indices {
+                new_output_fp = {
+                    let producer_tx = &mut self.transformation_infos[producer_idx];
+                    producer_tx.refactor_output_key_value_layout(*key_split);
+                    producer_tx.update_output_fake_sig();
+                    producer_tx.output_info_fp()
+                };
+            }
 
             // Update consumers to use new fingerprint
-            if let Some(consumers) = consumers {
-                for consumer_idx in consumers {
-                    self.transformation_infos[consumer_idx]
-                        .update_input_fake_info_fp(new_output_fp, tx_fp);
-                }
+            for consumer_idx in consumers {
+                self.transformation_infos[consumer_idx]
+                    .update_input_fake_info_fp(new_output_fp, tx_fp);
             }
         }
 
@@ -365,10 +371,10 @@ impl RulePlanner {
         // Detailed mapping summary
         for (fp, (prod_idx, consumers)) in &self.producer_consumer {
             trace!(
-                "[rebuild_producer_consumer] mapping: fp {:#018x} -> producer {}, consumers {:?}",
+                "[rebuild_producer_consumer] mapping: fp {:#018x} -> producer {:?}, consumers {:?}",
                 fp,
                 prod_idx,
-                consumers.as_ref().map(|v| &v[..])
+                consumers
             );
         }
         for (fp, split) in &self.kv_layouts {

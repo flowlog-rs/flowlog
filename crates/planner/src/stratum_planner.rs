@@ -20,6 +20,9 @@ pub struct StratumPlanner {
     /// Per-rule planners that own the transformation infos.
     rule_planners: Vec<RulePlanner>,
 
+    /// Indicator of recursiveness for this stratum.
+    is_recursive: bool,
+
     /// Temporary storage for all deduplicated transformations during analysis.
     /// After static/dynamic separation, prefer using static_transformations and dynamic_transformations.
     transformations: Vec<Transformation>,
@@ -32,29 +35,36 @@ pub struct StratumPlanner {
     /// These transformations must be re-evaluated during recursion.
     dynamic_transformations: Vec<Transformation>,
 
-    /// Mapping from rule head IDB fingerprint to final output collection fingerprint.
-    /// This allows the generator to find where each rule's result is stored.
-    idb_to_output_map: HashMap<u64, u64>,
+    /// Fingerprints of collections that enter recursion.
+    dynamic_enter_collections: Vec<u64>,
 
-    /// Mapping from rule head IDB fingerprint to aggregation requirement.
+    /// Fingerprints of collections that are iterative (i.e., updated during recursion).
+    dynamic_iterative_collections: Vec<u64>,
+
+    /// Mapping from stratum each output relation to rule head IDBs.
+    /// This allows the generator to find where each rule's result is stored.
+    output_to_idb_map: HashMap<u64, Vec<u64>>,
+
+    /// Mapping from stratum output relation to aggregation requirement.
     /// Only contains entries for rules with aggregation in their heads.
-    /// Tuple format: (AggregationOperator, position_in_head_args)
-    idb_to_aggregation_map: HashMap<u64, (AggregationOperator, usize)>,
+    /// Tuple format: (AggregationOperator, position in output relation)
+    output_to_aggregation_map: HashMap<u64, (AggregationOperator, usize)>,
 }
 
 impl StratumPlanner {
     /// Build a stratum planner from a stratum.
     #[must_use]
     pub fn from_rules(
-        rules: &[MacaronRule],
+        stratum: &[MacaronRule],
         optimizer: &mut Optimizer,
-        is_recursive_stratum: bool,
+        is_recursive: bool,
+        iterative_relation: &[u64],
     ) -> Self {
-        let mut catalogs = Vec::with_capacity(rules.len());
-        let mut rule_planners = Vec::with_capacity(rules.len());
+        let mut catalogs = Vec::with_capacity(stratum.len());
+        let mut rule_planners = Vec::with_capacity(stratum.len());
 
         // Phase 1: Initialize catalogs and run prepare phase
-        for (i, rule) in rules.iter().enumerate() {
+        for (i, rule) in stratum.iter().enumerate() {
             let mut catalog = Catalog::from_rule(rule);
             debug!("{}", "-".repeat(40));
             debug!("rule[{i}] init:\n{catalog}");
@@ -102,16 +112,20 @@ impl StratumPlanner {
         // Phase 4: Materialize deduplicated transformations
         let mut stratum_planner = Self {
             rule_planners,
+            is_recursive,
             transformations: Vec::new(),
             static_transformations: Vec::new(),
             dynamic_transformations: Vec::new(),
-            idb_to_output_map: HashMap::new(),
-            idb_to_aggregation_map: HashMap::new(),
+            dynamic_enter_collections: Vec::new(),
+            dynamic_iterative_collections: iterative_relation.to_vec(),
+            output_to_idb_map: HashMap::new(),
+            output_to_aggregation_map: HashMap::new(),
         };
         stratum_planner.materialize_transformations();
-        stratum_planner.build_idb_to_output_map(&catalogs);
-        stratum_planner.identify_static_transformations(is_recursive_stratum);
-        stratum_planner.build_idb_to_aggregation_map(&catalogs);
+        stratum_planner.build_output_to_idb_map(&catalogs);
+        stratum_planner.identify_static_transformations(is_recursive);
+        stratum_planner.build_dynamic_enter_collections();
+        stratum_planner.build_output_to_aggregation_map(&catalogs);
         stratum_planner
     }
 }
@@ -151,17 +165,41 @@ impl StratumPlanner {
         &self.dynamic_transformations
     }
 
-    /// Get the mapping from rule head IDB fingerprint to final output collection fingerprint.
+    /// Get fingerprints of collections that enter recursion.
     #[inline]
-    pub fn idb_to_output_map(&self) -> &HashMap<u64, u64> {
-        &self.idb_to_output_map
+    pub fn dynamic_enter_collections(&self) -> &[u64] {
+        &self.dynamic_enter_collections
     }
 
-    /// Get the mapping from rule head IDB fingerprint to aggregation requirement.
-    /// Returns tuples of (AggregationOperator, position_in_head_args).
+    /// Get fingerprints of collections that are iterative (i.e., updated during recursion).
     #[inline]
-    pub fn idb_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize)> {
-        &self.idb_to_aggregation_map
+    pub fn dynamic_iterative_collections(&self) -> &[u64] {
+        &self.dynamic_iterative_collections
+    }
+
+    /// Get the mapping from stratum each output relation to rule head IDBs.
+    #[inline]
+    pub fn output_to_idb_map(&self) -> &HashMap<u64, Vec<u64>> {
+        &self.output_to_idb_map
+    }
+
+    /// Get the mapping from stratum output relation to aggregation requirement.
+    /// Returns tuples of (AggregationOperator, position in output relation).
+    #[inline]
+    pub fn output_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize)> {
+        &self.output_to_aggregation_map
+    }
+
+    /// Check if this stratum is recursive.
+    #[inline]
+    pub fn is_recursive(&self) -> bool {
+        self.is_recursive
+    }
+
+    /// Output relation fingerprints produced by this stratum.
+    #[inline]
+    pub fn output_relations(&self) -> Vec<u64> {
+        self.output_to_idb_map.keys().cloned().collect()
     }
 }
 
@@ -199,7 +237,12 @@ impl StratumPlanner {
 
         unique_infos
     }
+}
 
+// =========================================================================
+// Static/Dynamic Separation
+// =========================================================================
+impl StratumPlanner {
     /// Identify static and dynamic transformations for optimization.
     ///
     /// Static transformations depend only on EDB (base) relations and can be computed
@@ -217,12 +260,12 @@ impl StratumPlanner {
     ///      - If any input fingerprint is dynamic, mark transformation as dynamic
     ///      - Add the transformation's output fingerprint to the dynamic set
     ///   3. Remaining transformations are static
-    fn identify_static_transformations(&mut self, is_recursive_stratum: bool) {
+    fn identify_static_transformations(&mut self, is_recursive: bool) {
         // Clear any previous results
         self.static_transformations.clear();
         self.dynamic_transformations.clear();
 
-        if !is_recursive_stratum {
+        if !is_recursive {
             // Non-recursive stratum: all transformations are static
             self.static_transformations
                 .extend(self.transformations.iter().cloned());
@@ -235,9 +278,13 @@ impl StratumPlanner {
 
         // Recursive stratum: propagate dynamic dependencies
 
-        // Step 1: Initialize with IDB fingerprints (head relations)
-        let mut dynamic_fingerprints: HashSet<u64> =
-            self.idb_to_output_map.keys().cloned().collect();
+        // Step 1: Initialize with IDB fingerprints (head relations).
+        // Values in `output_to_idb_map` are Vec<u64>; flatten them into the set.
+        let mut dynamic_fingerprints: HashSet<u64> = self
+            .output_to_idb_map
+            .values()
+            .flat_map(|v| v.iter().copied())
+            .collect();
 
         // Step 2: Left-to-right propagation through transformations
         let mut dynamic_indices = HashSet::new();
@@ -276,30 +323,57 @@ impl StratumPlanner {
             self.transformations.len()
         );
     }
+}
 
-    /// Build the mapping from rule head IDB fingerprint to final output collection fingerprint.
-    fn build_idb_to_output_map(&mut self, catalogs: &[Catalog]) {
+// =========================================================================
+// Metadata Mappings
+// =========================================================================
+impl StratumPlanner {
+    /// Build the fingerprint of collections that enter resursion.
+    pub fn build_dynamic_enter_collections(&mut self) {
+        // Build sets of input/output fingerprints touched by dynamic transformations.
+        let mut dynamic_input_fps: HashSet<u64> = HashSet::new();
+        let mut dynamic_output_fps: HashSet<u64> = HashSet::new();
+
+        // Iterate by reference to avoid moving out of `self.dynamic_transformations`.
+        for tx in &self.dynamic_transformations {
+            if tx.is_unary() {
+                dynamic_input_fps.insert(tx.unary_input().fingerprint());
+            } else {
+                let (left, right) = tx.binary_input();
+                dynamic_input_fps.insert(left.fingerprint());
+                dynamic_input_fps.insert(right.fingerprint());
+            }
+            dynamic_output_fps.insert(tx.output().fingerprint());
+        }
+
+        // Inputs that never appear as outputs of any dynamic transformation are the
+        // entering collections for the dynamic (recursive) portion.
+        self.dynamic_enter_collections = dynamic_input_fps
+            .difference(&dynamic_output_fps)
+            .copied()
+            .collect()
+    }
+
+    /// Build the mapping from each final output collection fingerprint to the rule head IDB fingerprints
+    /// that produce it. Multiple rules may contribute to the same output relation.
+    fn build_output_to_idb_map(&mut self, catalogs: &[Catalog]) {
         for (rule_idx, catalog) in catalogs.iter().enumerate() {
-            let head_idb_fingerprint = catalog.head_idb_fingerprint();
-
-            // Get the final transformation's output fingerprint for this rule
-            if let Some(final_transformation) =
-                self.rule_planners[rule_idx].transformation_infos().last()
-            {
-                let final_output_fingerprint = final_transformation.output_info_fp();
-                self.idb_to_output_map
-                    .insert(head_idb_fingerprint, final_output_fingerprint);
+            let head_idb_fp = catalog.head_idb_fingerprint();
+            if let Some(final_info) = self.rule_planners[rule_idx].transformation_infos().last() {
+                let output_fp = final_info.output_info_fp();
+                self.output_to_idb_map
+                    .entry(output_fp)
+                    .or_insert_with(Vec::new)
+                    .push(head_idb_fp);
             }
         }
     }
 
-    /// Build the mapping from rule head IDB fingerprint to aggregation requirement.
-    /// This validates that rules with the same head name have consistent aggregation.
-    fn build_idb_to_aggregation_map(&mut self, catalogs: &[Catalog]) {
-        for catalog in catalogs {
-            let head_idb_fp = catalog.head_idb_fingerprint();
-
-            // Parser allows at most one aggregation in head; grab it if present
+    /// Build the mapping from each final output collection fingerprint to its aggregation requirement.
+    /// Ensures consistent aggregation operator and position for a given output relation if multiple rules map to it.
+    fn build_output_to_aggregation_map(&mut self, catalogs: &[Catalog]) {
+        for (rule_idx, catalog) in catalogs.iter().enumerate() {
             if let Some((pos, op)) =
                 catalog
                     .head_arguments()
@@ -310,17 +384,21 @@ impl StratumPlanner {
                         _ => None,
                     })
             {
-                match self.idb_to_aggregation_map.get(&head_idb_fp) {
-                    Some(&(existing_op, existing_pos)) => {
-                        if existing_op != op || existing_pos != pos {
-                            panic!(
-                                "Planner error: inconsistent aggregation for head fingerprint {:#018x}, found {:?} at position {} but expected {:?} at position {}",
-                                head_idb_fp, op, pos, existing_op, existing_pos
-                            );
+                if let Some(final_info) = self.rule_planners[rule_idx].transformation_infos().last()
+                {
+                    let output_fp = final_info.output_info_fp();
+                    match self.output_to_aggregation_map.get(&output_fp) {
+                        Some(&(existing_op, existing_pos)) => {
+                            if existing_op != op || existing_pos != pos {
+                                panic!(
+                                    "Planner error: inconsistent aggregation for output fingerprint {:#018x}, found {:?} at position {} but expected {:?} at position {}",
+                                    output_fp, op, pos, existing_op, existing_pos
+                                );
+                            }
                         }
-                    }
-                    None => {
-                        self.idb_to_aggregation_map.insert(head_idb_fp, (op, pos));
+                        None => {
+                            self.output_to_aggregation_map.insert(output_fp, (op, pos));
+                        }
                     }
                 }
             }

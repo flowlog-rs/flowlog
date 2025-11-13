@@ -47,7 +47,12 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
         // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
 
-        let sp = StratumPlanner::from_rules(&rules, optimizer, is_recursive);
+        let sp = StratumPlanner::from_rules(
+            &rules,
+            optimizer,
+            is_recursive,
+            stratifier.stratum_iterative_relation(stratum_idx),
+        );
 
         info!("{}", "=".repeat(80));
         info!(
@@ -63,12 +68,25 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
             info!("\n({:>2}) {}", i, r);
         }
 
+        // Print static vs dynamic transformations separately for clarity.
         info!(
-            "Transformations (shared, de-duplicated): {}",
-            sp.transformations().len()
+            "Static transformations ({}):",
+            sp.static_transformations().len()
         );
-        for (i, t) in sp.transformations().iter().enumerate() {
-            info!("\n[{:>3}] {}", i, t);
+        for (i, t) in sp.static_transformations().iter().enumerate() {
+            info!("\n[S{:>3}] {}", i, t);
+        }
+
+        if is_recursive {
+            info!(
+                "Dynamic transformations ({}):",
+                sp.dynamic_transformations().len()
+            );
+            for (i, t) in sp.dynamic_transformations().iter().enumerate() {
+                info!("\n[D{:>3}] {}", i, t);
+            }
+        } else {
+            info!("(Non-recursive stratum: no dynamic transformations)");
         }
     }
 }
@@ -90,7 +108,12 @@ fn run_all_examples() {
             for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
                 let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
-                let _sp = StratumPlanner::from_rules(&rules, &mut optimizer, is_recursive);
+                let _sp = StratumPlanner::from_rules(
+                    &rules,
+                    &mut optimizer,
+                    is_recursive,
+                    stratifier.stratum_iterative_relation(stratum_idx),
+                );
             }
 
             (program.rules().len(), stratifier.stratum().len())

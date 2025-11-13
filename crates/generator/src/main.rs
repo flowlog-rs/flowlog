@@ -2,7 +2,7 @@ use std::{fs, path::Path, process};
 
 use clap::Parser;
 use common::Args;
-use generator::Generator;
+use generator::generate_project_at;
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
@@ -40,17 +40,21 @@ fn main() {
 
     // Plan each stratum using StratumPlanner then hand transformations to generator
     let mut optimizer = Optimizer::new();
-    let generator = Generator::new();
-    generate_program(&generator, &mut optimizer, &stratifier);
+    generate_program(&mut optimizer, &stratifier, &program);
 }
 
-fn generate_program(generator: &Generator, optimizer: &mut Optimizer, stratifier: &Stratifier) {
+fn generate_program(optimizer: &mut Optimizer, stratifier: &Stratifier, program: &Program) {
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
         let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
 
         // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
-        let sp = StratumPlanner::from_rules(&rules, optimizer);
+        let sp = StratumPlanner::from_rules(
+            &rules,
+            optimizer,
+            is_recursive,
+            stratifier.stratum_iterative_relation(stratum_idx),
+        );
 
         info!("{}", "=".repeat(80));
         info!(
@@ -60,7 +64,13 @@ fn generate_program(generator: &Generator, optimizer: &mut Optimizer, stratifier
             is_recursive
         );
         // Generate code for the deduplicated transformation list for this stratum
-        generator.generate(sp.transformations());
+        let out_parent = Path::new("../");
+        let package_name = "demo";
+        let strata = vec![&sp];
+        if let Err(e) = generate_project_at(out_parent, package_name, program, strata) {
+            error!("Failed to generate project: {}", e);
+            process::exit(1);
+        }
     }
 }
 
@@ -110,12 +120,17 @@ fn run_all_examples() {
             let program = Program::parse(file_path.to_str().unwrap());
             let stratifier = Stratifier::from_program(&program);
             let mut optimizer = Optimizer::new();
-            let generator = Generator::new();
 
-            for rule_refs in stratifier.stratum().iter() {
+            for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
+                let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
-                let sp = StratumPlanner::from_rules(&rules, &mut optimizer);
-                generator.generate(sp.transformations());
+                let _sp = StratumPlanner::from_rules(
+                    &rules,
+                    &mut optimizer,
+                    is_recursive,
+                    stratifier.stratum_iterative_relation(stratum_idx),
+                );
+                // In batch mode, skip file generation to avoid overwriting.
             }
 
             (program.rules().len(), stratifier.stratum().len())
