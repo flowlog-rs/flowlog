@@ -25,8 +25,8 @@ pub struct Relation {
     /// Input parameters (e.g., filename="file.csv", IO="file")
     input_params: Option<HashMap<String, String>>,
 
-    /// Output path (None if not output, Some(None) for default path, Some(Some(path)) for custom path)
-    output_path: Option<Option<String>>,
+    /// Whether to output result
+    output: bool,
 
     /// Whether to print size
     printsize: bool,
@@ -42,7 +42,7 @@ impl Relation {
             fingerprint: compute_fp(&name),
             attributes,
             input_params: None,
-            output_path: None,
+            output: false,
             printsize: false,
         }
     }
@@ -82,13 +82,6 @@ impl Relation {
         self.input_params.as_ref()
     }
 
-    /// Output path configuration.
-    #[must_use]
-    #[inline]
-    pub fn output_path(&self) -> Option<&Option<String>> {
-        self.output_path.as_ref()
-    }
-
     /// Whether to print size for this relation.
     #[must_use]
     #[inline]
@@ -107,7 +100,7 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn is_output(&self) -> bool {
-        self.output_path.is_some()
+        self.output || self.printsize
     }
 
     /// Set input parameters for this relation.
@@ -115,9 +108,9 @@ impl Relation {
         self.input_params = Some(params);
     }
 
-    /// Set output configuration (None for default path, Some(path) for custom path).
-    pub fn set_output(&mut self, path: Option<String>) {
-        self.output_path = Some(path);
+    /// Mark relation for output.
+    pub fn set_output(&mut self, output: bool) {
+        self.output = output;
     }
 
     /// Set printsize flag.
@@ -164,11 +157,8 @@ impl fmt::Display for Relation {
         }
 
         // Add output directive on the same line if present
-        if let Some(path_opt) = &self.output_path {
+        if self.output {
             write!(f, " .output")?;
-            if let Some(path) = path_opt {
-                write!(f, "(\"{}\")", path)?;
-            }
         }
 
         // Add printsize directive on the same line if present
@@ -229,8 +219,7 @@ impl Lexeme for Relation {
             }
         }
 
-        // Always create relations with both input and output paths
-        // The program parser will decide whether it's EDB or IDB based on input_path
+        // Create relation with parsed attributes; output directive handled separately.
         Self::new(name, attributes)
     }
 }
@@ -283,20 +272,12 @@ mod tests {
             ".decl input_rel(x: number, y: string) .input(IO=\"file\", filename=\"data.csv\")"
         );
 
-        // Test with output (default path)
+        // Test with output
         let mut with_output = Relation::new("output_rel", a.clone());
-        with_output.set_output(None);
+        with_output.set_output(true);
         assert_eq!(
             with_output.to_string(),
             ".decl output_rel(x: number, y: string) .output"
-        );
-
-        // Test with output (custom path)
-        let mut with_output_path = Relation::new("output_rel", a.clone());
-        with_output_path.set_output(Some("custom/path.csv".to_string()));
-        assert_eq!(
-            with_output_path.to_string(),
-            ".decl output_rel(x: number, y: string) .output(\"custom/path.csv\")"
         );
 
         // Test with printsize
@@ -312,11 +293,11 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("filename".to_string(), "input.csv".to_string());
         full_rel.set_input_params(params);
-        full_rel.set_output(Some("output.csv".to_string()));
+        full_rel.set_output(true);
         full_rel.set_printsize(true);
         assert_eq!(
             full_rel.to_string(),
-            ".decl full_rel(x: number, y: string) .input(filename=\"input.csv\") .output(\"output.csv\") .printsize"
+            ".decl full_rel(x: number, y: string) .input(filename=\"input.csv\") .output .printsize"
         );
     }
 

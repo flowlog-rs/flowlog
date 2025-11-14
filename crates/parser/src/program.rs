@@ -458,7 +458,8 @@ impl Lexeme for Program {
                 .iter_mut()
                 .find(|r| r.name() == output_dir.relation_name())
             {
-                relation.set_output(output_dir.path().map(|s| s.to_string()));
+                // Simplified output handling: just mark relation for output; path ignored.
+                relation.set_output(true);
             } else {
                 panic!(
                     "Parser error: output directive for UNKNOWN relation '{}'. Relation must be declared with .decl before using .output directive.",

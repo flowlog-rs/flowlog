@@ -72,33 +72,23 @@ impl Lexeme for InputDirective {
     }
 }
 
-/// Represents an output directive (which relation to write + optional path)
+/// Represents an output directive (which relation to write)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputDirective {
     relation_name: String,
-    path: Option<String>,
 }
 
 impl OutputDirective {
-    /// Create a new OutputDirective with optional output path
+    /// Create a new OutputDirective
     #[must_use]
-    pub fn new(relation_name: String, path: Option<String>) -> Self {
-        Self {
-            relation_name,
-            path,
-        }
+    pub fn new(relation_name: String) -> Self {
+        Self { relation_name }
     }
 
     /// Get the relation name
     #[must_use]
     pub fn relation_name(&self) -> &str {
         &self.relation_name
-    }
-
-    /// Get the optional output path
-    #[must_use]
-    pub fn path(&self) -> Option<&str> {
-        self.path.as_deref()
     }
 }
 
@@ -113,12 +103,7 @@ impl Lexeme for OutputDirective {
             .as_str()
             .to_string();
 
-        // Second child may be an output file path
-        let path = inner
-            .next()
-            .map(|p| p.as_str().trim_matches('"').to_string());
-
-        Self::new(relation_name, path)
+        Self::new(relation_name)
     }
 }
 
@@ -178,14 +163,8 @@ mod tests {
 
     #[test]
     fn test_output_directive_creation() {
-        let output_dir = OutputDirective::new("OutputRelation".to_string(), None);
+        let output_dir = OutputDirective::new("OutputRelation".to_string());
         assert_eq!(output_dir.relation_name(), "OutputRelation");
-        assert_eq!(output_dir.path(), None);
-
-        let output_dir_with_path =
-            OutputDirective::new("OutputRelation".to_string(), Some("output.csv".to_string()));
-        assert_eq!(output_dir_with_path.relation_name(), "OutputRelation");
-        assert_eq!(output_dir_with_path.path(), Some("output.csv"));
     }
 
     #[test]
@@ -203,9 +182,9 @@ mod tests {
         assert_eq!(input1, input2);
         assert_ne!(input1, input3);
 
-        let output1 = OutputDirective::new("Test".to_string(), None);
-        let output2 = OutputDirective::new("Test".to_string(), None);
-        let output3 = OutputDirective::new("Other".to_string(), None);
+        let output1 = OutputDirective::new("Test".to_string());
+        let output2 = OutputDirective::new("Test".to_string());
+        let output3 = OutputDirective::new("Other".to_string());
 
         assert_eq!(output1, output2);
         assert_ne!(output1, output3);

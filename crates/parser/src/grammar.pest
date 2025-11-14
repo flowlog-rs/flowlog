@@ -88,10 +88,10 @@ parameter_name = { identifier }
 // Parameter value (quoted string)
 parameter_value = { string }
 
-// Output directive for relations  
-// Example: .output Relation or .output Relation path/to/output
+// Output directive for relations
+// Example: .output Relation
 output_directive = { 
-    ".output" ~ relation_name ~ string?
+    ".output" ~ relation_name
 }
 
 // Print size directive for relations - separate from declaration
