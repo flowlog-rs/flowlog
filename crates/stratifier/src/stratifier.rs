@@ -24,6 +24,8 @@ pub struct Stratifier {
 
     // Mapping of stratum IDs to their iterative relations (rule IDs) (recursive strata only).
     stratum_iterative_relation: Vec<Vec<u64>>,
+    // Mapping of stratum IDs to their leave relations (rule IDs) required by later stratum.
+    stratum_leave_relation: Vec<Vec<u64>>,
 }
 
 impl Stratifier {
@@ -65,6 +67,12 @@ impl Stratifier {
     #[must_use]
     pub fn stratum_iterative_relation(&self, idx: usize) -> &Vec<u64> {
         &self.stratum_iterative_relation[idx]
+    }
+
+    /// Return leave relations.
+    #[must_use]
+    pub fn stratum_leave_relation(&self, idx: usize) -> &Vec<u64> {
+        &self.stratum_leave_relation[idx]
     }
 
     /// Build strata by computing SCCs then merging independent non‑recursive strata.
@@ -170,9 +178,10 @@ impl Stratifier {
             stratum: merged,
             is_recursive_stratum_bitmap: merged_bitmap,
             stratum_iterative_relation: Vec::new(),
+            stratum_leave_relation: Vec::new(),
         };
 
-        instance.build_recursive_metadata();
+        instance.build_stratum_metadata();
         instance
     }
 
@@ -230,22 +239,20 @@ impl Stratifier {
         }
     }
 
-    fn build_recursive_metadata(&mut self) {
-        self.stratum_iterative_relation.clear();
-        for (idx, stratum) in self.stratum.iter().enumerate() {
-            if !self.is_recursive_stratum(idx) {
-                // Non-recursive strata have no iterative relations.
-                self.stratum_iterative_relation.push(Vec::new());
-                continue;
-            }
+    fn build_stratum_metadata(&mut self) {
+        // Precompute heads and body atoms per stratum.
+        let mut heads_per_stratum = Vec::new();
+        let mut body_atoms_per_stratum = Vec::new();
 
-            // Collect all head fingerprints in this stratum.
+        for stratum in &self.stratum {
+            // Heads in this stratum
             let heads: HashSet<u64> = stratum
                 .iter()
                 .map(|rid| self.program.rules()[*rid].head().head_fingerprint())
                 .collect();
+            heads_per_stratum.push(heads);
 
-            // Collect all atom fingerprints appearing in any rule body in this stratum.
+            // Body atoms in this stratum
             let body_atoms: HashSet<u64> = stratum
                 .iter()
                 .flat_map(|rid| {
@@ -259,10 +266,51 @@ impl Stratifier {
                     })
                 })
                 .collect();
+            body_atoms_per_stratum.push(body_atoms);
+        }
 
-            // Iterative relations are heads that also occur in some body within the same recursive stratum.
-            let iterative: Vec<u64> = heads.intersection(&body_atoms).copied().collect();
-            self.stratum_iterative_relation.push(iterative);
+        let n = self.stratum.len();
+
+        // Precompute IDB relation fingerprints (always retained in leave set even if not referenced later).
+        let idb_fp_set: HashSet<u64> = self
+            .program
+            .idbs()
+            .into_iter()
+            .map(|r| r.fingerprint())
+            .collect();
+        // For each stratum, compute the set of body atoms referenced by any STRICTLY later stratum.
+        let mut later_union: HashSet<u64> = HashSet::new();
+        let mut later_body_atoms_per_stratum: Vec<HashSet<u64>> = vec![HashSet::new(); n];
+
+        for i in (0..n).rev() {
+            // For stratum i, the "later" set is what we've accumulated so far.
+            later_body_atoms_per_stratum[i] = later_union.clone();
+            // Include current stratum's body atoms for earlier strata to see.
+            later_union.extend(body_atoms_per_stratum[i].iter().copied());
+        }
+
+        // Build iterative and leave relations per stratum.
+        for i in 0..n {
+            let heads = &heads_per_stratum[i];
+            let body_atoms = &body_atoms_per_stratum[i];
+            let later_body_atoms = &later_body_atoms_per_stratum[i];
+
+            // Iterative relations only for recursive strata: heads that appear in bodies within the same stratum.
+            if self.is_recursive_stratum(i) {
+                let iterative: Vec<u64> = heads.intersection(body_atoms).copied().collect();
+                self.stratum_iterative_relation.push(iterative);
+            } else {
+                self.stratum_iterative_relation.push(Vec::new());
+            }
+
+            // Leave relations: heads from this stratum that are referenced by any later stratum.
+            // Additionally retain heads that correspond to IDB relations even if not referenced later.
+            let leave: Vec<u64> = heads
+                .iter()
+                .filter(|fp| later_body_atoms.contains(fp) || idb_fp_set.contains(fp))
+                .copied()
+                .collect();
+            self.stratum_leave_relation.push(leave);
         }
     }
 }
@@ -311,9 +359,11 @@ impl fmt::Display for Stratifier {
             writeln!(f, "[{}]", ids)?;
 
             let iters = &self.stratum_iterative_relation[idx];
+            let leaves = &self.stratum_leave_relation[idx];
             if recursive {
                 writeln!(f, "  iterative: [{}]", fmt_fps(iters))?;
             }
+            writeln!(f, "  leave: [{}]", fmt_fps(leaves))?;
 
             for rid in stratum {
                 writeln!(f, "{}", self.program.rules()[*rid])?;

@@ -12,7 +12,10 @@ use planner::{
 /// - 0 parts => ()
 /// - 1 part  => (x,)  // note the trailing comma: (x) is just x, not a tuple
 /// - n parts => (x, y, ...)
-pub fn build_key_val_from_row_args(args: &[ArithmeticArgument], fields: &[Ident]) -> TokenStream {
+pub(super) fn build_key_val_from_row_args(
+    args: &[ArithmeticArgument],
+    fields: &[Ident],
+) -> TokenStream {
     let mut parts: Vec<TokenStream> = Vec::new();
     for arg in args {
         let part = build_row_args_arithmetic_expr(arg, fields);
@@ -27,7 +30,7 @@ pub fn build_key_val_from_row_args(args: &[ArithmeticArgument], fields: &[Ident]
 /// - 0 parts => ()
 /// - 1 part  => (x,)
 /// - n parts => (x, y, ...)
-pub fn build_key_val_from_kv_args(args: &[ArithmeticArgument]) -> TokenStream {
+pub(super) fn build_key_val_from_kv_args(args: &[ArithmeticArgument]) -> TokenStream {
     let mut parts: Vec<TokenStream> = Vec::new();
     for arg in args {
         let part = build_kv_args_arithmetic_expr(arg);
@@ -42,7 +45,7 @@ pub fn build_key_val_from_kv_args(args: &[ArithmeticArgument]) -> TokenStream {
 /// - 0 parts => ()
 /// - 1 part  => (x,)
 /// - n parts => (x, y, ...)
-pub fn build_key_val_from_join_args(args: &[ArithmeticArgument]) -> TokenStream {
+pub(super) fn build_key_val_from_join_args(args: &[ArithmeticArgument]) -> TokenStream {
     let mut parts: Vec<TokenStream> = Vec::new();
     for arg in args {
         let part = build_join_args_arithmetic_expr(arg);
@@ -55,7 +58,7 @@ pub fn build_key_val_from_join_args(args: &[ArithmeticArgument]) -> TokenStream 
 /// are referenced by the produced expressions or filters.
 /// Returns three TokenStreams for the closure parameter identifiers. Any unused
 /// parameter becomes an underscore-prefixed ident to silence warnings.
-pub fn compute_join_param_tokens(
+pub(super) fn compute_join_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
@@ -126,7 +129,7 @@ pub fn compute_join_param_tokens(
 
 /// Compute closure parameter idents for a (k, v) style closure (e.g. antijoin map).
 /// Returns two TokenStreams; unused parameters are underscore-prefixed.
-pub fn compute_anti_join_param_tokens(
+pub(super) fn compute_anti_join_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
 ) -> (TokenStream, TokenStream) {
@@ -194,7 +197,7 @@ fn comparison_op_tokens(op: &parser::ComparisonOperator) -> TokenStream {
 
 /// Build a combined predicate for KV-based closures from comparison expressions.
 /// Returns None when there are no comparisons.
-pub fn build_kv_compare_predicate(comps: &[ComparisonExprArgument]) -> Option<TokenStream> {
+pub(super) fn build_kv_compare_predicate(comps: &[ComparisonExprArgument]) -> Option<TokenStream> {
     if comps.is_empty() {
         return None;
     }
@@ -213,7 +216,9 @@ pub fn build_kv_compare_predicate(comps: &[ComparisonExprArgument]) -> Option<To
 
 /// Build a combined predicate for join-core closures (k, lv, rv) from comparison expressions.
 /// Returns None when there are no comparisons.
-pub fn build_join_compare_predicate(comps: &[ComparisonExprArgument]) -> Option<TokenStream> {
+pub(super) fn build_join_compare_predicate(
+    comps: &[ComparisonExprArgument],
+) -> Option<TokenStream> {
     if comps.is_empty() {
         return None;
     }
@@ -232,7 +237,7 @@ pub fn build_join_compare_predicate(comps: &[ComparisonExprArgument]) -> Option<
 
 /// Build a combined predicate for row-based closures from comparison expressions.
 /// Returns None when there are no comparisons.
-pub fn build_row_compare_predicate(
+pub(super) fn build_row_compare_predicate(
     comps: &[ComparisonExprArgument],
     row_fields: &[Ident],
 ) -> Option<TokenStream> {
@@ -256,7 +261,7 @@ pub fn build_row_compare_predicate(
 // Constraint predicate builders
 // ==================================================
 /// Build predicate for KV constraints (const eq and var eq). Returns None if empty.
-pub fn build_kv_constraints_predicate(constraints: &Constraints) -> Option<TokenStream> {
+pub(super) fn build_kv_constraints_predicate(constraints: &Constraints) -> Option<TokenStream> {
     let mut parts: Vec<TokenStream> = Vec::new();
 
     for (arg, c) in constraints.constant_eq_constraints().as_ref().iter() {
@@ -278,7 +283,7 @@ pub fn build_kv_constraints_predicate(constraints: &Constraints) -> Option<Token
 }
 
 /// Build predicate for row constraints (const eq and var eq). Returns None if empty.
-pub fn build_row_constraints_predicate(
+pub(super) fn build_row_constraints_predicate(
     constraints: &Constraints,
     row_fields: &[Ident],
 ) -> Option<TokenStream> {
@@ -343,7 +348,10 @@ fn trans_arg_to_row_expr(arg: &TransformationArgument, fields: &[Ident]) -> Toke
 /// - Some(a) & None => Some(a)
 /// - None & Some(b) => Some(b)
 /// - Some(a) & Some(b) => Some( (a) && (b) )
-pub fn combine_predicates(a: Option<TokenStream>, b: Option<TokenStream>) -> Option<TokenStream> {
+pub(super) fn combine_predicates(
+    a: Option<TokenStream>,
+    b: Option<TokenStream>,
+) -> Option<TokenStream> {
     match (a, b) {
         (None, None) => None,
         (Some(x), None) => Some(x),

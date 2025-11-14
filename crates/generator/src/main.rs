@@ -40,10 +40,16 @@ fn main() {
 
     // Plan each stratum using StratumPlanner then hand transformations to generator
     let mut optimizer = Optimizer::new();
-    generate_program(&mut optimizer, &stratifier, &program);
+    generate_program(&args, &mut optimizer, &stratifier, &program);
 }
 
-fn generate_program(optimizer: &mut Optimizer, stratifier: &Stratifier, program: &Program) {
+fn generate_program(
+    args: &Args,
+    optimizer: &mut Optimizer,
+    stratifier: &Stratifier,
+    program: &Program,
+) {
+    let mut strata = Vec::new();
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
         let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
 
@@ -54,6 +60,7 @@ fn generate_program(optimizer: &mut Optimizer, stratifier: &Stratifier, program:
             optimizer,
             is_recursive,
             stratifier.stratum_iterative_relation(stratum_idx),
+            stratifier.stratum_leave_relation(stratum_idx),
         );
 
         info!("{}", "=".repeat(80));
@@ -63,14 +70,15 @@ fn generate_program(optimizer: &mut Optimizer, stratifier: &Stratifier, program:
             rule_refs.len(),
             is_recursive
         );
-        // Generate code for the deduplicated transformation list for this stratum
-        let out_parent = Path::new("../");
-        let package_name = "demo";
-        let strata = vec![&sp];
-        if let Err(e) = generate_project_at(out_parent, package_name, program, strata) {
-            error!("Failed to generate project: {}", e);
-            process::exit(1);
-        }
+        strata.push(sp);
+    }
+
+    // Generate code for the deduplicated transformation list for this stratum
+    let out_parent = Path::new("../");
+    let package_name = "demo";
+    if let Err(e) = generate_project_at(args, out_parent, package_name, program, &strata) {
+        error!("Failed to generate project: {}", e);
+        process::exit(1);
     }
 }
 
@@ -129,6 +137,7 @@ fn run_all_examples() {
                     &mut optimizer,
                     is_recursive,
                     stratifier.stratum_iterative_relation(stratum_idx),
+                    stratifier.stratum_leave_relation(stratum_idx),
                 );
                 // In batch mode, skip file generation to avoid overwriting.
             }

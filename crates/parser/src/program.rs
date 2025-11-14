@@ -119,6 +119,18 @@ impl Program {
         self.relations.iter().filter(|rel| rel.is_edb()).collect()
     }
 
+    /// Ordered EDB relation names.
+    #[must_use]
+    pub fn edb_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .edbs()
+            .iter()
+            .map(|rel| rel.name().to_string())
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
     /// IDB relations (those without input parameters).
     #[must_use]
     pub fn idbs(&self) -> Vec<&Relation> {

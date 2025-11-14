@@ -18,7 +18,7 @@ pub fn gen_input_decls(input_relations: Vec<&Relation>) -> Vec<TokenStream> {
         .iter()
         .map(|rel| {
             let handle = format_ident!("h_{}", rel.name());
-            let coll = format_ident!("c_{}", rel.name());
+            let coll = format_ident!("{}", rel.name());
             quote! { let (#handle, #coll) = scope.new_collection::<_, Diff>(); }
         })
         .collect()

@@ -41,6 +41,9 @@ pub struct StratumPlanner {
     /// Fingerprints of collections that are iterative (i.e., updated during recursion).
     dynamic_iterative_collections: Vec<u64>,
 
+    /// Fingerprints of collections that leave recursion.
+    dynamic_leave_collections: Vec<u64>,
+
     /// Mapping from stratum each output relation to rule head IDBs.
     /// This allows the generator to find where each rule's result is stored.
     output_to_idb_map: HashMap<u64, Vec<u64>>,
@@ -59,6 +62,7 @@ impl StratumPlanner {
         optimizer: &mut Optimizer,
         is_recursive: bool,
         iterative_relation: &[u64],
+        leave_relation: &[u64],
     ) -> Self {
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
@@ -118,6 +122,7 @@ impl StratumPlanner {
             dynamic_transformations: Vec::new(),
             dynamic_enter_collections: Vec::new(),
             dynamic_iterative_collections: iterative_relation.to_vec(),
+            dynamic_leave_collections: leave_relation.to_vec(),
             output_to_idb_map: HashMap::new(),
             output_to_aggregation_map: HashMap::new(),
         };
@@ -177,6 +182,12 @@ impl StratumPlanner {
         &self.dynamic_iterative_collections
     }
 
+    /// Get fingerprints of collections that leave recursion.
+    #[inline]
+    pub fn dynamic_leave_collections(&self) -> &[u64] {
+        &self.dynamic_leave_collections
+    }
+
     /// Get the mapping from stratum each output relation to rule head IDBs.
     #[inline]
     pub fn output_to_idb_map(&self) -> &HashMap<u64, Vec<u64>> {
@@ -198,7 +209,7 @@ impl StratumPlanner {
 
     /// Output relation fingerprints produced by this stratum.
     #[inline]
-    pub fn output_relations(&self) -> Vec<u64> {
+    pub fn output_relations(&self) -> HashSet<u64> {
         self.output_to_idb_map.keys().cloned().collect()
     }
 }
@@ -261,10 +272,6 @@ impl StratumPlanner {
     ///      - Add the transformation's output fingerprint to the dynamic set
     ///   3. Remaining transformations are static
     fn identify_static_transformations(&mut self, is_recursive: bool) {
-        // Clear any previous results
-        self.static_transformations.clear();
-        self.dynamic_transformations.clear();
-
         if !is_recursive {
             // Non-recursive stratum: all transformations are static
             self.static_transformations
@@ -278,13 +285,9 @@ impl StratumPlanner {
 
         // Recursive stratum: propagate dynamic dependencies
 
-        // Step 1: Initialize with IDB fingerprints (head relations).
-        // Values in `output_to_idb_map` are Vec<u64>; flatten them into the set.
-        let mut dynamic_fingerprints: HashSet<u64> = self
-            .output_to_idb_map
-            .values()
-            .flat_map(|v| v.iter().copied())
-            .collect();
+        // Step 1: Initialize with output relations fingerprints.
+        let mut dynamic_fingerprints: HashSet<u64> =
+            self.output_to_idb_map.keys().copied().collect();
 
         // Step 2: Left-to-right propagation through transformations
         let mut dynamic_indices = HashSet::new();
@@ -363,9 +366,9 @@ impl StratumPlanner {
             if let Some(final_info) = self.rule_planners[rule_idx].transformation_infos().last() {
                 let output_fp = final_info.output_info_fp();
                 self.output_to_idb_map
-                    .entry(output_fp)
+                    .entry(head_idb_fp)
                     .or_insert_with(Vec::new)
-                    .push(head_idb_fp);
+                    .push(output_fp);
             }
         }
     }
