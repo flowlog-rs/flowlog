@@ -126,7 +126,7 @@ pub fn gen_ingest_stmts(input_relations: Vec<&Relation>) -> Vec<TokenStream> {
                         #(#parse_stmts)*
                         #should_send_stmt
                         if should_send {
-                            #handle.update(#elem_expr, 1i64);
+                            #handle.update(#elem_expr, 1 as Diff);
                         }
                     }
                 }

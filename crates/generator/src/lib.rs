@@ -154,7 +154,7 @@ fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -
     let file_ts: TokenStream = quote! {
         #imports
 
-        type Diff = i64;
+        type Diff = isize;
 
         fn main() {
             timely::execute_from_args(std::env::args(), |worker| {

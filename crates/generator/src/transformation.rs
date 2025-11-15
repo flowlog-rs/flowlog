@@ -213,8 +213,8 @@ pub(super) fn gen_transformation(
             }
         }
 
-        // KV -> Row
-        Transformation::KvToRow {
+        // KV -> Value-only
+        Transformation::KvToV {
             input,
             output,
             flow,
@@ -237,13 +237,13 @@ pub(super) fn gen_transformation(
                         .flat_map(|(k, v)| {
                             if #pred { Some( ( (), #out_val ) ) } else { None }
                         })
-                        .inspect(|rec| eprintln!("[op][KvToRow->{}] {:?}", stringify!(#out), rec));
+                        .inspect(|rec| eprintln!("[op][KvToV->{}] {:?}", stringify!(#out), rec));
                 }
             } else {
                 quote! {
                     let #out = #inp
                         .flat_map(|(k, v)| std::iter::once( ( (), #out_val ) ))
-                        .inspect(|rec| eprintln!("[op][KvToRow->{}] {:?}", stringify!(#out), rec));
+                        .inspect(|rec| eprintln!("[op][KvToV->{}] {:?}", stringify!(#out), rec));
                 }
             }
         }

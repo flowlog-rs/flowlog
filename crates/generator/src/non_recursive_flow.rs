@@ -69,11 +69,14 @@ pub(super) fn gen_non_recursive_post_flows(
             flows.push(quote! {
                 let #output = #output
                     .concat(&#expr)
-                    .distinct();
+                    .distinct()
+                    .map(|(_, v)| v);
             });
         } else {
             flows.push(quote! {
-                let #output = #expr.distinct();
+                let #output = #expr
+                    .distinct()
+                    .map(|(_, v)| v);
             });
         }
     }

@@ -49,8 +49,8 @@ pub enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Key-value to row transformation (drop keys)
-    KvToRow {
+    /// Key-value to value-only transformation
+    KvToV {
         input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
@@ -108,7 +108,7 @@ impl Transformation {
                 | Self::RowToK { .. }
                 | Self::KvToKv { .. }
                 | Self::KvToK { .. }
-                | Self::KvToRow { .. }
+                | Self::KvToV { .. }
         )
     }
 }
@@ -129,7 +129,7 @@ impl Transformation {
             | Self::RowToK { input, .. }
             | Self::KvToKv { input, .. }
             | Self::KvToK { input, .. }
-            | Self::KvToRow { input, .. } => input,
+            | Self::KvToV { input, .. } => input,
             _ => panic!("Planner error: unary_input called on binary transformation"),
         }
     }
@@ -159,7 +159,7 @@ impl Transformation {
             | Self::RowToK { output, .. }
             | Self::KvToKv { output, .. }
             | Self::KvToK { output, .. }
-            | Self::KvToRow { output, .. }
+            | Self::KvToV { output, .. }
             | Self::JnKK { output, .. }
             | Self::JnKKv { output, .. }
             | Self::JnKvKv { output, .. }
@@ -177,7 +177,7 @@ impl Transformation {
             | Self::RowToK { flow, .. }
             | Self::KvToKv { flow, .. }
             | Self::KvToK { flow, .. }
-            | Self::KvToRow { flow, .. }
+            | Self::KvToV { flow, .. }
             | Self::JnKK { flow, .. }
             | Self::JnKKv { flow, .. }
             | Self::JnKvKv { flow, .. }
@@ -269,8 +269,8 @@ impl Transformation {
                 output,
                 flow,
             },
-            // Key-value input -> Row output: drop keys and produce rows
-            (false, true, _) => Self::KvToRow {
+            // Key-value input -> Value-only output: extract values from key-value pairs
+            (false, true, _) => Self::KvToV {
                 input,
                 output,
                 flow,
@@ -497,14 +497,14 @@ impl fmt::Display for Transformation {
                     input, flow, output
                 )
             }
-            Self::KvToRow {
+            Self::KvToV {
                 input,
                 output,
                 flow,
             } => {
                 write!(
                     f,
-                    "[KvToRow]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    "[KvToV]\n   In   : {}\n   Flow : {}\n   Out  : {}",
                     input, flow, output
                 )
             }
