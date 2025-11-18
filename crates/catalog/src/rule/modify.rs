@@ -29,9 +29,8 @@ impl Catalog {
         let rhs_index = self.rhs_index_from_signature(atom_signature);
 
         // Create a new mapped atom with the same arguments but a new name
-        // Only positive atoms needs to be premapped
         let new_atom = match &self.rule.rhs()[rhs_index] {
-            Predicate::PositiveAtomPredicate(atom) => {
+            Predicate::PositiveAtomPredicate(atom) | Predicate::NegatedAtomPredicate(atom) => {
                 let new_atom = Atom::new(
                     &new_atom_name,
                     atom.arguments().to_vec(),
@@ -41,6 +40,7 @@ impl Catalog {
                     Predicate::PositiveAtomPredicate(_) => {
                         Predicate::PositiveAtomPredicate(new_atom)
                     }
+                    Predicate::NegatedAtomPredicate(_) => Predicate::NegatedAtomPredicate(new_atom),
                     _ => unreachable!(),
                 }
             }

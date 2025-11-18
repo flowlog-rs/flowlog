@@ -136,6 +136,7 @@ impl RulePlanner {
             self.create_edb_premap_transformations(
                 catalog,
                 lhs_pos_idx,
+                true,
                 &KeyValueLayout::new(lhs_keys, Vec::new()),
             );
         }
@@ -161,6 +162,7 @@ impl RulePlanner {
                 self.create_edb_premap_transformations(
                     catalog,
                     rhs_idx,
+                    true,
                     &KeyValueLayout::new(rhs_keys, rhs_vals),
                 );
             }
@@ -312,6 +314,7 @@ impl RulePlanner {
             self.create_edb_premap_transformations(
                 catalog,
                 lhs_neg_idx,
+                false,
                 &KeyValueLayout::new(lhs_keys, Vec::new()),
             );
         }
@@ -337,6 +340,7 @@ impl RulePlanner {
                 self.create_edb_premap_transformations(
                     catalog,
                     rhs_idx,
+                    true,
                     &KeyValueLayout::new(rhs_keys, rhs_vals),
                 );
             }
@@ -639,12 +643,21 @@ impl RulePlanner {
         &mut self,
         catalog: &mut Catalog,
         atom_idx: usize,
+        is_positive: bool,
         target_kv_layout: &KeyValueLayout,
     ) {
         // Note: only positive EDB atoms need premap transformations
-        let edb_fp = catalog.positive_atom_fingerprint(atom_idx);
-        let edb_args = catalog.positive_atom_argument_signature(atom_idx);
-        let edb_atom_signature = AtomSignature::new(true, atom_idx);
+        let edb_fp = if is_positive {
+            catalog.positive_atom_fingerprint(atom_idx)
+        } else {
+            catalog.negated_atom_fingerprint(atom_idx)
+        };
+        let edb_args = if is_positive {
+            catalog.positive_atom_argument_signature(atom_idx)
+        } else {
+            catalog.negated_atom_argument_signature(atom_idx)
+        };
+        let edb_atom_signature = AtomSignature::new(is_positive, atom_idx);
         let current_transformation_index = self.transformation_infos.len();
 
         let edb_layout = KeyValueLayout::new(

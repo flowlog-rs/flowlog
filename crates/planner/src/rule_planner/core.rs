@@ -80,13 +80,13 @@ impl RulePlanner {
         // Create premap for LHS atom if needed
         if catalog.original_atom_fingerprints().contains(&lhs_pos_fp) && !lhs_keys.is_empty() {
             let target_kv_layout = KeyValueLayout::new(lhs_keys.clone(), lhs_vals.clone());
-            self.create_edb_premap_transformations(catalog, lhs_idx, &target_kv_layout);
+            self.create_edb_premap_transformations(catalog, lhs_idx, true, &target_kv_layout);
         }
 
         // Create premap for RHS atom if needed
         if catalog.original_atom_fingerprints().contains(&rhs_pos_fp) && !rhs_keys.is_empty() {
             let target_kv_layout = KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone());
-            self.create_edb_premap_transformations(catalog, rhs_idx, &target_kv_layout);
+            self.create_edb_premap_transformations(catalog, rhs_idx, true, &target_kv_layout);
         }
     }
 

@@ -20,23 +20,21 @@ pub fn gen_iterative_block(
 ) -> TokenStream {
     // Deterministic leave relations for the stratum
     let leave_rels = stratum_planner.dynamic_leave_collections();
-    let iterative_rels = stratum_planner.dynamic_iterative_collections();
+    // No recursive relations, no iterative block needed
     if leave_rels.is_empty() {
         return quote! {};
     }
 
+    // Iterative relations for the stratum
+    let iterative_rels = stratum_planner.dynamic_iterative_collections();
     let iter_names: Vec<_> = iterative_rels
         .iter()
         .map(|idb| format_ident!("iter_{}", idb))
         .collect();
-    let n_names: Vec<_> = iterative_rels
-        .iter()
-        .map(|idb| format_ident!("in_{}", *idb))
-        .collect();
 
-    // Enter EDBs once
-    let enter_stmts: Vec<TokenStream> = stratum_planner
-        .dynamic_enter_collections()
+    // Enter relations for the stratum
+    let enter_rels = stratum_planner.dynamic_enter_collections();
+    let enter_stmts: Vec<TokenStream> = enter_rels
         .iter()
         .map(|fp| {
             let coll = find_ident(fp_to_ident, *fp);
@@ -45,13 +43,16 @@ pub fn gen_iterative_block(
         })
         .collect();
 
-    // Single-pass flow generation with simple caches
+    // Initialize arranged map and current/next iteration maps
     let mut arranged_map: HashMap<u64, Ident> = HashMap::new();
     let mut current: HashMap<u64, Ident> = HashMap::new();
 
     // Seed current with entered EDBs and local variables
-    for enter_fp in stratum_planner.dynamic_enter_collections() {
+    for enter_fp in enter_rels {
         current.insert(*enter_fp, format_ident!("in_{}", *enter_fp));
+    }
+    for iter_fp in iterative_rels {
+        current.insert(*iter_fp, format_ident!("iter_{}", *iter_fp));
     }
 
     // Emit all flow pipelines in order; joins arrange just-in-time.
@@ -66,9 +67,11 @@ pub fn gen_iterative_block(
     }
 
     // Per-IDB: union all rules and reduce to set semantics
+    let mut next: HashMap<u64, Ident> = HashMap::new();
     let mut union_stmts: Vec<TokenStream> = Vec::new();
     for (output_fp, idb_fps) in stratum_planner.output_to_idb_map() {
-        let output = find_ident(&current, *output_fp);
+        let next_ident = format_ident!("next_{}", *output_fp);
+        next.insert(*output_fp, next_ident.clone());
         let mut outs: Vec<Ident> = Vec::new();
         for idb_fp in idb_fps {
             outs.push(format_ident!("t_{}", idb_fp));
@@ -82,14 +85,16 @@ pub fn gen_iterative_block(
         }
 
         union_stmts.push(quote! {
-            let #output = #expr.distinct().map(|(_, v)| v);
+            let #next_ident = #expr.distinct().map(|(_, v)| v);
         });
     }
 
-    let set_stmts: Vec<TokenStream> = iter_names
+    let set_stmts: Vec<TokenStream> = next
         .iter()
-        .zip(n_names.iter())
-        .map(|(v, n)| quote! { #v.set(&#n); })
+        .map(|(fp, next_ident)| {
+            let iter_var = find_ident(&current, *fp);
+            quote! { #iter_var.set(&#next_ident); }
+        })
         .collect();
 
     let vars_new: Vec<TokenStream> = iter_names
@@ -97,7 +102,13 @@ pub fn gen_iterative_block(
         .map(|v| quote! { let #v = Variable::new(inner, timely::order::Product::new(Default::default(), 1)); })
         .collect();
 
-    let leaves: Vec<TokenStream> = n_names.iter().map(|n| quote! { #n.leave() }).collect();
+    let leaves: Vec<TokenStream> = leave_rels
+        .iter()
+        .map(|fp| {
+            let n = next.get(fp);
+            quote! { #n.leave() }
+        })
+        .collect();
 
     quote! {
         let _rec_outputs = scope.iterative::<u64, _, _>(|inner| {

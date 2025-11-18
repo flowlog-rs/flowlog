@@ -139,12 +139,14 @@ fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -
             inspect_stmts.push(gen_size_inspector(&var, name));
         }
 
-        if args.output_to_stdout() {
-            inspect_stmts.push(gen_print_inspector(&var, name));
-        } else {
-            let parent_dir = args.output_dir().unwrap();
-            inspect_stmts.push(gen_write_inspector(&var, name, parent_dir));
-            merge_stmts.push(gen_merge_partitions(name, parent_dir));
+        if idb.is_output() {
+            if args.output_to_stdout() {
+                inspect_stmts.push(gen_print_inspector(&var, name));
+            } else {
+                let parent_dir = args.output_dir().unwrap();
+                inspect_stmts.push(gen_write_inspector(&var, name, parent_dir));
+                merge_stmts.push(gen_merge_partitions(name, parent_dir));
+            }
         }
     }
 

@@ -49,15 +49,13 @@ pub(super) fn gen_transformation(
                     let #out = #inp
                         .flat_map(|#row_pat: #row_ty| {
                             if #pred { Some( ( (), #out_val ) ) } else { None }
-                        })
-                        .inspect(|rec| eprintln!("[op][RowToRow->{}] {:?}", stringify!(#out), rec));
+                        });
                 }
             } else {
                 // For Row -> Row, use empty key () and put data in value
                 quote! {
                     let #out = #inp
-                        .flat_map(|#row_pat: #row_ty| std::iter::once( ( (), #out_val ) ))
-                        .inspect(|rec| eprintln!("[op][RowToRow->{}] {:?}", stringify!(#out), rec));
+                        .flat_map(|#row_pat: #row_ty| std::iter::once( ( (), #out_val ) ));
                 }
             }
         }
@@ -89,15 +87,13 @@ pub(super) fn gen_transformation(
                     let #out = #inp
                         .flat_map(|#row_pat: #row_ty| {
                             if #pred { Some( ( #out_key, () ) ) } else { None }
-                        })
-                        .inspect(|rec| eprintln!("[op][RowToK->{}] {:?}", stringify!(#out), rec));
+                        });
                 }
             } else {
                 // For Row -> K, put data in key and use empty value ()
                 quote! {
                     let #out = #inp
-                        .flat_map(|#row_pat: #row_ty| std::iter::once( ( #out_key, () ) ))
-                        .inspect(|rec| eprintln!("[op][RowToK->{}] {:?}", stringify!(#out), rec));
+                        .flat_map(|#row_pat: #row_ty| std::iter::once( ( #out_key, () ) ));
                 }
             }
         }
@@ -130,14 +126,12 @@ pub(super) fn gen_transformation(
                     let #out = #inp
                         .flat_map(|#row_pat: #row_ty| {
                             if #pred { Some( ( #out_key, #out_val ) ) } else { None }
-                        })
-                        .inspect(|rec| eprintln!("[op][RowToKv->{}] {:?}", stringify!(#out), rec));
+                        });
                 }
             } else {
                 quote! {
                     let #out = #inp
-                        .flat_map(|#row_pat: #row_ty| std::iter::once( ( #out_key, #out_val ) ))
-                        .inspect(|rec| eprintln!("[op][RowToKv->{}] {:?}", stringify!(#out), rec));
+                        .flat_map(|#row_pat: #row_ty| std::iter::once( ( #out_key, #out_val ) ));
                 }
             }
         }
@@ -166,14 +160,12 @@ pub(super) fn gen_transformation(
                     let #out = #inp
                         .flat_map(|(k, v)| {
                             if #pred { Some( ( #out_key, #out_val ) ) } else { None }
-                        })
-                        .inspect(|rec| eprintln!("[op][KvToKv->{}] {:?}", stringify!(#out), rec));
+                        });
                 }
             } else {
                 quote! {
                     let #out = #inp
-                        .flat_map(|(k, v)| std::iter::once( ( #out_key, #out_val ) ))
-                        .inspect(|rec| eprintln!("[op][KvToKv->{}] {:?}", stringify!(#out), rec));
+                        .flat_map(|(k, v)| std::iter::once( ( #out_key, #out_val ) ));
                 }
             }
         }
@@ -201,14 +193,12 @@ pub(super) fn gen_transformation(
                     let #out = #inp
                         .flat_map(|(k, v)| {
                             if #pred { Some( ( #out_key, () ) ) } else { None }
-                        })
-                        .inspect(|rec| eprintln!("[op][KvToK->{}] {:?}", stringify!(#out), rec));
+                        });
                 }
             } else {
                 quote! {
                     let #out = #inp
-                        .flat_map(|(k, v)| std::iter::once( ( #out_key, () ) ))
-                        .inspect(|rec| eprintln!("[op][KvToK->{}] {:?}", stringify!(#out), rec));
+                        .flat_map(|(k, v)| std::iter::once( ( #out_key, () ) ));
                 }
             }
         }
@@ -236,14 +226,12 @@ pub(super) fn gen_transformation(
                     let #out = #inp
                         .flat_map(|(k, v)| {
                             if #pred { Some( ( (), #out_val ) ) } else { None }
-                        })
-                        .inspect(|rec| eprintln!("[op][KvToV->{}] {:?}", stringify!(#out), rec));
+                        });
                 }
             } else {
                 quote! {
                     let #out = #inp
-                        .flat_map(|(k, v)| std::iter::once( ( (), #out_val ) ))
-                        .inspect(|rec| eprintln!("[op][KvToV->{}] {:?}", stringify!(#out), rec));
+                        .flat_map(|(k, v)| std::iter::once( ( (), #out_val ) ));
                 }
             }
         }
@@ -325,8 +313,7 @@ pub(super) fn gen_transformation(
                                 let out_key = #out_key;
                                 let out_val = #out_val;
                                 if #pred { Some((out_key, out_val)) } else { None }
-                            })
-                            .inspect(|rec| eprintln!("[op][{}->{}] {:?}", #op_name, stringify!(#out), rec));
+                            });
                 }
             } else {
                 quote! {
@@ -337,8 +324,7 @@ pub(super) fn gen_transformation(
                                 let out_key = #out_key;
                                 let out_val = #out_val;
                                 Some((out_key, out_val))
-                            })
-                            .inspect(|rec| eprintln!("[op][{}->{}] {:?}", #op_name, stringify!(#out), rec));
+                            });
                 }
             }
         }
@@ -407,8 +393,7 @@ pub(super) fn gen_transformation(
                             let out_key = #out_key;
                             let out_val = #out_val;
                             (out_key, out_val)
-                        })
-                        .inspect(|rec| eprintln!("[op][{}->{}] {:?}", #op_name, stringify!(#out), rec));
+                        });
             }
         }
     }
