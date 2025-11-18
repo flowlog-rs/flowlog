@@ -109,7 +109,7 @@ pub fn gen_ingest_stmts(input_relations: Vec<&Relation>) -> Vec<TokenStream> {
 
             let elem_expr = if arity == 1 {
                 let x0 = field_idents[0].clone();
-                quote! { #x0 }
+                quote! { ( #x0, ) }
             } else {
                 quote! { ( #(#field_idents),* ) }
             };

@@ -122,6 +122,24 @@ impl RulePlanner {
             .clone();
         let lhs_arg_names = Self::arg_names_set(&lhs_pos_args, catalog);
 
+        // Process LHS atom for premap if needed
+        let lhs_keys = lhs_pos_args
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect::<Vec<_>>();
+        if catalog
+            .original_atom_fingerprints()
+            .contains(&catalog.positive_atom_fingerprint(lhs_pos_idx))
+            && !lhs_keys.is_empty()
+        {
+            // LHS atom is not in key-only format; need to create a map
+            self.create_edb_premap_transformations(
+                catalog,
+                lhs_pos_idx,
+                &KeyValueLayout::new(lhs_keys, Vec::new()),
+            );
+        }
+
         // Process each RHS atom for semijoin
         for &rhs_idx in rhs_pos_indices {
             // Extract RHS atom information
@@ -279,6 +297,24 @@ impl RulePlanner {
         // Extract LHS negated atom information
         let lhs_neg_args = catalog.negated_atom_argument_signature(lhs_neg_idx).clone();
         let lhs_arg_names = Self::arg_names_set(&lhs_neg_args, catalog);
+
+        // Process LHS atom for premap if needed
+        let lhs_keys = lhs_neg_args
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect::<Vec<_>>();
+        if catalog
+            .original_atom_fingerprints()
+            .contains(&catalog.negated_atom_fingerprint(lhs_neg_idx))
+            && !lhs_keys.is_empty()
+        {
+            // LHS atom is not in key-only format; need to create a map
+            self.create_edb_premap_transformations(
+                catalog,
+                lhs_neg_idx,
+                &KeyValueLayout::new(lhs_keys, Vec::new()),
+            );
+        }
 
         // Process each RHS atom for anti-semijoin
         for &rhs_idx in rhs_pos_indices {

@@ -51,10 +51,10 @@ pub(super) fn insert_or_verify_type(
 // Argument DataType Utilities
 // =========================================================================
 
-/// Key-Value Type (tuple-ified) used for KV values and join annotations:
-/// - Numeric: () | (u64,) | (u64, u64, ...)
-/// - Text:    () | (String,) | (String, String, ...)
-pub(super) fn key_value_type_tokens(input_type: DataType, arity: usize) -> TokenStream {
+/// Type tokens based on the configured InputType:
+/// - Numeric: () | u64 | (u64, u64, ...)
+/// - Text:    () | String | (String, String, ...)
+pub(super) fn type_tokens(input_type: DataType, arity: usize) -> TokenStream {
     match input_type {
         DataType::Integer => match arity {
             0 => quote! { () },
@@ -75,38 +75,14 @@ pub(super) fn key_value_type_tokens(input_type: DataType, arity: usize) -> Token
     }
 }
 
-/// EDB Row type tokens based on the configured InputType:
-/// - Numeric: () | u64 | (u64, u64, ...)
-/// - Text:    () | String | (String, String, ...)
-pub(super) fn row_type_tokens(input_type: DataType, arity: usize) -> TokenStream {
-    match input_type {
-        DataType::Integer => match arity {
-            0 => quote! { () },
-            1 => quote! { u64 },
-            n => {
-                let tys = std::iter::repeat(quote! { u64 }).take(n);
-                quote! { ( #(#tys),* ) }
-            }
-        },
-        DataType::String => match arity {
-            0 => quote! { () },
-            1 => quote! { String },
-            n => {
-                let tys = std::iter::repeat(quote! { String }).take(n);
-                quote! { ( #(#tys),* ) }
-            }
-        },
-    }
-}
-
 /// Build row pattern + identifiers from an arity.
-/// - 1 => `x0`
+/// - 1 => `(x0,)`
 /// - n≥2 => `(x0, x1, ...)`
 pub(super) fn row_pattern_and_fields(arity: usize) -> (TokenStream, Vec<Ident>) {
     let fields: Vec<_> = (0..arity).map(|i| format_ident!("x{}", i)).collect();
     let pat = if arity == 1 {
         let x0 = fields[0].clone();
-        quote! { #x0 }
+        quote! { ( #x0, ) }
     } else {
         quote! { ( #(#fields),* ) }
     };

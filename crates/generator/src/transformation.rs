@@ -7,7 +7,7 @@ use super::arg::{
     build_key_val_from_row_args, build_kv_compare_predicate, build_kv_constraints_predicate,
     build_row_compare_predicate, build_row_constraints_predicate, combine_predicates,
 };
-use super::data_type::{find_type, insert_or_verify_type, row_pattern_and_fields, row_type_tokens};
+use super::data_type::{find_type, insert_or_verify_type, row_pattern_and_fields, type_tokens};
 use super::ident::find_ident;
 
 use parser::DataType;
@@ -37,7 +37,7 @@ pub(super) fn gen_transformation(
             // Check if output type already exists, if so assert it matches, otherwise insert
             insert_or_verify_type(fp_to_type, output.fingerprint(), itype);
 
-            let row_ty = row_type_tokens(itype, input_arity);
+            let row_ty = type_tokens(itype, input_arity);
             let out_val = build_key_val_from_row_args(flow.value(), &row_fields);
             // Optional filter on comparisons and constraints
             let cmp_pred = build_row_compare_predicate(flow.compares(), &row_fields);
@@ -78,7 +78,7 @@ pub(super) fn gen_transformation(
             // Check if output type already exists, if so assert it matches, otherwise insert
             insert_or_verify_type(fp_to_type, output.fingerprint(), itype);
 
-            let row_ty = row_type_tokens(itype, input_arity);
+            let row_ty = type_tokens(itype, input_arity);
             let out_key = build_key_val_from_row_args(flow.key(), &row_fields);
             let cmp_pred = build_row_compare_predicate(flow.compares(), &row_fields);
             let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields);
@@ -118,7 +118,7 @@ pub(super) fn gen_transformation(
             // Check if output type already exists, if so assert it matches, otherwise insert
             insert_or_verify_type(fp_to_type, output.fingerprint(), itype);
 
-            let row_ty = row_type_tokens(itype, input_arity);
+            let row_ty = type_tokens(itype, input_arity);
             let out_key = build_key_val_from_row_args(flow.key(), &row_fields);
             let out_val = build_key_val_from_row_args(flow.value(), &row_fields);
             let cmp_pred = build_row_compare_predicate(flow.compares(), &row_fields);
