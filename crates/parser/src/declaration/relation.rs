@@ -25,10 +25,10 @@ pub struct Relation {
     /// Input parameters (e.g., filename="file.csv", IO="file")
     input_params: Option<HashMap<String, String>>,
 
-    /// Whether to output result
+    /// Whether to output detailed results
     output: bool,
 
-    /// Whether to print size
+    /// Whether to print results size (e.g. row count)
     printsize: bool,
 }
 
@@ -89,6 +89,13 @@ impl Relation {
         self.printsize
     }
 
+    /// Whether to output results for this relation.
+    #[must_use]
+    #[inline]
+    pub fn output(&self) -> bool {
+        self.output
+    }
+
     /// Check if this is an EDB relation (has input parameters).
     #[must_use]
     #[inline]
@@ -96,10 +103,11 @@ impl Relation {
         self.input_params.is_some()
     }
 
-    /// Check if this is an output relation.
+    /// Check if this is an output/printsize relation.
+    /// Notice not every IDB is an output/printsize relation.
     #[must_use]
     #[inline]
-    pub fn is_output(&self) -> bool {
+    pub fn is_output_printsize(&self) -> bool {
         self.output || self.printsize
     }
 
@@ -244,7 +252,7 @@ mod tests {
         assert!(!rel.is_nullary());
         assert_eq!(rel.attributes()[0].name(), "id");
         assert!(!rel.is_edb());
-        assert!(!rel.is_output());
+        assert!(!rel.output());
         assert!(!rel.printsize());
     }
 

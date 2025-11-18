@@ -141,7 +141,12 @@ pub fn gen_close_stmts(input_names: &[String]) -> Vec<TokenStream> {
         .iter()
         .map(|name| {
             let handle = format_ident!("h_{}", name);
-            quote! { #handle.close(); }
+            quote! {
+                #handle.close();
+                if index == 0 {
+                    println!("{:?}:\tData loaded for {}", timer.elapsed(), #name);
+                }
+            }
         })
         .collect()
 }

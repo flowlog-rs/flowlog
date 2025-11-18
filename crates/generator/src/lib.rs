@@ -139,7 +139,7 @@ fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -
             inspect_stmts.push(gen_size_inspector(&var, name));
         }
 
-        if idb.is_output() {
+        if idb.output() {
             if args.output_to_stdout() {
                 inspect_stmts.push(gen_print_inspector(&var, name));
             } else {
@@ -161,7 +161,7 @@ fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -
         fn main() {
             timely::execute_from_args(std::env::args(), |worker| {
                 // --- Runtime setup -------------------------------------------------
-                let start = Instant::now();
+                let timer = Instant::now();
                 let peers = worker.peers();
                 let index = worker.index();
 
@@ -180,22 +180,18 @@ fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -
                     });
 
                 if index == 0 {
-                    println!("{:?}:\tDataflow assembled", start.elapsed());
+                    println!("{:?}:\tDataflow assembled", timer.elapsed());
                 }
 
                 // --- Data ingestion -----------------------------------------------
                 #(#ingest_stmts)*
                 #(#close_stmts)*
 
-                if index == 0 {
-                    println!("{:?}:\tData loaded", start.elapsed());
-                }
-
                 // --- Execute to fixpoint -------------------------------------------
                 while worker.step() {}
 
                 if index == 0 {
-                    println!("{:?}:\tFixpoint reached", start.elapsed());
+                    println!("{:?}:\tDataflow executed", timer.elapsed());
                     // === Merge per-worker output partitions (if any) ===
                     #(#merge_stmts)*
                 }

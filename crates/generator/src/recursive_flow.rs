@@ -33,6 +33,7 @@ pub fn gen_iterative_block(
         .collect();
 
     // Enter relations for the stratum
+    let mut enter: HashMap<u64, Ident> = HashMap::new();
     let enter_rels = stratum_planner.dynamic_enter_collections();
     let enter_stmts: Vec<TokenStream> = enter_rels
         .iter()
@@ -42,6 +43,9 @@ pub fn gen_iterative_block(
             quote! { let #entered = #coll.enter(inner); }
         })
         .collect();
+    for enter_fp in enter_rels {
+        enter.insert(*enter_fp, format_ident!("in_{}", *enter_fp));
+    }
 
     // Initialize arranged map and current/next iteration maps
     let mut arranged_map: HashMap<u64, Ident> = HashMap::new();
@@ -75,6 +79,14 @@ pub fn gen_iterative_block(
         let mut outs: Vec<Ident> = Vec::new();
         for idb_fp in idb_fps {
             outs.push(format_ident!("t_{}", idb_fp));
+        }
+        if enter.contains_key(output_fp) {
+            let enter_ident = enter.get(output_fp).unwrap();
+            let keyed_ident = format_ident!("t_enter_{}", output_fp);
+            union_stmts.push(quote! {
+                let #keyed_ident = #enter_ident.map(|row| ((), row));
+            });
+            outs.push(keyed_ident.clone());
         }
 
         let head = outs[0].clone();
@@ -110,8 +122,18 @@ pub fn gen_iterative_block(
         })
         .collect();
 
+    let leave_idents: Vec<Ident> = leave_rels
+        .iter()
+        .map(|fp| find_ident(fp_to_ident, *fp))
+        .collect();
+
+    let leave_pattern = match leave_idents.as_slice() {
+        [ident] => quote! { #ident },
+        _ => quote! { (#(#leave_idents),*) },
+    };
+
     quote! {
-        let _rec_outputs = scope.iterative::<u64, _, _>(|inner| {
+        let #leave_pattern = scope.iterative::<u64, _, _>(|inner| {
             #(#enter_stmts)*
 
             #(#vars_new)*

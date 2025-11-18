@@ -137,12 +137,13 @@ impl Program {
         self.relations.iter().filter(|rel| !rel.is_edb()).collect()
     }
 
-    /// Output relations (those marked for output).
+    /// Output/Printsize relations.
+    /// Notice not every IDB is an output/printsize relation.
     #[must_use]
-    pub fn output_relations(&self) -> Vec<&Relation> {
+    pub fn output_printsize_relations(&self) -> Vec<&Relation> {
         self.relations
             .iter()
-            .filter(|rel| rel.is_output())
+            .filter(|rel| rel.is_output_printsize())
             .collect()
     }
 
@@ -213,7 +214,7 @@ impl Program {
     #[must_use]
     fn identify_needed_components(&self) -> (HashSet<usize>, HashSet<String>) {
         let mut needed_preds: HashSet<String> = self
-            .output_relations()
+            .output_printsize_relations()
             .into_iter()
             .map(|d| d.name().to_string())
             .collect();
