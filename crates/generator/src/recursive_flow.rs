@@ -81,12 +81,7 @@ pub fn gen_iterative_block(
             outs.push(format_ident!("t_{}", idb_fp));
         }
         if enter.contains_key(output_fp) {
-            let enter_ident = enter.get(output_fp).unwrap();
-            let keyed_ident = format_ident!("t_enter_{}", output_fp);
-            union_stmts.push(quote! {
-                let #keyed_ident = #enter_ident.map(|row| ((), row));
-            });
-            outs.push(keyed_ident.clone());
+            outs.push(find_ident(&enter, *output_fp));
         }
 
         let head = outs[0].clone();
@@ -97,7 +92,7 @@ pub fn gen_iterative_block(
         }
 
         union_stmts.push(quote! {
-            let #next_ident = #expr.distinct().map(|(_, v)| v);
+            let #next_ident = #expr.distinct();
         });
     }
 
@@ -121,6 +116,11 @@ pub fn gen_iterative_block(
             quote! { #n.leave() }
         })
         .collect();
+
+    let leave_stmts = match leaves.as_slice() {
+        [leave_expr] => quote! { #leave_expr },
+        _ => quote! { ( #(#leaves),* ) },
+    };
 
     let leave_idents: Vec<Ident> = leave_rels
         .iter()
@@ -147,7 +147,7 @@ pub fn gen_iterative_block(
             // feedback
             #(#set_stmts)*
 
-            ( #(#leaves),* )
+            #leave_stmts
         });
     }
 }

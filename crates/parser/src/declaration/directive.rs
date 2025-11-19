@@ -16,7 +16,7 @@ impl InputDirective {
     #[must_use]
     pub fn new(relation_name: String, parameters: HashMap<String, String>) -> Self {
         Self {
-            relation_name,
+            relation_name: relation_name.to_lowercase(),
             parameters,
         }
     }
@@ -82,7 +82,9 @@ impl OutputDirective {
     /// Create a new OutputDirective
     #[must_use]
     pub fn new(relation_name: String) -> Self {
-        Self { relation_name }
+        Self {
+            relation_name: relation_name.to_lowercase(),
+        }
     }
 
     /// Get the relation name
@@ -116,7 +118,9 @@ pub struct PrintSizeDirective {
 impl PrintSizeDirective {
     #[must_use]
     pub fn new(relation_name: String) -> Self {
-        Self { relation_name }
+        Self {
+            relation_name: relation_name.to_lowercase(),
+        }
     }
 
     /// Get the relation name
@@ -153,7 +157,7 @@ mod tests {
 
         let input_dir = InputDirective::new("TestRelation".to_string(), params);
 
-        assert_eq!(input_dir.relation_name(), "TestRelation");
+        assert_eq!(input_dir.relation_name(), "testrelation");
         assert_eq!(input_dir.parameters().get("IO"), Some(&"file".to_string()));
         assert_eq!(
             input_dir.parameters().get("filename"),
@@ -164,13 +168,13 @@ mod tests {
     #[test]
     fn test_output_directive_creation() {
         let output_dir = OutputDirective::new("OutputRelation".to_string());
-        assert_eq!(output_dir.relation_name(), "OutputRelation");
+        assert_eq!(output_dir.relation_name(), "outputrelation");
     }
 
     #[test]
     fn test_printsize_directive_creation() {
         let printsize_dir = PrintSizeDirective::new("SizeRelation".to_string());
-        assert_eq!(printsize_dir.relation_name(), "SizeRelation");
+        assert_eq!(printsize_dir.relation_name(), "sizerelation");
     }
 
     #[test]

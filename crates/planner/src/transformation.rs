@@ -25,70 +25,50 @@ pub enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Row-to-key transformation (extract keys from rows)
-    RowToK {
-        input: Arc<Collection>,
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
     /// Row-to-key-value transformation (structure rows into KV pairs)
+    /// This include key-value, key-only, and value-only outputs.
     RowToKv {
         input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
+    /// Key-value to row transformation
+    KvToRow {
+        input: Arc<Collection>,
+        output: Arc<Collection>,
+        flow: TransformationFlow,
+    },
     /// Key-value to key-value transformation
+    /// This include key-value, key-only, and value-only outputs.
     KvToKv {
-        input: Arc<Collection>,
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
-    /// Key-value to key-only transformation
-    KvToK {
-        input: Arc<Collection>,
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
-    /// Key-value to value-only transformation
-    KvToV {
         input: Arc<Collection>,
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
 
     // === Binary Transformations ===
-    /// Join: Key-only ⋈ Key-only
-    JnKK {
+    /// Join: Key-value ⋈ Key-value to row transformation
+    JnToRow {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Join: Key-only ⋈ Key-value (right has values)
-    JnKKv {
+    /// Join: Key-value ⋈ Key-value to key-value transformation
+    /// This include key-value, key-only, and value-only outputs.
+    JnToKv {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Join: Key-value ⋈ Key-value
-    JnKvKv {
+    /// Antijoin: Key-value ¬ Key-only to row transformation
+    NJnToRow {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Cartesian product (no join keys)
-    Cartesian {
-        input: (Arc<Collection>, Arc<Collection>),
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
-    /// Antijoin: Key-value ¬ Key-only
-    NjKKv {
-        input: (Arc<Collection>, Arc<Collection>),
-        output: Arc<Collection>,
-        flow: TransformationFlow,
-    },
-    /// Antijoin: Key-only ¬ Key-only
-    NjKK {
+    /// Antijoin: Key-only ¬ Key-only to key-value transformation
+    /// This include key-value, key-only, and value-only outputs.
+    NJnToKv {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
         flow: TransformationFlow,
@@ -105,10 +85,8 @@ impl Transformation {
             self,
             Self::RowToRow { .. }
                 | Self::RowToKv { .. }
-                | Self::RowToK { .. }
+                | Self::KvToRow { .. }
                 | Self::KvToKv { .. }
-                | Self::KvToK { .. }
-                | Self::KvToV { .. }
         )
     }
 }
@@ -126,10 +104,8 @@ impl Transformation {
         match self {
             Self::RowToRow { input, .. }
             | Self::RowToKv { input, .. }
-            | Self::RowToK { input, .. }
-            | Self::KvToKv { input, .. }
-            | Self::KvToK { input, .. }
-            | Self::KvToV { input, .. } => input,
+            | Self::KvToRow { input, .. }
+            | Self::KvToKv { input, .. } => input,
             _ => panic!("Planner error: unary_input called on binary transformation"),
         }
     }
@@ -141,12 +117,10 @@ impl Transformation {
     /// Panics if called on a unary transformation. Use `is_unary()` to check first.
     pub fn binary_input(&self) -> &(Arc<Collection>, Arc<Collection>) {
         match self {
-            Self::JnKK { input, .. }
-            | Self::JnKKv { input, .. }
-            | Self::JnKvKv { input, .. }
-            | Self::Cartesian { input, .. }
-            | Self::NjKK { input, .. }
-            | Self::NjKKv { input, .. } => input,
+            Self::JnToRow { input, .. }
+            | Self::JnToKv { input, .. }
+            | Self::NJnToRow { input, .. }
+            | Self::NJnToKv { input, .. } => input,
             _ => panic!("Planner error: binary_input called on unary transformation"),
         }
     }
@@ -156,16 +130,12 @@ impl Transformation {
         match self {
             Self::RowToRow { output, .. }
             | Self::RowToKv { output, .. }
-            | Self::RowToK { output, .. }
+            | Self::KvToRow { output, .. }
             | Self::KvToKv { output, .. }
-            | Self::KvToK { output, .. }
-            | Self::KvToV { output, .. }
-            | Self::JnKK { output, .. }
-            | Self::JnKKv { output, .. }
-            | Self::JnKvKv { output, .. }
-            | Self::Cartesian { output, .. }
-            | Self::NjKKv { output, .. }
-            | Self::NjKK { output, .. } => output,
+            | Self::JnToRow { output, .. }
+            | Self::JnToKv { output, .. }
+            | Self::NJnToRow { output, .. }
+            | Self::NJnToKv { output, .. } => output,
         }
     }
 
@@ -174,16 +144,12 @@ impl Transformation {
         match self {
             Self::RowToRow { flow, .. }
             | Self::RowToKv { flow, .. }
-            | Self::RowToK { flow, .. }
             | Self::KvToKv { flow, .. }
-            | Self::KvToK { flow, .. }
-            | Self::KvToV { flow, .. }
-            | Self::JnKK { flow, .. }
-            | Self::JnKKv { flow, .. }
-            | Self::JnKvKv { flow, .. }
-            | Self::Cartesian { flow, .. }
-            | Self::NjKKv { flow, .. }
-            | Self::NjKK { flow, .. } => flow,
+            | Self::KvToRow { flow, .. }
+            | Self::JnToRow { flow, .. }
+            | Self::JnToKv { flow, .. }
+            | Self::NJnToRow { flow, .. }
+            | Self::NJnToKv { flow, .. } => flow,
         }
     }
 }
@@ -222,9 +188,8 @@ impl Transformation {
             info.compare_exprs(),
         );
 
-        let is_row_in = info.input_kv_layout().0.key().is_empty(); // Input is row-based (no keys)
-        let is_row_out = info.output_kv_layout().key().is_empty(); // Output is row-based (no keys)
-        let is_key_only_out = info.output_kv_layout().value().is_empty(); // Output has keys but no values
+        let is_row_in = info.is_row_input(); // Input is Row
+        let is_row_out = info.is_row_output(); // Output is Row
 
         let input = Arc::new(Collection::new(
             info.input_info_fp().0,
@@ -238,39 +203,27 @@ impl Transformation {
             info.output_kv_layout().value(),
         ));
 
-        match (is_row_in, is_row_out, is_key_only_out) {
+        match (is_row_in, is_row_out) {
             // Row input -> Row output: filtering, projection, or aggregation on row data
-            (true, true, _) => Self::RowToRow {
+            (true, true) => Self::RowToRow {
                 input,
                 output,
                 flow,
             },
             // Row input -> Key-only output: extract keys from row data
-            (true, false, true) => Self::RowToK {
+            (true, false) => Self::RowToKv {
                 input,
                 output,
                 flow,
             },
             // Row input -> Key-value output: structure row data into key-value pairs
-            (true, false, false) => Self::RowToKv {
+            (false, true) => Self::KvToRow {
                 input,
                 output,
                 flow,
             },
             // Key-value input -> Key-value output: transform existing key-value structure
-            (false, false, false) => Self::KvToKv {
-                input,
-                output,
-                flow,
-            },
-            // Key-value input -> Key-only output: extract keys from key-value pairs
-            (false, false, true) => Self::KvToK {
-                input,
-                output,
-                flow,
-            },
-            // Key-value input -> Value-only output: extract values from key-value pairs
-            (false, true, _) => Self::KvToV {
+            (false, false) => Self::KvToKv {
                 input,
                 output,
                 flow,
@@ -305,9 +258,7 @@ impl Transformation {
             info.compare_exprs(),
         );
 
-        let is_key_only_left = info.input_kv_layout().0.value().is_empty(); // Left collection has only keys
-        let is_key_only_right = info.input_kv_layout().1.unwrap().value().is_empty(); // Right collection has only keys
-        let is_cartesian = info.input_kv_layout().0.key().is_empty(); // No join keys = cartesian product
+        let is_row_output = info.is_row_output(); // Output is Row
 
         let input = (
             Arc::new(Collection::new(
@@ -328,38 +279,19 @@ impl Transformation {
             info.output_kv_layout().value(),
         ));
 
-        if is_cartesian {
-            // Special case: Cartesian product (no join keys)
-            Self::Cartesian {
+        if is_row_output {
+            // Key-value ⋈ Key-value to Row
+            Self::JnToRow {
                 input,
                 output,
                 flow,
             }
         } else {
-            // Standard joins based on collection types
-            match (is_key_only_left, is_key_only_right) {
-                // Key-only ⋈ Key-only: both collections have keys but no values
-                (true, true) => Self::JnKK {
-                    input,
-                    output,
-                    flow,
-                },
-                // Key-value ⋈ Key-value: both collections have keys and values
-                (false, false) => Self::JnKvKv {
-                    input,
-                    output,
-                    flow,
-                },
-                // Key-only ⋈ Key-value: left is key-only, right has values
-                (true, false) => Self::JnKKv {
-                    input,
-                    output,
-                    flow,
-                },
-                // Key-value ⋈ Key-only: left has values, right is key-only
-                (false, true) => unreachable!(
-                    "Planner error: join - left collection cannot have values when right is key-only"
-                ),
+            // Key-value ⋈ Key-value to Key-value
+            Self::JnToKv {
+                input,
+                output,
+                flow,
             }
         }
     }
@@ -399,8 +331,8 @@ impl Transformation {
             &[], // No comparison expressions for antijoins
         );
 
-        // Determine antijoin type based on left collection characteristics
-        let is_key_only_right = info.input_kv_layout().1.unwrap().value().is_empty(); // Right collection has only keys
+        // Determine antijoin type based on output collection characteristics
+        let is_row_output = info.is_row_output(); // Output is Row
 
         let input = (
             Arc::new(Collection::new(
@@ -421,16 +353,16 @@ impl Transformation {
             info.output_kv_layout().value(),
         ));
 
-        if is_key_only_right {
-            // Key-only ¬⋈ Key-only: filter key-only records using key-only filter
-            Self::NjKK {
+        if is_row_output {
+            // Key-only ¬⋈ Key-only to Row
+            Self::NJnToRow {
                 input,
                 output,
                 flow,
             }
         } else {
-            // Key-only ¬⋈ Key-value: filter key-value records using key-only filter
-            Self::NjKKv {
+            // Key-only ¬⋈ Key-value to Key-value
+            Self::NJnToKv {
                 input,
                 output,
                 flow,
@@ -449,18 +381,7 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[RowToRow]\n   In   : {}\n   Flow : {}\n   Out  : {}",
-                    input, flow, output
-                )
-            }
-            Self::RowToK {
-                input,
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[RowToK]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    "[Row -> Row]\n   In   : {}\n   Flow : {}\n   Out  : {}",
                     input, flow, output
                 )
             }
@@ -471,7 +392,18 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[RowToKv]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    "[Row -> KV]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    input, flow, output
+                )
+            }
+            Self::KvToRow {
+                input,
+                output,
+                flow,
+            } => {
+                write!(
+                    f,
+                    "[KV -> Row]\n   In   : {}\n   Flow : {}\n   Out  : {}",
                     input, flow, output
                 )
             }
@@ -482,96 +414,52 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[KvToKv]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    "[KV -> KV]\n   In   : {}\n   Flow : {}\n   Out  : {}",
                     input, flow, output
                 )
             }
-            Self::KvToK {
-                input,
+            Self::JnToRow {
+                input: (left, right),
                 output,
                 flow,
             } => {
                 write!(
                     f,
-                    "[KvToK]\n   In   : {}\n   Flow : {}\n   Out  : {}",
-                    input, flow, output
+                    "[Join -> Row]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    left, right, flow, output
                 )
             }
-            Self::KvToV {
-                input,
+            Self::JnToKv {
+                input: (left, right),
                 output,
                 flow,
             } => {
                 write!(
                     f,
-                    "[KvToV]\n   In   : {}\n   Flow : {}\n   Out  : {}",
-                    input, flow, output
+                    "[Join -> KV]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    left, right, flow, output
                 )
             }
-            Self::JnKK {
-                input: (l, r),
+            Self::NJnToRow {
+                input: (left, right),
                 output,
                 flow,
             } => {
                 write!(
                     f,
-                    "[JnKK]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
-                    l, r, flow, output
+                    "[AntiJoin -> Row]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    left, right, flow, output
                 )
             }
-            Self::JnKKv {
-                input: (l, r),
+            Self::NJnToKv {
+                input: (left, right),
                 output,
                 flow,
             } => {
                 write!(
                     f,
-                    "[JnKKv]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
-                    l, r, flow, output
-                )
-            }
-            Self::JnKvKv {
-                input: (l, r),
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[JnKvKv]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
-                    l, r, flow, output
-                )
-            }
-            Self::Cartesian {
-                input: (l, r),
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[Cartesian]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
-                    l, r, flow, output
-                )
-            }
-            Self::NjKKv {
-                input: (l, r),
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[NjKvK]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
-                    l, r, flow, output
-                )
-            }
-            Self::NjKK {
-                input: (l, r),
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[NjKK]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
-                    l, r, flow, output
+                    "[AntiJoin -> KV]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    left, right, flow, output
                 )
             }
         }

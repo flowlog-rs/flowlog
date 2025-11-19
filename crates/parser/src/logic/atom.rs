@@ -101,7 +101,7 @@ impl Atom {
     #[must_use]
     pub fn new(name: &str, arguments: Vec<AtomArg>, fingerprint: u64) -> Self {
         Self {
-            name: name.to_string(),
+            name: name.to_lowercase(),
             arguments,
             fingerprint,
         }
@@ -237,7 +237,7 @@ mod tests {
         assert!(a0.to_string().starts_with("flag()"));
 
         // unary
-        let a1 = Atom::new("student", vec![v("X")], 0);
+        let a1 = Atom::new("Student", vec![v("X")], 0);
         assert_eq!(a1.arity(), 1);
         assert!(a1.to_string().starts_with("student(X)"));
 

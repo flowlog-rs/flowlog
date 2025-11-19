@@ -505,6 +505,7 @@ impl RulePlanner {
 
             let tx = TransformationInfo::kv_to_kv(
                 rhs_fp,
+                catalog.original_atom_fingerprints().contains(&rhs_fp),
                 KeyValueLayout::new(in_keys.clone(), in_vals.clone()),
                 KeyValueLayout::new(in_keys.clone(), in_vals),
                 vec![], // no const-eq
@@ -604,6 +605,7 @@ impl RulePlanner {
             // Create projection transformation that removes unused arguments
             let tx = TransformationInfo::kv_to_kv(
                 atom_fp,
+                catalog.original_atom_fingerprints().contains(&atom_fp),
                 KeyValueLayout::new(in_keys, in_vals), // input layout
                 KeyValueLayout::new(out_keys, out_vals), // output layout (projected)
                 vec![],                                // no constant equality constraints
@@ -670,6 +672,7 @@ impl RulePlanner {
 
         let tx = TransformationInfo::kv_to_kv(
             edb_fp,
+            true,
             edb_layout,               // input layout
             target_kv_layout.clone(), // output row layout
             vec![],                   // no constant equality constraints

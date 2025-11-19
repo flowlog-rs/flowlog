@@ -38,7 +38,7 @@ impl Relation {
     #[inline]
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
         Self {
-            name: name.to_string(),
+            name: name.to_ascii_lowercase(),
             fingerprint: compute_fp(&name),
             attributes,
             input_params: None,
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn new_and_accessors() {
-        let rel = Relation::new("users", attrs());
+        let rel = Relation::new("Users", attrs());
         assert_eq!(rel.name(), "users");
         assert_eq!(rel.arity(), 2);
         assert!(!rel.is_nullary());

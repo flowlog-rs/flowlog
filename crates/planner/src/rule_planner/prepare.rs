@@ -144,6 +144,7 @@ impl RulePlanner {
         // Build a Key-Value to Key-Value info.
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
+            catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(in_keys, in_vals),
             KeyValueLayout::new(Vec::new(), out_vals.clone()),
             vec![],                      // no const-eq
@@ -198,6 +199,7 @@ impl RulePlanner {
         // Build a Key-Value to Key-Value info.
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
+            catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(in_keys, in_vals),
             KeyValueLayout::new(Vec::new(), out_vals.clone()),
             vec![(var_sig, const_val)], // const-eq
@@ -251,6 +253,7 @@ impl RulePlanner {
         // Build a Key-Value to Key-Value info.
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
+            catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(in_keys, in_vals),
             KeyValueLayout::new(Vec::new(), out_vals.clone()),
             vec![], // no const-eq

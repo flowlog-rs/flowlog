@@ -55,6 +55,7 @@ impl RulePlanner {
         let output_values = Self::resolve_head_arguments(&name_to_sig, head_args);
 
         let new_layout = KeyValueLayout::new(Vec::new(), output_values);
+        last_tx.update_row_output(true);
         last_tx.update_output_key_value_layout(new_layout);
         last_tx.update_output_fake_sig();
     }
@@ -78,14 +79,17 @@ impl RulePlanner {
             ),
         );
 
-        let post_tx = TransformationInfo::kv_to_kv(
+        let mut post_tx = TransformationInfo::kv_to_kv(
             input_fake_sig,
+            true,
             input_kv_layout,
             KeyValueLayout::new(Vec::new(), output_values),
             Vec::new(), // no const constraints
             Vec::new(), // no var constraints
             Vec::new(), // no comparisons
         );
+        post_tx.update_row_output(true);
+        post_tx.update_output_fake_sig();
 
         self.transformation_infos.push(post_tx);
     }

@@ -104,7 +104,7 @@ impl Head {
     pub fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
         let head_fingerprint = compute_fp(&name);
         Self {
-            name,
+            name: name.to_ascii_lowercase(),
             head_fingerprint,
             head_arguments,
         }
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn head_basics() {
-        let h = Head::new("person".into(), vec![var_arg("Name"), var_arg("Age")]);
+        let h = Head::new("Person".into(), vec![var_arg("Name"), var_arg("Age")]);
         assert_eq!(h.name(), "person");
         assert_eq!(h.arity(), 2);
         assert_eq!(h.to_string(), "person(Name, Age)");

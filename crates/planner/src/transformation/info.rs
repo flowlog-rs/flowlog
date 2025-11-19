@@ -78,6 +78,10 @@ pub enum TransformationInfo {
         input_info_fp: u64,
         /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
+        /// Whether row input
+        is_row_input: bool,
+        /// Whether row output
+        is_row_output: bool,
         /// Input layout (key/value positions).
         input_kv_layout: KeyValueLayout,
         /// Output layout (key/value positions) (fake until resolved).
@@ -98,6 +102,8 @@ pub enum TransformationInfo {
         right_input_info_fp: u64,
         /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
+        /// Whether row output
+        is_row_output: bool,
         /// Left input layout (its key is the join key).
         left_input_kv_layout: KeyValueLayout,
         /// Right input layout (its value contributes to output value).
@@ -116,6 +122,8 @@ pub enum TransformationInfo {
         right_input_info_fp: u64,
         /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
+        /// Whether row output
+        is_row_output: bool,
         /// Left input layout (its key is the anti-join key).
         left_input_kv_layout: KeyValueLayout,
         /// Right input layout (its value is ignored in the output, but key participates).
@@ -132,6 +140,7 @@ impl TransformationInfo {
     /// Build a Key-Value to Key-Value transformation with a derived (fake) output fingerprint.
     pub fn kv_to_kv(
         input_fake_sig: u64,
+        is_row_input: bool,
         input_kv_layout: KeyValueLayout,
         output_fake_kv_layout: KeyValueLayout,
         const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
@@ -151,6 +160,8 @@ impl TransformationInfo {
         Self::KVToKV {
             input_info_fp: input_fake_sig,
             output_info_fp: fake_output_sig,
+            is_row_input,
+            is_row_output: false,
             input_kv_layout,
             output_kv_layout: output_fake_kv_layout,
             const_eq_constraints,
@@ -182,6 +193,7 @@ impl TransformationInfo {
             left_input_info_fp: left_fake_sig,
             right_input_info_fp: right_fake_sig,
             output_info_fp: fake_output_sig,
+            is_row_output: false,
             left_input_kv_layout: left_kv_layout,
             right_input_kv_layout: right_kv_layout,
             output_kv_layout: output_fake_kv_layout,
@@ -210,6 +222,7 @@ impl TransformationInfo {
             left_input_info_fp: left_fake_sig,
             right_input_info_fp: right_fake_sig,
             output_info_fp: fake_output_sig,
+            is_row_output: false,
             left_input_kv_layout: left_kv_layout,
             right_input_kv_layout: right_kv_layout,
             output_kv_layout: output_fake_kv_layout,
@@ -262,6 +275,26 @@ impl TransformationInfo {
             Self::KVToKV { output_info_fp, .. }
             | Self::JoinToKV { output_info_fp, .. }
             | Self::AntiJoinToKV { output_info_fp, .. } => *output_info_fp,
+        }
+    }
+
+    /// Whether the input is row-based.
+    /// Only KVtoKV needs this info.
+    #[inline]
+    pub fn is_row_input(&self) -> bool {
+        match self {
+            Self::KVToKV { is_row_input, .. } => *is_row_input,
+            _ => panic!("Planner error: is_row_input is only available for KVToKV"),
+        }
+    }
+
+    /// Whether the output is row-based.
+    #[inline]
+    pub fn is_row_output(&self) -> bool {
+        match self {
+            Self::KVToKV { is_row_output, .. } => *is_row_output,
+            Self::JoinToKV { is_row_output, .. } => *is_row_output,
+            Self::AntiJoinToKV { is_row_output, .. } => *is_row_output,
         }
     }
 
@@ -393,6 +426,30 @@ impl TransformationInfo {
         }
     }
 
+    /// Update whether the output is row-based.
+    pub fn update_row_output(&mut self, is_row_output: bool) {
+        match self {
+            Self::KVToKV {
+                is_row_output: row_out,
+                ..
+            } => {
+                *row_out = is_row_output;
+            }
+            Self::JoinToKV {
+                is_row_output: row_out,
+                ..
+            } => {
+                *row_out = is_row_output;
+            }
+            Self::AntiJoinToKV {
+                is_row_output: row_out,
+                ..
+            } => {
+                *row_out = is_row_output;
+            }
+        }
+    }
+
     /// Replace a placeholder (fake) output layout with its resolved (real) positions.
     ///
     /// Necessary once the actual output schema is known, since downstream operators
@@ -470,6 +527,8 @@ impl TransformationInfo {
         match self {
             Self::KVToKV {
                 input_info_fp,
+                is_row_input,
+                is_row_output,
                 input_kv_layout,
                 output_kv_layout,
                 const_eq_constraints,
@@ -480,6 +539,8 @@ impl TransformationInfo {
                 *output_info_fp = compute_fp((
                     "kv_to_kv",
                     input_info_fp,
+                    is_row_input,
+                    is_row_output,
                     input_kv_layout,
                     output_kv_layout,
                     const_eq_constraints,
@@ -490,6 +551,7 @@ impl TransformationInfo {
             Self::JoinToKV {
                 left_input_info_fp,
                 right_input_info_fp,
+                is_row_output,
                 left_input_kv_layout,
                 right_input_kv_layout,
                 output_kv_layout,
@@ -500,6 +562,7 @@ impl TransformationInfo {
                     "join_to_kv",
                     left_input_info_fp,
                     right_input_info_fp,
+                    is_row_output,
                     left_input_kv_layout,
                     right_input_kv_layout,
                     output_kv_layout,
@@ -509,6 +572,7 @@ impl TransformationInfo {
             Self::AntiJoinToKV {
                 left_input_info_fp,
                 right_input_info_fp,
+                is_row_output,
                 left_input_kv_layout,
                 right_input_kv_layout,
                 output_kv_layout,
@@ -518,6 +582,7 @@ impl TransformationInfo {
                     "anti_join_to_kv",
                     left_input_info_fp,
                     right_input_info_fp,
+                    is_row_output,
                     left_input_kv_layout,
                     right_input_kv_layout,
                     output_kv_layout,
@@ -532,6 +597,8 @@ impl fmt::Display for TransformationInfo {
         match self {
             Self::KVToKV {
                 input_info_fp,
+                is_row_input,
+                is_row_output,
                 input_kv_layout,
                 output_info_fp,
                 output_kv_layout,
@@ -547,18 +614,24 @@ impl fmt::Display for TransformationInfo {
                     var_eq_constraints,
                     compare_exprs_pos,
                 );
+                let row_flags = match (*is_row_input, *is_row_output) {
+                    (true, true) => "[Row -> Row]",
+                    (true, false) => "[Row -> KV]",
+                    (false, true) => "[KV -> Row]",
+                    (false, false) => "[KV -> KV]",
+                };
 
                 if filters.is_empty() {
                     write!(
                         f,
-                        "[KVToKV]\n   ┌─ In   : {}\n   └─> Out : {}\n",
-                        in_coll, out_coll
+                        "{}\n   ┌─ In   : {}\n   └─> Out : {}\n",
+                        row_flags, in_coll, out_coll
                     )
                 } else {
                     write!(
                         f,
-                        "[KVToKV]\n   ┌─ In   : {}\n   └─> Out : {}\n       WHERE {}\n",
-                        in_coll, out_coll, filters
+                        "{}\n   ┌─ In   : {}\n   └─> Out : {}\n       WHERE {}\n",
+                        row_flags, in_coll, out_coll, filters
                     )
                 }
             }
@@ -566,6 +639,7 @@ impl fmt::Display for TransformationInfo {
             Self::JoinToKV {
                 left_input_info_fp,
                 right_input_info_fp,
+                is_row_output,
                 output_info_fp,
                 left_input_kv_layout,
                 right_input_kv_layout,
@@ -585,18 +659,23 @@ impl fmt::Display for TransformationInfo {
 
                 let out = fmt_collection(output_info_fp, output_kv_layout);
                 let filters = fmt_flow_kv(output_kv_layout, &[], &[], compare_exprs_pos);
+                let row_flag = if *is_row_output {
+                    "[Jn -> Row]"
+                } else {
+                    "[Jn -> KV]"
+                };
 
                 if filters.is_empty() {
                     write!(
                         f,
-                        "[JoinToKV]\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n",
-                        l, r, out
+                        "{}\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n",
+                        row_flag, l, r, out
                     )
                 } else {
                     write!(
                         f,
-                        "[JoinToKV]\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n       WHERE {}\n",
-                        l, r, out, filters
+                        "{}\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n       WHERE {}\n",
+                        row_flag, l, r, out, filters
                     )
                 }
             }
@@ -605,6 +684,7 @@ impl fmt::Display for TransformationInfo {
                 left_input_info_fp,
                 right_input_info_fp,
                 output_info_fp,
+                is_row_output,
                 left_input_kv_layout,
                 right_input_kv_layout,
                 output_kv_layout,
@@ -621,11 +701,16 @@ impl fmt::Display for TransformationInfo {
                 );
 
                 let out = fmt_collection(output_info_fp, output_kv_layout);
+                let row_flag = if *is_row_output {
+                    "[AntiJn -> Row]"
+                } else {
+                    "[AntiJn -> KV]"
+                };
 
                 write!(
                     f,
-                    "[AntiJoinToKV]\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n",
-                    l, r, out
+                    "{}\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n",
+                    row_flag, l, r, out
                 )
             }
         }
