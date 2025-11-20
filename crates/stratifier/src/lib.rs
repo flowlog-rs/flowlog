@@ -11,14 +11,10 @@
 //! # Example
 //! ```rust,no_run
 //! use parser::Program;
-//! use stratifier::{DependencyGraph, Stratifier};
+//! use stratifier::Stratifier;
 //!
 //! // Parse a Macaron program (example reach.dl, adjust path as needed)
 //! let program = Program::parse("../../example/reach.dl");
-//!
-//! // Build dependency graph
-//! let graph = DependencyGraph::from_program(&program);
-//! println!("{}", graph);
 //!
 //! // Compute stratum
 //! let stratum = Stratifier::from_program(&program);

@@ -2,38 +2,30 @@ use catalog::rule::Catalog;
 use clap::Parser;
 use common::{get_example_files, Args, TestResult};
 use parser::Program;
-use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Initialize tracing similar to parser/stratifier mains
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("info"))
-        .init();
-
     let args = Args::parse();
 
     if args.should_process_all() {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("info"))
+            .init();
         run_all_examples();
         return;
     }
 
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("debug"))
+        .init();
+
     let program = Program::parse(args.program());
-    info!(
-        "Parsed program: {} rules ({} EDBs, {} IDBs)",
-        program.rules().len(),
-        program.edbs().len(),
-        program.idbs().len()
-    );
     print_catalogs(&program);
 }
 
 fn print_catalogs(program: &Program) {
-    for (i, rule) in program.rules().iter().enumerate() {
-        info!("{}", "-".repeat(80));
-        info!("[Rule {}] {}", i, rule.head().name());
-        let catalog = Catalog::from_rule(rule);
-        info!("{}", catalog);
+    for rule in program.rules().iter() {
+        let _catalog = Catalog::from_rule(rule);
     }
 }
 

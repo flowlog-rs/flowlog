@@ -262,7 +262,7 @@ impl Program {
             let mut deps = Vec::new();
             for pred in r.rhs() {
                 let atom_name = match pred {
-                    Predicate::PositiveAtomPredicate(a) | Predicate::NegatedAtomPredicate(a) => {
+                    Predicate::PositiveAtomPredicate(a) | Predicate::NegativeAtomPredicate(a) => {
                         a.name()
                     }
                     _ => continue,

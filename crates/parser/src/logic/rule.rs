@@ -157,7 +157,7 @@ mod tests {
         Predicate::PositiveAtomPredicate(atom(name, args))
     }
     fn neg_pred(name: &str, args: Vec<AtomArg>) -> Predicate {
-        Predicate::NegatedAtomPredicate(atom(name, args))
+        Predicate::NegativeAtomPredicate(atom(name, args))
     }
     fn bool_pred(v: bool) -> Predicate {
         Predicate::BoolPredicate(v)

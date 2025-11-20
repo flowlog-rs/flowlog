@@ -60,13 +60,6 @@ impl ComparisonExprPos {
     pub fn right(&self) -> &ArithmeticPos {
         &self.right
     }
-
-    /// Returns all variable signatures referenced in this comparison.
-    pub fn signatures(&self) -> Vec<&AtomArgumentSignature> {
-        let mut signatures = self.left.signatures();
-        signatures.extend(self.right.signatures());
-        signatures
-    }
 }
 
 impl fmt::Display for ComparisonExprPos {

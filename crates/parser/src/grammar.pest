@@ -199,9 +199,9 @@ atom = {
     ")" 
 }
 
-// Negated atom for negative conditions
+// Negative atom for negative conditions
 // Example: !edge(x, y)
-neg_atom = { "!" ~ atom }
+negative_atom = { "!" ~ atom }
 
 // Arguments in atoms can be variables, constants, or placeholders
 atom_arg = { variable | constant | placeholder } 
@@ -235,7 +235,7 @@ predicates = { predicate ~ ("," ~ predicate)* }
 // Types of predicates allowed in rule bodies
 predicate = { 
     atom |          // Positive atom: edge(x, y)
-    neg_atom |      // Negated atom: !edge(x, y)  
+    negative_atom | // Negative atom: !edge(x, y)  
     compare_expr |  // Comparison: x > y
     boolean         // Boolean atom: True/False
 }

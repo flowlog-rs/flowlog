@@ -65,14 +65,14 @@ impl DependencyGraph {
         for predicate in rule.rhs() {
             // Determine the atom name based on predicate type and handle dependencies
             let atom_name = match predicate {
-                Predicate::PositiveAtomPredicate(atom) | Predicate::NegatedAtomPredicate(atom) => {
+                Predicate::PositiveAtomPredicate(atom) | Predicate::NegativeAtomPredicate(atom) => {
                     atom.name()
                 }
                 // Other predicate types (constraints, comparisons, etc.) - skip dependency analysis
                 _ => continue,
             };
 
-            // For both positive and negated atoms, check if they reference IDB relations
+            // For both positive and negative atoms, check if they reference IDB relations
             // If so, add positive dependency (the rule needs these atoms to be computed first)
             if let Some(dependency_rule_ids) = head_to_rule_ids_map.get(atom_name) {
                 // Add dependency (polarity-agnostic): current rule depends on rules defining this atom

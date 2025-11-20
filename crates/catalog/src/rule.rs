@@ -7,6 +7,7 @@ use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
 use crate::ComparisonExprPos;
 use parser::{ComparisonExpr, HeadArg, MacaronRule};
+use tracing::debug;
 
 // Implementation modules
 mod modify;
@@ -16,6 +17,11 @@ mod populate;
 ///
 /// This structure maintains signatures, variable mappings, filters, and superset relationships
 /// for efficient rule analysis and transformation planning.
+///
+/// Note:
+/// 1. We introduce positive and negative atom RHS indices, which refer to the positions of atoms
+///    in the rule's right-hand side (RHS) when considering only positive or negative atoms, respectively.
+///    These two indices are not same as the global RHS indices.
 #[derive(Debug)]
 pub struct Catalog {
     /// The original rule.
@@ -29,6 +35,7 @@ pub struct Catalog {
     /// Original rule atom fingerprints
     original_atom_fingerprints: HashSet<u64>,
 
+    // All these positive metadata are positive indexed.
     /// RHS positive atom fingerprints (in source order).
     positive_atom_fingerprints: Vec<u64>,
     /// For each RHS positive atom, its argument signatures.
@@ -40,16 +47,17 @@ pub struct Catalog {
     /// For each RHS positive atom, its RHS id (index).
     positive_atom_rhs_ids: Vec<usize>,
 
-    /// RHS negated atom fingerprints (in source order).
-    negated_atom_fingerprints: Vec<u64>,
-    /// For each RHS negated atom, its argument signatures.
-    negated_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
-    /// Variable string sets per negated atom (deduplicated).
-    negated_atom_argument_vars_str_sets: Vec<HashSet<String>>,
-    /// For each RHS negated atom, indices of positive atoms that are supersets.
-    negated_supersets: Vec<Vec<usize>>,
-    /// For each RHS negated atom, its RHS id (index).
-    negated_atom_rhs_ids: Vec<usize>,
+    // All these negative metadata are negative indexed.
+    /// RHS negative atom fingerprints (in source order).
+    negative_atom_fingerprints: Vec<u64>,
+    /// For each RHS negative atom, its argument signatures.
+    negative_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
+    /// Variable string sets per negative atom (deduplicated).
+    negative_atom_argument_vars_str_sets: Vec<HashSet<String>>,
+    /// For each RHS negative atom, indices of positive atoms that are supersets.
+    negative_supersets: Vec<Vec<usize>>,
+    /// For each RHS negative atom, its RHS id (index).
+    negative_atom_rhs_ids: Vec<usize>,
 
     /// Local filters: variable equality constraints, constant equality constraints, placeholders.
     filters: Filters,
@@ -67,8 +75,8 @@ pub struct Catalog {
     head_idb_fingerprint: u64,
 
     /// Atom argument signatures whose variable string occurs exactly once across
-    /// all predicates in the rule body (positive atoms, negated atoms, comparisons).
-    /// Grouped by atom signature for convenience in planners.
+    /// all predicates in the rule body (positive atoms, negaive atoms, comparisons).
+    /// Grouped by atom signature for convenience elimination in planners.
     unused_arguments_per_atom: HashMap<AtomSignature, Vec<AtomArgumentSignature>>,
 }
 
@@ -86,11 +94,11 @@ impl Catalog {
             positive_atom_argument_vars_str_sets: Vec::new(),
             positive_supersets: Vec::new(),
             positive_atom_rhs_ids: Vec::new(),
-            negated_atom_fingerprints: Vec::new(),
-            negated_atom_argument_signatures: Vec::new(),
-            negated_atom_argument_vars_str_sets: Vec::new(),
-            negated_supersets: Vec::new(),
-            negated_atom_rhs_ids: Vec::new(),
+            negative_atom_fingerprints: Vec::new(),
+            negative_atom_argument_signatures: Vec::new(),
+            negative_atom_argument_vars_str_sets: Vec::new(),
+            negative_supersets: Vec::new(),
+            negative_atom_rhs_ids: Vec::new(),
             filters: Filters::new(HashMap::new(), HashMap::new(), HashSet::new()),
             comparison_predicates: Vec::new(),
             comparison_predicates_vars_str_set: Vec::new(),
@@ -105,7 +113,7 @@ impl Catalog {
         for predicate in rule.rhs() {
             match predicate {
                 parser::Predicate::PositiveAtomPredicate(atom)
-                | parser::Predicate::NegatedAtomPredicate(atom) => {
+                | parser::Predicate::NegativeAtomPredicate(atom) => {
                     catalog
                         .original_atom_fingerprints
                         .insert(atom.fingerprint());
@@ -113,6 +121,9 @@ impl Catalog {
                 _ => {}
             }
         }
+
+        // Debug info print
+        debug!("\n{}", catalog);
 
         catalog
     }
@@ -127,11 +138,11 @@ impl Catalog {
         self.positive_atom_argument_vars_str_sets.clear();
         self.positive_supersets.clear();
         self.positive_atom_rhs_ids.clear();
-        self.negated_atom_fingerprints.clear();
-        self.negated_atom_argument_signatures.clear();
-        self.negated_atom_argument_vars_str_sets.clear();
-        self.negated_supersets.clear();
-        self.negated_atom_rhs_ids.clear();
+        self.negative_atom_fingerprints.clear();
+        self.negative_atom_argument_signatures.clear();
+        self.negative_atom_argument_vars_str_sets.clear();
+        self.negative_supersets.clear();
+        self.negative_atom_rhs_ids.clear();
         self.filters = Filters::new(HashMap::new(), HashMap::new(), HashSet::new());
         self.comparison_predicates.clear();
         self.comparison_predicates_vars_str_set.clear();
@@ -174,8 +185,8 @@ impl Catalog {
             "Rule has positive supersets - not a core rule"
         );
         assert!(
-            self.negated_supersets.iter().all(|s| s.is_empty()),
-            "Rule has negated supersets - not a core rule"
+            self.negative_supersets.iter().all(|s| s.is_empty()),
+            "Rule has negative supersets - not a core rule"
         );
         assert!(
             self.comparison_supersets.iter().all(|s| s.is_empty()),
@@ -212,16 +223,16 @@ impl Catalog {
             return self.positive_atom_argument_signatures[index].clone();
         }
 
-        // Check negated atoms
+        // Check negative atoms
         if let Some(index) = self
-            .negated_atom_fingerprints
+            .negative_atom_fingerprints
             .iter()
             .position(|&fp| fp == origin_atom_fp)
         {
-            return self.negated_atom_argument_signatures[index].clone();
+            return self.negative_atom_argument_signatures[index].clone();
         }
 
-        unreachable!("Original atom fingerprint should exist in either positive or negated atoms");
+        unreachable!("Original atom fingerprint should exist in either positive or negative atoms");
     }
 
     // === Positive Atoms ===
@@ -250,30 +261,29 @@ impl Catalog {
         self.positive_atom_rhs_ids[index]
     }
 
-    // === Negated Atoms ===
-
-    /// Get the fingerprint of a negated atom by its index.
+    // === Negative Atoms ===
+    /// Get the fingerprint of a negative atom by its index.
     #[inline]
-    pub fn negated_atom_fingerprint(&self, index: usize) -> u64 {
-        self.negated_atom_fingerprints[index]
+    pub fn negative_atom_fingerprint(&self, index: usize) -> u64 {
+        self.negative_atom_fingerprints[index]
     }
 
-    /// Get the argument signatures for a negated atom by its index.
+    /// Get the argument signatures for a negative atom by its index.
     #[inline]
-    pub fn negated_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
-        &self.negated_atom_argument_signatures[index]
+    pub fn negative_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
+        &self.negative_atom_argument_signatures[index]
     }
 
-    /// For each negated atom, get indices of positive atoms with superset variable sets.
+    /// For each negative atom, get indices of positive atoms with superset variable sets.
     #[inline]
-    pub fn negated_supersets(&self) -> &Vec<Vec<usize>> {
-        &self.negated_supersets
+    pub fn negative_supersets(&self) -> &Vec<Vec<usize>> {
+        &self.negative_supersets
     }
 
-    /// Get the RHS id (index) of a negated atom by its index.
+    /// Get the RHS id (index) of a negative atom by its index.
     #[inline]
-    pub fn negated_atom_rhs_id(&self, index: usize) -> usize {
-        self.negated_atom_rhs_ids[index]
+    pub fn negative_atom_rhs_id(&self, index: usize) -> usize {
+        self.negative_atom_rhs_ids[index]
     }
 
     // === Atom Resolution ===
@@ -293,8 +303,8 @@ impl Catalog {
             )
         } else {
             (
-                &self.negated_atom_argument_signatures[atom_id],
-                self.negated_atom_fingerprints[atom_id],
+                &self.negative_atom_argument_signatures[atom_id],
+                self.negative_atom_fingerprints[atom_id],
                 atom_id,
             )
         }
@@ -305,7 +315,7 @@ impl Catalog {
         if sig.is_positive() {
             self.positive_atom_rhs_ids[sig.rhs_id()]
         } else {
-            self.negated_atom_rhs_ids[sig.rhs_id()]
+            self.negative_atom_rhs_ids[sig.rhs_id()]
         }
     }
 
@@ -409,7 +419,7 @@ impl Catalog {
     /// Check if current rule planning is done.
     pub fn is_planned(&self) -> bool {
         self.positive_atom_fingerprints.len() == 1
-            && self.negated_atom_fingerprints.is_empty()
+            && self.negative_atom_fingerprints.is_empty()
             && self.filters.is_empty()
             && self.comparison_predicates.is_empty()
     }
@@ -417,6 +427,7 @@ impl Catalog {
 
 impl fmt::Display for Catalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{}", "-".repeat(80))?;
         writeln!(f, "Rule:\n  {}", self.rule())?;
 
         let fmt_sig_list = |sigs: &[AtomArgumentSignature],
@@ -430,7 +441,7 @@ impl fmt::Display for Catalog {
             format!("[{}]", items.join(", "))
         };
 
-        // NEW: simple index vector pretty-printer (keeps original order)
+        // Simple index vector pretty-printer (keeps original order)
         let fmt_idx_list = |idxs: &[usize]| -> String {
             format!(
                 "[{}]",
@@ -450,13 +461,13 @@ impl fmt::Display for Catalog {
             writeln!(f, "  [{:>2}] 0x{:016x} args: {}", i, fp, args)?;
         }
 
-        writeln!(f, "\nNegated atoms:")?;
-        if self.negated_atom_fingerprints.is_empty() {
+        writeln!(f, "\nNegative atoms:")?;
+        if self.negative_atom_fingerprints.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
-            for (i, fp) in self.negated_atom_fingerprints.iter().enumerate() {
+            for (i, fp) in self.negative_atom_fingerprints.iter().enumerate() {
                 let args = fmt_sig_list(
-                    &self.negated_atom_argument_signatures[i],
+                    &self.negative_atom_argument_signatures[i],
                     &self.signature_to_argument_str_map,
                 );
                 writeln!(f, "  [{:>2}] 0x{:016x} args: {}", i, fp, args)?;
@@ -476,11 +487,11 @@ impl fmt::Display for Catalog {
         }
         writeln!(
             f,
-            "  negated_atom_rhs_ids  ({}): {}",
-            self.negated_atom_rhs_ids.len(),
-            fmt_idx_list(&self.negated_atom_rhs_ids)
+            "  negative_atom_rhs_ids  ({}): {}",
+            self.negative_atom_rhs_ids.len(),
+            fmt_idx_list(&self.negative_atom_rhs_ids)
         )?;
-        for (i, rhs_id) in self.negated_atom_rhs_ids.iter().copied().enumerate() {
+        for (i, rhs_id) in self.negative_atom_rhs_ids.iter().copied().enumerate() {
             writeln!(f, "    neg[{:>2}] -> rhs[{:>2}]", i, rhs_id)?;
         }
 
@@ -566,7 +577,7 @@ impl fmt::Display for Catalog {
             }
         };
         print_supersets("positives", &self.positive_supersets)?;
-        print_supersets("negated", &self.negated_supersets)?;
+        print_supersets("negative", &self.negative_supersets)?;
         print_supersets("comparisons", &self.comparison_supersets)?;
 
         writeln!(f, "\nUnused arguments per atom:")?;

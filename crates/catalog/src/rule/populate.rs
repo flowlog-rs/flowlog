@@ -39,7 +39,7 @@ impl Catalog {
 
     /// Populates argument signatures and filters for positive/negative atoms and comparisons.
     fn populate_argument_signatures(&mut self) {
-        // Tracks vars that are already bound (safe) before encountering them in a negated atom
+        // Tracks vars that are already bound (safe) before encountering them in a negative atom
         let mut is_safe_set = HashSet::new();
 
         // Map of later-occurring var signature to first-occurring signature (for equality filters)
@@ -55,8 +55,8 @@ impl Catalog {
         // Placeholders (wildcards) encountered
         let mut local_placeholder_set = HashSet::new();
 
-        // Partition RHS predicates into positive atoms, negated atoms, and comparisons
-        let (positive_atoms, negated_atoms, comparison_predicates): (Vec<_>, Vec<_>, Vec<_>) =
+        // Partition RHS predicates into positive atoms, negative atoms, and comparisons
+        let (positive_atoms, negative_atoms, comparison_predicates): (Vec<_>, Vec<_>, Vec<_>) =
             self.rule.rhs().iter().enumerate().fold(
                 (Vec::new(), Vec::new(), Vec::new()),
                 |(mut pos, mut neg, mut comp), (i, p)| {
@@ -65,9 +65,9 @@ impl Catalog {
                             pos.push(a);
                             self.positive_atom_rhs_ids.push(i);
                         }
-                        Predicate::NegatedAtomPredicate(a) => {
+                        Predicate::NegativeAtomPredicate(a) => {
                             neg.push(a);
-                            self.negated_atom_rhs_ids.push(i);
+                            self.negative_atom_rhs_ids.push(i);
                         }
                         Predicate::ComparePredicate(expr) => comp.push(expr.clone()),
                         Predicate::BoolPredicate(_) => {}
@@ -77,15 +77,15 @@ impl Catalog {
             );
 
         // Process positive atoms: record fingerprints, build argument signatures, record var/const/placeholder, collect var set
-        for (rhs_id, atom) in positive_atoms.iter().enumerate() {
+        for (pos_rhs_id, atom) in positive_atoms.iter().enumerate() {
             let mut atom_sigs = Vec::new();
             let mut atom_var_str_set = HashSet::new();
             for (arg_id, arg) in atom.arguments().iter().enumerate() {
-                let sig = AtomArgumentSignature::new(AtomSignature::new(true, rhs_id), arg_id);
+                let sig = AtomArgumentSignature::new(AtomSignature::new(true, pos_rhs_id), arg_id);
                 atom_sigs.push(sig);
                 match arg {
                     AtomArg::Var(v) => {
-                        // Mark variable as safe (can be used in later negated atoms)
+                        // Mark variable as safe (can be used in later negative atoms)
                         is_safe_set.insert(v);
                         atom_var_str_set.insert(v.to_string());
                         self.signature_to_argument_str_map
@@ -117,8 +117,8 @@ impl Catalog {
             local_var_first_occurrence_map.clear();
         }
 
-        // Process negated atoms: only already-safe vars are allowed
-        for (neg_rhs_id, atom) in negated_atoms.iter().enumerate() {
+        // Process negative atoms: only already-safe vars are allowed
+        for (neg_rhs_id, atom) in negative_atoms.iter().enumerate() {
             let mut neg_sigs = Vec::new();
             let mut neg_var_str_set = HashSet::new();
             for (arg_id, arg) in atom.arguments().iter().enumerate() {
@@ -150,9 +150,9 @@ impl Catalog {
                     }
                 }
             }
-            self.negated_atom_fingerprints.push(atom.fingerprint());
-            self.negated_atom_argument_signatures.push(neg_sigs);
-            self.negated_atom_argument_vars_str_sets
+            self.negative_atom_fingerprints.push(atom.fingerprint());
+            self.negative_atom_argument_signatures.push(neg_sigs);
+            self.negative_atom_argument_vars_str_sets
                 .push(neg_var_str_set);
 
             // Reset first-occurrence tracking for next atom
@@ -213,8 +213,8 @@ impl Catalog {
             }
         }
 
-        // Count occurrences in negated atoms
-        for vars_set in &self.negated_atom_argument_vars_str_sets {
+        // Count occurrences in negative atoms
+        for vars_set in &self.negative_atom_argument_vars_str_sets {
             for variable in vars_set {
                 *variable_counts.entry(variable.clone()).or_insert(0) += 1;
             }
@@ -261,9 +261,9 @@ impl Catalog {
             })
             .collect();
 
-        // For each negated atom: list indices of positive atoms that contain all its vars
-        self.negated_supersets = self
-            .negated_atom_argument_vars_str_sets
+        // For each negative atom: list indices of positive atoms that contain all its vars
+        self.negative_supersets = self
+            .negative_atom_argument_vars_str_sets
             .iter()
             .map(|set| {
                 pos_var_sets

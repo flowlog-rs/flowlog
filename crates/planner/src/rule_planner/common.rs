@@ -22,7 +22,7 @@ impl RulePlanner {
     /// This method tries the following optimizations in order:
     /// 1. Comparison pushdown: When a comparison predicate can be pushed to atoms
     /// 2. Positive semijoin: When a positive atom has positive supersets
-    /// 3. Anti-semijoin: When a negated atom has positive supersets  
+    /// 3. Anti-semijoin: When a negative atom has positive supersets  
     ///
     /// The reason why we try comparison pushdown first is that it can avoid fuse a comparison
     /// with a neg join producer, which is undefined in my understanding.
@@ -84,10 +84,10 @@ impl RulePlanner {
         }
 
         // (3) Anti-semijoin optimization
-        // When a negated atom has positive supersets, we can anti-join them.
+        // When a negative atom has positive supersets, we can anti-join them.
         // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
         if let Some((lhs_neg_idx, rhs_pos_indices)) = catalog
-            .negated_supersets()
+            .negative_supersets()
             .iter()
             .enumerate()
             .find(|(_, v)| !v.is_empty())
@@ -96,9 +96,9 @@ impl RulePlanner {
             self.apply_anti_semijoin_premap(catalog, lhs_neg_idx, &rhs_pos_indices);
 
             trace!(
-                "Anti-semijoin:\n  LHS negated atom: ({}, !{})\n  RHS atoms: {:?}",
-                catalog.rule().rhs()[catalog.negated_atom_rhs_id(lhs_neg_idx)],
-                catalog.negated_atom_rhs_id(lhs_neg_idx),
+                "Anti-semijoin:\n  LHS negative atom: ({}, !{})\n  RHS atoms: {:?}",
+                catalog.rule().rhs()[catalog.negative_atom_rhs_id(lhs_neg_idx)],
+                catalog.negative_atom_rhs_id(lhs_neg_idx),
                 rhs_pos_indices
                     .iter()
                     .map(|&i| (
@@ -309,7 +309,7 @@ impl RulePlanner {
         // Process LHS atom for anti-semijoin.
         if catalog
             .original_atom_fingerprints()
-            .contains(&catalog.negated_atom_fingerprint(lhs_neg_idx))
+            .contains(&catalog.negative_atom_fingerprint(lhs_neg_idx))
         {
             // LHS atom is not in key-only format; need to create a map
             self.create_edb_premap_transformations(catalog, lhs_neg_idx, false);
@@ -336,9 +336,11 @@ impl RulePlanner {
         lhs_neg_idx: usize,
         rhs_pos_indices: &[usize],
     ) -> bool {
-        // Extract LHS negated atom information
-        let lhs_neg_args = catalog.negated_atom_argument_signature(lhs_neg_idx).clone();
-        let lhs_neg_fp = catalog.negated_atom_fingerprint(lhs_neg_idx);
+        // Extract LHS negative atom information
+        let lhs_neg_args = catalog
+            .negative_atom_argument_signature(lhs_neg_idx)
+            .clone();
+        let lhs_neg_fp = catalog.negative_atom_fingerprint(lhs_neg_idx);
         let left_atom_signature = AtomSignature::new(false, lhs_neg_idx);
         let lhs_arg_names = Self::arg_names_set(&lhs_neg_args, catalog);
 
@@ -372,7 +374,7 @@ impl RulePlanner {
         for &rhs_idx in rhs_pos_indices {
             let current_transformation_index = self.transformation_infos.len();
 
-            // Register LHS negated atom as consumer of this transformation
+            // Register LHS negative atom as consumer of this transformation
             self.insert_consumer(
                 catalog.original_atom_fingerprints(),
                 lhs_neg_fp,
@@ -655,16 +657,16 @@ impl RulePlanner {
         atom_idx: usize,
         is_positive: bool,
     ) {
-        // Both positive and negated atoms can be pre-mapped.
+        // Both positive and negative atoms can be pre-mapped.
         let edb_fp = if is_positive {
             catalog.positive_atom_fingerprint(atom_idx)
         } else {
-            catalog.negated_atom_fingerprint(atom_idx)
+            catalog.negative_atom_fingerprint(atom_idx)
         };
         let edb_args = if is_positive {
             catalog.positive_atom_argument_signature(atom_idx)
         } else {
-            catalog.negated_atom_argument_signature(atom_idx)
+            catalog.negative_atom_argument_signature(atom_idx)
         };
         let edb_atom_signature = AtomSignature::new(is_positive, atom_idx);
         let current_transformation_index = self.transformation_infos.len();
