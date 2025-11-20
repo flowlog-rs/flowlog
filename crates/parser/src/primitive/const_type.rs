@@ -16,7 +16,6 @@ pub enum ConstType {
     Integer(i32),
 
     /// UTF-8 string constant.
-    /// TODO: current unsupported in system, need to discuss
     Text(String),
 }
 

@@ -4,35 +4,32 @@ use common::{get_example_files, Args, TestResult};
 use optimizer::Optimizer;
 use parser::Program;
 use stratifier::Stratifier;
-use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Initialize simple tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
-    // Parse command line arguments
     let args = Args::parse();
 
     if args.should_process_all() {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .init();
         run_all_examples();
         return;
     }
 
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+        )
+        .init();
+
     // Parse and process single file
     let program = Program::parse(args.program());
-    info!("Parsed program: {} rules", program.rules().len());
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program);
-    info!(
-        "Stratified program into {} strata",
-        stratifier.stratum().len()
-    );
 
     // Optimize each stratum
     let mut optimizer = Optimizer::new();
@@ -41,25 +38,11 @@ fn main() {
 
 /// Optimize and print results for each stratum in the stratified program
 fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
-    for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-        let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
-
+    for rules in stratifier.stratum().iter() {
         // Create catalogs for all rules in this stratum
-        let catalogs: Vec<Catalog> = rule_refs
-            .iter()
-            .map(|rule| Catalog::from_rule(rule))
-            .collect();
-        let is_planned = vec![false; catalogs.len()];
+        let catalogs: Vec<Catalog> = rules.iter().map(|rule| Catalog::from_rule(rule)).collect();
         // Plan the entire stratum
-        let _ = optimizer.plan_stratum(&catalogs, is_planned);
-
-        info!("{}", "=".repeat(80));
-        info!(
-            "[Stratum {}] {} rules (recursive: {})",
-            stratum_idx,
-            rule_refs.len(),
-            is_recursive
-        );
+        let _ = optimizer.plan_stratum(&catalogs);
     }
 }
 
@@ -77,13 +60,10 @@ fn run_all_examples() {
             let optimizer = Optimizer::new();
 
             // Just run optimization without printing details
-            for rule_refs in stratifier.stratum().iter() {
-                let catalogs: Vec<Catalog> = rule_refs
-                    .iter()
-                    .map(|rule| Catalog::from_rule(rule))
-                    .collect();
-                let is_planned = vec![false; catalogs.len()];
-                let _ = optimizer.plan_stratum(&catalogs, is_planned);
+            for rules in stratifier.stratum().iter() {
+                let catalogs: Vec<Catalog> =
+                    rules.iter().map(|rule| Catalog::from_rule(rule)).collect();
+                let _ = optimizer.plan_stratum(&catalogs);
             }
 
             (program.rules().len(), stratifier.stratum().len())

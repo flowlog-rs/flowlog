@@ -2,7 +2,7 @@
 use catalog::rule::Catalog;
 use std::collections::HashMap;
 use std::fmt;
-use tracing::trace;
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct PlanTree {
@@ -71,7 +71,7 @@ impl PlanTree {
         }
 
         let plan_tree = Self { root, tree };
-        trace!("Plan tree:\n{}", plan_tree);
+        debug!("\nRule:\n  {}\nPlan tree:\n{}", catalog.rule(), plan_tree);
 
         // Return the constructed plan tree.
         plan_tree

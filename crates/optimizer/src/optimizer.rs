@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct Optimizer {
-    relation_cardinality: HashMap<String, u64>, // future: temporary use u64
+    relation_cardinality: HashMap<u64, u64>, // future: temporary use u64
 }
 
 impl Optimizer {
@@ -17,28 +17,28 @@ impl Optimizer {
     }
 
     /// Get stored cardinality (if present) for a relation.
-    pub fn get_cardinality(&self, rel: &str) -> Option<u64> {
-        self.relation_cardinality.get(rel).copied()
+    pub fn get_cardinality(&self, rel_fp: u64) -> Option<u64> {
+        self.relation_cardinality.get(&rel_fp).copied()
     }
 
     /// Set a single relation cardinality.
-    pub fn set_cardinality(&mut self, rel: &str, card: u64) {
-        self.relation_cardinality.insert(rel.to_owned(), card);
+    pub fn set_cardinality(&mut self, rel_fp: u64, card: u64) {
+        self.relation_cardinality.insert(rel_fp, card);
     }
 
-    /// Plan a stratum producing one `PlanTree` per rule.
-    pub fn plan_stratum(
-        &self,
-        catalogs: &[Catalog],
-        is_planned: Vec<bool>,
-    ) -> Vec<Option<(usize, usize)>> {
+    /// Plan a stratum producing while building one `PlanTree` per rule.
+    /// This function returns a vector of optional tuple indices, one per rule in the stratum.
+    /// If a rule is already planned (is_planned = true), its entry is `None`.
+    /// Otherwise, it contains `Some((first_join_tuple_index))`.
+    pub fn plan_stratum(&self, catalogs: &[Catalog]) -> Vec<Option<(usize, usize)>> {
         catalogs
             .iter()
-            .zip(is_planned)
-            .map(|(catalog, is_planned)| {
-                if is_planned {
+            .map(|catalog| {
+                if catalog.is_planned() {
                     None
                 } else {
+                    // TODO: future work to return join tuple based on built join tree
+                    //       while also considering cardinalities.
                     let plan_tree = PlanTree::from_catalog(catalog);
                     Some(plan_tree.get_first_join_tuple_index())
                 }

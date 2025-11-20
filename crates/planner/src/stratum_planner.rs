@@ -92,8 +92,7 @@ impl StratumPlanner {
         // Phase 2: Core planning with optimizer guidance
         // this phase may introduce exponential blowup in intermediate results if not guided properly
         while !catalogs.iter().all(|c| c.is_planned()) {
-            let planning_status: Vec<_> = catalogs.iter().map(|c| c.is_planned()).collect();
-            let join_decisions = optimizer.plan_stratum(&catalogs, planning_status);
+            let join_decisions = optimizer.plan_stratum(&catalogs);
 
             for ((planner, catalog), join_decision) in rule_planners
                 .iter_mut()
