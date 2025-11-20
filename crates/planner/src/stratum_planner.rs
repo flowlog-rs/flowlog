@@ -141,6 +141,36 @@ impl StratumPlanner {
         stratum_planner.identify_recursive_transformations(is_recursive);
         stratum_planner.build_recursion_enter_collections();
         stratum_planner.build_output_to_aggregation_map(&catalogs);
+
+        // Debug info for non-recursive vs recursive transformations.
+        debug!(
+            "Non recursive transformations ({}):",
+            stratum_planner.non_recursive_transformations().len()
+        );
+        for (index, tx) in stratum_planner
+            .non_recursive_transformations()
+            .iter()
+            .enumerate()
+        {
+            debug!("\n[N{:>3}] {}", index, tx);
+        }
+
+        if is_recursive {
+            debug!(
+                "Recursive transformations ({}):",
+                stratum_planner.recursive_transformations().len()
+            );
+            for (index, tx) in stratum_planner
+                .recursive_transformations()
+                .iter()
+                .enumerate()
+            {
+                debug!("\n[R{:>3}] {}", index, tx);
+            }
+        } else {
+            debug!("(Non-recursive stratum: no recursive transformations)");
+        }
+
         stratum_planner
     }
 }

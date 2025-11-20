@@ -7,12 +7,12 @@
 .decl U(R: number, Z: number, W: number)
 .decl S(R: number, P: number)
 
-.input P(IO="file", filename="galen/P.csv", delimiter=",")
-.input Q(IO="file", filename="galen/Q.csv", delimiter=",")
-.input R(IO="file", filename="galen/R.csv", delimiter=",")
-.input C(IO="file", filename="galen/C.csv", delimiter=",")
-.input U(IO="file", filename="galen/U.csv", delimiter=",")
-.input S(IO="file", filename="galen/S.csv", delimiter=",")
+.input P(IO="file", filename="P.csv", delimiter=",")
+.input Q(IO="file", filename="Q.csv", delimiter=",")
+.input R(IO="file", filename="R.csv", delimiter=",")
+.input C(IO="file", filename="C.csv", delimiter=",")
+.input U(IO="file", filename="U.csv", delimiter=",")
+.input S(IO="file", filename="S.csv", delimiter=",")
 
 OutP(x,y) :- P(x,y).
 OutQ(x,y,z) :- Q(x,y,z).

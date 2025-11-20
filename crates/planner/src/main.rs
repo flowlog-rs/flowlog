@@ -47,14 +47,6 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
         // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
 
-        let sp = StratumPlanner::from_rules(
-            &rules,
-            optimizer,
-            is_recursive,
-            stratifier.stratum_iterative_relation(stratum_idx),
-            stratifier.stratum_leave_relation(stratum_idx),
-        );
-
         info!("{}", "=".repeat(80));
         info!(
             "[Stratum {}] {} rules (recursive: {})",
@@ -69,26 +61,13 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
             info!("\n({:>2}) {}", i, r);
         }
 
-        // Print static vs dynamic transformations separately for clarity.
-        info!(
-            "Non recursive transformations ({}):",
-            sp.non_recursive_transformations().len()
+        let _stratum_planner = StratumPlanner::from_rules(
+            &rules,
+            optimizer,
+            is_recursive,
+            stratifier.stratum_iterative_relation(stratum_idx),
+            stratifier.stratum_leave_relation(stratum_idx),
         );
-        for (i, t) in sp.non_recursive_transformations().iter().enumerate() {
-            info!("\n[N{:>3}] {}", i, t);
-        }
-
-        if is_recursive {
-            info!(
-                "Recursive transformations ({}):",
-                sp.recursive_transformations().len()
-            );
-            for (i, t) in sp.recursive_transformations().iter().enumerate() {
-                info!("\n[R{:>3}] {}", i, t);
-            }
-        } else {
-            info!("(Non-recursive stratum: no recursive transformations)");
-        }
     }
 }
 

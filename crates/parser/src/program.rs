@@ -16,7 +16,7 @@ use super::{
 use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::{fmt, fs};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// A complete Macaron program.
 ///
@@ -107,7 +107,13 @@ impl Program {
         let root = pairs.next().expect("Parser error: no parsed rule found");
 
         // Build structure + extract boolean facts inside `from_parsed_rule` then prune.
-        Self::from_parsed_rule(root).prune_dead_components()
+        let program = Self::from_parsed_rule(root).prune_dead_components();
+
+        // Debug info the parsed program
+        debug!("\n{}", program);
+        info!("Successfully parsed program from '{}'.", path);
+
+        program
     }
 
     /// All relation declarations.
@@ -307,9 +313,9 @@ impl Program {
             .filter(|d| !needed_preds.contains(d.name()))
             .collect();
         if !dead_relations.is_empty() {
-            warn!("Dead Relations:");
+            warn!("\nDead Relations:");
             for d in &dead_relations {
-                info!("  - {}", d.name());
+                println!("  - {}", d.name());
             }
         }
 
@@ -321,9 +327,9 @@ impl Program {
             .filter(|(i, _)| !needed_rules.contains(i))
             .collect();
         if !dead_rules.is_empty() {
-            warn!("Dead Rules:");
+            warn!("\nDead Rules:");
             for (i, r) in &dead_rules {
-                warn!("  - Rule #{}: {}", i, r);
+                println!("  - Rule #{}: {}", i, r);
             }
         }
 

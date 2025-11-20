@@ -1,25 +1,24 @@
 use clap::Parser;
 use common::{get_example_files, Args, TestResult};
 use parser::program::Program;
-use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Initialize simple tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("info"))
-        .init();
-
     // Parse command line arguments
     let args = Args::parse();
 
     if args.should_process_all() {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("info"))
+            .init();
         // Run parser on all example files
         run_all_examples();
     } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("debug"))
+            .init();
         // Parse single program file
-        let program = Program::parse(args.program());
-        info!("Success parse program\n{program}");
+        let _program = Program::parse(args.program());
     }
 }
 
