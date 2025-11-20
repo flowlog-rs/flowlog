@@ -8,9 +8,9 @@ use super::transformation::gen_transformation;
 use parser::DataType;
 use planner::StratumPlanner;
 
-/// =========================================================================
-/// Recursive Flow Generation
-/// =========================================================================
+// =========================================================================
+// Recursive Flow Generation
+// =========================================================================
 
 /// Generate the iterative block for recursive rules (IDBs).
 pub fn gen_iterative_block(
@@ -19,14 +19,14 @@ pub fn gen_iterative_block(
     stratum_planner: &StratumPlanner,
 ) -> TokenStream {
     // Deterministic leave relations for the stratum
-    let leave_rels = stratum_planner.dynamic_leave_collections();
+    let leave_rels = stratum_planner.recursion_leave_collections();
     // No recursive relations, no iterative block needed
     if leave_rels.is_empty() {
         return quote! {};
     }
 
     // Iterative relations for the stratum
-    let iterative_rels = stratum_planner.dynamic_iterative_collections();
+    let iterative_rels = stratum_planner.recursion_iterative_collections();
     let iter_names: Vec<_> = iterative_rels
         .iter()
         .map(|idb| format_ident!("iter_{}", idb))
@@ -34,7 +34,7 @@ pub fn gen_iterative_block(
 
     // Enter relations for the stratum
     let mut enter: HashMap<u64, Ident> = HashMap::new();
-    let enter_rels = stratum_planner.dynamic_enter_collections();
+    let enter_rels = stratum_planner.recursion_enter_collections();
     let enter_stmts: Vec<TokenStream> = enter_rels
         .iter()
         .map(|fp| {
@@ -61,7 +61,7 @@ pub fn gen_iterative_block(
 
     // Emit all flow pipelines in order; joins arrange just-in-time.
     let mut flow_stmts: Vec<TokenStream> = Vec::new();
-    for transformation in stratum_planner.dynamic_transformations().iter() {
+    for transformation in stratum_planner.recursive_transformations().iter() {
         flow_stmts.push(gen_transformation(
             &current,
             fp_to_type,

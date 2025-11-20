@@ -60,7 +60,7 @@ pub(super) fn type_tokens(input_type: DataType, arity: usize) -> TokenStream {
             0 => quote! { () },
             1 => quote! { (u64,) },
             n => {
-                let tys = std::iter::repeat(quote! { u64 }).take(n);
+                let tys = vec![quote! { u64 }; n];
                 quote! { ( #(#tys),* ) }
             }
         },
@@ -68,7 +68,7 @@ pub(super) fn type_tokens(input_type: DataType, arity: usize) -> TokenStream {
             0 => quote! { () },
             1 => quote! { (String,) },
             n => {
-                let tys = std::iter::repeat(quote! { String }).take(n);
+                let tys = vec![quote! { String }; n];
                 quote! { ( #(#tys),* ) }
             }
         },

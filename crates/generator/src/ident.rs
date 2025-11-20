@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use parser::Relation;
 
-/// =========================================================================
-/// Ident Mapping Utilities
-/// =========================================================================
+// =========================================================================
+// Ident Mapping Utilities
+// =========================================================================
 
 /// Map input and output fingerprints to collection identifiers.
 pub(super) fn make_ident_map(

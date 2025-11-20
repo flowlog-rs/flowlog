@@ -71,23 +71,23 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 
         // Print static vs dynamic transformations separately for clarity.
         info!(
-            "Static transformations ({}):",
-            sp.static_transformations().len()
+            "Non recursive transformations ({}):",
+            sp.non_recursive_transformations().len()
         );
-        for (i, t) in sp.static_transformations().iter().enumerate() {
-            info!("\n[S{:>3}] {}", i, t);
+        for (i, t) in sp.non_recursive_transformations().iter().enumerate() {
+            info!("\n[N{:>3}] {}", i, t);
         }
 
         if is_recursive {
             info!(
-                "Dynamic transformations ({}):",
-                sp.dynamic_transformations().len()
+                "Recursive transformations ({}):",
+                sp.recursive_transformations().len()
             );
-            for (i, t) in sp.dynamic_transformations().iter().enumerate() {
-                info!("\n[D{:>3}] {}", i, t);
+            for (i, t) in sp.recursive_transformations().iter().enumerate() {
+                info!("\n[R{:>3}] {}", i, t);
             }
         } else {
-            info!("(Non-recursive stratum: no dynamic transformations)");
+            info!("(Non-recursive stratum: no recursive transformations)");
         }
     }
 }

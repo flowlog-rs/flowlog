@@ -6,7 +6,7 @@
 //! - `prepare`: applies local filters (var==var, var==const, placeholders), may
 //!   perform (anti-)semijoins and comparison pushdown, and removes unused
 //!   arguments to simplify the rule before joining.
-//! - `core`: performs the initial join between two selected positive atoms and
+//! - `core`: performs the core join between two selected positive atoms and
 //!   then iterates semijoin/pushdown and projection removal to a fixed point.
 //! - `fuse`: merges compatible KV-to-KV map steps into their producers and
 //!   propagates key/value layout requirements upstream.
@@ -14,18 +14,17 @@
 //!   arithmetic expressions). Aggregation in the head is handled earlier at the
 //!   stratum planning phase.
 //!
-//! The planner maintains a vector of transformation descriptors along with two
-//! caches to accelerate shape and dependency analyses. These caches are always
-//! rebuilt after structural changes (see `fuse` phase).
+//! The planner maintains a vector of transformation descriptors along with
+//! dependency analyses.
 
 use crate::TransformationInfo;
 use std::collections::HashMap;
 
 mod common; // small utilities shared by planner phases
-mod core; // initial join + fixed-point of semijoin/pushdown and projection removal
+mod core; // core join, plus fixed-point of semijoin/pushdown and projection removal
 mod fuse; // fuse KV-to-KV maps and propagate key/value layout constraints upstream
 mod post; // align final output to the rule head (vars and arithmetic)
-mod prepare; // local filters and simplifications before the join
+mod prepare; // local filters, semi-join and comparison before the core join
 
 /// Planner state for a single rule.
 #[derive(Debug, Default)]
@@ -36,7 +35,14 @@ pub struct RulePlanner {
     /// Mapping from an fingerprint to its producer indices and optional
     /// list of consumer indices.
     ///
-    /// Final transformation outputs have no consumers.
+    /// Note:
+    /// 1. final transformation outputs have no consumers.
+    /// 2. original EDBs have no producers.
+    /// 3. One collection could have multiple producers.
+    ///    e.g. when an IDB is derived multiple times in a single rule,
+    ///    galen: OutP(x,z) :- C(y,w,z),OutP(x,w), OutP(x,y).
+    /// 4. One collection could have multiple consumers.
+    ///    e.g. when an atom can be semijoined to multiple other atoms.
     producer_consumer: HashMap<u64, (Vec<usize>, Vec<usize>)>,
 }
 

@@ -10,9 +10,9 @@ use super::transformation::gen_transformation;
 use parser::DataType;
 use planner::Transformation;
 
-/// =========================================================================
-/// Non-Recursive Flow Generation
-/// =========================================================================
+// =========================================================================
+// Non-Recursive Flow Generation
+// =========================================================================
 
 /// Generate the non-recursive core differential dataflow pipelines.
 pub(super) fn gen_non_recursive_core_flows(

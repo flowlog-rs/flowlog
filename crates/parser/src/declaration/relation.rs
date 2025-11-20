@@ -41,7 +41,7 @@ impl Relation {
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
         Self {
             name: name.to_lowercase(),
-            fingerprint: compute_fp(&name),
+            fingerprint: compute_fp(name),
             attributes,
             input_params: None,
             output: false,

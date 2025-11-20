@@ -57,7 +57,8 @@ impl RulePlanner {
         }
 
         // (2) Positive semijoin optimization
-        // When a positive atom has positive supersets, we can join them
+        // When a positive atom has positive supersets, we can join them.
+        // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
         if let Some((lhs_pos_idx, rhs_pos_indices)) = catalog
             .positive_supersets()
             .iter()
@@ -66,6 +67,7 @@ impl RulePlanner {
             .map(|(idx, indices)| (idx, indices.clone()))
         {
             self.apply_positive_semijoin_premap(catalog, lhs_pos_idx, &rhs_pos_indices);
+
             trace!(
                 "Positive semijoin:\n  LHS atom: ({}, {})\n  RHS atoms: {:?}",
                 catalog.rule().rhs()[catalog.positive_atom_rhs_id(lhs_pos_idx)],
@@ -82,7 +84,8 @@ impl RulePlanner {
         }
 
         // (3) Anti-semijoin optimization
-        // When a negated atom has positive supersets, we can anti-join them
+        // When a negated atom has positive supersets, we can anti-join them.
+        // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
         if let Some((lhs_neg_idx, rhs_pos_indices)) = catalog
             .negated_supersets()
             .iter()
@@ -91,6 +94,7 @@ impl RulePlanner {
             .map(|(idx, indices)| (idx, indices.clone()))
         {
             self.apply_anti_semijoin_premap(catalog, lhs_neg_idx, &rhs_pos_indices);
+
             trace!(
                 "Anti-semijoin:\n  LHS negated atom: ({}, !{})\n  RHS atoms: {:?}",
                 catalog.rule().rhs()[catalog.negated_atom_rhs_id(lhs_neg_idx)],
@@ -109,22 +113,26 @@ impl RulePlanner {
         false
     }
 
-    /// Apply premap for positive semijoin optimization.
+    /// Apply premap for positive semijoin optimization if needed..
     fn apply_positive_semijoin_premap(
         &mut self,
         catalog: &mut Catalog,
         lhs_pos_idx: usize,
         rhs_pos_indices: &[usize],
     ) {
+        // Even for empty key key-value layout, we still need premap for EDB relations.
+        // ((), (value)) is not the same as (value) in differential dataflow.
+
+        // Process LHS atom for positive semijoin.
         if catalog
             .original_atom_fingerprints()
             .contains(&catalog.positive_atom_fingerprint(lhs_pos_idx))
         {
-            // LHS atom is not in key-only format; need to create a map
+            // LHS atom is an EDB, need to create a map
             self.create_edb_premap_transformations(catalog, lhs_pos_idx, true);
         }
 
-        // Process each RHS atom for semijoin
+        // Process each RHS atom for positive semijoin.
         for &rhs_idx in rhs_pos_indices {
             if catalog
                 .original_atom_fingerprints()
@@ -295,7 +303,10 @@ impl RulePlanner {
         lhs_neg_idx: usize,
         rhs_pos_indices: &[usize],
     ) {
-        // Extract LHS negated atom information
+        // Even for empty key key-value layout, we still need premap for EDB relations.
+        // ((), (value)) is not the same as (value) in differential dataflow.
+
+        // Process LHS atom for anti-semijoin.
         if catalog
             .original_atom_fingerprints()
             .contains(&catalog.negated_atom_fingerprint(lhs_neg_idx))
@@ -304,7 +315,7 @@ impl RulePlanner {
             self.create_edb_premap_transformations(catalog, lhs_neg_idx, false);
         }
 
-        // Process each RHS atom for anti-semijoin
+        // Process each RHS atom for anti-semijoin.
         for &rhs_idx in rhs_pos_indices {
             if catalog
                 .original_atom_fingerprints()
@@ -635,13 +646,16 @@ impl RulePlanner {
 // =========================================================================
 impl RulePlanner {
     /// Creates premap transformations for EDB relations that are not in row format.
+    /// We do not care about real key-value layout output here, as these premap is just
+    /// an indicator we need to map the EDB from read-in row format.
+    /// The key-value layout adjustment is handled in later fuse phase if needed.
     pub(super) fn create_edb_premap_transformations(
         &mut self,
         catalog: &mut Catalog,
         atom_idx: usize,
         is_positive: bool,
     ) {
-        // Note: only positive EDB atoms need premap transformations
+        // Both positive and negated atoms can be pre-mapped.
         let edb_fp = if is_positive {
             catalog.positive_atom_fingerprint(atom_idx)
         } else {
@@ -699,18 +713,6 @@ impl RulePlanner {
 // Private Utilities
 // =========================================================================
 impl RulePlanner {
-    /// Build output payload expressions excluding a specific argument signature.
-    #[inline]
-    pub(super) fn out_values_excluding(
-        args: &[AtomArgumentSignature],
-        drop_sig: AtomArgumentSignature,
-    ) -> Vec<ArithmeticPos> {
-        args.iter()
-            .filter(|&sig| *sig != drop_sig)
-            .map(|&sig| ArithmeticPos::from_var_signature(sig))
-            .collect()
-    }
-
     /// Generates a consistent projection name based on atom polarity and RHS identifier.
     #[inline]
     pub(super) fn projection_name(atom_signature: &AtomSignature, atom_id: usize) -> String {
@@ -722,10 +724,7 @@ impl RulePlanner {
     }
 
     /// Collects display strings for argument signatures to identify duplicates in RHS columns.
-    pub(super) fn arg_names_set(
-        args: &[AtomArgumentSignature],
-        catalog: &Catalog,
-    ) -> HashSet<String> {
+    fn arg_names_set(args: &[AtomArgumentSignature], catalog: &Catalog) -> HashSet<String> {
         args.iter()
             .map(|sig| catalog.signature_to_argument_str(sig).clone())
             .collect()
@@ -782,6 +781,7 @@ impl RulePlanner {
             });
     }
 
+    /// Retrieves the indices of producer transformations for a given fingerprint.
     #[inline]
     pub(super) fn producer_indices(&self, fp: u64) -> Vec<usize> {
         self.producer_consumer
@@ -790,6 +790,7 @@ impl RulePlanner {
             .unwrap_or_else(|| panic!("No producer for transformation fingerprint: {:#018x}", fp))
     }
 
+    /// Retrieves the indices of consumer transformations for a given fingerprint.
     #[inline]
     pub(super) fn consumer_indices(&self, fp: u64) -> Vec<usize> {
         self.producer_consumer

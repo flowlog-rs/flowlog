@@ -20,6 +20,9 @@ use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 use catalog::{ArithmeticPos, ComparisonExprPos, FactorPos};
 
+type ConsumerLayout = (Vec<usize>, Vec<usize>, Vec<usize>);
+type LayoutAssignment = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
+
 // =========================================================================
 // Fusion
 // =========================================================================
@@ -167,7 +170,7 @@ impl RulePlanner {
             // Copy out the producer index and current consumers (if any), then mutate
             let Some((producer_indices, consumers)) = self
                 .producer_consumer
-                .get(&tx_fp)
+                .get(tx_fp)
                 .map(|(p, c)| (p.clone(), c.clone()))
             else {
                 // No producer found - likely an original atom; ignore
@@ -396,7 +399,7 @@ impl RulePlanner {
         &self,
         consumer_indices: &[usize],
         input_fp: u64,
-    ) -> Vec<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+    ) -> Vec<ConsumerLayout> {
         let mut layouts: BTreeMap<(Vec<usize>, Vec<usize>), Vec<usize>> = BTreeMap::new();
 
         for &consumer_idx in consumer_indices {
@@ -465,8 +468,8 @@ impl RulePlanner {
 
     fn assign_layout_to_producer(
         producer_indices: &[usize],
-        consumer_layouts: &[(Vec<usize>, Vec<usize>, Vec<usize>)],
-    ) -> Vec<(Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>)> {
+        consumer_layouts: &[ConsumerLayout],
+    ) -> Vec<LayoutAssignment> {
         if consumer_layouts.len() > producer_indices.len() {
             panic!(
                 "Planner error: {} consumer layout kinds but only {} producers available",
@@ -480,7 +483,7 @@ impl RulePlanner {
 
         let mut assignments = Vec::with_capacity(consumer_layouts.len());
 
-        let mut sorted_layouts: Vec<(usize, Vec<usize>, Vec<usize>, Vec<usize>)> = consumer_layouts
+        let mut sorted_layouts: Vec<(usize, ConsumerLayout)> = consumer_layouts
             .iter()
             .map(|(consumers, key_ids, value_ids)| {
                 let min_consumer_idx = consumers.iter().copied().min().unwrap_or_else(|| {
@@ -488,16 +491,14 @@ impl RulePlanner {
                 });
                 (
                     min_consumer_idx,
-                    consumers.clone(),
-                    key_ids.clone(),
-                    value_ids.clone(),
+                    (consumers.clone(), key_ids.clone(), value_ids.clone()),
                 )
             })
             .collect();
 
-        sorted_layouts.sort_by_key(|(min_consumer_idx, _, _, _)| *min_consumer_idx);
+        sorted_layouts.sort_by_key(|(min_consumer_idx, _)| *min_consumer_idx);
 
-        for (min_consumer_idx, consumers, key_ids, value_ids) in sorted_layouts {
+        for (min_consumer_idx, (consumers, key_ids, value_ids)) in sorted_layouts {
             let position = available_producers
                 .iter()
                 .position(|producer_idx| *producer_idx < min_consumer_idx)
@@ -516,7 +517,7 @@ impl RulePlanner {
             let (producer_ids, _, _, _) = assignments.first_mut().unwrap_or_else(|| {
                 panic!("Planner error: no consumer layout kinds to receive extra producers")
             });
-            producer_ids.extend(available_producers.into_iter());
+            producer_ids.extend(available_producers);
             producer_ids.sort_unstable();
         }
 

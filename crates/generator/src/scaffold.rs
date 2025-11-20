@@ -4,9 +4,9 @@ use std::path::Path;
 use crate::io::{ensure_dir, write_file};
 use toml_edit::DocumentMut;
 
-/// =========================================================================
-/// Project File Generation
-/// =========================================================================
+// =========================================================================
+// Project File Generation
+// =========================================================================
 
 /// Render a basic Cargo.toml.
 pub fn render_cargo_toml(package_name: &str) -> String {

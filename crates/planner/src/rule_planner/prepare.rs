@@ -288,4 +288,16 @@ impl RulePlanner {
 
         true
     }
+
+    /// Build output expressions excluding a specific argument signature.
+    #[inline]
+    fn out_values_excluding(
+        args: &[AtomArgumentSignature],
+        drop_sig: AtomArgumentSignature,
+    ) -> Vec<ArithmeticPos> {
+        args.iter()
+            .filter(|&sig| *sig != drop_sig)
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect()
+    }
 }

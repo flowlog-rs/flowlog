@@ -498,7 +498,7 @@ impl TransformationInfo {
 
                 let remap = |indices: &[usize]| -> Vec<ArithmeticPos> {
                     indices
-                        .into_iter()
+                        .iter()
                         .map(|idx| {
                             all_positions.get(*idx).cloned().unwrap_or_else(|| {
                                 panic!(

@@ -35,9 +35,9 @@ use scaffold::write_project;
 
 use crate::ident::find_ident;
 
-/// =========================================================================
-/// Generator Main Entry Point
-/// =========================================================================
+// =========================================================================
+// Generator Main Entry Point
+// =========================================================================
 
 /// Create a project directory and write Cargo.toml + src/main.rs generated from the `Stratum`.
 pub fn generate_project_at(
@@ -52,9 +52,9 @@ pub fn generate_project_at(
     write_project(&out_dir, package_name, &main)
 }
 
-/// =========================================================================
-/// Project Generation Utilities
-/// =========================================================================
+// =========================================================================
+// Project Generation Utilities
+// =========================================================================
 
 /// Generate the `use` imports for the generated `main.rs`.
 /// - Always imports: std IO, differential Input, and operators::*.
@@ -107,7 +107,7 @@ fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -
         let static_core = gen_non_recursive_core_flows(
             &fp_to_ident,
             &mut fp_to_type,
-            stratum.static_transformations(),
+            stratum.non_recursive_transformations(),
         );
         flow_stmts.extend(static_core);
 

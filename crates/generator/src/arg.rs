@@ -67,33 +67,25 @@ pub(super) fn compute_join_param_tokens(
     let mut use_join_lv = false;
     let mut use_join_rv = false;
 
+    let mut mark_usage = |arg: &TransformationArgument| {
+        if let TransformationArgument::Jn((is_left, is_key, _)) = arg {
+            if *is_key {
+                use_join_k = true;
+            } else if *is_left {
+                use_join_lv = true;
+            } else {
+                use_join_rv = true;
+            }
+        }
+    };
+
     let mut inspect_expr = |expr: &ArithmeticArgument| {
-        match expr.init() {
-            FactorArgument::Var(trans_arg) => match trans_arg {
-                TransformationArgument::Jn((is_left, is_key, _)) => {
-                    if *is_key {
-                        use_join_k = true;
-                    } else if *is_left {
-                        use_join_lv = true;
-                    } else {
-                        use_join_rv = true;
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
+        if let FactorArgument::Var(trans_arg) = expr.init() {
+            mark_usage(trans_arg);
         }
         for (_op, factor) in expr.rest() {
             if let FactorArgument::Var(trans_arg) = factor {
-                if let TransformationArgument::Jn((is_left, is_key, _)) = trans_arg {
-                    if *is_key {
-                        use_join_k = true;
-                    } else if *is_left {
-                        use_join_lv = true;
-                    } else {
-                        use_join_rv = true;
-                    }
-                }
+                mark_usage(trans_arg);
             }
         }
     };
@@ -136,29 +128,23 @@ pub(super) fn compute_anti_join_param_tokens(
     let mut use_anti_join_k = false;
     let mut use_anti_join_v = false;
 
+    let mut mark_usage = |arg: &TransformationArgument| {
+        if let TransformationArgument::KV((is_key, _)) = arg {
+            if *is_key {
+                use_anti_join_k = true;
+            } else {
+                use_anti_join_v = true;
+            }
+        }
+    };
+
     let mut inspect_expr = |expr: &ArithmeticArgument| {
-        match expr.init() {
-            FactorArgument::Var(trans_arg) => match trans_arg {
-                TransformationArgument::KV((is_key, _)) => {
-                    if *is_key {
-                        use_anti_join_k = true;
-                    } else {
-                        use_anti_join_v = true;
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
+        if let FactorArgument::Var(trans_arg) = expr.init() {
+            mark_usage(trans_arg);
         }
         for (_op, factor) in expr.rest() {
             if let FactorArgument::Var(trans_arg) = factor {
-                if let TransformationArgument::KV((is_key, _)) = trans_arg {
-                    if *is_key {
-                        use_anti_join_k = true;
-                    } else {
-                        use_anti_join_v = true;
-                    }
-                }
+                mark_usage(trans_arg);
             }
         }
     };
