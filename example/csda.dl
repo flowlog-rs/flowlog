@@ -1,8 +1,8 @@
 .decl NullEdge(x: number, y: number)
-.input NullEdge(IO="file", filename="NullEdge.csv", delimiter=",")
+.input NullEdge(IO="file", filename="csda-linux/NullEdge.csv", delimiter=",")
 
 .decl Edge(x: number, y: number)
-.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.input Edge(IO="file", filename="csda-linux/Edge.csv", delimiter=",")
 
 .decl NullNode(x: number, y: number)
 

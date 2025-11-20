@@ -490,8 +490,7 @@ fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
         FactorArgument::Var(trans_arg) => match trans_arg {
             TransformationArgument::Jn((is_left, is_key, idx)) => {
                 if *is_key {
-                    // `k` is a reference in join_core; clone to produce an owned key.
-                    quote! { k.clone() }
+                    proj_tuple_field("k", *idx)
                 } else if *is_left {
                     proj_tuple_field("lv", *idx)
                 } else {

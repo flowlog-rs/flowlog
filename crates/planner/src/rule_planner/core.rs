@@ -63,30 +63,20 @@ impl RulePlanner {
     fn apply_join_premaps(&mut self, catalog: &mut Catalog, join_tuple_index: (usize, usize)) {
         let (lhs_idx, rhs_idx) = join_tuple_index;
 
-        // Extract LHS atom information
-        let lhs_pos_fp = catalog.positive_atom_fingerprint(lhs_idx);
-        let left_atom_argument_signatures = catalog.positive_atom_argument_signature(lhs_idx);
-
-        // Extract RHS atom information
-        let rhs_pos_fp = catalog.positive_atom_fingerprint(rhs_idx);
-        let right_atom_argument_signatures = catalog.positive_atom_argument_signature(rhs_idx);
-
-        let (lhs_keys, lhs_vals, rhs_keys, rhs_vals) = Self::partition_shared_keys(
-            catalog,
-            left_atom_argument_signatures,
-            right_atom_argument_signatures,
-        );
-
         // Create premap for LHS atom if needed
-        if catalog.original_atom_fingerprints().contains(&lhs_pos_fp) && !lhs_keys.is_empty() {
-            let target_kv_layout = KeyValueLayout::new(lhs_keys.clone(), lhs_vals.clone());
-            self.create_edb_premap_transformations(catalog, lhs_idx, true, &target_kv_layout);
+        if catalog
+            .original_atom_fingerprints()
+            .contains(&catalog.positive_atom_fingerprint(lhs_idx))
+        {
+            self.create_edb_premap_transformations(catalog, lhs_idx, true);
         }
 
         // Create premap for RHS atom if needed
-        if catalog.original_atom_fingerprints().contains(&rhs_pos_fp) && !rhs_keys.is_empty() {
-            let target_kv_layout = KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone());
-            self.create_edb_premap_transformations(catalog, rhs_idx, true, &target_kv_layout);
+        if catalog
+            .original_atom_fingerprints()
+            .contains(&catalog.positive_atom_fingerprint(rhs_idx))
+        {
+            self.create_edb_premap_transformations(catalog, rhs_idx, true);
         }
     }
 
@@ -118,7 +108,7 @@ impl RulePlanner {
         );
 
         // Partition arguments into join keys and payload values
-        let (lhs_keys, lhs_vals, _rhs_keys, rhs_vals) = Self::partition_shared_keys(
+        let (lhs_keys, lhs_vals, rhs_keys, rhs_vals) = Self::partition_shared_keys(
             catalog,
             left_atom_argument_signatures,
             right_atom_argument_signatures,
@@ -162,14 +152,13 @@ impl RulePlanner {
             .map(|pos| pos.init().signature().unwrap())
             .cloned()
             .collect();
-        let output_value_start_idx = lhs_keys.len();
 
         // Create the join transformation with proper key-value layouts
         let tx = TransformationInfo::join_to_kv(
             lhs_pos_fp,                                              // LHS input fingerprint
             rhs_pos_fp,                                              // RHS input fingerprint
             KeyValueLayout::new(lhs_keys.clone(), lhs_vals.clone()), // LHS layout (keys + values)
-            KeyValueLayout::new(Vec::new(), rhs_vals.clone()),       // RHS layout (values only)
+            KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()), // RHS layout (values only)
             KeyValueLayout::new(
                 lhs_keys,
                 lhs_vals.iter().chain(rhs_vals.iter()).cloned().collect(), // output layout
@@ -185,8 +174,7 @@ impl RulePlanner {
 
         trace!("Join transformation:\n      {}", tx);
 
-        // Store layout information and register transformation
-        self.kv_layouts.insert(new_fp, output_value_start_idx);
+        // Store the transformation info
         self.transformation_infos.push(tx);
 
         // Update catalog with the new joined atom

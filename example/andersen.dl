@@ -1,14 +1,14 @@
 .decl AddressOf(y: number, x: number)
-.input AddressOf(IO="file", filename="addressOf.csv", delimiter=",")
+.input AddressOf(IO="file", filename="medium/addressOf.csv", delimiter=",")
 
 .decl Assign(y: number, x: number)
-.input Assign(IO="file", filename="assign.csv", delimiter=",")
+.input Assign(IO="file", filename="medium/assign.csv", delimiter=",")
 
 .decl Load(y: number, x: number)
-.input Load(IO="file", filename="load.csv", delimiter=",")
+.input Load(IO="file", filename="medium/load.csv", delimiter=",")
 
 .decl Store(y: number, x: number)
-.input Store(IO="file", filename="store.csv", delimiter=",")
+.input Store(IO="file", filename="medium/store.csv", delimiter=",")
 
 .decl PointsTo(y: number, x: number)
 

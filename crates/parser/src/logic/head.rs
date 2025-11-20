@@ -100,12 +100,13 @@ pub struct Head {
 
 impl Head {
     /// Create a new rule head.
+    ///
+    /// Converts the name to lowercase.
     #[must_use]
     pub fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
-        let head_fingerprint = compute_fp(&name);
         Self {
             name: name.to_ascii_lowercase(),
-            head_fingerprint,
+            head_fingerprint: compute_fp(&name),
             head_arguments,
         }
     }

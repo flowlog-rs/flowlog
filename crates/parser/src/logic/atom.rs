@@ -98,6 +98,8 @@ pub struct Atom {
 
 impl Atom {
     /// Create a new atom.
+    ///
+    /// Converts the name to lowercase.
     #[must_use]
     pub fn new(name: &str, arguments: Vec<AtomArg>, fingerprint: u64) -> Self {
         Self {

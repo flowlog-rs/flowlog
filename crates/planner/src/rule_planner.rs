@@ -33,13 +33,6 @@ pub struct RulePlanner {
     /// Linear list of planned transformation infos for the current rule.
     transformation_infos: Vec<TransformationInfo>,
 
-    /// Required key/value layout for a given transformation output fingerprint.
-    ///
-    /// The stored `usize` is the split index such that:
-    /// - `[0, split)` are key columns
-    /// - `[split, ..)` are value columns
-    kv_layouts: HashMap<u64, usize>,
-
     /// Mapping from an fingerprint to its producer indices and optional
     /// list of consumer indices.
     ///
@@ -52,7 +45,6 @@ impl RulePlanner {
     pub fn new() -> Self {
         Self {
             transformation_infos: Vec::new(),
-            kv_layouts: HashMap::new(),
             producer_consumer: HashMap::new(),
         }
     }

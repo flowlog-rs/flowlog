@@ -1,5 +1,5 @@
 .decl Arc(src: number, dest: number)
-.input Arc(IO="file", filename="Arc.csv", delimiter=",")
+.input Arc(IO="file", filename="G10K-0.001/Arc.csv", delimiter=",")
 
 .decl Sg(src: number, dest: number)
 

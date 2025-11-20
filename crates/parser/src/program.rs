@@ -19,6 +19,13 @@ use std::{fmt, fs};
 use tracing::{info, warn};
 
 /// A complete Macaron program.
+///
+/// ```ignore
+/// use macaron_parser::program::Program;
+///
+/// let program = Program::parse("PATH_TO_DATALOG_FILE");
+/// println!("{}", program);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     relations: Vec<Relation>,
@@ -93,17 +100,14 @@ impl Program {
     /// Panics on I/O or parse errors.
     #[must_use]
     pub fn parse(path: &str) -> Self {
-        let unparsed = fs::read_to_string(path).expect("Parser error: failed to read file");
-        let parsed = MacaronParser::parse(Rule::main_grammar, &unparsed)
-            .expect("Parser error: failed to parse Macaron program")
-            .next()
-            .expect("Parser error: no parsed rule found");
+        let source = fs::read_to_string(path).expect("Parser error: failed to read file");
 
-        // Build structure + extract boolean facts inside `from_parsed_rule`.
-        let program = Self::from_parsed_rule(parsed);
+        let mut pairs = MacaronParser::parse(Rule::main_grammar, &source)
+            .expect("Parser error: failed to parse Macaron program");
+        let root = pairs.next().expect("Parser error: no parsed rule found");
 
-        // Prune unused declarations and rules.
-        program.prune_dead_components()
+        // Build structure + extract boolean facts inside `from_parsed_rule` then prune.
+        Self::from_parsed_rule(root).prune_dead_components()
     }
 
     /// All relation declarations.
@@ -115,16 +119,18 @@ impl Program {
 
     /// EDB relations (those with input parameters).
     #[must_use]
+    #[inline]
     pub fn edbs(&self) -> Vec<&Relation> {
         self.relations.iter().filter(|rel| rel.is_edb()).collect()
     }
 
-    /// Ordered EDB relation names.
+    /// Ordered EDB relation names (sorted lexicographically).
     #[must_use]
     pub fn edb_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
-            .edbs()
+            .relations
             .iter()
+            .filter(|rel| rel.is_edb())
             .map(|rel| rel.name().to_string())
             .collect();
         names.sort_unstable();
@@ -132,28 +138,12 @@ impl Program {
     }
 
     /// IDB relations (those without input parameters).
+    ///
+    /// Returned in declaration order.
     #[must_use]
+    #[inline]
     pub fn idbs(&self) -> Vec<&Relation> {
         self.relations.iter().filter(|rel| !rel.is_edb()).collect()
-    }
-
-    /// Output/Printsize relations.
-    /// Notice not every IDB is an output/printsize relation.
-    #[must_use]
-    pub fn output_printsize_relations(&self) -> Vec<&Relation> {
-        self.relations
-            .iter()
-            .filter(|rel| rel.is_output_printsize())
-            .collect()
-    }
-
-    /// Relations marked for printsize.
-    #[must_use]
-    pub fn printsize_relations(&self) -> Vec<&Relation> {
-        self.relations
-            .iter()
-            .filter(|rel| rel.printsize())
-            .collect()
     }
 
     /// Transformation rules (boolean-only rules are extracted into `bool_facts`).
@@ -168,6 +158,16 @@ impl Program {
     #[inline]
     pub fn bool_facts(&self) -> &HashMap<String, Vec<(Vec<ConstType>, bool)>> {
         &self.bool_facts
+    }
+
+    /// Output/Printsize relations.
+    /// Notice not every IDB is an output/printsize relation.
+    #[must_use]
+    fn output_printsize_relations(&self) -> Vec<&Relation> {
+        self.relations
+            .iter()
+            .filter(|rel| rel.is_output_printsize())
+            .collect()
     }
 
     /// Extract boolean facts from rules whose *entire* body is boolean.

@@ -13,7 +13,7 @@
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{AtomArgumentSignature, Catalog};
+use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog};
 use parser::ConstType;
 use tracing::trace;
 
@@ -135,7 +135,11 @@ impl RulePlanner {
             current_transformation_index,
         );
 
-        let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
+        // Get current values for this atom
+        let in_vals = args
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect::<Vec<_>>();
 
         // We drop right_sig from the output payload.
         let out_vals = Self::out_values_excluding(args, right_sig);
@@ -145,8 +149,8 @@ impl RulePlanner {
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
             catalog.original_atom_fingerprints().contains(&atom_fp),
-            KeyValueLayout::new(in_keys, in_vals),
-            KeyValueLayout::new(Vec::new(), out_vals.clone()),
+            KeyValueLayout::new(vec![], in_vals),
+            KeyValueLayout::new(vec![], out_vals.clone()),
             vec![],                      // no const-eq
             vec![(left_sig, right_sig)], // var-eq
             vec![],                      // no comparisons
@@ -164,8 +168,7 @@ impl RulePlanner {
         // Update catalog with the projection modification
         catalog.projection_modify(*atom_signature, vec![right_sig], new_name, new_fp);
 
-        // Store layout information
-        self.kv_layouts.insert(new_fp, 0);
+        // Store the transformation info
         self.transformation_infos.push(tx);
 
         true
@@ -191,7 +194,11 @@ impl RulePlanner {
             current_transformation_index,
         );
 
-        let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
+        // Get current values for this atom
+        let in_vals = args
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect::<Vec<_>>();
 
         let out_vals = Self::out_values_excluding(args, var_sig);
         trace!("Output values after dropping {}: {:?}", var_sig, out_vals);
@@ -200,8 +207,8 @@ impl RulePlanner {
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
             catalog.original_atom_fingerprints().contains(&atom_fp),
-            KeyValueLayout::new(in_keys, in_vals),
-            KeyValueLayout::new(Vec::new(), out_vals.clone()),
+            KeyValueLayout::new(vec![], in_vals),
+            KeyValueLayout::new(vec![], out_vals.clone()),
             vec![(var_sig, const_val)], // const-eq
             vec![],                     // no var-eq
             vec![],                     // no comparisons
@@ -219,8 +226,7 @@ impl RulePlanner {
         // Update catalog with the projection modification
         catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp);
 
-        // Store layout information
-        self.kv_layouts.insert(new_fp, 0);
+        // Store the transformation info
         self.transformation_infos.push(tx);
 
         true
@@ -245,7 +251,11 @@ impl RulePlanner {
             current_transformation_index,
         );
 
-        let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
+        // Get current values for this atom
+        let in_vals = args
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect::<Vec<_>>();
 
         let out_vals = Self::out_values_excluding(args, var_sig);
         trace!("Output values after dropping {}: {:?}", var_sig, out_vals);
@@ -254,8 +264,8 @@ impl RulePlanner {
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
             catalog.original_atom_fingerprints().contains(&atom_fp),
-            KeyValueLayout::new(in_keys, in_vals),
-            KeyValueLayout::new(Vec::new(), out_vals.clone()),
+            KeyValueLayout::new(vec![], in_vals),
+            KeyValueLayout::new(vec![], out_vals.clone()),
             vec![], // no const-eq
             vec![], // no var-eq
             vec![], // no comparisons
@@ -273,8 +283,7 @@ impl RulePlanner {
         // Update catalog with the projection modification
         catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp);
 
-        // Store layout information
-        self.kv_layouts.insert(new_fp, 0);
+        // Store the layout information
         self.transformation_infos.push(tx);
 
         true

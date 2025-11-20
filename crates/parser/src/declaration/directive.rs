@@ -13,6 +13,8 @@ pub struct InputDirective {
 
 impl InputDirective {
     /// Create a new InputDirective with a relation name and parameters
+    ///
+    /// Converts the relation name to lowercase.
     #[must_use]
     pub fn new(relation_name: String, parameters: HashMap<String, String>) -> Self {
         Self {
@@ -80,6 +82,8 @@ pub struct OutputDirective {
 
 impl OutputDirective {
     /// Create a new OutputDirective
+    ///
+    /// Converts the relation name to lowercase.
     #[must_use]
     pub fn new(relation_name: String) -> Self {
         Self {
@@ -116,6 +120,9 @@ pub struct PrintSizeDirective {
 }
 
 impl PrintSizeDirective {
+    /// Create a new PrintSizeDirective
+    ///
+    /// Converts the relation name to lowercase.
     #[must_use]
     pub fn new(relation_name: String) -> Self {
         Self {

@@ -474,7 +474,11 @@ impl TransformationInfo {
     ///
     /// Necessary when the actual key/value split is known, e.g., after downstream
     /// join operators determine the key-value layout.
-    pub fn refactor_output_key_value_layout(&mut self, real_key_offset: usize) {
+    pub fn refactor_output_key_value_layout(
+        &mut self,
+        real_key_indices: &[usize],
+        real_value_indices: &[usize],
+    ) {
         match self {
             Self::KVToKV {
                 output_kv_layout, ..
@@ -491,8 +495,24 @@ impl TransformationInfo {
                     .chain(output_kv_layout.value().iter())
                     .cloned()
                     .collect();
-                let (new_key, new_value) = all_positions.split_at(real_key_offset);
-                *output_kv_layout = KeyValueLayout::new(new_key.to_vec(), new_value.to_vec());
+
+                let remap = |indices: &[usize]| -> Vec<ArithmeticPos> {
+                    indices
+                        .into_iter()
+                        .map(|idx| {
+                            all_positions.get(*idx).cloned().unwrap_or_else(|| {
+                                panic!(
+                                    "Planner error: output layout index {} out of bounds (len {})",
+                                    idx,
+                                    all_positions.len()
+                                )
+                            })
+                        })
+                        .collect()
+                };
+
+                *output_kv_layout =
+                    KeyValueLayout::new(remap(real_key_indices), remap(real_value_indices));
             }
         }
     }
@@ -608,12 +628,8 @@ impl fmt::Display for TransformationInfo {
             } => {
                 let in_coll = fmt_collection(input_info_fp, input_kv_layout);
                 let out_coll = fmt_collection(output_info_fp, output_kv_layout);
-                let filters = fmt_flow_kv(
-                    output_kv_layout,
-                    const_eq_constraints,
-                    var_eq_constraints,
-                    compare_exprs_pos,
-                );
+                let filters =
+                    fmt_flow_kv(const_eq_constraints, var_eq_constraints, compare_exprs_pos);
                 let row_flags = match (*is_row_input, *is_row_output) {
                     (true, true) => "[Row -> Row]",
                     (true, false) => "[Row -> KV]",
@@ -652,13 +668,13 @@ impl fmt::Display for TransformationInfo {
                 let r = fmt_collection(
                     right_input_info_fp,
                     &KeyValueLayout::new(
-                        left_input_kv_layout.key().to_vec(),
+                        right_input_kv_layout.key().to_vec(),
                         right_input_kv_layout.value().to_vec(),
                     ),
                 );
 
                 let out = fmt_collection(output_info_fp, output_kv_layout);
-                let filters = fmt_flow_kv(output_kv_layout, &[], &[], compare_exprs_pos);
+                let filters = fmt_flow_kv(&[], &[], compare_exprs_pos);
                 let row_flag = if *is_row_output {
                     "[Jn -> Row]"
                 } else {
@@ -695,7 +711,7 @@ impl fmt::Display for TransformationInfo {
                 let r = fmt_collection(
                     right_input_info_fp,
                     &KeyValueLayout::new(
-                        left_input_kv_layout.key().to_vec(),
+                        right_input_kv_layout.key().to_vec(),
                         right_input_kv_layout.value().to_vec(),
                     ),
                 );
@@ -753,7 +769,6 @@ fn fmt_collection(sig: &u64, kv_layout: &KeyValueLayout) -> String {
 
 /// Formats filters (const-eq, var-eq, comparisons) joined by `AND`.
 fn fmt_flow_kv(
-    _out_kv_layout: &KeyValueLayout,
     consts: &[(AtomArgumentSignature, ConstType)],
     vars: &[(AtomArgumentSignature, AtomArgumentSignature)],
     comps: &[ComparisonExprPos],

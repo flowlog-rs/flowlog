@@ -34,11 +34,13 @@ pub struct Relation {
 
 impl Relation {
     /// Create a new relation.
+    ///
+    /// Converts the name to lowercase.
     #[must_use]
     #[inline]
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
         Self {
-            name: name.to_ascii_lowercase(),
+            name: name.to_lowercase(),
             fingerprint: compute_fp(&name),
             attributes,
             input_params: None,
