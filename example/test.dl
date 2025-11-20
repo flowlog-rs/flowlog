@@ -1,8 +1,0 @@
-.decl Arc(x: number, y: number)
-.input Arc(IO="file", filename="Arc.csv", delimiter=",")
-
-.decl OutP(x: number, y: number)
-
-OutP(x,z) :- C(y,w,z),OutP(x,w), OutP(x,y).
-
-.printsize OutP

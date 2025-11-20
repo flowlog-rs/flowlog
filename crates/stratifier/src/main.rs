@@ -1,43 +1,26 @@
 use clap::Parser;
 use common::{get_example_files, Args, TestResult};
 use parser::Program;
-use stratifier::{DependencyGraph, Stratifier};
-use tracing::info;
+use stratifier::Stratifier;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Initialize tracing similar to parser main
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("info"))
-        .init();
-
     let args = Args::parse();
 
     if args.should_process_all() {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("info"))
+            .init();
         run_all_examples();
         return;
     }
 
-    let program = Program::parse(args.program());
-    info!("Success parse program (rules={})", program.rules().len());
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("debug"))
+        .init();
 
-    // Show dependency graph then stratification summary
-    info!(
-        "Dependency Graph:{}",
-        DependencyGraph::from_program(&program)
-    );
-    let stratifier = Stratifier::from_program(&program);
-    let recursive_cnt = stratifier
-        .is_recursive_stratum_bitmap()
-        .iter()
-        .filter(|b| **b)
-        .count();
-    info!(
-        "Stratification ({} strata, {} recursive):{}",
-        stratifier.is_recursive_stratum_bitmap().len(),
-        recursive_cnt,
-        stratifier
-    );
+    let program = Program::parse(args.program());
+    let _stratifier = Stratifier::from_program(&program);
 }
 
 fn run_all_examples() {

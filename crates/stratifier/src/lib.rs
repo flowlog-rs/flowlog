@@ -25,8 +25,7 @@
 //! println!("{}", stratum);
 //! ```
 
-pub mod dependency_graph;
+mod dependency_graph;
 pub mod stratifier;
 
-pub use dependency_graph::DependencyGraph;
 pub use stratifier::Stratifier;

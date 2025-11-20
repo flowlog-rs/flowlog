@@ -1,38 +1,28 @@
 //! Dependency graph construction for Macaron Datalog programs.
 
 use itertools::Itertools;
-use parser::{Predicate, Program};
+use parser::{logic::MacaronRule, Predicate, Program};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// Represents the dependency relationships between rules.
 #[derive(Debug, Clone)]
-pub struct DependencyGraph {
-    rule_idb_names: Vec<String>,
-    // All dependencies: every rule whose head predicate appears in the body of another rule.
+pub(super) struct DependencyGraph {
+    /// All dependencies: every rule whose head predicate appears in the body of another rule.
     dependency_map: HashMap<usize, HashSet<usize>>,
 }
 
 impl DependencyGraph {
-    #[must_use]
-    pub fn rule_idb_names(&self) -> &[String] {
-        &self.rule_idb_names
-    }
-
     /// Returns map from rule ID to the set of rule IDs it depends on (polarity-agnostic).
     #[must_use]
-    pub fn dependency_map(&self) -> &HashMap<usize, HashSet<usize>> {
+    pub(super) fn dependency_map(&self) -> &HashMap<usize, HashSet<usize>> {
         &self.dependency_map
     }
 
     /// Constructs a dependency graph from a program.
     #[must_use]
-    pub fn from_program(program: &Program) -> Self {
+    pub(super) fn from_program(program: &Program) -> Self {
         let rules = program.rules();
-        let rule_idb_names = rules
-            .iter()
-            .map(|rule| rule.head().name().to_string())
-            .collect();
 
         let head_to_rule_ids_map = Self::build_head_to_rule_map(rules);
 
@@ -48,40 +38,36 @@ impl DependencyGraph {
             );
         }
 
-        Self {
-            rule_idb_names,
-            dependency_map,
-        }
+        Self { dependency_map }
     }
 
     /// Builds mapping from relation names to rule IDs that define them.
-    fn build_head_to_rule_map(rules: &[parser::logic::MacaronRule]) -> HashMap<String, Vec<usize>> {
-        let mut head_to_rule_ids_map = HashMap::new();
+    fn build_head_to_rule_map(rules: &[MacaronRule]) -> HashMap<String, Vec<usize>> {
+        let mut head_to_rule_ids_map: HashMap<String, Vec<usize>> = HashMap::new();
 
         for (rule_id, rule) in rules.iter().enumerate() {
-            let head_name = rule.head().name();
-
-            // Add this rule's ID to the list of rules that define this relation
-            // Multiple rules can define the same relation
+            // Multiple rules can define the same relation.
             head_to_rule_ids_map
-                .entry(head_name.to_string())
-                .or_insert_with(Vec::new)
+                .entry(rule.head().name().to_string())
+                .or_default()
                 .push(rule_id);
         }
+
         head_to_rule_ids_map
     }
 
     fn analyze_rule_dependencies(
         rule_id: usize,
-        rule: &parser::logic::MacaronRule,
+        rule: &MacaronRule,
         head_to_rule_ids_map: &HashMap<String, Vec<usize>>,
         dependency_map: &mut HashMap<usize, HashSet<usize>>,
     ) {
         for predicate in rule.rhs() {
             // Determine the atom name based on predicate type and handle dependencies
             let atom_name = match predicate {
-                Predicate::PositiveAtomPredicate(atom) => atom.name(),
-                Predicate::NegatedAtomPredicate(atom) => atom.name(),
+                Predicate::PositiveAtomPredicate(atom) | Predicate::NegatedAtomPredicate(atom) => {
+                    atom.name()
+                }
                 // Other predicate types (constraints, comparisons, etc.) - skip dependency analysis
                 _ => continue,
             };
@@ -101,7 +87,7 @@ impl DependencyGraph {
 
 impl fmt::Display for DependencyGraph {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "\nDependencies:")?;
+        writeln!(f, "\nDependency Graph:")?;
         writeln!(f, "{}", "-".repeat(45))?;
 
         for (rule_id, dependent_rule_ids) in self.dependency_map().iter().sorted_by_key(|x| x.0) {

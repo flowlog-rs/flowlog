@@ -5,26 +5,32 @@ use itertools::Itertools;
 use parser::{logic::MacaronRule, Program};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use tracing::{debug, info};
 
-/// Stratify a program into rule layers.
+/// Stratify a program into group of rules.
 ///
-/// Each stratum is a set of rule IDs that can be evaluated as a unit after all
+/// Each stratum is a set of rule IDs that can be evaluated parallelyas a unit after all
 /// preceding strata have been computed. A stratum is marked recursive when it
 /// corresponds to a strongly connected component (SCC) with more than one rule
 /// or a single rule with a self‑dependency.
 #[derive(Debug, Clone)]
 pub struct Stratifier {
+    /// The original program being stratified.
     program: Program,
+
+    /// Underlying dependency graph (rule -> rules it depends on).
     dependency_graph: DependencyGraph,
 
-    // rule IDs per stratum in evaluation order
+    /// Rule IDs per stratum in evaluation order
     stratum: Vec<Vec<usize>>,
-    // true iff corresponding stratum is recursive
+
+    /// True iff corresponding stratum is recursive
     is_recursive_stratum_bitmap: Vec<bool>,
 
-    // Mapping of stratum IDs to their iterative relations (rule IDs) (recursive strata only).
+    /// Mapping of stratum IDs to their iterative relations (rule IDs) (recursive strata only).
     stratum_iterative_relation: Vec<Vec<u64>>,
-    // Mapping of stratum IDs to their leave relations (rule IDs) required by later stratum.
+
+    /// Mapping of stratum IDs to their leave relations (rule IDs) required by later stratum.
     stratum_leave_relation: Vec<Vec<u64>>,
 }
 
@@ -33,12 +39,6 @@ impl Stratifier {
     #[must_use]
     pub fn program(&self) -> &Program {
         &self.program
-    }
-
-    /// Underlying dependency graph (rule -> rules it depends on).
-    #[must_use]
-    pub fn dependency_graph(&self) -> &DependencyGraph {
-        &self.dependency_graph
     }
 
     /// Bitmap indicating which strata are recursive (parallel with `strata`).
@@ -182,6 +182,20 @@ impl Stratifier {
         };
 
         instance.build_stratum_metadata();
+
+        // Debug info print
+        debug!("\n{}", instance);
+
+        info!(
+            "Stratification produced {} strata ({} recursive)",
+            instance.stratum.len(),
+            instance
+                .is_recursive_stratum_bitmap
+                .iter()
+                .filter(|&&b| b)
+                .count()
+        );
+
         instance
     }
 
@@ -317,6 +331,8 @@ impl Stratifier {
 
 impl fmt::Display for Stratifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{}", self.dependency_graph)?;
+
         writeln!(f, "\nStratum:")?;
         writeln!(f, "{}", "-".repeat(45))?;
 
