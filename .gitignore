@@ -1,2 +1,5 @@
 # Compilation artifacts
 /target
+
+# Local test program
+/example/test.dl
