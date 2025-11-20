@@ -20,6 +20,8 @@
 use crate::TransformationInfo;
 use std::collections::HashMap;
 
+use parser::MacaronRule;
+
 mod common; // small utilities shared by planner phases
 mod core; // core join, plus fixed-point of semijoin/pushdown and projection removal
 mod fuse; // fuse KV-to-KV maps and propagate key/value layout constraints upstream
@@ -27,8 +29,11 @@ mod post; // align final output to the rule head (vars and arithmetic)
 mod prepare; // local filters, semi-join and comparison before the core join
 
 /// Planner state for a single rule.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RulePlanner {
+    /// The original rule.
+    rule: MacaronRule,
+
     /// Linear list of planned transformation infos for the current rule.
     transformation_infos: Vec<TransformationInfo>,
 
@@ -48,8 +53,9 @@ pub struct RulePlanner {
 
 impl RulePlanner {
     /// Creates a new empty RulePlanner.
-    pub fn new() -> Self {
+    pub fn new(rule: MacaronRule) -> Self {
         Self {
+            rule,
             transformation_infos: Vec::new(),
             producer_consumer: HashMap::new(),
         }
@@ -59,5 +65,11 @@ impl RulePlanner {
     #[inline]
     pub fn transformation_infos(&self) -> &Vec<TransformationInfo> {
         &self.transformation_infos
+    }
+
+    /// Returns the original rule.
+    #[inline]
+    pub(super) fn rule(&self) -> &MacaronRule {
+        &self.rule
     }
 }

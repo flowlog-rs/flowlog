@@ -187,7 +187,7 @@ impl Stratifier {
         debug!("\n{}", instance);
 
         info!(
-            "Stratification produced {} strata ({} recursive)",
+            "Successfully stratified program: produced {} strata ({} recursive)",
             instance.stratum.len(),
             instance
                 .is_recursive_stratum_bitmap

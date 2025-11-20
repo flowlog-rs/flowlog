@@ -6,6 +6,7 @@ use catalog::Catalog;
 use optimizer::Optimizer;
 use parser::logic::MacaronRule;
 use parser::{AggregationOperator, HeadArg};
+use std::fmt;
 use tracing::debug;
 
 use crate::{RulePlanner, Transformation, TransformationInfo};
@@ -67,15 +68,15 @@ impl StratumPlanner {
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
 
+        debug!("New Stratum");
+
         // Phase 1: Initialize catalogs and run prepare phase
         // to apply local filters/semijoin/comparison before core join planning
         for (i, rule) in stratum.iter().enumerate() {
+            debug!("rule[{i}] init:");
             let mut catalog = Catalog::from_rule(rule);
-            debug!("{}", "-".repeat(40));
-            debug!("rule[{i}] init:\n{catalog}");
-            debug!("{}", "-".repeat(40));
 
-            let mut planner = RulePlanner::new();
+            let mut planner = RulePlanner::new(rule.clone());
             planner.prepare(&mut catalog);
 
             debug!(
@@ -83,7 +84,6 @@ impl StratumPlanner {
                 planner.transformation_infos().len()
             );
             debug!("rule[{i}] after prepare:\n{catalog}");
-            debug!("{}", "-".repeat(40));
 
             catalogs.push(catalog);
             rule_planners.push(planner);
@@ -142,33 +142,7 @@ impl StratumPlanner {
         stratum_planner.build_output_to_aggregation_map(&catalogs);
 
         // Debug info for non-recursive vs recursive transformations.
-        debug!(
-            "Non recursive transformations ({}):",
-            stratum_planner.non_recursive_transformations().len()
-        );
-        for (index, tx) in stratum_planner
-            .non_recursive_transformations()
-            .iter()
-            .enumerate()
-        {
-            debug!("\n[N{:>3}] {}", index, tx);
-        }
-
-        if is_recursive {
-            debug!(
-                "Recursive transformations ({}):",
-                stratum_planner.recursive_transformations().len()
-            );
-            for (index, tx) in stratum_planner
-                .recursive_transformations()
-                .iter()
-                .enumerate()
-            {
-                debug!("\n[R{:>3}] {}", index, tx);
-            }
-        } else {
-            debug!("(Non-recursive stratum: no recursive transformations)");
-        }
+        debug!("\n{}", stratum_planner);
 
         stratum_planner
     }
@@ -241,6 +215,51 @@ impl StratumPlanner {
     #[inline]
     pub fn is_recursive(&self) -> bool {
         self.is_recursive
+    }
+}
+
+impl fmt::Display for StratumPlanner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{}", "=".repeat(80))?;
+
+        let stratum_name = if self.is_recursive {
+            "Recursive Stratum"
+        } else {
+            "Non-Recursive Stratum"
+        };
+        writeln!(f, "[{stratum_name}] {} rules", self.rule_planners.len(),)?;
+        writeln!(f, "\n{}", "-".repeat(40))?;
+
+        writeln!(f, "Rules:")?;
+        for (idx, rule_planner) in self.rule_planners.iter().enumerate() {
+            writeln!(f, "  ({:>2}) {}", idx, rule_planner.rule())?;
+        }
+        writeln!(f, "\n{}", "-".repeat(40))?;
+
+        writeln!(
+            f,
+            "Non-recursive transformations ({}):",
+            self.non_recursive_transformations.len()
+        )?;
+        for (idx, tx) in self.non_recursive_transformations.iter().enumerate() {
+            writeln!(f, "  [N{:>3}] {}", idx, tx)?;
+        }
+        writeln!(f, "\n{}", "-".repeat(40))?;
+
+        if self.is_recursive {
+            writeln!(
+                f,
+                "Recursive transformations ({}):",
+                self.recursive_transformations.len()
+            )?;
+            for (idx, tx) in self.recursive_transformations.iter().enumerate() {
+                writeln!(f, "  [R{:>3}] {}", idx, tx)?;
+            }
+        } else {
+            writeln!(f, "(Non-recursive stratum: no recursive transformations)")?;
+        }
+
+        writeln!(f, "{}", "=".repeat(80))
     }
 }
 

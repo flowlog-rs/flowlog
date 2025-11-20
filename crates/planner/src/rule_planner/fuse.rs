@@ -13,14 +13,18 @@
 //!
 //! Not following these rules might introduce subtle bugs.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 use catalog::{ArithmeticPos, ComparisonExprPos, FactorPos};
 
-type ConsumerLayout = (Vec<usize>, Vec<usize>, Vec<usize>);
+/// Ordered consumer indices alongside their key/value index selections.
+/// (minimum consumer id, consumer ids, key indices, value indices)
+type ConsumerLayout = (usize, Vec<usize>, Vec<usize>, Vec<usize>);
+/// Assigned producer indices with their consumers and key/value index selections.
+/// (assigned producer ids, consumer ids, key indices, value indices)
 type LayoutAssignment = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
 
 // =========================================================================
@@ -49,38 +53,34 @@ impl RulePlanner {
 
         // Iterate in reverse order so consumers are processed before their producers.
         for index in (0..self.transformation_infos.len()).rev() {
-            let (input_fp, output_fp, out_kv_layout, cmp_exprs) =
-                match self.transformation_infos.get(index) {
-                    Some(TransformationInfo::KVToKV {
-                        input_info_fp,
-                        output_info_fp,
-                        output_kv_layout,
-                        compare_exprs_pos,
-                        ..
-                    }) => {
-                        // Skip if the input is an original atom (cannot fuse)
-                        if original_atom_fp.contains(input_info_fp) {
-                            trace!(
-                                "[fuse_map] skip at idx {}: input is original atom {:#018x}",
-                                index,
-                                *input_info_fp
-                            );
-                            continue;
-                        }
-                        (
-                            *input_info_fp,
-                            *output_info_fp,
-                            output_kv_layout.clone(),
-                            compare_exprs_pos.clone(),
-                        )
-                    }
-                    _ => continue,
-                };
+            let Some(TransformationInfo::KVToKV {
+                input_info_fp,
+                output_info_fp,
+                output_kv_layout,
+                compare_exprs_pos,
+                ..
+            }) = self.transformation_infos.get(index)
+            else {
+                continue;
+            };
+
+            if original_atom_fp.contains(input_info_fp) {
+                trace!(
+                    "[fuse_map] skip at idx {}: input is original atom {:#018x}",
+                    index,
+                    *input_info_fp
+                );
+                continue;
+            }
+
+            let input_fp = *input_info_fp;
+            let output_fp = *output_info_fp;
+            let out_kv_layout = output_kv_layout.clone();
+            let cmp_exprs = compare_exprs_pos.clone();
 
             let input_producer_indices = self.producer_indices(input_fp);
             let mut input_producer_output_fp = 0u64;
-
-            for input_producer_index in input_producer_indices {
+            for &input_producer_index in &input_producer_indices {
                 // Short-lived borrow to check if producer is a neg join
                 let producer_tx = &self.transformation_infos[input_producer_index];
                 if producer_tx.is_neg_join() && !cmp_exprs.is_empty() {
@@ -120,7 +120,7 @@ impl RulePlanner {
             let output_consumer_indices = self.consumer_indices(output_fp);
 
             // Update all consumers to point to the producer's new output
-            for output_consumer_index in output_consumer_indices {
+            for &output_consumer_index in &output_consumer_indices {
                 let consumer_tx = &mut self.transformation_infos[output_consumer_index];
                 consumer_tx.update_input_fake_info_fp(input_producer_output_fp, &output_fp);
 
@@ -166,11 +166,11 @@ impl RulePlanner {
             .map(|tx| tx.output_info_fp())
             .collect();
 
-        for tx_fp in tx_fps.iter() {
+        for &tx_fp in &tx_fps {
             // Copy out the producer index and current consumers (if any), then mutate
             let Some((producer_indices, consumers)) = self
                 .producer_consumer
-                .get(tx_fp)
+                .get(&tx_fp)
                 .map(|(p, c)| (p.clone(), c.clone()))
             else {
                 // No producer found - likely an original atom; ignore
@@ -182,7 +182,7 @@ impl RulePlanner {
                 continue;
             }
 
-            let consumer_layouts = self.collect_consumer_layout_indices(&consumers, *tx_fp);
+            let consumer_layouts = self.collect_consumer_layout_indices(&consumers, tx_fp);
             let producer_consumer_assignments =
                 Self::assign_layout_to_producer(&producer_indices, &consumer_layouts);
 
@@ -202,7 +202,7 @@ impl RulePlanner {
                 // Update consumers to use new fingerprint
                 for consumer_idx in consumers {
                     self.transformation_infos[consumer_idx]
-                        .update_input_fake_info_fp(new_output_fp, tx_fp);
+                        .update_input_fake_info_fp(new_output_fp, &tx_fp);
                 }
             }
         }
@@ -395,15 +395,18 @@ impl RulePlanner {
         );
     }
 
+    /// Collect distinct key-value layouts required by consumers of a given input fingerprint.
+    /// Sorted by minimum consumer index.
     fn collect_consumer_layout_indices(
         &self,
         consumer_indices: &[usize],
         input_fp: u64,
     ) -> Vec<ConsumerLayout> {
+        // Map from (key indices, value indices) to consumer ids
         let mut layouts: BTreeMap<(Vec<usize>, Vec<usize>), Vec<usize>> = BTreeMap::new();
 
         for &consumer_idx in consumer_indices {
-            let maybe_layout = match &self.transformation_infos[consumer_idx] {
+            let key_value_layout = match &self.transformation_infos[consumer_idx] {
                 TransformationInfo::KVToKV {
                     input_info_fp,
                     input_kv_layout,
@@ -444,7 +447,7 @@ impl RulePlanner {
                 _ => None,
             };
 
-            let (key_ids, value_ids) = maybe_layout.unwrap_or_else(|| {
+            let (key_indices, value_indices) = key_value_layout.unwrap_or_else(|| {
                 panic!(
                     "Planner error: consumer idx {} missing layout for producer fp {:#018x}",
                     consumer_idx, input_fp
@@ -452,24 +455,30 @@ impl RulePlanner {
             });
 
             layouts
-                .entry((key_ids, value_ids))
+                .entry((key_indices, value_indices))
                 .or_default()
                 .push(consumer_idx);
         }
 
-        layouts
+        let mut consumer_collection: Vec<(usize, Vec<usize>, Vec<usize>, Vec<usize>)> = layouts
             .into_iter()
             .map(|((key_ids, value_ids), mut consumers)| {
                 consumers.sort_unstable();
-                (consumers, key_ids, value_ids)
+                (consumers[0], consumers, key_ids, value_ids)
             })
-            .collect()
+            .collect();
+        consumer_collection.sort_by_key(|(first_consumer, _, _, _)| *first_consumer);
+        consumer_collection
     }
 
+    /// Assign producer indices to consumer layout kinds.
+    /// Ensures that each consumer layout kind is assigned at least one producer index
+    /// that appears before its first consumer index.
     fn assign_layout_to_producer(
         producer_indices: &[usize],
         consumer_layouts: &[ConsumerLayout],
     ) -> Vec<LayoutAssignment> {
+        // Check feasibility.
         if consumer_layouts.len() > producer_indices.len() {
             panic!(
                 "Planner error: {} consumer layout kinds but only {} producers available",
@@ -478,47 +487,39 @@ impl RulePlanner {
             );
         }
 
-        let mut available_producers: Vec<usize> = producer_indices.to_vec();
-        available_producers.sort_unstable();
+        let mut available: VecDeque<_> = producer_indices.iter().copied().collect();
+        available.make_contiguous().sort_unstable();
 
         let mut assignments = Vec::with_capacity(consumer_layouts.len());
 
-        let mut sorted_layouts: Vec<(usize, ConsumerLayout)> = consumer_layouts
-            .iter()
-            .map(|(consumers, key_ids, value_ids)| {
-                let min_consumer_idx = consumers.iter().copied().min().unwrap_or_else(|| {
-                    panic!("Planner error: consumer layout kind missing consumer indices")
-                });
-                (
-                    min_consumer_idx,
-                    (consumers.clone(), key_ids.clone(), value_ids.clone()),
-                )
-            })
-            .collect();
+        for (first_consumer, consumers, key_ids, value_ids) in consumer_layouts {
+            // We already check that there is at least one producer candidate, so just unwrap.
+            let producer_idx = available.pop_front().unwrap();
 
-        sorted_layouts.sort_by_key(|(min_consumer_idx, _)| *min_consumer_idx);
+            if producer_idx >= *first_consumer {
+                panic!(
+                    "Planner error: no producer index found before consumer idx {}",
+                    first_consumer
+                );
+            }
 
-        for (min_consumer_idx, (consumers, key_ids, value_ids)) in sorted_layouts {
-            let position = available_producers
-                .iter()
-                .position(|producer_idx| *producer_idx < min_consumer_idx)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Planner error: no producer index found before consumer idx {}",
-                        min_consumer_idx
-                    )
-                });
-
-            let producer_idx = available_producers.remove(position);
-            assignments.push((vec![producer_idx], consumers, key_ids, value_ids));
+            assignments.push((
+                vec![producer_idx],
+                consumers.clone(),
+                key_ids.clone(),
+                value_ids.clone(),
+            ));
         }
 
-        if !available_producers.is_empty() {
-            let (producer_ids, _, _, _) = assignments.first_mut().unwrap_or_else(|| {
-                panic!("Planner error: no consumer layout kinds to receive extra producers")
-            });
-            producer_ids.extend(available_producers);
-            producer_ids.sort_unstable();
+        // If there are any remaining available producers, assign them to the first consumer layout kind.
+        // Randomly assign also works, for simplify code we just push to the first one.
+        if !available.is_empty() {
+            if let Some((producer_ids, _, _, _)) = assignments.first_mut() {
+                producer_ids.extend(available.into_iter());
+                producer_ids.sort_unstable();
+            } else {
+                panic!("Planner error: no consumer layout kinds to receive extra producers");
+            }
         }
 
         assignments

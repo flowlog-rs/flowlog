@@ -4,35 +4,33 @@ use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
 use stratifier::Stratifier;
-use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Initialize simple tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
     // Parse command line arguments
     let args = Args::parse();
 
     if args.should_process_all() {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .init();
         run_all_examples();
         return;
     }
 
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
+        )
+        .init();
+
     // Parse and process single file
     let program = Program::parse(args.program());
-    info!("Parsed program: {} rules", program.rules().len());
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program);
-    info!(
-        "Stratified program into {} strata",
-        stratifier.stratum().len()
-    );
 
     // Plan each stratum using StratumPlanner
     let mut optimizer = Optimizer::new();
@@ -46,20 +44,6 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 
         // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
-
-        info!("{}", "=".repeat(80));
-        info!(
-            "[Stratum {}] {} rules (recursive: {})",
-            stratum_idx,
-            rule_refs.len(),
-            is_recursive
-        );
-
-        // List all rules in this stratum for clarity
-        info!("Rules in this stratum ({}):", rule_refs.len());
-        for (i, r) in rule_refs.iter().enumerate() {
-            info!("\n({:>2}) {}", i, r);
-        }
 
         let _stratum_planner = StratumPlanner::from_rules(
             &rules,

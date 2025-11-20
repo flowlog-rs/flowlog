@@ -381,7 +381,7 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[Row -> Row]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    "[Row -> Row]\n    In   : {}\n    Flow : {}\n    Out  : {}",
                     input, flow, output
                 )
             }
@@ -392,7 +392,7 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[Row -> KV]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    "[Row -> KV]\n    In   : {}\n    Flow : {}\n    Out  : {}",
                     input, flow, output
                 )
             }
@@ -403,7 +403,7 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[KV -> Row]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    "[KV -> Row]\n    In   : {}\n    Flow : {}\n    Out  : {}",
                     input, flow, output
                 )
             }
@@ -414,7 +414,7 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[KV -> KV]\n   In   : {}\n   Flow : {}\n   Out  : {}",
+                    "[KV -> KV]\n    In   : {}\n    Flow : {}\n    Out  : {}",
                     input, flow, output
                 )
             }
@@ -425,7 +425,7 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[Join -> Row]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    "[Join -> Row]\n    Left : {}\n    Right: {}\n    Flow : {}\n    Out  : {}",
                     left, right, flow, output
                 )
             }
@@ -436,7 +436,7 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[Join -> KV]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    "[Join -> KV]\n    Left : {}\n    Right: {}\n    Flow : {}\n    Out  : {}",
                     left, right, flow, output
                 )
             }
@@ -447,7 +447,7 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[AntiJoin -> Row]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    "[AntiJoin -> Row]\n    Left : {}\n    Right: {}\n    Flow : {}\n    Out  : {}",
                     left, right, flow, output
                 )
             }
@@ -458,7 +458,7 @@ impl fmt::Display for Transformation {
             } => {
                 write!(
                     f,
-                    "[AntiJoin -> KV]\n   Left : {}\n   Right: {}\n   Flow : {}\n   Out  : {}",
+                    "[AntiJoin -> KV]\n    Left : {}\n    Right: {}\n    Flow : {}\n    Out  : {}",
                     left, right, flow, output
                 )
             }

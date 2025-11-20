@@ -24,7 +24,9 @@ mod populate;
 ///    These two indices are not same as the global RHS indices.
 #[derive(Debug)]
 pub struct Catalog {
-    /// The original rule.
+    /// The rule.
+    /// Rule could be modified via modification methods.
+    /// Metadata is also updated accordingly.
     rule: MacaronRule,
 
     /// Reverse map from argument signatures to their variable strings.
@@ -427,8 +429,9 @@ impl Catalog {
 
 impl fmt::Display for Catalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", "-".repeat(80))?;
-        writeln!(f, "Rule:\n  {}", self.rule())?;
+        writeln!(f, "{}", "=".repeat(80))?;
+
+        writeln!(f, "Catalog of rule:\n  {}", self.rule())?;
 
         let fmt_sig_list = |sigs: &[AtomArgumentSignature],
                             map: &HashMap<AtomArgumentSignature, String>|
@@ -452,7 +455,8 @@ impl fmt::Display for Catalog {
             )
         };
 
-        writeln!(f, "\nPositive atoms:")?;
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "Positive atoms:")?;
         for (i, fp) in self.positive_atom_fingerprints.iter().enumerate() {
             let args = fmt_sig_list(
                 &self.positive_atom_argument_signatures[i],
@@ -461,7 +465,8 @@ impl fmt::Display for Catalog {
             writeln!(f, "  [{:>2}] 0x{:016x} args: {}", i, fp, args)?;
         }
 
-        writeln!(f, "\nNegative atoms:")?;
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "Negative atoms:")?;
         if self.negative_atom_fingerprints.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
@@ -475,7 +480,8 @@ impl fmt::Display for Catalog {
         }
 
         // NEW: print RHS index vectors with per-entry mapping
-        writeln!(f, "\nRHS indices (by atom kind):")?;
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "RHS indices (by atom kind):")?;
         writeln!(
             f,
             "  positive_atom_rhs_ids ({}): {}",
@@ -495,6 +501,8 @@ impl fmt::Display for Catalog {
             writeln!(f, "    neg[{:>2}] -> rhs[{:>2}]", i, rhs_id)?;
         }
 
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "Signature ↔ Var:")?;
         let mut sig_entries: Vec<_> = self.signature_to_argument_str_map.iter().collect();
         sig_entries.sort_by(|(a, _), (b, _)| a.to_string().cmp(&b.to_string()));
         let sig_line = sig_entries
@@ -502,14 +510,14 @@ impl fmt::Display for Catalog {
             .map(|(k, v)| format!("{}={}", k, v))
             .collect::<Vec<_>>()
             .join(", ");
-        writeln!(f, "\nSignature ↔ Var:")?;
         if sig_line.is_empty() {
             writeln!(f, "  (empty)")?;
         } else {
             writeln!(f, "  {}", sig_line)?;
         }
 
-        writeln!(f, "\nArgument presence per positive atom:")?;
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "Argument presence per positive atom:")?;
         let mut vars: Vec<_> = self.argument_presence_in_positive_atom_map.keys().collect();
         vars.sort();
         for var in vars {
@@ -521,7 +529,8 @@ impl fmt::Display for Catalog {
             writeln!(f, "  {}: [{}]", var, row)?;
         }
 
-        writeln!(f, "\nBase filters:")?;
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "Base filters:")?;
         if self.filters.is_empty() {
             writeln!(f, "  (none)")?
         } else {
@@ -530,7 +539,8 @@ impl fmt::Display for Catalog {
             }
         }
 
-        writeln!(f, "\nComparison predicates:")?;
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "Comparison predicates:")?;
         if self.comparison_predicates.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
@@ -553,7 +563,8 @@ impl fmt::Display for Catalog {
             }
         }
 
-        writeln!(f, "\nSupersets (per predicate → positive atom ids):")?;
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "Supersets (per predicate → positive atom ids):")?;
         let mut print_supersets = |label: &str, supersets: &Vec<Vec<usize>>| -> fmt::Result {
             if supersets.is_empty() || supersets.iter().all(|supers| supers.is_empty()) {
                 writeln!(f, "  {}: (none)", label)
@@ -580,7 +591,8 @@ impl fmt::Display for Catalog {
         print_supersets("negative", &self.negative_supersets)?;
         print_supersets("comparisons", &self.comparison_supersets)?;
 
-        writeln!(f, "\nUnused arguments per atom:")?;
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "Unused arguments per atom:")?;
         if self.unused_arguments_per_atom.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
@@ -588,6 +600,8 @@ impl fmt::Display for Catalog {
                 writeln!(f, "  {:?} -> {:?}", atom_sig, args)?;
             }
         }
+
+        writeln!(f, "{}", "=".repeat(80))?;
 
         Ok(())
     }
