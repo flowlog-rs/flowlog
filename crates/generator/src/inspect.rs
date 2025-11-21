@@ -1,11 +1,12 @@
-use proc_macro2::{Ident, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
+use syn::{Index, LitStr};
 
 /// Generate a TokenStream that inspects the cardinality of a differential dataflow
 /// collection identified by `var`. The output prints a single consolidated record
 /// whose weight corresponds to the number of elements in the collection at that point.
 pub fn gen_size_inspector(var: &Ident, name: &str) -> TokenStream {
-    let prefix = format!("Size of {}", name);
+    let prefix = format!("{}:", name);
 
     // We map all records to unit `()` so they consolidate to one key whose
     // multiplicity equals the current collection size. We then inspect it.
@@ -16,7 +17,7 @@ pub fn gen_size_inspector(var: &Ident, name: &str) -> TokenStream {
             #var
                 .map(|_| ())
                 .consolidate()
-                .inspect(|rec| eprintln!("[inspect][{}] {:?}", #prefix, rec));
+                .inspect(|(_data, _time, size)| eprintln!("[size] [{}] {:?}", #prefix, size));
         }
     }
 }
@@ -24,20 +25,37 @@ pub fn gen_size_inspector(var: &Ident, name: &str) -> TokenStream {
 /// Generate a TokenStream that prints each update of a collection with its time and diff.
 /// Useful for debugging tuple contents.
 pub fn gen_print_inspector(var: &Ident, name: &str) -> TokenStream {
-    let prefix = format!("Tuples of {}", name);
+    let prefix = format!("{}:", name);
     quote! {
         {
             #var
-                .inspect(|(data, time, diff)| eprintln!("[print][{}] {:?} @ {:?} by {:?}", #prefix, data, time, diff));
+                .inspect(|(data, _time, _diff)| eprintln!("[tuple] [{}] {:?}", #prefix, data));
         }
     }
 }
 
 /// Generate a TokenStream that writes the data part of each update to the given file path.
 /// Opens the file once and appends each tuple as a line using Debug formatting.
-pub fn gen_write_inspector(var: &Ident, name: &str, parent_dir: &str) -> TokenStream {
+pub fn gen_write_inspector(var: &Ident, name: &str, parent_dir: &str, arity: usize) -> TokenStream {
     let dir = parent_dir.to_string();
     let relation_name = name.to_string();
+    let data_accessors: Vec<TokenStream> = (0..arity)
+        .map(|idx| {
+            let index = Index::from(idx);
+            quote! { data.#index }
+        })
+        .collect();
+    let write_stmt = if arity == 0 {
+        quote! {
+            writeln!(&mut file, "True").expect("write failed");
+        }
+    } else {
+        let fmt = vec!["{}"; arity].join(",");
+        let fmt = LitStr::new(&fmt, Span::call_site());
+        quote! {
+            writeln!(&mut file, #fmt #(, #data_accessors )*).expect("write failed");
+        }
+    };
     quote! {
         {
             let base_path = #dir;
@@ -48,7 +66,7 @@ pub fn gen_write_inspector(var: &Ident, name: &str, parent_dir: &str) -> TokenSt
             #var
                 .inspect(move |(data, _time, _diff)| {
                     use std::io::Write as _;
-                    writeln!(&mut file, "{:?}", data).expect("write failed");
+                    #write_stmt
                 });
         }
     }

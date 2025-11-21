@@ -6,6 +6,9 @@ use planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
 };
 
+// ==================================================
+// Tuple builder utilities
+// ==================================================
 /// Row -> KV (keys/values): build from row fields by index.
 ///
 /// Shape policy (tuple-ified):
@@ -16,11 +19,10 @@ pub(super) fn build_key_val_from_row_args(
     args: &[ArithmeticArgument],
     fields: &[Ident],
 ) -> TokenStream {
-    let mut parts: Vec<TokenStream> = Vec::new();
-    for arg in args {
-        let part = build_row_args_arithmetic_expr(arg, fields);
-        parts.push(part);
-    }
+    let parts: Vec<TokenStream> = args
+        .iter()
+        .map(|arg| build_row_args_arithmetic_expr(arg, fields))
+        .collect();
     pack_as_tuple(parts)
 }
 
@@ -31,29 +33,24 @@ pub(super) fn build_key_val_from_row_args(
 /// - 1 part  => (x,)
 /// - n parts => (x, y, ...)
 pub(super) fn build_key_val_from_kv_args(args: &[ArithmeticArgument]) -> TokenStream {
-    let mut parts: Vec<TokenStream> = Vec::new();
-    for arg in args {
-        let part = build_kv_args_arithmetic_expr(arg);
-        parts.push(part);
-    }
+    let parts: Vec<TokenStream> = args.iter().map(build_kv_args_arithmetic_expr).collect();
     pack_as_tuple(parts)
 }
 
-/// Join -> KV (keys/values): use k, lv.#, rv.# as requested.
+/// Join -> KV (keys/values): use k.#, lv.#, rv.# as requested.
 ///
 /// Shape policy (tuple-ified like row builder):
 /// - 0 parts => ()
 /// - 1 part  => (x,)
 /// - n parts => (x, y, ...)
 pub(super) fn build_key_val_from_join_args(args: &[ArithmeticArgument]) -> TokenStream {
-    let mut parts: Vec<TokenStream> = Vec::new();
-    for arg in args {
-        let part = build_join_args_arithmetic_expr(arg);
-        parts.push(part);
-    }
+    let parts: Vec<TokenStream> = args.iter().map(build_join_args_arithmetic_expr).collect();
     pack_as_tuple(parts)
 }
 
+// ==================================================
+// Closure parameter utilities
+// ==================================================
 /// Inspect join arithmetic & comparison arguments to determine which closure parameters
 /// are referenced by the produced expressions or filters.
 /// Returns three TokenStreams for the closure parameter identifiers. Any unused
@@ -181,6 +178,16 @@ fn comparison_op_tokens(op: &parser::ComparisonOperator) -> TokenStream {
     }
 }
 
+fn arithmetic_op_tokens(op: &parser::ArithmeticOperator) -> TokenStream {
+    match op {
+        parser::ArithmeticOperator::Plus => quote! { + },
+        parser::ArithmeticOperator::Minus => quote! { - },
+        parser::ArithmeticOperator::Multiply => quote! { * },
+        parser::ArithmeticOperator::Divide => quote! { / },
+        parser::ArithmeticOperator::Modulo => quote! { % },
+    }
+}
+
 /// Build a combined predicate for KV-based closures from comparison expressions.
 /// Returns None when there are no comparisons.
 pub(super) fn build_kv_compare_predicate(comps: &[ComparisonExprArgument]) -> Option<TokenStream> {
@@ -248,18 +255,28 @@ pub(super) fn build_row_compare_predicate(
 // ==================================================
 /// Build predicate for KV constraints (const eq and var eq). Returns None if empty.
 pub(super) fn build_kv_constraints_predicate(constraints: &Constraints) -> Option<TokenStream> {
-    let mut parts: Vec<TokenStream> = Vec::new();
+    let mut parts: Vec<TokenStream> = constraints
+        .constant_eq_constraints()
+        .as_ref()
+        .iter()
+        .map(|(arg, c)| {
+            let lhs = trans_arg_to_kv_expr(arg);
+            let rhs = const_to_token(c);
+            quote! { (#lhs) == (#rhs) }
+        })
+        .collect();
 
-    for (arg, c) in constraints.constant_eq_constraints().as_ref().iter() {
-        let lhs = trans_arg_to_kv_expr(arg);
-        let rhs = const_to_token(c);
-        parts.push(quote! { (#lhs) == (#rhs) });
-    }
-    for (l, r) in constraints.variable_eq_constraints().as_ref().iter() {
-        let lhs = trans_arg_to_kv_expr(l);
-        let rhs = trans_arg_to_kv_expr(r);
-        parts.push(quote! { (#lhs) == (#rhs) });
-    }
+    parts.extend(
+        constraints
+            .variable_eq_constraints()
+            .as_ref()
+            .iter()
+            .map(|(l, r)| {
+                let lhs = trans_arg_to_kv_expr(l);
+                let rhs = trans_arg_to_kv_expr(r);
+                quote! { (#lhs) == (#rhs) }
+            }),
+    );
 
     if parts.is_empty() {
         None
@@ -273,18 +290,28 @@ pub(super) fn build_row_constraints_predicate(
     constraints: &Constraints,
     row_fields: &[Ident],
 ) -> Option<TokenStream> {
-    let mut parts: Vec<TokenStream> = Vec::new();
+    let mut parts: Vec<TokenStream> = constraints
+        .constant_eq_constraints()
+        .as_ref()
+        .iter()
+        .map(|(arg, c)| {
+            let lhs = trans_arg_to_row_expr(arg, row_fields);
+            let rhs = const_to_token(c);
+            quote! { (#lhs) == (#rhs) }
+        })
+        .collect();
 
-    for (arg, c) in constraints.constant_eq_constraints().as_ref().iter() {
-        let lhs = trans_arg_to_row_expr(arg, row_fields);
-        let rhs = const_to_token(c);
-        parts.push(quote! { (#lhs) == (#rhs) });
-    }
-    for (l, r) in constraints.variable_eq_constraints().as_ref().iter() {
-        let lhs = trans_arg_to_row_expr(l, row_fields);
-        let rhs = trans_arg_to_row_expr(r, row_fields);
-        parts.push(quote! { (#lhs) == (#rhs) });
-    }
+    parts.extend(
+        constraints
+            .variable_eq_constraints()
+            .as_ref()
+            .iter()
+            .map(|(l, r)| {
+                let lhs = trans_arg_to_row_expr(l, row_fields);
+                let rhs = trans_arg_to_row_expr(r, row_fields);
+                quote! { (#lhs) == (#rhs) }
+            }),
+    );
 
     if parts.is_empty() {
         None
@@ -293,6 +320,9 @@ pub(super) fn build_row_constraints_predicate(
     }
 }
 
+// ==================================================
+// Constraint helpers
+// ==================================================
 fn const_to_token(constant: &parser::ConstType) -> TokenStream {
     match constant {
         parser::ConstType::Integer(n) => quote! { #n },
@@ -347,36 +377,12 @@ pub(super) fn combine_predicates(
 }
 
 // ==================================================
-// Helper functions
+// Arithmetic expression helpers
 // ==================================================
 // Build an arithmetic expression from a position and field identifiers.
 fn build_row_args_arithmetic_expr(expr: &ArithmeticArgument, fields: &[Ident]) -> TokenStream {
-    // Build the initial factor
-    let init_token = match expr.init() {
-        FactorArgument::Var(trans_arg) => match trans_arg {
-            TransformationArgument::KV((_, idx)) => {
-                let ident = fields
-                    .get(*idx)
-                    .expect("row index out of bounds in row->kv builder");
-                quote! { #ident }
-            }
-            _ => unreachable!("unexpected argument type in row->kv builder"),
-        },
-        FactorArgument::Const(constant) => match constant {
-            parser::ConstType::Integer(n) => quote! { #n },
-            parser::ConstType::Text(s) => quote! { #s },
-        },
-    };
-
-    // If no operations, return just the initial factor
-    if expr.rest().is_empty() {
-        return init_token;
-    }
-
-    // Build the full expression with proper left-to-right parentheses
-    let mut expr_token = init_token;
-    for (op, factor) in expr.rest() {
-        let factor_token = match factor {
+    let to_expr = |factor: &FactorArgument| -> TokenStream {
+        match factor {
             FactorArgument::Var(trans_arg) => match trans_arg {
                 TransformationArgument::KV((_, idx)) => {
                     let ident = fields
@@ -386,57 +392,23 @@ fn build_row_args_arithmetic_expr(expr: &ArithmeticArgument, fields: &[Ident]) -
                 }
                 _ => unreachable!("unexpected argument type in row->kv builder"),
             },
-            FactorArgument::Const(constant) => match constant {
-                parser::ConstType::Integer(n) => quote! { #n },
-                parser::ConstType::Text(s) => quote! { #s },
-            },
-        };
+            FactorArgument::Const(constant) => const_to_token(constant),
+        }
+    };
 
-        let op_token = match op {
-            parser::ArithmeticOperator::Plus => quote! { + },
-            parser::ArithmeticOperator::Minus => quote! { - },
-            parser::ArithmeticOperator::Multiply => quote! { * },
-            parser::ArithmeticOperator::Divide => quote! { / },
-            parser::ArithmeticOperator::Modulo => quote! { % },
-        };
-
-        // Wrap in parentheses for left-to-right evaluation: (prev_result op factor)
-        expr_token = quote! { ( #expr_token #op_token #factor_token ) };
-    }
-
-    expr_token
+    expr.rest()
+        .iter()
+        .fold(to_expr(expr.init()), |acc, (op, factor)| {
+            let op_token = arithmetic_op_tokens(op);
+            let factor_token = to_expr(factor);
+            quote! { ( #acc #op_token #factor_token ) }
+        })
 }
 
 // Build an arithmetic expression from a position.
 fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
-    // Build the initial factor
-    let init_token = match expr.init() {
-        FactorArgument::Var(trans_arg) => match trans_arg {
-            TransformationArgument::KV((is_key, idx)) => {
-                let i = Index::from(*idx);
-                if *is_key {
-                    quote! { k.#i }
-                } else {
-                    quote! { v.#i }
-                }
-            }
-            _ => unreachable!("unexpected argument type in row->kv builder"),
-        },
-        FactorArgument::Const(constant) => match constant {
-            parser::ConstType::Integer(n) => quote! { #n },
-            parser::ConstType::Text(s) => quote! { #s },
-        },
-    };
-
-    // If no operations, return just the initial factor
-    if expr.rest().is_empty() {
-        return init_token;
-    }
-
-    // Build the full expression with proper left-to-right parentheses
-    let mut expr_token = init_token;
-    for (op, factor) in expr.rest() {
-        let factor_token = match factor {
+    let to_expr = |factor: &FactorArgument| -> TokenStream {
+        match factor {
             FactorArgument::Var(trans_arg) => match trans_arg {
                 TransformationArgument::KV((is_key, idx)) => {
                     let i = Index::from(*idx);
@@ -448,25 +420,17 @@ fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
                 }
                 _ => unreachable!("unexpected argument type in row->kv builder"),
             },
-            FactorArgument::Const(constant) => match constant {
-                parser::ConstType::Integer(n) => quote! { #n },
-                parser::ConstType::Text(s) => quote! { #s },
-            },
-        };
+            FactorArgument::Const(constant) => const_to_token(constant),
+        }
+    };
 
-        let op_token = match op {
-            parser::ArithmeticOperator::Plus => quote! { + },
-            parser::ArithmeticOperator::Minus => quote! { - },
-            parser::ArithmeticOperator::Multiply => quote! { * },
-            parser::ArithmeticOperator::Divide => quote! { / },
-            parser::ArithmeticOperator::Modulo => quote! { % },
-        };
-
-        // Wrap in parentheses for left-to-right evaluation: (prev_result op factor)
-        expr_token = quote! { ( #expr_token #op_token #factor_token ) };
-    }
-
-    expr_token
+    expr.rest()
+        .iter()
+        .fold(to_expr(expr.init()), |acc, (op, factor)| {
+            let op_token = arithmetic_op_tokens(op);
+            let factor_token = to_expr(factor);
+            quote! { ( #acc #op_token #factor_token ) }
+        })
 }
 
 // Build an arithmetic expression from a position.
@@ -519,13 +483,7 @@ fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
             },
         };
 
-        let op_token = match op {
-            parser::ArithmeticOperator::Plus => quote! { + },
-            parser::ArithmeticOperator::Minus => quote! { - },
-            parser::ArithmeticOperator::Multiply => quote! { * },
-            parser::ArithmeticOperator::Divide => quote! { / },
-            parser::ArithmeticOperator::Modulo => quote! { % },
-        };
+        let op_token = arithmetic_op_tokens(op);
 
         // Wrap in parentheses for left-to-right evaluation: (prev_result op factor)
         expr_token = quote! { ( #expr_token #op_token #factor_token ) };

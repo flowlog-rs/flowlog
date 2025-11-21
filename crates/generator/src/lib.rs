@@ -144,7 +144,7 @@ fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -
                 inspect_stmts.push(gen_print_inspector(&var, name));
             } else {
                 let parent_dir = args.output_dir().unwrap();
-                inspect_stmts.push(gen_write_inspector(&var, name, parent_dir));
+                inspect_stmts.push(gen_write_inspector(&var, name, parent_dir, idb.arity()));
                 merge_stmts.push(gen_merge_partitions(name, parent_dir));
             }
         }
