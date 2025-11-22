@@ -17,4 +17,4 @@ PointsTo(y, x) :- Assign(y, z), PointsTo(z, x).
 PointsTo(y, w) :- Load(y, x), PointsTo(x, z), PointsTo(z, w).
 PointsTo(z, w) :- Store(y, x), PointsTo(y, z), PointsTo(x, w).
 
-.output PointsTo
+.printsize PointsTo

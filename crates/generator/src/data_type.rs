@@ -11,9 +11,11 @@ use parser::{DataType, Relation};
 /// Map input fingerprints to collection data types.
 pub(super) fn make_type_map(
     input_rels: Vec<&Relation>,
+    output_rels: Vec<&Relation>,
 ) -> std::collections::HashMap<u64, DataType> {
     input_rels
         .into_iter()
+        .chain(output_rels.into_iter())
         .map(|rel| (rel.fingerprint(), *rel.data_type()))
         .collect()
 }

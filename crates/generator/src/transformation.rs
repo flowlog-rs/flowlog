@@ -1,11 +1,12 @@
 use proc_macro2::{Ident, TokenStream};
-use quote::quote;
+use quote::{format_ident, quote};
 use std::collections::HashMap;
 
 use super::arg::{
     build_join_compare_predicate, build_key_val_from_join_args, build_key_val_from_kv_args,
     build_key_val_from_row_args, build_kv_compare_predicate, build_kv_constraints_predicate,
     build_row_compare_predicate, build_row_constraints_predicate, combine_predicates,
+    compute_anti_join_param_tokens, compute_join_param_tokens,
 };
 use super::data_type::{find_type, insert_or_verify_type, row_pattern_and_fields, type_tokens};
 use super::ident::find_ident;
@@ -83,7 +84,7 @@ pub(super) fn gen_transformation(
             let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields);
             let pred = combine_predicates(cmp_pred, cst_pred);
 
-            if let Some(pred) = pred {
+            let transformation = if let Some(pred) = pred {
                 quote! {
                     let #out = #inp
                         .flat_map(|#row_pat: #row_ty| {
@@ -95,6 +96,13 @@ pub(super) fn gen_transformation(
                     let #out = #inp
                         .flat_map(|#row_pat: #row_ty| std::iter::once( ( #out_key, #out_val ) ));
                 }
+            };
+
+            let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);
+
+            quote! {
+                #transformation
+                #arrange_stmt
             }
         }
 
@@ -117,7 +125,7 @@ pub(super) fn gen_transformation(
             let cst_pred = build_kv_constraints_predicate(flow.constraints());
             let pred = combine_predicates(cmp_pred, cst_pred);
 
-            if let Some(pred) = pred {
+            let transformation = if let Some(pred) = pred {
                 quote! {
                     let #out = #inp
                         .flat_map(|(k, v)| {
@@ -129,6 +137,13 @@ pub(super) fn gen_transformation(
                     let #out = #inp
                         .flat_map(|(k, v)| std::iter::once( ( #out_key, #out_val ) ));
                 }
+            };
+
+            let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);
+
+            quote! {
+                #transformation
+                #arrange_stmt
             }
         }
 
@@ -183,35 +198,17 @@ pub(super) fn gen_transformation(
             // Check if output type already exists, if so assert it matches, otherwise insert
             insert_or_verify_type(fp_to_type, output.fingerprint(), itype);
 
-            // Collect arrangement statements if not already arranged.
-            let mut arrange_tokens: Vec<TokenStream> = Vec::new();
-            let l = if let Some(arr) = arranged_map.get(&left.fingerprint()).cloned() {
-                arr
-            } else {
-                let arr = quote::format_ident!("{}_arr", l_base);
-                arranged_map.insert(left.fingerprint(), arr.clone());
-                arrange_tokens.push(quote! { let #arr = #l_base.arrange_by_key(); });
-                arr
-            };
-            let r = if let Some(arr) = arranged_map.get(&right.fingerprint()).cloned() {
-                arr
-            } else {
-                let arr = quote::format_ident!("{}_arr", r_base);
-                arranged_map.insert(right.fingerprint(), arr.clone());
-                arrange_tokens.push(quote! { let #arr = #r_base.arrange_by_key(); });
-                arr
-            };
+            let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
+            let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
 
             let out = find_ident(fp_to_ident, output.fingerprint());
 
             let out_val = build_key_val_from_join_args(flow.value());
             let (jn_k, jn_lv, jn_rv) =
-                super::arg::compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
+                compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
 
-            let arrangement = quote! { #( #arrange_tokens )* };
             if let Some(pred) = build_join_compare_predicate(flow.compares()) {
                 quote! {
-                    #arrangement
                     let #out =
                         #l
                             .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
@@ -220,7 +217,6 @@ pub(super) fn gen_transformation(
                 }
             } else {
                 quote! {
-                    #arrangement
                     let #out =
                         #l
                             .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
@@ -248,36 +244,18 @@ pub(super) fn gen_transformation(
             // Check if output type already exists, if so assert it matches, otherwise insert
             insert_or_verify_type(fp_to_type, output.fingerprint(), itype);
 
-            // Collect arrangement statements if not already arranged.
-            let mut arrange_tokens: Vec<TokenStream> = Vec::new();
-            let l = if let Some(arr) = arranged_map.get(&left.fingerprint()).cloned() {
-                arr
-            } else {
-                let arr = quote::format_ident!("{}_arr", l_base);
-                arranged_map.insert(left.fingerprint(), arr.clone());
-                arrange_tokens.push(quote! { let #arr = #l_base.arrange_by_key(); });
-                arr
-            };
-            let r = if let Some(arr) = arranged_map.get(&right.fingerprint()).cloned() {
-                arr
-            } else {
-                let arr = quote::format_ident!("{}_arr", r_base);
-                arranged_map.insert(right.fingerprint(), arr.clone());
-                arrange_tokens.push(quote! { let #arr = #r_base.arrange_by_key(); });
-                arr
-            };
+            let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
+            let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
 
             let out = find_ident(fp_to_ident, output.fingerprint());
 
             let out_key = build_key_val_from_join_args(flow.key());
             let out_val = build_key_val_from_join_args(flow.value());
             let (jn_k, jn_lv, jn_rv) =
-                super::arg::compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
+                compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
 
-            let arrangement = quote! { #( #arrange_tokens )* };
-            if let Some(pred) = build_join_compare_predicate(flow.compares()) {
+            let transformation = if let Some(pred) = build_join_compare_predicate(flow.compares()) {
                 quote! {
-                    #arrangement
                     let #out =
                         #l
                             .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
@@ -286,13 +264,19 @@ pub(super) fn gen_transformation(
                 }
             } else {
                 quote! {
-                    #arrangement
                     let #out =
                         #l
                             .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
                                 Some((#out_key, #out_val))
                             });
                 }
+            };
+
+            let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);
+
+            quote! {
+                #transformation
+                #arrange_stmt
             }
         }
 
@@ -314,33 +298,14 @@ pub(super) fn gen_transformation(
             // Check if output type already exists, if so assert it matches, otherwise insert
             insert_or_verify_type(fp_to_type, output.fingerprint(), itype);
 
-            let mut arrange_tokens: Vec<TokenStream> = Vec::new();
-            let l = if let Some(arr) = arranged_map.get(&left.fingerprint()).cloned() {
-                arr
-            } else {
-                let arr = quote::format_ident!("{}_arr", l_base);
-                arranged_map.insert(left.fingerprint(), arr.clone());
-                arrange_tokens.push(quote! { let #arr = #l_base.arrange_by_key(); });
-                arr
-            };
-            let r = if let Some(arr) = arranged_map.get(&right.fingerprint()).cloned() {
-                arr
-            } else {
-                let arr = quote::format_ident!("{}_arr", r_base);
-                arranged_map.insert(right.fingerprint(), arr.clone());
-                arrange_tokens.push(quote! { let #arr = #r_base.arrange_by_key(); });
-                arr
-            };
+            let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
+            let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
 
             let out = find_ident(fp_to_ident, output.fingerprint());
 
             let out_val = build_key_val_from_join_args(flow.value());
-            let (antijoin_k, antijoin_v) =
-                super::arg::compute_anti_join_param_tokens(flow.key(), flow.value());
-
-            let arrangement = quote! { #( #arrange_tokens )* };
+            let (antijoin_k, antijoin_v) = compute_anti_join_param_tokens(flow.key(), flow.value());
             quote! {
-                #arrangement
                 let #out =
                     #l
                         .antijoin(&#r)
@@ -368,41 +333,56 @@ pub(super) fn gen_transformation(
             // Check if output type already exists, if so assert it matches, otherwise insert
             insert_or_verify_type(fp_to_type, output.fingerprint(), itype);
 
-            let mut arrange_tokens: Vec<TokenStream> = Vec::new();
-            let l = if let Some(arr) = arranged_map.get(&left.fingerprint()).cloned() {
-                arr
-            } else {
-                let arr = quote::format_ident!("{}_arr", l_base);
-                arranged_map.insert(left.fingerprint(), arr.clone());
-                arrange_tokens.push(quote! { let #arr = #l_base.arrange_by_key(); });
-                arr
-            };
-            let r = if let Some(arr) = arranged_map.get(&right.fingerprint()).cloned() {
-                arr
-            } else {
-                let arr = quote::format_ident!("{}_arr", r_base);
-                arranged_map.insert(right.fingerprint(), arr.clone());
-                arrange_tokens.push(quote! { let #arr = #r_base.arrange_by_key(); });
-                arr
-            };
+            let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
+            let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
 
             let out = find_ident(fp_to_ident, output.fingerprint());
 
             let out_key = build_key_val_from_join_args(flow.key());
             let out_val = build_key_val_from_join_args(flow.value());
-            let (antijoin_k, antijoin_v) =
-                super::arg::compute_anti_join_param_tokens(flow.key(), flow.value());
+            let (antijoin_k, antijoin_v) = compute_anti_join_param_tokens(flow.key(), flow.value());
 
-            let arrangement = quote! { #( #arrange_tokens )* };
-            quote! {
-                #arrangement
+            let transformation = quote! {
                 let #out =
                     #l
                         .antijoin(&#r)
                         .map(|(#antijoin_k, #antijoin_v)| {
                             (#out_key, #out_val)
                         });
+            };
+
+            let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);
+
+            quote! {
+                #transformation
+                #arrange_stmt
             }
         }
     }
+}
+
+// =========================================================================
+// Arrangement Management Utilities
+// =========================================================================
+fn register_arrangement(
+    arranged_map: &mut HashMap<u64, Ident>,
+    fingerprint: u64,
+    collection_ident: &Ident,
+) -> TokenStream {
+    let arrangement_ident = format_ident!("{}_arr", collection_ident);
+    arranged_map.insert(fingerprint, arrangement_ident.clone());
+    quote! { let #arrangement_ident = #collection_ident.arrange_by_key(); }
+}
+
+fn expect_arranged(
+    arranged_map: &HashMap<u64, Ident>,
+    fingerprint: u64,
+    base_ident: &Ident,
+) -> Ident {
+    arranged_map.get(&fingerprint).cloned().unwrap_or_else(|| {
+        panic!(
+            "collection '{}' (fingerprint {:016x}) must be arranged before use",
+            base_ident, fingerprint
+        )
+    })
 }

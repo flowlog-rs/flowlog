@@ -179,7 +179,7 @@ mod tests {
     fn var(name: &str) -> Arithmetic {
         Arithmetic::new(Factor::Var(name.into()), vec![])
     }
-    fn iconst(v: i32) -> Arithmetic {
+    fn iconst(v: u64) -> Arithmetic {
         Arithmetic::new(Factor::Const(ConstType::Integer(v)), vec![])
     }
 

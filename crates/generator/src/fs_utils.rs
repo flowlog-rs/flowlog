@@ -3,7 +3,7 @@ use std::io;
 use std::path::Path;
 
 // =========================================================================
-// File I/O Utilities
+// File system utilities
 // =========================================================================
 
 /// Ensure a directory exists (creates all parents if needed).

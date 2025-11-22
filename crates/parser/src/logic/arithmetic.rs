@@ -229,7 +229,7 @@ mod tests {
     fn v(name: &str) -> Factor {
         Var(name.into())
     }
-    fn i(n: i32) -> Factor {
+    fn i(n: u64) -> Factor {
         Const(Integer(n))
     }
     fn s(t: &str) -> Factor {

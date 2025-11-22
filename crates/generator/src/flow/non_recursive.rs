@@ -1,11 +1,12 @@
+use std::collections::{HashMap, HashSet};
+
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use std::collections::{HashMap, HashSet};
 use tracing::trace;
 
-use super::data_type::{find_type, insert_or_verify_type};
-use super::ident::find_ident;
-use super::transformation::gen_transformation;
+use crate::data_type::{find_type, insert_or_verify_type};
+use crate::ident::find_ident;
+use crate::transformation::gen_transformation;
 
 use parser::DataType;
 use planner::Transformation;
@@ -14,31 +15,32 @@ use planner::Transformation;
 // Non-Recursive Flow Generation
 // =========================================================================
 
-/// Generate the non-recursive core differential dataflow pipelines.
-pub(super) fn gen_non_recursive_core_flows(
+/// Generate the non-recursive core differential dataflow pipelines, returning the assembled
+/// statements along with the arrangement map populated while building them.
+pub(crate) fn gen_non_recursive_core_flows(
     fp_to_ident: &HashMap<u64, Ident>,
     fp_to_type: &mut HashMap<u64, DataType>,
     transformations: &[Transformation],
-) -> Vec<TokenStream> {
+) -> (Vec<TokenStream>, HashMap<u64, Ident>) {
     let mut flows = Vec::new();
     // Stratum-scoped cache of arrangements; emit arrange_by_key just before first use.
-    let mut arranged_map: HashMap<u64, Ident> = HashMap::new();
+    let mut non_recursive_arranged_map: HashMap<u64, Ident> = HashMap::new();
 
     for transformation in transformations {
         flows.push(gen_transformation(
             fp_to_ident,
             fp_to_type,
             transformation,
-            &mut arranged_map,
+            &mut non_recursive_arranged_map,
         ));
     }
 
     trace!("Generated static flows:\n{}\n", quote! { #(#flows)* });
-    flows
+    (flows, non_recursive_arranged_map)
 }
 
 /// Generate non recursive post-processing flows
-pub(super) fn gen_non_recursive_post_flows(
+pub(crate) fn gen_non_recursive_post_flows(
     fp_to_ident: &HashMap<u64, Ident>,
     fp_to_type: &mut HashMap<u64, DataType>,
     calculated_output_fps: &HashSet<u64>,

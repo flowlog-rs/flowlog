@@ -1,51 +1,54 @@
 //! Macaron Generator Library
-//! Generates execution plans and code from planned strata and rules produced by the optimizer.
-//!
-//! At this stage, this crate exposes a minimal facade and logs the generation
-//! process. Later it can be extended to generate optimized execution code.
+//! Generates executable Rust code from planned strata.
+
+// =========================================================================
+// Module Declarations
+// =========================================================================
 
 mod arg;
 mod data_type;
+mod flow;
+mod fs_utils;
 mod ident;
-mod ingest;
 mod inspect;
-mod io;
-mod non_recursive_flow;
-mod recursive_flow;
+mod io_utils;
 mod scaffold;
 mod transformation;
+
+// =========================================================================
+// Imports
+// =========================================================================
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use common::Args;
 use parser::Program;
 use planner::StratumPlanner;
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::quote;
-use std::collections::HashSet;
-use std::path::Path;
 use syn::{parse2, File};
 
+use crate::ident::find_ident;
 use data_type::make_type_map;
+use flow::{gen_iterative_block, gen_non_recursive_core_flows, gen_non_recursive_post_flows};
 use ident::make_ident_map;
-use ingest::{build_handle_binding, gen_close_stmts, gen_ingest_stmts, gen_input_decls};
 use inspect::gen_merge_partitions;
 use inspect::{gen_print_inspector, gen_size_inspector, gen_write_inspector};
-use non_recursive_flow::{gen_non_recursive_core_flows, gen_non_recursive_post_flows};
-use recursive_flow::gen_iterative_block;
+use io_utils::{build_handle_binding, gen_close_stmts, gen_ingest_stmts, gen_input_decls};
 use scaffold::write_project;
-
-use crate::ident::find_ident;
 
 // =========================================================================
 // Generator Main Entry Point
 // =========================================================================
 
-/// Create a project directory and write Cargo.toml + src/main.rs generated from the `Stratum`.
+/// Create a project directory and write Cargo.toml + src/main.rs generated from the strata plan.
 pub fn generate_project_at(
     args: &Args,
     out_parent: &Path,
     package_name: &str,
     program: &Program,
-    strata: &Vec<StratumPlanner>,
+    strata: &[StratumPlanner],
 ) -> std::io::Result<()> {
     let out_dir = out_parent.join(package_name);
     let main = generate_main(args, program, strata);
@@ -82,12 +85,12 @@ fn gen_imports(is_recursive: bool) -> TokenStream {
 }
 
 /// Generate the text for a standalone `main.rs` program executing the provided strata.
-fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -> String {
-    let mut fp_to_type = make_type_map(program.edbs());
+fn generate_main(args: &Args, program: &Program, strata: &[StratumPlanner]) -> String {
+    let mut fp_to_type = make_type_map(program.edbs(), program.idbs());
     let fp_to_ident = make_ident_map(program.edbs(), program.idbs());
     let input_order = program.edb_names();
 
-    // static pieces
+    // Static sections of the generated program.
     let input_decls = gen_input_decls(program.edbs());
     let (lhs_binding, ret_expr) = build_handle_binding(&input_order);
     let ingest_stmts = gen_ingest_stmts(program.edbs());
@@ -95,60 +98,38 @@ fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -
 
     let is_recursive = strata.iter().any(|s| s.is_recursive());
 
-    // Process strata in order and collect their token streams
-    let mut flow_stmts = Vec::<TokenStream>::new();
-    let mut inspect_stmts = Vec::<TokenStream>::new();
-    let mut merge_stmts = Vec::<TokenStream>::new();
-    // Fingerprints of output relations already materialized in prior strata.
+    // Flow generation per stratum.
+    let mut flow_stmts: Vec<TokenStream> = Vec::new();
     let mut calculated_output_fps: HashSet<u64> = HashSet::new();
 
     for stratum in strata {
-        // Core (non-recursive) transformations for the stratum.
-        let static_core = gen_non_recursive_core_flows(
+        let (core_flows, non_recursive_arranged_map) = gen_non_recursive_core_flows(
             &fp_to_ident,
             &mut fp_to_type,
             stratum.non_recursive_transformations(),
         );
-        flow_stmts.extend(static_core);
+        flow_stmts.extend(core_flows);
 
-        // If recursive, build iterative block; else emit post-processing unions.
         if stratum.is_recursive() {
-            let dyn_block = gen_iterative_block(&fp_to_ident, &mut fp_to_type, stratum);
-            flow_stmts.push(dyn_block);
+            flow_stmts.push(gen_iterative_block(
+                &fp_to_ident,
+                &mut fp_to_type,
+                &non_recursive_arranged_map,
+                stratum,
+            ));
         } else {
-            let post_flows = gen_non_recursive_post_flows(
+            flow_stmts.extend(gen_non_recursive_post_flows(
                 &fp_to_ident,
                 &mut fp_to_type,
                 &calculated_output_fps,
                 stratum.output_to_idb_map(),
-            );
-            flow_stmts.extend(post_flows);
+            ));
         }
 
-        // Record output relation fingerprints for incremental unions in later strata.
-        for fp in stratum.output_relations() {
-            calculated_output_fps.insert(fp);
-        }
+        calculated_output_fps.extend(stratum.output_relations());
     }
 
-    // After constructing flows, add inspectors for all IDB collections.
-    for idb in program.idbs() {
-        let var = find_ident(&fp_to_ident, idb.fingerprint());
-        let name = idb.name();
-        if idb.printsize() {
-            inspect_stmts.push(gen_size_inspector(&var, name));
-        }
-
-        if idb.output() {
-            if args.output_to_stdout() {
-                inspect_stmts.push(gen_print_inspector(&var, name));
-            } else {
-                let parent_dir = args.output_dir().unwrap();
-                inspect_stmts.push(gen_write_inspector(&var, name, parent_dir, idb.arity()));
-                merge_stmts.push(gen_merge_partitions(name, parent_dir));
-            }
-        }
-    }
+    let (inspect_stmts, merge_stmts) = collect_inspectors(args, program, &fp_to_ident);
 
     // Imports block (conditional on recursion for Variable).
     let imports = gen_imports(is_recursive);
@@ -201,4 +182,37 @@ fn generate_main(args: &Args, program: &Program, strata: &Vec<StratumPlanner>) -
 
     let ast: File = parse2(file_ts).expect("valid token stream");
     prettyplease::unparse(&ast)
+}
+
+/// Assemble inspection and partition-merge statements for IDB relations based on CLI args.
+fn collect_inspectors(
+    args: &Args,
+    program: &Program,
+    fp_to_ident: &HashMap<u64, Ident>,
+) -> (Vec<TokenStream>, Vec<TokenStream>) {
+    let mut inspect_stmts = Vec::new();
+    let mut merge_stmts = Vec::new();
+
+    for idb in program.idbs() {
+        let var = find_ident(fp_to_ident, idb.fingerprint());
+        let name = idb.name();
+
+        if idb.printsize() {
+            inspect_stmts.push(gen_size_inspector(&var, name));
+        }
+
+        if idb.output() {
+            if args.output_to_stdout() {
+                inspect_stmts.push(gen_print_inspector(&var, name));
+            } else {
+                let parent_dir = args
+                    .output_dir()
+                    .expect("output directory must be provided when writing IDB output to files");
+                inspect_stmts.push(gen_write_inspector(&var, name, parent_dir, idb.arity()));
+                merge_stmts.push(gen_merge_partitions(name, parent_dir));
+            }
+        }
+    }
+
+    (inspect_stmts, merge_stmts)
 }

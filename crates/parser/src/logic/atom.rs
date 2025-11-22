@@ -201,7 +201,7 @@ mod tests {
     fn v(n: &str) -> AtomArg {
         Var(n.into())
     }
-    fn i(n: i32) -> AtomArg {
+    fn i(n: u64) -> AtomArg {
         Const(Integer(n))
     }
     fn s(t: &str) -> AtomArg {

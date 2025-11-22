@@ -178,16 +178,6 @@ fn comparison_op_tokens(op: &parser::ComparisonOperator) -> TokenStream {
     }
 }
 
-fn arithmetic_op_tokens(op: &parser::ArithmeticOperator) -> TokenStream {
-    match op {
-        parser::ArithmeticOperator::Plus => quote! { + },
-        parser::ArithmeticOperator::Minus => quote! { - },
-        parser::ArithmeticOperator::Multiply => quote! { * },
-        parser::ArithmeticOperator::Divide => quote! { / },
-        parser::ArithmeticOperator::Modulo => quote! { % },
-    }
-}
-
 /// Build a combined predicate for KV-based closures from comparison expressions.
 /// Returns None when there are no comparisons.
 pub(super) fn build_kv_compare_predicate(comps: &[ComparisonExprArgument]) -> Option<TokenStream> {
@@ -379,6 +369,16 @@ pub(super) fn combine_predicates(
 // ==================================================
 // Arithmetic expression helpers
 // ==================================================
+fn arithmetic_op_tokens(op: &parser::ArithmeticOperator) -> TokenStream {
+    match op {
+        parser::ArithmeticOperator::Plus => quote! { + },
+        parser::ArithmeticOperator::Minus => quote! { - },
+        parser::ArithmeticOperator::Multiply => quote! { * },
+        parser::ArithmeticOperator::Divide => quote! { / },
+        parser::ArithmeticOperator::Modulo => quote! { % },
+    }
+}
+
 // Build an arithmetic expression from a position and field identifiers.
 fn build_row_args_arithmetic_expr(expr: &ArithmeticArgument, fields: &[Ident]) -> TokenStream {
     let to_expr = |factor: &FactorArgument| -> TokenStream {
@@ -398,10 +398,10 @@ fn build_row_args_arithmetic_expr(expr: &ArithmeticArgument, fields: &[Ident]) -
 
     expr.rest()
         .iter()
-        .fold(to_expr(expr.init()), |acc, (op, factor)| {
+        .fold(to_expr(expr.init()), |ts, (op, factor)| {
             let op_token = arithmetic_op_tokens(op);
             let factor_token = to_expr(factor);
-            quote! { ( #acc #op_token #factor_token ) }
+            quote! { ( #ts #op_token #factor_token ) }
         })
 }
 
@@ -426,10 +426,10 @@ fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
 
     expr.rest()
         .iter()
-        .fold(to_expr(expr.init()), |acc, (op, factor)| {
+        .fold(to_expr(expr.init()), |ts, (op, factor)| {
             let op_token = arithmetic_op_tokens(op);
             let factor_token = to_expr(factor);
-            quote! { ( #acc #op_token #factor_token ) }
+            quote! { ( #ts #op_token #factor_token ) }
         })
 }
 

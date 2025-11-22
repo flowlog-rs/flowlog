@@ -1,7 +1,7 @@
 use std::io;
 use std::path::Path;
 
-use crate::io::{ensure_dir, write_file};
+use crate::fs_utils::{ensure_dir, write_file};
 use toml_edit::DocumentMut;
 
 // =========================================================================
