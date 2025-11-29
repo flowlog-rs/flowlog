@@ -1,5 +1,5 @@
 .decl Arc(x:number, y:number, l:number)
-.input Arc(IO="file", filename="kernel/Arc.csv", delimiter=",")
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
 .decl Zero(x:number, y:number)
 .printsize Zero

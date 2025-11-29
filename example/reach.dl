@@ -1,7 +1,7 @@
 .decl Source(id: number)
-.input Source(IO="file", filename="livejournal/Source.csv", delimiter=",")
+.input Source(IO="file", filename="Source.csv", delimiter=",")
 .decl Arc(x: number, y: number)
-.input Arc(IO="file", filename="livejournal/Arc.csv", delimiter=",")
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
 .decl Reach(id: number)
 
