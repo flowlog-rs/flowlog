@@ -6,7 +6,7 @@ use syn::{Index, LitStr};
 /// collection identified by `var`. The output prints a single consolidated record
 /// whose weight corresponds to the number of elements in the collection at that point.
 pub fn gen_size_inspector(var: &Ident, name: &str) -> TokenStream {
-    let prefix = format!("{}:", name);
+    let prefix = name.to_string();
 
     // We map all records to unit `()` so they consolidate to one key whose
     // multiplicity equals the current collection size. We then inspect it.
@@ -15,6 +15,10 @@ pub fn gen_size_inspector(var: &Ident, name: &str) -> TokenStream {
             // Consolidate to a single key carrying the total multiplicity
             // and print the resulting update.
             #var
+                .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
+                .inner
+                .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1 as i32)))
+                .as_collection()
                 .map(|_| ())
                 .consolidate()
                 .inspect(|(_data, _time, size)| eprintln!("[size] [{}] {:?}", #prefix, size));
@@ -25,7 +29,7 @@ pub fn gen_size_inspector(var: &Ident, name: &str) -> TokenStream {
 /// Generate a TokenStream that prints each update of a collection with its time and diff.
 /// Useful for debugging tuple contents.
 pub fn gen_print_inspector(var: &Ident, name: &str) -> TokenStream {
-    let prefix = format!("{}:", name);
+    let prefix = name.to_string();
     quote! {
         {
             #var

@@ -71,12 +71,12 @@ pub(crate) fn gen_non_recursive_post_flows(
             flows.push(quote! {
                 let #output = #output
                     .concat(&#expr)
-                    .distinct();
+                    .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
             });
         } else {
             flows.push(quote! {
                 let #output = #expr
-                    .distinct();
+                    .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
             });
         }
     }

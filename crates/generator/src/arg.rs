@@ -116,21 +116,31 @@ pub(super) fn compute_join_param_tokens(
     (k_ident, lv_ident, rv_ident)
 }
 
-/// Compute closure parameter idents for a (k, v) style closure (e.g. antijoin map).
-/// Returns two TokenStreams; unused parameters are underscore-prefixed.
-pub(super) fn compute_anti_join_param_tokens(
+/// Inspect KV arithmetic, comparison, and constraint arguments to determine which closure
+/// parameters (`k`, `v`) are referenced. Unused parameters are renamed with an underscore
+/// prefix to silence warnings in generated `flat_map`/`flat_map_ref` closures.
+pub(super) fn compute_kv_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
+    compares: &[ComparisonExprArgument],
+    constraints: Option<&Constraints>,
 ) -> (TokenStream, TokenStream) {
-    let mut use_anti_join_k = false;
-    let mut use_anti_join_v = false;
+    let mut use_k = false;
+    let mut use_v = false;
 
-    let mut mark_usage = |arg: &TransformationArgument| {
-        if let TransformationArgument::KV((is_key, _)) = arg {
+    let mut mark_usage = |arg: &TransformationArgument| match arg {
+        TransformationArgument::KV((is_key, _)) => {
             if *is_key {
-                use_anti_join_k = true;
+                use_k = true;
             } else {
-                use_anti_join_v = true;
+                use_v = true;
+            }
+        }
+        TransformationArgument::Jn((_, is_key, _)) => {
+            if *is_key {
+                use_k = true;
+            } else {
+                use_v = true;
             }
         }
     };
@@ -146,16 +156,31 @@ pub(super) fn compute_anti_join_param_tokens(
         }
     };
 
-    for a in key_args.iter().chain(value_args.iter()) {
-        inspect_expr(a);
+    for arg in key_args.iter().chain(value_args.iter()) {
+        inspect_expr(arg);
     }
 
-    let k_ident = if use_anti_join_k {
+    for cmp in compares {
+        inspect_expr(cmp.left());
+        inspect_expr(cmp.right());
+    }
+
+    if let Some(cons) = constraints {
+        for (arg, _) in cons.constant_eq_constraints().as_ref().iter() {
+            mark_usage(arg);
+        }
+        for (left, right) in cons.variable_eq_constraints().as_ref().iter() {
+            mark_usage(left);
+            mark_usage(right);
+        }
+    }
+
+    let k_ident = if use_k {
         quote! { k }
     } else {
         quote! { _k }
     };
-    let v_ident = if use_anti_join_v {
+    let v_ident = if use_v {
         quote! { v }
     } else {
         quote! { _v }
@@ -233,7 +258,7 @@ pub(super) fn build_row_compare_predicate(
             let l = build_row_args_arithmetic_expr(c.left(), row_fields);
             let r = build_row_args_arithmetic_expr(c.right(), row_fields);
             let op = comparison_op_tokens(c.operator());
-            quote! { (#l) #op (#r) }
+            quote! { #l #op #r }
         })
         .collect();
 
@@ -252,7 +277,7 @@ pub(super) fn build_kv_constraints_predicate(constraints: &Constraints) -> Optio
         .map(|(arg, c)| {
             let lhs = trans_arg_to_kv_expr(arg);
             let rhs = const_to_token(c);
-            quote! { (#lhs) == (#rhs) }
+            quote! { #lhs == #rhs }
         })
         .collect();
 
@@ -264,7 +289,7 @@ pub(super) fn build_kv_constraints_predicate(constraints: &Constraints) -> Optio
             .map(|(l, r)| {
                 let lhs = trans_arg_to_kv_expr(l);
                 let rhs = trans_arg_to_kv_expr(r);
-                quote! { (#lhs) == (#rhs) }
+                quote! { #lhs == #rhs }
             }),
     );
 
@@ -287,7 +312,7 @@ pub(super) fn build_row_constraints_predicate(
         .map(|(arg, c)| {
             let lhs = trans_arg_to_row_expr(arg, row_fields);
             let rhs = const_to_token(c);
-            quote! { (#lhs) == (#rhs) }
+            quote! { #lhs == #rhs }
         })
         .collect();
 
@@ -299,7 +324,7 @@ pub(super) fn build_row_constraints_predicate(
             .map(|(l, r)| {
                 let lhs = trans_arg_to_row_expr(l, row_fields);
                 let rhs = trans_arg_to_row_expr(r, row_fields);
-                quote! { (#lhs) == (#rhs) }
+                quote! { #lhs == #rhs }
             }),
     );
 
@@ -362,7 +387,7 @@ pub(super) fn combine_predicates(
         (None, None) => None,
         (Some(x), None) => Some(x),
         (None, Some(y)) => Some(y),
-        (Some(x), Some(y)) => Some(quote! { ( (#x) && (#y) ) }),
+        (Some(x), Some(y)) => Some(quote! { (#x) && (#y) }),
     }
 }
 
@@ -418,7 +443,15 @@ fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
                         quote! { v.#i }
                     }
                 }
-                _ => unreachable!("unexpected argument type in row->kv builder"),
+                TransformationArgument::Jn((_, is_key, idx)) => {
+                    let i = Index::from(*idx);
+                    if *is_key {
+                        // `k` is a reference in join_core; clone to produce an owned key.
+                        quote! { k.#i }
+                    } else {
+                        proj_tuple_field("v", *idx)
+                    }
+                }
             },
             FactorArgument::Const(constant) => const_to_token(constant),
         }
@@ -468,7 +501,7 @@ fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
                 TransformationArgument::Jn((is_left, is_key, idx)) => {
                     if *is_key {
                         // `k` is a reference in join_core; clone to produce an owned key.
-                        quote! { k.clone() }
+                        quote! { k }
                     } else if *is_left {
                         proj_tuple_field("lv", *idx)
                     } else {
@@ -498,7 +531,7 @@ fn proj_tuple_field(base: &str, idx: usize) -> TokenStream {
     let ident = Ident::new(base, Span::call_site());
     // `lv` and `rv` are references to tuple values in join_core; clone to get owned field
     // values regardless of whether the field is Copy (u64) or owned (String).
-    quote! { #ident.#i.clone() }
+    quote! { #ident.#i }
 }
 
 /// Pack parts as a tuple with correct 1-tuple syntax.

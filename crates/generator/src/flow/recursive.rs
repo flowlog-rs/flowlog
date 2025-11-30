@@ -55,14 +55,14 @@ pub(crate) fn gen_iterative_block(
     let iter_var_inits: Vec<TokenStream> = iter_names
         .iter()
         .map(|name| {
-            quote! { let #name = Variable::new(inner, timely::order::Product::new(Default::default(), 1)); }
+            quote! { let #name = SemigroupVariable::new(inner, timely::order::Product::new(Default::default(), 1)); }
         })
         .collect();
 
     let (leave_pattern, leave_stmt) = build_leave_outputs(leave_fps, &next_bindings, fp_to_ident);
 
     quote! {
-        let #leave_pattern = scope.iterative::<u64, _, _>(|inner| {
+        let #leave_pattern = scope.iterative::<Iter, _, _>(|inner| {
             #(#enter_stmts)*
             #(#iter_var_inits)*
 
@@ -148,7 +148,7 @@ fn collect_unions(
         });
 
         union_stmts.push(quote! {
-            let #next_ident = #union_expr.distinct();
+            let #next_ident = #union_expr.threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
         });
     }
 

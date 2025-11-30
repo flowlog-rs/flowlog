@@ -64,6 +64,7 @@ impl StratumPlanner {
         is_recursive: bool,
         iterative_relation: &[u64],
         leave_relation: &[u64],
+        available_relations: &HashSet<u64>,
     ) -> Self {
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
@@ -138,7 +139,7 @@ impl StratumPlanner {
         // this phase to factoring optimizations
         stratum_planner.build_output_to_idb_map(&catalogs);
         stratum_planner.identify_recursive_transformations(is_recursive);
-        stratum_planner.build_recursion_enter_collections();
+        stratum_planner.build_recursion_enter_collections(available_relations);
         stratum_planner.build_output_to_aggregation_map(&catalogs);
 
         // Debug info for non-recursive vs recursive transformations.
@@ -383,10 +384,16 @@ impl StratumPlanner {
 // =========================================================================
 impl StratumPlanner {
     /// Build the fingerprint of collections that enter recursion.
-    pub fn build_recursion_enter_collections(&mut self) {
+    pub fn build_recursion_enter_collections(&mut self, available_relations: &HashSet<u64>) {
         // Build sets of input/output fingerprints touched by recursion transformations.
         let mut recursion_input_fps: HashSet<u64> = HashSet::new();
         let mut recursion_output_fps: HashSet<u64> = HashSet::new();
+        let mut available_fps = available_relations.clone();
+
+        // Build available output fps from static transformations
+        for tx in &self.non_recursive_transformations {
+            available_fps.insert(tx.output().fingerprint());
+        }
 
         for tx in &self.recursive_transformations {
             if tx.is_unary() {
@@ -403,6 +410,7 @@ impl StratumPlanner {
         // entering collections for the recursion.
         self.recursion_enter_collections = recursion_input_fps
             .difference(&recursion_output_fps)
+            .filter(|fp| available_fps.contains(fp))
             .copied()
             .collect()
     }

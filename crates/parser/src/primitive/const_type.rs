@@ -13,7 +13,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstType {
     /// 64-bit unsigned integer constant.
-    Integer(u64),
+    Integer(i32),
 
     /// UTF-8 string constant.
     Text(String),

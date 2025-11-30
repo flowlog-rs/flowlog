@@ -131,7 +131,7 @@ mod tests {
     fn var(name: &str) -> AtomArg {
         AtomArg::Var(name.into())
     }
-    fn int(v: u64) -> AtomArg {
+    fn int(v: i32) -> AtomArg {
         AtomArg::Const(ConstType::Integer(v))
     }
     fn txt(s: &str) -> AtomArg {

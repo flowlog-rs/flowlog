@@ -61,6 +61,7 @@ fn generate_program(
             is_recursive,
             stratifier.stratum_iterative_relation(stratum_idx),
             stratifier.stratum_leave_relation(stratum_idx),
+            stratifier.stratum_available_relations(stratum_idx),
         );
 
         info!("{}", "=".repeat(80));
@@ -75,8 +76,11 @@ fn generate_program(
 
     // Generate code for the deduplicated transformation list for this stratum
     let out_parent = Path::new("../");
-    let package_name = "demo";
-    if let Err(e) = generate_project_at(args, out_parent, package_name, program, &strata) {
+    let package_name = args
+        .output()
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| args.program_name());
+    if let Err(e) = generate_project_at(args, out_parent, &package_name, program, &strata) {
         error!("Failed to generate project: {}", e);
         process::exit(1);
     }
@@ -138,6 +142,7 @@ fn run_all_examples() {
                     is_recursive,
                     stratifier.stratum_iterative_relation(stratum_idx),
                     stratifier.stratum_leave_relation(stratum_idx),
+                    stratifier.stratum_available_relations(stratum_idx),
                 );
                 // In batch mode, skip file generation to avoid overwriting.
             }

@@ -22,7 +22,7 @@ mod transformation;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use common::Args;
+use common::{Args, ExecutionMode};
 use parser::Program;
 use planner::StratumPlanner;
 use proc_macro2::{Ident, TokenStream};
@@ -65,7 +65,7 @@ pub fn generate_project_at(
 fn gen_imports(is_recursive: bool) -> TokenStream {
     let rec_imports = if is_recursive {
         quote! {
-            use differential_dataflow::operators::iterate::Variable;
+            use differential_dataflow::operators::iterate::SemigroupVariable;
             use timely::dataflow::Scope;
         }
     } else {
@@ -80,6 +80,8 @@ fn gen_imports(is_recursive: bool) -> TokenStream {
         use differential_dataflow::input::Input;
         use differential_dataflow::operators::*;
         use differential_dataflow::operators::arrange::ArrangeByKey;
+        use timely::dataflow::operators::core::*;
+        use differential_dataflow::AsCollection;
         #rec_imports
     }
 }
@@ -93,7 +95,7 @@ fn generate_main(args: &Args, program: &Program, strata: &[StratumPlanner]) -> S
     // Static sections of the generated program.
     let input_decls = gen_input_decls(program.edbs());
     let (lhs_binding, ret_expr) = build_handle_binding(&input_order);
-    let ingest_stmts = gen_ingest_stmts(program.edbs());
+    let ingest_stmts = gen_ingest_stmts(args.fact_dir(), program.edbs());
     let close_stmts = gen_close_stmts(&input_order);
 
     let is_recursive = strata.iter().any(|s| s.is_recursive());
@@ -134,10 +136,22 @@ fn generate_main(args: &Args, program: &Program, strata: &[StratumPlanner]) -> S
     // Imports block (conditional on recursion for Variable).
     let imports = gen_imports(is_recursive);
 
+    let diff_type = match args.mode() {
+        ExecutionMode::Incremental => quote! { isize },
+        ExecutionMode::Batch => quote! { differential_dataflow::difference::Present },
+    };
+
+    let semiring_one_value = match args.mode() {
+        ExecutionMode::Incremental => quote! { 1 },
+        ExecutionMode::Batch => quote! { differential_dataflow::difference::Present },
+    };
+
     let file_ts: TokenStream = quote! {
         #imports
 
-        type Diff = isize;
+        type Diff = #diff_type;
+        type Iter = u16;
+        const SEMIRING_ONE: Diff = #semiring_one_value;
 
         fn main() {
             timely::execute_from_args(std::env::args(), |worker| {

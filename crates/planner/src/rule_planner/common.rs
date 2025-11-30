@@ -159,8 +159,6 @@ impl RulePlanner {
             .clone();
         let lhs_pos_fp = catalog.positive_atom_fingerprint(lhs_pos_idx);
         let left_atom_signature = AtomSignature::new(true, lhs_pos_idx);
-        let lhs_arg_names = Self::arg_names_set(&lhs_pos_args, catalog);
-
         // Build join keys from LHS arguments - these become the join condition
         let lhs_keys: Vec<ArithmeticPos> = lhs_pos_args
             .iter()
@@ -209,55 +207,27 @@ impl RulePlanner {
                 current_transformation_index,
             );
 
-            // Store join result argument list and signature for catalog update
-            new_arg_lists.push(rhs_args.clone());
-            right_sigs.push(AtomSignature::new(true, rhs_idx));
-
-            // Build RHS arithmetic positions; keys must mirror the LHS key ordering
-            let rhs_named_positions: Vec<(String, ArithmeticPos)> = rhs_args
-                .iter()
-                .map(|&sig| {
-                    (
-                        catalog.signature_to_argument_str(&sig).clone(),
-                        ArithmeticPos::from_var_signature(sig),
-                    )
-                })
-                .collect();
-
-            let find_rhs_pos = |target: &str| -> ArithmeticPos {
-                rhs_named_positions
-                    .iter()
-                    .find(|(name, _)| name == target)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Planner error: RHS missing key {} for positive semijoin",
-                            target
-                        )
-                    })
-                    .1
-                    .clone()
-            };
-
-            let rhs_keys: Vec<ArithmeticPos> = lhs_key_names
-                .iter()
-                .map(|name| find_rhs_pos(name))
-                .collect();
-
-            let rhs_vals: Vec<ArithmeticPos> = rhs_named_positions
-                .iter()
-                .filter(|(name, _)| !lhs_arg_names.contains(name))
-                .map(|(_, pos)| pos.clone())
-                .collect();
+            // Build RHS atom argument signatures; keys must mirror the LHS key ordering
+            let (new_rhs_args, rhs_keys, rhs_vals) = Self::reorder_rhs_arguments(
+                &rhs_args,
+                &lhs_key_names,
+                catalog,
+                "positive semijoin",
+            );
             trace!(
                 "Semijoin RHS values: {:?}",
                 rhs_vals
                     .iter()
-                    .map(|pos| (
-                        pos,
-                        catalog.signature_to_argument_str(pos.init().signature().unwrap())
+                    .map(|arg| (
+                        arg,
+                        catalog.signature_to_argument_str(arg.init().signature().unwrap())
                     ))
                     .collect::<Vec<_>>()
             );
+
+            // Store join result argument list and signature for catalog update
+            new_arg_lists.push(new_rhs_args.clone());
+            right_sigs.push(AtomSignature::new(true, rhs_idx));
 
             // Create the join transformation
             let tx = TransformationInfo::join_to_kv(
@@ -342,8 +312,6 @@ impl RulePlanner {
             .clone();
         let lhs_neg_fp = catalog.negative_atom_fingerprint(lhs_neg_idx);
         let left_atom_signature = AtomSignature::new(false, lhs_neg_idx);
-        let lhs_arg_names = Self::arg_names_set(&lhs_neg_args, catalog);
-
         // Build join keys from LHS arguments - these become the join condition
         let lhs_keys: Vec<ArithmeticPos> = lhs_neg_args
             .iter()
@@ -392,63 +360,30 @@ impl RulePlanner {
                 current_transformation_index,
             );
 
-            // Store join result argument list and signature for catalog update
-            new_arg_lists.push(rhs_args.clone());
-            right_sigs.push(AtomSignature::new(true, rhs_idx));
-
-            // Build RHS arithmetic positions; keys must mirror the LHS key ordering
-            let rhs_named_positions: Vec<(String, ArithmeticPos)> = rhs_args
-                .iter()
-                .map(|&sig| {
-                    (
-                        catalog.signature_to_argument_str(&sig).clone(),
-                        ArithmeticPos::from_var_signature(sig),
-                    )
-                })
-                .collect();
-
-            let find_rhs_pos = |target: &str| -> ArithmeticPos {
-                rhs_named_positions
-                    .iter()
-                    .find(|(name, _)| name == target)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Planner error: RHS missing key {} for anti-semijoin",
-                            target
-                        )
-                    })
-                    .1
-                    .clone()
-            };
-
-            let rhs_keys: Vec<ArithmeticPos> = lhs_key_names
-                .iter()
-                .map(|name| find_rhs_pos(name))
-                .collect();
-
-            let rhs_vals: Vec<ArithmeticPos> = rhs_named_positions
-                .iter()
-                .filter(|(name, _)| !lhs_arg_names.contains(name))
-                .map(|(_, pos)| pos.clone())
-                .collect();
+            let (new_rhs_args, rhs_keys, rhs_vals) =
+                Self::reorder_rhs_arguments(&rhs_args, &lhs_key_names, catalog, "anti-semijoin");
             trace!(
                 "Semijoin RHS values: {:?}",
                 rhs_vals
                     .iter()
-                    .map(|pos| (
-                        pos,
-                        catalog.signature_to_argument_str(pos.init().signature().unwrap())
+                    .map(|arg| (
+                        arg,
+                        catalog.signature_to_argument_str(arg.init().signature().unwrap())
                     ))
                     .collect::<Vec<_>>()
             );
+
+            // Store join result argument list and signature for catalog update
+            new_arg_lists.push(new_rhs_args.clone());
+            right_sigs.push(AtomSignature::new(true, rhs_idx));
 
             // Create the anti-join transformation
             let tx = TransformationInfo::anti_join_to_kv(
                 lhs_neg_fp,
                 rhs_fp,
                 KeyValueLayout::new(lhs_keys.clone(), Vec::new()), // LHS: keys only
-                KeyValueLayout::new(rhs_keys, rhs_vals.clone()),   // RHS: values only
-                KeyValueLayout::new(lhs_keys.clone(), rhs_vals),
+                KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()), // RHS: values only
+                KeyValueLayout::new(rhs_keys, rhs_vals),
             );
 
             // Generate descriptive name for the new atom
@@ -725,11 +660,50 @@ impl RulePlanner {
         }
     }
 
-    /// Collects display strings for argument signatures to identify duplicates in RHS columns.
-    fn arg_names_set(args: &[AtomArgumentSignature], catalog: &Catalog) -> HashSet<String> {
-        args.iter()
-            .map(|sig| catalog.signature_to_argument_str(sig).clone())
-            .collect()
+    /// Orders RHS arguments so join keys come first in the same order as the LHS keys.
+    fn reorder_rhs_arguments(
+        rhs_args: &[AtomArgumentSignature],
+        lhs_key_names: &[String],
+        catalog: &Catalog,
+        context: &str,
+    ) -> (
+        Vec<AtomArgumentSignature>,
+        Vec<ArithmeticPos>,
+        Vec<ArithmeticPos>,
+    ) {
+        let mut remaining: Vec<(String, AtomArgumentSignature)> = rhs_args
+            .iter()
+            .map(|&sig| (catalog.signature_to_argument_str(&sig).clone(), sig))
+            .collect();
+        let mut ordered = Vec::with_capacity(rhs_args.len());
+
+        for key_name in lhs_key_names {
+            if let Some(position) = remaining.iter().position(|(name, _)| name == key_name) {
+                let (_, sig) = remaining.remove(position);
+                ordered.push(sig);
+            } else {
+                panic!(
+                    "Planner error: RHS missing key {} for {}",
+                    key_name, context
+                );
+            }
+        }
+
+        for (_, sig) in remaining {
+            ordered.push(sig);
+        }
+
+        let key_count = lhs_key_names.len();
+        let rhs_keys = ordered[..key_count]
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect();
+        let rhs_vals = ordered[key_count..]
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect();
+
+        (ordered, rhs_keys, rhs_vals)
     }
 }
 

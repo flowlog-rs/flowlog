@@ -18,7 +18,8 @@ use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{ArithmeticPos, ComparisonExprPos, FactorPos};
+use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos};
+use parser::ConstType;
 
 /// Ordered consumer indices alongside their key/value index selections.
 /// (minimum consumer id, consumer ids, key indices, value indices)
@@ -58,6 +59,8 @@ impl RulePlanner {
                 output_info_fp,
                 output_kv_layout,
                 compare_exprs_pos,
+                const_eq_constraints,
+                var_eq_constraints,
                 ..
             }) = self.transformation_infos.get(index)
             else {
@@ -77,6 +80,8 @@ impl RulePlanner {
             let output_fp = *output_info_fp;
             let out_kv_layout = output_kv_layout.clone();
             let cmp_exprs = compare_exprs_pos.clone();
+            let const_eq_constraints = const_eq_constraints.clone();
+            let var_eq_constraints = var_eq_constraints.clone();
 
             let input_producer_indices = self.producer_indices(input_fp);
             let mut input_producer_output_fp = 0u64;
@@ -109,11 +114,13 @@ impl RulePlanner {
                 );
 
                 // Apply fused layout + comparisons to producer, and get new output fp
-                input_producer_output_fp = self.apply_fused_layout_and_comparisons(
+                input_producer_output_fp = self.apply_fused_layout_filters_cmps(
                     input_producer_index,
                     &key_argument_ids,
                     &value_argument_ids,
                     &cmp_exprs,
+                    &const_eq_constraints,
+                    &var_eq_constraints,
                 );
             }
 
@@ -219,12 +226,14 @@ impl RulePlanner {
     /// Build a new output layout from argument ids, update the producer's layout and comparisons,
     /// then return the new output fingerprint.
     #[inline]
-    fn apply_fused_layout_and_comparisons(
+    fn apply_fused_layout_filters_cmps(
         &mut self,
         producer_idx: usize,
         key_argument_ids: &[usize],
         value_argument_ids: &[usize],
         cmp_exprs: &[ComparisonExprPos],
+        const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
+        var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
     ) -> u64 {
         // Build the new output layout by selecting positions from the current producer output
         let all_positions = self.collect_output_positions(producer_idx);
@@ -234,12 +243,20 @@ impl RulePlanner {
             value_argument_ids,
         );
 
+        let remapped_const_eq =
+            Self::remap_const_eq_constraints(&all_positions, const_eq_constraints);
+        let remapped_var_eq = Self::remap_var_eq_constraints(&all_positions, var_eq_constraints);
+        let remapped_cmps = Self::remap_comparisons(&all_positions, cmp_exprs);
+
         // Update producer output layout and comparisons
         {
             let producer_tx = &mut self.transformation_infos[producer_idx];
             producer_tx.update_output_key_value_layout(new_out_kv_layout);
+            if !const_eq_constraints.is_empty() || !var_eq_constraints.is_empty() {
+                producer_tx
+                    .update_const_eq_and_var_eq_constraints(remapped_const_eq, remapped_var_eq);
+            }
             if !cmp_exprs.is_empty() {
-                let remapped_cmps = Self::remap_comparisons(&all_positions, cmp_exprs);
                 producer_tx.update_comparisons(remapped_cmps);
             }
             producer_tx.update_output_fake_sig();
@@ -342,6 +359,56 @@ impl RulePlanner {
                 ComparisonExprPos::from_parts(left, c.operator().clone(), right)
             })
             .collect()
+    }
+
+    fn remap_const_eq_constraints(
+        positions: &[ArithmeticPos],
+        constraints: &[(AtomArgumentSignature, ConstType)],
+    ) -> Vec<(AtomArgumentSignature, ConstType)> {
+        constraints
+            .iter()
+            .map(|(sig, constant)| {
+                let remapped = Self::remap_atom_signature(positions, sig);
+                (remapped, constant.clone())
+            })
+            .collect()
+    }
+
+    fn remap_var_eq_constraints(
+        positions: &[ArithmeticPos],
+        constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
+    ) -> Vec<(AtomArgumentSignature, AtomArgumentSignature)> {
+        constraints
+            .iter()
+            .map(|(left, right)| {
+                (
+                    Self::remap_atom_signature(positions, left),
+                    Self::remap_atom_signature(positions, right),
+                )
+            })
+            .collect()
+    }
+
+    fn remap_atom_signature(
+        positions: &[ArithmeticPos],
+        sig: &AtomArgumentSignature,
+    ) -> AtomArgumentSignature {
+        let idx = sig.argument_id();
+        let pos = positions.get(idx).unwrap_or_else(|| {
+            panic!(
+                "Planner error: missing argument id {} in output layout ({} positions)",
+                idx,
+                positions.len()
+            )
+        });
+
+        let signatures = pos.signatures();
+        signatures.first().copied().copied().unwrap_or_else(|| {
+            panic!(
+                "Planner error: no variable signature found for argument id {} during fusion",
+                idx
+            )
+        })
     }
 
     /// Rebuild the producer_consumer map and key-value layouts after fusion.
@@ -460,7 +527,7 @@ impl RulePlanner {
                 .push(consumer_idx);
         }
 
-        let mut consumer_collection: Vec<(usize, Vec<usize>, Vec<usize>, Vec<usize>)> = layouts
+        let mut consumer_collection: Vec<ConsumerLayout> = layouts
             .into_iter()
             .map(|((key_ids, value_ids), mut consumers)| {
                 consumers.sort_unstable();
@@ -515,7 +582,7 @@ impl RulePlanner {
         // Randomly assign also works, for simplify code we just push to the first one.
         if !available.is_empty() {
             if let Some((producer_ids, _, _, _)) = assignments.first_mut() {
-                producer_ids.extend(available.into_iter());
+                producer_ids.extend(available);
                 producer_ids.sort_unstable();
             } else {
                 panic!("Planner error: no consumer layout kinds to receive extra producers");

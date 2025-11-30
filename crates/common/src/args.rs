@@ -1,7 +1,20 @@
 //! Command line argument parsing for Macaron tools.
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::{fs, path::Path, process};
+
+/// Execution strategy for Macaron workflows
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ExecutionMode {
+    /// Maintain state across updates.
+    /// Tracking how many times each fact is derived,
+    /// supporting incremental view maintenance.
+    Incremental,
+    /// Recompute outputs in a single pass.
+    /// Only tracks whether facts are present or absent,
+    /// making it suitable for high-performance static execution.
+    Batch,
+}
 
 /// Command line arguments for Macaron tools
 #[derive(Parser, Debug)]
@@ -15,9 +28,17 @@ pub struct Args {
     #[arg(short = 'F', long, value_name = "DIR")]
     pub fact_dir: Option<String>,
 
+    /// Override the generated executable/package name (only used by generator/executor)
+    #[arg(short = 'o', long = "output", value_name = "NAME")]
+    pub output: Option<String>,
+
     /// Specify directory for output files (only used by generator/executor). If <DIR> is `-` then stdout is used.
     #[arg(short = 'D', long, value_name = "DIR")]
     pub output_dir: Option<String>,
+
+    /// Choose execution strategy (incremental = maintain state across updates, batch = recompute each run)
+    #[arg(long, value_enum, default_value = "batch", value_name = "MODE")]
+    pub mode: ExecutionMode,
 }
 
 impl Args {
@@ -41,12 +62,20 @@ impl Args {
         self.fact_dir.as_deref()
     }
 
+    pub fn output(&self) -> Option<&str> {
+        self.output.as_deref()
+    }
+
     pub fn output_dir(&self) -> Option<&str> {
         self.output_dir.as_deref()
     }
 
     pub fn output_to_stdout(&self) -> bool {
         self.output_dir.as_deref() == Some("-")
+    }
+
+    pub fn mode(&self) -> ExecutionMode {
+        self.mode
     }
 
     /// For generator/executor: get fact_dir with validation

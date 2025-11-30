@@ -540,6 +540,27 @@ impl TransformationInfo {
         }
     }
 
+    /// Update constant equality constraints, avoiding duplicates.
+    pub fn update_const_eq_and_var_eq_constraints(
+        &mut self,
+        const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
+        var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
+    ) {
+        match self {
+            Self::KVToKV {
+                const_eq_constraints: existing_const_eq_constraints,
+                var_eq_constraints: existing_var_eq_constraints,
+                ..
+            } => {
+                existing_const_eq_constraints.extend(const_eq_constraints);
+                existing_var_eq_constraints.extend(var_eq_constraints);
+            }
+            Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } => {
+                panic!("Planner error: attempting to append const constraints to non-unary transformation")
+            }
+        }
+    }
+
     /// Recompute the (fake) output fingerprint using the current resolved fields.
     ///
     /// Call this after all relevant inputs/layouts/constraints are up-to-date.

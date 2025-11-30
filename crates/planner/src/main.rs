@@ -51,6 +51,7 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
             is_recursive,
             stratifier.stratum_iterative_relation(stratum_idx),
             stratifier.stratum_leave_relation(stratum_idx),
+            stratifier.stratum_available_relations(stratum_idx),
         );
     }
 }
@@ -78,6 +79,7 @@ fn run_all_examples() {
                     is_recursive,
                     stratifier.stratum_iterative_relation(stratum_idx),
                     stratifier.stratum_leave_relation(stratum_idx),
+                    stratifier.stratum_available_relations(stratum_idx),
                 );
             }
 

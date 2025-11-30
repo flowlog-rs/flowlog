@@ -32,6 +32,9 @@ pub struct Stratifier {
 
     /// Mapping of stratum IDs to their leave relations (rule IDs) required by later stratum.
     stratum_leave_relation: Vec<Vec<u64>>,
+
+    /// Mapping of stratum IDs to the relations available before planning that stratum.
+    stratum_available_relations: Vec<HashSet<u64>>,
 }
 
 impl Stratifier {
@@ -73,6 +76,12 @@ impl Stratifier {
     #[must_use]
     pub fn stratum_leave_relation(&self, idx: usize) -> &Vec<u64> {
         &self.stratum_leave_relation[idx]
+    }
+
+    /// Return relations available prior to the given stratum (union of leaves from earlier strata).
+    #[must_use]
+    pub fn stratum_available_relations(&self, idx: usize) -> &HashSet<u64> {
+        &self.stratum_available_relations[idx]
     }
 
     /// Build strata by computing SCCs then merging independent non‑recursive strata.
@@ -179,6 +188,7 @@ impl Stratifier {
             is_recursive_stratum_bitmap: merged_bitmap,
             stratum_iterative_relation: Vec::new(),
             stratum_leave_relation: Vec::new(),
+            stratum_available_relations: Vec::new(),
         };
 
         instance.build_stratum_metadata();
@@ -325,6 +335,13 @@ impl Stratifier {
                 .copied()
                 .collect();
             self.stratum_leave_relation.push(leave);
+        }
+
+        // Build available relations per stratum by accumulating leaves from previous strata.
+        let mut accumulated: HashSet<u64> = HashSet::new();
+        for leave in &self.stratum_leave_relation {
+            self.stratum_available_relations.push(accumulated.clone());
+            accumulated.extend(leave.iter().copied());
         }
     }
 }

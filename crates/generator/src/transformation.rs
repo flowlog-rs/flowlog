@@ -6,7 +6,7 @@ use super::arg::{
     build_join_compare_predicate, build_key_val_from_join_args, build_key_val_from_kv_args,
     build_key_val_from_row_args, build_kv_compare_predicate, build_kv_constraints_predicate,
     build_row_compare_predicate, build_row_constraints_predicate, combine_predicates,
-    compute_anti_join_param_tokens, compute_join_param_tokens,
+    compute_join_param_tokens, compute_kv_param_tokens,
 };
 use super::data_type::{find_type, insert_or_verify_type, row_pattern_and_fields, type_tokens};
 use super::ident::find_ident;
@@ -32,7 +32,13 @@ pub(super) fn gen_transformation(
             let out = find_ident(fp_to_ident, output.fingerprint());
             let input_arity = input.arity().1;
 
-            let (row_pat, row_fields) = row_pattern_and_fields(input_arity);
+            let (row_pat, row_fields) = row_pattern_and_fields(
+                input_arity,
+                flow.key(),
+                flow.value(),
+                flow.compares(),
+                flow.constraints(),
+            );
             let itype = find_type(fp_to_type, input.fingerprint());
 
             // Check if output type already exists, if so assert it matches, otherwise insert
@@ -71,7 +77,13 @@ pub(super) fn gen_transformation(
             let out = find_ident(fp_to_ident, output.fingerprint());
             let input_arity = input.arity().1;
 
-            let (row_pat, row_fields) = row_pattern_and_fields(input_arity);
+            let (row_pat, row_fields) = row_pattern_and_fields(
+                input_arity,
+                flow.key(),
+                flow.value(),
+                flow.compares(),
+                flow.constraints(),
+            );
             let itype = find_type(fp_to_type, input.fingerprint());
 
             // Check if output type already exists, if so assert it matches, otherwise insert
@@ -124,18 +136,24 @@ pub(super) fn gen_transformation(
             let cmp_pred = build_kv_compare_predicate(flow.compares());
             let cst_pred = build_kv_constraints_predicate(flow.constraints());
             let pred = combine_predicates(cmp_pred, cst_pred);
+            let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
+                flow.key(),
+                flow.value(),
+                flow.compares(),
+                Some(flow.constraints()),
+            );
 
             let transformation = if let Some(pred) = pred {
                 quote! {
                     let #out = #inp
-                        .flat_map(|(k, v)| {
+                        .flat_map(|( #kv_param_k, #kv_param_v )| {
                             if #pred { Some( ( #out_key, #out_val ) ) } else { None }
                         });
                 }
             } else {
                 quote! {
                     let #out = #inp
-                        .flat_map(|(k, v)| std::iter::once( ( #out_key, #out_val ) ));
+                        .flat_map(|( #kv_param_k, #kv_param_v )| std::iter::once( ( #out_key, #out_val ) ));
                 }
             };
 
@@ -164,18 +182,24 @@ pub(super) fn gen_transformation(
             let cmp_pred = build_kv_compare_predicate(flow.compares());
             let cst_pred = build_kv_constraints_predicate(flow.constraints());
             let pred = combine_predicates(cmp_pred, cst_pred);
+            let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
+                flow.key(),
+                flow.value(),
+                flow.compares(),
+                Some(flow.constraints()),
+            );
 
             if let Some(pred) = pred {
                 quote! {
                     let #out = #inp
-                        .flat_map(|(k, v)| {
+                        .flat_map(|( #kv_param_k, #kv_param_v )| {
                             if #pred { Some( #out_val ) } else { None }
                         });
                 }
             } else {
                 quote! {
                     let #out = #inp
-                        .flat_map(|(k, v)| std::iter::once( #out_val ));
+                        .flat_map(|( #kv_param_k, #kv_param_v )| std::iter::once( #out_val ));
                 }
             }
         }
@@ -303,15 +327,34 @@ pub(super) fn gen_transformation(
 
             let out = find_ident(fp_to_ident, output.fingerprint());
 
-            let out_val = build_key_val_from_join_args(flow.value());
-            let (antijoin_k, antijoin_v) = compute_anti_join_param_tokens(flow.key(), flow.value());
+            let out_map_value = build_key_val_from_kv_args(flow.value());
+
+            let (anti_param_k, anti_param_v) =
+                compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
+
+            let out_join_val = build_key_val_from_join_args(flow.value());
+
+            let (antijoin_k, antijoin_lv, antijoin_rv) =
+                compute_join_param_tokens(flow.key(), flow.value(), &[]);
             quote! {
                 let #out =
-                    #l
-                        .antijoin(&#r)
-                        .map(|(#antijoin_k, #antijoin_v)| {
-                            #out_val
-                        });
+                    #r
+                        .flat_map_ref(|& #anti_param_k, & #anti_param_v| std::iter::once( #out_map_value ))
+                        .inner
+                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1 as i32)))
+                        .as_collection()
+                        .concat(
+                            &{
+                                #l
+                                    .join_core(&#r, |#antijoin_k, #antijoin_lv, #antijoin_rv| {
+                                        Some( #out_join_val )
+                                    })
+                                    .inner
+                                    .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1 as i32)))
+                                    .as_collection()
+                            }
+                        )
+                        .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
             }
         }
 
@@ -338,17 +381,37 @@ pub(super) fn gen_transformation(
 
             let out = find_ident(fp_to_ident, output.fingerprint());
 
-            let out_key = build_key_val_from_join_args(flow.key());
-            let out_val = build_key_val_from_join_args(flow.value());
-            let (antijoin_k, antijoin_v) = compute_anti_join_param_tokens(flow.key(), flow.value());
+            let out_map_key = build_key_val_from_kv_args(flow.key());
+            let out_map_value = build_key_val_from_kv_args(flow.value());
+
+            let (kv_param_k, kv_param_v) =
+                compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
+
+            let out_join_key = build_key_val_from_join_args(flow.key());
+            let out_join_val = build_key_val_from_join_args(flow.value());
+
+            let (antijoin_k, antijoin_lv, antijoin_rv) =
+                compute_join_param_tokens(flow.key(), flow.value(), &[]);
 
             let transformation = quote! {
                 let #out =
-                    #l
-                        .antijoin(&#r)
-                        .map(|(#antijoin_k, #antijoin_v)| {
-                            (#out_key, #out_val)
-                        });
+                    #r
+                        .flat_map_ref(|& #kv_param_k, & #kv_param_v | std::iter::once( ( #out_map_key, #out_map_value ) ))
+                        .inner
+                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1 as i32)))
+                        .as_collection()
+                        .concat(
+                            &{
+                                #l
+                                    .join_core(&#r, |#antijoin_k, #antijoin_lv, #antijoin_rv| {
+                                        Some((#out_join_key, #out_join_val))
+                                    })
+                                    .inner
+                                    .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1 as i32)))
+                                    .as_collection()
+                            }
+                        )
+                        .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
             };
 
             let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);
