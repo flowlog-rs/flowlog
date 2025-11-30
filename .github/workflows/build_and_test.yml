@@ -42,8 +42,6 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-      - name: 📚 Test docs
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --doc
+      - name: 🏁 Run end-to-end correctness test (check.sh)
+        run: 
+          bash tools/check/check.sh
