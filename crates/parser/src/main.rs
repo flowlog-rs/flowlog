@@ -1,136 +1,59 @@
-use std::env;
-use std::fs;
-use std::path::Path;
-use std::process;
-
+use clap::Parser;
+use common::{get_example_files, Args, TestResult};
 use parser::program::Program;
-use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Initialize simple tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("info"))
-        .init();
-
     // Parse command line arguments
-    let args: Vec<String> = env::args().collect();
+    let args = Args::parse();
 
-    if args.len() != 2 {
-        eprintln!("Usage: {} <program_file>", args[0]);
-        eprintln!("       {} --all", args[0]);
-        eprintln!();
-        eprintln!("Examples:");
-        eprintln!("  {} ./example/reach.dl", args[0]);
-        eprintln!("  {} --all", args[0]);
-        process::exit(1);
-    }
-
-    let argument = &args[1];
-
-    if argument == "--all" {
+    if args.should_process_all() {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("info"))
+            .init();
         // Run parser on all example files
         run_all_examples();
     } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("debug"))
+            .init();
         // Parse single program file
-        let program = Program::parse(argument);
-        info!("Success parse program\n{program}");
+        let _program = Program::parse(args.program());
     }
 }
 
 fn run_all_examples() {
-    let example_dir = "example";
+    let example_files = get_example_files();
+    let mut formatter = TestResult::new("parser", example_files.len());
 
-    // Check if example directory exists
-    if !Path::new(example_dir).exists() {
-        eprintln!("Error: example directory '{}' not found", example_dir);
-        process::exit(1);
-    }
-
-    // Read all .dl files from example directory
-    let entries = match fs::read_dir(example_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            eprintln!("Error reading example directory: {}", e);
-            process::exit(1);
-        }
-    };
-
-    let mut example_files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("dl") {
-            example_files.push(path);
-        }
-    }
-
-    // Sort files for consistent output
-    example_files.sort();
-
-    if example_files.is_empty() {
-        eprintln!("No .dl files found in {} directory", example_dir);
-        process::exit(1);
-    }
-
-    info!("Running parser on {} example files...", example_files.len());
-    println!("{}", "=".repeat(80));
-
-    let mut successful = 0;
-    let mut failed = 0;
-
-    for (i, file_path) in example_files.iter().enumerate() {
+    for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
-
-        println!(
-            "\n[{}/{}] Processing: {}",
-            i + 1,
-            example_files.len(),
-            file_name
-        );
-        println!("{}", "-".repeat(40));
 
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
             Ok(program) => {
-                successful += 1;
-                info!("  SUCCESS: {}", file_name);
-
-                // Print basic statistics
                 let edbs = program.edbs();
                 let idbs = program.idbs();
                 let rules = program.rules();
-
-                println!("    Statistics:");
-                println!("     EDB relations: {}", edbs.len());
-                println!("     IDB relations: {}", idbs.len());
-                println!("     Rules: {}", rules.len());
+                let stats = format!(
+                    "rules={}, edbs={}, idbs={}",
+                    rules.len(),
+                    edbs.len(),
+                    idbs.len()
+                );
+                formatter.report_success(file_name, Some(&stats));
             }
             Err(panic_info) => {
-                failed += 1;
-                eprintln!("  FAILED: {}", file_name);
-
-                // Try to extract panic message
-                if let Some(s) = panic_info.downcast_ref::<String>() {
-                    eprintln!("  Error: {}", s);
+                let error_msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
                 } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    eprintln!("  Error: {}", s);
+                    s.to_string()
                 } else {
-                    eprintln!("  Error: Unknown panic occurred");
-                }
+                    "Unknown panic occurred".to_string()
+                };
+                formatter.report_failure(file_name, Some(&error_msg));
             }
         }
     }
 
-    // Summary
-    println!("\n{}", "=".repeat(80));
-    println!("SUMMARY:");
-    println!("  Total files: {}", example_files.len());
-    println!("  Successful: {}", successful);
-    println!("  Failed: {}", failed);
-
-    if failed > 0 {
-        println!("\nSome files failed to parse. Check the errors above for details.");
-        process::exit(1);
-    } else {
-        println!("\nAll example files parsed successfully!");
-    }
+    formatter.finish();
 }

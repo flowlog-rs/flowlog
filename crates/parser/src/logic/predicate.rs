@@ -1,7 +1,7 @@
 //! Predicate types for Macaron Datalog programs.
 //!
 //! - Positive atoms: `edge(X, Y)`
-//! - Negated atoms: `!edge(X, Y)`
+//! - Negative atoms: `!edge(X, Y)`
 //! - Comparisons: `X > 5`, `Age ≥ 18`
 //! - Boolean literals: `true`, `false`
 //!
@@ -17,8 +17,8 @@ use std::fmt;
 pub enum Predicate {
     /// Positive atom, e.g. `edge(X, Y)`.
     PositiveAtomPredicate(Atom),
-    /// Negated atom (negation as failure), e.g. `!edge(X, Y)`.
-    NegatedAtomPredicate(Atom),
+    /// Negative atom (negation as failure), e.g. `!edge(X, Y)`.
+    NegativeAtomPredicate(Atom),
     /// Comparison expression, e.g. `X > 5`.
     ComparePredicate(ComparisonExpr),
     /// Boolean literal.
@@ -26,14 +26,14 @@ pub enum Predicate {
 }
 
 impl Predicate {
-    /// Arguments of the (negated) atom.
+    /// Arguments of the (negative) atom.
     ///
     /// # Panics
     /// Panics if called on non-atom predicates.
     #[inline]
     pub fn arguments(&self) -> Vec<&AtomArg> {
         match self {
-            Self::PositiveAtomPredicate(atom) | Self::NegatedAtomPredicate(atom) => {
+            Self::PositiveAtomPredicate(atom) | Self::NegativeAtomPredicate(atom) => {
                 atom.arguments().iter().collect()
             }
             Self::ComparePredicate(_) => {
@@ -45,7 +45,7 @@ impl Predicate {
         }
     }
 
-    /// Relation name (for atom / negated atom).
+    /// Relation name (for atom / negative atom).
     ///
     /// # Panics
     /// Panics if called on non-atom predicates.
@@ -53,7 +53,7 @@ impl Predicate {
     #[inline]
     pub fn name(&self) -> &str {
         match self {
-            Self::PositiveAtomPredicate(atom) | Self::NegatedAtomPredicate(atom) => atom.name(),
+            Self::PositiveAtomPredicate(atom) | Self::NegativeAtomPredicate(atom) => atom.name(),
             Self::ComparePredicate(_) => {
                 unreachable!("Cannot get name from a comparison predicate")
             }
@@ -72,7 +72,7 @@ impl fmt::Display for Predicate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PositiveAtomPredicate(atom) => write!(f, "{atom}"),
-            Self::NegatedAtomPredicate(atom) => write!(f, "!{atom}"),
+            Self::NegativeAtomPredicate(atom) => write!(f, "!{atom}"),
             Self::ComparePredicate(expr) => write!(f, "{expr}"),
             Self::BoolPredicate(b) => write!(f, "{b}"),
         }
@@ -89,7 +89,7 @@ impl fmt::Debug for Predicate {
 impl Lexeme for Predicate {
     /// Parse:
     /// - `atom` → positive atom
-    /// - `neg_atom` → `!atom`
+    /// - `negative_atom` → `!atom`
     /// - `compare_expr` → comparison
     /// - `boolean` → `True` | `False`
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
@@ -100,12 +100,12 @@ impl Lexeme for Predicate {
 
         match inner.as_rule() {
             Rule::atom => Self::PositiveAtomPredicate(Atom::from_parsed_rule(inner)),
-            Rule::neg_atom => {
+            Rule::negative_atom => {
                 let atom_rule = inner
                     .into_inner()
                     .next()
-                    .expect("Parser error: neg_atom missing inner atom");
-                Self::NegatedAtomPredicate(Atom::from_parsed_rule(atom_rule))
+                    .expect("Parser error: negative_atom missing inner atom");
+                Self::NegativeAtomPredicate(Atom::from_parsed_rule(atom_rule))
             }
             Rule::compare_expr => Self::ComparePredicate(ComparisonExpr::from_parsed_rule(inner)),
             Rule::boolean => match inner.as_str() {
@@ -156,8 +156,8 @@ mod tests {
     }
 
     #[test]
-    fn negated_atom_predicate() {
-        let p = Predicate::NegatedAtomPredicate(atom("blocked", vec![var("User")]));
+    fn negative_atom_predicate() {
+        let p = Predicate::NegativeAtomPredicate(atom("blocked", vec![var("User")]));
         assert_eq!(p.name(), "blocked");
         assert!(p.to_string().starts_with("!blocked(User)"));
         let args = p.arguments();

@@ -1,0 +1,10 @@
+[package]
+name = "common"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+tracing = "0.1"

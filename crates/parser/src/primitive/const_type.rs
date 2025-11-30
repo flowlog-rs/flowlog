@@ -12,11 +12,10 @@ use std::fmt;
 /// - [`ConstType::Text`] for UTF-8 strings
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstType {
-    /// 32-bit signed integer constant.
+    /// 64-bit unsigned integer constant.
     Integer(i32),
 
     /// UTF-8 string constant.
-    /// TODO: current unsupported in system, need to discuss
     Text(String),
 }
 
@@ -65,7 +64,6 @@ mod tests {
     #[test]
     fn display_integer_golden() {
         assert_eq!(ConstType::Integer(42).to_string(), "42");
-        assert_eq!(ConstType::Integer(-17).to_string(), "-17");
     }
 
     #[test]

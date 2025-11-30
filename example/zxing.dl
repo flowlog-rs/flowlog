@@ -29,14 +29,14 @@
 .decl isArrayType(t:number)
 .decl isClassType(t:number)
 .decl isInterfaceType(t:number)
-.decl ApplicationClass(ref:number)
+// .decl ApplicationClass(ref:number)
 .decl Field_DeclaringType(field:number, declaringClass:number)
 .decl Method_DeclaringType(method:number, declaringType:number)
-.decl Method_ReturnType(method:number, returnType:number) // redundant
+// .decl Method_ReturnType(method:number, returnType:number) // redundant
 .decl Method_SimpleName(method:number, simpleName:number)
-.decl Method_Params(method:number, params:number) // redundant
+// .decl Method_Params(method:number, params:number) // redundant
 .decl ThisVar(method:number, var:number)
-.decl Var_DeclaringMethod(var:number, method:number)
+// .decl Var_DeclaringMethod(var:number, method:number)
 // .decl HeapAllocation_Type(heap:number, type:number) move into input
 // .decl MainMethodArgArray(heap:number) // redundant
 // .decl MainMethodArgArrayContent(heap:number) // redundant
@@ -65,7 +65,7 @@
 .decl VirtualMethodInvocation_SimpleName(invocation:number, simplename:number)
 .decl VirtualMethodInvocation_Descriptor(invocation:number, descriptor:number)
 .decl SpecialMethodInvocation_Base(invocation:number, base:number)
-.decl MethodInvocation_Base(invocation:number, base:number)
+// .decl MethodInvocation_Base(invocation:number, base:number)
 
 // Fat schema
 .decl LoadInstanceField(base:number, sig:number, to:number, inmethod:number)
@@ -89,16 +89,16 @@
 .input _ArrayType(IO="file", filename="ArrayType.csv", delimiter=",")
 .decl _InterfaceType(interface:number)
 .input _InterfaceType(IO="file", filename="InterfaceType.csv", delimiter=",")
-.decl _Var_DeclaringMethod(var:number, method:number)
-.input _Var_DeclaringMethod(IO="file", filename="Var_DeclaringMethod.csv", delimiter=",")
+// .decl _Var_DeclaringMethod(var:number, method:number)
+// .input _Var_DeclaringMethod(IO="file", filename="Var_DeclaringMethod.csv", delimiter=",")
 .decl _ApplicationClass(type:number)
 .input _ApplicationClass(IO="file", filename="ApplicationClass.csv", delimiter=",")
 .decl _ThisVar(method:number, var:number)
 .input _ThisVar(IO="file", filename="ThisVar.csv", delimiter=",")
 .decl _NormalHeap(id:number, type:number)
 .input _NormalHeap(IO="file", filename="NormalHeap.csv", delimiter=",")
-.decl _StringConstant(id:number)
-.input _StringConstant(IO="file", filename="StringConstant.csv", delimiter=",")
+// .decl _StringConstant(id:number)
+// .input _StringConstant(IO="file", filename="StringConstant.csv", delimiter=",")
 .decl _AssignHeapAllocation(instruction:number, index:number, heap:number, to:number, inmethod:number, linenumber:number)
 .input _AssignHeapAllocation(IO="file", filename="AssignHeapAllocation.csv", delimiter=",")
 .decl _AssignLocal(instruction:number, index:number, from:number, to:number, inmethod:number)
@@ -121,11 +121,11 @@ isType(interface) :- _InterfaceType(interface).
 isReferenceType(interface) :- _InterfaceType(interface).
 isInterfaceType(interface) :- _InterfaceType(interface).
 
-Var_DeclaringMethod(var, method) :- _Var_DeclaringMethod(var, method). // redundant Var_DeclaringMethod
+// Var_DeclaringMethod(var, method) :- _Var_DeclaringMethod(var, method). // redundant Var_DeclaringMethod
 
 isType(type) :- _ApplicationClass(type).
 isReferenceType(type) :- _ApplicationClass(type).
-ApplicationClass(type) :- _ApplicationClass(type).
+// ApplicationClass(type) :- _ApplicationClass(type).
 
 ThisVar(method, var) :- _ThisVar(method, var).
 
@@ -158,8 +158,8 @@ AssignInstruction_To(instruction, to) :-
 
 Field_DeclaringType(signature, declaringType) :- _Field(signature, declaringType, _, _).
 
-MethodInvocation_Base(invocation, base) :- VirtualMethodInvocation_Base(invocation, base).
-MethodInvocation_Base(invocation, base) :- SpecialMethodInvocation_Base(invocation, base).
+// MethodInvocation_Base(invocation, base) :- VirtualMethodInvocation_Base(invocation, base).
+// MethodInvocation_Base(invocation, base) :- SpecialMethodInvocation_Base(invocation, base).
 
 
 

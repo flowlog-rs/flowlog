@@ -165,11 +165,7 @@ impl Lexeme for ComparisonExpr {
         let operator = ComparisonOperator::from_parsed_rule(op_pair);
         let right = Arithmetic::from_parsed_rule(right_pair);
 
-        Self {
-            left,
-            operator,
-            right,
-        }
+        Self::new(left, operator, right)
     }
 }
 

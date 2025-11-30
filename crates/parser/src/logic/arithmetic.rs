@@ -215,7 +215,7 @@ impl Lexeme for Arithmetic {
             rest.push((op, factor));
         }
 
-        Self { init, rest }
+        Self::new(init, rest)
     }
 }
 

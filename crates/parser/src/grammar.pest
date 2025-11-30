@@ -88,10 +88,10 @@ parameter_name = { identifier }
 // Parameter value (quoted string)
 parameter_value = { string }
 
-// Output directive for relations  
-// Example: .output Relation or .output Relation path/to/output
+// Output directive for relations
+// Example: .output Relation
 output_directive = { 
-    ".output" ~ relation_name ~ string?
+    ".output" ~ relation_name
 }
 
 // Print size directive for relations - separate from declaration
@@ -199,9 +199,9 @@ atom = {
     ")" 
 }
 
-// Negated atom for negative conditions
+// Negative atom for negative conditions
 // Example: !edge(x, y)
-neg_atom = { "!" ~ atom }
+negative_atom = { "!" ~ atom }
 
 // Arguments in atoms can be variables, constants, or placeholders
 atom_arg = { variable | constant | placeholder } 
@@ -235,7 +235,7 @@ predicates = { predicate ~ ("," ~ predicate)* }
 // Types of predicates allowed in rule bodies
 predicate = { 
     atom |          // Positive atom: edge(x, y)
-    neg_atom |      // Negated atom: !edge(x, y)  
+    negative_atom | // Negative atom: !edge(x, y)  
     compare_expr |  // Comparison: x > y
     boolean         // Boolean atom: True/False
 }

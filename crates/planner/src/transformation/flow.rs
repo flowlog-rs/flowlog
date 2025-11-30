@@ -225,13 +225,13 @@ impl TransformationFlow {
             .key()
             .iter()
             .enumerate()
-            .map(|(id, expr)| (expr.clone(), TransformationArgument::KV((false, id))))
+            .map(|(id, expr)| (expr.clone(), TransformationArgument::KV((true, id))))
             .chain(
                 kv_layout
                     .value()
                     .iter()
                     .enumerate()
-                    .map(|(id, expr)| (expr.clone(), TransformationArgument::KV((true, id)))),
+                    .map(|(id, expr)| (expr.clone(), TransformationArgument::KV((false, id)))),
             )
             .collect()
     }
@@ -246,15 +246,15 @@ impl TransformationFlow {
             .key()
             .iter()
             .enumerate()
-            .map(|(id, expr)| (expr.clone(), TransformationArgument::Jn((false, false, id))))
+            .map(|(id, expr)| (expr.clone(), TransformationArgument::Jn((true, true, id))))
             .chain(
                 jn_left_layout.value().iter().enumerate().map(|(id, expr)| {
-                    (expr.clone(), TransformationArgument::Jn((false, true, id)))
+                    (expr.clone(), TransformationArgument::Jn((true, false, id)))
                 }),
             )
             .chain(
                 jn_right_layout.key().iter().enumerate().map(|(id, expr)| {
-                    (expr.clone(), TransformationArgument::Jn((true, false, id)))
+                    (expr.clone(), TransformationArgument::Jn((false, true, id)))
                 }),
             )
             .chain(
@@ -262,7 +262,9 @@ impl TransformationFlow {
                     .value()
                     .iter()
                     .enumerate()
-                    .map(|(id, expr)| (expr.clone(), TransformationArgument::Jn((true, true, id)))),
+                    .map(|(id, expr)| {
+                        (expr.clone(), TransformationArgument::Jn((false, false, id)))
+                    }),
             )
             .collect()
     }
@@ -478,12 +480,12 @@ impl fmt::Display for TransformationFlow {
 
                 let key_str = key
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|k| format!("{}", k))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let value_str = value
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|v| format!("{}", v))
                     .collect::<Vec<_>>()
                     .join(", ");
 
@@ -514,12 +516,12 @@ impl fmt::Display for TransformationFlow {
 
                 let key_str = key
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|k| format!("{}", k))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let value_str = value
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|v| format!("{}", v))
                     .collect::<Vec<_>>()
                     .join(", ");
 

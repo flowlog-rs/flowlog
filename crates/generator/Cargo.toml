@@ -1,0 +1,23 @@
+[package]
+name = "generator"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+prettyplease = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+toml_edit = { workspace = true }
+
+common = { path = "../common" }
+catalog = { path = "../catalog" }
+planner = { path = "../planner" }
+parser = { path = "../parser" }
+stratifier = { path = "../stratifier" }
+optimizer = { path = "../optimizer" }

@@ -1,2 +1,11 @@
 # Compilation artifacts
 /target
+
+# Macaron output
+/result
+
+# Data files
+/facts
+
+# Local test program
+/example/test.dl

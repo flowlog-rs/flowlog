@@ -13,10 +13,12 @@ pub struct InputDirective {
 
 impl InputDirective {
     /// Create a new InputDirective with a relation name and parameters
+    ///
+    /// Converts the relation name to lowercase.
     #[must_use]
     pub fn new(relation_name: String, parameters: HashMap<String, String>) -> Self {
         Self {
-            relation_name,
+            relation_name: relation_name.to_lowercase(),
             parameters,
         }
     }
@@ -72,20 +74,20 @@ impl Lexeme for InputDirective {
     }
 }
 
-/// Represents an output directive (which relation to write + optional path)
+/// Represents an output directive (which relation to write)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputDirective {
     relation_name: String,
-    path: Option<String>,
 }
 
 impl OutputDirective {
-    /// Create a new OutputDirective with optional output path
+    /// Create a new OutputDirective
+    ///
+    /// Converts the relation name to lowercase.
     #[must_use]
-    pub fn new(relation_name: String, path: Option<String>) -> Self {
+    pub fn new(relation_name: String) -> Self {
         Self {
-            relation_name,
-            path,
+            relation_name: relation_name.to_lowercase(),
         }
     }
 
@@ -93,12 +95,6 @@ impl OutputDirective {
     #[must_use]
     pub fn relation_name(&self) -> &str {
         &self.relation_name
-    }
-
-    /// Get the optional output path
-    #[must_use]
-    pub fn path(&self) -> Option<&str> {
-        self.path.as_deref()
     }
 }
 
@@ -113,12 +109,7 @@ impl Lexeme for OutputDirective {
             .as_str()
             .to_string();
 
-        // Second child may be an output file path
-        let path = inner
-            .next()
-            .map(|p| p.as_str().trim_matches('"').to_string());
-
-        Self::new(relation_name, path)
+        Self::new(relation_name)
     }
 }
 
@@ -129,9 +120,14 @@ pub struct PrintSizeDirective {
 }
 
 impl PrintSizeDirective {
+    /// Create a new PrintSizeDirective
+    ///
+    /// Converts the relation name to lowercase.
     #[must_use]
     pub fn new(relation_name: String) -> Self {
-        Self { relation_name }
+        Self {
+            relation_name: relation_name.to_lowercase(),
+        }
     }
 
     /// Get the relation name
@@ -168,7 +164,7 @@ mod tests {
 
         let input_dir = InputDirective::new("TestRelation".to_string(), params);
 
-        assert_eq!(input_dir.relation_name(), "TestRelation");
+        assert_eq!(input_dir.relation_name(), "testrelation");
         assert_eq!(input_dir.parameters().get("IO"), Some(&"file".to_string()));
         assert_eq!(
             input_dir.parameters().get("filename"),
@@ -178,20 +174,14 @@ mod tests {
 
     #[test]
     fn test_output_directive_creation() {
-        let output_dir = OutputDirective::new("OutputRelation".to_string(), None);
-        assert_eq!(output_dir.relation_name(), "OutputRelation");
-        assert_eq!(output_dir.path(), None);
-
-        let output_dir_with_path =
-            OutputDirective::new("OutputRelation".to_string(), Some("output.csv".to_string()));
-        assert_eq!(output_dir_with_path.relation_name(), "OutputRelation");
-        assert_eq!(output_dir_with_path.path(), Some("output.csv"));
+        let output_dir = OutputDirective::new("OutputRelation".to_string());
+        assert_eq!(output_dir.relation_name(), "outputrelation");
     }
 
     #[test]
     fn test_printsize_directive_creation() {
         let printsize_dir = PrintSizeDirective::new("SizeRelation".to_string());
-        assert_eq!(printsize_dir.relation_name(), "SizeRelation");
+        assert_eq!(printsize_dir.relation_name(), "sizerelation");
     }
 
     #[test]
@@ -203,9 +193,9 @@ mod tests {
         assert_eq!(input1, input2);
         assert_ne!(input1, input3);
 
-        let output1 = OutputDirective::new("Test".to_string(), None);
-        let output2 = OutputDirective::new("Test".to_string(), None);
-        let output3 = OutputDirective::new("Other".to_string(), None);
+        let output1 = OutputDirective::new("Test".to_string());
+        let output2 = OutputDirective::new("Test".to_string());
+        let output3 = OutputDirective::new("Other".to_string());
 
         assert_eq!(output1, output2);
         assert_ne!(output1, output3);

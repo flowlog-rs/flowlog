@@ -12,8 +12,8 @@
 .decl Block_next(Block:number,BlockEnd:number,NextBlock:number)
 .input Block_next(IO="file", filename="Block_next.csv", delimiter=",")
 
-.decl Block_last_instruction(Block:number,EA:number)
-.input Block_last_instruction(IO="file", filename="Block_last_instruction.csv", delimiter=",")
+// .decl Block_last_instruction(Block:number,EA:number)
+// .input Block_last_instruction(IO="file", filename="Block_last_instruction.csv", delimiter=",")
 
 .decl Code_in_block(EA:number,Block:number)
 .input Code_in_block(IO="file", filename="Code_in_block.csv", delimiter=",")

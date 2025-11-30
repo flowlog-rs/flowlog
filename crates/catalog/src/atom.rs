@@ -30,15 +30,6 @@ impl AtomSignature {
     pub fn rhs_id(&self) -> usize {
         self.rhs_id
     }
-
-    /// Returns the negated signature (flips positivity, keeps id).
-    #[inline]
-    pub fn negated(self) -> Self {
-        Self {
-            is_positive: !self.is_positive,
-            ..self
-        }
-    }
 }
 
 impl fmt::Display for AtomSignature {

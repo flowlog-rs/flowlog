@@ -96,25 +96,7 @@ impl ArithmeticPos {
         &self.rest
     }
 
-    /// Returns true if this expression consists of a single factor (no operations).
-    #[inline]
-    pub fn is_literal(&self) -> bool {
-        self.rest.is_empty()
-    }
-
-    /// Returns true if this expression is a single variable.
-    #[inline]
-    pub fn is_var(&self) -> bool {
-        self.is_literal() && matches!(self.init, FactorPos::Var(_))
-    }
-
-    /// Returns true if this expression is a single constant.
-    #[inline]
-    pub fn is_const(&self) -> bool {
-        self.is_literal() && matches!(self.init, FactorPos::Const(_))
-    }
-
-    /// Returns a vector of all variable signatures referenced in this expression.
+    /// Returns a vector of all variable signatures referenced in this expression, in order.
     pub fn signatures(&self) -> Vec<&AtomArgumentSignature> {
         self.init
             .signature()

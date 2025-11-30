@@ -23,6 +23,7 @@ impl RulePlanner {
     pub fn post(&mut self, catalog: &mut Catalog) {
         let head_args = catalog.head_arguments();
 
+        // Note: here we always create row output layout for rule heads.
         if self.needs_post_transformation() {
             self.create_post_transformation(catalog, head_args);
         } else {
@@ -54,6 +55,7 @@ impl RulePlanner {
         let output_values = Self::resolve_head_arguments(&name_to_sig, head_args);
 
         let new_layout = KeyValueLayout::new(Vec::new(), output_values);
+        last_tx.update_row_output(true);
         last_tx.update_output_key_value_layout(new_layout);
         last_tx.update_output_fake_sig();
     }
@@ -63,6 +65,8 @@ impl RulePlanner {
         let name_to_sig = Self::build_name_to_output_signatures_from_atom(catalog);
         let output_values = Self::resolve_head_arguments(&name_to_sig, head_args);
 
+        // We default here assume the input layout is all values from the first positive atom.
+        // No additional mapping is needed.
         let (input_fake_sig, input_kv_layout) = (
             catalog.positive_atom_fingerprint(0),
             KeyValueLayout::new(
@@ -75,14 +79,17 @@ impl RulePlanner {
             ),
         );
 
-        let post_tx = TransformationInfo::kv_to_kv(
+        let mut post_tx = TransformationInfo::kv_to_kv(
             input_fake_sig,
+            true,
             input_kv_layout,
             KeyValueLayout::new(Vec::new(), output_values),
             Vec::new(), // no const constraints
             Vec::new(), // no var constraints
             Vec::new(), // no comparisons
         );
+        post_tx.update_row_output(true);
+        post_tx.update_output_fake_sig();
 
         self.transformation_infos.push(post_tx);
     }

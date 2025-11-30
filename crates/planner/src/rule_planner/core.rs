@@ -5,7 +5,7 @@
 //!
 //! Core logic relies on optimizer to give the index of the two atoms to join.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tracing::trace;
 
 use super::RulePlanner;
@@ -27,6 +27,9 @@ impl RulePlanner {
             catalog.rule().rhs()[catalog.positive_atom_rhs_id(join_tuple_index.1)],
             catalog.positive_atom_rhs_id(join_tuple_index.1),
         );
+
+        // Premap EDB atoms to match required key/value layouts
+        self.apply_join_premaps(catalog, join_tuple_index);
 
         // Execute the initial join between the two selected atoms
         self.apply_join(catalog, join_tuple_index);
@@ -53,6 +56,27 @@ impl RulePlanner {
 
             // Fixed point reached - no more optimizations possible
             break;
+        }
+    }
+
+    /// Premaps EDB atoms to match required key/value layouts.
+    fn apply_join_premaps(&mut self, catalog: &mut Catalog, join_tuple_index: (usize, usize)) {
+        let (lhs_idx, rhs_idx) = join_tuple_index;
+
+        // Create premap for LHS atom if needed
+        if catalog
+            .original_atom_fingerprints()
+            .contains(&catalog.positive_atom_fingerprint(lhs_idx))
+        {
+            self.create_edb_premap_transformations(catalog, lhs_idx, true);
+        }
+
+        // Create premap for RHS atom if needed
+        if catalog
+            .original_atom_fingerprints()
+            .contains(&catalog.positive_atom_fingerprint(rhs_idx))
+        {
+            self.create_edb_premap_transformations(catalog, rhs_idx, true);
         }
     }
 
@@ -84,7 +108,7 @@ impl RulePlanner {
         );
 
         // Partition arguments into join keys and payload values
-        let (lhs_keys, lhs_vals, rhs_vals) = Self::partition_shared_keys(
+        let (lhs_keys, lhs_vals, rhs_keys, rhs_vals) = Self::partition_shared_keys(
             catalog,
             left_atom_argument_signatures,
             right_atom_argument_signatures,
@@ -128,14 +152,13 @@ impl RulePlanner {
             .map(|pos| pos.init().signature().unwrap())
             .cloned()
             .collect();
-        let output_value_start_idx = lhs_keys.len();
 
         // Create the join transformation with proper key-value layouts
         let tx = TransformationInfo::join_to_kv(
             lhs_pos_fp,                                              // LHS input fingerprint
             rhs_pos_fp,                                              // RHS input fingerprint
             KeyValueLayout::new(lhs_keys.clone(), lhs_vals.clone()), // LHS layout (keys + values)
-            KeyValueLayout::new(Vec::new(), rhs_vals.clone()),       // RHS layout (values only)
+            KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()), // RHS layout (values only)
             KeyValueLayout::new(
                 lhs_keys,
                 lhs_vals.iter().chain(rhs_vals.iter()).cloned().collect(), // output layout
@@ -151,8 +174,7 @@ impl RulePlanner {
 
         trace!("Join transformation:\n      {}", tx);
 
-        // Store layout information and register transformation
-        self.kv_layouts.insert(new_fp, output_value_start_idx);
+        // Store the transformation info
         self.transformation_infos.push(tx);
 
         // Update catalog with the new joined atom
@@ -170,40 +192,54 @@ impl RulePlanner {
         catalog: &Catalog,
         lhs_sigs: &[AtomArgumentSignature],
         rhs_sigs: &[AtomArgumentSignature],
-    ) -> (Vec<ArithmeticPos>, Vec<ArithmeticPos>, Vec<ArithmeticPos>) {
+    ) -> (
+        Vec<ArithmeticPos>,
+        Vec<ArithmeticPos>,
+        Vec<ArithmeticPos>,
+        Vec<ArithmeticPos>,
+    ) {
         // Build mapping from argument names to RHS signatures for efficient lookup
-        let mut rhs_sigs_to_name = HashMap::new();
+        let mut rhs_name_to_sig = HashMap::new();
         for sig in rhs_sigs {
             let name = catalog.signature_to_argument_str(sig);
-            rhs_sigs_to_name.insert(name, sig);
+            rhs_name_to_sig.insert(name.clone(), *sig);
         }
 
         // Partition LHS arguments into join keys and remaining values
         let mut left_keys = Vec::new();
         let mut left_remains = Vec::new();
-        let mut matched_names = HashSet::new();
+        let mut matched_names = Vec::new(); // Keep order for right_keys
 
         for sig in lhs_sigs {
             let name = catalog.signature_to_argument_str(sig);
-            if rhs_sigs_to_name.contains_key(name) {
+            if rhs_name_to_sig.contains_key(name) {
                 // This variable appears in both atoms - it's a join key
                 left_keys.push(ArithmeticPos::from_var_signature(*sig));
-                matched_names.insert(name.as_str());
+                matched_names.push(name.clone());
             } else {
                 // This variable only appears in LHS - it's a payload value
                 left_remains.push(ArithmeticPos::from_var_signature(*sig))
             }
         }
 
+        // Build right_keys in the same order as left_keys
+        let right_keys: Vec<ArithmeticPos> = matched_names
+            .iter()
+            .map(|name| {
+                let sig = rhs_name_to_sig[name];
+                ArithmeticPos::from_var_signature(sig)
+            })
+            .collect();
+
         // Collect RHS arguments that don't participate in join (RHS payload)
         let mut right_remains = Vec::new();
         for sig in rhs_sigs {
             let name = catalog.signature_to_argument_str(sig);
-            if !matched_names.contains(name.as_str()) {
+            if !matched_names.contains(name) {
                 right_remains.push(ArithmeticPos::from_var_signature(*sig));
             }
         }
 
-        (left_keys, left_remains, right_remains)
+        (left_keys, left_remains, right_keys, right_remains)
     }
 }

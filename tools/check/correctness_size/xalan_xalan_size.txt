@@ -1,0 +1,12 @@
+subclass: 15793
+superinterface: 12562
+subtypeof: 41551
+methodlookup: 355148
+arrayindexpointsto: 21216
+assign: 45066
+callgraphedge: 20419
+initializedclass: 990
+instancefieldpointsto: 1444699
+reachable: 4416
+staticfieldpointsto: 2304
+varpointsto: 2867913

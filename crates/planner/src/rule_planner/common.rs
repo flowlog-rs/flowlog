@@ -22,7 +22,7 @@ impl RulePlanner {
     /// This method tries the following optimizations in order:
     /// 1. Comparison pushdown: When a comparison predicate can be pushed to atoms
     /// 2. Positive semijoin: When a positive atom has positive supersets
-    /// 3. Anti-semijoin: When a negated atom has positive supersets  
+    /// 3. Anti-semijoin: When a negative atom has positive supersets  
     ///
     /// The reason why we try comparison pushdown first is that it can avoid fuse a comparison
     /// with a neg join producer, which is undefined in my understanding.
@@ -57,7 +57,8 @@ impl RulePlanner {
         }
 
         // (2) Positive semijoin optimization
-        // When a positive atom has positive supersets, we can join them
+        // When a positive atom has positive supersets, we can join them.
+        // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
         if let Some((lhs_pos_idx, rhs_pos_indices)) = catalog
             .positive_supersets()
             .iter()
@@ -65,6 +66,8 @@ impl RulePlanner {
             .find(|(_, v)| !v.is_empty())
             .map(|(idx, indices)| (idx, indices.clone()))
         {
+            self.apply_positive_semijoin_premap(catalog, lhs_pos_idx, &rhs_pos_indices);
+
             trace!(
                 "Positive semijoin:\n  LHS atom: ({}, {})\n  RHS atoms: {:?}",
                 catalog.rule().rhs()[catalog.positive_atom_rhs_id(lhs_pos_idx)],
@@ -81,18 +84,21 @@ impl RulePlanner {
         }
 
         // (3) Anti-semijoin optimization
-        // When a negated atom has positive supersets, we can anti-join them
+        // When a negative atom has positive supersets, we can anti-join them.
+        // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
         if let Some((lhs_neg_idx, rhs_pos_indices)) = catalog
-            .negated_supersets()
+            .negative_supersets()
             .iter()
             .enumerate()
             .find(|(_, v)| !v.is_empty())
             .map(|(idx, indices)| (idx, indices.clone()))
         {
+            self.apply_anti_semijoin_premap(catalog, lhs_neg_idx, &rhs_pos_indices);
+
             trace!(
-                "Anti-semijoin:\n  LHS negated atom: ({}, !{})\n  RHS atoms: {:?}",
-                catalog.rule().rhs()[catalog.negated_atom_rhs_id(lhs_neg_idx)],
-                catalog.negated_atom_rhs_id(lhs_neg_idx),
+                "Anti-semijoin:\n  LHS negative atom: ({}, !{})\n  RHS atoms: {:?}",
+                catalog.rule().rhs()[catalog.negative_atom_rhs_id(lhs_neg_idx)],
+                catalog.negative_atom_rhs_id(lhs_neg_idx),
                 rhs_pos_indices
                     .iter()
                     .map(|&i| (
@@ -105,6 +111,37 @@ impl RulePlanner {
         }
 
         false
+    }
+
+    /// Apply premap for positive semijoin optimization if needed..
+    fn apply_positive_semijoin_premap(
+        &mut self,
+        catalog: &mut Catalog,
+        lhs_pos_idx: usize,
+        rhs_pos_indices: &[usize],
+    ) {
+        // Even for empty key key-value layout, we still need premap for EDB relations.
+        // ((), (value)) is not the same as (value) in differential dataflow.
+
+        // Process LHS atom for positive semijoin.
+        if catalog
+            .original_atom_fingerprints()
+            .contains(&catalog.positive_atom_fingerprint(lhs_pos_idx))
+        {
+            // LHS atom is an EDB, need to create a map
+            self.create_edb_premap_transformations(catalog, lhs_pos_idx, true);
+        }
+
+        // Process each RHS atom for positive semijoin.
+        for &rhs_idx in rhs_pos_indices {
+            if catalog
+                .original_atom_fingerprints()
+                .contains(&catalog.positive_atom_fingerprint(rhs_idx))
+            {
+                // RHS atom is not in key-only format; need to create a map
+                self.create_edb_premap_transformations(catalog, rhs_idx, true);
+            }
+        }
     }
 
     /// Applies positive semijoin optimization.
@@ -122,12 +159,14 @@ impl RulePlanner {
             .clone();
         let lhs_pos_fp = catalog.positive_atom_fingerprint(lhs_pos_idx);
         let left_atom_signature = AtomSignature::new(true, lhs_pos_idx);
-        let lhs_arg_names = Self::arg_names_set(&lhs_pos_args, catalog);
-
         // Build join keys from LHS arguments - these become the join condition
         let lhs_keys: Vec<ArithmeticPos> = lhs_pos_args
             .iter()
             .map(|&s| ArithmeticPos::from_var_signature(s))
+            .collect();
+        let lhs_key_names: Vec<String> = lhs_pos_args
+            .iter()
+            .map(|sig| catalog.signature_to_argument_str(sig).clone())
             .collect();
         trace!(
             "Semijoin keys: {:?}",
@@ -168,33 +207,34 @@ impl RulePlanner {
                 current_transformation_index,
             );
 
-            // Store join result argument list and signature for catalog update
-            new_arg_lists.push(rhs_args.clone());
-            right_sigs.push(AtomSignature::new(true, rhs_idx));
-
-            // Build RHS arithmetic positions excluding those already in LHS keys to avoid duplication
-            let rhs_vals: Vec<ArithmeticPos> = rhs_args
-                .iter()
-                .filter(|&sig| !lhs_arg_names.contains(catalog.signature_to_argument_str(sig)))
-                .map(|&s| ArithmeticPos::from_var_signature(s))
-                .collect();
+            // Build RHS atom argument signatures; keys must mirror the LHS key ordering
+            let (new_rhs_args, rhs_keys, rhs_vals) = Self::reorder_rhs_arguments(
+                &rhs_args,
+                &lhs_key_names,
+                catalog,
+                "positive semijoin",
+            );
             trace!(
                 "Semijoin RHS values: {:?}",
                 rhs_vals
                     .iter()
-                    .map(|pos| (
-                        pos,
-                        catalog.signature_to_argument_str(pos.init().signature().unwrap())
+                    .map(|arg| (
+                        arg,
+                        catalog.signature_to_argument_str(arg.init().signature().unwrap())
                     ))
                     .collect::<Vec<_>>()
             );
+
+            // Store join result argument list and signature for catalog update
+            new_arg_lists.push(new_rhs_args.clone());
+            right_sigs.push(AtomSignature::new(true, rhs_idx));
 
             // Create the join transformation
             let tx = TransformationInfo::join_to_kv(
                 lhs_pos_fp,
                 rhs_fp,
                 KeyValueLayout::new(lhs_keys.clone(), Vec::new()), // LHS: keys only
-                KeyValueLayout::new(Vec::new(), rhs_vals.clone()), // RHS: values only
+                KeyValueLayout::new(rhs_keys, rhs_vals.clone()),   // RHS: keys aligned + values
                 KeyValueLayout::new(lhs_keys.clone(), rhs_vals),
                 vec![], // no additional comparisons
             );
@@ -211,8 +251,7 @@ impl RulePlanner {
             new_names.push(new_name);
             new_fps.push(new_fp);
 
-            // Store the key-value layout split point
-            self.kv_layouts.insert(new_fp, lhs_keys.len());
+            // Store the transformation info
             self.transformation_infos.push(tx);
         }
 
@@ -227,6 +266,37 @@ impl RulePlanner {
         true
     }
 
+    /// Apply premap for anti-semijoin optimization.
+    fn apply_anti_semijoin_premap(
+        &mut self,
+        catalog: &mut Catalog,
+        lhs_neg_idx: usize,
+        rhs_pos_indices: &[usize],
+    ) {
+        // Even for empty key key-value layout, we still need premap for EDB relations.
+        // ((), (value)) is not the same as (value) in differential dataflow.
+
+        // Process LHS atom for anti-semijoin.
+        if catalog
+            .original_atom_fingerprints()
+            .contains(&catalog.negative_atom_fingerprint(lhs_neg_idx))
+        {
+            // LHS atom is not in key-only format; need to create a map
+            self.create_edb_premap_transformations(catalog, lhs_neg_idx, false);
+        }
+
+        // Process each RHS atom for anti-semijoin.
+        for &rhs_idx in rhs_pos_indices {
+            if catalog
+                .original_atom_fingerprints()
+                .contains(&catalog.positive_atom_fingerprint(rhs_idx))
+            {
+                // RHS atom is not in key-only format; need to create a map
+                self.create_edb_premap_transformations(catalog, rhs_idx, true);
+            }
+        }
+    }
+
     /// Applies anti-semijoin optimization.
     ///
     /// Anti-semijoin: Keeps LHS rows whose join keys do NOT exist in any RHS atom.
@@ -236,16 +306,20 @@ impl RulePlanner {
         lhs_neg_idx: usize,
         rhs_pos_indices: &[usize],
     ) -> bool {
-        // Extract LHS negated atom information
-        let lhs_neg_args = catalog.negated_atom_argument_signature(lhs_neg_idx).clone();
-        let lhs_neg_fp = catalog.negated_atom_fingerprint(lhs_neg_idx);
+        // Extract LHS negative atom information
+        let lhs_neg_args = catalog
+            .negative_atom_argument_signature(lhs_neg_idx)
+            .clone();
+        let lhs_neg_fp = catalog.negative_atom_fingerprint(lhs_neg_idx);
         let left_atom_signature = AtomSignature::new(false, lhs_neg_idx);
-        let lhs_arg_names = Self::arg_names_set(&lhs_neg_args, catalog);
-
         // Build join keys from LHS arguments - these become the join condition
         let lhs_keys: Vec<ArithmeticPos> = lhs_neg_args
             .iter()
             .map(|&s| ArithmeticPos::from_var_signature(s))
+            .collect();
+        let lhs_key_names: Vec<String> = lhs_neg_args
+            .iter()
+            .map(|sig| catalog.signature_to_argument_str(sig).clone())
             .collect();
         trace!(
             "Semijoin keys: {:?}",
@@ -268,7 +342,7 @@ impl RulePlanner {
         for &rhs_idx in rhs_pos_indices {
             let current_transformation_index = self.transformation_infos.len();
 
-            // Register LHS negated atom as consumer of this transformation
+            // Register LHS negative atom as consumer of this transformation
             self.insert_consumer(
                 catalog.original_atom_fingerprints(),
                 lhs_neg_fp,
@@ -286,34 +360,30 @@ impl RulePlanner {
                 current_transformation_index,
             );
 
-            // Store join result argument list and signature for catalog update
-            new_arg_lists.push(rhs_args.clone());
-            right_sigs.push(AtomSignature::new(true, rhs_idx));
-
-            // Build RHS arithmetic positions excluding those already in LHS keys to avoid duplication
-            let rhs_vals: Vec<ArithmeticPos> = rhs_args
-                .iter()
-                .filter(|&sig| !lhs_arg_names.contains(catalog.signature_to_argument_str(sig)))
-                .map(|&s| ArithmeticPos::from_var_signature(s))
-                .collect();
+            let (new_rhs_args, rhs_keys, rhs_vals) =
+                Self::reorder_rhs_arguments(&rhs_args, &lhs_key_names, catalog, "anti-semijoin");
             trace!(
                 "Semijoin RHS values: {:?}",
                 rhs_vals
                     .iter()
-                    .map(|pos| (
-                        pos,
-                        catalog.signature_to_argument_str(pos.init().signature().unwrap())
+                    .map(|arg| (
+                        arg,
+                        catalog.signature_to_argument_str(arg.init().signature().unwrap())
                     ))
                     .collect::<Vec<_>>()
             );
+
+            // Store join result argument list and signature for catalog update
+            new_arg_lists.push(new_rhs_args.clone());
+            right_sigs.push(AtomSignature::new(true, rhs_idx));
 
             // Create the anti-join transformation
             let tx = TransformationInfo::anti_join_to_kv(
                 lhs_neg_fp,
                 rhs_fp,
                 KeyValueLayout::new(lhs_keys.clone(), Vec::new()), // LHS: keys only
-                KeyValueLayout::new(Vec::new(), rhs_vals.clone()), // RHS: values only
-                KeyValueLayout::new(lhs_keys.clone(), rhs_vals),
+                KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()), // RHS: values only
+                KeyValueLayout::new(rhs_keys, rhs_vals),
             );
 
             // Generate descriptive name for the new atom
@@ -328,8 +398,7 @@ impl RulePlanner {
             new_names.push(new_name);
             new_fps.push(new_fp);
 
-            // Store the key-value layout split point
-            self.kv_layouts.insert(new_fp, lhs_keys.len());
+            // Store the transformation info
             self.transformation_infos.push(tx);
         }
 
@@ -381,12 +450,16 @@ impl RulePlanner {
             // Store signature for catalog update
             right_sigs.push(AtomSignature::new(true, rhs_idx));
 
-            let (in_keys, in_vals) = self.get_or_init_row_kv_layout(rhs_fp, &rhs_args);
+            let in_vals = rhs_args
+                .iter()
+                .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                .collect::<Vec<_>>();
 
             let tx = TransformationInfo::kv_to_kv(
                 rhs_fp,
-                KeyValueLayout::new(in_keys.clone(), in_vals.clone()),
-                KeyValueLayout::new(in_keys.clone(), in_vals),
+                catalog.original_atom_fingerprints().contains(&rhs_fp),
+                KeyValueLayout::new(vec![], in_vals.clone()),
+                KeyValueLayout::new(vec![], in_vals),
                 vec![], // no const-eq
                 vec![], // no var-eq
                 vec![catalog.resolve_comparison_predicates(rhs_idx, lhs_comp_idx)],
@@ -404,8 +477,7 @@ impl RulePlanner {
             new_names.push(new_name);
             new_fps.push(new_fp);
 
-            // Store the key-value layout split point
-            self.kv_layouts.insert(new_fp, in_keys.len());
+            // Store the transformation info
             self.transformation_infos.push(tx);
         }
 
@@ -458,37 +530,30 @@ impl RulePlanner {
                 .map(|&sig| ArithmeticPos::from_var_signature(sig))
                 .collect();
 
-            // Get current key-value layout for this atom
-            let (in_keys, in_vals) = self.get_or_init_row_kv_layout(atom_fp, args);
+            // Get current values for this atom
+            let in_vals = args
+                .iter()
+                .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                .collect::<Vec<_>>();
 
             // Filter out unused arguments from both keys and values
-            let out_keys: Vec<ArithmeticPos> = in_keys
-                .iter()
-                .filter(|&sig| !drop_set.contains(sig))
-                .cloned()
-                .collect();
             let out_vals: Vec<ArithmeticPos> = in_vals
                 .iter()
                 .filter(|&sig| !drop_set.contains(sig))
                 .cloned()
                 .collect();
 
-            trace!(
-                "Output KV layout: keys={:?}, values={:?}",
-                out_keys,
-                out_vals
-            );
-
-            let out_value_start_idx = out_keys.len();
+            trace!("Output KV layout: keys=[], values={:?}", out_vals);
 
             // Create projection transformation that removes unused arguments
             let tx = TransformationInfo::kv_to_kv(
                 atom_fp,
-                KeyValueLayout::new(in_keys, in_vals), // input layout
-                KeyValueLayout::new(out_keys, out_vals), // output layout (projected)
-                vec![],                                // no constant equality constraints
-                vec![],                                // no variable equality constraints
-                vec![],                                // no comparison constraints
+                catalog.original_atom_fingerprints().contains(&atom_fp),
+                KeyValueLayout::new(vec![], in_vals), // input layout
+                KeyValueLayout::new(vec![], out_vals), // output layout (projected)
+                vec![],                               // no constant equality constraints
+                vec![],                               // no variable equality constraints
+                vec![],                               // no comparison constraints
             );
 
             // Generate descriptive name for projected atom
@@ -500,8 +565,7 @@ impl RulePlanner {
 
             trace!("Unused transformation:\n      {}", tx);
 
-            // Store the key-value layout split point
-            self.kv_layouts.insert(new_fp, out_value_start_idx);
+            // Store the transformation info
             self.transformation_infos.push(tx);
 
             // Modify the catalog to reflect the projected atom
@@ -515,60 +579,77 @@ impl RulePlanner {
 }
 
 // =========================================================================
+// Premap for EDB relations
+// =========================================================================
+impl RulePlanner {
+    /// Creates premap transformations for EDB relations that are not in row format.
+    /// We do not care about real key-value layout output here, as these premap is just
+    /// an indicator we need to map the EDB from read-in row format.
+    /// The key-value layout adjustment is handled in later fuse phase if needed.
+    pub(super) fn create_edb_premap_transformations(
+        &mut self,
+        catalog: &mut Catalog,
+        atom_idx: usize,
+        is_positive: bool,
+    ) {
+        // Both positive and negative atoms can be pre-mapped.
+        let edb_fp = if is_positive {
+            catalog.positive_atom_fingerprint(atom_idx)
+        } else {
+            catalog.negative_atom_fingerprint(atom_idx)
+        };
+        let edb_args = if is_positive {
+            catalog.positive_atom_argument_signature(atom_idx)
+        } else {
+            catalog.negative_atom_argument_signature(atom_idx)
+        };
+        let edb_atom_signature = AtomSignature::new(is_positive, atom_idx);
+        let current_transformation_index = self.transformation_infos.len();
+
+        let edb_layout = KeyValueLayout::new(
+            Vec::new(),
+            edb_args
+                .iter()
+                .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                .collect(),
+        );
+
+        let tx = TransformationInfo::kv_to_kv(
+            edb_fp,
+            true,
+            edb_layout.clone(), // input layout
+            edb_layout,         // output row layout
+            vec![],             // no constant equality constraints
+            vec![],             // no variable equality constraints
+            vec![],             // no comparison constraints
+        );
+
+        // Generate descriptive name for the projected atom
+        let new_name = format!("edb_{}_premap", edb_fp);
+        let new_fp = tx.output_info_fp();
+
+        // Store the transformation info
+        self.transformation_infos.push(tx);
+
+        // Register this transformation as consumer of EDB atom
+        self.insert_consumer(
+            catalog.original_atom_fingerprints(),
+            edb_fp,
+            current_transformation_index,
+        );
+
+        // Register this transformation as a producer
+        self.insert_producer(new_fp, current_transformation_index);
+
+        // Update catalog to reflect the premap atom
+        catalog.map_modify(edb_atom_signature, new_name, new_fp);
+    }
+}
+
+// =========================================================================
 // Private Utilities
 // =========================================================================
 impl RulePlanner {
-    /// Build output payload expressions excluding a specific argument signature.
-    #[inline]
-    pub(super) fn out_values_excluding(
-        args: &[AtomArgumentSignature],
-        drop_sig: AtomArgumentSignature,
-    ) -> Vec<ArithmeticPos> {
-        args.iter()
-            .filter(|&sig| *sig != drop_sig)
-            .map(|&sig| ArithmeticPos::from_var_signature(sig))
-            .collect()
-    }
-
-    /// Return cached KV split (keys|values) for an atom or initialize it to a row layout.
-    /// Cache stores the split index (prefix length) of the keys.
-    pub(super) fn get_or_init_row_kv_layout(
-        &mut self,
-        atom_fp: u64,
-        args: &[AtomArgumentSignature],
-    ) -> (Vec<ArithmeticPos>, Vec<ArithmeticPos>) {
-        if let Some(&split_idx) = self.kv_layouts.get(&atom_fp) {
-            let all: Vec<ArithmeticPos> = args
-                .iter()
-                .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                .collect();
-            let (keys, vals) = all.split_at(split_idx);
-            trace!(
-                "Cached KV layout [atom 0x{:016x}]: keys={:?}, values={:?}",
-                atom_fp,
-                keys,
-                vals
-            );
-            return (keys.to_vec(), vals.to_vec());
-        }
-
-        // Default: row-based layout (no keys, all values).
-        let keys = Vec::new();
-        let vals: Vec<ArithmeticPos> = args
-            .iter()
-            .map(|&sig| ArithmeticPos::from_var_signature(sig))
-            .collect();
-
-        trace!(
-            "Initialize KV layout [atom 0x{:016x}]: keys=[], values={:?}",
-            atom_fp,
-            vals
-        );
-
-        self.kv_layouts.insert(atom_fp, 0);
-        (keys, vals)
-    }
-
     /// Generates a consistent projection name based on atom polarity and RHS identifier.
     #[inline]
     pub(super) fn projection_name(atom_signature: &AtomSignature, atom_id: usize) -> String {
@@ -579,14 +660,50 @@ impl RulePlanner {
         }
     }
 
-    /// Collects display strings for argument signatures to identify duplicates in RHS columns.
-    pub(super) fn arg_names_set(
-        args: &[AtomArgumentSignature],
+    /// Orders RHS arguments so join keys come first in the same order as the LHS keys.
+    fn reorder_rhs_arguments(
+        rhs_args: &[AtomArgumentSignature],
+        lhs_key_names: &[String],
         catalog: &Catalog,
-    ) -> HashSet<String> {
-        args.iter()
-            .map(|sig| catalog.signature_to_argument_str(sig).clone())
-            .collect()
+        context: &str,
+    ) -> (
+        Vec<AtomArgumentSignature>,
+        Vec<ArithmeticPos>,
+        Vec<ArithmeticPos>,
+    ) {
+        let mut remaining: Vec<(String, AtomArgumentSignature)> = rhs_args
+            .iter()
+            .map(|&sig| (catalog.signature_to_argument_str(&sig).clone(), sig))
+            .collect();
+        let mut ordered = Vec::with_capacity(rhs_args.len());
+
+        for key_name in lhs_key_names {
+            if let Some(position) = remaining.iter().position(|(name, _)| name == key_name) {
+                let (_, sig) = remaining.remove(position);
+                ordered.push(sig);
+            } else {
+                panic!(
+                    "Planner error: RHS missing key {} for {}",
+                    key_name, context
+                );
+            }
+        }
+
+        for (_, sig) in remaining {
+            ordered.push(sig);
+        }
+
+        let key_count = lhs_key_names.len();
+        let rhs_keys = ordered[..key_count]
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect();
+        let rhs_vals = ordered[key_count..]
+            .iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect();
+
+        (ordered, rhs_keys, rhs_vals)
     }
 }
 
@@ -594,19 +711,15 @@ impl RulePlanner {
 // Producer-Consumer Relationship Management
 // =========================================================================
 impl RulePlanner {
-    /// Registers a producer transformation for a given fingerprint.
+    /// Registers a producer transformation for data with a given fingerprint.
     ///
-    /// Each transformation fingerprint can have exactly one producer - the transformation
-    /// that generates data with that fingerprint.
+    /// Multiple transformations can produce the same data (i.e., multiple producers per output).
+    /// We will deduplicate in the later fusion logic.
     pub(super) fn insert_producer(&mut self, producer_fp: u64, producer_idx: usize) {
-        // It is impossible to have two producers for the same transformation fingerprint.
-        assert!(
-            self.producer_consumer
-                .insert(producer_fp, (producer_idx, None))
-                .is_none(),
-            "Producer already exists for transformation fingerprint: {:016x}",
-            producer_fp
-        );
+        self.producer_consumer
+            .entry(producer_fp)
+            .and_modify(|(producers, _)| producers.push(producer_idx))
+            .or_insert((vec![producer_idx], vec![]));
     }
 
     /// Registers a consumer transformation for data with a given fingerprint.
@@ -634,7 +747,7 @@ impl RulePlanner {
         self.producer_consumer
             .entry(producer_fp)
             .and_modify(|(_, consumers)| {
-                consumers.get_or_insert_with(Vec::new).push(consumer_idx);
+                consumers.push(consumer_idx);
             })
             .or_insert_with(|| {
                 panic!(
@@ -644,19 +757,21 @@ impl RulePlanner {
             });
     }
 
+    /// Retrieves the indices of producer transformations for a given fingerprint.
     #[inline]
-    pub(super) fn producer_index(&self, fp: u64) -> usize {
+    pub(super) fn producer_indices(&self, fp: u64) -> Vec<usize> {
         self.producer_consumer
             .get(&fp)
-            .map(|(idx, _)| *idx)
+            .map(|(producers, _)| producers.clone())
             .unwrap_or_else(|| panic!("No producer for transformation fingerprint: {:#018x}", fp))
     }
 
+    /// Retrieves the indices of consumer transformations for a given fingerprint.
     #[inline]
     pub(super) fn consumer_indices(&self, fp: u64) -> Vec<usize> {
         self.producer_consumer
             .get(&fp)
-            .and_then(|(_, consumers)| consumers.clone())
-            .unwrap_or_default()
+            .map(|(_, consumers)| consumers.clone())
+            .unwrap_or_else(|| panic!("No consumers for transformation fingerprint: {:#018x}", fp))
     }
 }

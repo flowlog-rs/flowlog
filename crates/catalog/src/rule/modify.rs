@@ -16,6 +16,48 @@ use parser::{Atom, AtomArg, MacaronRule, Predicate};
 
 /// Public API for modifying rules and updating catalog metadata accordingly.
 impl Catalog {
+    /// Map an EDB atom to a required key/value layout.
+    /// This function do not change the arity of the atom.
+    /// Only premap of an original atom should use this function.
+    pub fn map_modify(
+        &mut self,
+        atom_signature: AtomSignature,
+        new_atom_name: String,
+        new_atom_fingerprint: u64,
+    ) {
+        // Find the global RHS position of the target atom
+        let rhs_index = self.rhs_index_from_signature(atom_signature);
+
+        // Create a new mapped atom with the same arguments but a new name
+        let new_atom = match &self.rule.rhs()[rhs_index] {
+            Predicate::PositiveAtomPredicate(atom) | Predicate::NegativeAtomPredicate(atom) => {
+                let new_atom = Atom::new(
+                    &new_atom_name,
+                    atom.arguments().to_vec(),
+                    new_atom_fingerprint,
+                );
+                match &self.rule.rhs()[rhs_index] {
+                    Predicate::PositiveAtomPredicate(_) => {
+                        Predicate::PositiveAtomPredicate(new_atom)
+                    }
+                    Predicate::NegativeAtomPredicate(_) => {
+                        Predicate::NegativeAtomPredicate(new_atom)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            other => {
+                panic!(
+                    "Catalog error: Target predicate at rhs index {} is not an positive atom: {}",
+                    rhs_index, other
+                )
+            }
+        };
+
+        // Replace the original atom with the mapped atom and update the rule
+        self.update_rule_in_place(rhs_index, new_atom);
+    }
+
     /// Projects out specified arguments from an atom, creating a new atom with reduced arity.
     pub fn projection_modify(
         &mut self,
@@ -45,7 +87,7 @@ impl Catalog {
 
         // Create the new projected atom
         let new_atom = match &self.rule.rhs()[rhs_index] {
-            Predicate::PositiveAtomPredicate(atom) | Predicate::NegatedAtomPredicate(atom) => {
+            Predicate::PositiveAtomPredicate(atom) | Predicate::NegativeAtomPredicate(atom) => {
                 // Validate argument bounds before removal
                 for &arg_id in &arg_ids_to_delete {
                     if arg_id >= atom.arity() {
@@ -65,8 +107,10 @@ impl Catalog {
                     Predicate::PositiveAtomPredicate(_) => {
                         Predicate::PositiveAtomPredicate(new_atom)
                     }
-                    Predicate::NegatedAtomPredicate(_) => Predicate::NegatedAtomPredicate(new_atom),
-                    _ => unreachable!(),
+                    Predicate::NegativeAtomPredicate(_) => {
+                        Predicate::NegativeAtomPredicate(new_atom)
+                    }
+                    _ => unreachable!("Catalog error: unexpected predicate type in projection"),
                 }
             }
             other => {
@@ -104,7 +148,7 @@ impl Catalog {
 
         // Ensure left predicate is an atom (not a comparison or filter)
         match &self.rule.rhs()[left_rhs_index] {
-            Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_) => {}
+            Predicate::PositiveAtomPredicate(_) | Predicate::NegativeAtomPredicate(_) => {}
             _ => panic!("Catalog error: Left predicate must be an atom"),
         }
 
@@ -115,7 +159,7 @@ impl Catalog {
                 let idx = self.rhs_index_from_signature(sig);
                 // Ensure each right predicate is an atom
                 match &self.rule.rhs()[idx] {
-                    Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_) => {}
+                    Predicate::PositiveAtomPredicate(_) | Predicate::NegativeAtomPredicate(_) => {}
                     _ => panic!("Catalog error: Right predicate must be an atom"),
                 }
                 idx
@@ -190,7 +234,7 @@ impl Catalog {
                 let idx = self.rhs_index_from_signature(sig);
                 // Ensure the target predicate is an atom
                 match &self.rule.rhs()[idx] {
-                    Predicate::PositiveAtomPredicate(_) | Predicate::NegatedAtomPredicate(_) => {}
+                    Predicate::PositiveAtomPredicate(_) | Predicate::NegativeAtomPredicate(_) => {}
                     _ => panic!("Catalog error: Right predicate must be an atom"),
                 }
                 idx
@@ -205,7 +249,7 @@ impl Catalog {
                 // Extract arguments from the original atom
                 let new_atom_args = match &self.rule.rhs()[atom_idx] {
                     Predicate::PositiveAtomPredicate(atom)
-                    | Predicate::NegatedAtomPredicate(atom) => atom.arguments().to_vec(),
+                    | Predicate::NegativeAtomPredicate(atom) => atom.arguments().to_vec(),
                     _ => panic!("Catalog error: Expected atom predicate"),
                 };
 
@@ -223,32 +267,36 @@ impl Catalog {
     // === PRIVATE HELPER METHODS ===
     // ========================================================================================
 
-    /// Remove specified indices from RHS, add new predicates, and update the rule.
-    /// Indices are removed in descending order to preserve correctness.
-    fn update_rule_in_place(&mut self, index_to_change: usize, new_predicate: Predicate) {
+    /// Update the rule by replacing the predicate at the specified index.
+    /// Note that we take global RHS index here, not positive or negative index.
+    fn update_rule_in_place(&mut self, global_rhs_idx: usize, new_predicate: Predicate) {
         let mut new_rhs = self.rule.rhs().to_vec();
 
         // Update the rule
-        new_rhs[index_to_change] = new_predicate;
+        new_rhs[global_rhs_idx] = new_predicate;
         let new_rule = MacaronRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
         self.update_rule(&new_rule);
     }
 
     /// Remove specified indices from RHS, add new predicates, and update the rule.
     /// Indices are removed in descending order to preserve correctness.
+    /// Note that we take global RHS indices here, not positive or negative indices.
     fn remove_and_update_rule(
         &mut self,
-        index_to_remove: usize,
-        indices_to_update: Vec<usize>,
+        global_rhs_index_to_remove: usize,
+        global_rhs_indices_to_update: Vec<usize>,
         new_predicates: Vec<Predicate>,
     ) {
         let mut new_rhs = self.rule.rhs().to_vec();
 
-        // Update the rule
-        indices_to_update.iter().enumerate().for_each(|(i, idx)| {
-            new_rhs[*idx] = new_predicates[i].clone();
-        });
-        new_rhs.remove(index_to_remove);
+        // Update the rule with new predicates
+        global_rhs_indices_to_update
+            .iter()
+            .enumerate()
+            .for_each(|(i, idx)| {
+                new_rhs[*idx] = new_predicates[i].clone();
+            });
+        new_rhs.remove(global_rhs_index_to_remove);
 
         // Add new predicates and update the rule
         let new_rule = MacaronRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());

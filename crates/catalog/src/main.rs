@@ -1,110 +1,56 @@
 use catalog::rule::Catalog;
+use clap::Parser;
+use common::{get_example_files, Args, TestResult};
 use parser::Program;
-use std::env;
-use std::fs;
-use std::path::Path;
-use std::process;
-use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Initialize tracing similar to parser/stratifier mains
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("info"))
-        .init();
+    let args = Args::parse();
 
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <program_file>", args[0]);
-        eprintln!("       {} --all", args[0]);
-        eprintln!("Examples:");
-        eprintln!("  {} ./example/reach.dl", args[0]);
-        eprintln!("  {} --all", args[0]);
-        process::exit(1);
-    }
-
-    let argument = &args[1];
-    if argument == "--all" {
+    if args.should_process_all() {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("info"))
+            .init();
         run_all_examples();
         return;
     }
 
-    let program = Program::parse(argument);
-    info!(
-        "Parsed program: {} rules ({} EDBs, {} IDBs)",
-        program.rules().len(),
-        program.edbs().len(),
-        program.idbs().len()
-    );
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("debug"))
+        .init();
+
+    let program = Program::parse(args.program());
     print_catalogs(&program);
 }
 
 fn print_catalogs(program: &Program) {
-    for (i, rule) in program.rules().iter().enumerate() {
-        info!("{}", "-".repeat(80));
-        info!("[Rule {}] {}", i, rule.head().name());
-        let catalog = Catalog::from_rule(rule);
-        info!("{}", catalog);
+    for rule in program.rules().iter() {
+        let _catalog = Catalog::from_rule(rule);
     }
 }
 
 fn run_all_examples() {
-    let example_dir = "example";
-    if !Path::new(example_dir).exists() {
-        error!("Error: example directory '{}' not found", example_dir);
-        process::exit(1);
-    }
+    let example_files = get_example_files();
+    let mut formatter = TestResult::new("catalog", example_files.len());
 
-    let entries = match fs::read_dir(example_dir) {
-        Ok(e) => e,
-        Err(err) => {
-            error!("Error reading example directory: {err}");
-            process::exit(1);
-        }
-    };
-
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("dl") {
-            files.push(path);
-        }
-    }
-    files.sort();
-    if files.is_empty() {
-        error!("No .dl files found in {example_dir} directory");
-        process::exit(1);
-    }
-
-    info!("Running catalog on {} example files...", files.len());
-
-    let mut successful = 0usize;
-    let mut failed = 0usize;
-
-    for file_path in files.iter() {
+    for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
-            Ok(_program) => {
-                successful += 1;
-                println!("SUCCESS: {}", file_name);
+            Ok(program) => {
+                let stats = format!(
+                    "rules={}, edbs={}, idbs={}",
+                    program.rules().len(),
+                    program.edbs().len(),
+                    program.idbs().len()
+                );
+                formatter.report_success(file_name, Some(&stats));
             }
             Err(_panic_info) => {
-                failed += 1;
-                println!("FAILED: {}", file_name);
+                formatter.report_failure(file_name, None);
             }
         }
     }
 
-    println!("\nSUMMARY:");
-    println!("  Total files: {}", files.len());
-    println!("  Successful: {}", successful);
-    println!("  Failed: {}", failed);
-
-    if failed > 0 {
-        // Non-zero exit so CI can catch failures
-        process::exit(1);
-    } else {
-        println!("\nAll example files processed successfully!");
-    }
+    formatter.finish();
 }

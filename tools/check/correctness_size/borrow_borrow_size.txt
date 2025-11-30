@@ -1,0 +1,11 @@
+ancestor_path: 30
+path_begins_with_var: 6372
+path_assigned_at: 6793
+path_moved_at: 16295
+path_accessed_at: 7838
+var_live_on_entry: 329734
+path_maybe_initialized_on_exit: 1048567
+path_maybe_uninitialized_on_exit: 291552229
+var_drop_live_on_entry: 3588
+subset: 5068815
+origin_contains_loan_on_entry: 1316

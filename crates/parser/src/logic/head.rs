@@ -17,6 +17,7 @@
 
 use super::{Aggregation, Arithmetic};
 use crate::{Lexeme, Rule};
+use common::compute_fp;
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -93,15 +94,19 @@ impl Lexeme for HeadArg {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Head {
     name: String,
+    head_fingerprint: u64,
     head_arguments: Vec<HeadArg>,
 }
 
 impl Head {
     /// Create a new rule head.
+    ///
+    /// Converts the name to lowercase.
     #[must_use]
     pub fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
         Self {
-            name,
+            name: name.to_ascii_lowercase(),
+            head_fingerprint: compute_fp(&name),
             head_arguments,
         }
     }
@@ -111,6 +116,13 @@ impl Head {
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Head fingerprint.
+    #[must_use]
+    #[inline]
+    pub fn head_fingerprint(&self) -> u64 {
+        self.head_fingerprint
     }
 
     /// Arguments.
@@ -210,7 +222,7 @@ mod tests {
 
     #[test]
     fn head_basics() {
-        let h = Head::new("person".into(), vec![var_arg("Name"), var_arg("Age")]);
+        let h = Head::new("Person".into(), vec![var_arg("Name"), var_arg("Age")]);
         assert_eq!(h.name(), "person");
         assert_eq!(h.arity(), 2);
         assert_eq!(h.to_string(), "person(Name, Age)");
