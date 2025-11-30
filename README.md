@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="Macaron.png" alt="Macaron Logo" width="400"/>
+  <img src="Macaron.png" alt="Macaron Logo" width="700"/>
 </p>
 
 <p align="center">
-  <strong>Composable Datalog-to-Rust compiler for scalable Timely and Differential Dataflow programs.</strong>
+  <strong>Composable Datalog-to-Rust compiler for scalable Differential Dataflow programs.</strong>
 </p>
 
 <p align="center">
