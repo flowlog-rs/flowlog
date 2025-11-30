@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Composable Datalog compiler for generating Timely + Differential executables</strong>
+  <strong>Composable Datalog-to-Rust compiler for scalable Timely and Differential Dataflow programs.</strong>
 </p>
 
 <p align="center">
