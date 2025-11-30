@@ -1,4 +1,6 @@
-# Macaron
+<p align="center">
+  <img src="Macaron.png" alt="Macaron Logo" width="400"/>
+</p>
 
 <p align="center">
   <strong>Composable Datalog compiler for generating Timely + Differential executables</strong>
@@ -184,3 +186,6 @@ Macaron builds on the FlowLog paper:
 ## Contributing
 
 Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` (and `tools/check/check.sh` when it is relevant).
+
+## Acknowledgement
+Macaron succeeds [FlowLog](https://github.com/hdz284/FlowLog); many thanks to [**Hangdong Zhao**](https://github.com/hdz284) for continued support throughout the transition.
