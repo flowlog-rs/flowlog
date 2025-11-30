@@ -1,0 +1,8 @@
+reg_def_use_live_var_used: 41186
+reg_def_use_return_val_used: 4442
+reg_def_use_def_used: 65950
+reg_def_use_live_var_at_block_end: 84775
+reg_def_use_live_var_at_prior_used: 46552
+stack_def_use_live_var_at_block_end: 21236205
+stack_def_use_def_used: 2065369
+def_used_for_address: 10299
