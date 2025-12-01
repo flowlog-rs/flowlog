@@ -14,7 +14,12 @@ echo -e "${BLUE}[START]${NC} Macaron Testing"
 # Resolve project paths and shared resources.
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
+# Passing a custom config.txt path as the first argument
 CONFIG_FILE="${ROOT_DIR}/tools/check/config.txt"
+if [ $# -ge 1 ] && [ -n "$1" ]; then
+    CONFIG_FILE="$1"
+fi
+
 PROG_DIR="${ROOT_DIR}/example"
 FACT_DIR="${ROOT_DIR}/facts"
 SIZE_DIR="${ROOT_DIR}/tools/check/correctness_size"

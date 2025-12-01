@@ -42,6 +42,6 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-      - name: 🏁 Run end-to-end correctness test (check.sh)
+      - name: 🏁 Run smoke test
         run: 
-          bash tools/check/check.sh
+          bash tools/check/check.sh tools/check/config_ci.txt
