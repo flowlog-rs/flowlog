@@ -4,11 +4,12 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use tracing::trace;
 
+use crate::aggregation::{aggregation_merge_kv, aggregation_reduce, aggregation_row_chop};
 use crate::data_type::{find_type, insert_or_verify_type};
 use crate::ident::find_ident;
 use crate::transformation::gen_transformation;
 
-use parser::DataType;
+use parser::{AggregationOperator, DataType};
 use planner::Transformation;
 
 // =========================================================================
@@ -45,6 +46,7 @@ pub(crate) fn gen_non_recursive_post_flows(
     fp_to_type: &mut HashMap<u64, DataType>,
     calculated_output_fps: &HashSet<u64>,
     output2idbs: &HashMap<u64, Vec<u64>>,
+    output_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
 ) -> Vec<TokenStream> {
     let mut flows = Vec::new();
 
@@ -67,18 +69,36 @@ pub(crate) fn gen_non_recursive_post_flows(
 
         // If this output was already computed in a previous stratum, union the previous
         // collection with the newly produced tuples before applying distinct.
-        if calculated_output_fps.contains(output_fp) {
-            flows.push(quote! {
+        let mut block = if calculated_output_fps.contains(output_fp) {
+            quote! {
                 let #output = #output
                     .concat(&#expr)
                     .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
-            });
+            }
         } else {
-            flows.push(quote! {
+            quote! {
                 let #output = #expr
                     .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
-            });
+            }
+        };
+
+        // Aggregation logic
+        if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
+            let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
+            let reduce_logic = aggregation_reduce(agg_op);
+            let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
+            block = quote! {
+                #block
+                let #output = #output
+                    .map(#row_chop)
+                    .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+                        "aggregation",
+                        #reduce_logic
+                    )
+                    .as_collection(#merge_kv);
+            };
         }
+        flows.push(block);
     }
 
     trace!(
