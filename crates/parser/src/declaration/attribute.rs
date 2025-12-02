@@ -1,4 +1,4 @@
-//! Attribute declaration types for Macaron Datalog programs.
+//! Attribute declaration types for FlowLog Datalog programs.
 
 use crate::primitive::DataType;
 use std::fmt;
@@ -34,7 +34,7 @@ impl Attribute {
 }
 
 impl fmt::Display for Attribute {
-    /// Formats as `name: type` using Macaron grammar strings.
+    /// Formats as `name: type` using FlowLog grammar strings.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.name, self.data_type)
     }

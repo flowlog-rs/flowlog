@@ -1,11 +1,11 @@
-//! Data type definitions for Macaron Datalog programs.
+//! Data type definitions for FlowLog Datalog programs.
 
 use std::fmt;
 use std::str::FromStr;
 
-/// Data types supported in Macaron Datalog programs.
+/// Data types supported in FlowLog Datalog programs.
 ///
-/// These types correspond to the primitive types in the Macaron grammar:
+/// These types correspond to the primitive types in the FlowLog grammar:
 /// - `"number"` → [`DataType::Integer`]
 /// - `"string"` → [`DataType::String`]
 ///

@@ -1,4 +1,4 @@
-//! Atom types for Macaron Datalog programs.
+//! Atom types for FlowLog Datalog programs.
 //!
 //! - [`AtomArg`]: variable / constant / placeholder (`_`)
 //! - [`Atom`]: `name(arg1, ..., argN)`

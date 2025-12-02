@@ -1,4 +1,4 @@
-//! Filter expression for Macaron Datalog programs.
+//! Filter expression for FlowLog Datalog programs.
 
 use crate::atom::AtomArgumentSignature;
 use parser::ConstType;

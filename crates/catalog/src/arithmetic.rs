@@ -1,4 +1,4 @@
-//! Arithmetic expression signatures for Macaron Datalog programs.
+//! Arithmetic expression signatures for FlowLog Datalog programs.
 
 use crate::atom::AtomArgumentSignature;
 use parser::{Arithmetic, ArithmeticOperator, ConstType, Factor};

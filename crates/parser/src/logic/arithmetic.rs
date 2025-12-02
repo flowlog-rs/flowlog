@@ -1,4 +1,4 @@
-//! Arithmetic expressions for Macaron Datalog Programs.
+//! Arithmetic expressions for FlowLog Datalog Programs.
 //!
 //! - [`ArithmeticOperator`]: `+ | - | * | / | %`
 //! - [`Factor`]: variables or constants

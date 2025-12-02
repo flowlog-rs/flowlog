@@ -1,4 +1,4 @@
-//! Catalog of per-rule metadata and signatures for Macaron Datalog programs.
+//! Catalog of per-rule metadata and signatures for FlowLog Datalog programs.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -6,7 +6,7 @@ use std::fmt;
 use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
 use crate::ComparisonExprPos;
-use parser::{ComparisonExpr, HeadArg, MacaronRule};
+use parser::{ComparisonExpr, HeadArg, FlowLogRule};
 use tracing::debug;
 
 // Implementation modules
@@ -27,7 +27,7 @@ pub struct Catalog {
     /// The rule.
     /// Rule could be modified via modification methods.
     /// Metadata is also updated accordingly.
-    rule: MacaronRule,
+    rule: FlowLogRule,
 
     /// Reverse map from argument signatures to their variable strings.
     signature_to_argument_str_map: HashMap<AtomArgumentSignature, String>,
@@ -85,7 +85,7 @@ pub struct Catalog {
 // Construction and lifecycle management
 impl Catalog {
     /// Build a Catalog from a single rule (derives signatures, filters and helper maps).
-    pub fn from_rule(rule: &MacaronRule) -> Self {
+    pub fn from_rule(rule: &FlowLogRule) -> Self {
         let mut catalog = Self {
             rule: rule.clone(),
             signature_to_argument_str_map: HashMap::new(),
@@ -154,7 +154,7 @@ impl Catalog {
     }
 
     /// Update the catalog with a new rule, recomputing corresponding metadata.
-    pub fn update_rule(&mut self, rule: &MacaronRule) {
+    pub fn update_rule(&mut self, rule: &FlowLogRule) {
         self.rule = rule.clone();
         self.clear();
         self.populate_all_metadata();
@@ -165,7 +165,7 @@ impl Catalog {
 impl Catalog {
     /// Get the underlying rule.
     #[inline]
-    pub fn rule(&self) -> &MacaronRule {
+    pub fn rule(&self) -> &FlowLogRule {
         &self.rule
     }
 

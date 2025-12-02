@@ -1,9 +1,9 @@
-//! Command line argument parsing for Macaron tools.
+//! Command line argument parsing for FlowLog tools.
 
 use clap::{Parser, ValueEnum};
 use std::{fs, path::Path, process};
 
-/// Execution strategy for Macaron workflows
+/// Execution strategy for FlowLog workflows
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ExecutionMode {
     /// Maintain state across updates.
@@ -16,7 +16,7 @@ pub enum ExecutionMode {
     Batch,
 }
 
-/// Command line arguments for Macaron tools
+/// Command line arguments for FlowLog tools
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Args {

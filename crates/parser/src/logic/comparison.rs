@@ -1,4 +1,4 @@
-//! Comparison expressions for Macaron Datalog programs.
+//! Comparison expressions for FlowLog Datalog programs.
 //!
 //! - [`ComparisonOperator`]: `== | ≠ | > | ≥ | < | ≤`
 //! - [`ComparisonExpr`]: `{left} {op} {right}`

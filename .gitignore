@@ -1,7 +1,7 @@
 # Compilation artifacts
 /target
 
-# Macaron output
+# FlowLog output
 /result
 
 # Data files

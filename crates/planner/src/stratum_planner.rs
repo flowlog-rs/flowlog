@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use catalog::Catalog;
 use optimizer::Optimizer;
-use parser::logic::MacaronRule;
+use parser::logic::FlowLogRule;
 use parser::{AggregationOperator, HeadArg};
 use std::fmt;
 use tracing::debug;
@@ -59,7 +59,7 @@ impl StratumPlanner {
     /// Build a stratum planner from a stratum.
     #[must_use]
     pub fn from_rules(
-        stratum: &[MacaronRule],
+        stratum: &[FlowLogRule],
         optimizer: &mut Optimizer,
         is_recursive: bool,
         iterative_relation: &[u64],

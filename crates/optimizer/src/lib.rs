@@ -1,4 +1,4 @@
-//! Macaron Optimizer Library
+//! FlowLog Optimizer Library
 //! This crate provides two handlers:
 //! * Reader handler: load / update base (EDB) relation cardinalities.
 //! * Planner handler: given a stratum catalog collection, build `PlanTree`s per rule.

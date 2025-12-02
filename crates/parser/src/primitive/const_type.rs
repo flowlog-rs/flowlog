@@ -1,10 +1,10 @@
-//! Constant value types for Macaron Datalog programs.
+//! Constant value types for FlowLog Datalog programs.
 
 use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
-/// A literal constant in a Macaron Datalog program.
+/// A literal constant in a FlowLog Datalog program.
 ///
 /// Constants may appear in atom arguments, arithmetic expressions,
 /// and comparisons. Currently supported:

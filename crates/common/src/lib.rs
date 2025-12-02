@@ -1,4 +1,4 @@
-//! Shared common utilities for Macaron Datalog programs.
+//! Shared common utilities for FlowLog Datalog programs.
 
 pub mod args;
 pub mod formatter;

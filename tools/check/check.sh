@@ -9,7 +9,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${BLUE}[START]${NC} Macaron Testing"
+echo -e "${BLUE}[START]${NC} FlowLog Testing"
 
 # Resolve project paths and shared resources.
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -49,10 +49,10 @@ sanitize_package_name() {
     s="$(printf '%s' "$s" | tr -c 'a-z0-9_-' '_')"
     s="$(printf '%s' "$s" | sed 's/_\{2,\}/_/g; s/-\{2,\}/-/g; s/^[-_]//; s/[-_]$//')"
     if [ -z "$s" ]; then
-        s="macaron_output"
+        s="flowlog_output"
     fi
     if [[ $s =~ ^[0-9] ]]; then
-        s="macaron_${s}"
+        s="flowlog_${s}"
     fi
     printf '%s' "$s"
 }

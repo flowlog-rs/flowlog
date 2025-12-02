@@ -1,4 +1,4 @@
-//! Atom signatures for Macaron Datalog programs.
+//! Atom signatures for FlowLog Datalog programs.
 
 use std::fmt;
 

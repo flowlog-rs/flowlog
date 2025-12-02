@@ -1,4 +1,4 @@
-//! Predicate types for Macaron Datalog programs.
+//! Predicate types for FlowLog Datalog programs.
 //!
 //! - Positive atoms: `edge(X, Y)`
 //! - Negative atoms: `!edge(X, Y)`

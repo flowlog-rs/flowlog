@@ -1,4 +1,4 @@
-//! Comparison expression signatures for Macaron Datalog programs.
+//! Comparison expression signatures for FlowLog Datalog programs.
 
 use crate::{arithmetic::ArithmeticPos, atom::AtomArgumentSignature};
 use parser::{ComparisonExpr, ComparisonOperator};

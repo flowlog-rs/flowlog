@@ -1,7 +1,7 @@
-//! Macaron Stratifier Library
+//! FlowLog Stratifier Library
 //!
 //! This crate provides analysis utilities that operate on a parsed
-//! Macaron `Program` and help plan evaluation order:
+//! FlowLog `Program` and help plan evaluation order:
 //!
 //! - [`DependencyGraph`]: builds the rule dependency map
 //!   identifying which rules reference predicates defined by other rules.
@@ -13,7 +13,7 @@
 //! use parser::Program;
 //! use stratifier::Stratifier;
 //!
-//! // Parse a Macaron program (example reach.dl, adjust path as needed)
+//! // Parse a FlowLog program (example reach.dl, adjust path as needed)
 //! let program = Program::parse("../../example/reach.dl");
 //!
 //! // Compute stratum

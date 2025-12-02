@@ -1,4 +1,4 @@
-//! Declaration types for Macaron Datalog programs.
+//! Declaration types for FlowLog Datalog programs.
 //!
 //! This module defines the schema-layer declarations parsed from source:
 //! - [`Attribute`]: a single column (name + [`DataType`](crate::primitive::DataType))

@@ -1,4 +1,4 @@
-//! Rule structures for Macaron Datalog programs.
+//! Rule structures for FlowLog Datalog programs.
 //!
 //! A rule is `head :- p1, p2, ..., pn.`
 //! - Head: a single derived relation
@@ -11,15 +11,15 @@ use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
-/// A complete Macaron rule.
+/// A complete FlowLog rule.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MacaronRule {
+pub struct FlowLogRule {
     head: Head,
     rhs: Vec<Predicate>,
     is_planning: bool,
 }
 
-impl fmt::Display for MacaronRule {
+impl fmt::Display for FlowLogRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -34,7 +34,7 @@ impl fmt::Display for MacaronRule {
     }
 }
 
-impl MacaronRule {
+impl FlowLogRule {
     /// Construct a rule.
     #[must_use]
     pub fn new(head: Head, rhs: Vec<Predicate>, is_planning: bool) -> Self {
@@ -108,7 +108,7 @@ impl MacaronRule {
     }
 }
 
-impl Lexeme for MacaronRule {
+impl Lexeme for FlowLogRule {
     /// Parse `head ~ ":-" ~ predicates ~ optimize? ~ "."`
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let mut inner = parsed_rule.into_inner();
@@ -174,7 +174,7 @@ mod tests {
     fn create_and_access() {
         let head = head_named("result", vec![head_var("X")]);
         let body = vec![pos_pred("input", vec![var_arg("X")])];
-        let r = MacaronRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body, false);
 
         assert!(!r.is_planning());
         assert!(!r.is_boolean());
@@ -186,7 +186,7 @@ mod tests {
     fn planning_flag() {
         let head = head_named("optimized", vec![head_var("Y")]);
         let body = vec![pos_pred("source", vec![var_arg("Y")])];
-        let r = MacaronRule::new(head, body, true);
+        let r = FlowLogRule::new(head, body, true);
         assert!(r.is_planning());
     }
 
@@ -194,7 +194,7 @@ mod tests {
     fn boolean_detection() {
         let head = head_named("fact", vec![head_const(ConstType::Integer(42))]);
         let body = vec![bool_pred(true)];
-        let r = MacaronRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body, false);
         assert!(r.is_boolean());
     }
 
@@ -206,7 +206,7 @@ mod tests {
             cmp_pred(),
             bool_pred(false),
         ];
-        let r = MacaronRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body, false);
 
         match r.get(0) {
             Predicate::PositiveAtomPredicate(a) => assert_eq!(a.name(), "first"),
@@ -220,7 +220,7 @@ mod tests {
     fn display_formats() {
         let head = head_named("result", vec![head_var("X")]);
         let body = vec![pos_pred("input", vec![var_arg("X")])];
-        let r = MacaronRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body, false);
         assert!(r.to_string().starts_with("result(X) :- input(X)"));
 
         let head2 = head_named("complex", vec![head_var("A"), head_var("B")]);
@@ -229,7 +229,7 @@ mod tests {
             neg_pred("rel2", vec![var_arg("B")]),
             bool_pred(true),
         ];
-        let r2 = MacaronRule::new(head2, body2, false);
+        let r2 = FlowLogRule::new(head2, body2, false);
         let s2 = r2.to_string();
         assert!(s2.starts_with("complex(A, B) :- rel1(A)"));
         assert!(s2.contains("!rel2(B)"));
@@ -242,7 +242,7 @@ mod tests {
             let r = Arithmetic::new(Factor::Const(ConstType::Integer(5)), vec![]);
             Predicate::ComparePredicate(ComparisonExpr::new(l, ComparisonOperator::GreaterThan, r))
         }];
-        let r3 = MacaronRule::new(head3, body3, false);
+        let r3 = FlowLogRule::new(head3, body3, false);
         let s3 = r3.to_string();
         assert!(s3.starts_with("filtered(X) :- data(X)"));
         assert!(s3.contains(", X > 5"));
@@ -258,7 +258,7 @@ mod tests {
                 head_const(ConstType::Text("hello".into())),
             ],
         );
-        let r = MacaronRule::new(head, vec![bool_pred(true)], false);
+        let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
 
         let c = r.extract_constants_from_head();
         assert_eq!(c.len(), 2);
@@ -273,7 +273,7 @@ mod tests {
             "invalid",
             vec![head_const(ConstType::Integer(1)), head_var("X")],
         );
-        let r = MacaronRule::new(head, vec![bool_pred(true)], false);
+        let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
         let _ = r.extract_constants_from_head();
     }
 
@@ -287,7 +287,7 @@ mod tests {
             "invalid",
             vec![head_const(ConstType::Integer(1)), HeadArg::Aggregation(agg)],
         );
-        let r = MacaronRule::new(head, vec![bool_pred(true)], false);
+        let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
         let _ = r.extract_constants_from_head();
     }
 
@@ -302,7 +302,7 @@ mod tests {
             )],
         );
         let head = head_named("invalid", vec![HeadArg::Arith(complex)]);
-        let r = MacaronRule::new(head, vec![bool_pred(true)], false);
+        let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
         let _ = r.extract_constants_from_head();
     }
 
@@ -310,7 +310,7 @@ mod tests {
     fn clone_hash_eq() {
         let head = head_named("test", vec![head_var("X")]);
         let body = vec![pos_pred("input", vec![var_arg("X")])];
-        let r = MacaronRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body, false);
         let c = r.clone();
         assert_eq!(r, c);
 
@@ -333,7 +333,7 @@ mod tests {
             Predicate::ComparePredicate(age_gt),
             neg_pred("blocked", vec![var_arg("Person")]),
         ];
-        let r = MacaronRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body, false);
 
         assert_eq!(r.head().name(), "derived");
         assert_eq!(r.head().arity(), 2);

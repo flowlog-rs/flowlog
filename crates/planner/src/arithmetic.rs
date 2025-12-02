@@ -1,4 +1,4 @@
-//! Arithmetic expression representation for query planning in Macaron Datalog programs.
+//! Arithmetic expression representation for query planning in FlowLog Datalog programs.
 
 use crate::argument::TransformationArgument;
 use catalog::arithmetic::{ArithmeticPos, FactorPos};

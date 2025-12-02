@@ -1,4 +1,4 @@
-//! Macaron Generator Library
+//! FlowLog Generator Library
 //! Generates executable Rust code from planned strata.
 
 // =========================================================================

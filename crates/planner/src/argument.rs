@@ -1,4 +1,4 @@
-//! Argument types for query planning transformations in Macaron Datalog program.
+//! Argument types for query planning transformations in FlowLog Datalog program.
 
 use crate::{ArithmeticArgument, FactorArgument};
 use std::fmt;

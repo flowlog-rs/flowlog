@@ -1,4 +1,4 @@
-//! Input/Output directive types for Macaron Datalog programs.
+//! Input/Output directive types for FlowLog Datalog programs.
 
 use crate::{Lexeme, Rule};
 use pest::iterators::Pair;

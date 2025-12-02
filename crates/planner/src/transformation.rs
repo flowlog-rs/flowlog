@@ -1,4 +1,4 @@
-//! Transformation operations for query planning in Macaron Datalog programs.
+//! Transformation operations for query planning in FlowLog Datalog programs.
 //!
 //! This module provides the core transformation abstractions that define how data flows
 //! through query execution plans. Transformations represent operations like filtering,

@@ -1,7 +1,7 @@
 // =============================================================================
-// Macaron GRAMMAR DEFINITION
+// FlowLog GRAMMAR DEFINITION
 // =============================================================================
-// This grammar defines the syntax for Macaron, a Datalog language engine
+// This grammar defines the syntax for FlowLog, a Datalog language engine
 // for declarative data processing and rule-based queries.
 
 // Main grammar entry point
@@ -60,7 +60,7 @@ boolean = { "True" | "False" }
 // =============================================================================
 // RELATION DECLARATIONS
 // =============================================================================
-// Relations are the core data structures in Macaron. They can be:
+// Relations are the core data structures in FlowLog. They can be:
 // - EDB (Extensional Database): Input relations with external data
 // - IDB (Intentional Database): Computed relations defined by rules
 

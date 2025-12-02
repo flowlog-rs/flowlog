@@ -1,4 +1,4 @@
-//! Macaron Datalog program representation and manipulation.
+//! FlowLog Datalog program representation and manipulation.
 //!
 //! A program contains:
 //! - Relation declarations (schema only)
@@ -10,18 +10,18 @@
 
 use super::{
     declaration::{InputDirective, OutputDirective, PrintSizeDirective, Relation},
-    logic::{MacaronRule, Predicate},
-    ConstType, Lexeme, MacaronParser, Rule,
+    logic::{FlowLogRule, Predicate},
+    ConstType, FlowLogParser, Lexeme, Rule,
 };
 use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::{fmt, fs};
 use tracing::{debug, info, warn};
 
-/// A complete Macaron program.
+/// A complete FlowLog program.
 ///
 /// ```ignore
-/// use macaron_parser::program::Program;
+/// use FlowLog_parser::program::Program;
 ///
 /// let program = Program::parse("PATH_TO_DATALOG_FILE");
 /// println!("{}", program);
@@ -29,7 +29,7 @@ use tracing::{debug, info, warn};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     relations: Vec<Relation>,
-    rules: Vec<MacaronRule>,
+    rules: Vec<FlowLogRule>,
     /// Map: relation name -> [(constant tuple, boolean value)]
     bool_facts: HashMap<String, Vec<(Vec<ConstType>, bool)>>,
 }
@@ -37,7 +37,7 @@ pub struct Program {
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "=============================================")?;
-        writeln!(f, "MACARON DATALOG PROGRAM")?;
+        writeln!(f, "FlowLog DATALOG PROGRAM")?;
         writeln!(f, "=============================================")?;
         writeln!(f)?;
 
@@ -102,8 +102,8 @@ impl Program {
     pub fn parse(path: &str) -> Self {
         let source = fs::read_to_string(path).expect("Parser error: failed to read file");
 
-        let mut pairs = MacaronParser::parse(Rule::main_grammar, &source)
-            .expect("Parser error: failed to parse Macaron program");
+        let mut pairs = FlowLogParser::parse(Rule::main_grammar, &source)
+            .expect("Parser error: failed to parse FlowLog program");
         let root = pairs.next().expect("Parser error: no parsed rule found");
 
         // Build structure + extract boolean facts inside `from_parsed_rule` then prune.
@@ -155,7 +155,7 @@ impl Program {
     /// Transformation rules (boolean-only rules are extracted into `bool_facts`).
     #[must_use]
     #[inline]
-    pub fn rules(&self) -> &[MacaronRule] {
+    pub fn rules(&self) -> &[FlowLogRule] {
         &self.rules
     }
 
@@ -395,7 +395,7 @@ impl Lexeme for Program {
                     printsize_directives.push(printsize_dir);
                 }
                 Rule::rule => {
-                    rules.push(MacaronRule::from_parsed_rule(node));
+                    rules.push(FlowLogRule::from_parsed_rule(node));
                 }
                 _ => {}
             }

@@ -1,10 +1,10 @@
-//! Primitive types for the Macaron Datalog programs.
+//! Primitive types for the FlowLog Datalog programs.
 //!
 //! This module defines the core types used in the parser layer:
 //! - [`DataType`]: relation attribute types (`number`, `string`)
 //! - [`ConstType`]: literal constants (numbers, text)
 //!
-//! These types form the building blocks of Macaron Datalog programs and appear
+//! These types form the building blocks of FlowLog Datalog programs and appear
 //! in atoms, expressions, and relation schemas.
 //!
 //! # Example

@@ -1,4 +1,4 @@
-//! Plan tree (left-to-right chain) over core atoms for Macaron Datalog programs.
+//! Plan tree (left-to-right chain) over core atoms for FlowLog Datalog programs.
 use catalog::rule::Catalog;
 use std::collections::HashMap;
 use std::fmt;

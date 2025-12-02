@@ -1,4 +1,4 @@
-//! Relation declaration types for Macaron Datalog programs.
+//! Relation declaration types for FlowLog Datalog programs.
 
 use super::Attribute;
 use crate::primitive::DataType;

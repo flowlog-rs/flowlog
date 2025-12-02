@@ -1,4 +1,4 @@
-//! Aggregation code generation utilities for Macaron.
+//! Aggregation code generation utilities for FlowLog.
 //!
 //! This module provides helper functions to generate Rust code for aggregation operations
 //! in the codegen pipeline. It supports row chopping, aggregation reduction logic,
@@ -52,7 +52,7 @@ pub fn aggregation_reduce(op: &AggregationOperator) -> TokenStream {
         AggregationOperator::Count => quote! {
             |_, input, _output, updates| {
                 let count = input.len() as i32;
-                updates.push((*count, SEMIRING_ONE));
+                updates.push(((count,), SEMIRING_ONE));
             }
         },
         AggregationOperator::Sum => quote! {

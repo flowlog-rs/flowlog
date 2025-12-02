@@ -1,4 +1,4 @@
-//! Aggregation expressions for Macaron Datalog programs.
+//! Aggregation expressions for FlowLog Datalog programs.
 //!
 //! - [`AggregationOperator`]: `min | max | count | sum`
 //! - [`Aggregation`]: `op(expr)` (e.g., `sum(price * qty)`)

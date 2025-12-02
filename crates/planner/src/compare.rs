@@ -1,4 +1,4 @@
-//! Comparison expression representation for query planning in Macaron Datalog programs.
+//! Comparison expression representation for query planning in FlowLog Datalog programs.
 
 use crate::{argument::TransformationArgument, arithmetic::ArithmeticArgument};
 use catalog::ComparisonExprPos;

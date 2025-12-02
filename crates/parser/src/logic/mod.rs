@@ -1,4 +1,4 @@
-//! Logic components for Macaron Datalog programs.
+//! Logic components for FlowLog Datalog programs.
 //!
 //! This module exposes the core logic layer used by the parser and planner:
 //! - [`rule`][]: rules (head + body)
@@ -11,12 +11,12 @@
 //!
 //! # Example
 //! ```rust
-//! use parser::logic::{MacaronRule, Head, HeadArg, Predicate};
+//! use parser::logic::{FlowLogRule, Head, HeadArg, Predicate};
 //!
 //! // result(X) :- input(X).
 //! let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
 //! let body = vec![Predicate::BoolPredicate(true)]; // adjust to your real body/predicate
-//! let rule = MacaronRule::new(head, body, false);
+//! let rule = FlowLogRule::new(head, body, false);
 //! ```
 
 pub mod aggregation;
@@ -34,4 +34,4 @@ pub use atom::{Atom, AtomArg};
 pub use comparison::{ComparisonExpr, ComparisonOperator};
 pub use head::{Head, HeadArg};
 pub use predicate::Predicate;
-pub use rule::MacaronRule;
+pub use rule::FlowLogRule;

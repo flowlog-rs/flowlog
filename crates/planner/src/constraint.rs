@@ -1,4 +1,4 @@
-//! Constraints representation for query planning in Macaron Datalog programs.
+//! Constraints representation for query planning in FlowLog Datalog programs.
 
 use crate::argument::TransformationArgument;
 use parser::ConstType;

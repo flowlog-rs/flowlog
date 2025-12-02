@@ -1,4 +1,4 @@
-//! Optimizer for Macaron Datalog programs.
+//! Optimizer for FlowLog Datalog programs.
 use crate::plan_tree::PlanTree;
 use catalog::rule::Catalog;
 use std::collections::HashMap;

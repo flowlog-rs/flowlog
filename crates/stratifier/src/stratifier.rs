@@ -1,8 +1,8 @@
-//! Stratification for Macaron Datalog programs.
+//! Stratification for FlowLog Datalog programs.
 
 use crate::dependency_graph::DependencyGraph;
 use itertools::Itertools;
-use parser::{logic::MacaronRule, Program};
+use parser::{logic::FlowLogRule, Program};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use tracing::{debug, info};
@@ -58,7 +58,7 @@ impl Stratifier {
 
     /// Return stratum as rule references instead of IDs (helper for display/tests).
     #[must_use]
-    pub fn stratum(&self) -> Vec<Vec<&MacaronRule>> {
+    pub fn stratum(&self) -> Vec<Vec<&FlowLogRule>> {
         let mut out = Vec::with_capacity(self.stratum.len());
         for s in &self.stratum {
             out.push(s.iter().map(|&rid| &self.program.rules()[rid]).collect());

@@ -1,4 +1,4 @@
-//! Macaron Catalog Library
+//! FlowLog Catalog Library
 //!
 //! This crate provides per-rule metadata and utilities used by the planner.
 //! It builds compact signatures for atoms/arguments, detects core

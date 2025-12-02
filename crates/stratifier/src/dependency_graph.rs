@@ -1,7 +1,7 @@
-//! Dependency graph construction for Macaron Datalog programs.
+//! Dependency graph construction for FlowLog Datalog programs.
 
 use itertools::Itertools;
-use parser::{logic::MacaronRule, Predicate, Program};
+use parser::{logic::FlowLogRule, Predicate, Program};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -42,7 +42,7 @@ impl DependencyGraph {
     }
 
     /// Builds mapping from relation names to rule IDs that define them.
-    fn build_head_to_rule_map(rules: &[MacaronRule]) -> HashMap<String, Vec<usize>> {
+    fn build_head_to_rule_map(rules: &[FlowLogRule]) -> HashMap<String, Vec<usize>> {
         let mut head_to_rule_ids_map: HashMap<String, Vec<usize>> = HashMap::new();
 
         for (rule_id, rule) in rules.iter().enumerate() {
@@ -58,7 +58,7 @@ impl DependencyGraph {
 
     fn analyze_rule_dependencies(
         rule_id: usize,
-        rule: &MacaronRule,
+        rule: &FlowLogRule,
         head_to_rule_ids_map: &HashMap<String, Vec<usize>>,
         dependency_map: &mut HashMap<usize, HashSet<usize>>,
     ) {

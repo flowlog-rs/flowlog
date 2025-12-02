@@ -1,4 +1,4 @@
-//! Rule heads for Macaron Datalog programs.
+//! Rule heads for FlowLog Datalog programs.
 //!
 //! - [`HeadArg`]: `Var | Arith | Aggregation`
 //! - [`Head`]: `rel(arg1, ..., argN)`

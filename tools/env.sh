@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "[SETUP] Setting up Macaron development environment..."
+echo "[SETUP] Setting up FlowLog development environment..."
 
 # Detect operating system
 OS="$(uname -s)"
@@ -67,7 +67,7 @@ rustup default stable
 echo "Rust installation complete."
 fi
 
-echo "[VERIFY] Verifying Macaron compilation..."
+echo "[VERIFY] Verifying FlowLog compilation..."
 cargo check
 
 echo "[COMPLETE] Environment setup completed successfully!"
