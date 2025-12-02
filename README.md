@@ -79,21 +79,7 @@ Reach(y) :- Source(y).
 Reach(y) :- Reach(x), Arc(x, y).
 ```
 
-### 1. Prepare a Tiny Dataset
-
-```bash
-$ mkdir -p reach
-$ cat <<'EOF' > reach/Source.csv
-  1
-  EOF
-
-$ cat <<'EOF' > reach/Arc.csv
-  1,2
-  2,3
-  EOF
-```
-
-### 2. Generate the Executable
+### 1. Generate the Executable
 
 ```bash
 $ cargo run -p generator -- example/reach.dl -F reach -o reach_flowlog -D -
@@ -106,14 +92,27 @@ Key flags:
 - `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
 - `--mode incremental` switches the diff type to `isize` (default is batch semantics).
 
-### 3. Build and Run the Generated Project
+
+### 2. Prepare a Tiny Dataset
 
 ```bash
 $ cd ../reach_flowlog
-$ cargo run --release -- -w 4
+$ mkdir -p reach
+$ cat <<'EOF' > reach/Source.csv
+  1
+  EOF
+
+$ cat <<'EOF' > reach/Arc.csv
+  1,2
+  2,3
+  EOF
 ```
 
-Set `RUST_LOG=debug` for more verbose inspection output.
+### 3. Build and Run the Generated Project
+
+```bash
+$ cargo run --release -- -w 4
+```
 
 ## Regression Harness
 
