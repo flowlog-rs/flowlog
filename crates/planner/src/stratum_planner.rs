@@ -51,8 +51,8 @@ pub struct StratumPlanner {
 
     /// Aggregation metadata keyed by final output fingerprint.
     /// Only populated for rules whose heads contain an aggregation argument.
-    /// Values are `(AggregationOperator, output_position)` tuples.
-    output_to_aggregation_map: HashMap<u64, (AggregationOperator, usize)>,
+    /// Values are `(AggregationOperator, output_position, output_arity)` tuples.
+    output_to_aggregation_map: HashMap<u64, (AggregationOperator, usize, usize)>,
 }
 
 impl StratumPlanner {
@@ -206,9 +206,9 @@ impl StratumPlanner {
     }
 
     /// Get the mapping from rule output relation to corresponding aggregation.
-    /// Returns tuples of (AggregationOperator, position in output relation).
+    /// Returns tuples of (AggregationOperator, position in output relation, output arity).
     #[inline]
-    pub fn output_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize)> {
+    pub fn output_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
         &self.output_to_aggregation_map
     }
 
@@ -258,6 +258,16 @@ impl fmt::Display for StratumPlanner {
             }
         } else {
             writeln!(f, "(Non-recursive stratum: no recursive transformations)")?;
+        }
+
+        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "IDB to Aggregation Map:")?;
+        for (fp, (op, pos, arity)) in &self.output_to_aggregation_map {
+            writeln!(
+                f,
+                "  fp={:#018x},\n  op={:?},\n  pos={},\n  arity={}",
+                fp, op, pos, arity
+            )?;
         }
 
         writeln!(f, "{}", "=".repeat(80))
@@ -442,33 +452,33 @@ impl StratumPlanner {
     /// 2. Due to sharing, not every rule has a real output fingerprint -> aggregation mapping, though it may occur
     ///    in the `output_to_aggregation_map`.
     fn build_output_to_aggregation_map(&mut self, catalogs: &[Catalog]) {
-        for (rule_idx, catalog) in catalogs.iter().enumerate() {
-            if let Some((pos, op)) =
-                catalog
-                    .head_arguments()
-                    .iter()
-                    .enumerate()
-                    .find_map(|(i, arg)| match arg {
-                        HeadArg::Aggregation(agg) => Some((i, *agg.operator())),
-                        _ => None,
-                    })
+        for catalog in catalogs.iter() {
+            if let Some((pos, op, arity, head_idb_fp)) = catalog
+                .head_arguments()
+                .iter()
+                .enumerate()
+                .find_map(|(i, arg)| match arg {
+                    HeadArg::Aggregation(agg) => Some((
+                        i,
+                        *agg.operator(),
+                        catalog.head_arguments().len(),
+                        catalog.head_idb_fingerprint(),
+                    )),
+                    _ => None,
+                })
             {
-                let final_info = self.rule_planners[rule_idx]
-                    .transformation_infos()
-                    .last()
-                    .unwrap();
-                let output_fp = final_info.output_info_fp();
-                match self.output_to_aggregation_map.get(&output_fp) {
-                    Some(&(existing_op, existing_pos)) => {
-                        if existing_op != op || existing_pos != pos {
+                match self.output_to_aggregation_map.get(&head_idb_fp) {
+                    Some(&(existing_op, existing_pos, existing_arity)) => {
+                        if existing_op != op || existing_pos != pos || existing_arity != arity {
                             panic!(
                                     "Planner error: inconsistent aggregation for output fingerprint {:#018x}, found {:?} at position {} but expected {:?} at position {}",
-                                    output_fp, op, pos, existing_op, existing_pos
+                                    head_idb_fp, op, pos, existing_op, existing_pos
                                 );
                         }
                     }
                     None => {
-                        self.output_to_aggregation_map.insert(output_fp, (op, pos));
+                        self.output_to_aggregation_map
+                            .insert(head_idb_fp, (op, pos, arity));
                     }
                 }
             }

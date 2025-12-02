@@ -5,6 +5,7 @@
 // Module Declarations
 // =========================================================================
 
+mod aggregation;
 mod arg;
 mod data_type;
 mod flow;
@@ -80,8 +81,10 @@ fn gen_imports(is_recursive: bool) -> TokenStream {
         use differential_dataflow::input::Input;
         use differential_dataflow::operators::*;
         use differential_dataflow::operators::arrange::ArrangeByKey;
-        use timely::dataflow::operators::core::*;
+        use differential_dataflow::operators::reduce::*;
+        use differential_dataflow::trace::implementations::*;
         use differential_dataflow::AsCollection;
+        use timely::dataflow::operators::core::*;
         #rec_imports
     }
 }
@@ -118,6 +121,7 @@ fn generate_main(args: &Args, program: &Program, strata: &[StratumPlanner]) -> S
                 &mut fp_to_type,
                 &non_recursive_arranged_map,
                 stratum,
+                stratum.output_to_aggregation_map(),
             ));
         } else {
             flow_stmts.extend(gen_non_recursive_post_flows(
@@ -125,6 +129,7 @@ fn generate_main(args: &Args, program: &Program, strata: &[StratumPlanner]) -> S
                 &mut fp_to_type,
                 &calculated_output_fps,
                 stratum.output_to_idb_map(),
+                stratum.output_to_aggregation_map(),
             ));
         }
 

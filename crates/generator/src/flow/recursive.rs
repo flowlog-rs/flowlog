@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
+use crate::aggregation::{aggregation_merge_kv, aggregation_reduce, aggregation_row_chop};
 use crate::ident::find_ident;
 use crate::transformation::gen_transformation;
 
@@ -19,6 +20,7 @@ pub(crate) fn gen_iterative_block(
     fp_to_type: &mut HashMap<u64, DataType>,
     non_recursive_arranged_map: &HashMap<u64, Ident>,
     stratum_planner: &StratumPlanner,
+    output_to_aggregation_map: &HashMap<u64, (parser::AggregationOperator, usize, usize)>,
 ) -> TokenStream {
     let leave_fps = stratum_planner.recursion_leave_collections();
     if leave_fps.is_empty() {
@@ -41,8 +43,11 @@ pub(crate) fn gen_iterative_block(
         .map(|tx| gen_transformation(&current, fp_to_type, tx, &mut recursive_arranged))
         .collect();
 
-    let (next_bindings, union_stmts) =
-        collect_unions(stratum_planner.output_to_idb_map(), &enter_bindings);
+    let (next_bindings, union_stmts) = collect_unions(
+        stratum_planner.output_to_idb_map(),
+        &enter_bindings,
+        output_to_aggregation_map,
+    );
 
     let set_stmts: Vec<TokenStream> = next_bindings
         .iter()
@@ -125,6 +130,7 @@ fn build_enter_bindings(
 fn collect_unions(
     output_to_idb_map: &HashMap<u64, Vec<u64>>,
     enter_bindings: &HashMap<u64, Ident>,
+    output_to_aggregation_map: &HashMap<u64, (parser::AggregationOperator, usize, usize)>,
 ) -> (HashMap<u64, Ident>, Vec<TokenStream>) {
     let mut next_bindings: HashMap<u64, Ident> = HashMap::new();
     let mut union_stmts = Vec::new();
@@ -147,9 +153,26 @@ fn collect_unions(
             quote! { #ts.concat(&#ident) }
         });
 
-        union_stmts.push(quote! {
+        let mut block = quote! {
             let #next_ident = #union_expr.threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
-        });
+        };
+
+        if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
+            let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
+            let reduce_logic = aggregation_reduce(agg_op);
+            let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
+            block = quote! {
+                #block
+                let #next_ident = #next_ident
+                    .map(#row_chop)
+                    .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+                        "aggregation",
+                        #reduce_logic
+                    )
+                    .as_collection(#merge_kv);
+            };
+        }
+        union_stmts.push(block);
     }
 
     (next_bindings, union_stmts)
