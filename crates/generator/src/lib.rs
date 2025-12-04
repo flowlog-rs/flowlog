@@ -97,7 +97,7 @@ fn generate_main(args: &Args, program: &Program, strata: &[StratumPlanner]) -> S
     // Static sections of the generated program.
     let input_decls = gen_input_decls(program.edbs());
     let (lhs_binding, ret_expr) = build_handle_binding(&input_order);
-    let ingest_stmts = gen_ingest_stmts(args.fact_dir(), program.edbs());
+    let ingest_stmts = gen_ingest_stmts(args.fact_dir(), program);
     let close_stmts = gen_close_stmts(&input_order);
 
     let is_recursive = strata.iter().any(|s| s.is_recursive());

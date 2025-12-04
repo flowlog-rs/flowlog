@@ -77,11 +77,22 @@ impl Relation {
         self.attributes[0].data_type()
     }
 
-    /// Input parameters if this is an EDB relation.
+    /// Get the input filename if this is an EDB relation.
     #[must_use]
     #[inline]
-    pub fn input_params(&self) -> Option<&HashMap<String, String>> {
-        self.input_params.as_ref()
+    pub fn input_file_name(&self) -> Option<&str> {
+        self.input_params
+            .as_ref()
+            .and_then(|m| m.get("filename").map(String::as_str))
+    }
+
+    /// Get the input delimiter if this is an EDB relation.
+    #[must_use]
+    #[inline]
+    pub fn input_delimiter(&self) -> Option<&str> {
+        self.input_params
+            .as_ref()
+            .and_then(|m| m.get("delimiter").map(String::as_str))
     }
 
     /// Whether to print size for this relation.
@@ -318,5 +329,20 @@ mod tests {
         let r3 = Relation::new("u", attrs());
         assert_eq!(r1, r2);
         assert_ne!(r1, r3);
+    }
+
+    #[test]
+    fn input_filename_and_delimiter_accessors() {
+        let mut rel = Relation::new("input_rel", attrs());
+        assert_eq!(rel.input_file_name(), None);
+        assert_eq!(rel.input_delimiter(), None);
+
+        let mut params = HashMap::new();
+        params.insert("filename".to_string(), "data.csv".to_string());
+        params.insert("delimiter".to_string(), ",".to_string());
+        rel.set_input_params(params);
+
+        assert_eq!(rel.input_file_name(), Some("data.csv"));
+        assert_eq!(rel.input_delimiter(), Some(","));
     }
 }

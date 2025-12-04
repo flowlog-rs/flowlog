@@ -6,7 +6,7 @@ use std::fmt;
 use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
 use crate::ComparisonExprPos;
-use parser::{ComparisonExpr, HeadArg, FlowLogRule};
+use parser::{ComparisonExpr, FlowLogRule, HeadArg};
 use tracing::debug;
 
 // Implementation modules
