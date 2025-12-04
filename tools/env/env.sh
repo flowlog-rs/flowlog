@@ -65,7 +65,6 @@ rustup install stable
 rustup default stable
 
 echo "Rust installation complete."
-fi
 
 echo "[VERIFY] Verifying FlowLog compilation..."
 cargo check
