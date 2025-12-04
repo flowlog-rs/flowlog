@@ -96,7 +96,7 @@ Key flags:
 ### 2. Prepare a Tiny Dataset
 
 ```bash
-$ cd ../reach_flowlog
+$ cd reach_flowlog
 $ mkdir -p reach
 $ cat <<'EOF' > reach/Source.csv
   1
