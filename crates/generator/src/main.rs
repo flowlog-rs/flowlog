@@ -1,4 +1,8 @@
-use std::{fs, path::Path, process};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process,
+};
 
 use clap::Parser;
 use common::Args;
@@ -75,12 +79,19 @@ fn generate_program(
     }
 
     // Generate code for the deduplicated transformation list for this stratum
-    let out_parent = Path::new("../");
-    let package_name = args
+    let output_path = args
         .output()
-        .map(|name| name.to_string())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(args.program_name()));
+    let package_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
         .unwrap_or_else(|| args.program_name());
-    if let Err(e) = generate_project_at(args, out_parent, &package_name, program, &strata) {
+    if let Err(e) =
+        generate_project_at(args, output_path.as_path(), &package_name, program, &strata)
+    {
         error!("Failed to generate project: {}", e);
         process::exit(1);
     }

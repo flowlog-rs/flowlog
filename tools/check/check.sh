@@ -27,7 +27,6 @@ RESULT_DIR="${ROOT_DIR}/result"
 LOG_DIR="${RESULT_DIR}/logs"
 PARSED_DIR="${RESULT_DIR}/parsed"
 GENERATOR_BIN="${ROOT_DIR}/target/release/generator"
-OUTPUT_PARENT="$(realpath "${ROOT_DIR}/..")"
 WORKERS=${WORKERS:-64}
 
 mkdir -p "$RESULT_DIR" "$LOG_DIR" "$PARSED_DIR"
@@ -234,14 +233,14 @@ run_test() {
     local program_stem="${prog_file%.*}"
     local package_name_raw="${program_stem}_${dataset_name}"
     local package_name="$(sanitize_package_name "$package_name_raw")"
-    local project_dir="${OUTPUT_PARENT}/${package_name}"
+    local project_dir="${ROOT_DIR}/${package_name}"
 
     echo -e "${BLUE}[TEST]${NC} $prog_file with $dataset_name"
 
     rm -rf "$project_dir"
 
-    echo -e "${YELLOW}[GENERATE]${NC} $GENERATOR_BIN $prog_path -F $dataset_path -o $package_name"
-    "$GENERATOR_BIN" "$prog_path" -F "$dataset_path" -o "$package_name"
+    echo -e "${YELLOW}[GENERATE]${NC} $GENERATOR_BIN $prog_path -F $dataset_path -o $project_dir"
+    "$GENERATOR_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir"
 
     if [ ! -d "$project_dir" ]; then
         echo -e "${RED}[ERROR]${NC} Generated project not found: $project_dir"

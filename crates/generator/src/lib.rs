@@ -46,14 +46,13 @@ use scaffold::write_project;
 /// Create a project directory and write Cargo.toml + src/main.rs generated from the strata plan.
 pub fn generate_project_at(
     args: &Args,
-    out_parent: &Path,
+    out_dir: &Path,
     package_name: &str,
     program: &Program,
     strata: &[StratumPlanner],
 ) -> std::io::Result<()> {
-    let out_dir = out_parent.join(package_name);
     let main = generate_main(args, program, strata);
-    write_project(&out_dir, package_name, &main)
+    write_project(out_dir, package_name, &main)
 }
 
 // =========================================================================

@@ -11,9 +11,14 @@ use toml_edit::DocumentMut;
 /// Render a basic Cargo.toml.
 pub fn render_cargo_toml(package_name: &str) -> String {
     let mut doc = DocumentMut::new();
+
+    // Package info
     doc["package"]["name"] = package_name.into();
     doc["package"]["version"] = "0.1.0".into();
     doc["package"]["edition"] = "2024".into();
+
+    // Make generated crate standalone even inside another workspace
+    doc["workspace"] = toml_edit::table();
 
     // dependencies
     doc["dependencies"]["timely"] = "0.25".into();
