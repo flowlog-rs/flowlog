@@ -6,7 +6,7 @@ members = [
     "crates/catalog",
     "crates/optimizer",
     "crates/planner",
-    "crates/generator"
+    "crates/compiler"
 ]
 resolver = "2"
 

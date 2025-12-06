@@ -26,7 +26,7 @@ SIZE_DIR="${ROOT_DIR}/tools/check/correctness_size"
 RESULT_DIR="${ROOT_DIR}/result"
 LOG_DIR="${RESULT_DIR}/logs"
 PARSED_DIR="${RESULT_DIR}/parsed"
-GENERATOR_BIN="${ROOT_DIR}/target/release/generator"
+COMPILER_BIN="${ROOT_DIR}/target/release/compiler"
 WORKERS=${WORKERS:-64}
 
 mkdir -p "$RESULT_DIR" "$LOG_DIR" "$PARSED_DIR"
@@ -110,11 +110,11 @@ setup_size_reference() {
     exit 1
 }
 
-ensure_generator_built() {
-    # Build the generator binary if it is missing.
-    if [ ! -x "$GENERATOR_BIN" ]; then
-        echo -e "${YELLOW}[BUILD]${NC} Building generator"
-        cargo build --release --bin generator >/dev/null
+ensure_compiler_built() {
+    # Build the compiler binary if it is missing.
+    if [ ! -x "$COMPILER_BIN" ]; then
+        echo -e "${YELLOW}[BUILD]${NC} Building compiler"
+        cargo build --release --bin compiler >/dev/null
     fi
 }
 
@@ -239,8 +239,8 @@ run_test() {
 
     rm -rf "$project_dir"
 
-    echo -e "${YELLOW}[GENERATE]${NC} $GENERATOR_BIN $prog_path -F $dataset_path -o $project_dir"
-    "$GENERATOR_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir"
+    echo -e "${YELLOW}[GENERATE]${NC} $COMPILER_BIN $prog_path -F $dataset_path -o $project_dir"
+    "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir"
 
     if [ ! -d "$project_dir" ]; then
         echo -e "${RED}[ERROR]${NC} Generated project not found: $project_dir"
@@ -306,7 +306,7 @@ run_all_tests() {
 }
 
 compile_release_workspace
-ensure_generator_built
+ensure_compiler_built
 setup_config_file
 setup_size_reference
 run_all_tests

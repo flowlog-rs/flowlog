@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 1) Build the release binary (still named `generator`)
+# 1) Build the release binary
 cargo build --release
 
 # 2) Variables for packaging
@@ -15,8 +15,8 @@ TARGET_DIR="${APP_NAME}-${VERSION}-macos${MACOS_VERSION}-${ARCH}"
 rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 
-# 4) Copy and rename the binary: generator -> flowlog_compile
-cp target/release/generator "$TARGET_DIR/$APP_NAME"
+# 4) Copy and rename the binary: compiler -> flowlog_compile
+cp target/release/compiler "$TARGET_DIR/$APP_NAME"
 
 # Optionally include README / LICENSE
 [ -f README.md ] && cp README.md "$TARGET_DIR/"

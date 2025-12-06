@@ -125,6 +125,20 @@ impl Transformation {
         }
     }
 
+    /// Returns the input fingerprint(s) for any transformation.
+    pub fn input_fingerprints(&self) -> Vec<u64> {
+        match self {
+            Self::RowToRow { input, .. }
+            | Self::RowToKv { input, .. }
+            | Self::KvToRow { input, .. }
+            | Self::KvToKv { input, .. } => vec![input.fingerprint()],
+            Self::JnToRow { input, .. }
+            | Self::JnToKv { input, .. }
+            | Self::NJnToRow { input, .. }
+            | Self::NJnToKv { input, .. } => vec![input.0.fingerprint(), input.1.fingerprint()],
+        }
+    }
+
     /// Returns the output collection for any transformation.
     pub fn output(&self) -> &Arc<Collection> {
         match self {
@@ -150,6 +164,20 @@ impl Transformation {
             | Self::JnToKv { flow, .. }
             | Self::NJnToRow { flow, .. }
             | Self::NJnToKv { flow, .. } => flow,
+        }
+    }
+
+    /// Return the transformation operation name.
+    pub fn operation_name(&self) -> &str {
+        match self {
+            Transformation::RowToRow { .. } => "[Row -> Row]",
+            Transformation::RowToKv { .. } => "[Row -> KV]",
+            Transformation::KvToRow { .. } => "[KV -> Row]",
+            Transformation::KvToKv { .. } => "[KV -> KV]",
+            Transformation::JnToRow { .. } => "[Join -> Row]",
+            Transformation::JnToKv { .. } => "[Join -> KV]",
+            Transformation::NJnToRow { .. } => "[NJoin -> Row]",
+            Transformation::NJnToKv { .. } => "[NJoin -> KV]",
         }
     }
 }

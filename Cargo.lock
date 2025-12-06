@@ -142,6 +142,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "compiler"
+version = "0.1.0"
+dependencies = [
+ "catalog",
+ "clap",
+ "common",
+ "optimizer",
+ "parser",
+ "planner",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "stratifier",
+ "syn",
+ "toml_edit",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -181,26 +201,6 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
-
-[[package]]
-name = "generator"
-version = "0.1.0"
-dependencies = [
- "catalog",
- "clap",
- "common",
- "optimizer",
- "parser",
- "planner",
- "prettyplease",
- "proc-macro2",
- "quote",
- "stratifier",
- "syn",
- "toml_edit",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "generic-array"

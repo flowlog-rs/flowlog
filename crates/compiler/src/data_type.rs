@@ -27,7 +27,7 @@ pub(super) fn make_type_map(
 pub(super) fn find_type(fp_to_type: &HashMap<u64, DataType>, fingerprint: u64) -> DataType {
     *fp_to_type.get(&fingerprint).unwrap_or_else(|| {
         panic!(
-            "Generator error: input type missing for fingerprint {:016x}",
+            "Compiler error: input type missing for fingerprint {:016x}",
             fingerprint
         )
     })
@@ -44,7 +44,7 @@ pub(super) fn insert_or_verify_type(
     if let Some(existing_type) = fp_to_type.get(&fingerprint) {
         assert_eq!(
             *existing_type, expected_type,
-            "Generator error: type mismatch for fingerprint {:016x}: existing {:?}, expected {:?}",
+            "Compiler error: type mismatch for fingerprint {:016x}: existing {:?}, expected {:?}",
             fingerprint, existing_type, expected_type
         );
     } else {

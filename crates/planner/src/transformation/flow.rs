@@ -489,11 +489,7 @@ impl fmt::Display for TransformationFlow {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                write!(
-                    f,
-                    "key:({}), value:({}), filter:({})",
-                    key_str, value_str, filters_str
-                )
+                write!(f, "K:({}), V:({}), F:({})", key_str, value_str, filters_str)
             }
 
             Self::JnToKV {
@@ -525,11 +521,7 @@ impl fmt::Display for TransformationFlow {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                write!(
-                    f,
-                    "key:({}), value:({}), filter:({})",
-                    key_str, value_str, filters_str
-                )
+                write!(f, "K:({}), V:({}), F:({})", key_str, value_str, filters_str)
             }
         }
     }

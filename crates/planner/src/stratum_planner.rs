@@ -17,7 +17,7 @@ use crate::{RulePlanner, Transformation, TransformationInfo};
 /// The planner owns per-rule planners, deduplicates the
 /// generated transformation graphs, separates non-recursive (EDB-only) work from
 /// recursive (IDB-dependent) work, and records metadata (enter/leave collections,
-/// aggregations) that generator/executor stages need to run the stratum efficiently.
+/// aggregations) that compiler/executor stages need to run the stratum efficiently.
 #[derive(Debug, Default)]
 pub struct StratumPlanner {
     /// One planner per rule; these own the raw transformation infos.
@@ -46,7 +46,7 @@ pub struct StratumPlanner {
     recursion_leave_collections: Vec<u64>,
 
     /// Map each stratum output relation to the rule head IDBs that feed it.
-    /// Enables the generator to locate the materialized results per rule.
+    /// Enables the compiler to locate the materialized results per rule.
     output_to_idb_map: HashMap<u64, Vec<u64>>,
 
     /// Aggregation metadata keyed by final output fingerprint.
@@ -118,6 +118,11 @@ impl StratumPlanner {
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
             planner.post(catalog);
         }
+
+        // Debug info for per-rule plan trees
+        rule_planners.iter().for_each(|rp| {
+            debug!("{}", rp);
+        });
 
         // Phase 5: Materialize deduplicated transformations
         // this phase also do sharing optimization across rules

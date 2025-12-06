@@ -24,15 +24,15 @@ pub struct Args {
     #[arg(value_name = "PROGRAM")]
     pub program: String,
 
-    /// Specify directory for fact files (only used by generator/executor)
+    /// Specify directory for fact files (only used by compiler/executor)
     #[arg(short = 'F', long, value_name = "DIR")]
     pub fact_dir: Option<String>,
 
-    /// Override the generated executable/package name (only used by generator/executor)
+    /// Override the generated executable/package name (only used by compiler/executor)
     #[arg(short = 'o', long = "output", value_name = "NAME")]
     pub output: Option<String>,
 
-    /// Specify directory for output files (only used by generator/executor). If <DIR> is `-` then stdout is used.
+    /// Specify directory for output files (only used by compiler/executor). If <DIR> is `-` then stdout is used.
     #[arg(short = 'D', long, value_name = "DIR")]
     pub output_dir: Option<String>,
 
@@ -78,14 +78,14 @@ impl Args {
         self.mode
     }
 
-    /// For generator/executor: get fact_dir with validation
+    /// For compiler/executor: get fact_dir with validation
     pub fn fact_dir_required(&self) -> &str {
         self.fact_dir
             .as_ref()
             .expect("--fact-dir is required for this tool")
     }
 
-    /// For generator/executor: get output_dir with validation  
+    /// For compiler/executor: get output_dir with validation  
     pub fn output_dir_required(&self) -> &str {
         self.output_dir
             .as_ref()

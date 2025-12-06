@@ -21,7 +21,7 @@ if ($osInfo.Version) {
     $osTag += "unknown"
 }
 
-# 1) Build the release binary (still named `generator.exe`)
+# 1) Build the release binary
 cargo build --release
 
 # 2) Variables for packaging
@@ -36,8 +36,8 @@ if (Test-Path $targetPath) {
 }
 New-Item -ItemType Directory -Path $targetPath | Out-Null
 
-# 4) Copy and rename the binary: generator.exe -> flowlog_compile.exe
-$sourceBinary = Join-Path -Path (Get-Location) -ChildPath "target/release/generator.exe"
+# 4) Copy and rename the binary: compiler.exe -> flowlog_compile.exe
+$sourceBinary = Join-Path -Path (Get-Location) -ChildPath "target/release/compiler.exe"
 if (-not (Test-Path $sourceBinary)) {
     Write-Error "Error: Expected binary '$sourceBinary' not found."
     exit 1

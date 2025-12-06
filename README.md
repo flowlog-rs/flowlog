@@ -9,7 +9,7 @@
 <p align="center">
   <a href="#end-to-end-example">Quick Start</a> •
   <a href="#architecture">Architecture</a> •
-  <a href="#generator-cli">Generator CLI</a> •
+  <a href="#compiler-cli">Compiler CLI</a> •
   <a href="https://arxiv.org/pdf/2511.00865">FlowLog Paper</a>
 </p>
 
@@ -25,7 +25,7 @@ crates/
 ├── catalog      # per-rule metadata (signatures, filters, comparisons)
 ├── optimizer    # heuristic plan trees consumed by the planner
 ├── planner      # lowers strata into transformation flows
-└── generator    # writes Timely/DD executables from planned strata
+└── compiler     # compile Timely/DD executables from planned strata
 ```
 
 ## Getting Started
@@ -44,12 +44,12 @@ The bootstrap script installs a stable Rust toolchain and a few helper utilities
 $ cargo build --release
 ```
 
-## Generator CLI
+## Compiler CLI
 
-Use the generator to lower a FlowLog program into a Timely/Differential Cargo project.
+Use the compiler to lower a FlowLog program into a Timely/Differential Cargo project.
 
 ```bash
-$ cargo run -p generator -- <PROGRAM> [OPTIONS]
+$ cargo run -p compiler -- <PROGRAM> [OPTIONS]
 ```
 
 | Flag | Description | Required | Notes |
@@ -82,12 +82,12 @@ Reach(y) :- Reach(x), Arc(x, y).
 ### 1. Generate the Executable
 
 ```bash
-$ cargo run -p generator -- example/reach.dl -F reach -o reach_flowlog -D -
+$ cargo run -p compiler -- example/reach.dl -F reach -o reach_flowlog -D -
 ```
 
 Key flags:
 
-- `-F reach` points the generator at the directory holding `Source.csv` and `Arc.csv`.
+- `-F reach` points the compiler at the directory holding `Source.csv` and `Arc.csv`.
 - `-o reach_flowlog` names the generated Cargo project (written to `../reach_flowlog`).
 - `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
 - `--mode incremental` switches the diff type to `isize` (default is batch semantics).

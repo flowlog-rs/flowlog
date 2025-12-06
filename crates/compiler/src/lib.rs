@@ -1,4 +1,4 @@
-//! FlowLog Generator Library
+//! FlowLog Compiler Library
 //! Generates executable Rust code from planned strata.
 
 // =========================================================================
@@ -40,7 +40,7 @@ use io_utils::{build_handle_binding, gen_close_stmts, gen_ingest_stmts, gen_inpu
 use scaffold::write_project;
 
 // =========================================================================
-// Generator Main Entry Point
+// Compiler Main Entry Point
 // =========================================================================
 
 /// Create a project directory and write Cargo.toml + src/main.rs generated from the strata plan.

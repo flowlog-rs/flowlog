@@ -593,15 +593,16 @@ impl RulePlanner {
         is_positive: bool,
     ) {
         // Both positive and negative atoms can be pre-mapped.
-        let edb_fp = if is_positive {
-            catalog.positive_atom_fingerprint(atom_idx)
+        let (edb_fp, edb_args) = if is_positive {
+            (
+                catalog.positive_atom_fingerprint(atom_idx),
+                catalog.positive_atom_argument_signature(atom_idx),
+            )
         } else {
-            catalog.negative_atom_fingerprint(atom_idx)
-        };
-        let edb_args = if is_positive {
-            catalog.positive_atom_argument_signature(atom_idx)
-        } else {
-            catalog.negative_atom_argument_signature(atom_idx)
+            (
+                catalog.negative_atom_fingerprint(atom_idx),
+                catalog.negative_atom_argument_signature(atom_idx),
+            )
         };
         let edb_atom_signature = AtomSignature::new(is_positive, atom_idx);
         let current_transformation_index = self.transformation_infos.len();

@@ -6,7 +6,7 @@ use std::{
 
 use clap::Parser;
 use common::Args;
-use generator::generate_project_at;
+use compiler::generate_project_at;
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
@@ -37,12 +37,8 @@ fn main() {
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program);
-    info!(
-        "Stratified program into {} strata",
-        stratifier.stratum().len()
-    );
 
-    // Plan each stratum using StratumPlanner then hand transformations to generator
+    // Plan each stratum using StratumPlanner then hand transformations to compiler
     let mut optimizer = Optimizer::new();
     generate_program(&args, &mut optimizer, &stratifier, &program);
 }
@@ -67,14 +63,6 @@ fn generate_program(
             stratifier.stratum_leave_relation(stratum_idx),
             stratifier.stratum_available_relations(stratum_idx),
         );
-
-        info!("{}", "=".repeat(80));
-        info!(
-            "[Stratum {}] {} rules (recursive: {})",
-            stratum_idx,
-            rule_refs.len(),
-            is_recursive
-        );
         strata.push(sp);
     }
 
@@ -95,9 +83,13 @@ fn generate_program(
         error!("Failed to generate project: {}", e);
         process::exit(1);
     }
+    info!(
+        "Compile project at '{}'",
+        output_path.as_path().to_string_lossy()
+    );
 }
 
-/// Run generator on all example files in the example directory
+/// Run compiler on all example files in the example directory
 fn run_all_examples() {
     let example_dir = "example";
 
@@ -132,7 +124,7 @@ fn run_all_examples() {
     }
 
     // Process all files
-    info!("Running generator on {} example files...", files.len());
+    info!("Running compiler on {} example files...", files.len());
     let mut success_count = 0;
     let mut failure_count = 0;
 
