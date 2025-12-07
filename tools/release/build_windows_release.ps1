@@ -1,3 +1,8 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Version
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -21,11 +26,13 @@ if ($osInfo.Version) {
     $osTag += "unknown"
 }
 
+# No default: require -Version (PowerShell enforces via Mandatory = $true).
+
 # 1) Build the release binary
 cargo build --release
 
 # 2) Variables for packaging
-$version = "v0.1.0-internal"
+$version = $Version
 $appName = "flowlog_compile"
 $targetDir = "${appName}-${version}-${osTag}-x86_64"
 $targetPath = Join-Path -Path (Get-Location) -ChildPath $targetDir

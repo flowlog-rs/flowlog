@@ -25,11 +25,17 @@ else
 	OS_TAG="${OS_TAG}unknown"
 fi
 
+# Require version argument.
+if [ $# -lt 1 ]; then
+	echo "Usage: $0 <version>" >&2
+	exit 1
+fi
+VERSION="$1"
+
 # 1) Build the release binary
 cargo build --release
 
 # 2) Variables for packaging
-VERSION=v0.1.0-internal
 APP_NAME=flowlog_compile
 TARGET_DIR="${APP_NAME}-${VERSION}-${OS_TAG:-unknown}-x86_64"
 

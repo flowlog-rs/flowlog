@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Require explicit version argument (and disallow fallback to env/default).
+if [ $# -lt 1 ]; then
+	echo "Usage: $0 <version>" >&2
+	exit 1
+fi
+VERSION="$1"
+
 # 1) Build the release binary
 cargo build --release
 
 # 2) Variables for packaging
-VERSION=${VERSION:-v0.1.0-internal}
 APP_NAME=${APP_NAME:-flowlog_compile}
 MACOS_VERSION=$(sw_vers -productVersion | cut -d. -f1-2)
 ARCH=$(uname -m)
