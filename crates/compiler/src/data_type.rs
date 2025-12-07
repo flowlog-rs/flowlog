@@ -1,8 +1,8 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use std::collections::HashMap;
 
-use parser::{DataType, Relation};
+use super::Compiler;
+use parser::DataType;
 use planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
 };
@@ -10,45 +10,48 @@ use planner::{
 // =========================================================================
 // DataType Inference Utilities
 // =========================================================================
+impl Compiler {
+    /// Map input fingerprints to global collection data types.
+    /// Here global means across all strata, so we include both EDBs and IDBs.
+    /// Relateively, local means within a recursion stratum, collections are
+    /// entering recursion scope and thus get new local identifiers.
+    pub(super) fn make_global_type_map(&mut self) {
+        self.global_fp_to_type = self
+            .program
+            .edbs()
+            .into_iter()
+            .chain(self.program.idbs())
+            .map(|rel| (rel.fingerprint(), *rel.data_type()))
+            .collect();
+    }
 
-/// Map input fingerprints to collection data types.
-pub(super) fn make_type_map(
-    input_rels: Vec<&Relation>,
-    output_rels: Vec<&Relation>,
-) -> HashMap<u64, DataType> {
-    input_rels
-        .into_iter()
-        .chain(output_rels)
-        .map(|rel| (rel.fingerprint(), *rel.data_type()))
-        .collect()
-}
+    /// Find a global fingerprint in the type map and return the associated DataType.
+    pub(super) fn find_global_type(&self, fingerprint: u64) -> DataType {
+        *self.global_fp_to_type.get(&fingerprint).unwrap_or_else(|| {
+            panic!(
+                "Compiler error: input type missing for fingerprint {:016x}",
+                fingerprint
+            )
+        })
+    }
 
-/// Find a fingerprint in the type map and return the associated DataType.
-pub(super) fn find_type(fp_to_type: &HashMap<u64, DataType>, fingerprint: u64) -> DataType {
-    *fp_to_type.get(&fingerprint).unwrap_or_else(|| {
-        panic!(
-            "Compiler error: input type missing for fingerprint {:016x}",
-            fingerprint
-        )
-    })
-}
-
-/// Safely insert or verify a type mapping in the fingerprint-to-type map.
-/// If the fingerprint already exists, asserts that the types match.
-/// If it doesn't exist, inserts the new mapping.
-pub(super) fn insert_or_verify_type(
-    fp_to_type: &mut HashMap<u64, DataType>,
-    fingerprint: u64,
-    expected_type: DataType,
-) {
-    if let Some(existing_type) = fp_to_type.get(&fingerprint) {
-        assert_eq!(
+    /// Safely insert or verify a global type mapping in the fingerprint-to-type map.
+    /// If the fingerprint already exists, asserts that the types match.
+    /// If it doesn't exist, inserts the new mapping.
+    pub(super) fn insert_or_verify_global_type(
+        &mut self,
+        fingerprint: u64,
+        expected_type: DataType,
+    ) {
+        if let Some(existing_type) = self.global_fp_to_type.get(&fingerprint) {
+            assert_eq!(
             *existing_type, expected_type,
             "Compiler error: type mismatch for fingerprint {:016x}: existing {:?}, expected {:?}",
             fingerprint, existing_type, expected_type
         );
-    } else {
-        fp_to_type.insert(fingerprint, expected_type);
+        } else {
+            self.global_fp_to_type.insert(fingerprint, expected_type);
+        }
     }
 }
 

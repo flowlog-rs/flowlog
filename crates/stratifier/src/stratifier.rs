@@ -337,10 +337,13 @@ impl Stratifier {
             self.stratum_leave_relation.push(leave);
         }
 
-        // Build available relations per stratum by accumulating leaves from previous strata.
+        // Build available relations per stratum by accumulating leaves from previous strata
+        // and always including original EDB relation fingerprints (facts available from the start).
         let mut accumulated: HashSet<u64> = HashSet::new();
         for leave in &self.stratum_leave_relation {
-            self.stratum_available_relations.push(accumulated.clone());
+            let mut available_relations = accumulated.clone();
+            available_relations.extend(self.program.edb_fingerprints().iter().copied());
+            self.stratum_available_relations.push(available_relations);
             accumulated.extend(leave.iter().copied());
         }
     }

@@ -1,3 +1,10 @@
+andersen.dl=medium
+andersen.dl=large
+batik.dl=batik
+biojava.dl=biojava
+bipartite.dl=mind
+bipartite.dl=netflix
+borrow.dl=borrow
 cc.dl=livejournal 
 crdt.dl=crdt
 csda.dl=csda-httpd

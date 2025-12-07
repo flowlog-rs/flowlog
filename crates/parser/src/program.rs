@@ -143,6 +143,16 @@ impl Program {
         names
     }
 
+    /// Deduplicated EDB relation fingerprints.
+    #[must_use]
+    pub fn edb_fingerprints(&self) -> HashSet<u64> {
+        self.relations
+            .iter()
+            .filter(|rel| rel.is_edb())
+            .map(|rel| rel.fingerprint())
+            .collect()
+    }
+
     /// IDB relations (those without input parameters).
     ///
     /// Returned in declaration order.

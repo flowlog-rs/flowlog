@@ -5,105 +5,103 @@ use quote::{format_ident, quote};
 use tracing::trace;
 
 use crate::aggregation::{aggregation_merge_kv, aggregation_reduce, aggregation_row_chop};
-use crate::data_type::{find_type, insert_or_verify_type};
-use crate::ident::find_ident;
-use crate::transformation::gen_transformation;
+use crate::Compiler;
 
-use parser::{AggregationOperator, DataType};
-use planner::Transformation;
+use planner::{StratumPlanner, Transformation};
 
 // =========================================================================
 // Non-Recursive Flow Generation
 // =========================================================================
+impl Compiler {
+    /// Generate the non-recursive core differential dataflow pipelines, returning the assembled
+    /// statements along with the arrangement map populated while building them.
+    pub(crate) fn gen_non_recursive_core_flows(
+        &mut self,
+        transformations: &[Transformation],
+    ) -> (Vec<TokenStream>, HashMap<u64, Ident>) {
+        let mut flows = Vec::new();
+        // Stratum-scoped cache of arrangements; emit arrange_by_key just before first use.
+        let mut non_recursive_arranged_map: HashMap<u64, Ident> = HashMap::new();
 
-/// Generate the non-recursive core differential dataflow pipelines, returning the assembled
-/// statements along with the arrangement map populated while building them.
-pub(crate) fn gen_non_recursive_core_flows(
-    fp_to_ident: &HashMap<u64, Ident>,
-    fp_to_type: &mut HashMap<u64, DataType>,
-    transformations: &[Transformation],
-) -> (Vec<TokenStream>, HashMap<u64, Ident>) {
-    let mut flows = Vec::new();
-    // Stratum-scoped cache of arrangements; emit arrange_by_key just before first use.
-    let mut non_recursive_arranged_map: HashMap<u64, Ident> = HashMap::new();
+        for transformation in transformations {
+            let global_fp_to_ident = self.global_fp_to_ident.clone();
+            flows.push(self.gen_transformation(
+                &global_fp_to_ident,
+                transformation,
+                &mut non_recursive_arranged_map,
+            ));
+        }
 
-    for transformation in transformations {
-        flows.push(gen_transformation(
-            fp_to_ident,
-            fp_to_type,
-            transformation,
-            &mut non_recursive_arranged_map,
-        ));
+        trace!("Generated static flows:\n{}\n", quote! { #(#flows)* });
+        (flows, non_recursive_arranged_map)
     }
 
-    trace!("Generated static flows:\n{}\n", quote! { #(#flows)* });
-    (flows, non_recursive_arranged_map)
-}
+    /// Generate non recursive post-processing flows
+    pub(crate) fn gen_non_recursive_post_flows(
+        &mut self,
+        calculated_output_fps: &HashSet<u64>,
+        stratum: &StratumPlanner,
+    ) -> Vec<TokenStream> {
+        let mut flows = Vec::new();
 
-/// Generate non recursive post-processing flows
-pub(crate) fn gen_non_recursive_post_flows(
-    fp_to_ident: &HashMap<u64, Ident>,
-    fp_to_type: &mut HashMap<u64, DataType>,
-    calculated_output_fps: &HashSet<u64>,
-    output2idbs: &HashMap<u64, Vec<u64>>,
-    output_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
-) -> Vec<TokenStream> {
-    let mut flows = Vec::new();
+        for (output_fp, idb_fps) in stratum.output_to_idb_map() {
+            let output = self.find_global_ident(*output_fp);
+            let mut outs: Vec<Ident> = Vec::new();
 
-    for (output_fp, idb_fps) in output2idbs {
-        let output = find_ident(fp_to_ident, *output_fp);
-        let mut outs: Vec<Ident> = Vec::new();
-
-        for idb_fp in idb_fps {
-            outs.push(format_ident!("t_{}", idb_fp));
-        }
-
-        insert_or_verify_type(fp_to_type, *output_fp, find_type(fp_to_type, idb_fps[0]));
-
-        let head = outs[0].clone();
-        let tail = &outs[1..];
-        let mut expr: TokenStream = quote! { #head };
-        for t in tail {
-            expr = quote! { #expr.concat(&#t) };
-        }
-
-        // If this output was already computed in a previous stratum, union the previous
-        // collection with the newly produced tuples before applying distinct.
-        let mut block = if calculated_output_fps.contains(output_fp) {
-            quote! {
-                let #output = #output
-                    .concat(&#expr)
-                    .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
+            for idb_fp in idb_fps {
+                outs.push(format_ident!("t_{}", idb_fp));
             }
-        } else {
-            quote! {
-                let #output = #expr
-                    .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
-            }
-        };
 
-        // Aggregation logic
-        if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
-            let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-            let reduce_logic = aggregation_reduce(agg_op);
-            let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
-            block = quote! {
-                #block
-                let #output = #output
-                    .map(#row_chop)
-                    .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
-                        "aggregation",
-                        #reduce_logic
-                    )
-                    .as_collection(#merge_kv);
+            self.insert_or_verify_global_type(*output_fp, self.find_global_type(idb_fps[0]));
+
+            let head = outs[0].clone();
+            let tail = &outs[1..];
+            let mut expr: TokenStream = quote! { #head };
+            for t in tail {
+                expr = quote! { #expr.concat(&#t) };
+            }
+
+            // If this output was already computed in a previous stratum, union the previous
+            // collection with the newly produced tuples before applying distinct.
+            let mut block = if calculated_output_fps.contains(output_fp) {
+                quote! {
+                    let #output = #output
+                        .concat(&#expr)
+                        .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
+                }
+            } else {
+                quote! {
+                    let #output = #expr
+                        .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
+                }
             };
-        }
-        flows.push(block);
-    }
 
-    trace!(
-        "Generated post-processing flows:\n{}\n",
-        quote! { #(#flows)* }
-    );
-    flows
+            // Aggregation logic
+            if let Some((agg_op, agg_pos, agg_arity)) =
+                stratum.output_to_aggregation_map().get(output_fp)
+            {
+                self.has_aggregation = true;
+                let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
+                let reduce_logic = aggregation_reduce(agg_op);
+                let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
+                block = quote! {
+                    #block
+                    let #output = #output
+                        .map(#row_chop)
+                        .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+                            "aggregation",
+                            #reduce_logic
+                        )
+                        .as_collection(#merge_kv);
+                };
+            }
+            flows.push(block);
+        }
+
+        trace!(
+            "Generated post-processing flows:\n{}\n",
+            quote! { #(#flows)* }
+        );
+        flows
+    }
 }

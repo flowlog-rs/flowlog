@@ -1,7 +1,8 @@
 //! Command line argument parsing for FlowLog tools.
 
 use clap::{Parser, ValueEnum};
-use std::{fs, path::Path, process};
+use std::path::{Path, PathBuf};
+use std::{fs, process};
 
 /// Execution strategy for FlowLog workflows
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -17,7 +18,7 @@ pub enum ExecutionMode {
 }
 
 /// Command line arguments for FlowLog tools
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 pub struct Args {
     /// Path of the Datalog program, or "all" to process all example files
@@ -28,9 +29,9 @@ pub struct Args {
     #[arg(short = 'F', long, value_name = "DIR")]
     pub fact_dir: Option<String>,
 
-    /// Override the generated executable/package name (only used by compiler/executor)
-    #[arg(short = 'o', long = "output", value_name = "NAME")]
-    pub output: Option<String>,
+    /// Override the generated executable path (only used by compiler/executor)
+    #[arg(short = 'o', value_name = "PATH")]
+    pub executable_path: Option<String>,
 
     /// Specify directory for output files (only used by compiler/executor). If <DIR> is `-` then stdout is used.
     #[arg(short = 'D', long, value_name = "DIR")]
@@ -51,7 +52,7 @@ impl Args {
     }
 
     pub fn program_name(&self) -> String {
-        std::path::Path::new(&self.program)
+        Path::new(&self.program)
             .file_stem()
             .and_then(|stem| stem.to_str())
             .map(|s| s.to_string())
@@ -62,8 +63,19 @@ impl Args {
         self.fact_dir.as_deref()
     }
 
-    pub fn output(&self) -> Option<&str> {
-        self.output.as_deref()
+    pub fn executable_path(&self) -> PathBuf {
+        self.executable_path
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(self.program_name()))
+    }
+
+    pub fn executable_name(&self) -> String {
+        self.executable_path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "Compiler error: invalid executable name".into())
     }
 
     pub fn output_dir(&self) -> Option<&str> {

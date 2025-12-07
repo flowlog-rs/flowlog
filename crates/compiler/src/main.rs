@@ -1,12 +1,8 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    process,
-};
+use std::{fs, path::Path, process};
 
 use clap::Parser;
 use common::Args;
-use compiler::generate_project_at;
+use compiler::Compiler;
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
@@ -33,7 +29,6 @@ fn main() {
 
     // Parse and process single file
     let program = Program::parse(args.program());
-    info!("Parsed program: {} rules", program.rules().len());
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program);
@@ -66,26 +61,16 @@ fn generate_program(
         strata.push(sp);
     }
 
+    let mut compiler = Compiler::new(args.clone(), program.clone());
+
     // Generate code for the deduplicated transformation list for this stratum
-    let output_path = args
-        .output()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(args.program_name()));
-    let package_name = output_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .unwrap_or_else(|| args.program_name());
-    if let Err(e) =
-        generate_project_at(args, output_path.as_path(), &package_name, program, &strata)
-    {
+    if let Err(e) = compiler.generate_executable_at(&strata) {
         error!("Failed to generate project: {}", e);
         process::exit(1);
     }
     info!(
         "Compile project at '{}'",
-        output_path.as_path().to_string_lossy()
+        args.executable_path().to_string_lossy()
     );
 }
 
