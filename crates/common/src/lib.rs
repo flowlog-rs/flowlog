@@ -1,10 +1,10 @@
 //! Shared common utilities for FlowLog Datalog programs.
 
-pub mod args;
+pub mod config;
 pub mod formatter;
 
 // Re-export main types for backwards compatibility
-pub use args::{get_example_files, Args, ExecutionMode};
+pub use config::{get_example_files, Config, ExecutionMode};
 pub use formatter::TestResult;
 
 use std::collections::hash_map::DefaultHasher;

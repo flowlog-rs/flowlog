@@ -70,18 +70,18 @@ impl Compiler {
     fn gen_csv_ingest_stmt(&self, rel: &Relation) -> TokenStream {
         let arity = rel.arity();
         let handle = format_ident!("h{}", rel.name());
-        let file_name = rel.input_file_name().unwrap();
-        let delimiter = rel.input_delimiter().unwrap_or(",");
+        let file_name = rel.input_file_name();
+        let delimiter = rel.input_delimiter();
         let path = self
-            .args
+            .config
             .fact_dir()
             .map(|dir| {
                 Path::new(dir)
-                    .join(file_name)
+                    .join(&file_name)
                     .to_string_lossy()
                     .into_owned()
             })
-            .unwrap_or_else(|| file_name.to_string());
+            .unwrap_or_else(|| file_name);
         let itype = rel.data_type();
 
         let field_idents: Vec<Ident> = (0..arity).map(|i| format_ident!("f{}", i)).collect();

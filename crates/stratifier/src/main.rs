@@ -1,13 +1,13 @@
 use clap::Parser;
-use common::{get_example_files, Args, TestResult};
+use common::{get_example_files, Config, TestResult};
 use parser::Program;
 use stratifier::Stratifier;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    let args = Args::parse();
+    let config = Config::parse();
 
-    if args.should_process_all() {
+    if config.should_process_all() {
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::new("info"))
             .init();
@@ -19,7 +19,7 @@ fn main() {
         .with_env_filter(EnvFilter::new("debug"))
         .init();
 
-    let program = Program::parse(args.program());
+    let program = Program::parse(config.program());
     let _stratifier = Stratifier::from_program(&program);
 }
 

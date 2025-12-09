@@ -1,7 +1,7 @@
 use std::{fs, path::Path, process};
 
 use clap::Parser;
-use common::Args;
+use common::Config;
 use compiler::Compiler;
 use optimizer::Optimizer;
 use parser::Program;
@@ -19,27 +19,27 @@ fn main() {
         .init();
 
     // Parse command line arguments with clap
-    let args = Args::parse();
+    let config = Config::parse();
 
     // Backward-compat convenience: allow `--program all` or `--program --all`
-    if args.should_process_all() {
+    if config.should_process_all() {
         run_all_examples();
         return;
     }
 
     // Parse and process single file
-    let program = Program::parse(args.program());
+    let program = Program::parse(config.program());
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program);
 
     // Plan each stratum using StratumPlanner then hand transformations to compiler
     let mut optimizer = Optimizer::new();
-    generate_program(&args, &mut optimizer, &stratifier, &program);
+    generate_program(&config, &mut optimizer, &stratifier, &program);
 }
 
 fn generate_program(
-    args: &Args,
+    config: &Config,
     optimizer: &mut Optimizer,
     stratifier: &Stratifier,
     program: &Program,
@@ -61,7 +61,7 @@ fn generate_program(
         strata.push(sp);
     }
 
-    let mut compiler = Compiler::new(args.clone(), program.clone());
+    let mut compiler = Compiler::new(config.clone(), program.clone());
 
     // Generate code for the deduplicated transformation list for this stratum
     if let Err(e) = compiler.generate_executable_at(&strata) {
@@ -70,7 +70,7 @@ fn generate_program(
     }
     info!(
         "Compile project at '{}'",
-        args.executable_path().to_string_lossy()
+        config.executable_path().to_string_lossy()
     );
 }
 

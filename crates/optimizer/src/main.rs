@@ -1,15 +1,15 @@
 use catalog::rule::Catalog;
 use clap::Parser;
-use common::{get_example_files, Args, TestResult};
+use common::{get_example_files, Config, TestResult};
 use optimizer::Optimizer;
 use parser::Program;
 use stratifier::Stratifier;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    let args = Args::parse();
+    let config = Config::parse();
 
-    if args.should_process_all() {
+    if config.should_process_all() {
         tracing_subscriber::fmt()
             .with_env_filter(
                 EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -26,7 +26,7 @@ fn main() {
         .init();
 
     // Parse and process single file
-    let program = Program::parse(args.program());
+    let program = Program::parse(config.program());
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program);

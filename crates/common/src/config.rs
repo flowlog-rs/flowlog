@@ -20,7 +20,7 @@ pub enum ExecutionMode {
 /// Command line arguments for FlowLog tools
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
-pub struct Args {
+pub struct Config {
     /// Path of the Datalog program, or "all" to process all example files
     #[arg(value_name = "PROGRAM")]
     pub program: String,
@@ -42,7 +42,7 @@ pub struct Args {
     pub mode: ExecutionMode,
 }
 
-impl Args {
+impl Config {
     pub fn program(&self) -> &str {
         &self.program
     }

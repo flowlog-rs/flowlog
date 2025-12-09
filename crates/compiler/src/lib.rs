@@ -23,7 +23,7 @@ use quote::quote;
 use std::collections::{HashMap, HashSet};
 use syn::{parse2, File};
 
-use common::{Args, ExecutionMode};
+use common::{Config, ExecutionMode};
 use parser::{DataType, Program};
 use planner::StratumPlanner;
 
@@ -31,8 +31,8 @@ use inspect::gen_merge_partitions;
 use inspect::{gen_print_inspector, gen_size_inspector, gen_write_inspector};
 
 pub struct Compiler {
-    /// Arguments provided to the compiler.
-    args: Args,
+    /// Configuration provided to the compiler.
+    config: Config,
 
     /// The parsed FlowLog program.
     program: Program,
@@ -49,10 +49,10 @@ pub struct Compiler {
 }
 
 impl Compiler {
-    /// Create a new Compiler instance from Args and Program.
-    pub fn new(args: Args, program: Program) -> Self {
+    /// Create a new Compiler instance from Config and Program.
+    pub fn new(config: Config, program: Program) -> Self {
         let mut compiler = Compiler {
-            args,
+            config,
             program,
             global_fp_to_ident: HashMap::new(),
             global_fp_to_type: HashMap::new(),
@@ -146,12 +146,12 @@ impl Compiler {
         // Imports block (conditional on recursion for Variable).
         let imports = self.gen_imports();
 
-        let diff_type = match self.args.mode() {
+        let diff_type = match self.config.mode() {
             ExecutionMode::Incremental => quote! { isize },
             ExecutionMode::Batch => quote! { differential_dataflow::difference::Present },
         };
 
-        let semiring_one_value = match self.args.mode() {
+        let semiring_one_value = match self.config.mode() {
             ExecutionMode::Incremental => quote! { 1 },
             ExecutionMode::Batch => quote! { differential_dataflow::difference::Present },
         };
@@ -222,10 +222,10 @@ impl Compiler {
             }
 
             if idb.output() {
-                if self.args.output_to_stdout() {
+                if self.config.output_to_stdout() {
                     inspect_stmts.push(gen_print_inspector(&var, name));
                 } else {
-                    let parent_dir = self.args.output_dir().expect(
+                    let parent_dir = self.config.output_dir().expect(
                         "output directory must be provided when writing IDB output to files",
                     );
                     inspect_stmts.push(gen_write_inspector(&var, name, parent_dir, idb.arity()));

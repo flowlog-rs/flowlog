@@ -167,13 +167,18 @@ impl RulePlanner {
     /// Fuse correct key-value layout requirements from downstream transformation infos
     /// to upstream transformations.
     fn fuse_kv_layout(&mut self, original_atom_fp: &HashSet<u64>) {
-        let tx_fps: HashSet<u64> = self
-            .transformation_infos
-            .iter()
-            .map(|tx| tx.output_info_fp())
-            .collect();
+        // Collect output fingerprints in same order (deduplicated).
+        // It is important to sharing optimization, different processing order
+        // may leads to different fingerprints for same plan operatoions.
+        let mut tx_fps: Vec<u64> = Vec::new();
+        for tx in &self.transformation_infos {
+            let fp = tx.output_info_fp();
+            if !tx_fps.contains(&fp) {
+                tx_fps.push(fp);
+            }
+        }
 
-        for &tx_fp in &tx_fps {
+        for tx_fp in tx_fps {
             // Copy out the producer index and current consumers (if any), then mutate
             let Some((producer_indices, consumers)) = self
                 .producer_consumer
