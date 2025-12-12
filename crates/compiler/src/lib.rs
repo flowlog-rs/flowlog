@@ -235,7 +235,7 @@ impl Compiler {
 
             if idb.output() {
                 if self.config.output_to_stdout() {
-                    inspect_stmts.push(gen_print_inspector(&var, name));
+                    inspect_stmts.push(gen_print_inspector(&var, name, idb.arity()));
                 } else {
                     let parent_dir = self.config.output_dir().expect(
                         "output directory must be provided when writing IDB output to files",

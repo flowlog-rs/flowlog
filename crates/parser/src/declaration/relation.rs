@@ -74,7 +74,10 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn data_type(&self) -> &DataType {
-        self.attributes[0].data_type()
+        self.attributes
+            .get(0)
+            .map(|a| a.data_type())
+            .unwrap_or(&DataType::Boolean)
     }
 
     /// Get the input filename.

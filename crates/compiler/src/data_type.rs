@@ -46,7 +46,7 @@ impl Compiler {
         if let Some(existing_type) = self.global_fp_to_type.get(&fingerprint) {
             assert_eq!(
             *existing_type, expected_type,
-            "Compiler error: type mismatch for fingerprint {:016x}: existing {:?}, expected {:?}",
+            "Compiler error: type mismatch for fingerprint 0x{:016x}: existing {:?}, expected {:?}",
             fingerprint, existing_type, expected_type
         );
         } else {
@@ -80,6 +80,7 @@ pub(super) fn type_tokens(input_type: DataType, arity: usize) -> TokenStream {
                 quote! { ( #(#tys),* ) }
             }
         },
+        DataType::Boolean => quote! { () },
     }
 }
 

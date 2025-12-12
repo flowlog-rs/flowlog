@@ -3,8 +3,10 @@ use common::ExecutionMode;
 use proc_macro2::TokenStream;
 use quote::quote;
 
+/// Deduplication strategy for different execution modes.
 impl Compiler {
-    pub(crate) fn threshold_chain(&self) -> TokenStream {
+    /// Deduplication for differential dataflow collections.
+    pub(crate) fn dedup_collection(&self) -> TokenStream {
         match self.config.mode() {
             ExecutionMode::Incremental => {
                 quote! { .threshold(|_, w| if *w > 0 { 1 } else { 0 }) }

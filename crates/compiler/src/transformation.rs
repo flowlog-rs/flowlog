@@ -43,9 +43,12 @@ impl Compiler {
                     flow.compares(),
                     flow.constraints(),
                 );
-                let itype = self.find_global_type(input.fingerprint());
 
-                // Check if output type already exists, if so assert it matches, otherwise insert
+                // Type inference
+                let itype = self
+                    .find_global_type(input.fingerprint())
+                    .inference(None, output.is_nullary())
+                    .unwrap();
                 self.insert_or_verify_global_type(output.fingerprint(), itype);
 
                 let row_ty = type_tokens(itype, input_arity);
@@ -88,9 +91,12 @@ impl Compiler {
                     flow.compares(),
                     flow.constraints(),
                 );
-                let itype = self.find_global_type(input.fingerprint());
 
-                // Check if output type already exists, if so assert it matches, otherwise insert
+                // Type inference
+                let itype = self
+                    .find_global_type(input.fingerprint())
+                    .inference(None, output.is_nullary())
+                    .unwrap();
                 self.insert_or_verify_global_type(output.fingerprint(), itype);
 
                 let row_ty = type_tokens(itype, input_arity);
@@ -131,8 +137,11 @@ impl Compiler {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                let itype = self.find_global_type(input.fingerprint());
-                // Check if output type already exists, if so assert it matches, otherwise insert
+                // Type inference
+                let itype = self
+                    .find_global_type(input.fingerprint())
+                    .inference(None, output.is_nullary())
+                    .unwrap();
                 self.insert_or_verify_global_type(output.fingerprint(), itype);
 
                 let out_key = build_key_val_from_kv_args(flow.key());
@@ -178,8 +187,11 @@ impl Compiler {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                let itype = self.find_global_type(input.fingerprint());
-                // Check if output type already exists, if so assert it matches, otherwise insert
+                // Type inference
+                let itype = self
+                    .find_global_type(input.fingerprint())
+                    .inference(None, output.is_nullary())
+                    .unwrap();
                 self.insert_or_verify_global_type(output.fingerprint(), itype);
 
                 let out_val = build_key_val_from_kv_args(flow.value());
@@ -218,13 +230,13 @@ impl Compiler {
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
 
-                assert_eq!(
-                    self.find_global_type(left.fingerprint()),
-                    self.find_global_type(right.fingerprint())
-                );
-                let itype = self.find_global_type(left.fingerprint());
-                // Check if output type already exists, if so assert it matches, otherwise insert
+                // Type inference
+                let itype = self
+                    .find_global_type(left.fingerprint())
+                    .inference(Some(self.find_global_type(right.fingerprint())), output.is_nullary())
+                    .unwrap_or_else(|| panic!("Compiler error: type mismatch between collection 0x{:016x} and 0x{:016x}", left.fingerprint(), right.fingerprint()));
                 self.insert_or_verify_global_type(output.fingerprint(), itype);
+
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
 
@@ -262,13 +274,13 @@ impl Compiler {
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
 
-                assert_eq!(
-                    self.find_global_type(left.fingerprint()),
-                    self.find_global_type(right.fingerprint())
-                );
-                let itype = self.find_global_type(left.fingerprint());
-                // Check if output type already exists, if so assert it matches, otherwise insert
+                // Type inference
+                let itype = self
+                    .find_global_type(left.fingerprint())
+                    .inference(Some(self.find_global_type(right.fingerprint())), output.is_nullary())
+                    .unwrap_or_else(|| panic!("Compiler error: type mismatch between collection 0x{:016x} and 0x{:016x}", left.fingerprint(), right.fingerprint()));
                 self.insert_or_verify_global_type(output.fingerprint(), itype);
+
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
 
@@ -315,13 +327,13 @@ impl Compiler {
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
 
-                assert_eq!(
-                    self.find_global_type(left.fingerprint()),
-                    self.find_global_type(right.fingerprint())
-                );
-                let itype = self.find_global_type(left.fingerprint());
-                // Check if output type already exists, if so assert it matches, otherwise insert
+                // Type inference
+                let itype = self
+                    .find_global_type(left.fingerprint())
+                    .inference(Some(self.find_global_type(right.fingerprint())), output.is_nullary())
+                    .unwrap_or_else(|| panic!("Compiler error: type mismatch between collection 0x{:016x} and 0x{:016x}", left.fingerprint(), right.fingerprint()));
                 self.insert_or_verify_global_type(output.fingerprint(), itype);
+
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
 
@@ -330,34 +342,30 @@ impl Compiler {
 
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
-
-                let out_join_val = build_key_val_from_join_args(flow.value());
-
-                let (antijoin_k, antijoin_lv, antijoin_rv) =
-                    compute_join_param_tokens(flow.key(), flow.value(), &[]);
-                let threshold_call = self.threshold_chain();
+                let dedup_call = self.dedup_collection();
 
                 quote! {
                     let #out =
                         #r
-                            .flat_map_ref(|& #anti_param_k, & #anti_param_v| std::iter::once( #out_map_value ))
-                            #threshold_call
+                            .flat_map_ref(|& #anti_param_k, & #anti_param_v| std::iter::once(( #anti_param_k, #anti_param_v )))
+                            #dedup_call
                             .inner
                             .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1 as i32)))
                             .as_collection()
                             .concat(
                                 &{
                                     #l
-                                        .join_core(&#r, |#antijoin_k, #antijoin_lv, #antijoin_rv| {
-                                            Some( #out_join_val )
-                                        })
-                                        #threshold_call
-                                        .inner
-                                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1 as i32)))
-                                        .as_collection()
+                                    .join_core(&#r, |&aj_k, _, &aj_rv| {
+                                        Some((aj_k, aj_rv))
+                                    })
+                                    #dedup_call
+                                    .inner
+                                    .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1 as i32)))
+                                    .as_collection()
                                 }
                             )
-                            #threshold_call;
+                            .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_value ))
+                            #dedup_call;
                 }
             }
 
@@ -371,13 +379,13 @@ impl Compiler {
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
 
-                assert_eq!(
-                    self.find_global_type(left.fingerprint()),
-                    self.find_global_type(right.fingerprint())
-                );
-                let itype = self.find_global_type(left.fingerprint());
-                // Check if output type already exists, if so assert it matches, otherwise insert
+                // Type inference
+                let itype = self
+                    .find_global_type(left.fingerprint())
+                    .inference(Some(self.find_global_type(right.fingerprint())), output.is_nullary())
+                    .unwrap_or_else(|| panic!("Compiler error: type mismatch between collection 0x{:016x} and 0x{:016x}", left.fingerprint(), right.fingerprint()));
                 self.insert_or_verify_global_type(output.fingerprint(), itype);
+
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
 
@@ -385,37 +393,32 @@ impl Compiler {
                 let out_map_key = build_key_val_from_kv_args(flow.key());
                 let out_map_value = build_key_val_from_kv_args(flow.value());
 
-                let (kv_param_k, kv_param_v) =
+                let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
-
-                let out_join_key = build_key_val_from_join_args(flow.key());
-                let out_join_val = build_key_val_from_join_args(flow.value());
-
-                let (antijoin_k, antijoin_lv, antijoin_rv) =
-                    compute_join_param_tokens(flow.key(), flow.value(), &[]);
-                let threshold_call = self.threshold_chain();
+                let dedup_call = self.dedup_collection();
 
                 let transformation = quote! {
                     let #out =
                         #r
-                            .flat_map_ref(|& #kv_param_k, & #kv_param_v | std::iter::once( ( #out_map_key, #out_map_value ) ))
-                            #threshold_call
+                            .flat_map_ref(|& #anti_param_k, & #anti_param_v | std::iter::once( ( #anti_param_k, #anti_param_v ) ))
+                            #dedup_call
                             .inner
                             .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1 as i32)))
                             .as_collection()
                             .concat(
                                 &{
                                     #l
-                                        .join_core(&#r, |#antijoin_k, #antijoin_lv, #antijoin_rv| {
-                                            Some((#out_join_key, #out_join_val))
+                                        .join_core(&#r, |&aj_k, _, &aj_rv| {
+                                            Some((aj_k, aj_rv))
                                         })
-                                        #threshold_call
+                                        #dedup_call
                                         .inner
                                         .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1 as i32)))
                                         .as_collection()
                                 }
                             )
-                            #threshold_call;
+                            .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( ( #out_map_key, #out_map_value ) ))
+                            #dedup_call;
                 };
 
                 let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);

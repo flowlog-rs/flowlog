@@ -54,11 +54,18 @@ impl Collection {
     }
 
     /// Returns the arity as (key_count, value_count).
+    #[inline]
     pub fn arity(&self) -> (usize, usize) {
         (
             self.key_argument_signatures.len(),
             self.value_argument_signatures.len(),
         )
+    }
+
+    /// Return `true` if this colleciton is nullary
+    #[inline]
+    pub fn is_nullary(&self) -> bool {
+        self.key_argument_signatures.is_empty() && self.value_argument_signatures.is_empty()
     }
 
     /// Returns `true` if this collection has a key-value structure.

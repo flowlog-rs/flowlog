@@ -139,9 +139,9 @@ impl Compiler {
                 quote! { #ts.concat(&#ident) }
             });
 
-            let threshold_chain = self.threshold_chain();
+            let dedup_call = self.dedup_collection();
             let mut block = quote! {
-                let #next_ident = #union_expr #threshold_chain;
+                let #next_ident = #union_expr #dedup_call;
             };
 
             if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {

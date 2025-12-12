@@ -105,6 +105,7 @@ impl Compiler {
                 }
             })
             .collect(),
+        DataType::Boolean => todo!("For now we do not support nullary EDBs")
     };
 
         // Determine whether this worker should ingest the record.
@@ -134,6 +135,7 @@ impl Compiler {
                     };
                 }
             }
+            DataType::Boolean => todo!("For now we do not support nullary EDBs"),
         };
 
         let elem_expr = if arity == 1 {
@@ -193,6 +195,7 @@ impl Compiler {
                     ingest.for_each(|row| #handle.update(row, SEMIRING_ONE));
                 }
             }
+            DataType::Boolean => todo!("For now we do not support nullary EDBs"),
         }
     }
 
