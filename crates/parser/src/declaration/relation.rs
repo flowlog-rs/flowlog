@@ -75,7 +75,7 @@ impl Relation {
     #[inline]
     pub fn data_type(&self) -> &DataType {
         self.attributes
-            .get(0)
+            .first()
             .map(|a| a.data_type())
             .unwrap_or(&DataType::Boolean)
     }
