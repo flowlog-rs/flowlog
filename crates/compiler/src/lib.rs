@@ -6,6 +6,7 @@
 // =========================================================================
 mod aggregation;
 mod arg;
+mod comm;
 mod data_type;
 mod flow;
 mod fs_utils;
@@ -156,11 +157,22 @@ impl Compiler {
             ExecutionMode::Batch => quote! { differential_dataflow::difference::Present },
         };
 
+        let timestamp_type = match self.config.mode() {
+            ExecutionMode::Incremental => quote! { u32 },
+            ExecutionMode::Batch => quote! { () },
+        };
+
+        let iter_type = if self.is_recursive {
+            quote! { type Iter = u16; }
+        } else {
+            quote! {}
+        };
+
         let file_ts: TokenStream = quote! {
             #imports
 
             type Diff = #diff_type;
-            type Iter = u16;
+            #iter_type
             const SEMIRING_ONE: Diff = #semiring_one_value;
 
             fn main() {
@@ -172,7 +184,7 @@ impl Compiler {
 
                     // --- Build dataflow graph -----------------------------------------
                     #lhs_binding =
-                        worker.dataflow::<(), _, _>(|scope| {
+                        worker.dataflow::<#timestamp_type, _, _>(|scope| {
                             #(#input_decls)*
 
                             // === Transformation flows ===

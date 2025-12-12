@@ -139,8 +139,9 @@ impl Compiler {
                 quote! { #ts.concat(&#ident) }
             });
 
+            let threshold_chain = self.threshold_chain();
             let mut block = quote! {
-                let #next_ident = #union_expr.threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
+                let #next_ident = #union_expr #threshold_chain;
             };
 
             if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {

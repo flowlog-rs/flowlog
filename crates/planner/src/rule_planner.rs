@@ -110,7 +110,7 @@ impl RulePlanner {
             debug_info_map.entry(child_fp).or_insert_with(|| {
                 let (name, args) = atom_info.get(&child_fp).unwrap();
                 let values = args.join(", ");
-                (format!("[{}] K:(), V:({})", name, values), Vec::new())
+                (format!("[{}] ({})", name, values), Vec::new())
             });
         }
 

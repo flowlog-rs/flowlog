@@ -66,13 +66,13 @@ impl fmt::Display for TransformationArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::KV((key_or_value, id)) => {
-                let prefix = if *key_or_value { "key" } else { "value" };
-                write!(f, "[{}, {}]", prefix, id)
+                let prefix = if *key_or_value { 'K' } else { 'V' };
+                write!(f, "{}{}", prefix, id)
             }
             Self::Jn((left_or_right, key_or_value, id)) => {
-                let side = if *left_or_right { "left" } else { "right" };
-                let prefix = if *key_or_value { "key" } else { "value" };
-                write!(f, "[{}, {}, {}]", side, prefix, id)
+                let side = if *left_or_right { 'L' } else { 'R' };
+                let prefix = if *key_or_value { 'K' } else { 'V' };
+                write!(f, "{}{}{}", side, prefix, id)
             }
         }
     }

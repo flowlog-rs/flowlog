@@ -232,45 +232,49 @@ run_test() {
 
     local program_stem="${prog_file%.*}"
     local package_name_raw="${program_stem}_${dataset_name}"
-    local package_name="$(sanitize_package_name "$package_name_raw")"
-    local project_dir="${ROOT_DIR}/${package_name}"
+    local modes=(batch incremental)
 
-    echo -e "${BLUE}[TEST]${NC} $prog_file with $dataset_name"
+    for mode in "${modes[@]}"; do
+        local package_name="$(sanitize_package_name "${package_name_raw}_${mode}")"
+        local project_dir="${ROOT_DIR}/${package_name}"
 
-    rm -rf "$project_dir"
+        echo -e "${BLUE}[TEST]${NC} $prog_file with $dataset_name (mode=$mode)"
 
-    echo -e "${YELLOW}[GENERATE]${NC} $COMPILER_BIN $prog_path -F $dataset_path -o $project_dir"
-    "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir"
+        rm -rf "$project_dir"
 
-    if [ ! -d "$project_dir" ]; then
-        echo -e "${RED}[ERROR]${NC} Generated project not found: $project_dir"
-        exit 1
-    fi
+        echo -e "${YELLOW}[GENERATE]${NC} $COMPILER_BIN $prog_path -F $dataset_path -o $project_dir --mode $mode"
+        "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir" --mode "$mode"
 
-    local log_file="${LOG_DIR}/${program_stem}_${dataset_name}.log"
-    pushd "$project_dir" >/dev/null
-    echo -e "${YELLOW}[RUN]${NC} cargo run --release -- -w $WORKERS"
-    cargo run --release -- -w "$WORKERS" 2>&1 | tee "$log_file"
-    popd >/dev/null
+        if [ ! -d "$project_dir" ]; then
+            echo -e "${RED}[ERROR]${NC} Generated project not found (mode=$mode): $project_dir"
+            exit 1
+        fi
 
-    if [ ! -f "$log_file" ]; then
-        echo -e "${RED}[ERROR]${NC} Run log missing: $log_file"
-        exit 1
-    fi
+        local log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${mode}.log"
+        pushd "$project_dir" >/dev/null
+        echo -e "${YELLOW}[RUN]${NC} cargo run --release -- -w $WORKERS (mode=$mode)"
+        cargo run --release -- -w "$WORKERS" 2>&1 | tee "$log_file"
+        popd >/dev/null
 
-    local parsed_file="${PARSED_DIR}/${program_stem}_${dataset_name}_size.txt"
-    parse_output_to_size_file "$log_file" "$parsed_file" || {
-        echo -e "${RED}[ERROR]${NC} Failed to parse output for $prog_file"
-        exit 1
-    }
+        if [ ! -f "$log_file" ]; then
+            echo -e "${RED}[ERROR]${NC} Run log missing (mode=$mode): $log_file"
+            exit 1
+        fi
 
-    if ! verify_results_against_truth "$program_stem" "$dataset_name" "$parsed_file"; then
-        echo -e "${RED}[ERROR]${NC} Reference verification failed for $prog_file"
-        exit 1
-    fi
+        local parsed_file="${PARSED_DIR}/${program_stem}_${dataset_name}_${mode}_size.txt"
+        parse_output_to_size_file "$log_file" "$parsed_file" || {
+            echo -e "${RED}[ERROR]${NC} Failed to parse output for $prog_file (mode=$mode)"
+            exit 1
+        }
 
-    echo -e "${YELLOW}[CLEANUP]${NC} Removing generated project $project_dir"
-    rm -rf "$project_dir"
+        if ! verify_results_against_truth "$program_stem" "$dataset_name" "$parsed_file"; then
+            echo -e "${RED}[ERROR]${NC} Reference verification failed for $prog_file (mode=$mode)"
+            exit 1
+        fi
+
+        echo -e "${YELLOW}[CLEANUP]${NC} Removing generated project $project_dir"
+        rm -rf "$project_dir"
+    done
 
     cleanup_dataset "$dataset_name"
 }

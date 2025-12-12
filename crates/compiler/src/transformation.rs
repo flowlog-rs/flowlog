@@ -335,10 +335,13 @@ impl Compiler {
 
                 let (antijoin_k, antijoin_lv, antijoin_rv) =
                     compute_join_param_tokens(flow.key(), flow.value(), &[]);
+                let threshold_call = self.threshold_chain();
+
                 quote! {
                     let #out =
                         #r
                             .flat_map_ref(|& #anti_param_k, & #anti_param_v| std::iter::once( #out_map_value ))
+                            #threshold_call
                             .inner
                             .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1 as i32)))
                             .as_collection()
@@ -348,12 +351,13 @@ impl Compiler {
                                         .join_core(&#r, |#antijoin_k, #antijoin_lv, #antijoin_rv| {
                                             Some( #out_join_val )
                                         })
+                                        #threshold_call
                                         .inner
                                         .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1 as i32)))
                                         .as_collection()
                                 }
                             )
-                            .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
+                            #threshold_call;
                 }
             }
 
@@ -389,11 +393,13 @@ impl Compiler {
 
                 let (antijoin_k, antijoin_lv, antijoin_rv) =
                     compute_join_param_tokens(flow.key(), flow.value(), &[]);
+                let threshold_call = self.threshold_chain();
 
                 let transformation = quote! {
                     let #out =
                         #r
                             .flat_map_ref(|& #kv_param_k, & #kv_param_v | std::iter::once( ( #out_map_key, #out_map_value ) ))
+                            #threshold_call
                             .inner
                             .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1 as i32)))
                             .as_collection()
@@ -403,12 +409,13 @@ impl Compiler {
                                         .join_core(&#r, |#antijoin_k, #antijoin_lv, #antijoin_rv| {
                                             Some((#out_join_key, #out_join_val))
                                         })
+                                        #threshold_call
                                         .inner
                                         .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1 as i32)))
                                         .as_collection()
                                 }
                             )
-                            .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
+                            #threshold_call;
                 };
 
                 let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);

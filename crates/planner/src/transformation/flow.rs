@@ -489,7 +489,18 @@ impl fmt::Display for TransformationFlow {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                write!(f, "K:({}), V:({}), F:({})", key_str, value_str, filters_str)
+                let mut parts: Vec<String> = Vec::new();
+                if !key.is_empty() {
+                    parts.push(format!("K:({})", key_str));
+                }
+                if !value.is_empty() {
+                    parts.push(format!("V:({})", value_str));
+                }
+                if !filters_str.is_empty() {
+                    parts.push(format!("F:({})", filters_str));
+                }
+
+                write!(f, "{}", parts.join(", "))
             }
 
             Self::JnToKV {
@@ -521,7 +532,18 @@ impl fmt::Display for TransformationFlow {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                write!(f, "K:({}), V:({}), F:({})", key_str, value_str, filters_str)
+                let mut parts: Vec<String> = Vec::new();
+                if !key.is_empty() {
+                    parts.push(format!("K:({})", key_str));
+                }
+                if !value.is_empty() {
+                    parts.push(format!("V:({})", value_str));
+                }
+                if !filters_str.is_empty() {
+                    parts.push(format!("F:({})", filters_str));
+                }
+
+                write!(f, "{}", parts.join(", "))
             }
         }
     }
