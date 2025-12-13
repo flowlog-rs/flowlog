@@ -55,10 +55,7 @@ impl Compiler {
             _ => {
                 let hs: Vec<_> = edb_names.iter().map(|n| format_ident!("h{}", n)).collect();
                 let lhs: Vec<_> = hs.iter().map(|h| quote! { mut #h }).collect();
-                (
-                    quote! { ( #(#lhs),* ) },
-                    quote! { ( #(#hs),* ) },
-                )
+                (quote! { ( #(#lhs),* ) }, quote! { ( #(#hs),* ) })
             }
         }
     }

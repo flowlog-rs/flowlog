@@ -1,3 +1,9 @@
+//! File system utilities for FlowLog compiler.
+//!
+//! This module provides helper functions for common file system operations
+//! needed by the FlowLog compiler, such as ensuring directories exist and
+//! writing files with automatic parent directory creation.
+
 use std::fs;
 use std::io;
 use std::path::Path;

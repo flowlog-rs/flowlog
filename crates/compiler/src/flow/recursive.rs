@@ -1,3 +1,11 @@
+//! Recursive flow generation for FlowLog compiler.
+//! 
+//! This module handles the generation of recursive differential dataflow
+//! pipelines within recursive strata.
+//! It manages the iterative blocks, feedback loops, and unioning of IDB relations.
+//! It is worth noticing that due to factoring optimization, we need to maintain a local 
+//! ident map derived from both non-recursive arrangements and global idents.
+
 use std::collections::HashMap;
 
 use proc_macro2::{Ident, TokenStream};
@@ -83,6 +91,7 @@ impl Compiler {
         }
     }
 
+    /// Build the enter bindings for arrangements entering recursion.
     fn build_enter_bindings(
         &self,
         non_recursive_arranged_map: &HashMap<u64, Ident>,
@@ -111,6 +120,7 @@ impl Compiler {
         (stmts, bindings, recursive_arranged)
     }
 
+    /// Collect union statements for all IDB relations in the stratum.
     fn collect_unions(
         &mut self,
         output_to_idb_map: &HashMap<u64, Vec<u64>>,
@@ -166,6 +176,7 @@ impl Compiler {
         (next_bindings, union_stmts)
     }
 
+    /// Build the leave collections for recursion.
     fn build_leave_outputs(
         &self,
         leave_fps: &[u64],
@@ -199,7 +210,7 @@ impl Compiler {
         (pattern, leave_stmt)
     }
 }
-
+/// Build the iterative variable bindings for recursion.
 fn build_iterative_bindings(iterative_fps: &[u64]) -> (Vec<Ident>, HashMap<u64, Ident>) {
     let names: Vec<Ident> = iterative_fps
         .iter()

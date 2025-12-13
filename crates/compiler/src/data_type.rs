@@ -1,17 +1,20 @@
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
+//! Type inference system for FlowLog compiler.
+//!
+//! This module builds and maintains a global mapping from relation fingerprints
+//! to their key and value data types. It also provides utilities to infer the
+//! data types of expressions used in transformations, and to generate Rust type
+//! tokens corresponding to FlowLog data types.
+
+use proc_macro2::TokenStream;
+use quote::quote;
 
 use super::Compiler;
 use parser::{ConstType, DataType};
-use planner::{
-    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
-    TransformationArgument, TransformationFlow,
-};
+use planner::{ArithmeticArgument, FactorArgument, TransformationArgument, TransformationFlow};
 
 // ============================================================================
 // Global type inference (fingerprint -> (key_types, value_types))
 // ============================================================================
-
 impl Compiler {
     /// Build the global fingerprint-to-type map for *all* relations (EDBs + IDBs).
     ///
@@ -30,10 +33,8 @@ impl Compiler {
     /// Verify (or infer+insert) the global type mapping for a transformation output.
     ///
     /// - `left_fingerprint` is always present.
-    /// - `right_fingerprint` is present only for binary transformations (e.g., join).
+    /// - `right_fingerprint` is present only for binary transformations (e.g., join, njoin).
     /// - `output_fingerprint` is the fingerprint of the produced collection.
-    ///
-    /// Returns the *row value type* of the left input (used by callers as a convenience).
     pub(super) fn verify_and_infer_global_type(
         &mut self,
         left_fingerprint: u64,
@@ -44,7 +45,12 @@ impl Compiler {
         let left_type = self.find_global_type(left_fingerprint);
         let right_type = right_fingerprint.map(|rf| self.find_global_type(rf));
 
-        self.assert_key_compat(left_fingerprint, left_type, right_fingerprint, right_type);
+        self.assert_join_key_type_compat(
+            left_fingerprint,
+            left_type,
+            right_fingerprint,
+            right_type,
+        );
 
         let key_types: Vec<DataType> = flow
             .key()
@@ -71,7 +77,7 @@ impl Compiler {
     }
 
     /// Assert that in a join operator the *key* types agree between inputs.
-    fn assert_key_compat(
+    fn assert_join_key_type_compat(
         &self,
         left_fp: u64,
         left_type: &(Vec<DataType>, Vec<DataType>),
@@ -190,100 +196,4 @@ pub(super) fn type_tokens(input_types: &[DataType]) -> TokenStream {
         }
         _ => quote! { ( #(#tys),* ) },
     }
-}
-
-// ============================================================================
-// Row pattern + field identifiers for closures
-// ============================================================================
-
-/// Build a row pattern and a list of field idents `(pat, fields)` for a given `arity`.
-///
-/// - Fields that are referenced anywhere in `key_args`, `value_args`, `compares`,
-///   or `constraints` become `x<i>`.
-/// - Unused fields become `_x<i>` so Rust doesn't warn about unused bindings.
-///
-/// This is analogous to KV parameter handling, but for row inputs which expose
-/// only *value* slots.
-pub(super) fn row_pattern_and_fields(
-    arity: usize,
-    key_args: &[ArithmeticArgument],
-    value_args: &[ArithmeticArgument],
-    compares: &[ComparisonExprArgument],
-    constraints: &Constraints,
-) -> (TokenStream, Vec<Ident>) {
-    if arity == 0 {
-        return (quote! { () }, Vec::new());
-    }
-
-    let used = compute_row_slot_usage(arity, key_args, value_args, compares, constraints);
-
-    let fields: Vec<Ident> = (0..arity)
-        .map(|idx| {
-            if used[idx] {
-                format_ident!("x{}", idx)
-            } else {
-                format_ident!("_x{}", idx)
-            }
-        })
-        .collect();
-
-    let pat = match fields.len() {
-        0 => quote! { () },
-        1 => {
-            let only = fields[0].clone();
-            quote! { ( #only, ) }
-        }
-        _ => quote! { ( #(#fields),* ) },
-    };
-
-    (pat, fields)
-}
-
-/// Compute which row slots are referenced by the provided arguments/constraints.
-fn compute_row_slot_usage(
-    arity: usize,
-    key_args: &[ArithmeticArgument],
-    value_args: &[ArithmeticArgument],
-    compares: &[ComparisonExprArgument],
-    constraints: &Constraints,
-) -> Vec<bool> {
-    let mut used = vec![false; arity];
-
-    let mut mark = |arg: &TransformationArgument| {
-        if let TransformationArgument::KV((_, idx)) = arg {
-            if let Some(slot) = used.get_mut(*idx) {
-                *slot = true;
-            }
-        }
-    };
-
-    let mut inspect_expr = |expr: &ArithmeticArgument| {
-        if let FactorArgument::Var(trans_arg) = expr.init() {
-            mark(trans_arg);
-        }
-        for (_op, factor) in expr.rest() {
-            if let FactorArgument::Var(trans_arg) = factor {
-                mark(trans_arg);
-            }
-        }
-    };
-
-    for expr in key_args.iter().chain(value_args.iter()) {
-        inspect_expr(expr);
-    }
-
-    for cmp in compares {
-        inspect_expr(cmp.left());
-        inspect_expr(cmp.right());
-    }
-
-    for (arg, _) in constraints.constant_eq_constraints().as_ref().iter() {
-        mark(arg);
-    }
-    for (left, right) in constraints.variable_eq_constraints().as_ref().iter() {
-        mark(left);
-        mark(right);
-    }
-
-    used
 }

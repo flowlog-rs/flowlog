@@ -74,10 +74,7 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn data_type(&self) -> Vec<DataType> {
-        self.attributes
-            .iter()
-            .map(|a| *a.data_type())
-            .collect()
+        self.attributes.iter().map(|a| *a.data_type()).collect()
     }
 
     /// Get the input filename.

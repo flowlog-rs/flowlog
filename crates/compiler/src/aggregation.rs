@@ -1,4 +1,4 @@
-//! Aggregation code generation utilities for FlowLog.
+//! Aggregation code generation utilities for FlowLog compiler.
 //!
 //! This module provides helper functions to generate Rust code for aggregation operations
 //! in the codegen pipeline. It supports row chopping, aggregation reduction logic,

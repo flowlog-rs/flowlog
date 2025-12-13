@@ -1,3 +1,9 @@
+//! Ident system for FlowLog compiler.
+//!
+//! This module builds and maintains a global mapping from relation fingerprints
+//! to their identifiers. It also provides utilities to lookup local identifiers
+//! within recursion strata.
+
 use proc_macro2::Ident;
 use quote::format_ident;
 use std::collections::HashMap;
@@ -7,6 +13,7 @@ use super::Compiler;
 // =========================================================================
 // Ident Mapping Utilities
 // =========================================================================
+
 impl Compiler {
     /// Map input and output fingerprints to global collection identifiers.
     /// Here global means across all strata, so we include both EDBs and IDBs.

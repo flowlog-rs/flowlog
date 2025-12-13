@@ -1,3 +1,14 @@
+//! Non-recursive flow generation for FlowLog compiler.
+//!
+//! This module handles the generation of non-recursive differential dataflow
+//! pipelines based on the planned transformations.
+//! - Core flow means the main non-recursive transformations within a stratum.
+//!   It is worth notice that due to factoring optimization, even recursive stratum
+//!   may contain non-recursive core flows.
+//! - Post flow means the final output processing after core flows, such as
+//!   unioning multiple IDBs into an output relation and applying aggregation.
+//!   Post flows are only generated for non-recursive strata.
+
 use std::collections::{HashMap, HashSet};
 
 use proc_macro2::{Ident, TokenStream};

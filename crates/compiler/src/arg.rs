@@ -1,14 +1,62 @@
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::Index;
 
 use planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
 };
 
+// ============================================================================
+// Row pattern + field identifiers for RowToX transformations
+// ============================================================================
+
+/// Build a row pattern and a list of field idents `(pattern, fields)` for a given `arity`.
+///
+/// - Fields that are referenced anywhere in `key_args`, `value_args`, `compares`,
+///   or `constraints` become `x<i>`.
+/// - Unused fields become `_x<i>` so Rust doesn't warn about unused bindings.
+///
+/// This is analogous to KV parameter handling, but for row inputs which expose
+/// only *value* slots.
+pub(super) fn row_pattern_and_fields(
+    arity: usize,
+    key_args: &[ArithmeticArgument],
+    value_args: &[ArithmeticArgument],
+    compares: &[ComparisonExprArgument],
+    constraints: &Constraints,
+) -> (TokenStream, Vec<Ident>) {
+    if arity == 0 {
+        return (quote! { () }, Vec::new());
+    }
+
+    let used = compute_row_params_tokens(arity, key_args, value_args, compares, constraints);
+
+    let fields: Vec<Ident> = (0..arity)
+        .map(|idx| {
+            if used[idx] {
+                format_ident!("x{}", idx)
+            } else {
+                format_ident!("_x{}", idx)
+            }
+        })
+        .collect();
+
+    let pat = match fields.len() {
+        0 => quote! { () },
+        1 => {
+            let only = fields[0].clone();
+            quote! { ( #only, ) }
+        }
+        _ => quote! { ( #(#fields),* ) },
+    };
+
+    (pat, fields)
+}
+
 // ==================================================
 // Tuple builder utilities
 // ==================================================
+
 /// Row -> KV (keys/values): build from row fields by index.
 ///
 /// Shape policy (tuple-ified):
@@ -51,6 +99,58 @@ pub(super) fn build_key_val_from_join_args(args: &[ArithmeticArgument]) -> Token
 // ==================================================
 // Closure parameter utilities
 // ==================================================
+/// Inspect row arithmetic & comparison arguments to determine which closure parameters
+/// are referenced by the produced expressions or filters.
+/// Returns vectors of boolean value indicate which parameters are used. Any unused
+/// parameter becomes an underscore-prefixed ident later to silence warnings.
+fn compute_row_params_tokens(
+    arity: usize,
+    key_args: &[ArithmeticArgument],
+    value_args: &[ArithmeticArgument],
+    compares: &[ComparisonExprArgument],
+    constraints: &Constraints,
+) -> Vec<bool> {
+    let mut used = vec![false; arity];
+
+    let mut mark = |arg: &TransformationArgument| {
+        if let TransformationArgument::KV((_, idx)) = arg {
+            if let Some(slot) = used.get_mut(*idx) {
+                *slot = true;
+            }
+        }
+    };
+
+    let mut inspect_expr = |expr: &ArithmeticArgument| {
+        if let FactorArgument::Var(trans_arg) = expr.init() {
+            mark(trans_arg);
+        }
+        for (_op, factor) in expr.rest() {
+            if let FactorArgument::Var(trans_arg) = factor {
+                mark(trans_arg);
+            }
+        }
+    };
+
+    for expr in key_args.iter().chain(value_args.iter()) {
+        inspect_expr(expr);
+    }
+
+    for cmp in compares {
+        inspect_expr(cmp.left());
+        inspect_expr(cmp.right());
+    }
+
+    for (arg, _) in constraints.constant_eq_constraints().as_ref().iter() {
+        mark(arg);
+    }
+    for (left, right) in constraints.variable_eq_constraints().as_ref().iter() {
+        mark(left);
+        mark(right);
+    }
+
+    used
+}
+
 /// Inspect join arithmetic & comparison arguments to determine which closure parameters
 /// are referenced by the produced expressions or filters.
 /// Returns three TokenStreams for the closure parameter identifiers. Any unused
@@ -192,6 +292,7 @@ pub(super) fn compute_kv_param_tokens(
 // ==================================================
 // Comparison expression predicate builders
 // ==================================================
+
 fn comparison_op_tokens(op: &parser::ComparisonOperator) -> TokenStream {
     match op {
         parser::ComparisonOperator::Equal => quote! { == },
@@ -268,6 +369,7 @@ pub(super) fn build_row_compare_predicate(
 // ==================================================
 // Constraint predicate builders
 // ==================================================
+
 /// Build predicate for KV constraints (const eq and var eq). Returns None if empty.
 pub(super) fn build_kv_constraints_predicate(constraints: &Constraints) -> Option<TokenStream> {
     let mut parts: Vec<TokenStream> = constraints
@@ -338,6 +440,7 @@ pub(super) fn build_row_constraints_predicate(
 // ==================================================
 // Constraint helpers
 // ==================================================
+
 fn const_to_token(constant: &parser::ConstType) -> TokenStream {
     match constant {
         parser::ConstType::Integer(n) => quote! { #n },
@@ -374,6 +477,7 @@ fn trans_arg_to_row_expr(arg: &TransformationArgument, fields: &[Ident]) -> Toke
 // ==================================================
 // Predicate composition utilities
 // ==================================================
+
 /// Combine two optional predicates with logical AND, returning the appropriate composed TokenStream.
 /// - None & None => None
 /// - Some(a) & None => Some(a)

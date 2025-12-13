@@ -1,3 +1,9 @@
+//! Transformation code generation for FlowLog compiler.
+//!
+//! This module generates Rust code for various data transformations
+//! such as Row-to-Row, Row-to-KV, KV-to-KV, KV-to-Row, Joins, and Antijoins
+//! in the differential dataflow pipelines.
+
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use std::collections::HashMap;
@@ -6,9 +12,9 @@ use super::arg::{
     build_join_compare_predicate, build_key_val_from_join_args, build_key_val_from_kv_args,
     build_key_val_from_row_args, build_kv_compare_predicate, build_kv_constraints_predicate,
     build_row_compare_predicate, build_row_constraints_predicate, combine_predicates,
-    compute_join_param_tokens, compute_kv_param_tokens,
+    compute_join_param_tokens, compute_kv_param_tokens, row_pattern_and_fields,
 };
-use super::data_type::{row_pattern_and_fields, type_tokens};
+use super::data_type::type_tokens;
 use super::ident::find_local_ident;
 use super::Compiler;
 
