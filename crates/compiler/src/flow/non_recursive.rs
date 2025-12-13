@@ -52,8 +52,6 @@ impl Compiler {
                 outs.push(format_ident!("t_{}", idb_fp));
             }
 
-            self.insert_or_verify_global_type(*output_fp, self.find_global_type(idb_fps[0]));
-
             let head = outs[0].clone();
             let tail = &outs[1..];
             let mut expr: TokenStream = quote! { #head };

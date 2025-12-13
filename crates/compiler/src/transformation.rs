@@ -45,13 +45,15 @@ impl Compiler {
                 );
 
                 // Type inference
-                let itype = self
-                    .find_global_type(input.fingerprint())
-                    .inference(None, output.is_nullary())
-                    .unwrap();
-                self.insert_or_verify_global_type(output.fingerprint(), itype);
+                self.verify_and_infer_global_type(
+                    input.fingerprint(),
+                    None,
+                    output.fingerprint(),
+                    flow,
+                );
+                let itype = self.find_global_type(input.fingerprint()).1.clone();
 
-                let row_ty = type_tokens(itype, input_arity);
+                let row_ty = type_tokens(&itype);
                 let out_val = build_key_val_from_row_args(flow.value(), &row_fields);
                 // Optional filter on comparisons and constraints
                 let cmp_pred = build_row_compare_predicate(flow.compares(), &row_fields);
@@ -93,13 +95,15 @@ impl Compiler {
                 );
 
                 // Type inference
-                let itype = self
-                    .find_global_type(input.fingerprint())
-                    .inference(None, output.is_nullary())
-                    .unwrap();
-                self.insert_or_verify_global_type(output.fingerprint(), itype);
+                self.verify_and_infer_global_type(
+                    input.fingerprint(),
+                    None,
+                    output.fingerprint(),
+                    flow,
+                );
+                let itype = self.find_global_type(input.fingerprint()).1.clone();
 
-                let row_ty = type_tokens(itype, input_arity);
+                let row_ty = type_tokens(&itype);
                 let out_key = build_key_val_from_row_args(flow.key(), &row_fields);
                 let out_val = build_key_val_from_row_args(flow.value(), &row_fields);
                 let cmp_pred = build_row_compare_predicate(flow.compares(), &row_fields);
@@ -138,11 +142,12 @@ impl Compiler {
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
                 // Type inference
-                let itype = self
-                    .find_global_type(input.fingerprint())
-                    .inference(None, output.is_nullary())
-                    .unwrap();
-                self.insert_or_verify_global_type(output.fingerprint(), itype);
+                self.verify_and_infer_global_type(
+                    input.fingerprint(),
+                    None,
+                    output.fingerprint(),
+                    flow,
+                );
 
                 let out_key = build_key_val_from_kv_args(flow.key());
                 let out_val = build_key_val_from_kv_args(flow.value());
@@ -188,11 +193,12 @@ impl Compiler {
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
                 // Type inference
-                let itype = self
-                    .find_global_type(input.fingerprint())
-                    .inference(None, output.is_nullary())
-                    .unwrap();
-                self.insert_or_verify_global_type(output.fingerprint(), itype);
+                self.verify_and_infer_global_type(
+                    input.fingerprint(),
+                    None,
+                    output.fingerprint(),
+                    flow,
+                );
 
                 let out_val = build_key_val_from_kv_args(flow.value());
                 let cmp_pred = build_kv_compare_predicate(flow.compares());
@@ -231,11 +237,12 @@ impl Compiler {
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
 
                 // Type inference
-                let itype = self
-                    .find_global_type(left.fingerprint())
-                    .inference(Some(self.find_global_type(right.fingerprint())), output.is_nullary())
-                    .unwrap_or_else(|| panic!("Compiler error: type mismatch between collection 0x{:016x} and 0x{:016x}", left.fingerprint(), right.fingerprint()));
-                self.insert_or_verify_global_type(output.fingerprint(), itype);
+                self.verify_and_infer_global_type(
+                    left.fingerprint(),
+                    Some(right.fingerprint()),
+                    output.fingerprint(),
+                    flow,
+                );
 
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
@@ -275,11 +282,12 @@ impl Compiler {
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
 
                 // Type inference
-                let itype = self
-                    .find_global_type(left.fingerprint())
-                    .inference(Some(self.find_global_type(right.fingerprint())), output.is_nullary())
-                    .unwrap_or_else(|| panic!("Compiler error: type mismatch between collection 0x{:016x} and 0x{:016x}", left.fingerprint(), right.fingerprint()));
-                self.insert_or_verify_global_type(output.fingerprint(), itype);
+                self.verify_and_infer_global_type(
+                    left.fingerprint(),
+                    Some(right.fingerprint()),
+                    output.fingerprint(),
+                    flow,
+                );
 
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
@@ -328,11 +336,12 @@ impl Compiler {
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
 
                 // Type inference
-                let itype = self
-                    .find_global_type(left.fingerprint())
-                    .inference(Some(self.find_global_type(right.fingerprint())), output.is_nullary())
-                    .unwrap_or_else(|| panic!("Compiler error: type mismatch between collection 0x{:016x} and 0x{:016x}", left.fingerprint(), right.fingerprint()));
-                self.insert_or_verify_global_type(output.fingerprint(), itype);
+                self.verify_and_infer_global_type(
+                    left.fingerprint(),
+                    Some(right.fingerprint()),
+                    output.fingerprint(),
+                    flow,
+                );
 
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
@@ -347,20 +356,20 @@ impl Compiler {
                 quote! {
                     let #out =
                         #r
-                            .flat_map_ref(|& #anti_param_k, & #anti_param_v| std::iter::once(( #anti_param_k, #anti_param_v )))
+                            .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
                             #dedup_call
                             .inner
-                            .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1 as i32)))
+                            .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1_i32)))
                             .as_collection()
                             .concat(
                                 &{
                                     #l
-                                    .join_core(&#r, |&aj_k, _, &aj_rv| {
-                                        Some((aj_k, aj_rv))
+                                    .join_core(&#r, |aj_k, _, aj_rv| {
+                                        Some((aj_k.clone(), aj_rv.clone()))
                                     })
                                     #dedup_call
                                     .inner
-                                    .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1 as i32)))
+                                    .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1_i32)))
                                     .as_collection()
                                 }
                             )
@@ -380,11 +389,12 @@ impl Compiler {
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
 
                 // Type inference
-                let itype = self
-                    .find_global_type(left.fingerprint())
-                    .inference(Some(self.find_global_type(right.fingerprint())), output.is_nullary())
-                    .unwrap_or_else(|| panic!("Compiler error: type mismatch between collection 0x{:016x} and 0x{:016x}", left.fingerprint(), right.fingerprint()));
-                self.insert_or_verify_global_type(output.fingerprint(), itype);
+                self.verify_and_infer_global_type(
+                    left.fingerprint(),
+                    Some(right.fingerprint()),
+                    output.fingerprint(),
+                    flow,
+                );
 
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
@@ -400,20 +410,20 @@ impl Compiler {
                 let transformation = quote! {
                     let #out =
                         #r
-                            .flat_map_ref(|& #anti_param_k, & #anti_param_v | std::iter::once( ( #anti_param_k, #anti_param_v ) ))
+                            .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
                             #dedup_call
                             .inner
-                            .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1 as i32)))
+                            .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1_i32)))
                             .as_collection()
                             .concat(
                                 &{
                                     #l
-                                        .join_core(&#r, |&aj_k, _, &aj_rv| {
-                                            Some((aj_k, aj_rv))
+                                        .join_core(&#r, |aj_k, _, aj_rv| {
+                                            Some((aj_k.clone(), aj_rv.clone()))
                                         })
                                         #dedup_call
                                         .inner
-                                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1 as i32)))
+                                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1_i32)))
                                         .as_collection()
                                 }
                             )

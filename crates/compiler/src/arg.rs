@@ -446,10 +446,9 @@ fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
                 TransformationArgument::Jn((_, is_key, idx)) => {
                     let i = Index::from(*idx);
                     if *is_key {
-                        // `k` is a reference in join_core; clone to produce an owned key.
                         quote! { k.#i }
                     } else {
-                        proj_tuple_field("v", *idx)
+                        quote! { v.#i }
                     }
                 }
             },
@@ -500,8 +499,7 @@ fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
             FactorArgument::Var(trans_arg) => match trans_arg {
                 TransformationArgument::Jn((is_left, is_key, idx)) => {
                     if *is_key {
-                        // `k` is a reference in join_core; clone to produce an owned key.
-                        quote! { k }
+                        proj_tuple_field("k", *idx)
                     } else if *is_left {
                         proj_tuple_field("lv", *idx)
                     } else {
@@ -531,7 +529,7 @@ fn proj_tuple_field(base: &str, idx: usize) -> TokenStream {
     let ident = Ident::new(base, Span::call_site());
     // `lv` and `rv` are references to tuple values in join_core; clone to get owned field
     // values regardless of whether the field is Copy (u64) or owned (String).
-    quote! { #ident.#i }
+    quote! { #ident.#i.clone() }
 }
 
 /// Pack parts as a tuple with correct 1-tuple syntax.

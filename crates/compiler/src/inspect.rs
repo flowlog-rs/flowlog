@@ -27,7 +27,7 @@ pub fn gen_size_inspector(var: &Ident, name: &str) -> TokenStream {
             .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
             // Drop data; keep time, emit `diff = 1` in DD's inner representation.
             .inner
-            .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1 as i32)))
+            .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
             // Back to a collection so we can consolidate.
             .as_collection()
             .map(|_| ())

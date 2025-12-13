@@ -70,14 +70,14 @@ impl Relation {
         &self.attributes
     }
 
-    /// Data types of the relation.
+    /// Data types of the relation, one per attribute.
     #[must_use]
     #[inline]
-    pub fn data_type(&self) -> &DataType {
+    pub fn data_type(&self) -> Vec<DataType> {
         self.attributes
-            .first()
-            .map(|a| a.data_type())
-            .unwrap_or(&DataType::Boolean)
+            .iter()
+            .map(|a| *a.data_type())
+            .collect()
     }
 
     /// Get the input filename.

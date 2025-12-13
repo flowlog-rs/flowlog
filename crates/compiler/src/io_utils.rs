@@ -1,10 +1,15 @@
-//! Codegen for input ingestion inside a timely scope.
+//! Input ingestion helper for the FlowLog compiler.
 //!
-//! Responsibilities:
-//! - Declare per-input (handle, collection) pairs.
-//! - Provide a mutable binding for handles.
-//! - Generate per-input CSV readers based on configured paths.
-//! - Close all handles at the end of ingestion.
+//! This module generates Rust code that:
+//! - Declares `(handle, collection)` pairs for each EDB relation.
+//! - Creates *mutable* bindings for handles so we can call `update(...)`.
+//! - Ingests EDB facts from CSV-like files (arity > 0).
+//! - Ingests compile-time boolean facts (from the parsed program).
+//! - Closes all handles to signal end-of-input.
+//!
+//! Sharding strategy (to distribute ingestion across workers):
+//! - If the first column is an integer: shard by `first % peers`.
+//! - If the first column is a string: shard by a stable 64-bit FNV-1a hash of the bytes.
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
@@ -14,8 +19,11 @@ use super::Compiler;
 use parser::{ConstType, DataType, Relation};
 
 impl Compiler {
-    /// Declare inputs as `(handle, collection)` pairs:
-    /// `let (h_<name>, c_<name>) = scope.new_collection::<_, Diff>();`
+    /// Generate per-EDB declarations as `(handle, collection)` pairs:
+    ///
+    /// ```ignore
+    /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
+    /// ```
     pub(super) fn gen_input_decls(&self) -> Vec<TokenStream> {
         self.program
             .edbs()
@@ -28,37 +36,43 @@ impl Compiler {
             .collect()
     }
 
-    /// Create a single binding for one or more handles, returning:
-    /// - the `let` binding TokenStream used in code,
-    /// - an expression TokenStream referencing the handle(s).
+    /// Build a *single* mutable handle binding pattern for one or more handles.
+    ///
+    /// We intentionally shadow the original handles returned from `new_collection(...)`
+    /// so downstream code can uniformly work with mutable handles:
+    /// - 0 inputs: emits a harmless binding and returns `()`.
+    /// - 1 input:  `let mut hR = worker.dataflow(...);` and returns `hR`.
+    /// - N inputs: `let (mut hA, mut hB, ...) = worker.dataflow(...);` and returns `(hA, hB, ...)`.
     pub(super) fn build_handle_binding(&self) -> (TokenStream, TokenStream) {
         let edb_names = self.program.edb_names();
+
         match edb_names.len() {
-            0 => (quote! { let _ret }, quote! { () }),
+            0 => (quote! { _handles }, quote! { () }),
             1 => {
                 let h = format_ident!("h{}", edb_names[0]);
-                (quote! { let mut #h }, quote! { #h })
+                (quote! { mut #h }, quote! { #h })
             }
             _ => {
                 let hs: Vec<_> = edb_names.iter().map(|n| format_ident!("h{}", n)).collect();
-                let muts: Vec<_> = hs.iter().map(|h| quote! { mut #h }).collect();
-                (quote! { let ( #(#muts),* ) }, quote! { ( #(#hs),* ) })
+                let lhs: Vec<_> = hs.iter().map(|h| quote! { mut #h }).collect();
+                (
+                    quote! { ( #(#lhs),* ) },
+                    quote! { ( #(#hs),* ) },
+                )
             }
         }
     }
 
-    /// Generate CSV ingestion loops and boolean fact ingestion for each EDB relation.
-    ///
-    /// Each input is sharded on its first field to distribute records across workers.
+    /// Generate ingestion code for every EDB relation:
+    /// - CSV ingestion for arity > 0
+    /// - boolean fact ingestion (if present)
     pub(super) fn gen_ingest_stmts(&self) -> Vec<TokenStream> {
-        let input_relations = self.program.edbs();
-
-        input_relations
+        self.program
+            .edbs()
             .iter()
             .map(|rel| {
                 let csv_ingest = self.gen_csv_ingest_stmt(rel);
                 let bool_ingest = self.gen_bool_fact_ingest_stmt(rel);
-
                 quote! {
                     #csv_ingest
                     #bool_ingest
@@ -67,11 +81,23 @@ impl Compiler {
             .collect()
     }
 
+    /// Generate CSV ingestion for a single relation.
+    ///
+    /// Notes:
+    /// - Nullary relations do not read from CSV.
+    /// - Records are sharded by the first field to spread ingestion work.
     fn gen_csv_ingest_stmt(&self, rel: &Relation) -> TokenStream {
         let arity = rel.arity();
+
+        // Nullary relations do not read from files; they are handled via boolean facts (if any).
+        if arity == 0 {
+            return quote! {};
+        }
+
         let handle = format_ident!("h{}", rel.name());
+
+        // Resolve input path: `<fact_dir>/<file_name>` if configured, otherwise `file_name`.
         let file_name = rel.input_file_name();
-        let delimiter = rel.input_delimiter();
         let path = self
             .config
             .fact_dir()
@@ -82,50 +108,48 @@ impl Compiler {
                     .into_owned()
             })
             .unwrap_or_else(|| file_name);
-        let itype = rel.data_type();
 
+        // Delimiter is expected to be a 1-byte separator (e.g., ',' or '\t').
+        // We materialize it once to avoid repeatedly indexing `.as_bytes()[0]`.
+        let delimiter = rel.input_delimiter();
+
+        let data_types = rel.data_type();
+        debug_assert_eq!(
+            data_types.len(),
+            arity,
+            "relation arity must match number of attribute data types",
+        );
+
+        // Field identifiers: f0, f1, ..., f{arity-1}.
         let field_idents: Vec<Ident> = (0..arity).map(|i| format_ident!("f{}", i)).collect();
 
-        let parse_stmts: Vec<TokenStream> = match itype {
-        DataType::Integer => field_idents
+        // Parse fields f1..f{arity-1} (the first field is parsed in the sharding logic).
+        let parse_rest_stmts: Vec<TokenStream> = field_idents
             .iter()
+            .zip(data_types.iter())
             .skip(1)
-            .map(|ident| {
-                quote! {
+            .map(|(ident, dt)| match *dt {
+                DataType::Integer => quote! {
                     let #ident: i32 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i32>().ok()?;
-                }
-            })
-            .collect(),
-        DataType::String => field_idents
-            .iter()
-            .skip(1)
-            .map(|ident| {
-                quote! {
+                },
+                DataType::String => quote! {
                     let #ident: String = std::str::from_utf8(tuple.next()?).ok()?.to_string();
-                }
+                },
             })
-            .collect(),
-        DataType::Boolean => todo!("For now we do not support nullary EDBs")
-    };
+            .collect();
 
-        // Determine whether this worker should ingest the record.
-        // Numeric inputs are sharded by first field modulo peers.
-        // Text inputs use a stable FNV-1a hash of the first field to shard across workers,
-        // while keeping the record values as Strings (no hashing of data itself).
-        let should_send_stmt: TokenStream = match itype {
-            DataType::Integer => {
-                let first_key = field_idents[0].clone();
-                quote! {
+        // Sharding / "should this worker ingest this row?" logic.
+        let should_send_stmt: TokenStream = {
+            let first_key = field_idents[0].clone();
+            match data_types[0] {
+                DataType::Integer => quote! {
                     let #first_key: i32 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i32>().ok()?;
                     let should_send = ((#first_key as usize) % peers) == index;
-                }
-            }
-            DataType::String => {
-                let first_key = field_idents[0].clone();
-                quote! {
+                },
+                DataType::String => quote! {
                     let #first_key: String = std::str::from_utf8(tuple.next()?).ok()?.to_string();
                     let should_send = {
-                        // Stable 64-bit FNV-1a over bytes of the first field
+                        // 64-bit FNV-1a hash for stable worker assignment on string keys.
                         let mut hash: u64 = 0xcbf29ce484222325;
                         for &b in #first_key.as_bytes() {
                             hash ^= b as u64;
@@ -133,11 +157,11 @@ impl Compiler {
                         }
                         ((hash as usize) % peers) == index
                     };
-                }
+                },
             }
-            DataType::Boolean => todo!("For now we do not support nullary EDBs"),
         };
 
+        // Element expression for `.update(...)`.
         let elem_expr = if arity == 1 {
             let x0 = field_idents[0].clone();
             quote! { ( #x0, ) }
@@ -145,102 +169,84 @@ impl Compiler {
             quote! { ( #(#field_idents),* ) }
         };
 
-        match itype {
-            DataType::Integer => {
-                quote! {
-                    let ingest = {
-                        let reader = BufReader::new(
-                            File::open(#path)
-                                .unwrap_or_else(|e| panic!("failed to open {}: {}", #path, e))
-                        );
-                        reader
-                            .split(b'\n')
-                            .filter_map(Result::ok) // filter out errors
-                            .filter(move |line| !line.is_empty()) // skip empty lines
-                            .filter_map(move |line| {
-                                let mut tuple = line.split(|&bt| bt == #delimiter.as_bytes()[0]);
-                                #should_send_stmt
-                                if !should_send {
-                                    return None;
-                                }
-                                #(#parse_stmts)*
-                                Some(#elem_expr)
-                            })
-                    };
+        quote! {
+            let ingest = {
+                let reader = BufReader::new(
+                    File::open(#path)
+                        .unwrap_or_else(|e| panic!("failed to open {}: {}", #path, e))
+                );
+                let delim: u8 = #delimiter.as_bytes()[0];
 
-                    ingest.for_each(|row| #handle.update(row, SEMIRING_ONE));
-                }
-            }
-            DataType::String => {
-                quote! {
-                    let ingest = {
-                        let reader = BufReader::new(
-                            File::open(#path)
-                                .unwrap_or_else(|e| panic!("failed to open {}: {}", #path, e))
-                        );
-                        reader
-                            .split(b'\n')
-                            .filter_map(Result::ok) // filter out errors
-                            .filter(move |line| !line.is_empty()) // skip empty lines
-                            .filter_map(move |line| {
-                                let mut tuple = line.split(|&bt| bt == #delimiter.as_bytes()[0]);
-                                #should_send_stmt
-                                if !should_send {
-                                    return None;
-                                }
-                                #(#parse_stmts)*
-                                Some(#elem_expr)
-                            })
-                    };
-                    ingest.for_each(|row| #handle.update(row, SEMIRING_ONE));
-                }
-            }
-            DataType::Boolean => todo!("For now we do not support nullary EDBs"),
+                reader
+                    .split(b'\n')
+                    .filter_map(Result::ok)          // drop I/O errors
+                    .filter(|line| !line.is_empty()) // skip empty lines
+                    .filter_map(move |line| {
+                        let mut tuple = line.split(|&bt| bt == delim);
+
+                        #should_send_stmt
+                        if !should_send {
+                            return None;
+                        }
+
+                        #(#parse_rest_stmts)*
+
+                        Some(#elem_expr)
+                    })
+            };
+
+            ingest.for_each(|row| #handle.update(row, SEMIRING_ONE));
         }
     }
 
+    /// Generate ingestion code for boolean facts associated with `rel`.
+    ///
+    /// This is used for facts provided directly in the program (not via CSV files),
+    /// typically for nullary relations or small compile-time datasets.
     fn gen_bool_fact_ingest_stmt(&self, rel: &Relation) -> TokenStream {
         let handle = format_ident!("h{}", rel.name());
         let rel_name = rel.name().to_string();
-        let facts = self.program.bool_facts().get(&rel_name);
 
-        if let Some(facts) = facts {
-            // Build a literal vector of tuples for all `true` facts.
-            let tuples: Vec<TokenStream> = facts
-                .iter()
-                .filter(|(_, b)| *b)
-                .map(|(vals, _)| {
-                    let elems: Vec<TokenStream> = vals
-                        .iter()
-                        .map(|c| match c {
-                            ConstType::Integer(i) => quote! { #i },
-                            ConstType::Text(s) => quote! { #s.to_string() },
-                        })
-                        .collect();
-                    if elems.len() == 1 {
-                        let e0 = &elems[0];
-                        quote! { ( #e0, ) }
-                    } else {
-                        quote! { ( #(#elems),* ) }
-                    }
-                })
-                .collect();
+        let Some(facts) = self.program.bool_facts().get(&rel_name) else {
+            return quote! {};
+        };
 
-            if tuples.is_empty() {
-                quote! {}
-            } else {
-                quote! {
-                    for row in [ #(#tuples),* ] {
-                        #handle.update(row, SEMIRING_ONE);
-                    }
+        // Build literal tuples for all `true` facts only.
+        let tuples: Vec<TokenStream> = facts
+            .iter()
+            .filter(|(_, b)| *b)
+            .map(|(vals, _)| {
+                let elems: Vec<TokenStream> = vals
+                    .iter()
+                    .map(|c| match c {
+                        ConstType::Integer(i) => quote! { #i },
+                        ConstType::Text(s) => quote! { #s.to_string() },
+                    })
+                    .collect();
+
+                if elems.len() == 1 {
+                    let e0 = &elems[0];
+                    quote! { ( #e0, ) }
+                } else {
+                    quote! { ( #(#elems),* ) }
+                }
+            })
+            .collect();
+
+        if tuples.is_empty() {
+            quote! {}
+        } else {
+            quote! {
+                for row in [ #(#tuples),* ] {
+                    #handle.update(row, SEMIRING_ONE);
                 }
             }
-        } else {
-            quote! {}
         }
     }
 
-    /// Close all input handles (end of ingestion).
+    /// Generate code to close all input handles (signals end-of-input to the dataflow).
+    ///
+    /// We also print a per-relation "loaded" message on worker 0.
     pub fn gen_close_stmts(&self) -> Vec<TokenStream> {
         self.program
             .edb_names()

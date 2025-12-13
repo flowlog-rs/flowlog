@@ -41,8 +41,8 @@ pub struct Compiler {
     /// Global map from relation fingerprint to its identifier.
     global_fp_to_ident: HashMap<u64, Ident>,
 
-    /// Global map from relation fingerprint to its data type.
-    global_fp_to_type: HashMap<u64, DataType>,
+    /// Global map from relation fingerprint to its key-value data type.
+    global_fp_to_type: HashMap<u64, (Vec<DataType>, Vec<DataType>)>,
 
     // Fields for conditional imports, e.g., recursion-related.
     is_recursive: bool,
@@ -183,7 +183,7 @@ impl Compiler {
                     let index = worker.index();
 
                     // --- Build dataflow graph -----------------------------------------
-                    #lhs_binding =
+                    let #lhs_binding =
                         worker.dataflow::<#timestamp_type, _, _>(|scope| {
                             #(#input_decls)*
 
