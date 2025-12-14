@@ -70,6 +70,7 @@ impl Compiler {
                 expr = quote! { #expr.concat(&#t) };
             }
 
+            self.imports.mark_threshold_total();
             // If this output was already computed in a previous stratum, union the previous
             // collection with the newly produced tuples before applying distinct.
             let mut block = if calculated_output_fps.contains(output_fp) {
@@ -89,7 +90,8 @@ impl Compiler {
             if let Some((agg_op, agg_pos, agg_arity)) =
                 stratum.output_to_aggregation_map().get(output_fp)
             {
-                self.has_aggregation = true;
+                self.imports.mark_aggregation();
+                self.imports.mark_as_collection();
                 let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
                 let reduce_logic = aggregation_reduce(agg_op);
                 let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);

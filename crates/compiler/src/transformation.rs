@@ -130,7 +130,8 @@ impl Compiler {
                     }
                 };
 
-                let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);
+                let arrange_stmt =
+                    self.register_arrangement(arranged_map, output.fingerprint(), &out);
 
                 quote! {
                     #transformation
@@ -181,7 +182,8 @@ impl Compiler {
                     }
                 };
 
-                let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);
+                let arrange_stmt =
+                    self.register_arrangement(arranged_map, output.fingerprint(), &out);
 
                 quote! {
                     #transformation
@@ -323,7 +325,8 @@ impl Compiler {
                         }
                     };
 
-                let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);
+                let arrange_stmt =
+                    self.register_arrangement(arranged_map, output.fingerprint(), &out);
 
                 quote! {
                     #transformation
@@ -337,6 +340,7 @@ impl Compiler {
                 output,
                 flow,
             } => {
+                self.imports.mark_as_collection();
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
@@ -390,6 +394,7 @@ impl Compiler {
                 output,
                 flow,
             } => {
+                self.imports.mark_as_collection();
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
@@ -437,7 +442,8 @@ impl Compiler {
                             #dedup_call;
                 };
 
-                let arrange_stmt = register_arrangement(arranged_map, output.fingerprint(), &out);
+                let arrange_stmt =
+                    self.register_arrangement(arranged_map, output.fingerprint(), &out);
 
                 quote! {
                     #transformation
@@ -451,14 +457,18 @@ impl Compiler {
 // =========================================================================
 // Arrangement Management Utilities
 // =========================================================================
-fn register_arrangement(
-    arranged_map: &mut HashMap<u64, Ident>,
-    fingerprint: u64,
-    collection_ident: &Ident,
-) -> TokenStream {
-    let arrangement_ident = format_ident!("{}_arr", collection_ident);
-    arranged_map.insert(fingerprint, arrangement_ident.clone());
-    quote! { let #arrangement_ident = #collection_ident.arrange_by_key(); }
+impl Compiler {
+    fn register_arrangement(
+        &mut self,
+        arranged_map: &mut HashMap<u64, Ident>,
+        fingerprint: u64,
+        collection_ident: &Ident,
+    ) -> TokenStream {
+        self.imports.mark_arrange_by_key();
+        let arrangement_ident = format_ident!("{}_arr", collection_ident);
+        arranged_map.insert(fingerprint, arrangement_ident.clone());
+        quote! { let #arrangement_ident = #collection_ident.arrange_by_key(); }
+    }
 }
 
 fn expect_arranged(

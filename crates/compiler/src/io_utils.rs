@@ -24,10 +24,15 @@ impl Compiler {
     /// ```ignore
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
-    pub(super) fn gen_input_decls(&self) -> Vec<TokenStream> {
-        self.program
-            .edbs()
-            .iter()
+    pub(super) fn gen_input_decls(&mut self) -> Vec<TokenStream> {
+        let edbs = self.program.edbs();
+        if edbs.is_empty() {
+            return Vec::new();
+        }
+
+        self.imports.mark_input();
+
+        edbs.iter()
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
                 let coll = format_ident!("{}", rel.name());
@@ -63,19 +68,23 @@ impl Compiler {
     /// Generate ingestion code for every EDB relation:
     /// - CSV ingestion for arity > 0
     /// - boolean fact ingestion (if present)
-    pub(super) fn gen_ingest_stmts(&self) -> Vec<TokenStream> {
-        self.program
-            .edbs()
-            .iter()
-            .map(|rel| {
-                let csv_ingest = self.gen_csv_ingest_stmt(rel);
-                let bool_ingest = self.gen_bool_fact_ingest_stmt(rel);
-                quote! {
-                    #csv_ingest
-                    #bool_ingest
-                }
-            })
-            .collect()
+    pub(super) fn gen_ingest_stmts(&mut self) -> Vec<TokenStream> {
+        let mut stmts = Vec::new();
+        for rel in self.program.edbs() {
+            if rel.arity() > 0 {
+                self.imports.mark_std_file();
+                self.imports.mark_std_buf_io();
+            }
+
+            let csv_ingest = self.gen_csv_ingest_stmt(rel);
+            let bool_ingest = self.gen_bool_fact_ingest_stmt(rel);
+            stmts.push(quote! {
+                #csv_ingest
+                #bool_ingest
+            });
+        }
+
+        stmts
     }
 
     /// Generate CSV ingestion for a single relation.

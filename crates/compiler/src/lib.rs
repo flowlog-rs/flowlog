@@ -11,6 +11,7 @@ mod data_type;
 mod flow;
 mod fs_utils;
 mod ident;
+mod import;
 mod inspect;
 mod io_utils;
 mod scaffold;
@@ -28,6 +29,7 @@ use common::{Config, ExecutionMode};
 use parser::{DataType, Program};
 use planner::StratumPlanner;
 
+use import::ImportTracker;
 use inspect::gen_merge_partitions;
 use inspect::{gen_print_inspector, gen_size_inspector, gen_write_inspector};
 
@@ -44,9 +46,7 @@ pub struct Compiler {
     /// Global map from relation fingerprint to its key-value data type.
     global_fp_to_type: HashMap<u64, (Vec<DataType>, Vec<DataType>)>,
 
-    // Fields for conditional imports, e.g., recursion-related.
-    is_recursive: bool,
-    has_aggregation: bool,
+    imports: ImportTracker,
 }
 
 impl Compiler {
@@ -57,8 +57,7 @@ impl Compiler {
             program,
             global_fp_to_ident: HashMap::new(),
             global_fp_to_type: HashMap::new(),
-            is_recursive: false,
-            has_aggregation: false,
+            imports: ImportTracker::default(),
         };
         compiler.make_global_ident_map();
         compiler.make_global_type_map();
@@ -77,45 +76,10 @@ impl Compiler {
 // Project Generation Utilities
 // =========================================================================
 impl Compiler {
-    /// Generate the `use` imports for the generated `main.rs`.
-    /// - Always imports: std IO, differential Input, and operators::*.
-    /// - Imports iterate::Variable only when the stratum is recursive.
-    fn gen_imports(&self) -> TokenStream {
-        let rec_imports = if self.is_recursive {
-            quote! {
-                use differential_dataflow::operators::iterate::SemigroupVariable;
-                use timely::dataflow::Scope;
-            }
-        } else {
-            quote! {}
-        };
-
-        let agg_imports = if self.has_aggregation {
-            quote! {
-                use differential_dataflow::operators::reduce::*;
-                use differential_dataflow::trace::implementations::*;
-            }
-        } else {
-            quote! {}
-        };
-
-        quote! {
-            use std::fs::File;
-            use std::io::{BufRead, BufReader};
-            use std::time::Instant;
-
-            use differential_dataflow::input::Input;
-            use differential_dataflow::operators::*;
-            use differential_dataflow::operators::arrange::ArrangeByKey;
-            use differential_dataflow::AsCollection;
-            use timely::dataflow::operators::core::*;
-            #rec_imports
-            #agg_imports
-        }
-    }
-
     /// Generate the text for a standalone `main.rs` program executing the provided strata.
     fn generate_main(&mut self, strata: &[StratumPlanner]) -> String {
+        self.imports.reset();
+
         // Static sections of the generated program.
         let input_decls = self.gen_input_decls();
         let (lhs_binding, ret_expr) = self.build_handle_binding();
@@ -132,7 +96,7 @@ impl Compiler {
             flow_stmts.extend(core_flows);
 
             if stratum.is_recursive() {
-                self.is_recursive = true;
+                self.imports.mark_recursive();
                 flow_stmts.push(self.gen_iterative_block(&non_recursive_arranged_map, stratum));
             } else {
                 flow_stmts
@@ -145,7 +109,7 @@ impl Compiler {
         let (inspect_stmts, merge_stmts) = self.collect_inspectors();
 
         // Imports block (conditional on recursion for Variable).
-        let imports = self.gen_imports();
+        let imports = self.imports.render();
 
         let diff_type = match self.config.mode() {
             ExecutionMode::Incremental => quote! { isize },
@@ -162,7 +126,7 @@ impl Compiler {
             ExecutionMode::Batch => quote! { () },
         };
 
-        let iter_type = if self.is_recursive {
+        let iter_type = if self.imports.is_recursive() {
             quote! { type Iter = u16; }
         } else {
             quote! {}
@@ -221,7 +185,7 @@ impl Compiler {
     }
 
     /// Assemble inspection and partition-merge statements for IDB relations based on CLI args.
-    fn collect_inspectors(&self) -> (Vec<TokenStream>, Vec<TokenStream>) {
+    fn collect_inspectors(&mut self) -> (Vec<TokenStream>, Vec<TokenStream>) {
         let mut inspect_stmts = Vec::new();
         let mut merge_stmts = Vec::new();
 
@@ -230,6 +194,9 @@ impl Compiler {
             let name = idb.name();
 
             if idb.printsize() {
+                self.imports.mark_threshold_total();
+                self.imports.mark_as_collection();
+                self.imports.mark_timely_map();
                 inspect_stmts.push(gen_size_inspector(&var, name));
             }
 

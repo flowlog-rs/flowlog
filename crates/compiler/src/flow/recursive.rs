@@ -1,9 +1,9 @@
 //! Recursive flow generation for FlowLog compiler.
-//! 
+//!
 //! This module handles the generation of recursive differential dataflow
 //! pipelines within recursive strata.
 //! It manages the iterative blocks, feedback loops, and unioning of IDB relations.
-//! It is worth noticing that due to factoring optimization, we need to maintain a local 
+//! It is worth noticing that due to factoring optimization, we need to maintain a local
 //! ident map derived from both non-recursive arrangements and global idents.
 
 use std::collections::HashMap;
@@ -155,7 +155,8 @@ impl Compiler {
             };
 
             if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
-                self.has_aggregation = true;
+                self.imports.mark_aggregation();
+                self.imports.mark_as_collection();
                 let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
                 let reduce_logic = aggregation_reduce(agg_op);
                 let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
