@@ -4,7 +4,7 @@
 //! .cargo/config.toml, and src/main.rs for the compiler generated Rust projects.
 
 use std::io;
-use toml_edit::{value, Array, DocumentMut};
+use toml_edit::DocumentMut;
 
 use super::Compiler;
 use crate::fs_utils::{ensure_dir, write_file};
@@ -18,8 +18,6 @@ impl Compiler {
         ensure_dir(&self.config.executable_path().join("src"))?;
         let cargo = self.render_cargo_toml();
         self.write_cargo_toml(&cargo)?;
-        let cargo_cfg = self.render_cargo_config();
-        self.write_cargo_config(&cargo_cfg)?;
         self.write_src_main(main_rs)?;
         Ok(())
     }
@@ -47,23 +45,6 @@ impl Compiler {
     fn write_cargo_toml(&self, cargo_toml: &str) -> io::Result<()> {
         let path = self.config.executable_path().join("Cargo.toml");
         write_file(&path, cargo_toml.trim_start())
-    }
-
-    /// Render a basic .cargo/config.toml support rustflags.
-    fn render_cargo_config(&self) -> String {
-        let mut doc = DocumentMut::new();
-        let mut flags = Array::new();
-        flags.push("-Dwarnings");
-        doc["build"]["rustflags"] = value(flags);
-        doc.to_string()
-    }
-
-    /// Write .cargo/config.toml to the given project directory.
-    fn write_cargo_config(&self, cargo_config: &str) -> io::Result<()> {
-        let cargo_dir = self.config.executable_path().join(".cargo");
-        ensure_dir(&cargo_dir)?;
-        let path = cargo_dir.join("config.toml");
-        write_file(&path, cargo_config.trim_start())
     }
 
     /// Write src/main.rs into the given project directory.
