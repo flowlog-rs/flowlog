@@ -7,99 +7,130 @@
 //! - write tuple values to per-worker partition files
 //! - merge partition files into a single output (typically run by worker 0)
 
+use crate::Compiler;
+
+use common::ExecutionMode;
+
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{Index, LitStr};
 
-/// Generate code that prints the *cardinality* of a collection at each update.
-///
-/// Strategy:
-/// - normalize the collection so each logical record contributes `SEMIRING_ONE`
-/// - convert to the underlying `(data, time, diff)` stream
-/// - map everything to the single key `()` so all updates consolidate into one
-/// - consolidate and inspect the resulting multiplicity (the size)
-pub fn gen_size_inspector(var: &Ident, name: &str) -> TokenStream {
-    let prefix = name.to_string();
+impl Compiler {
+    /// Generate code that prints the *cardinality* of a collection at each update.
+    ///
+    /// Strategy:
+    /// - normalize the collection so each logical record contributes `SEMIRING_ONE`
+    /// - convert to the underlying `(data, time, diff)` stream
+    /// - map everything to the single key `()` so all updates consolidate into one
+    /// - consolidate and inspect the resulting multiplicity (the size)
+    pub fn gen_size_inspector(&self, var: &Ident, name: &str) -> TokenStream {
+        let prefix = name.to_string();
 
-    quote! {{
-        #var
-            // Ensure each distinct record has weight `SEMIRING_ONE` under our semiring.
-            .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
-            // Drop data; keep time, emit `diff = 1` in DD's inner representation.
-            .inner
-            .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
-            // Back to a collection so we can consolidate.
-            .as_collection()
-            .map(|_| ())
-            .consolidate()
-            .inspect(|(_data, _time, size)| eprintln!("[size] [{}] {:?}", #prefix, size));
-    }}
-}
+        let maybe_probe = match self.config.mode() {
+            ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
+            ExecutionMode::Batch => quote! {},
+        };
 
-/// Generate code that prints each tuple update (data only) at stderr for debugging.
-///
-/// If `arity == 0`, print `True` instead of `()`, matching common Datalog
-/// conventions for 0-arity relations.
-pub fn gen_print_inspector(var: &Ident, name: &str, arity: usize) -> TokenStream {
-    let prefix = name.to_string();
-
-    if arity == 0 {
         quote! {{
-            #var.inspect(|(_data, _time, _diff)| {
-                eprintln!("[tuple] [{}] True", #prefix)
-            });
-        }}
-    } else {
-        quote! {{
-            #var.inspect(|(data, _time, _diff)| {
-                eprintln!("[tuple] [{}] {:?}", #prefix, data)
-            });
+            #var
+                // Ensure each distinct record has weight `SEMIRING_ONE` under our semiring.
+                .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
+                // Drop data; keep time, emit `diff = 1` in DD's inner representation.
+                .inner
+                .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
+                // Back to a collection so we can consolidate.
+                .as_collection()
+                .map(|_| ())
+                .consolidate()
+                .inspect(|(_data, _time, size)| eprintln!("[size] [{}] {:?}", #prefix, size))
+                #maybe_probe;
         }}
     }
-}
 
-/// Generate code that writes the data part of each update to a per-worker file.
-///
-/// It creates `<parent_dir>/<relation_name><index>` where `index` is the worker id.
-/// Each tuple is appended as one line:
-/// - arity 0: `True`
-/// - arity >0: comma-separated values using `{}` formatting
-pub fn gen_write_inspector(var: &Ident, name: &str, parent_dir: &str, arity: usize) -> TokenStream {
-    let base_dir = parent_dir.to_string();
-    let rel_name = name.to_string();
+    /// Generate code that prints each tuple update (data only) at stderr for debugging.
+    ///
+    /// If `arity == 0`, print `True` instead of `()`, matching common Datalog
+    /// conventions for 0-arity relations.
+    pub fn gen_print_inspector(&self, var: &Ident, name: &str, arity: usize) -> TokenStream {
+        let prefix = name.to_string();
 
-    let data_accessors: Vec<TokenStream> = (0..arity)
-        .map(|i| {
-            let idx = Index::from(i);
-            quote! { data.#idx }
-        })
-        .collect();
+        let maybe_probe = match self.config.mode() {
+            ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
+            ExecutionMode::Batch => quote! {},
+        };
 
-    let write_stmt = if arity == 0 {
-        quote! {
-            writeln!(&mut file, "True").expect("write failed");
+        if arity == 0 {
+            quote! {{
+                #var.inspect(|(_data, _time, _diff)| {
+                    eprintln!("[tuple] [{}] True", #prefix)
+                })
+                #maybe_probe;
+            }}
+        } else {
+            quote! {{
+                #var.inspect(|(data, _time, _diff)| {
+                    eprintln!("[tuple] [{}] {:?}", #prefix, data)
+                })
+                #maybe_probe;
+            }}
         }
-    } else {
-        let fmt = vec!["{}"; arity].join(",");
-        let fmt = LitStr::new(&fmt, Span::call_site());
-        quote! {
-            writeln!(&mut file, #fmt #(, #data_accessors )*).expect("write failed");
-        }
-    };
+    }
 
-    quote! {{
-        let base_dir = #base_dir;
-        let rel_name = #rel_name;
-        let path = format!("{}/{}{}", base_dir, rel_name, index);
+    /// Generate code that writes the data part of each update to a per-worker file.
+    ///
+    /// It creates `<parent_dir>/<relation_name><index>` where `index` is the worker id.
+    /// Each tuple is appended as one line:
+    /// - arity 0: `True`
+    /// - arity >0: comma-separated values using `{}` formatting
+    pub fn gen_write_inspector(
+        &self,
+        var: &Ident,
+        name: &str,
+        parent_dir: &str,
+        arity: usize,
+    ) -> TokenStream {
+        let base_dir = parent_dir.to_string();
+        let rel_name = name.to_string();
 
-        let mut file = std::fs::File::create(&path)
-            .unwrap_or_else(|e| panic!("failed to create {}: {}", path, e));
+        let maybe_probe = match self.config.mode() {
+            ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
+            ExecutionMode::Batch => quote! {},
+        };
 
-        #var.inspect(move |(data, _time, _diff)| {
-            use std::io::Write as _;
-            #write_stmt
-        });
-    }}
+        let data_accessors: Vec<TokenStream> = (0..arity)
+            .map(|i| {
+                let idx = Index::from(i);
+                quote! { data.#idx }
+            })
+            .collect();
+
+        let write_stmt = if arity == 0 {
+            quote! {
+                writeln!(&mut file, "True").expect("write failed");
+            }
+        } else {
+            let fmt = vec!["{}"; arity].join(",");
+            let fmt = LitStr::new(&fmt, Span::call_site());
+            quote! {
+                writeln!(&mut file, #fmt #(, #data_accessors )*).expect("write failed");
+            }
+        };
+
+        quote! {{
+            let base_dir = #base_dir;
+            let rel_name = #rel_name;
+            let path = format!("{}/{}{}", base_dir, rel_name, index);
+
+            let mut file = std::fs::File::create(&path)
+                .unwrap_or_else(|e| panic!("failed to create {}: {}", path, e));
+
+            #var.inspect(move |(data, _time, _diff)| {
+                use std::io::Write as _;
+                #write_stmt
+            })
+            #maybe_probe;
+        }}
+    }
 }
 
 /// Generate code that merges per-worker partition files into one output file.

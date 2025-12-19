@@ -1,30 +1,65 @@
-//! Project scaffolding for FlowLog compiler.
+//! Project scaffolding for the FlowLog compiler.
 //!
-//! This module handles the generation of project files such as Cargo.toml,
-//! .cargo/config.toml, and src/main.rs for the compiler generated Rust projects.
+//! This module materializes a standalone Rust crate produced by the compiler.
+//! It is responsible for writing:
+//! - `Cargo.toml`
+//! - `.cargo/config.toml` (rustflags, etc.)
+//! - `src/main.rs` (compiler-generated)
+//! - `src/cmd.rs` (optional: interactive txn command parser for incremental mode)
 
 use std::io;
+
 use toml_edit::{value, Array, DocumentMut};
 
 use super::Compiler;
 use crate::fs_utils::{ensure_dir, write_file};
 
+/// Embedded template for the incremental interactive command parser.
+///
+/// Notes:
+/// - `include_str!` is evaluated at *compile time* of the compiler crate.
+/// - The released binary does NOT need the template file at runtime.
+const CMD_RS_TMPL: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/cmd_rs.tpl"));
+
 // =========================================================================
 // Project File Generation
 // =========================================================================
 impl Compiler {
-    /// Create the project layout and write Cargo.toml + src/main.rs.
+    /// Create the project layout and write Cargo.toml + .cargo/config.toml + src/main.rs.
+    ///
+    /// If `config.is_incremental()` is enabled, also writes `src/cmd.rs` from a template.
     pub(crate) fn write_project(&self, main_rs: &str) -> io::Result<()> {
-        ensure_dir(&self.config.executable_path().join("src"))?;
-        let cargo = self.render_cargo_toml();
-        self.write_cargo_toml(&cargo)?;
+        let root = self.config.executable_path();
+        let src_dir = root.join("src");
+
+        ensure_dir(&src_dir)?;
+
+        // Project metadata + dependencies
+        let cargo_toml = self.render_cargo_toml();
+        self.write_cargo_toml(&cargo_toml)?;
+
+        // Optional build flags (e.g., -Dwarnings)
         let cargo_cfg = self.render_cargo_config();
         self.write_cargo_config(&cargo_cfg)?;
+
+        // Compiler-generated entrypoint
         self.write_src_main(main_rs)?;
+
+        // Optional incremental interactive command parser
+        if self.config.is_incremental() {
+            self.write_src_cmd()?;
+            self.write_src_relation()?;
+        }
+
         Ok(())
     }
 
-    /// Render a basic Cargo.toml.
+    // -------------------------
+    // Cargo.toml
+    // -------------------------
+
+    /// Render a minimal Cargo.toml for the generated crate.
     fn render_cargo_toml(&self) -> String {
         let mut doc = DocumentMut::new();
 
@@ -36,41 +71,80 @@ impl Compiler {
         // Make generated crate standalone even inside another workspace
         doc["workspace"] = toml_edit::table();
 
-        // dependencies
+        // Dependencies for generated code
         doc["dependencies"]["timely"] = "0.25".into();
         doc["dependencies"]["differential-dataflow"] = "0.18".into();
 
         doc.to_string()
     }
 
-    /// Write Cargo.toml into the given project directory.
+    /// Write Cargo.toml into the generated project directory.
     fn write_cargo_toml(&self, cargo_toml: &str) -> io::Result<()> {
         let path = self.config.executable_path().join("Cargo.toml");
         write_file(&path, cargo_toml.trim_start())
     }
 
-    /// Write src/main.rs into the given project directory.
+    // -------------------------
+    // src/main.rs
+    // -------------------------
+
+    /// Write src/main.rs into the generated project directory.
     fn write_src_main(&self, main_rs: &str) -> io::Result<()> {
         let src_dir = self.config.executable_path().join("src");
         ensure_dir(&src_dir)?;
-        let path = src_dir.join("main.rs");
-        write_file(&path, main_rs)
+        write_file(&src_dir.join("main.rs"), main_rs)
     }
 
-    /// Render a basic .cargo/config.toml support rustflags.
+    // -------------------------
+    // .cargo/config.toml
+    // -------------------------
+
+    /// Render `.cargo/config.toml` with build rustflags.
     fn render_cargo_config(&self) -> String {
         let mut doc = DocumentMut::new();
+
         let mut flags = Array::new();
         flags.push("-Dwarnings");
+
         doc["build"]["rustflags"] = value(flags);
         doc.to_string()
     }
 
-    /// Write .cargo/config.toml to the given project directory.
+    /// Write `.cargo/config.toml` to the generated project directory.
     fn write_cargo_config(&self, cargo_config: &str) -> io::Result<()> {
         let cargo_dir = self.config.executable_path().join(".cargo");
         ensure_dir(&cargo_dir)?;
-        let path = cargo_dir.join("config.toml");
-        write_file(&path, cargo_config.trim_start())
+        write_file(&cargo_dir.join("config.toml"), cargo_config.trim_start())
+    }
+
+    // -------------------------
+    // src/cmd.rs (template)
+    // -------------------------
+
+    /// Write `src/cmd.rs` (incremental-only) into the generated project directory.
+    fn write_src_cmd(&self) -> io::Result<()> {
+        let src_dir = self.config.executable_path().join("src");
+        ensure_dir(&src_dir)?;
+
+        // Optional: normalize CRLF to LF for stable diffs across platforms.
+        let rendered = CMD_RS_TMPL.replace("\r\n", "\n");
+
+        write_file(&src_dir.join("cmd.rs"), rendered.trim_start())
+    }
+
+    // -------------------------
+    // src/relation.rs (generated)
+    // -------------------------
+
+    /// Write `src/relation.rs` (incremental-only) into the generated project directory.
+    fn write_src_relation(&self) -> io::Result<()> {
+        let src_dir = self.config.executable_path().join("src");
+        ensure_dir(&src_dir)?;
+
+        let edbs = self.program.edbs();
+
+        let rendered = self.render_relops(edbs).replace("\r\n", "\n");
+
+        write_file(&src_dir.join("relation.rs"), rendered.trim_start())
     }
 }

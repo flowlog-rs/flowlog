@@ -6,10 +6,15 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use common::ExecutionMode;
+
 /// Records the import requirements gathered while compiling.
 #[must_use]
 #[derive(Default)]
 pub(crate) struct ImportTracker {
+    /// Batch or incremental execution mode.
+    mode: ExecutionMode,
+
     /// Standard file IO support.
     std_file: bool,
 
@@ -43,8 +48,9 @@ pub(crate) struct ImportTracker {
 
 impl ImportTracker {
     /// Clears all captured requirements so a new stratum starts from scratch.
-    pub(crate) fn reset(&mut self) {
+    pub(crate) fn reset(&mut self, mode: ExecutionMode) {
         *self = Self::default();
+        self.mode = mode;
     }
 
     /// Materializes the required import statements as a single token stream.
@@ -58,6 +64,7 @@ impl ImportTracker {
         let operator_imports = self.operator_imports();
         let recursive_imports = self.recursive_imports();
         let aggregation_imports = self.aggregation_imports();
+        let probe_imports = self.probe_imports();
 
         quote! {
             #std_file
@@ -71,6 +78,7 @@ impl ImportTracker {
             #timely_map
             #recursive_imports
             #aggregation_imports
+            #probe_imports
         }
     }
 
@@ -149,7 +157,7 @@ impl ImportTracker {
 
     /// Emits `std::fs::File` if requested.
     fn std_file_import(&self) -> TokenStream {
-        if self.std_file {
+        if self.std_file && self.mode == ExecutionMode::Batch {
             quote! { use std::fs::File; }
         } else {
             quote! {}
@@ -158,7 +166,7 @@ impl ImportTracker {
 
     /// Emits buffered IO helpers if requested.
     fn std_io_import(&self) -> TokenStream {
-        if self.std_buf_io {
+        if self.std_buf_io && self.mode == ExecutionMode::Batch {
             quote! { use std::io::{BufRead, BufReader}; }
         } else {
             quote! {}
@@ -219,6 +227,17 @@ impl ImportTracker {
             quote! {
                 use differential_dataflow::operators::reduce::ReduceCore;
                 use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
+            }
+        } else {
+            quote! {}
+        }
+    }
+
+    /// Emits probe imports if in incremental mode.
+    fn probe_imports(&self) -> TokenStream {
+        if self.mode == ExecutionMode::Incremental {
+            quote! {
+                use timely::dataflow::operators::probe::Handle as ProbeHandle;
             }
         } else {
             quote! {}

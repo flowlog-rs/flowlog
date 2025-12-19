@@ -13,7 +13,8 @@ mod fs_utils;
 mod ident;
 mod import;
 mod inspect;
-mod io_utils;
+mod read;
+mod relation;
 mod scaffold;
 mod transformation;
 
@@ -31,7 +32,6 @@ use planner::StratumPlanner;
 
 use import::ImportTracker;
 use inspect::gen_merge_partitions;
-use inspect::{gen_print_inspector, gen_size_inspector, gen_write_inspector};
 
 pub struct Compiler {
     /// Configuration provided to the compiler.
@@ -78,7 +78,23 @@ impl Compiler {
 impl Compiler {
     /// Generate the text for a standalone `main.rs` program executing the provided strata.
     fn generate_main(&mut self, strata: &[StratumPlanner]) -> String {
-        self.imports.reset();
+        self.imports.reset(self.config.mode());
+
+        // --- incremental-only helper prelude injected into generated main.rs ---
+        let prelude = match self.config.mode() {
+            ExecutionMode::Incremental => quote! {
+                mod cmd;
+                mod relation;
+
+                use cmd::{Cmd, TxnAction, TxnOp, TxnState};
+                use relation::*;
+
+                use std::collections::HashMap;
+                use std::io::{self, Write};
+                use std::sync::{Arc, Barrier, RwLock};
+            },
+            ExecutionMode::Batch => quote! {},
+        };
 
         // Static sections of the generated program.
         let input_decls = self.gen_input_decls();
@@ -132,52 +148,344 @@ impl Compiler {
             quote! {}
         };
 
+        // --- incremental: generate rel registry inserts from EDB list ---
+        // Assumptions (match your current generated code):
+        //   - input handle idents are named h{rel_name}, e.g., hsource, harc
+        //   - rel ops concrete types are {CamelCase(rel_name)}Rel, e.g., SourceRel, ArcRel
+        let rel_build_stmts: Vec<TokenStream> = if matches!(
+            self.config.mode(),
+            ExecutionMode::Incremental
+        ) {
+            self.program
+                .edbs()
+                .iter()
+                .map(|edb| {
+                    let rel_name = edb.name().to_ascii_lowercase();
+
+                    let handle_ident =
+                        Ident::new(&format!("h{rel_name}"), proc_macro2::Span::call_site());
+
+                    let ops_ty_ident = Ident::new(
+                        &format!("Rel{}", &rel_name),
+                        proc_macro2::Span::call_site(),
+                    );
+
+                    quote! {
+                        rels.insert(#rel_name.to_string(), Box::new(#ops_ty_ident::new(#handle_ident)));
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // --- generate the whole fn main() depending on mode (minimal but correct) ---
+        let main_fn = match self.config.mode() {
+            ExecutionMode::Batch => quote! {
+                fn main() {
+                    timely::execute_from_args(std::env::args(), |worker| {
+                        // --- Runtime setup -------------------------------------------------
+                        let timer = Instant::now();
+                        let peers = worker.peers();
+                        let index = worker.index();
+
+                        // --- Build dataflow graph -----------------------------------------
+                        let #lhs_binding =
+                            worker.dataflow::<#timestamp_type, _, _>(|scope| {
+                                #(#input_decls)*
+
+                                // === Transformation flows ===
+                                #(#flow_stmts)*
+
+                                // === Inspect IDB sizes ===
+                                #(#inspect_stmts)*
+
+                                #ret_expr
+                            });
+
+                        if index == 0 {
+                            println!("{:?}:\tDataflow assembled", timer.elapsed());
+                        }
+
+                        // --- Data ingestion -----------------------------------------------
+                        #(#ingest_stmts)*
+                        #(#close_stmts)*
+
+                        // --- Execute to fixpoint -------------------------------------------
+                        while worker.step() {}
+
+                        if index == 0 {
+                            println!("{:?}:\tDataflow executed", timer.elapsed());
+                            // === Merge per-worker output partitions (if any) ===
+                            #(#merge_stmts)*
+                        }
+                    }).unwrap();
+                }
+            },
+
+            ExecutionMode::Incremental => quote! {
+                // -------------------------------
+                // Worker sync helpers
+                // -------------------------------
+                fn workers_from_args(args: &[String]) -> usize {
+                    let mut i = 0;
+                    while i < args.len() {
+                        if args[i] == "-w" && i + 1 < args.len() {
+                            if let Ok(n) = args[i + 1].parse::<usize>() {
+                                return n.max(1);
+                            }
+                            i += 2;
+                            continue;
+                        }
+                        if let Some(rest) = args[i].strip_prefix("-w=") {
+                            if let Ok(n) = rest.parse::<usize>() {
+                                return n.max(1);
+                            }
+                        }
+                        i += 1;
+                    }
+                    1
+                }
+
+                fn prompt_cmd() -> Option<Cmd> {
+                    print!(">> ");
+                    io::stdout().flush().ok();
+
+                    let stdin = io::stdin();
+                    let mut line = String::new();
+                    match stdin.read_line(&mut line) {
+                        Ok(0) => Some(Cmd::Quit), // EOF
+                        Ok(_) => cmd::parse_line(&line),
+                        Err(_) => Some(Cmd::Quit),
+                    }
+                }
+
+                fn main() {
+                    let args_vec: Vec<String> = std::env::args().collect();
+                    let workers = workers_from_args(&args_vec);
+
+                    let shared_txn: Arc<RwLock<TxnState>> = Arc::new(RwLock::new(TxnState::default()));
+                    let barrier = Arc::new(Barrier::new(workers));
+
+                    timely::execute_from_args(std::env::args(), {
+                        let shared_txn = shared_txn.clone();
+                        let barrier = barrier.clone();
+
+                        move |worker| {
+                            // --- Runtime setup -------------------------------------------------
+                            let timer = Instant::now();
+                            let peers = worker.peers();
+                            let index = worker.index();
+
+                            // --- Build dataflow graph -----------------------------------------
+                            let #lhs_binding =
+                                worker.dataflow::<#timestamp_type, _, _>(|scope| {
+                                    #(#input_decls)*
+
+                                    // === Transformation flows ===
+                                    #(#flow_stmts)*
+
+                                    // === Probe ===
+                                    let mut probe = ProbeHandle::new();
+                                    // === Inspect IDB sizes ===
+                                    #(#inspect_stmts)*
+
+                                    #ret_expr
+                                });
+
+                            // --- Build rel registry (EDBs) ------------------------------------
+                            let mut rels: HashMap<String, Box<dyn RelOps>> = HashMap::new();
+                            #(#rel_build_stmts)*
+
+                            if index == 0 {
+                                println!("{:?}:\tDataflow assembled", timer.elapsed());
+                                println!("{}", cmd::help_text());
+                            }
+
+                            // NOTE: this assumes your #lhs_binding includes a `probe` handle
+                            // (like `(hsource, harc, probe)`), and the ident is literally `probe`.
+                            // This matches your handwritten incremental driver.
+                            let mut time_stamp: u32 = 0;
+                            let mut last_epoch_seen: u32 = 0;
+
+                            if index != 0 {
+                                loop {
+                                    barrier.wait();
+
+                                    let snap = shared_txn.read().unwrap().clone();
+                                    if snap.epoch == last_epoch_seen {
+                                        barrier.wait();
+                                        continue;
+                                    }
+                                    last_epoch_seen = snap.epoch;
+
+                                    match snap.action {
+                                        TxnAction::Commit => {
+                                            for op in snap.pending.iter() {
+                                                match op {
+                                                    TxnOp::Put { rel, tuple, diff } => {
+                                                        let r = rels
+                                                            .get_mut(&rel.to_ascii_lowercase())
+                                                            .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
+                                                        r.apply_tuple(tuple, *diff, peers, index);
+                                                    }
+                                                    TxnOp::File { rel, path, diff } => {
+                                                        let r = rels
+                                                            .get_mut(&rel.to_ascii_lowercase())
+                                                            .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
+                                                        r.apply_file(path.as_path(), *diff, peers, index);
+                                                    }
+                                                }
+                                            }
+
+                                            time_stamp += 1;
+                                            for r in rels.values_mut() {
+                                                r.advance_to(time_stamp);
+                                                r.flush();
+                                            }
+                                            while probe.less_than(&time_stamp) {
+                                                worker.step();
+                                            }
+                                        }
+                                        TxnAction::Quit => {
+                                            for r in rels.values_mut() {
+                                                r.close();
+                                            }
+                                            while probe.less_than(&time_stamp) {
+                                                worker.step();
+                                            }
+                                            barrier.wait();
+                                            break;
+                                        }
+                                        TxnAction::None => {}
+                                    }
+
+                                    barrier.wait();
+                                }
+                                return;
+                            }
+
+                            let mut local_txn: TxnState = TxnState::default();
+
+                            loop {
+                                let Some(c) = prompt_cmd() else { continue };
+
+                                match c {
+                                    Cmd::Help => println!("{}", cmd::help_text()),
+                                    Cmd::Begin => {
+                                        local_txn.begin();
+                                        println!("(txn begin)");
+                                    }
+                                    Cmd::Abort => {
+                                        local_txn.abort();
+                                        println!("(txn aborted)");
+                                    }
+                                    Cmd::Put { rel, tuple, diff } => {
+                                        if !local_txn.in_txn {
+                                            local_txn.begin();
+                                        }
+                                        local_txn.enqueue(TxnOp::Put { rel, tuple, diff });
+                                        println!("(queued put)");
+                                    }
+                                    Cmd::File { rel, path, diff } => {
+                                        if !local_txn.in_txn {
+                                            local_txn.begin();
+                                        }
+                                        local_txn.enqueue(TxnOp::File { rel, path, diff });
+                                        println!("(queued file)");
+                                    }
+                                    Cmd::Commit => {
+                                        if !local_txn.in_txn {
+                                            println!("(no active txn)");
+                                            continue;
+                                        }
+
+                                        let round_timer = Instant::now();
+
+                                        let next_epoch = shared_txn.read().unwrap().epoch + 1;
+                                        {
+                                            let mut w = shared_txn.write().unwrap();
+                                            *w = local_txn.as_commit_snapshot(next_epoch);
+                                        }
+
+                                        barrier.wait();
+
+                                        let snap = shared_txn.read().unwrap().clone();
+                                        for op in snap.pending.iter() {
+                                            match op {
+                                                TxnOp::Put { rel, tuple, diff } => {
+                                                    let r = rels
+                                                        .get_mut(&rel.to_ascii_lowercase())
+                                                        .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
+                                                    r.apply_tuple(tuple, *diff, peers, index);
+                                                }
+                                                TxnOp::File { rel, path, diff } => {
+                                                    let r = rels
+                                                        .get_mut(&rel.to_ascii_lowercase())
+                                                        .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
+                                                    r.apply_file(path.as_path(), *diff, peers, index);
+                                                }
+                                            }
+                                        }
+
+                                        time_stamp += 1;
+                                        for r in rels.values_mut() {
+                                            r.advance_to(time_stamp);
+                                            r.flush();
+                                        }
+                                        while probe.less_than(&time_stamp) {
+                                            worker.step();
+                                        }
+
+                                        println!("{:?}:\tCommitted & executed", round_timer.elapsed());
+
+                                        local_txn.abort();
+
+                                        barrier.wait();
+
+                                        {
+                                            let mut w = shared_txn.write().unwrap();
+                                            w.action = TxnAction::None;
+                                            w.pending.clear();
+                                            w.in_txn = false;
+                                        }
+                                    }
+                                    Cmd::Quit => {
+                                        let next_epoch = shared_txn.read().unwrap().epoch + 1;
+                                        {
+                                            let mut w = shared_txn.write().unwrap();
+                                            *w = TxnState::as_quit_snapshot(next_epoch);
+                                        }
+
+                                        barrier.wait();
+
+                                        for r in rels.values_mut() {
+                                            r.close();
+                                        }
+                                        while probe.less_than(&time_stamp) {
+                                            worker.step();
+                                        }
+
+                                        barrier.wait();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }).unwrap();
+                }
+            },
+        };
+
         let file_ts: TokenStream = quote! {
             #imports
+            #prelude
 
             type Diff = #diff_type;
             #iter_type
             const SEMIRING_ONE: Diff = #semiring_one_value;
 
-            fn main() {
-                timely::execute_from_args(std::env::args(), |worker| {
-                    // --- Runtime setup -------------------------------------------------
-                    let timer = Instant::now();
-                    let peers = worker.peers();
-                    let index = worker.index();
-
-                    // --- Build dataflow graph -----------------------------------------
-                    let #lhs_binding =
-                        worker.dataflow::<#timestamp_type, _, _>(|scope| {
-                            #(#input_decls)*
-
-                            // === Transformation flows ===
-                            #(#flow_stmts)*
-
-                            // === Inspect IDB sizes ===
-                            #(#inspect_stmts)*
-
-                            #ret_expr
-                        });
-
-                    if index == 0 {
-                        println!("{:?}:\tDataflow assembled", timer.elapsed());
-                    }
-
-                    // --- Data ingestion -----------------------------------------------
-                    #(#ingest_stmts)*
-                    #(#close_stmts)*
-
-                    // --- Execute to fixpoint -------------------------------------------
-                    while worker.step() {}
-
-                    if index == 0 {
-                        println!("{:?}:\tDataflow executed", timer.elapsed());
-                        // === Merge per-worker output partitions (if any) ===
-                        #(#merge_stmts)*
-                    }
-                }).unwrap();
-            }
+            #main_fn
         };
 
         let ast: File = parse2(file_ts).expect("valid token stream");
@@ -197,17 +505,22 @@ impl Compiler {
                 self.imports.mark_threshold_total();
                 self.imports.mark_as_collection();
                 self.imports.mark_timely_map();
-                inspect_stmts.push(gen_size_inspector(&var, name));
+                inspect_stmts.push(self.gen_size_inspector(&var, name));
             }
 
             if idb.output() {
                 if self.config.output_to_stdout() {
-                    inspect_stmts.push(gen_print_inspector(&var, name, idb.arity()));
+                    inspect_stmts.push(self.gen_print_inspector(&var, name, idb.arity()));
                 } else {
                     let parent_dir = self.config.output_dir().expect(
                         "output directory must be provided when writing IDB output to files",
                     );
-                    inspect_stmts.push(gen_write_inspector(&var, name, parent_dir, idb.arity()));
+                    inspect_stmts.push(self.gen_write_inspector(
+                        &var,
+                        name,
+                        parent_dir,
+                        idb.arity(),
+                    ));
                     merge_stmts.push(gen_merge_partitions(name, parent_dir));
                 }
             }
