@@ -153,7 +153,7 @@ fn gen_one_rel_nonnullary(rel: &Relation) -> TokenStream {
     let delim_byte: u8 = rel
         .input_delimiter()
         .as_bytes()
-        .get(0)
+        .first()
         .copied()
         .unwrap_or(b',');
 

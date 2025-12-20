@@ -112,7 +112,6 @@ impl Compiler {
             flow_stmts.extend(core_flows);
 
             if stratum.is_recursive() {
-                self.imports.mark_recursive();
                 flow_stmts.push(self.gen_iterative_block(&non_recursive_arranged_map, stratum));
             } else {
                 flow_stmts

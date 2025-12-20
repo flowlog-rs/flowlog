@@ -7,7 +7,6 @@ use quote::quote;
 impl Compiler {
     /// Deduplication for differential dataflow collections.
     pub(crate) fn dedup_collection(&mut self) -> TokenStream {
-        self.imports.mark_timely_map();
         match self.config.mode() {
             ExecutionMode::Incremental => {
                 self.imports.mark_threshold();

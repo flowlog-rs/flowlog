@@ -28,6 +28,8 @@ impl Compiler {
         non_recursive_arranged_map: &HashMap<u64, Ident>,
         stratum: &StratumPlanner,
     ) -> TokenStream {
+        self.imports.mark_recursive();
+
         let leave_fps = stratum.recursion_leave_collections();
         if leave_fps.is_empty() {
             return quote! {};

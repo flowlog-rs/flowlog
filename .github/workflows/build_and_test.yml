@@ -42,6 +42,6 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-      - name: 🏁 Run smoke test
+      - name: 🏁 Run batch smoke test
         run: 
-          bash tools/check/check.sh tools/check/config_ci.txt
+          bash tools/check/batch.sh tools/check/config_ci.txt

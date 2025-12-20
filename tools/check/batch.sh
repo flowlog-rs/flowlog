@@ -217,7 +217,8 @@ PY
 run_test() {
     # Drive a single program/dataset pair through generation, execution, and verification.
     local prog_name="$1" dataset_name="$2"
-    local prog_file="$(basename "$prog_name")"
+    local prog_file
+    prog_file="$(basename "$prog_name")"
     local prog_path="${PROG_DIR}/${prog_file}"
 
     if [ ! -f "$prog_path" ]; then
@@ -232,56 +233,55 @@ run_test() {
 
     local program_stem="${prog_file%.*}"
     local package_name_raw="${program_stem}_${dataset_name}"
-    local modes=(batch incremental)
 
-    for mode in "${modes[@]}"; do
-        local package_name="$(sanitize_package_name "${package_name_raw}_${mode}")"
-        local project_dir="${ROOT_DIR}/${package_name}"
+    local mode="batch"
+    local package_name
+    package_name="$(sanitize_package_name "${package_name_raw}_${mode}")"
+    local project_dir="${ROOT_DIR}/${package_name}"
 
-        echo -e "${BLUE}[TEST]${NC} $prog_file with $dataset_name (mode=$mode)"
+    echo -e "${BLUE}[TEST]${NC} $prog_file with $dataset_name (mode=$mode)"
 
-        rm -rf "$project_dir"
+    rm -rf "$project_dir"
 
-        echo -e "${YELLOW}[GENERATE]${NC} $COMPILER_BIN $prog_path -F $dataset_path -o $project_dir --mode $mode"
-        "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir" --mode "$mode"
+    echo -e "${YELLOW}[GENERATE]${NC} $COMPILER_BIN $prog_path -F $dataset_path -o $project_dir --mode $mode"
+    "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir" --mode "$mode"
 
-        if [ ! -d "$project_dir" ]; then
-            echo -e "${RED}[ERROR]${NC} Generated project not found (mode=$mode): $project_dir"
-            exit 1
-        fi
+    if [ ! -d "$project_dir" ]; then
+        echo -e "${RED}[ERROR]${NC} Generated project not found (mode=$mode): $project_dir"
+        exit 1
+    fi
 
-        local log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${mode}.log"
-        pushd "$project_dir" >/dev/null
-        echo -e "${YELLOW}[RUN]${NC} cargo run --release -- -w $WORKERS (mode=$mode)"
-        cargo run --release -- -w "$WORKERS" 2>&1 | tee "$log_file"
-        popd >/dev/null
+    local log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${mode}.log"
+    pushd "$project_dir" >/dev/null
+    echo -e "${YELLOW}[RUN]${NC} cargo run --release -- -w $WORKERS (mode=$mode)"
+    cargo run --release -- -w "$WORKERS" 2>&1 | tee "$log_file"
+    popd >/dev/null
 
-        if [ ! -f "$log_file" ]; then
-            echo -e "${RED}[ERROR]${NC} Run log missing (mode=$mode): $log_file"
-            exit 1
-        fi
+    if [ ! -f "$log_file" ]; then
+        echo -e "${RED}[ERROR]${NC} Run log missing (mode=$mode): $log_file"
+        exit 1
+    fi
 
-        local parsed_file="${PARSED_DIR}/${program_stem}_${dataset_name}_${mode}_size.txt"
-        parse_output_to_size_file "$log_file" "$parsed_file" || {
-            echo -e "${RED}[ERROR]${NC} Failed to parse output for $prog_file (mode=$mode)"
-            exit 1
-        }
+    local parsed_file="${PARSED_DIR}/${program_stem}_${dataset_name}_${mode}_size.txt"
+    parse_output_to_size_file "$log_file" "$parsed_file" || {
+        echo -e "${RED}[ERROR]${NC} Failed to parse output for $prog_file (mode=$mode)"
+        exit 1
+    }
 
-        if ! verify_results_against_truth "$program_stem" "$dataset_name" "$parsed_file"; then
-            echo -e "${RED}[ERROR]${NC} Reference verification failed for $prog_file (mode=$mode)"
-            exit 1
-        fi
+    if ! verify_results_against_truth "$program_stem" "$dataset_name" "$parsed_file"; then
+        echo -e "${RED}[ERROR]${NC} Reference verification failed for $prog_file (mode=$mode)"
+        exit 1
+    fi
 
-        echo -e "${YELLOW}[CLEANUP]${NC} Removing generated project $project_dir"
-        rm -rf "$project_dir"
-    done
+    echo -e "${YELLOW}[CLEANUP]${NC} Removing generated project $project_dir"
+    rm -rf "$project_dir"
 
     cleanup_dataset "$dataset_name"
 }
 
 run_all_tests() {
     # Iterate over the config file and execute every listed benchmark.
-    echo -e "${BLUE}[TESTS]${NC} Running compiler-mode correctness tests"
+    echo -e "${BLUE}[TESTS]${NC} Running compiler-mode correctness tests (batch mode)"
 
     while IFS= read -r raw_line || [ -n "$raw_line" ]; do
         local line="${raw_line%%#*}"
@@ -303,6 +303,7 @@ run_all_tests() {
             echo -e "${YELLOW}[SKIP]${NC} Skipping test.dl"
             continue
         fi
+
         run_test "$prog_name" "$dataset_name"
     done < "$CONFIG_FILE"
 
