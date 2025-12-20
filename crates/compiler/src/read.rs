@@ -26,6 +26,8 @@ impl Compiler {
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
     pub(super) fn gen_input_decls(&mut self) -> Vec<TokenStream> {
+        let normalize = self.dedup_collection();
+
         let edbs = self.program.edbs();
         if edbs.is_empty() {
             return Vec::new();
@@ -37,7 +39,10 @@ impl Compiler {
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
                 let coll = format_ident!("{}", rel.name());
-                quote! { let (#handle, #coll) = scope.new_collection::<_, Diff>(); }
+                quote! {
+                    let (#handle, #coll) = scope.new_collection::<_, Diff>();
+                    let #coll = #coll #normalize;
+                }
             })
             .collect()
     }
