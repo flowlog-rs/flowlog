@@ -9,7 +9,7 @@
 
 use std::io;
 
-use toml_edit::{value, Array, DocumentMut};
+use toml_edit::{value, Array, DocumentMut, Item};
 
 use super::Compiler;
 use crate::fs_utils::{ensure_dir, write_file};
@@ -21,6 +21,10 @@ use crate::fs_utils::{ensure_dir, write_file};
 /// - The released binary does NOT need the template file at runtime.
 const CMD_RS_TMPL: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/cmd_rs.tpl"));
+const PROMPT_RS_TMPL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/templates/prompt_rs.tpl"
+));
 
 // =========================================================================
 // Project File Generation
@@ -49,6 +53,7 @@ impl Compiler {
         // Optional incremental interactive command parser
         if self.config.is_incremental() {
             self.write_src_cmd()?;
+            self.write_src_prompt()?;
             self.write_src_relation()?;
         }
 
@@ -63,19 +68,36 @@ impl Compiler {
     fn render_cargo_toml(&self) -> String {
         let mut doc = DocumentMut::new();
 
-        // Package info
-        doc["package"]["name"] = self.config.executable_name().into();
-        doc["package"]["version"] = "0.1.0".into();
-        doc["package"]["edition"] = "2024".into();
+        // package
+        doc["package"] = Item::Table(toml_edit::Table::new());
+        {
+            let pkg = doc["package"].as_table_mut().unwrap();
+            pkg["name"] = self.config.executable_name().into();
+            pkg["version"] = "0.1.0".into();
+            pkg["edition"] = "2024".into();
+        }
 
-        // Make generated crate standalone even inside another workspace
-        doc["workspace"] = toml_edit::table();
+        // workspace
+        doc["workspace"] = Item::Table(toml_edit::Table::new());
 
-        // Dependencies for generated code
-        doc["dependencies"]["timely"] = "0.25".into();
-        doc["dependencies"]["differential-dataflow"] = "0.18".into();
+        // dependencies
+        doc["dependencies"] = Item::Table(toml_edit::Table::new());
+        {
+            let deps = doc["dependencies"].as_table_mut().unwrap();
+            deps["timely"] = "0.25".into();
+            deps["differential-dataflow"] = "0.18".into();
 
-        doc.to_string()
+            if self.config.is_incremental() {
+                deps["rustyline"] = "17".into();
+            }
+        }
+
+        // Nice trailing newline.
+        let mut s = doc.to_string();
+        if !s.ends_with('\n') {
+            s.push('\n');
+        }
+        s
     }
 
     /// Write Cargo.toml into the generated project directory.
@@ -146,5 +168,14 @@ impl Compiler {
         let rendered = self.render_relops(edbs).replace("\r\n", "\n");
 
         write_file(&src_dir.join("relation.rs"), rendered.trim_start())
+    }
+
+    /// Write `src/prompt.rs` (incremental-only) into the generated project directory.
+    fn write_src_prompt(&self) -> io::Result<()> {
+        let src_dir = self.config.executable_path().join("src");
+        ensure_dir(&src_dir)?;
+
+        let rendered = PROMPT_RS_TMPL.replace("\r\n", "\n");
+        write_file(&src_dir.join("prompt.rs"), rendered.trim_start())
     }
 }

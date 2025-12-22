@@ -84,13 +84,14 @@ impl Compiler {
         let prelude = match self.config.mode() {
             ExecutionMode::Incremental => quote! {
                 mod cmd;
+                mod prompt;
                 mod relation;
 
                 use cmd::{Cmd, TxnAction, TxnOp, TxnState};
                 use relation::*;
+                use prompt::Prompt;
 
                 use std::collections::HashMap;
-                use std::io::{self, Write};
                 use std::sync::{Arc, Barrier, RwLock};
             },
             ExecutionMode::Batch => quote! {},
@@ -246,19 +247,6 @@ impl Compiler {
                     1
                 }
 
-                fn prompt_cmd() -> Option<Cmd> {
-                    print!(">> ");
-                    io::stdout().flush().ok();
-
-                    let stdin = io::stdin();
-                    let mut line = String::new();
-                    match stdin.read_line(&mut line) {
-                        Ok(0) => Some(Cmd::Quit), // EOF
-                        Ok(_) => cmd::parse_line(&line),
-                        Err(_) => Some(Cmd::Quit),
-                    }
-                }
-
                 fn main() {
                     let args_vec: Vec<String> = std::env::args().collect();
                     let workers = workers_from_args(&args_vec);
@@ -286,7 +274,8 @@ impl Compiler {
 
                                     // === Probe ===
                                     let mut probe = ProbeHandle::new();
-                                    // === Inspect IDB sizes ===
+
+                                    // === Inspect IDB sizes / outputs ===
                                     #(#inspect_stmts)*
 
                                     #ret_expr
@@ -296,17 +285,42 @@ impl Compiler {
                             let mut rels: HashMap<String, Box<dyn RelOps>> = HashMap::new();
                             #(#rel_build_stmts)*
 
+                            // Helper: apply a list of txn ops to this worker's input handles.
+                            fn apply_ops(
+                                rels: &mut HashMap<String, Box<dyn RelOps>>,
+                                ops: &[TxnOp],
+                                peers: usize,
+                                index: usize,
+                            ) {
+                                for op in ops {
+                                    match op {
+                                        TxnOp::Put { rel, tuple, diff } => {
+                                            let r = rels
+                                                .get_mut(&rel.to_ascii_lowercase())
+                                                .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
+                                            r.apply_tuple(tuple, *diff, peers, index);
+                                        }
+                                        TxnOp::File { rel, path, diff } => {
+                                            let r = rels
+                                                .get_mut(&rel.to_ascii_lowercase())
+                                                .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
+                                            r.apply_file(path.as_path(), *diff, peers, index);
+                                        }
+                                    }
+                                }
+                            }
+
                             if index == 0 {
                                 println!("{:?}:\tDataflow assembled", timer.elapsed());
                                 println!("{}", cmd::help_text());
                             }
 
-                            // NOTE: this assumes your #lhs_binding includes a `probe` handle
-                            // (like `(hsource, harc, probe)`), and the ident is literally `probe`.
-                            // This matches your handwritten incremental driver.
                             let mut time_stamp: u32 = 0;
                             let mut last_epoch_seen: u32 = 0;
 
+                            // -------------------------------
+                            // Worker != 0: listen & apply published txn snapshots
+                            // -------------------------------
                             if index != 0 {
                                 loop {
                                     barrier.wait();
@@ -320,22 +334,7 @@ impl Compiler {
 
                                     match snap.action {
                                         TxnAction::Commit => {
-                                            for op in snap.pending.iter() {
-                                                match op {
-                                                    TxnOp::Put { rel, tuple, diff } => {
-                                                        let r = rels
-                                                            .get_mut(&rel.to_ascii_lowercase())
-                                                            .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
-                                                        r.apply_tuple(tuple, *diff, peers, index);
-                                                    }
-                                                    TxnOp::File { rel, path, diff } => {
-                                                        let r = rels
-                                                            .get_mut(&rel.to_ascii_lowercase())
-                                                            .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
-                                                        r.apply_file(path.as_path(), *diff, peers, index);
-                                                    }
-                                                }
-                                            }
+                                            apply_ops(&mut rels, snap.pending.as_slice(), peers, index);
 
                                             time_stamp += 1;
                                             for r in rels.values_mut() {
@@ -364,21 +363,30 @@ impl Compiler {
                                 return;
                             }
 
+                            // -------------------------------
+                            // Worker 0: interactive driver
+                            // -------------------------------
+                            let rel_words = rels.keys().cloned().collect::<Vec<_>>();
+                            let mut prompt = Prompt::new(rel_words);
+
                             let mut local_txn: TxnState = TxnState::default();
 
                             loop {
-                                let Some(c) = prompt_cmd() else { continue };
+                                let Some(c) = prompt.next_cmd() else { continue };
 
                                 match c {
                                     Cmd::Help => println!("{}", cmd::help_text()),
+
                                     Cmd::Begin => {
                                         local_txn.begin();
                                         println!("(txn begin)");
                                     }
+
                                     Cmd::Abort => {
                                         local_txn.abort();
                                         println!("(txn aborted)");
                                     }
+
                                     Cmd::Put { rel, tuple, diff } => {
                                         if !local_txn.in_txn {
                                             local_txn.begin();
@@ -386,6 +394,7 @@ impl Compiler {
                                         local_txn.enqueue(TxnOp::Put { rel, tuple, diff });
                                         println!("(queued put)");
                                     }
+
                                     Cmd::File { rel, path, diff } => {
                                         if !local_txn.in_txn {
                                             local_txn.begin();
@@ -393,6 +402,7 @@ impl Compiler {
                                         local_txn.enqueue(TxnOp::File { rel, path, diff });
                                         println!("(queued file)");
                                     }
+
                                     Cmd::Commit => {
                                         if !local_txn.in_txn {
                                             println!("(no active txn)");
@@ -409,23 +419,9 @@ impl Compiler {
 
                                         barrier.wait();
 
+                                        // Apply exactly what got published (keeps behavior consistent).
                                         let snap = shared_txn.read().unwrap().clone();
-                                        for op in snap.pending.iter() {
-                                            match op {
-                                                TxnOp::Put { rel, tuple, diff } => {
-                                                    let r = rels
-                                                        .get_mut(&rel.to_ascii_lowercase())
-                                                        .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
-                                                    r.apply_tuple(tuple, *diff, peers, index);
-                                                }
-                                                TxnOp::File { rel, path, diff } => {
-                                                    let r = rels
-                                                        .get_mut(&rel.to_ascii_lowercase())
-                                                        .unwrap_or_else(|| panic!("unknown relation: '{rel}'"));
-                                                    r.apply_file(path.as_path(), *diff, peers, index);
-                                                }
-                                            }
-                                        }
+                                        apply_ops(&mut rels, snap.pending.as_slice(), peers, index);
 
                                         time_stamp += 1;
                                         for r in rels.values_mut() {
@@ -449,6 +445,7 @@ impl Compiler {
                                             w.in_txn = false;
                                         }
                                     }
+
                                     Cmd::Quit => {
                                         let next_epoch = shared_txn.read().unwrap().epoch + 1;
                                         {

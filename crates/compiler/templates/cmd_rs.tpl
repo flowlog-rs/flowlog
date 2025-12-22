@@ -1,18 +1,4 @@
 // cmd.rs template for inremental mode of FlowLog Compiler.
-//
-// Commands (case-insensitive):
-//   cmd | begin                       begin a transaction (clears pending ops)
-//   put  <rel> <tuple> [diff]         enqueue one tuple update (diff defaults to +1)
-//   file <rel> <path> [diff]          enqueue loading a file for <rel> at commit time
-//   commit | done                     commit current transaction
-//   abort | rollback                  abort (clear pending ops)
-//   quit | exit | q                   quit
-//   help | h | ?                      show help
-//
-// Notes:
-// - <tuple> is ONE token (no spaces). It is an *opaque* string here.
-//   e.g. "7" for source, "1,2" for arc.
-// - diff is an isize (e.g. +1, -1, 2). Defaults to +1.
 
 use std::path::PathBuf;
 
@@ -112,23 +98,41 @@ impl TxnState {
 }
 
 pub fn help_text() -> &'static str {
-    "Commands:
+    r#"
+Usage:
   cmd | begin
   put  <rel> <tuple> [diff]
   file <rel> <path>  [diff]
   commit | done
   abort | rollback
-  quit | exit | q
   help | h | ?
+  quit | exit | q
 
-Examples:
-  cmd
-  put source 7
-  put arc 1,2 +1
-  put arc 1,2 -1
-  file source /tmp/Source.csv +1
-  file arc    /tmp/Arc.csv    -1
-  commit"
+Commands:
+  cmd, begin
+      Begin a transaction.
+
+  put <rel> <tuple> [diff]
+      Apply an update to relation <rel>.
+      <tuple> is comma-separated (e.g., 1,2 or 7).
+      [diff] defaults to +1.
+
+  file <rel> <path> [diff]
+      Apply updates from CSV file <path> to relation <rel>.
+      [diff] defaults to +1.
+
+  commit, done
+      Commit the transaction and advance time.
+
+  abort, rollback
+      Abort the transaction (discard staged updates).
+
+  help, h, ?
+      Show this help text.
+
+  quit, exit, q
+      Exit.
+"#
 }
 
 fn usage_put() -> &'static str {
@@ -140,7 +144,7 @@ fn usage_file() -> &'static str {
 
 /// Print an error and return None.
 fn err(msg: impl AsRef<str>) -> Option<Cmd> {
-    eprintln!("invalid : {}", msg.as_ref());
+    eprintln!("invalid {}", msg.as_ref());
     None
 }
 
