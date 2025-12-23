@@ -55,6 +55,8 @@ impl ImportTracker {
 
     /// Materializes the required import statements as a single token stream.
     pub(crate) fn render(&self) -> TokenStream {
+        let precludes = self.preclude();
+
         let std_file = self.std_file_import();
         let std_io = self.std_io_import();
         let input = self.input_import();
@@ -66,7 +68,13 @@ impl ImportTracker {
         let aggregation_imports = self.aggregation_imports();
         let probe_imports = self.probe_imports();
 
+        let diff_type = self.diff_type();
+        let semiring_one = self.semiring_one_value();
+        let iter_type = self.iter_type();
+
         quote! {
+            #precludes
+
             #std_file
             #std_io
             use std::time::Instant;
@@ -79,6 +87,10 @@ impl ImportTracker {
             #recursive_imports
             #aggregation_imports
             #probe_imports
+
+            #diff_type
+            #semiring_one
+            #iter_type
         }
     }
 
@@ -125,11 +137,6 @@ impl ImportTracker {
     /// Marks that the current stratum contains recursion.
     pub(crate) fn mark_recursive(&mut self) {
         self.recursive = true;
-    }
-
-    /// Indicates whether recursion was requested while building the stratum.
-    pub(crate) fn is_recursive(&self) -> bool {
-        self.recursive
     }
 
     /// Marks that at least one aggregation operator was encountered.
@@ -235,10 +242,57 @@ impl ImportTracker {
 
     /// Emits probe imports if in incremental mode.
     fn probe_imports(&self) -> TokenStream {
-        if self.mode == ExecutionMode::Incremental {
-            quote! {
+        match self.mode {
+            ExecutionMode::Incremental => quote! {
                 use timely::dataflow::operators::probe::Handle as ProbeHandle;
+            },
+            ExecutionMode::Batch => quote! {},
+        }
+    }
+
+    /// Precludes crate modules.
+    fn preclude(&self) -> TokenStream {
+        match self.mode {
+            ExecutionMode::Incremental => quote! {
+                mod cmd;
+                mod prompt;
+                mod relation;
+
+                use cmd::{Cmd, TxnAction, TxnOp, TxnState};
+                use relation::*;
+                use prompt::Prompt;
+
+                use std::collections::HashMap;
+                use std::sync::{Arc, Barrier, RwLock};
+            },
+            ExecutionMode::Batch => quote! {},
+        }
+    }
+
+    /// Differential dataflow diff type.
+    fn diff_type(&self) -> TokenStream {
+        match self.mode {
+            ExecutionMode::Incremental => quote! { type Diff = isize; },
+            ExecutionMode::Batch => {
+                quote! { type Diff = differential_dataflow::difference::Present; }
             }
+        }
+    }
+
+    /// Semiring one value.
+    fn semiring_one_value(&self) -> TokenStream {
+        match self.mode {
+            ExecutionMode::Incremental => quote! { const SEMIRING_ONE: Diff = 1; },
+            ExecutionMode::Batch => {
+                quote! { const SEMIRING_ONE: Diff = differential_dataflow::difference::Present; }
+            }
+        }
+    }
+
+    /// Iterator type.
+    fn iter_type(&self) -> TokenStream {
+        if self.recursive {
+            quote! { type Iter = u16; }
         } else {
             quote! {}
         }

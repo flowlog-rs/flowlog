@@ -21,6 +21,7 @@ mod transformation;
 // =========================================================================
 // Imports
 // =========================================================================
+use import::ImportTracker;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use std::collections::{HashMap, HashSet};
@@ -30,8 +31,7 @@ use common::{Config, ExecutionMode};
 use parser::{DataType, Program};
 use planner::StratumPlanner;
 
-use import::ImportTracker;
-use inspect::gen_merge_partitions;
+use inspect::gen_delete_partitions;
 
 pub struct Compiler {
     /// Configuration provided to the compiler.
@@ -46,6 +46,7 @@ pub struct Compiler {
     /// Global map from relation fingerprint to its key-value data type.
     global_fp_to_type: HashMap<u64, (Vec<DataType>, Vec<DataType>)>,
 
+    /// Tracker for imports needed.
     imports: ImportTracker,
 }
 
@@ -80,23 +81,6 @@ impl Compiler {
     fn generate_main(&mut self, strata: &[StratumPlanner]) -> String {
         self.imports.reset(self.config.mode());
 
-        // --- incremental-only helper prelude injected into generated main.rs ---
-        let prelude = match self.config.mode() {
-            ExecutionMode::Incremental => quote! {
-                mod cmd;
-                mod prompt;
-                mod relation;
-
-                use cmd::{Cmd, TxnAction, TxnOp, TxnState};
-                use relation::*;
-                use prompt::Prompt;
-
-                use std::collections::HashMap;
-                use std::sync::{Arc, Barrier, RwLock};
-            },
-            ExecutionMode::Batch => quote! {},
-        };
-
         // Static sections of the generated program.
         let input_decls = self.gen_input_decls();
         let (lhs_binding, ret_expr) = self.build_handle_binding();
@@ -122,30 +106,14 @@ impl Compiler {
             calculated_output_fps.extend(stratum.output_relations());
         }
 
-        let (inspect_stmts, merge_stmts) = self.collect_inspectors();
+        let (inspect_stmts, merge_stmts, delete_stmts) = self.collect_inspectors();
 
         // Imports block (conditional on recursion for Variable).
         let imports = self.imports.render();
 
-        let diff_type = match self.config.mode() {
-            ExecutionMode::Incremental => quote! { isize },
-            ExecutionMode::Batch => quote! { differential_dataflow::difference::Present },
-        };
-
-        let semiring_one_value = match self.config.mode() {
-            ExecutionMode::Incremental => quote! { 1 },
-            ExecutionMode::Batch => quote! { differential_dataflow::difference::Present },
-        };
-
         let timestamp_type = match self.config.mode() {
             ExecutionMode::Incremental => quote! { u32 },
             ExecutionMode::Batch => quote! { () },
-        };
-
-        let iter_type = if self.imports.is_recursive() {
-            quote! { type Iter = u16; }
-        } else {
-            quote! {}
         };
 
         // --- incremental: generate rel registry inserts from EDB list ---
@@ -434,6 +402,9 @@ impl Compiler {
 
                                         println!("{:?}:\tCommitted & executed", round_timer.elapsed());
 
+                                        // === Merge per-worker output partitions (if any) ===
+                                        #(#merge_stmts)*
+
                                         local_txn.abort();
 
                                         barrier.wait();
@@ -462,6 +433,9 @@ impl Compiler {
                                             worker.step();
                                         }
 
+                                        // === incremental quit: clean up tmp per-worker partition files ===
+                                        #(#delete_stmts)*
+
                                         barrier.wait();
                                         break;
                                     }
@@ -475,12 +449,6 @@ impl Compiler {
 
         let file_ts: TokenStream = quote! {
             #imports
-            #prelude
-
-            type Diff = #diff_type;
-            #iter_type
-            const SEMIRING_ONE: Diff = #semiring_one_value;
-
             #main_fn
         };
 
@@ -489,9 +457,10 @@ impl Compiler {
     }
 
     /// Assemble inspection and partition-merge statements for IDB relations based on CLI args.
-    fn collect_inspectors(&mut self) -> (Vec<TokenStream>, Vec<TokenStream>) {
+    fn collect_inspectors(&mut self) -> (Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>) {
         let mut inspect_stmts = Vec::new();
         let mut merge_stmts = Vec::new();
+        let mut delete_stmts = Vec::new();
 
         for idb in self.program.idbs() {
             let var = self.find_global_ident(idb.fingerprint());
@@ -517,11 +486,15 @@ impl Compiler {
                         parent_dir,
                         idb.arity(),
                     ));
-                    merge_stmts.push(gen_merge_partitions(name, parent_dir));
+                    merge_stmts.push(self.gen_merge_partitions(name, parent_dir));
+
+                    if self.config.is_incremental() {
+                        delete_stmts.push(gen_delete_partitions(name, parent_dir));
+                    }
                 }
             }
         }
 
-        (inspect_stmts, merge_stmts)
+        (inspect_stmts, merge_stmts, delete_stmts)
     }
 }
