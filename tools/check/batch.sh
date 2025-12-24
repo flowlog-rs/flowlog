@@ -131,19 +131,38 @@ parse_output_to_size_file() {
     local out_file="$2"
 
     # Guard to keep the parser from producing empty output files.
-    if ! grep -Eq '^[[:space:]]*\[size\]' "$log_file"; then
+    if ! grep -Eq '^[[:space:]]*\[size\]\[' "$log_file"; then
         echo -e "${RED}[ERROR]${NC} No size lines found in $log_file"
         return 1
     fi
 
-    grep -E '^[[:space:]]*\[size\]' "$log_file" \
-        | awk '{
-            name=$2;
-            gsub(/^[\[]|[\]]$/, "", name);
-            count=$3;
-            print name ": " count;
-        }' \
-        | sort > "$out_file"
+    python - "$log_file" "$out_file" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+log_path = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+
+# Matches: [size][REL] ... size=123 (time field may be anything)
+pat = re.compile(r'^\s*\[size\]\[([^\]]+)\].*\bsize=([+-]?\d+)\b')
+
+sizes = {}  # keep the last seen size per relation
+for raw in log_path.read_text(errors="replace").splitlines():
+    m = pat.match(raw)
+    if not m:
+        continue
+    rel = m.group(1).strip()
+    sz = m.group(2).strip()
+    sizes[rel] = sz
+
+if not sizes:
+    print(f"No parsable size lines found in {log_path}", file=sys.stderr)
+    sys.exit(1)
+
+lines = [f"{k}: {v}" for k, v in sorted(sizes.items())]
+out_path.write_text("\n".join(lines) + "\n")
+PY
 }
 
 verify_results_against_truth() {
