@@ -98,8 +98,7 @@ impl TxnState {
 }
 
 pub fn help_text() -> &'static str {
-    r#"
-Usage:
+    r#"Usage:
   cmd | begin
   put  <rel> <tuple> [diff]
   file <rel> <path>  [diff]
@@ -117,9 +116,18 @@ Commands:
       <tuple> is comma-separated (e.g., 1,2 or 7).
       [diff] defaults to +1.
 
+      Nullary relations (arity 0):
+        Use boolean tuples to toggle presence:
+          put <rel> True    # insert (diff = +1)
+          put <rel> False   # delete (diff = -1)
+        For nullary relations, any [diff] you provide is ignored.
+
   file <rel> <path> [diff]
       Apply updates from CSV file <path> to relation <rel>.
       [diff] defaults to +1.
+
+      Nullary relations (arity 0):
+        File ingestion is not supported; use `put <rel> True|False`.
 
   commit, done
       Commit the transaction and advance time.
@@ -131,8 +139,7 @@ Commands:
       Show this help text.
 
   quit, exit, q
-      Exit.
-"#
+      Exit."#
 }
 
 fn usage_put() -> &'static str {
