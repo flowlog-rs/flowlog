@@ -97,31 +97,36 @@ fn gen_one_rel_nullary(rel: &Relation) -> TokenStream {
         }
 
         impl RelOps for #struct_name {
-            fn apply_tuple(&mut self, _tuple: &str, diff: Diff, _peers: usize, index: usize) {
-                // Nullary: apply once (avoid multiplying diffs across workers).
+            fn apply_tuple(&mut self, tuple: &str, _diff: Diff, _peers: usize, index: usize) {
+                // Nullary: only worker0 applies (avoid multiplying diffs across workers).
                 if index != 0 { return; }
-                self.h_mut().update((), diff);
+
+                let s = tuple.trim();
+                let d: Diff = if s.eq_ignore_ascii_case("true") {
+                    1
+                } else if s.eq_ignore_ascii_case("false") {
+                    -1
+                } else {
+                    eprintln!(
+                        "[relops][{}] nullary expects tuple 'True' or 'False', got {:?}",
+                        #name,
+                        s
+                    );
+                    return;
+                };
+
+                self.h_mut().update((), d);
             }
 
-            fn apply_file(&mut self, path: &Path, diff: Diff, _peers: usize, index: usize) {
-                // Nullary: if file has any non-empty line, update once on worker0.
+            fn apply_file(&mut self, path: &Path, _diff: Diff, _peers: usize, index: usize) {
                 if index != 0 { return; }
 
-                let f = match File::open(path) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        eprintln!("[relops][{}] failed to open {}: {}", #name, path.display(), e);
-                        return;
-                    }
-                };
-                let reader = BufReader::new(f);
-
-                for line in reader.split(b'\n').filter_map(Result::ok) {
-                    if !line.is_empty() {
-                        self.h_mut().update((), diff);
-                        break;
-                    }
-                }
+                // Per request: nullary relations only allow tuple interaction.
+                eprintln!(
+                    "[relops][{}] nullary relation does not support file ingestion. Use: put {} True|False",
+                    #name,
+                    path.display()
+                );
             }
 
             fn advance_to(&mut self, t: u32) {
