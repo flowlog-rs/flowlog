@@ -470,6 +470,7 @@ impl Compiler {
                 self.imports.mark_threshold_total();
                 self.imports.mark_as_collection();
                 self.imports.mark_timely_map();
+                self.imports.mark_semiring_one();
                 inspect_stmts.push(self.gen_size_inspector(&var, name));
             }
 

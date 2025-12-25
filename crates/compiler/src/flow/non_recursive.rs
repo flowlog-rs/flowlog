@@ -54,6 +54,7 @@ impl Compiler {
         stratum: &StratumPlanner,
     ) -> Vec<TokenStream> {
         let mut flows = Vec::new();
+        let dedup_stats = self.dedup_collection();
 
         for (output_fp, idb_fps) in stratum.output_to_idb_map() {
             let output = self.find_global_ident(*output_fp);
@@ -70,19 +71,18 @@ impl Compiler {
                 expr = quote! { #expr.concat(&#t) };
             }
 
-            self.imports.mark_threshold_total();
             // If this output was already computed in a previous stratum, union the previous
             // collection with the newly produced tuples before applying distinct.
             let mut block = if calculated_output_fps.contains(output_fp) {
                 quote! {
                     let #output = #output
                         .concat(&#expr)
-                        .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
+                        #dedup_stats;
                 }
             } else {
                 quote! {
                     let #output = #expr
-                        .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE));
+                        #dedup_stats;
                 }
             };
 

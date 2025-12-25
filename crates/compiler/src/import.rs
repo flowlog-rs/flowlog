@@ -44,6 +44,9 @@ pub(crate) struct ImportTracker {
 
     /// Whether aggregation operators are used.
     aggregation: bool,
+
+    /// Whether semiring one value is needed.
+    semiring_one: bool,
 }
 
 impl ImportTracker {
@@ -142,6 +145,10 @@ impl ImportTracker {
     /// Marks that at least one aggregation operator was encountered.
     pub(crate) fn mark_aggregation(&mut self) {
         self.aggregation = true;
+    }
+
+    pub(crate) fn mark_semiring_one(&mut self) {
+        self.semiring_one = true;
     }
 
     /// Emits the operator trait imports required so far.
@@ -281,11 +288,15 @@ impl ImportTracker {
 
     /// Semiring one value.
     fn semiring_one_value(&self) -> TokenStream {
-        match self.mode {
-            ExecutionMode::Incremental => quote! { const SEMIRING_ONE: Diff = 1; },
-            ExecutionMode::Batch => {
-                quote! { const SEMIRING_ONE: Diff = differential_dataflow::difference::Present; }
+        if self.semiring_one {
+            match self.mode {
+                ExecutionMode::Incremental => quote! { const SEMIRING_ONE: Diff = 1; },
+                ExecutionMode::Batch => {
+                    quote! { const SEMIRING_ONE: Diff = differential_dataflow::difference::Present; }
+                }
             }
+        } else {
+            quote! {}
         }
     }
 
