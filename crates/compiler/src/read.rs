@@ -16,6 +16,7 @@ use quote::{format_ident, quote};
 use std::path::Path;
 
 use super::Compiler;
+use common::ExecutionMode;
 use parser::{ConstType, DataType, Relation};
 
 impl Compiler {
@@ -25,6 +26,8 @@ impl Compiler {
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
     pub(super) fn gen_input_decls(&mut self) -> Vec<TokenStream> {
+        let normalize = self.dedup_collection();
+
         let edbs = self.program.edbs();
         if edbs.is_empty() {
             return Vec::new();
@@ -36,7 +39,10 @@ impl Compiler {
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
                 let coll = format_ident!("{}", rel.name());
-                quote! { let (#handle, #coll) = scope.new_collection::<_, Diff>(); }
+                quote! {
+                    let (#handle, #coll) = scope.new_collection::<_, Diff>();
+                    let #coll = #coll #normalize;
+                }
             })
             .collect()
     }
@@ -48,19 +54,47 @@ impl Compiler {
     /// - 0 inputs: emits a harmless binding and returns `()`.
     /// - 1 input:  `let mut hR = worker.dataflow(...);` and returns `hR`.
     /// - N inputs: `let (mut hA, mut hB, ...) = worker.dataflow(...);` and returns `(hA, hB, ...)`.
+    ///
+    /// In **incremental** mode, we additionally bind/return a `probe` handle as the last element.
     pub(super) fn build_handle_binding(&self) -> (TokenStream, TokenStream) {
         let edb_names = self.program.edb_names();
 
-        match edb_names.len() {
-            0 => (quote! { _handles }, quote! { () }),
-            1 => {
-                let h = format_ident!("h{}", edb_names[0]);
-                (quote! { mut #h }, quote! { #h })
-            }
-            _ => {
-                let hs: Vec<_> = edb_names.iter().map(|n| format_ident!("h{}", n)).collect();
-                let lhs: Vec<_> = hs.iter().map(|h| quote! { mut #h }).collect();
-                (quote! { ( #(#lhs),* ) }, quote! { ( #(#hs),* ) })
+        match self.config.mode() {
+            ExecutionMode::Batch => match edb_names.len() {
+                0 => (quote! { _handles }, quote! { () }),
+                1 => {
+                    let h = format_ident!("h{}", edb_names[0]);
+                    (quote! { mut #h }, quote! { #h })
+                }
+                _ => {
+                    let hs: Vec<_> = edb_names.iter().map(|n| format_ident!("h{}", n)).collect();
+                    let lhs: Vec<_> = hs.iter().map(|h| quote! { mut #h }).collect();
+                    (quote! { ( #(#lhs),* ) }, quote! { ( #(#hs),* ) })
+                }
+            },
+
+            ExecutionMode::Incremental => {
+                let probe = format_ident!("probe");
+
+                match edb_names.len() {
+                    0 => {
+                        // `worker.dataflow` will return `(probe,)` in incremental mode.
+                        (quote! { ( #probe, ) }, quote! { #probe })
+                    }
+                    1 => {
+                        let h = format_ident!("h{}", edb_names[0]);
+                        (quote! { ( #h, #probe ) }, quote! { ( #h, #probe ) })
+                    }
+                    _ => {
+                        let hs: Vec<_> =
+                            edb_names.iter().map(|n| format_ident!("h{}", n)).collect();
+                        let lhs: Vec<_> = hs.iter().map(|h| quote! { #h }).collect();
+                        (
+                            quote! { ( #(#lhs),*, #probe ) },
+                            quote! { ( #(#hs),*, #probe ) },
+                        )
+                    }
+                }
             }
         }
     }

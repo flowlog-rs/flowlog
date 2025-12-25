@@ -38,6 +38,8 @@ impl Compiler {
                 output,
                 flow,
             } => {
+                self.imports.mark_timely_map();
+
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
                 let input_arity = input.arity().1;
@@ -88,6 +90,8 @@ impl Compiler {
                 output,
                 flow,
             } => {
+                self.imports.mark_timely_map();
+
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
                 let input_arity = input.arity().1;
@@ -145,6 +149,8 @@ impl Compiler {
                 output,
                 flow,
             } => {
+                self.imports.mark_timely_map();
+
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
@@ -197,6 +203,8 @@ impl Compiler {
                 output,
                 flow,
             } => {
+                self.imports.mark_timely_map();
+
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
@@ -341,6 +349,8 @@ impl Compiler {
                 flow,
             } => {
                 self.imports.mark_as_collection();
+                self.imports.mark_timely_map();
+
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
@@ -395,6 +405,8 @@ impl Compiler {
                 flow,
             } => {
                 self.imports.mark_as_collection();
+                self.imports.mark_timely_map();
+
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());

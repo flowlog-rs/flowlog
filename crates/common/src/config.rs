@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::{fs, process};
 
 /// Execution strategy for FlowLog workflows
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Default)]
 pub enum ExecutionMode {
     /// Maintain state across updates.
     /// Tracking how many times each fact is derived,
@@ -14,6 +14,7 @@ pub enum ExecutionMode {
     /// Recompute outputs in a single pass.
     /// Only tracks whether facts are present or absent,
     /// making it suitable for high-performance static execution.
+    #[default]
     Batch,
 }
 
@@ -88,6 +89,10 @@ impl Config {
 
     pub fn mode(&self) -> ExecutionMode {
         self.mode
+    }
+
+    pub fn is_incremental(&self) -> bool {
+        self.mode == ExecutionMode::Incremental
     }
 
     /// For compiler/executor: get fact_dir with validation
