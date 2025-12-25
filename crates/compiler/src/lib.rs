@@ -280,7 +280,7 @@ impl Compiler {
 
                             if index == 0 {
                                 println!("{:?}:\tDataflow assembled", timer.elapsed());
-                                println!("{}", cmd::help_text());
+                                println!("FlowLog Incremental Interactive Shell, type 'help' for commands.");
                             }
 
                             let mut time_stamp: u32 = 0;
