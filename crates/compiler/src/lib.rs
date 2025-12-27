@@ -294,11 +294,10 @@ impl Compiler {
                                     barrier.wait();
 
                                     let snap = shared_txn.read().unwrap().clone();
-                                    if snap.epoch == last_epoch_seen {
-                                        barrier.wait();
-                                        continue;
-                                    }
+                                    assert!(snap.epoch > last_epoch_seen, "stale epoch observed");
                                     last_epoch_seen = snap.epoch;
+
+                                    let mut should_quit = false;
 
                                     match snap.action {
                                         TxnAction::Commit => {
@@ -312,6 +311,8 @@ impl Compiler {
                                             while probe.less_than(&time_stamp) {
                                                 worker.step();
                                             }
+
+                                            barrier.wait();
                                         }
                                         TxnAction::Quit => {
                                             for r in rels.values_mut() {
@@ -320,13 +321,20 @@ impl Compiler {
                                             while probe.less_than(&time_stamp) {
                                                 worker.step();
                                             }
+
                                             barrier.wait();
-                                            break;
+                                            should_quit = true;
                                         }
-                                        TxnAction::None => {}
+                                        TxnAction::None => {
+                                            barrier.wait();
+                                        }
                                     }
 
                                     barrier.wait();
+
+                                    if should_quit {
+                                        break;
+                                    }
                                 }
                                 return;
                             }
@@ -400,6 +408,8 @@ impl Compiler {
                                             worker.step();
                                         }
 
+                                        barrier.wait();
+
                                         println!("{:?}:\tCommitted & executed", round_timer.elapsed());
 
                                         // === Merge per-worker output partitions (if any) ===
@@ -432,6 +442,8 @@ impl Compiler {
                                         while probe.less_than(&time_stamp) {
                                             worker.step();
                                         }
+
+                                        barrier.wait();
 
                                         // === incremental quit: clean up tmp per-worker partition files ===
                                         #(#delete_stmts)*

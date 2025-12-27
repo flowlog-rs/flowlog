@@ -133,7 +133,10 @@ impl Compiler {
             let rel_name = #rel_name;
             let path = format!("{}/{}{}", base_dir, rel_name, index);
 
-            let mut file = std::fs::File::create(&path)
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
                 .unwrap_or_else(|e| panic!("failed to create {}: {}", path, e));
 
             #var.inspect(move |(data, _time, diff)| {
