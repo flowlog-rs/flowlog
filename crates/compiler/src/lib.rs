@@ -410,10 +410,10 @@ impl Compiler {
 
                                         barrier.wait();
 
-                                        println!("{:?}:\tCommitted & executed", round_timer.elapsed());
-
                                         // === Merge per-worker output partitions (if any) ===
                                         #(#merge_stmts)*
+
+                                        println!("{:?}:\tCommitted & executed", round_timer.elapsed());
 
                                         local_txn.abort();
 
