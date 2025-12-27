@@ -115,9 +115,6 @@ impl Compiler {
 
         let (inspect_stmts, merge_stmts, delete_stmts) = self.collect_inspectors();
 
-        // Imports block (conditional on mode/recursion/etc).
-        let imports = self.imports.render();
-
         let timestamp_type = match self.config.mode() {
             ExecutionMode::Incremental => quote! { u32 },
             ExecutionMode::Batch => quote! { () },
@@ -506,6 +503,9 @@ impl Compiler {
                 }
             }
         };
+
+        // Imports block (conditional on mode/recursion/etc).
+        let imports = self.imports.render();
 
         let file_ts: TokenStream = quote! {
             #imports

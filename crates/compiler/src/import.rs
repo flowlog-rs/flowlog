@@ -176,23 +176,22 @@ impl ImportTracker {
 
     /// All std imports in a consistent order, with minimal duplication.
     fn std_imports(&mut self) -> TokenStream {
+        let file = self.std_file_import();
+        let io = self.std_io_import();
+        let hashmap = self.std_hashmap_import();
+
         // Profiling implies a set of std imports.
         if self.profiling {
-            self.std_hashmap = true;
-
             return quote! {
                 use std::cell::RefCell;
                 use std::collections::HashMap;
                 use std::fs::File;
+                #io
                 use std::io::{BufWriter, Write};
                 use std::rc::Rc;
                 use std::time::{Duration, Instant};
             };
         }
-
-        let file = self.std_file_import();
-        let io = self.std_io_import();
-        let hashmap = self.std_hashmap_import();
 
         quote! {
             #file

@@ -108,6 +108,7 @@ impl Compiler {
             if rel.arity() > 0 {
                 self.imports.mark_std_file();
                 self.imports.mark_std_buf_io();
+                self.imports.mark_semiring_one();
             }
 
             let csv_ingest = self.gen_csv_ingest_stmt(rel);

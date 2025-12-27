@@ -13,6 +13,7 @@ impl Compiler {
                 quote! { .threshold(|_, w| if *w > 0 { 1isize } else { 0 }) }
             }
             ExecutionMode::Batch => {
+                self.imports.mark_semiring_one();
                 self.imports.mark_threshold_total();
                 quote! {
                     .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
