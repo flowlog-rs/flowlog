@@ -1,6 +1,6 @@
 //! Command line argument parsing for FlowLog tools.
 
-use clap::{Parser, ValueEnum};
+use clap::{ArgAction, Parser, ValueEnum};
 use std::path::{Path, PathBuf};
 use std::{fs, process};
 
@@ -38,9 +38,13 @@ pub struct Config {
     #[arg(short = 'D', long, value_name = "DIR")]
     pub output_dir: Option<String>,
 
-    /// Choose execution strategy (incremental = maintain state across updates, batch = recompute each run)
+    /// Choose execution strategy (incremental = maintain state across updates, batch = recompute each run; only used by compiler/executor)
     #[arg(long, value_enum, default_value = "batch", value_name = "MODE")]
     pub mode: ExecutionMode,
+
+    /// Enable profiling (collect execution statistics; only used by planner, compiler/executor)
+    #[arg(long, short = 'P', action = ArgAction::SetTrue)]
+    pub profile: bool,
 }
 
 impl Config {
@@ -107,6 +111,11 @@ impl Config {
         self.output_dir
             .as_ref()
             .expect("--output-dir is required for this tool")
+    }
+
+    /// For planner, compiler/executor: check if profiling is enabled
+    pub fn profiling_enabled(&self) -> bool {
+        self.profile
     }
 }
 
