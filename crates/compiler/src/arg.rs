@@ -444,7 +444,7 @@ pub(super) fn build_row_constraints_predicate(
 fn const_to_token(constant: &parser::ConstType) -> TokenStream {
     match constant {
         parser::ConstType::Integer(n) => quote! { #n },
-        parser::ConstType::Text(s) => quote! { #s },
+        parser::ConstType::Text(s) => quote! { #s.to_string() },
     }
 }
 
@@ -585,10 +585,7 @@ fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
             }
             _ => unreachable!("unexpected argument type in join->kv value transformation"),
         },
-        FactorArgument::Const(constant) => match constant {
-            parser::ConstType::Integer(n) => quote! { #n },
-            parser::ConstType::Text(s) => quote! { #s },
-        },
+        FactorArgument::Const(constant) => const_to_token(constant),
     };
 
     // If no operations, return just the initial factor
@@ -612,10 +609,7 @@ fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
                 }
                 _ => unreachable!("unexpected argument type in join->kv value transformation"),
             },
-            FactorArgument::Const(constant) => match constant {
-                parser::ConstType::Integer(n) => quote! { #n },
-                parser::ConstType::Text(s) => quote! { #s },
-            },
+            FactorArgument::Const(constant) => const_to_token(constant),
         };
 
         let op_token = arithmetic_op_tokens(op);
