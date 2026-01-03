@@ -370,9 +370,6 @@ impl Compiler {
                         #r
                             .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
                             #dedup_call
-                            .inner
-                            .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1_i32)))
-                            .as_collection()
                             .concat(
                                 &{
                                     #l
@@ -381,7 +378,7 @@ impl Compiler {
                                     })
                                     #dedup_call
                                     .inner
-                                    .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1_i32)))
+                                    .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
                                     .as_collection()
                                 }
                             )
@@ -427,9 +424,6 @@ impl Compiler {
                         #r
                             .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
                             #dedup_call
-                            .inner
-                            .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1_i32)))
-                            .as_collection()
                             .concat(
                                 &{
                                     #l
@@ -438,7 +432,7 @@ impl Compiler {
                                         })
                                         #dedup_call
                                         .inner
-                                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1_i32)))
+                                        .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
                                         .as_collection()
                                 }
                             )
