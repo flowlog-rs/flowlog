@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-pub type Diff = isize;
+pub type Diff = i32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cmd {

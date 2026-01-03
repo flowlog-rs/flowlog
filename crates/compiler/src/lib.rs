@@ -84,8 +84,6 @@ impl Compiler {
         // Static sections of the generated program.
         let input_decls = self.gen_input_decls();
         let (lhs_binding, ret_expr) = self.build_handle_binding();
-        let ingest_stmts = self.gen_ingest_stmts();
-        let close_stmts = self.gen_close_stmts();
 
         // Flow generation per stratum.
         let mut flow_stmts: Vec<TokenStream> = Vec::new();
@@ -149,47 +147,52 @@ impl Compiler {
 
         // --- generate the whole fn main() depending on mode (minimal but correct) ---
         let main_fn = match self.config.mode() {
-            ExecutionMode::Batch => quote! {
-                fn main() {
-                    timely::execute_from_args(std::env::args(), |worker| {
-                        // --- Runtime setup -------------------------------------------------
-                        let timer = Instant::now();
-                        let peers = worker.peers();
-                        let index = worker.index();
+            ExecutionMode::Batch => {
+                let ingest_stmts = self.gen_ingest_stmts();
+                let close_stmts = self.gen_close_stmts();
 
-                        // --- Build dataflow graph -----------------------------------------
-                        let #lhs_binding =
-                            worker.dataflow::<#timestamp_type, _, _>(|scope| {
-                                #(#input_decls)*
+                quote! {
+                    fn main() {
+                        timely::execute_from_args(std::env::args(), |worker| {
+                            // --- Runtime setup -------------------------------------------------
+                            let timer = Instant::now();
+                            let peers = worker.peers();
+                            let index = worker.index();
 
-                                // === Transformation flows ===
-                                #(#flow_stmts)*
+                            // --- Build dataflow graph -----------------------------------------
+                            let #lhs_binding =
+                                worker.dataflow::<#timestamp_type, _, _>(|scope| {
+                                    #(#input_decls)*
 
-                                // === Inspect IDB sizes ===
-                                #(#inspect_stmts)*
+                                    // === Transformation flows ===
+                                    #(#flow_stmts)*
 
-                                #ret_expr
-                            });
+                                    // === Inspect IDB sizes ===
+                                    #(#inspect_stmts)*
 
-                        if index == 0 {
-                            println!("{:?}:\tDataflow assembled", timer.elapsed());
-                        }
+                                    #ret_expr
+                                });
 
-                        // --- Data ingestion -----------------------------------------------
-                        #(#ingest_stmts)*
-                        #(#close_stmts)*
+                            if index == 0 {
+                                println!("{:?}:\tDataflow assembled", timer.elapsed());
+                            }
 
-                        // --- Execute to fixpoint -------------------------------------------
-                        while worker.step() {}
+                            // --- Data ingestion -----------------------------------------------
+                            #(#ingest_stmts)*
+                            #(#close_stmts)*
 
-                        if index == 0 {
-                            println!("{:?}:\tDataflow executed", timer.elapsed());
-                            // === Merge per-worker output partitions (if any) ===
-                            #(#merge_stmts)*
-                        }
-                    }).unwrap();
+                            // --- Execute to fixpoint -------------------------------------------
+                            while worker.step() {}
+
+                            if index == 0 {
+                                println!("{:?}:\tDataflow executed", timer.elapsed());
+                                // === Merge per-worker output partitions (if any) ===
+                                #(#merge_stmts)*
+                            }
+                        }).unwrap();
+                    }
                 }
-            },
+            }
 
             ExecutionMode::Incremental => quote! {
                 // -------------------------------
