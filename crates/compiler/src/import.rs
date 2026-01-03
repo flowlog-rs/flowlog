@@ -279,7 +279,7 @@ impl ImportTracker {
     /// Differential dataflow diff type.
     fn diff_type(&self) -> TokenStream {
         match self.mode {
-            ExecutionMode::Incremental => quote! { type Diff = isize; },
+            ExecutionMode::Incremental => quote! { type Diff = i32; },
             ExecutionMode::Batch => {
                 quote! { type Diff = differential_dataflow::difference::Present; }
             }

@@ -36,7 +36,7 @@ impl Compiler {
             use std::io::{BufRead, BufReader};
             use std::path::Path;
 
-            type Diff = isize;
+            type Diff = i32;
 
             pub(crate) trait RelOps {
                 fn apply_tuple(&mut self, tuple: &str, diff: Diff, peers: usize, index: usize);
