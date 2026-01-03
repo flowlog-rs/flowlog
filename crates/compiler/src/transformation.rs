@@ -365,11 +365,36 @@ impl Compiler {
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
                 let dedup_call = self.dedup_collection();
 
+                let pos_weight_concat = if self.config.is_incremental() {
+                    quote! {}
+                } else {
+                    quote! {
+                        .inner
+                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1i32)))
+                        .as_collection()
+                    }
+                };
+
+                let neg_weight_concat = if self.config.is_incremental() {
+                    quote! {
+                        .inner
+                        .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
+                        .as_collection()
+                    }
+                } else {
+                    quote! {
+                        .inner
+                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
+                        .as_collection()
+                    }
+                };
+
                 quote! {
                     let #out =
                         #r
                             .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
                             #dedup_call
+                            #pos_weight_concat
                             .concat(
                                 &{
                                     #l
@@ -377,9 +402,7 @@ impl Compiler {
                                         Some((aj_k.clone(), aj_rv.clone()))
                                     })
                                     #dedup_call
-                                    .inner
-                                    .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
-                                    .as_collection()
+                                    #neg_weight_concat
                                 }
                             )
                             .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_value ))
@@ -419,11 +442,36 @@ impl Compiler {
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
                 let dedup_call = self.dedup_collection();
 
+                let pos_weight_concat = if self.config.is_incremental() {
+                    quote! {}
+                } else {
+                    quote! {
+                        .inner
+                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1i32)))
+                        .as_collection()
+                    }
+                };
+
+                let neg_weight_concat = if self.config.is_incremental() {
+                    quote! {
+                        .inner
+                        .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
+                        .as_collection()
+                    }
+                } else {
+                    quote! {
+                        .inner
+                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
+                        .as_collection()
+                    }
+                };
+
                 let transformation = quote! {
                     let #out =
                         #r
                             .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
                             #dedup_call
+                            #pos_weight_concat
                             .concat(
                                 &{
                                     #l
@@ -431,9 +479,7 @@ impl Compiler {
                                             Some((aj_k.clone(), aj_rv.clone()))
                                         })
                                         #dedup_call
-                                        .inner
-                                        .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
-                                        .as_collection()
+                                        #neg_weight_concat
                                 }
                             )
                             .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( ( #out_map_key, #out_map_value ) ))
