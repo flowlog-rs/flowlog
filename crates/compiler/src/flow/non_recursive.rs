@@ -92,6 +92,7 @@ impl Compiler {
             {
                 self.imports.mark_aggregation();
                 self.imports.mark_as_collection();
+                self.imports.mark_semiring_one();
                 let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
                 let reduce_logic = aggregation_reduce(agg_op);
                 let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);

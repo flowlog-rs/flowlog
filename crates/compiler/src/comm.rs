@@ -14,6 +14,7 @@ impl Compiler {
             }
             ExecutionMode::Batch => {
                 self.imports.mark_threshold_total();
+                self.imports.mark_semiring_one();
                 quote! {
                     .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
                 }
