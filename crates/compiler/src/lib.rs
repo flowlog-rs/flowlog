@@ -27,7 +27,7 @@ use std::collections::{HashMap, HashSet};
 
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
-use syn::{parse2, File};
+use syn::parse2;
 
 use common::{Config, ExecutionMode};
 use parser::{DataType, Program};
@@ -515,7 +515,7 @@ impl Compiler {
             #main_fn
         };
 
-        let ast: File = parse2(file_ts).expect("valid token stream");
+        let ast = parse2(file_ts).expect("valid token stream");
         prettyplease::unparse(&ast)
     }
 
