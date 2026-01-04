@@ -58,7 +58,7 @@ $ cargo run -p compiler -- <PROGRAM> [OPTIONS]
 | `-F, --fact-dir <DIR>` | Directory containing input CSVs referenced by `.input` directives. | When `.input` uses relative filenames | Prepends `<DIR>` to each `filename=` parameter; omit to use paths embedded in the program. |
 | `-o, --output <NAME>` | Override the generated Cargo package name. | No | Default derives from `<PROGRAM>`; project is written to `../<NAME>`. |
 | `-D, --output-dir <DIR>` | Location for materializing `.output` relations. | Required when any relation uses `.output` | Pass `-` to print tuples to stderr instead of writing files. |
-| `--mode <MODE>` | Choose execution semantics: `batch` (default) or `incremental`. | No | `batch` uses `Present`; `incremental` switches the diff type to `isize`. |
+| `--mode <MODE>` | Choose execution semantics: `batch` (default) or `incremental`. | No | `batch` uses `Present`; `incremental` switches the diff type to `i32`. |
 | `-h, --help` | Show full Clap help text. | No | Includes additional examples and environment variables. |
 
 ## End-to-End Example
@@ -90,7 +90,7 @@ Key flags:
 - `-F reach` points the compiler at the directory holding `Source.csv` and `Arc.csv`.
 - `-o reach_flowlog` names the generated Cargo project (written to `../reach_flowlog`).
 - `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
-- `--mode incremental` switches the diff type to `isize` (default is batch semantics).
+- `--mode incremental` switches the diff type to `i32` (default is batch semantics).
 
 
 ### 2. Prepare a Tiny Dataset

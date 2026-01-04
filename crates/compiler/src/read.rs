@@ -111,6 +111,8 @@ impl Compiler {
                 self.imports.mark_semiring_one();
             }
 
+            self.imports.mark_semiring_one();
+
             let csv_ingest = self.gen_csv_ingest_stmt(rel);
             let bool_ingest = self.gen_bool_fact_ingest_stmt(rel);
             stmts.push(quote! {
