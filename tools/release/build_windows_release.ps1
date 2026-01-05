@@ -26,15 +26,24 @@ if ($osInfo.Version) {
     $osTag += "unknown"
 }
 
-# No default: require -Version (PowerShell enforces via Mandatory = $true).
+# Arch tag (prefer OS bitness)
+$archTag = "unknown"
+if ($osInfo.OSArchitecture) {
+    # e.g., "64-bit"
+    if ($osInfo.OSArchitecture -match "64") { $archTag = "x86_64" }
+    elseif ($osInfo.OSArchitecture -match "32") { $archTag = "x86" }
+} else {
+    # fallback
+    $archTag = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { "x86" }
+}
 
 # 1) Build the release binary
 cargo build --release
 
 # 2) Variables for packaging
 $version = $Version
-$appName = "flowlog_compile"
-$targetDir = "${appName}-${version}-${osTag}-x86_64"
+$appName = "flowlog-compiler"
+$targetDir = "${appName}-${version}-${osTag}-${archTag}"
 $targetPath = Join-Path -Path (Get-Location) -ChildPath $targetDir
 
 # 3) Create a clean release directory
@@ -43,8 +52,8 @@ if (Test-Path $targetPath) {
 }
 New-Item -ItemType Directory -Path $targetPath | Out-Null
 
-# 4) Copy and rename the binary: compiler.exe -> flowlog_compile.exe
-$sourceBinary = Join-Path -Path (Get-Location) -ChildPath "target/release/compiler.exe"
+# 4) Copy the binary
+$sourceBinary = Join-Path -Path (Get-Location) -ChildPath "target/release/$appName.exe"
 if (-not (Test-Path $sourceBinary)) {
     Write-Error "Error: Expected binary '$sourceBinary' not found."
     exit 1
@@ -63,8 +72,13 @@ $zipName = "${targetDir}.zip"
 if (Test-Path $zipName) {
     Remove-Item $zipName -Force
 }
+
 Compress-Archive -Path $targetDir -DestinationPath $zipName
+
+# 6) Remove the staging directory, keep only the archive
+Remove-Item $targetPath -Recurse -Force
 
 Write-Host "Release artifact created: $zipName"
 
-# Running command: powershell -ExecutionPolicy Bypass -File .\tools\release\build_windows_release.ps1
+# Running command:
+# powershell -ExecutionPolicy Bypass -File .\tools\release\build_windows_release.ps1 -Version <version>
