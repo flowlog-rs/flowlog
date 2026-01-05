@@ -6,7 +6,7 @@ pub type Diff = i32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cmd {
-    Begin, // cmd / begin
+    Begin, // txn / begin
     Put {
         rel: String,
         tuple: String,
@@ -99,7 +99,7 @@ impl TxnState {
 
 pub fn help_text() -> &'static str {
     r#"Usage:
-  cmd | begin
+  txn | begin
   put  <rel> <tuple> [diff]
   file <rel> <path>  [diff]
   commit | done
@@ -108,7 +108,7 @@ pub fn help_text() -> &'static str {
   quit | exit | q
 
 Commands:
-  cmd, begin
+  txn, begin
       Begin a transaction.
 
   put <rel> <tuple> [diff]
@@ -203,9 +203,9 @@ pub fn parse_line(line: &str) -> Option<Cmd> {
             Some(Cmd::Commit)
         }
 
-        "cmd" | "begin" => {
+        "txn" | "begin" => {
             if parts.len() != 1 {
-                return err("usage: cmd");
+                return err("usage: txn");
             }
             Some(Cmd::Begin)
         }

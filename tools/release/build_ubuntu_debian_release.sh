@@ -39,7 +39,7 @@ VERSION="$1"
 cargo build --release
 
 # 2) Variables for packaging
-APP_NAME="flowlog-compiler"
+APP_NAME="flowlog"
 ARCH="$(uname -m)"
 TARGET_DIR="${APP_NAME}-${VERSION}-${OS_TAG:-unknown}-${ARCH}"
 

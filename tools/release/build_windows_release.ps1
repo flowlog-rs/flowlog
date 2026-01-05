@@ -42,7 +42,7 @@ cargo build --release
 
 # 2) Variables for packaging
 $version = $Version
-$appName = "flowlog-compiler"
+$appName = "flowlog"
 $targetDir = "${appName}-${version}-${osTag}-${archTag}"
 $targetPath = Join-Path -Path (Get-Location) -ChildPath $targetDir
 

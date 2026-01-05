@@ -12,7 +12,7 @@ VERSION="$1"
 cargo build --release
 
 # 2) Variables for packaging
-APP_NAME="flowlog-compiler"
+APP_NAME="flowlog"
 MACOS_VERSION=$(sw_vers -productVersion | cut -d. -f1-2)
 ARCH=$(uname -m)
 TARGET_DIR="${APP_NAME}-${VERSION}-macos${MACOS_VERSION}-${ARCH}"

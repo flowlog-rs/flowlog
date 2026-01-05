@@ -80,7 +80,7 @@ impl Prompt {
     pub fn new(extra_words: impl IntoIterator<Item = String>) -> Self {
         // Commands/aliases from your cmd.rs help text (case-insensitive).
         let mut words: Vec<String> = vec![
-            "cmd", "begin", "put", "file", "commit", "done", "abort", "rollback", "quit", "exit",
+            "txn", "begin", "put", "file", "commit", "done", "abort", "rollback", "quit", "exit",
             "q", "help", "h", "?",
         ]
         .into_iter()
