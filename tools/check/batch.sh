@@ -26,7 +26,7 @@ SIZE_DIR="${ROOT_DIR}/tools/check/correctness_size"
 RESULT_DIR="${ROOT_DIR}/result"
 LOG_DIR="${RESULT_DIR}/logs"
 PARSED_DIR="${RESULT_DIR}/parsed"
-COMPILER_BIN="${ROOT_DIR}/target/release/compiler"
+COMPILER_BIN="${ROOT_DIR}/target/release/flowlog"
 WORKERS=${WORKERS:-64}
 
 mkdir -p "$RESULT_DIR" "$LOG_DIR" "$PARSED_DIR"
@@ -114,7 +114,7 @@ ensure_compiler_built() {
     # Build the compiler binary if it is missing.
     if [ ! -x "$COMPILER_BIN" ]; then
         echo -e "${YELLOW}[BUILD]${NC} Building compiler"
-        cargo build --release --bin compiler >/dev/null
+        cargo build --release --bin flowlog >/dev/null
     fi
 }
 
