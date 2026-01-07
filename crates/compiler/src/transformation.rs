@@ -112,6 +112,12 @@ impl Compiler {
                 let row_ty = type_tokens(&itype);
                 let out_key = build_key_val_from_row_args(flow.key(), &row_fields);
                 let out_val = build_key_val_from_row_args(flow.value(), &row_fields);
+                let out_expr = if output.is_k_only() {
+                    quote! { #out_key  }
+                } else {
+                    quote! { ( #out_key, #out_val ) }
+                };
+
                 let cmp_pred = build_row_compare_predicate(flow.compares(), &row_fields);
                 let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields);
                 let pred = combine_predicates(cmp_pred, cst_pred);
@@ -120,18 +126,22 @@ impl Compiler {
                     quote! {
                         let #out = #inp
                             .flat_map(|#row_pat: #row_ty| {
-                                if #pred { Some( ( #out_key, #out_val ) ) } else { None }
+                                if #pred { Some( #out_expr ) } else { None }
                             });
                     }
                 } else {
                     quote! {
                         let #out = #inp
-                            .flat_map(|#row_pat: #row_ty| std::iter::once( ( #out_key, #out_val ) ));
+                            .flat_map(|#row_pat: #row_ty| std::iter::once( #out_expr ));
                     }
                 };
 
-                let arrange_stmt =
-                    self.register_arrangement(arranged_map, output.fingerprint(), &out);
+                let arrange_stmt = self.register_arrangement(
+                    arranged_map,
+                    output.fingerprint(),
+                    &out,
+                    output.is_k_only(),
+                );
 
                 quote! {
                     #transformation
@@ -158,6 +168,11 @@ impl Compiler {
 
                 let out_key = build_key_val_from_kv_args(flow.key());
                 let out_val = build_key_val_from_kv_args(flow.value());
+                let out_expr = if output.is_k_only() {
+                    quote! { #out_key }
+                } else {
+                    quote! { ( #out_key, #out_val ) }
+                };
                 let cmp_pred = build_kv_compare_predicate(flow.compares());
                 let cst_pred = build_kv_constraints_predicate(flow.constraints());
                 let pred = combine_predicates(cmp_pred, cst_pred);
@@ -172,18 +187,22 @@ impl Compiler {
                     quote! {
                         let #out = #inp
                             .flat_map(|( #kv_param_k, #kv_param_v )| {
-                                if #pred { Some( ( #out_key, #out_val ) ) } else { None }
+                                if #pred { Some( #out_expr ) } else { None }
                             });
                     }
                 } else {
                     quote! {
                         let #out = #inp
-                            .flat_map(|( #kv_param_k, #kv_param_v )| std::iter::once( ( #out_key, #out_val ) ));
+                            .flat_map(|( #kv_param_k, #kv_param_v )| std::iter::once( #out_expr ));
                     }
                 };
 
-                let arrange_stmt =
-                    self.register_arrangement(arranged_map, output.fingerprint(), &out);
+                let arrange_stmt = self.register_arrangement(
+                    arranged_map,
+                    output.fingerprint(),
+                    &out,
+                    output.is_k_only(),
+                );
 
                 quote! {
                     #transformation
@@ -303,6 +322,11 @@ impl Compiler {
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
                 let out_key = build_key_val_from_join_args(flow.key());
                 let out_val = build_key_val_from_join_args(flow.value());
+                let out_expr = if output.is_k_only() {
+                    quote! { #out_key }
+                } else {
+                    quote! { ( #out_key, #out_val ) }
+                };
                 let (jn_k, jn_lv, jn_rv) =
                     compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
 
@@ -312,7 +336,7 @@ impl Compiler {
                             let #out =
                                 #l
                                     .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
-                                        if #pred { Some((#out_key, #out_val)) } else { None }
+                                        if #pred { Some( #out_expr ) } else { None }
                                     });
                         }
                     } else {
@@ -320,13 +344,17 @@ impl Compiler {
                             let #out =
                                 #l
                                     .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
-                                        Some((#out_key, #out_val))
+                                        Some( #out_expr )
                                     });
                         }
                     };
 
-                let arrange_stmt =
-                    self.register_arrangement(arranged_map, output.fingerprint(), &out);
+                let arrange_stmt = self.register_arrangement(
+                    arranged_map,
+                    output.fingerprint(),
+                    &out,
+                    output.is_k_only(),
+                );
 
                 quote! {
                     #transformation
@@ -437,6 +465,11 @@ impl Compiler {
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
                 let out_map_key = build_key_val_from_kv_args(flow.key());
                 let out_map_value = build_key_val_from_kv_args(flow.value());
+                let out_map_expr = if output.is_k_only() {
+                    quote! { #out_map_key }
+                } else {
+                    quote! { ( #out_map_key, #out_map_value ) }
+                };
 
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
@@ -482,12 +515,16 @@ impl Compiler {
                                         #neg_weight_concat
                                 }
                             )
-                            .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( ( #out_map_key, #out_map_value ) ))
+                            .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_expr ))
                             #dedup_call;
                 };
 
-                let arrange_stmt =
-                    self.register_arrangement(arranged_map, output.fingerprint(), &out);
+                let arrange_stmt = self.register_arrangement(
+                    arranged_map,
+                    output.fingerprint(),
+                    &out,
+                    output.is_k_only(),
+                );
 
                 quote! {
                     #transformation
@@ -507,11 +544,18 @@ impl Compiler {
         arranged_map: &mut HashMap<u64, Ident>,
         fingerprint: u64,
         collection_ident: &Ident,
+        only_key: bool,
     ) -> TokenStream {
-        self.imports.mark_arrange_by_key();
         let arrangement_ident = format_ident!("{}_arr", collection_ident);
         arranged_map.insert(fingerprint, arrangement_ident.clone());
-        quote! { let #arrangement_ident = #collection_ident.arrange_by_key(); }
+
+        if only_key {
+            self.imports.mark_arrange_by_self();
+            quote! { let #arrangement_ident = #collection_ident.arrange_by_self(); }
+        } else {
+            self.imports.mark_arrange_by_key();
+            quote! { let #arrangement_ident = #collection_ident.arrange_by_key(); }
+        }
     }
 }
 
