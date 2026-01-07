@@ -27,6 +27,9 @@ pub(crate) struct ImportTracker {
     /// ArrangeByKey operator.
     arrange_by_key: bool,
 
+    /// ArrangeBySelf operator.
+    arrange_by_self: bool,
+
     /// AsCollection conversions.
     as_collection: bool,
 
@@ -117,6 +120,11 @@ impl ImportTracker {
         self.arrange_by_key = true;
     }
 
+    /// Marks that `ArrangeBySelf` must be imported.
+    pub(crate) fn mark_arrange_by_self(&mut self) {
+        self.arrange_by_self = true;
+    }
+
     /// Marks that `AsCollection` conversions are required.
     pub(crate) fn mark_as_collection(&mut self) {
         self.as_collection = true;
@@ -198,10 +206,19 @@ impl ImportTracker {
 
     /// Emits `ArrangeByKey` if requested.
     fn arrange_import(&self) -> TokenStream {
+        let mut traits = Vec::new();
+
         if self.arrange_by_key {
-            quote! { use differential_dataflow::operators::arrange::ArrangeByKey; }
-        } else {
+            traits.push(quote! { ArrangeByKey });
+        }
+        if self.arrange_by_self {
+            traits.push(quote! { ArrangeBySelf });
+        }
+
+        if traits.is_empty() {
             quote! {}
+        } else {
+            quote! { use differential_dataflow::operators::arrange::{ #(#traits),* }; }
         }
     }
 
