@@ -44,4 +44,5 @@ jobs:
           command: test
       - name: 🏁 Run batch smoke test
         run: 
+          bash tools/check/batch.sh --compile-only
           bash tools/check/batch.sh tools/check/config_ci.txt
