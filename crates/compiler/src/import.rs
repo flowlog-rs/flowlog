@@ -27,6 +27,8 @@ pub(crate) struct ImportTracker {
     dd_input: bool,
     /// ArrangeByKey operator.
     arrange_by_key: bool,
+    /// ArrangeBySelf operator.
+    arrange_by_self: bool,
     /// AsCollection conversions.
     as_collection: bool,
     /// Threshold operator trait.
