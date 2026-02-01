@@ -8,6 +8,8 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use std::collections::HashMap;
 
+use profiler::Profiler;
+
 use super::arg::{
     build_join_compare_predicate, build_key_val_from_join_args, build_key_val_from_kv_args,
     build_key_val_from_row_args, build_kv_compare_predicate, build_kv_constraints_predicate,
@@ -30,7 +32,9 @@ impl Compiler {
         local_fp_to_ident: &HashMap<u64, Ident>,
         transformation: &Transformation,
         arranged_map: &mut HashMap<u64, Ident>,
+        profiler: &mut Option<Profiler>,
     ) -> TokenStream {
+        let transformation_name = format!("{transformation:?}");
         match transformation {
             // Row -> Row
             Transformation::RowToRow {
@@ -40,6 +44,17 @@ impl Compiler {
             } => {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+
+                // Record profiler info if enabled
+                if let Some(profiler) = profiler {
+                    profiler.map_join_operator(
+                        transformation_name,
+                        vec![inp.to_string()],
+                        out.to_string(),
+                        output.fingerprint(),
+                    );
+                }
+
                 let input_arity = input.arity().1;
 
                 let (row_pat, row_fields) = row_pattern_and_fields(
@@ -90,6 +105,18 @@ impl Compiler {
             } => {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+
+                // Record profiler info if enabled
+                if let Some(profiler) = profiler {
+                    profiler.map_join_arrange_operator(
+                        transformation_name,
+                        vec![inp.to_string()],
+                        out.to_string(),
+                        output.fingerprint(),
+                        output.is_k_only(),
+                    );
+                }
+
                 let input_arity = input.arity().1;
 
                 let (row_pat, row_fields) = row_pattern_and_fields(
@@ -158,6 +185,17 @@ impl Compiler {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
+                // Record profiler info if enabled
+                if let Some(profiler) = profiler {
+                    profiler.map_join_arrange_operator(
+                        transformation_name,
+                        vec![inp.to_string()],
+                        out.to_string(),
+                        output.fingerprint(),
+                        output.is_k_only(),
+                    );
+                }
+
                 // Type inference
                 self.verify_and_infer_global_type(
                     input.fingerprint(),
@@ -219,6 +257,16 @@ impl Compiler {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
+                // Record profiler info if enabled
+                if let Some(profiler) = profiler {
+                    profiler.map_join_operator(
+                        transformation_name,
+                        vec![inp.to_string()],
+                        out.to_string(),
+                        output.fingerprint(),
+                    );
+                }
+
                 // Type inference
                 self.verify_and_infer_global_type(
                     input.fingerprint(),
@@ -262,6 +310,17 @@ impl Compiler {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
+                let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+
+                // Record profiler info if enabled
+                if let Some(profiler) = profiler {
+                    profiler.map_join_operator(
+                        transformation_name,
+                        vec![l_base.to_string(), r_base.to_string()],
+                        out.to_string(),
+                        output.fingerprint(),
+                    );
+                }
 
                 // Type inference
                 self.verify_and_infer_global_type(
@@ -273,8 +332,6 @@ impl Compiler {
 
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
-
-                let out = find_local_ident(local_fp_to_ident, output.fingerprint());
                 let out_val = build_key_val_from_join_args(flow.value());
                 let (jn_k, jn_lv, jn_rv) =
                     compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
@@ -307,6 +364,18 @@ impl Compiler {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
+                let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+
+                // Record profiler info if enabled
+                if let Some(profiler) = profiler {
+                    profiler.map_join_arrange_operator(
+                        transformation_name,
+                        vec![l_base.to_string(), r_base.to_string()],
+                        out.to_string(),
+                        output.fingerprint(),
+                        output.is_k_only(),
+                    );
+                }
 
                 // Type inference
                 self.verify_and_infer_global_type(
@@ -318,8 +387,6 @@ impl Compiler {
 
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
-
-                let out = find_local_ident(local_fp_to_ident, output.fingerprint());
                 let out_key = build_key_val_from_join_args(flow.key());
                 let out_val = build_key_val_from_join_args(flow.value());
                 let out_expr = if output.is_k_only() {
@@ -374,6 +441,17 @@ impl Compiler {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
+                let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+
+                // Record profiler info if enabled
+                if let Some(profiler) = profiler {
+                    profiler.anti_join_operator(
+                        transformation_name,
+                        vec![l_base.to_string(), r_base.to_string()],
+                        out.to_string(),
+                        output.fingerprint(),
+                    );
+                }
 
                 // Type inference
                 self.verify_and_infer_global_type(
@@ -385,8 +463,6 @@ impl Compiler {
 
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
-
-                let out = find_local_ident(local_fp_to_ident, output.fingerprint());
                 let out_map_value = build_key_val_from_kv_args(flow.value());
 
                 let (anti_param_k, anti_param_v) =
@@ -450,6 +526,18 @@ impl Compiler {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
+                let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+
+                // Record profiler info if enabled
+                if let Some(profiler) = profiler {
+                    profiler.anti_join_arrange_operator(
+                        transformation_name,
+                        vec![l_base.to_string(), r_base.to_string()],
+                        out.to_string(),
+                        output.fingerprint(),
+                        output.is_k_only(),
+                    );
+                }
 
                 // Type inference
                 self.verify_and_infer_global_type(
@@ -461,8 +549,6 @@ impl Compiler {
 
                 let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
-
-                let out = find_local_ident(local_fp_to_ident, output.fingerprint());
                 let out_map_key = build_key_val_from_kv_args(flow.key());
                 let out_map_value = build_key_val_from_kv_args(flow.value());
                 let out_map_expr = if output.is_k_only() {

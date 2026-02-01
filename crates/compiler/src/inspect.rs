@@ -10,6 +10,7 @@
 use crate::Compiler;
 
 use common::ExecutionMode;
+use profiler::Profiler;
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
@@ -23,13 +24,22 @@ impl Compiler {
     /// - convert to the underlying `(data, time, diff)` stream
     /// - map everything to the single key `()` so all updates consolidate into one
     /// - consolidate and inspect the resulting multiplicity (the size)
-    pub(crate) fn gen_size_inspector(&self, var: &Ident, name: &str) -> TokenStream {
+    pub(crate) fn gen_size_inspector(
+        &self,
+        var: &Ident,
+        name: &str,
+        profiler: &mut Option<Profiler>,
+    ) -> TokenStream {
         let prefix = name.to_string();
 
         let maybe_probe = match self.config.mode() {
             ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
             ExecutionMode::Batch => quote! {},
         };
+
+        if let Some(profiler) = profiler.as_mut() {
+            profiler.inspect_size_operator(prefix.clone());
+        }
 
         quote! {{
             #var
@@ -51,13 +61,23 @@ impl Compiler {
     ///
     /// If `arity == 0`, print `True` instead of `()`, matching common Datalog
     /// conventions for 0-arity relations.
-    pub(crate) fn gen_print_inspector(&self, var: &Ident, name: &str, arity: usize) -> TokenStream {
+    pub(crate) fn gen_print_inspector(
+        &self,
+        var: &Ident,
+        name: &str,
+        arity: usize,
+        profiler: &mut Option<Profiler>,
+    ) -> TokenStream {
         let prefix = name.to_string();
 
         let maybe_probe = match self.config.mode() {
             ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
             ExecutionMode::Batch => quote! {},
         };
+
+        if let Some(profiler) = profiler.as_mut() {
+            profiler.inspect_content_terminal_operator(prefix.clone());
+        }
 
         if arity == 0 {
             quote! {{
@@ -88,6 +108,7 @@ impl Compiler {
         name: &str,
         parent_dir: &str,
         arity: usize,
+        profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let base_dir = parent_dir.to_string();
         let rel_name = name.to_string();
@@ -96,6 +117,10 @@ impl Compiler {
             ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
             ExecutionMode::Batch => quote! {},
         };
+
+        if let Some(profiler) = profiler.as_mut() {
+            profiler.inspect_content_file_operator(rel_name.clone());
+        }
 
         let data_accessors: Vec<TokenStream> = (0..arity)
             .map(|i| {

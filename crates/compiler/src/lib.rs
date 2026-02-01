@@ -23,15 +23,15 @@ mod transformation;
 // =========================================================================
 // Imports
 // =========================================================================
-use std::collections::{HashMap, HashSet};
-
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
+use std::collections::{HashMap, HashSet};
 use syn::parse2;
 
 use common::{Config, ExecutionMode};
 use parser::{DataType, Program};
 use planner::StratumPlanner;
+use profiler::Profiler;
 
 use import::ImportTracker;
 use inspect::gen_delete_partitions;
@@ -72,9 +72,13 @@ impl Compiler {
     }
 
     /// Create executable from the strata plan.
-    pub fn generate_executable_at(&mut self, strata: &[StratumPlanner]) -> std::io::Result<()> {
-        let main_rs = self.generate_main(strata);
-        self.write_project(&main_rs)
+    pub fn generate_executable_at(
+        &mut self,
+        strata: &[StratumPlanner],
+        profiler: &mut Option<Profiler>,
+    ) -> std::io::Result<()> {
+        let main_rs = self.generate_main(strata, profiler);
+        self.write_project(&main_rs, profiler)
     }
 }
 
@@ -84,12 +88,19 @@ impl Compiler {
 
 impl Compiler {
     /// Generate the text for a standalone `main.rs` program executing the provided strata.
-    fn generate_main(&mut self, strata: &[StratumPlanner]) -> String {
+    fn generate_main(
+        &mut self,
+        strata: &[StratumPlanner],
+        profiler: &mut Option<Profiler>,
+    ) -> String {
         self.imports
             .reset(self.config.mode(), self.config.profiling_enabled());
 
         // Static sections of the generated program.
-        let input_decls = self.gen_input_decls();
+        let input_decls = self.gen_input_decls(profiler);
+        if let Some(profiler) = profiler.as_mut() {
+            profiler.enter_scope();
+        }
         let (lhs_binding, ret_expr) = self.build_handle_binding();
         let profile_struct_stmts = self.gen_profile_struct();
         let profile_init_stmts = self.gen_profile_init();
@@ -99,21 +110,28 @@ impl Compiler {
         let mut calculated_output_fps: HashSet<u64> = HashSet::new();
 
         for stratum in strata {
-            let (core_flows, non_recursive_arranged_map) =
-                self.gen_non_recursive_core_flows(stratum.non_recursive_transformations());
+            let (core_flows, non_recursive_arranged_map) = self
+                .gen_non_recursive_core_flows(stratum.non_recursive_transformations(), profiler);
             flow_stmts.extend(core_flows);
 
             if stratum.is_recursive() {
-                flow_stmts.push(self.gen_iterative_block(&non_recursive_arranged_map, stratum));
+                flow_stmts.push(self.gen_iterative_block(
+                    &non_recursive_arranged_map,
+                    stratum,
+                    profiler,
+                ));
             } else {
-                flow_stmts
-                    .extend(self.gen_non_recursive_post_flows(&calculated_output_fps, stratum));
+                flow_stmts.extend(self.gen_non_recursive_post_flows(
+                    &calculated_output_fps,
+                    stratum,
+                    profiler,
+                ));
             }
 
             calculated_output_fps.extend(stratum.output_relations());
         }
 
-        let (inspect_stmts, merge_stmts, delete_stmts) = self.collect_inspectors();
+        let (inspect_stmts, merge_stmts, delete_stmts) = self.collect_inspectors(profiler);
 
         let timestamp_type = match self.config.mode() {
             ExecutionMode::Incremental => quote! { u32 },
@@ -520,7 +538,10 @@ impl Compiler {
     }
 
     /// Assemble inspection and partition-merge statements for IDB relations based on CLI args.
-    fn collect_inspectors(&mut self) -> (Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>) {
+    fn collect_inspectors(
+        &mut self,
+        profiler: &mut Option<Profiler>,
+    ) -> (Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>) {
         let mut inspect_stmts = Vec::new();
         let mut merge_stmts = Vec::new();
         let mut delete_stmts = Vec::new();
@@ -535,12 +556,12 @@ impl Compiler {
                 self.imports.mark_timely_map();
                 self.imports.mark_semiring_one();
 
-                inspect_stmts.push(self.gen_size_inspector(&var, name));
+                inspect_stmts.push(self.gen_size_inspector(&var, name, profiler));
             }
 
             if idb.output() {
                 if self.config.output_to_stdout() {
-                    inspect_stmts.push(self.gen_print_inspector(&var, name, idb.arity()));
+                    inspect_stmts.push(self.gen_print_inspector(&var, name, idb.arity(), profiler));
                 } else {
                     let parent_dir = self.config.output_dir().expect(
                         "output directory must be provided when writing IDB output to files",
@@ -551,6 +572,7 @@ impl Compiler {
                         name,
                         parent_dir,
                         idb.arity(),
+                        profiler,
                     ));
                     merge_stmts.push(self.gen_merge_partitions(name, parent_dir));
 

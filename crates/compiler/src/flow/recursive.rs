@@ -17,6 +17,7 @@ use crate::Compiler;
 
 use parser::AggregationOperator;
 use planner::StratumPlanner;
+use profiler::Profiler;
 
 // =========================================================================
 // Recursive Flow Generation
@@ -27,20 +28,38 @@ impl Compiler {
         &mut self,
         non_recursive_arranged_map: &HashMap<u64, Ident>,
         stratum: &StratumPlanner,
+        profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         self.imports.mark_recursive();
+
+        if let Some(profiler) = profiler.as_mut() {
+            profiler.enter_scope();
+        }
 
         let leave_fps = stratum.recursion_leave_collections();
         if leave_fps.is_empty() {
             return quote! {};
         }
 
+        let enter_fps = stratum.recursion_enter_collections();
+        let (enter_stmts, enter_bindings, mut recursive_arranged) =
+            self.build_enter_bindings(non_recursive_arranged_map, enter_fps, profiler);
+
         let iterative_fps = stratum.recursion_iterative_collections();
         let (iter_names, iter_bindings) = build_iterative_bindings(iterative_fps);
 
-        let enter_fps = stratum.recursion_enter_collections();
-        let (enter_stmts, enter_bindings, mut recursive_arranged) =
-            self.build_enter_bindings(non_recursive_arranged_map, enter_fps);
+        let iter_var_inits: Vec<TokenStream> = iter_names
+            .iter()
+            .map(|name| {
+                if let Some(profiler) = profiler.as_mut() {
+                    profiler.recursive_feedback_operator(
+                        name.to_string(),
+                        name.to_string(),
+                    );
+                }
+                quote! { let #name = SemigroupVariable::new(inner, timely::order::Product::new(Default::default(), 1)); }
+            })
+            .collect();
 
         let mut current: HashMap<u64, Ident> = enter_bindings.clone();
         current.extend(iter_bindings.clone());
@@ -48,31 +67,33 @@ impl Compiler {
         let flow_stmts: Vec<TokenStream> = stratum
             .recursive_transformations()
             .iter()
-            .map(|tx| self.gen_transformation(&current, tx, &mut recursive_arranged))
+            .map(|tx| self.gen_transformation(&current, tx, &mut recursive_arranged, profiler))
             .collect();
 
         let (next_bindings, union_stmts) = self.collect_unions(
             stratum.output_to_idb_map(),
             &enter_bindings,
             stratum.output_to_aggregation_map(),
+            profiler,
         );
 
         let set_stmts: Vec<TokenStream> = next_bindings
             .iter()
             .map(|(fp, next_ident)| {
                 let iter_var = find_local_ident(&current, *fp);
+                if let Some(profiler) = profiler.as_mut() {
+                    profiler.recursive_resultsin_operator(iter_var.to_string());
+                }
                 quote! { #iter_var.set(&#next_ident); }
             })
             .collect();
 
-        let iter_var_inits: Vec<TokenStream> = iter_names
-        .iter()
-        .map(|name| {
-            quote! { let #name = SemigroupVariable::new(inner, timely::order::Product::new(Default::default(), 1)); }
-        })
-        .collect();
+        if let Some(profiler) = profiler.as_mut() {
+            profiler.leave_scope();
+        }
 
-        let (leave_pattern, leave_stmt) = self.build_leave_outputs(leave_fps, &next_bindings);
+        let (leave_pattern, leave_stmt) =
+            self.build_leave_outputs(leave_fps, &next_bindings, profiler);
 
         quote! {
             let #leave_pattern = scope.iterative::<Iter, _, _>(|inner| {
@@ -98,6 +119,7 @@ impl Compiler {
         &self,
         non_recursive_arranged_map: &HashMap<u64, Ident>,
         enter_fps: &[u64],
+        profiler: &mut Option<Profiler>,
     ) -> (Vec<TokenStream>, HashMap<u64, Ident>, HashMap<u64, Ident>) {
         let mut bindings: HashMap<u64, Ident> = HashMap::new();
         let mut stmts: Vec<TokenStream> = Vec::new();
@@ -111,6 +133,15 @@ impl Compiler {
             let entered = format_ident!("in_{}", source);
             bindings.insert(*fp, entered.clone());
             stmts.push(quote! { let #entered = #source.enter(inner); });
+
+            // record profiling information if enabled
+            if let Some(profiler) = profiler.as_mut() {
+                profiler.recursive_enter_operator(
+                    format!("enter: {}", source),
+                    vec![source.to_string()],
+                    entered.to_string(),
+                );
+            }
 
             if non_recursive_arranged_map.contains_key(fp) {
                 let entered_arr =
@@ -128,6 +159,7 @@ impl Compiler {
         output_to_idb_map: &HashMap<u64, Vec<u64>>,
         enter_bindings: &HashMap<u64, Ident>,
         output_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
+        profiler: &mut Option<Profiler>,
     ) -> (HashMap<u64, Ident>, Vec<TokenStream>) {
         let mut next_bindings: HashMap<u64, Ident> = HashMap::new();
         let mut union_stmts = Vec::new();
@@ -155,6 +187,25 @@ impl Compiler {
             let mut block = quote! {
                 let #next_ident = #union_expr #dedup_call;
             };
+
+            // Record profiling information if enabled
+            if let Some(profiler) = profiler.as_mut() {
+                let output_name = self.find_global_ident(*output_fp).to_string();
+                if sources.len() > 1 {
+                    profiler.concat_operator(
+                        format!("concat & dedup: {}", output_name),
+                        sources.iter().map(|id| id.to_string()).collect(),
+                        next_ident.to_string(),
+                        sources.len() as u32,
+                    );
+                } else {
+                    profiler.input_dedup_operator(
+                        format!("dedup: {}", output_name),
+                        sources[0].to_string(),
+                        next_ident.to_string(),
+                    );
+                }
+            }
 
             if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
                 self.imports.mark_aggregation();
@@ -184,22 +235,8 @@ impl Compiler {
         &self,
         leave_fps: &[u64],
         next: &HashMap<u64, Ident>,
+        profiler: &mut Option<Profiler>,
     ) -> (TokenStream, TokenStream) {
-        let leave_exprs: Vec<TokenStream> = leave_fps
-            .iter()
-            .map(|fp| {
-                let next_ident = next
-                    .get(fp)
-                    .expect("leave relation missing from next bindings during recursion");
-                quote! { #next_ident.leave() }
-            })
-            .collect();
-
-        let leave_stmt = match leave_exprs.as_slice() {
-            [expr] => quote! { #expr },
-            _ => quote! { ( #(#leave_exprs),* ) },
-        };
-
         let targets: Vec<Ident> = leave_fps
             .iter()
             .map(|fp| self.find_global_ident(*fp))
@@ -208,6 +245,25 @@ impl Compiler {
         let pattern = match targets.as_slice() {
             [ident] => quote! { #ident },
             _ => quote! { ( #(#targets),* ) },
+        };
+
+        let leave_exprs: Vec<TokenStream> = leave_fps
+            .iter()
+            .zip(targets.iter())
+            .map(|(fp, target)| {
+                let next_ident = next
+                    .get(fp)
+                    .expect("leave relation missing from next bindings during recursion");
+                if let Some(profiler) = profiler.as_mut() {
+                    profiler.recursive_leave_operator(format!("leave: {}", target));
+                }
+                quote! { #next_ident.leave() }
+            })
+            .collect();
+
+        let leave_stmt = match leave_exprs.as_slice() {
+            [expr] => quote! { #expr },
+            _ => quote! { ( #(#leave_exprs),* ) },
         };
 
         (pattern, leave_stmt)

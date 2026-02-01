@@ -19,6 +19,7 @@ use crate::aggregation::{aggregation_merge_kv, aggregation_reduce, aggregation_r
 use crate::Compiler;
 
 use planner::{StratumPlanner, Transformation};
+use profiler::Profiler;
 
 // =========================================================================
 // Non-Recursive Flow Generation
@@ -29,6 +30,7 @@ impl Compiler {
     pub(crate) fn gen_non_recursive_core_flows(
         &mut self,
         transformations: &[Transformation],
+        profiler: &mut Option<Profiler>,
     ) -> (Vec<TokenStream>, HashMap<u64, Ident>) {
         let mut flows = Vec::new();
         // Stratum-scoped cache of arrangements; emit arrange_by_key just before first use.
@@ -40,6 +42,7 @@ impl Compiler {
                 &global_fp_to_ident,
                 transformation,
                 &mut non_recursive_arranged_map,
+                profiler,
             ));
         }
 
@@ -52,6 +55,7 @@ impl Compiler {
         &mut self,
         calculated_output_fps: &HashSet<u64>,
         stratum: &StratumPlanner,
+        profiler: &mut Option<Profiler>,
     ) -> Vec<TokenStream> {
         let mut flows = Vec::new();
         let dedup_stats = self.dedup_collection();
@@ -74,12 +78,29 @@ impl Compiler {
             // If this output was already computed in a previous stratum, union the previous
             // collection with the newly produced tuples before applying distinct.
             let mut block = if calculated_output_fps.contains(output_fp) {
+                // Record profiling information if enabled
+                if let Some(profiler) = profiler.as_mut() {
+                    profiler.concat_operator(
+                        format!("concat & dedup: {}", output),
+                        outs.iter().map(|id| id.to_string()).collect(),
+                        output.to_string(),
+                        outs.len() as u32,
+                    );
+                }
                 quote! {
                     let #output = #output
                         .concat(&#expr)
                         #dedup_stats;
                 }
             } else {
+                // Record profiling information if enabled
+                if let Some(profiler) = profiler.as_mut() {
+                    profiler.input_dedup_operator(
+                        format!("dedup: {}", output),
+                        expr.to_string(),
+                        output.to_string(),
+                    );
+                }
                 quote! {
                     let #output = #expr
                         #dedup_stats;

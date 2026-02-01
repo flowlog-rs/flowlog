@@ -1,13 +1,14 @@
 //! Stratum planner that plans a stratum (a group of rules).
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use tracing::debug;
 
 use catalog::Catalog;
 use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
 use parser::{AggregationOperator, HeadArg};
-use std::fmt;
-use tracing::debug;
+use profiler::Profiler;
 
 use crate::{RulePlanner, Transformation, TransformationInfo};
 
@@ -61,6 +62,7 @@ impl StratumPlanner {
     pub fn from_rules(
         stratum: &[FlowLogRule],
         optimizer: &mut Optimizer,
+        profiler: &mut Option<Profiler>,
         is_recursive: bool,
         iterative_relation: &[u64],
         leave_relation: &[u64],
@@ -123,6 +125,20 @@ impl StratumPlanner {
         rule_planners.iter().for_each(|rp| {
             debug!("{}", rp);
         });
+
+        // Profiler: record rule logic profiles if enabled
+        if let Some(profiler) = profiler {
+            for rule_planner in rule_planners.iter() {
+                profiler.insert_rule(
+                    rule_planner.rule().to_string(),
+                    rule_planner
+                        .transformation_infos()
+                        .iter()
+                        .map(|info| (info.input_info_fp(), info.output_info_fp()))
+                        .collect(),
+                );
+            }
+        }
 
         // Phase 5: Materialize deduplicated transformations
         // this phase also do sharing optimization across rules

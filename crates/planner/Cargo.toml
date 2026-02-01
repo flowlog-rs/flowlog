@@ -10,9 +10,9 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 clap = { workspace = true, features = ["derive"] }
 
-common = { path = "../common" }
 catalog = { path = "../catalog" }
-parser = { path = "../parser" }
+common = { path = "../common" }
 optimizer = { path = "../optimizer" }
+parser = { path = "../parser" }
+profiler = { path = "../profiler" }
 stratifier = { path = "../stratifier" }
-

@@ -18,6 +18,7 @@ use std::path::Path;
 use super::Compiler;
 use common::ExecutionMode;
 use parser::{ConstType, DataType, Relation};
+use profiler::Profiler;
 
 impl Compiler {
     /// Generate per-EDB declarations as `(handle, collection)` pairs:
@@ -25,7 +26,7 @@ impl Compiler {
     /// ```ignore
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
-    pub(super) fn gen_input_decls(&mut self) -> Vec<TokenStream> {
+    pub(super) fn gen_input_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
         let normalize = self.dedup_collection();
 
         let edbs = self.program.edbs();
@@ -39,6 +40,17 @@ impl Compiler {
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
                 let coll = format_ident!("{}", rel.name());
+
+                // Record profiler info if enabled
+                if let Some(profiler) = profiler {
+                    profiler.input_edb_operator(rel.name().to_string(), coll.to_string());
+                    profiler.input_dedup_operator(
+                        rel.name().to_string(),
+                        coll.to_string(),
+                        coll.to_string(),
+                    );
+                }
+
                 quote! {
                     let (#handle, #coll) = scope.new_collection::<_, Diff>();
                     let #coll = #coll #normalize;
