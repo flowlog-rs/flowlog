@@ -81,7 +81,7 @@ impl Compiler {
                 // Record profiling information if enabled
                 if let Some(profiler) = profiler.as_mut() {
                     profiler.concat_operator(
-                        format!("concat & dedup: {}", output),
+                        output.to_string(),
                         outs.iter().map(|id| id.to_string()).collect(),
                         output.to_string(),
                         outs.len() as u32 - 1,
@@ -96,7 +96,7 @@ impl Compiler {
                 // Record profiling information if enabled
                 if let Some(profiler) = profiler.as_mut() {
                     profiler.input_dedup_operator(
-                        format!("dedup: {}", output),
+                        output.to_string(),
                         expr.to_string(),
                         output.to_string(),
                     );

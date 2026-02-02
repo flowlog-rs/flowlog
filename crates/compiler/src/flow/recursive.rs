@@ -142,7 +142,7 @@ impl Compiler {
             // record profiling information if enabled
             if let Some(profiler) = profiler.as_mut() {
                 profiler.recursive_enter_operator(
-                    format!("enter: {}", source),
+                    source.to_string(),
                     source.to_string(),
                     entered.to_string(),
                 );
@@ -198,14 +198,14 @@ impl Compiler {
                 let output_name = self.find_global_ident(*output_fp).to_string();
                 if sources.len() > 1 {
                     profiler.concat_operator(
-                        format!("concat & dedup: {}", output_name),
+                        output_name,
                         sources.iter().map(|id| id.to_string()).collect(),
                         next_ident.to_string(),
                         sources.len() as u32 - 1,
                     );
                 } else {
                     profiler.input_dedup_operator(
-                        format!("dedup: {}", output_name),
+                        output_name,
                         sources[0].to_string(),
                         next_ident.to_string(),
                     );
@@ -261,7 +261,7 @@ impl Compiler {
                     .expect("leave relation missing from next bindings during recursion");
                 if let Some(profiler) = profiler.as_mut() {
                     profiler.recursive_leave_operator(
-                        format!("leave: {}", target),
+                        target.to_string(),
                         next_ident.to_string(),
                         target.to_string(),
                     );

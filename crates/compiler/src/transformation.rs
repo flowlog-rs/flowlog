@@ -111,7 +111,7 @@ impl Compiler {
                     profiler.map_join_arrange_operator(
                         transformation_name,
                         vec![inp.to_string()],
-                        format!("{}_arr", out.to_string()),
+                        format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
                     );
@@ -190,7 +190,7 @@ impl Compiler {
                     profiler.map_join_arrange_operator(
                         transformation_name,
                         vec![inp.to_string()],
-                        format!("{}_arr", out.to_string()),
+                        format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
                     );
@@ -381,7 +381,7 @@ impl Compiler {
                     profiler.map_join_arrange_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
-                        format!("{}_arr", out.to_string()),
+                        format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
                     );
@@ -541,7 +541,7 @@ impl Compiler {
                     profiler.anti_join_arrange_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
-                        format!("{}_arr", out.to_string()),
+                        format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
                     );
