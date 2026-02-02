@@ -46,7 +46,7 @@ impl Compiler {
             self.build_enter_bindings(non_recursive_arranged_map, enter_fps, profiler);
 
         let iterative_fps = stratum.recursion_iterative_collections();
-        let (iter_names, iter_bindings) = build_iterative_bindings(iterative_fps);
+        let (iter_names, iter_bindings) = self.build_iterative_bindings(iterative_fps);
 
         let iter_var_inits: Vec<TokenStream> = iter_names
             .iter()
@@ -277,19 +277,23 @@ impl Compiler {
 
         (pattern, leave_stmt)
     }
-}
-/// Build the iterative variable bindings for recursion.
-fn build_iterative_bindings(iterative_fps: &[u64]) -> (Vec<Ident>, HashMap<u64, Ident>) {
-    let names: Vec<Ident> = iterative_fps
-        .iter()
-        .map(|fp| format_ident!("iter_{}", fp))
-        .collect();
 
-    let bindings = iterative_fps
-        .iter()
-        .zip(names.iter().cloned())
-        .map(|(fp, ident)| (*fp, ident))
-        .collect();
+    /// Build the iterative variable bindings for recursion.
+    fn build_iterative_bindings(&self, iterative_fps: &[u64]) -> (Vec<Ident>, HashMap<u64, Ident>) {
+        let names: Vec<Ident> = iterative_fps
+            .iter()
+            .map(|fp| {
+                let name = self.find_global_ident(*fp);
+                format_ident!("iter_{}", name)
+            })
+            .collect();
 
-    (names, bindings)
+        let bindings = iterative_fps
+            .iter()
+            .zip(names.iter().cloned())
+            .map(|(fp, ident)| (*fp, ident))
+            .collect();
+
+        (names, bindings)
+    }
 }
