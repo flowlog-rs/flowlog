@@ -55,6 +55,7 @@ impl Compiler {
                     profiler.recursive_feedback_operator(
                         name.to_string(),
                         name.to_string(),
+                        name.to_string(),
                     );
                 }
                 quote! { let #name = SemigroupVariable::new(inner, timely::order::Product::new(Default::default(), 1)); }
@@ -82,7 +83,11 @@ impl Compiler {
             .map(|(fp, next_ident)| {
                 let iter_var = find_local_ident(&current, *fp);
                 if let Some(profiler) = profiler.as_mut() {
-                    profiler.recursive_resultsin_operator(iter_var.to_string());
+                    profiler.recursive_resultsin_operator(
+                        iter_var.to_string(),
+                        next_ident.to_string(),
+                        next_ident.to_string(),
+                    );
                 }
                 quote! { #iter_var.set(&#next_ident); }
             })
@@ -138,7 +143,7 @@ impl Compiler {
             if let Some(profiler) = profiler.as_mut() {
                 profiler.recursive_enter_operator(
                     format!("enter: {}", source),
-                    vec![source.to_string()],
+                    source.to_string(),
                     entered.to_string(),
                 );
             }
@@ -196,7 +201,7 @@ impl Compiler {
                         format!("concat & dedup: {}", output_name),
                         sources.iter().map(|id| id.to_string()).collect(),
                         next_ident.to_string(),
-                        sources.len() as u32,
+                        sources.len() as u32 - 1,
                     );
                 } else {
                     profiler.input_dedup_operator(
@@ -255,7 +260,11 @@ impl Compiler {
                     .get(fp)
                     .expect("leave relation missing from next bindings during recursion");
                 if let Some(profiler) = profiler.as_mut() {
-                    profiler.recursive_leave_operator(format!("leave: {}", target));
+                    profiler.recursive_leave_operator(
+                        format!("leave: {}", target),
+                        next_ident.to_string(),
+                        target.to_string(),
+                    );
                 }
                 quote! { #next_ident.leave() }
             })

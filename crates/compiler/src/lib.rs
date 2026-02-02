@@ -77,6 +77,9 @@ impl Compiler {
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
     ) -> std::io::Result<()> {
+        if let Some(profiler) = profiler {
+            profiler.enter_scope();
+        }
         let main_rs = self.generate_main(strata, profiler);
         self.write_project(&main_rs, profiler)
     }
@@ -98,9 +101,6 @@ impl Compiler {
 
         // Static sections of the generated program.
         let input_decls = self.gen_input_decls(profiler);
-        if let Some(profiler) = profiler.as_mut() {
-            profiler.enter_scope();
-        }
         let (lhs_binding, ret_expr) = self.build_handle_binding();
         let profile_struct_stmts = self.gen_profile_struct();
         let profile_init_stmts = self.gen_profile_init();
@@ -109,7 +109,10 @@ impl Compiler {
         let mut flow_stmts: Vec<TokenStream> = Vec::new();
         let mut calculated_output_fps: HashSet<u64> = HashSet::new();
 
-        for stratum in strata {
+        for (idx, stratum) in strata.iter().enumerate() {
+            if let Some(profiler) = profiler {
+                profiler.update_stratum_block(idx);
+            }
             let (core_flows, non_recursive_arranged_map) = self
                 .gen_non_recursive_core_flows(stratum.non_recursive_transformations(), profiler);
             flow_stmts.extend(core_flows);
@@ -545,6 +548,10 @@ impl Compiler {
         let mut inspect_stmts = Vec::new();
         let mut merge_stmts = Vec::new();
         let mut delete_stmts = Vec::new();
+
+        if let Some(profiler) = profiler {
+            profiler.update_inspect_block();
+        }
 
         for idb in self.program.idbs() {
             let var = self.find_global_ident(idb.fingerprint());

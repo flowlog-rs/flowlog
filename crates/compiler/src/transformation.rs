@@ -111,7 +111,7 @@ impl Compiler {
                     profiler.map_join_arrange_operator(
                         transformation_name,
                         vec![inp.to_string()],
-                        out.to_string(),
+                        format!("{}_arr", out.to_string()),
                         output.fingerprint(),
                         output.is_k_only(),
                     );
@@ -190,7 +190,7 @@ impl Compiler {
                     profiler.map_join_arrange_operator(
                         transformation_name,
                         vec![inp.to_string()],
-                        out.to_string(),
+                        format!("{}_arr", out.to_string()),
                         output.fingerprint(),
                         output.is_k_only(),
                     );
@@ -310,13 +310,18 @@ impl Compiler {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
+                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
+                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+                let out_val = build_key_val_from_join_args(flow.value());
+                let (jn_k, jn_lv, jn_rv) =
+                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
 
                 // Record profiler info if enabled
                 if let Some(profiler) = profiler {
                     profiler.map_join_operator(
                         transformation_name,
-                        vec![l_base.to_string(), r_base.to_string()],
+                        vec![l.to_string(), r.to_string()],
                         out.to_string(),
                         output.fingerprint(),
                     );
@@ -329,12 +334,6 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                 );
-
-                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
-                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
-                let out_val = build_key_val_from_join_args(flow.value());
-                let (jn_k, jn_lv, jn_rv) =
-                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
 
                 if let Some(pred) = build_join_compare_predicate(flow.compares()) {
                     quote! {
@@ -364,14 +363,25 @@ impl Compiler {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
+                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
+                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+                let out_key = build_key_val_from_join_args(flow.key());
+                let out_val = build_key_val_from_join_args(flow.value());
+                let out_expr = if output.is_k_only() {
+                    quote! { #out_key }
+                } else {
+                    quote! { ( #out_key, #out_val ) }
+                };
+                let (jn_k, jn_lv, jn_rv) =
+                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
 
                 // Record profiler info if enabled
                 if let Some(profiler) = profiler {
                     profiler.map_join_arrange_operator(
                         transformation_name,
-                        vec![l_base.to_string(), r_base.to_string()],
-                        out.to_string(),
+                        vec![l.to_string(), r.to_string()],
+                        format!("{}_arr", out.to_string()),
                         output.fingerprint(),
                         output.is_k_only(),
                     );
@@ -384,18 +394,6 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                 );
-
-                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
-                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
-                let out_key = build_key_val_from_join_args(flow.key());
-                let out_val = build_key_val_from_join_args(flow.value());
-                let out_expr = if output.is_k_only() {
-                    quote! { #out_key }
-                } else {
-                    quote! { ( #out_key, #out_val ) }
-                };
-                let (jn_k, jn_lv, jn_rv) =
-                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
 
                 let transformation =
                     if let Some(pred) = build_join_compare_predicate(flow.compares()) {
@@ -441,13 +439,19 @@ impl Compiler {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
+                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
+                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+                let out_map_value = build_key_val_from_kv_args(flow.value());
+                let (anti_param_k, anti_param_v) =
+                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
+                let dedup_call = self.dedup_collection();
 
                 // Record profiler info if enabled
                 if let Some(profiler) = profiler {
                     profiler.anti_join_operator(
                         transformation_name,
-                        vec![l_base.to_string(), r_base.to_string()],
+                        vec![l.to_string(), r.to_string()],
                         out.to_string(),
                         output.fingerprint(),
                     );
@@ -460,14 +464,6 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                 );
-
-                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
-                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
-                let out_map_value = build_key_val_from_kv_args(flow.value());
-
-                let (anti_param_k, anti_param_v) =
-                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
-                let dedup_call = self.dedup_collection();
 
                 let pos_weight_concat = if self.config.is_incremental() {
                     quote! {}
@@ -526,14 +522,26 @@ impl Compiler {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
+                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
+                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
+                let out_map_key = build_key_val_from_kv_args(flow.key());
+                let out_map_value = build_key_val_from_kv_args(flow.value());
+                let out_map_expr = if output.is_k_only() {
+                    quote! { #out_map_key }
+                } else {
+                    quote! { ( #out_map_key, #out_map_value ) }
+                };
+                let (anti_param_k, anti_param_v) =
+                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
+                let dedup_call = self.dedup_collection();
 
                 // Record profiler info if enabled
                 if let Some(profiler) = profiler {
                     profiler.anti_join_arrange_operator(
                         transformation_name,
-                        vec![l_base.to_string(), r_base.to_string()],
-                        out.to_string(),
+                        vec![l.to_string(), r.to_string()],
+                        format!("{}_arr", out.to_string()),
                         output.fingerprint(),
                         output.is_k_only(),
                     );
@@ -546,20 +554,6 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                 );
-
-                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
-                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
-                let out_map_key = build_key_val_from_kv_args(flow.key());
-                let out_map_value = build_key_val_from_kv_args(flow.value());
-                let out_map_expr = if output.is_k_only() {
-                    quote! { #out_map_key }
-                } else {
-                    quote! { ( #out_map_key, #out_map_value ) }
-                };
-
-                let (anti_param_k, anti_param_v) =
-                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
-                let dedup_call = self.dedup_collection();
 
                 let pos_weight_concat = if self.config.is_incremental() {
                     quote! {}

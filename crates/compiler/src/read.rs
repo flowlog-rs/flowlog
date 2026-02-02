@@ -36,6 +36,10 @@ impl Compiler {
 
         self.imports.mark_input();
 
+        if let Some(profiler) = profiler {
+            profiler.update_input_block();
+        }
+
         edbs.iter()
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());

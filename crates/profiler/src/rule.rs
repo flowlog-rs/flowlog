@@ -4,7 +4,7 @@ use std::collections::HashSet;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct PlanTreeNodeProfile {
     fingerprints: String,
-    children: Vec<String>,
+    parents: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -20,20 +20,20 @@ impl RuleProfile {
     }
 
     fn render_plan_tree(plan_tree_info: &[((u64, Option<u64>), u64)]) -> Vec<PlanTreeNodeProfile> {
-        let fp_hex = |fp: u64| format!("0x{:x}", fp);
+        let fp_hex = |fp: u64| format!("0x{:016x}", fp);
         let outputs: HashSet<_> = plan_tree_info.iter().map(|(_, fp)| *fp).collect();
 
         plan_tree_info
             .iter()
             .map(|((fp1, fp2), output_fp)| {
-                let children = std::iter::once(*fp1)
+                let parents = std::iter::once(*fp1)
                     .chain(fp2.iter().copied())
                     .filter(|fp| outputs.contains(fp))
                     .map(fp_hex)
                     .collect();
                 PlanTreeNodeProfile {
                     fingerprints: fp_hex(*output_fp),
-                    children,
+                    parents,
                 }
             })
             .collect()

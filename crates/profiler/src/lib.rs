@@ -106,7 +106,7 @@ impl Profiler {
         fingerprint: u64,
         is_key_only: bool,
     ) {
-        let operator_steps = if is_key_only { 2 } else { 3 };
+        let operator_steps = if is_key_only { 3 } else { 2 };
         let node = self.node_manager.build_node(
             name,
             input_variable_names,
@@ -144,7 +144,7 @@ impl Profiler {
         fingerprint: u64,
         is_key_only: bool,
     ) {
-        let operator_steps = if is_key_only { 16 } else { 17 };
+        let operator_steps = if is_key_only { 17 } else { 16 };
         let node = self.node_manager.build_node(
             name,
             input_variable_names,
@@ -177,12 +177,12 @@ impl Profiler {
     pub fn recursive_enter_operator(
         &mut self,
         name: String,
-        input_variable_names: Vec<String>,
+        input_variable_name: String,
         output_variable_name: String,
     ) {
         let node = self.node_manager.build_node(
             format!("{}: enter", name),
-            input_variable_names,
+            vec![input_variable_name],
             Some(output_variable_name),
             "Runtime",
             1,
@@ -191,10 +191,15 @@ impl Profiler {
         self.nodes.push(node);
     }
 
-    pub fn recursive_feedback_operator(&mut self, name: String, output_variable_name: String) {
+    pub fn recursive_feedback_operator(
+        &mut self,
+        name: String,
+        input_variable_name: String,
+        output_variable_name: String,
+    ) {
         let node = self.node_manager.build_node(
             format!("{}: feedback", name),
-            vec![],
+            vec![input_variable_name],
             Some(output_variable_name),
             "Runtime",
             1,
@@ -203,11 +208,16 @@ impl Profiler {
         self.nodes.push(node);
     }
 
-    pub fn recursive_resultsin_operator(&mut self, name: String) {
+    pub fn recursive_resultsin_operator(
+        &mut self,
+        name: String,
+        input_variable_name: String,
+        output_variable_name: String,
+    ) {
         let node = self.node_manager.build_node(
             format!("{}: resultsin", name),
-            vec![],
-            None,
+            vec![input_variable_name],
+            Some(output_variable_name),
             "Runtime",
             1,
             None,
@@ -215,11 +225,16 @@ impl Profiler {
         self.nodes.push(node);
     }
 
-    pub fn recursive_leave_operator(&mut self, name: String) {
+    pub fn recursive_leave_operator(
+        &mut self,
+        name: String,
+        input_variable_name: String,
+        output_variable_name: String,
+    ) {
         let node = self.node_manager.build_node(
             format!("{}: leave", name),
-            vec![],
-            None,
+            vec![input_variable_name],
+            Some(output_variable_name),
             "Runtime",
             1,
             None,
@@ -227,10 +242,10 @@ impl Profiler {
         self.nodes.push(node);
     }
 
-    pub fn inspect_size_operator(&mut self, name: String) {
+    pub fn inspect_size_operator(&mut self, input_variable_name: String, name: String) {
         let node = self.node_manager.build_node(
             format!("{}: inspect", name),
-            vec![],
+            vec![input_variable_name],
             None,
             "Inspect",
             9,

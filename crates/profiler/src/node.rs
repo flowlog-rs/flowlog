@@ -99,6 +99,7 @@ impl NodeManager {
     /// Leave the current scope for address generation.
     pub(super) fn leave_scope(&mut self) {
         self.addr_cnt.leave_scope();
+        self.addr_cnt.advance(1);
     }
 
     /// Build a node with common metadata, optional fingerprint, and parents.

@@ -84,7 +84,7 @@ impl Compiler {
                         format!("concat & dedup: {}", output),
                         outs.iter().map(|id| id.to_string()).collect(),
                         output.to_string(),
-                        outs.len() as u32,
+                        outs.len() as u32 - 1,
                     );
                 }
                 quote! {

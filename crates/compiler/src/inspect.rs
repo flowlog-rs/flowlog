@@ -38,7 +38,7 @@ impl Compiler {
         };
 
         if let Some(profiler) = profiler.as_mut() {
-            profiler.inspect_size_operator(prefix.clone());
+            profiler.inspect_size_operator(prefix.clone(), prefix.clone());
         }
 
         quote! {{
