@@ -254,7 +254,7 @@ impl fmt::Display for StratumPlanner {
 
         writeln!(f, "Rules:")?;
         for (idx, rule_planner) in self.rule_planners.iter().enumerate() {
-            writeln!(f, "  ({:>2}) {}", idx, rule_planner.rule())?;
+            writeln!(f, "  ({:>2}) {:?}", idx, rule_planner.rule())?;
         }
         writeln!(f, "\n{}", "-".repeat(40))?;
 
@@ -264,7 +264,7 @@ impl fmt::Display for StratumPlanner {
             self.non_recursive_transformations.len()
         )?;
         for (idx, tx) in self.non_recursive_transformations.iter().enumerate() {
-            writeln!(f, "  [N{:>3}] {}", idx, tx)?;
+            writeln!(f, "  [N{:>3}] {:?}", idx, tx)?;
         }
         writeln!(f, "\n{}", "-".repeat(40))?;
 
@@ -275,7 +275,7 @@ impl fmt::Display for StratumPlanner {
                 self.recursive_transformations.len()
             )?;
             for (idx, tx) in self.recursive_transformations.iter().enumerate() {
-                writeln!(f, "  [R{:>3}] {}", idx, tx)?;
+                writeln!(f, "  [R{:>3}] {:?}", idx, tx)?;
             }
         } else {
             writeln!(f, "(Non-recursive stratum: no recursive transformations)")?;

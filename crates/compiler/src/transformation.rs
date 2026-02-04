@@ -34,7 +34,7 @@ impl Compiler {
         arranged_map: &mut HashMap<u64, Ident>,
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
-        let transformation_name = format!("{transformation:?}");
+        let transformation_name = format!("{transformation}");
         match transformation {
             // Row -> Row
             Transformation::RowToRow {

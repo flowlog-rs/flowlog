@@ -89,7 +89,7 @@ impl Lexeme for AtomArg {
 }
 
 /// `name(arg1, ..., argN)` predicate.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Atom {
     name: String,
     arguments: Vec<AtomArg>,
@@ -155,6 +155,19 @@ impl Atom {
 
 impl fmt::Display for Atom {
     /// Formats as `name(a, b, _)`, always including parentheses.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}(", self.name)?;
+        for (i, arg) in self.arguments.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{arg}")?;
+        }
+        write!(f, ")")
+    }
+}
+
+impl fmt::Debug for Atom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}(", self.name)?;
         for (i, arg) in self.arguments.iter().enumerate() {

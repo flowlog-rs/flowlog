@@ -71,7 +71,7 @@ impl PlanTree {
         }
 
         let plan_tree = Self { root, tree };
-        debug!("\nRule:\n  {}\nPlan tree:\n{}", catalog.rule(), plan_tree);
+        debug!("\nRule:\n  {:?}\nPlan tree:\n{}", catalog.rule(), plan_tree);
 
         // Return the constructed plan tree.
         plan_tree
