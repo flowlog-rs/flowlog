@@ -228,6 +228,15 @@ impl Compiler {
                         )
                         .as_collection(#merge_kv);
                 };
+
+                // Record profiling information if enabled
+                if let Some(profiler) = profiler.as_mut() {
+                    profiler.aggregate_operator(
+                        next_ident.to_string(),
+                        next_ident.to_string(),
+                        next_ident.to_string(),
+                    );
+                }
             }
             union_stmts.push(block);
         }

@@ -156,6 +156,23 @@ impl Profiler {
         self.nodes.push(node);
     }
 
+    pub fn aggregate_operator(
+        &mut self,
+        name: String,
+        input_variable_name: String,
+        output_variable_name: String,
+    ) {
+        let node = self.node_manager.build_node(
+            format!("{}: aggregate", name),
+            vec![input_variable_name],
+            Some(output_variable_name),
+            "Stage",
+            4,
+            None,
+        );
+        self.nodes.push(node);
+    }
+
     pub fn concat_operator(
         &mut self,
         name: String,
