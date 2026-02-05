@@ -13,7 +13,7 @@ use toml_edit::{value, Array, DocumentMut, Item};
 
 use super::Compiler;
 use crate::fs_utils::{ensure_dir, write_file};
-use profiler::Profiler;
+use profiler::{with_profiler_ref, Profiler};
 
 /// Embedded template for the incremental interactive command parser.
 ///
@@ -63,9 +63,9 @@ impl Compiler {
         }
 
         // Profiler logs if enabled
-        if let Some(profiler) = profiler {
-            self.write_profiler_logs(profiler, &self.config.executable_name())?;
-        }
+        with_profiler_ref(profiler, |profiler| {
+            self.write_profiler_logs(profiler, &self.config.executable_name())
+        })?;
 
         Ok(())
     }

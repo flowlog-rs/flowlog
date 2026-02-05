@@ -23,6 +23,28 @@ pub struct Profiler {
     node_manager: NodeManager,
 }
 
+/// Run a closure if a profiler instance is present.
+pub fn with_profiler<F>(profiler: &mut Option<Profiler>, f: F)
+where
+    F: FnOnce(&mut Profiler),
+{
+    if let Some(profiler) = profiler.as_mut() {
+        f(profiler);
+    }
+}
+
+/// Run a fallible closure if a profiler instance is present (shared reference).
+pub fn with_profiler_ref<F, E>(profiler: &Option<Profiler>, f: F) -> Result<(), E>
+where
+    F: FnOnce(&Profiler) -> Result<(), E>,
+{
+    if let Some(profiler) = profiler.as_ref() {
+        f(profiler)
+    } else {
+        Ok(())
+    }
+}
+
 impl Profiler {
     /// Serialize profiler data to a pretty JSON file.
     pub fn write_json<P: AsRef<std::path::Path>>(&self, path: P) -> io::Result<()> {

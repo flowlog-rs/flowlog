@@ -10,7 +10,7 @@
 use crate::Compiler;
 
 use common::ExecutionMode;
-use profiler::Profiler;
+use profiler::{with_profiler, Profiler};
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
@@ -37,9 +37,10 @@ impl Compiler {
             ExecutionMode::Batch => quote! {},
         };
 
-        if let Some(profiler) = profiler.as_mut() {
+        // Record inspect size operator in profiler if enabled
+        with_profiler(profiler, |profiler| {
             profiler.inspect_size_operator(prefix.clone(), prefix.clone());
-        }
+        });
 
         quote! {{
             #var
@@ -75,9 +76,10 @@ impl Compiler {
             ExecutionMode::Batch => quote! {},
         };
 
-        if let Some(profiler) = profiler.as_mut() {
+        // Record inspect content terminal operator in profiler if enabled
+        with_profiler(profiler, |profiler| {
             profiler.inspect_content_terminal_operator(prefix.clone(), prefix.clone());
-        }
+        });
 
         if arity == 0 {
             quote! {{
@@ -118,9 +120,10 @@ impl Compiler {
             ExecutionMode::Batch => quote! {},
         };
 
-        if let Some(profiler) = profiler.as_mut() {
+        // Record inspect content file operator in profiler if enabled
+        with_profiler(profiler, |profiler| {
             profiler.inspect_content_file_operator(rel_name.clone(), rel_name.clone());
-        }
+        });
 
         let data_accessors: Vec<TokenStream> = (0..arity)
             .map(|i| {

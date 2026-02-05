@@ -31,7 +31,7 @@ use syn::parse2;
 use common::{Config, ExecutionMode};
 use parser::{DataType, Program};
 use planner::StratumPlanner;
-use profiler::Profiler;
+use profiler::{with_profiler, Profiler};
 
 use import::ImportTracker;
 use inspect::gen_delete_partitions;
@@ -77,9 +77,11 @@ impl Compiler {
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
     ) -> std::io::Result<()> {
-        if let Some(profiler) = profiler {
+        // Record entering main dataflow scope in profiler if enabled
+        with_profiler(profiler, |profiler| {
             profiler.enter_scope();
-        }
+        });
+
         let main_rs = self.generate_main(strata, profiler);
         self.write_project(&main_rs, profiler)
     }
@@ -110,9 +112,11 @@ impl Compiler {
         let mut calculated_output_fps: HashSet<u64> = HashSet::new();
 
         for (idx, stratum) in strata.iter().enumerate() {
-            if let Some(profiler) = profiler {
+            // Record new stratum block in profiler if enabled
+            with_profiler(profiler, |profiler| {
                 profiler.update_stratum_block(idx);
-            }
+            });
+
             let (core_flows, non_recursive_arranged_map) = self
                 .gen_non_recursive_core_flows(stratum.non_recursive_transformations(), profiler);
             flow_stmts.extend(core_flows);
@@ -549,9 +553,10 @@ impl Compiler {
         let mut merge_stmts = Vec::new();
         let mut delete_stmts = Vec::new();
 
-        if let Some(profiler) = profiler {
+        // Record enter inspect block in profiler if enabled
+        with_profiler(profiler, |profiler| {
             profiler.update_inspect_block();
-        }
+        });
 
         for idb in self.program.idbs() {
             let var = self.find_global_ident(idb.fingerprint());

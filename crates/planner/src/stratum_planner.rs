@@ -8,7 +8,7 @@ use catalog::Catalog;
 use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
 use parser::{AggregationOperator, HeadArg};
-use profiler::Profiler;
+use profiler::{with_profiler, Profiler};
 
 use crate::{RulePlanner, Transformation, TransformationInfo};
 
@@ -127,7 +127,7 @@ impl StratumPlanner {
         });
 
         // Profiler: record rule logic profiles if enabled
-        if let Some(profiler) = profiler {
+        with_profiler(profiler, |profiler| {
             for rule_planner in rule_planners.iter() {
                 profiler.insert_rule(
                     rule_planner.rule().to_string(),
@@ -138,7 +138,7 @@ impl StratumPlanner {
                         .collect(),
                 );
             }
-        }
+        });
 
         // Phase 5: Materialize deduplicated transformations
         // this phase also do sharing optimization across rules

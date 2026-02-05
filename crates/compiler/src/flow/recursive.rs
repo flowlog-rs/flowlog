@@ -17,7 +17,7 @@ use crate::Compiler;
 
 use parser::AggregationOperator;
 use planner::StratumPlanner;
-use profiler::Profiler;
+use profiler::{with_profiler, Profiler};
 
 // =========================================================================
 // Recursive Flow Generation
@@ -32,45 +32,54 @@ impl Compiler {
     ) -> TokenStream {
         self.imports.mark_recursive();
 
-        if let Some(profiler) = profiler.as_mut() {
+        // Profiler: enter recursive scope (optional)
+        with_profiler(profiler, |profiler| {
             profiler.enter_scope();
-        }
+        });
 
+        // Early exit if nothing leaves recursion.
         let leave_fps = stratum.recursion_leave_collections();
         if leave_fps.is_empty() {
             return quote! {};
         }
 
+        // Build enter bindings.
         let enter_fps = stratum.recursion_enter_collections();
         let (enter_stmts, enter_bindings, mut recursive_arranged) =
             self.build_enter_bindings(non_recursive_arranged_map, enter_fps, profiler);
 
+        // Build iterative variable bindings.
         let iterative_fps = stratum.recursion_iterative_collections();
         let (iter_names, iter_bindings) = self.build_iterative_bindings(iterative_fps);
 
+        // Initialize iterative variables and record feedback operators.
         let iter_var_inits: Vec<TokenStream> = iter_names
             .iter()
             .map(|name| {
-                if let Some(profiler) = profiler.as_mut() {
+                // Profiler: feedback operator (optional)
+                with_profiler(profiler, |profiler| {
                     profiler.recursive_feedback_operator(
                         name.to_string(),
                         name.to_string(),
                         name.to_string(),
                     );
-                }
+                });
                 quote! { let #name = SemigroupVariable::new(inner, timely::order::Product::new(Default::default(), 1)); }
             })
             .collect();
 
+        // Compose current binding map (enter + iterative).
         let mut current: HashMap<u64, Ident> = enter_bindings.clone();
         current.extend(iter_bindings.clone());
 
+        // Generate recursive transformations.
         let flow_stmts: Vec<TokenStream> = stratum
             .recursive_transformations()
             .iter()
             .map(|tx| self.gen_transformation(&current, tx, &mut recursive_arranged, profiler))
             .collect();
 
+        // Collect unions and (optional) aggregation for IDB outputs.
         let (next_bindings, union_stmts) = self.collect_unions(
             stratum.output_to_idb_map(),
             &enter_bindings,
@@ -78,25 +87,29 @@ impl Compiler {
             profiler,
         );
 
+        // Feedback: set iterative variables.
         let set_stmts: Vec<TokenStream> = next_bindings
             .iter()
             .map(|(fp, next_ident)| {
                 let iter_var = find_local_ident(&current, *fp);
-                if let Some(profiler) = profiler.as_mut() {
+                // Profiler: results-in operator (optional)
+                with_profiler(profiler, |profiler| {
                     profiler.recursive_resultsin_operator(
                         iter_var.to_string(),
                         next_ident.to_string(),
                         next_ident.to_string(),
                     );
-                }
+                });
                 quote! { #iter_var.set(&#next_ident); }
             })
             .collect();
 
-        if let Some(profiler) = profiler.as_mut() {
+        // Profiler: leave recursive scope (optional)
+        with_profiler(profiler, |profiler| {
             profiler.leave_scope();
-        }
+        });
 
+        // Build leave outputs for recursion.
         let (leave_pattern, leave_stmt) =
             self.build_leave_outputs(leave_fps, &next_bindings, profiler);
 
@@ -131,6 +144,7 @@ impl Compiler {
         let mut recursive_arranged: HashMap<u64, Ident> = HashMap::new();
 
         for fp in enter_fps {
+            // Resolve source collection and create enter binding.
             let source = non_recursive_arranged_map
                 .get(fp)
                 .cloned()
@@ -139,15 +153,16 @@ impl Compiler {
             bindings.insert(*fp, entered.clone());
             stmts.push(quote! { let #entered = #source.enter(inner); });
 
-            // record profiling information if enabled
-            if let Some(profiler) = profiler.as_mut() {
+            // Profiler: enter operator (optional)
+            with_profiler(profiler, |profiler| {
                 profiler.recursive_enter_operator(
                     source.to_string(),
                     source.to_string(),
                     entered.to_string(),
                 );
-            }
+            });
 
+            // Preserve arranged bindings for recursive paths.
             if non_recursive_arranged_map.contains_key(fp) {
                 let entered_arr =
                     format_ident!("in_{}", non_recursive_arranged_map.get(fp).unwrap());
@@ -170,6 +185,7 @@ impl Compiler {
         let mut union_stmts = Vec::new();
 
         for (output_fp, idb_fps) in output_to_idb_map {
+            // Determine output binding name and union sources.
             let next_ident = format_ident!("next_{}", output_fp);
             next_bindings.insert(*output_fp, next_ident.clone());
 
@@ -180,6 +196,7 @@ impl Compiler {
                 sources.push(entered.clone());
             }
 
+            // Build concatenation expression for all sources.
             let (head, tail) = sources
                 .split_first()
                 .expect("at least one source collection for union");
@@ -188,13 +205,14 @@ impl Compiler {
                 quote! { #ts.concat(&#ident) }
             });
 
+            // Apply dedup to merged collection.
             let dedup_call = self.dedup_collection();
             let mut block = quote! {
                 let #next_ident = #union_expr #dedup_call;
             };
 
-            // Record profiling information if enabled
-            if let Some(profiler) = profiler.as_mut() {
+            // Profiler: union / dedup operator (optional)
+            with_profiler(profiler, |profiler| {
                 let output_name = self.find_global_ident(*output_fp).to_string();
                 if sources.len() > 1 {
                     profiler.concat_operator(
@@ -210,7 +228,7 @@ impl Compiler {
                         next_ident.to_string(),
                     );
                 }
-            }
+            });
 
             if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
                 self.imports.mark_aggregation();
@@ -218,6 +236,7 @@ impl Compiler {
                 let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
                 let reduce_logic = aggregation_reduce(agg_op);
                 let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
+                // Aggregate after union + dedup.
                 block = quote! {
                     #block
                     let #next_ident = #next_ident
@@ -229,14 +248,14 @@ impl Compiler {
                         .as_collection(#merge_kv);
                 };
 
-                // Record profiling information if enabled
-                if let Some(profiler) = profiler.as_mut() {
+                // Profiler: aggregation operator (optional)
+                with_profiler(profiler, |profiler| {
                     profiler.aggregate_operator(
                         next_ident.to_string(),
                         next_ident.to_string(),
                         next_ident.to_string(),
                     );
-                }
+                });
             }
             union_stmts.push(block);
         }
@@ -251,6 +270,7 @@ impl Compiler {
         next: &HashMap<u64, Ident>,
         profiler: &mut Option<Profiler>,
     ) -> (TokenStream, TokenStream) {
+        // Resolve target identifiers and construct pattern.
         let targets: Vec<Ident> = leave_fps
             .iter()
             .map(|fp| self.find_global_ident(*fp))
@@ -268,13 +288,14 @@ impl Compiler {
                 let next_ident = next
                     .get(fp)
                     .expect("leave relation missing from next bindings during recursion");
-                if let Some(profiler) = profiler.as_mut() {
+                // Profiler: leave operator (optional)
+                with_profiler(profiler, |profiler| {
                     profiler.recursive_leave_operator(
                         target.to_string(),
                         next_ident.to_string(),
                         target.to_string(),
                     );
-                }
+                });
                 quote! { #next_ident.leave() }
             })
             .collect();
