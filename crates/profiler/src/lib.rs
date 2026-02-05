@@ -7,7 +7,7 @@ mod rule;
 use crate::node::{NodeManager, NodeProfile};
 use crate::rule::RuleProfile;
 use serde::{Deserialize, Serialize};
-use std::io::{self, ErrorKind};
+use std::io;
 
 const TAG_INPUT: &str = "Input";
 const TAG_STAGE: &str = "Stage";
@@ -26,8 +26,7 @@ pub struct Profiler {
 impl Profiler {
     /// Serialize profiler data to a pretty JSON file.
     pub fn write_json<P: AsRef<std::path::Path>>(&self, path: P) -> io::Result<()> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|err| io::Error::new(ErrorKind::Other, err))?;
+        let json = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
         std::fs::write(path, json)
     }
 
