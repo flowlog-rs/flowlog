@@ -76,7 +76,7 @@ impl Compiler {
         };
 
         if let Some(profiler) = profiler.as_mut() {
-            profiler.inspect_content_terminal_operator(prefix.clone());
+            profiler.inspect_content_terminal_operator(prefix.clone(), prefix.clone());
         }
 
         if arity == 0 {
@@ -119,7 +119,7 @@ impl Compiler {
         };
 
         if let Some(profiler) = profiler.as_mut() {
-            profiler.inspect_content_file_operator(rel_name.clone());
+            profiler.inspect_content_file_operator(rel_name.clone(), rel_name.clone());
         }
 
         let data_accessors: Vec<TokenStream> = (0..arity)
@@ -129,17 +129,25 @@ impl Compiler {
             })
             .collect();
 
-        // Generate the write statement. In incremental mode, append `diff` at the end.
-        let write_stmt = match (self.config.mode(), arity) {
-            (_, 0) => quote! {
-                writeln!(&mut file, "True").expect("write failed");
-            },
+        // Generate the inspect pattern and write statement based on mode and arity.
+        let (inspect_pattern, write_stmt) = match (self.config.mode(), arity) {
+            (ExecutionMode::Batch, 0) => (
+                quote! { (data, _time, _diff) },
+                quote! { writeln!(&mut file, "True").expect("write failed"); },
+            ),
+            (ExecutionMode::Incremental, 0) => (
+                quote! { (data, _time, diff) },
+                quote! { writeln!(&mut file, "True").expect("write failed"); },
+            ),
             (ExecutionMode::Batch, _) => {
                 let fmt = vec!["{}"; arity].join(",");
                 let fmt = LitStr::new(&fmt, Span::call_site());
-                quote! {
-                    writeln!(&mut file, #fmt #(, #data_accessors )*).expect("write failed");
-                }
+                (
+                    quote! { (data, _time, _diff) },
+                    quote! {
+                        writeln!(&mut file, #fmt #(, #data_accessors )*).expect("write failed");
+                    },
+                )
             }
             (ExecutionMode::Incremental, _) => {
                 // tuple fields + ",{:+}" for diff at the end
@@ -147,9 +155,13 @@ impl Compiler {
                 parts.push("{:+}");
                 let fmt = parts.join("  ");
                 let fmt = LitStr::new(&fmt, Span::call_site());
-                quote! {
-                    writeln!(&mut file, #fmt #(, #data_accessors )*, diff).expect("write failed");
-                }
+                (
+                    quote! { (data, _time, diff) },
+                    quote! {
+                        writeln!(&mut file, #fmt #(, #data_accessors )*, diff)
+                            .expect("write failed");
+                    },
+                )
             }
         };
 
@@ -164,7 +176,7 @@ impl Compiler {
                 .open(&path)
                 .unwrap_or_else(|e| panic!("failed to create {}: {}", path, e));
 
-            #var.inspect(move |(data, _time, diff)| {
+            #var.inspect(move |#inspect_pattern| {
                 use std::io::Write as _;
                 #write_stmt
             })

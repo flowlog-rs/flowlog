@@ -84,7 +84,7 @@ impl Compiler {
                         output.to_string(),
                         outs.iter().map(|id| id.to_string()).collect(),
                         output.to_string(),
-                        outs.len() as u32 - 1,
+                        outs.len() as u32,
                     );
                 }
                 quote! {
@@ -95,10 +95,11 @@ impl Compiler {
             } else {
                 // Record profiling information if enabled
                 if let Some(profiler) = profiler.as_mut() {
-                    profiler.input_dedup_operator(
+                    profiler.concat_operator(
                         output.to_string(),
-                        expr.to_string(),
+                        outs.iter().map(|id| id.to_string()).collect(),
                         output.to_string(),
+                        outs.len() as u32 - 1,
                     );
                 }
                 quote! {

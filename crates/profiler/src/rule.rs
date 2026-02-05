@@ -1,12 +1,20 @@
+//! Rule profiling data and plan tree rendering helpers.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+type PlanTreeInfo = [((u64, Option<u64>), u64)];
+
+/// A node entry in the rendered plan tree for a rule.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct PlanTreeNodeProfile {
-    fingerprints: String,
+    /// The output fingerprint for this plan node.
+    fingerprint: String,
+    /// Parent output fingerprints (only if they appear in the plan tree outputs).
     parents: Vec<String>,
 }
 
+/// A rule profile including the original rule text and a rendered plan tree.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(super) struct RuleProfile {
     text: String,
@@ -19,9 +27,8 @@ impl RuleProfile {
         Self { text, plan_tree }
     }
 
-    fn render_plan_tree(plan_tree_info: &[((u64, Option<u64>), u64)]) -> Vec<PlanTreeNodeProfile> {
-        let fp_hex = |fp: u64| format!("0x{:016x}", fp);
-        let outputs: HashSet<_> = plan_tree_info.iter().map(|(_, fp)| *fp).collect();
+    fn render_plan_tree(plan_tree_info: &PlanTreeInfo) -> Vec<PlanTreeNodeProfile> {
+        let outputs: HashSet<u64> = plan_tree_info.iter().map(|(_, fp)| *fp).collect();
 
         plan_tree_info
             .iter()
@@ -29,13 +36,18 @@ impl RuleProfile {
                 let parents = std::iter::once(*fp1)
                     .chain(fp2.iter().copied())
                     .filter(|fp| outputs.contains(fp))
-                    .map(fp_hex)
+                    .map(Self::format_fingerprint)
                     .collect();
                 PlanTreeNodeProfile {
-                    fingerprints: fp_hex(*output_fp),
+                    fingerprint: Self::format_fingerprint(*output_fp),
                     parents,
                 }
             })
             .collect()
+    }
+
+    #[inline]
+    fn format_fingerprint(fp: u64) -> String {
+        format!("0x{:016x}", fp)
     }
 }

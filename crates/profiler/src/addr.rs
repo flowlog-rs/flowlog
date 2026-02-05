@@ -5,6 +5,7 @@
 //! We store it as a Vec<u32> and derive ordering so it can be used in BTreeSet/Map.
 
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 /// Address in a Timely Dataflow log, representing nested scopes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -24,7 +25,11 @@ impl Addr {
 
     /// Leave the current scope.
     pub fn leave_scope(&mut self) {
-        self.0.pop();
+        if self.0.len() > 1 {
+            self.0.pop();
+        } else {
+            error!("Profiler error: attempted to leave root address scope");
+        }
     }
 
     /// Advance the last position by `steps`, returning previous addresses.
