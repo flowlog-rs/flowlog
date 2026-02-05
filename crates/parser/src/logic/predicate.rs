@@ -81,8 +81,12 @@ impl fmt::Display for Predicate {
 
 impl fmt::Debug for Predicate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Delegate Debug to Display
-        fmt::Display::fmt(self, f)
+        match self {
+            Self::PositiveAtomPredicate(atom) => write!(f, "{atom:?}"),
+            Self::NegativeAtomPredicate(atom) => write!(f, "!{atom:?}"),
+            Self::ComparePredicate(expr) => write!(f, "{expr}"),
+            Self::BoolPredicate(b) => write!(f, "{b}"),
+        }
     }
 }
 

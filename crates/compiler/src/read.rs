@@ -18,6 +18,7 @@ use std::path::Path;
 use super::Compiler;
 use common::ExecutionMode;
 use parser::{ConstType, DataType, Relation};
+use profiler::{with_profiler, Profiler};
 
 impl Compiler {
     /// Generate per-EDB declarations as `(handle, collection)` pairs:
@@ -25,7 +26,7 @@ impl Compiler {
     /// ```ignore
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
-    pub(super) fn gen_input_decls(&mut self) -> Vec<TokenStream> {
+    pub(super) fn gen_input_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
         let normalize = self.dedup_collection();
 
         let edbs = self.program.edbs();
@@ -35,10 +36,26 @@ impl Compiler {
 
         self.imports.mark_input();
 
+        // Record enter inpus block if profiler is enabled
+        with_profiler(profiler, |profiler| {
+            profiler.update_input_block();
+        });
+
         edbs.iter()
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
                 let coll = format_ident!("{}", rel.name());
+
+                // Record input EDB operator and dedup operator in profiler if enabled
+                with_profiler(profiler, |profiler| {
+                    profiler.input_edb_operator(rel.name().to_string(), coll.to_string());
+                    profiler.input_dedup_operator(
+                        rel.name().to_string(),
+                        coll.to_string(),
+                        coll.to_string(),
+                    );
+                });
+
                 quote! {
                     let (#handle, #coll) = scope.new_collection::<_, Diff>();
                     let #coll = #coll #normalize;
@@ -108,6 +125,7 @@ impl Compiler {
             if rel.arity() > 0 {
                 self.imports.mark_std_file();
                 self.imports.mark_std_buf_io();
+                self.imports.mark_semiring_one();
             }
 
             self.imports.mark_semiring_one();

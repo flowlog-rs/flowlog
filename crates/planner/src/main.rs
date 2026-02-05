@@ -1,8 +1,10 @@
 use clap::Parser;
+
 use common::{get_example_files, Config, TestResult};
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
+use profiler::Profiler;
 use stratifier::Stratifier;
 use tracing_subscriber::EnvFilter;
 
@@ -16,7 +18,7 @@ fn main() {
                 EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
             )
             .init();
-        run_all_examples();
+        run_all_examples(&config);
         return;
     }
 
@@ -34,11 +36,23 @@ fn main() {
 
     // Plan each stratum using StratumPlanner
     let mut optimizer = Optimizer::new();
-    plan_and_print(&mut optimizer, &stratifier);
+
+    // Profiler to collect profiling data
+    let mut profiler = if config.profiling_enabled() {
+        Some(Profiler::default())
+    } else {
+        None
+    };
+
+    plan_and_print(&mut optimizer, &stratifier, &mut profiler);
 }
 
 /// Plan and print results for each stratum in the stratified program
-fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
+fn plan_and_print(
+    optimizer: &mut Optimizer,
+    stratifier: &Stratifier,
+    profiler: &mut Option<Profiler>,
+) {
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
         let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
 
@@ -48,6 +62,7 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
         let _stratum_planner = StratumPlanner::from_rules(
             &rules,
             optimizer,
+            profiler,
             is_recursive,
             stratifier.stratum_iterative_relation(stratum_idx),
             stratifier.stratum_leave_relation(stratum_idx),
@@ -57,7 +72,7 @@ fn plan_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 }
 
 /// Run planner on all example files in the example directory
-fn run_all_examples() {
+fn run_all_examples(config: &Config) {
     let example_files = get_example_files();
     let mut formatter = TestResult::new("planner", example_files.len());
 
@@ -68,6 +83,11 @@ fn run_all_examples() {
             let program = Program::parse(file_path.to_str().unwrap());
             let stratifier = Stratifier::from_program(&program);
             let mut optimizer = Optimizer::new();
+            let mut profiler = if config.profiling_enabled() {
+                Some(Profiler::default())
+            } else {
+                None
+            };
 
             // Run stratum planner without printing details
             for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
@@ -76,6 +96,7 @@ fn run_all_examples() {
                 let _sp = StratumPlanner::from_rules(
                     &rules,
                     &mut optimizer,
+                    &mut profiler,
                     is_recursive,
                     stratifier.stratum_iterative_relation(stratum_idx),
                     stratifier.stratum_leave_relation(stratum_idx),

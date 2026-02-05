@@ -253,28 +253,42 @@ run_compile_check() {
 
     local program_stem="${prog_file%.*}"
     local mode="batch"
-    local package_name
-    package_name="$(sanitize_package_name "${program_stem}_${dataset_id}_${mode}")"
-    local project_dir="${ROOT_DIR}/${package_name}"
 
-    log "$BLUE" "CHECK" "$prog_file (id=$dataset_id, mode=$mode)"
+    local profiles=("" "-P")
+    local profile_labels=("" "prof")
 
-    rm -rf "$project_dir"
-    log "$YELLOW" "GENERATE" "$COMPILER_BIN $prog_path -F $facts_dir -o $project_dir --mode $mode"
-    "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$project_dir" --mode "$mode"
+    for idx in "${!profiles[@]}"; do
+        local profile_flag="${profiles[$idx]}"
+        local profile_label="${profile_labels[$idx]}"
+        local label_suffix="${profile_label:+_${profile_label}}"
 
-    if [ ! -d "$project_dir" ]; then
-        die "Generated project not found (mode=$mode): $project_dir"
-    fi
+        local package_name
+        package_name="$(sanitize_package_name "${program_stem}_${dataset_id}_${mode}${label_suffix}")"
+        local project_dir="${ROOT_DIR}/${package_name}"
 
-    local log_file="${LOG_DIR}/${program_stem}_${dataset_id}_${mode}_compile.log"
-    pushd "$project_dir" >/dev/null
-    log "$YELLOW" "RUN" "cargo check --release (mode=$mode)"
-    cargo check --release 2>&1 | tee "$log_file"
-    popd >/dev/null
+        log "$BLUE" "CHECK" "$prog_file (id=$dataset_id, mode=$mode${label_suffix})"
 
-    log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
-    rm -rf "$project_dir"
+        rm -rf "$project_dir"
+        log "$YELLOW" "GENERATE" "$COMPILER_BIN $prog_path -F $facts_dir -o $project_dir --mode $mode ${profile_flag}"
+        if [ -n "$profile_flag" ]; then
+            "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$project_dir" --mode "$mode" "$profile_flag"
+        else
+            "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$project_dir" --mode "$mode"
+        fi
+
+        if [ ! -d "$project_dir" ]; then
+            die "Generated project not found (mode=$mode${label_suffix}): $project_dir"
+        fi
+
+        local log_file="${LOG_DIR}/${program_stem}_${dataset_id}_${mode}${label_suffix}_compile.log"
+        pushd "$project_dir" >/dev/null
+        log "$YELLOW" "RUN" "cargo check --release (mode=$mode${label_suffix})"
+        cargo check --release 2>&1 | tee "$log_file"
+        popd >/dev/null
+
+        log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
+        rm -rf "$project_dir"
+    done
 }
 
 run_all_compile_checks() {
@@ -448,42 +462,55 @@ run_test() {
     local package_name_raw="${program_stem}_${dataset_name}"
 
     local mode="batch"
-    local package_name
-    package_name="$(sanitize_package_name "${package_name_raw}_${mode}")"
-    local project_dir="${ROOT_DIR}/${package_name}"
+    local profiles=("" "-P")
+    local profile_labels=("" "prof")
 
-    log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=$mode)"
+    for idx in "${!profiles[@]}"; do
+        local profile_flag="${profiles[$idx]}"
+        local profile_label="${profile_labels[$idx]}"
+        local label_suffix="${profile_label:+_${profile_label}}"
 
-    rm -rf "$project_dir"
+        local package_name
+        package_name="$(sanitize_package_name "${package_name_raw}_${mode}${label_suffix}")"
+        local project_dir="${ROOT_DIR}/${package_name}"
 
-    log "$YELLOW" "GENERATE" "$COMPILER_BIN $prog_path -F $dataset_path -o $project_dir --mode $mode"
-    "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir" --mode "$mode"
+        log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=$mode${label_suffix})"
 
-    if [ ! -d "$project_dir" ]; then
-        die "Generated project not found (mode=$mode): $project_dir"
-    fi
+        rm -rf "$project_dir"
 
-    local log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${mode}.log"
-    pushd "$project_dir" >/dev/null
-    log "$YELLOW" "RUN" "cargo run --release -- -w $WORKERS (mode=$mode)"
-    cargo run --release -- -w "$WORKERS" 2>&1 | tee "$log_file"
-    popd >/dev/null
+        log "$YELLOW" "GENERATE" "$COMPILER_BIN $prog_path -F $dataset_path -o $project_dir --mode $mode ${profile_flag}"
+        if [ -n "$profile_flag" ]; then
+            "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir" --mode "$mode" "$profile_flag"
+        else
+            "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir" --mode "$mode"
+        fi
 
-    if [ ! -f "$log_file" ]; then
-        die "Run log missing (mode=$mode): $log_file"
-    fi
+        if [ ! -d "$project_dir" ]; then
+            die "Generated project not found (mode=$mode${label_suffix}): $project_dir"
+        fi
 
-    local parsed_file="${PARSED_DIR}/${program_stem}_${dataset_name}_${mode}_size.txt"
-    parse_output_to_size_file "$log_file" "$parsed_file" || {
-        die "Failed to parse output for $prog_file (mode=$mode)"
-    }
+        local log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${mode}${label_suffix}.log"
+        pushd "$project_dir" >/dev/null
+        log "$YELLOW" "RUN" "cargo run --release -- -w $WORKERS (mode=$mode${label_suffix})"
+        cargo run --release -- -w "$WORKERS" 2>&1 | tee "$log_file"
+        popd >/dev/null
 
-    if ! verify_results_against_truth "$program_stem" "$dataset_name" "$parsed_file"; then
-        die "Reference verification failed for $prog_file (mode=$mode)"
-    fi
+        if [ ! -f "$log_file" ]; then
+            die "Run log missing (mode=$mode${label_suffix}): $log_file"
+        fi
 
-    log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
-    rm -rf "$project_dir"
+        local parsed_file="${PARSED_DIR}/${program_stem}_${dataset_name}_${mode}${label_suffix}_size.txt"
+        parse_output_to_size_file "$log_file" "$parsed_file" || {
+            die "Failed to parse output for $prog_file (mode=$mode${label_suffix})"
+        }
+
+        if ! verify_results_against_truth "$program_stem" "$dataset_name" "$parsed_file"; then
+            die "Reference verification failed for $prog_file (mode=$mode${label_suffix})"
+        fi
+
+        log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
+        rm -rf "$project_dir"
+    done
 
     cleanup_dataset "$dataset_name"
 }

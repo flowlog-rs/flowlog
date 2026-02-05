@@ -10,6 +10,7 @@
 use crate::Compiler;
 
 use common::ExecutionMode;
+use profiler::{with_profiler, Profiler};
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
@@ -23,13 +24,23 @@ impl Compiler {
     /// - convert to the underlying `(data, time, diff)` stream
     /// - map everything to the single key `()` so all updates consolidate into one
     /// - consolidate and inspect the resulting multiplicity (the size)
-    pub(crate) fn gen_size_inspector(&self, var: &Ident, name: &str) -> TokenStream {
+    pub(crate) fn gen_size_inspector(
+        &self,
+        var: &Ident,
+        name: &str,
+        profiler: &mut Option<Profiler>,
+    ) -> TokenStream {
         let prefix = name.to_string();
 
         let maybe_probe = match self.config.mode() {
             ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
             ExecutionMode::Batch => quote! {},
         };
+
+        // Record inspect size operator in profiler if enabled
+        with_profiler(profiler, |profiler| {
+            profiler.inspect_size_operator(prefix.clone(), prefix.clone());
+        });
 
         quote! {{
             #var
@@ -51,13 +62,24 @@ impl Compiler {
     ///
     /// If `arity == 0`, print `True` instead of `()`, matching common Datalog
     /// conventions for 0-arity relations.
-    pub(crate) fn gen_print_inspector(&self, var: &Ident, name: &str, arity: usize) -> TokenStream {
+    pub(crate) fn gen_print_inspector(
+        &self,
+        var: &Ident,
+        name: &str,
+        arity: usize,
+        profiler: &mut Option<Profiler>,
+    ) -> TokenStream {
         let prefix = name.to_string();
 
         let maybe_probe = match self.config.mode() {
             ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
             ExecutionMode::Batch => quote! {},
         };
+
+        // Record inspect content terminal operator in profiler if enabled
+        with_profiler(profiler, |profiler| {
+            profiler.inspect_content_terminal_operator(prefix.clone(), prefix.clone());
+        });
 
         if arity == 0 {
             quote! {{
@@ -88,6 +110,7 @@ impl Compiler {
         name: &str,
         parent_dir: &str,
         arity: usize,
+        profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let base_dir = parent_dir.to_string();
         let rel_name = name.to_string();
@@ -97,6 +120,11 @@ impl Compiler {
             ExecutionMode::Batch => quote! {},
         };
 
+        // Record inspect content file operator in profiler if enabled
+        with_profiler(profiler, |profiler| {
+            profiler.inspect_content_file_operator(rel_name.clone(), rel_name.clone());
+        });
+
         let data_accessors: Vec<TokenStream> = (0..arity)
             .map(|i| {
                 let idx = Index::from(i);
@@ -104,17 +132,25 @@ impl Compiler {
             })
             .collect();
 
-        // Generate the write statement. In incremental mode, append `diff` at the end.
-        let write_stmt = match (self.config.mode(), arity) {
-            (_, 0) => quote! {
-                writeln!(&mut file, "True").expect("write failed");
-            },
+        // Generate the inspect pattern and write statement based on mode and arity.
+        let (inspect_pattern, write_stmt) = match (self.config.mode(), arity) {
+            (ExecutionMode::Batch, 0) => (
+                quote! { (data, _time, _diff) },
+                quote! { writeln!(&mut file, "True").expect("write failed"); },
+            ),
+            (ExecutionMode::Incremental, 0) => (
+                quote! { (data, _time, diff) },
+                quote! { writeln!(&mut file, "True").expect("write failed"); },
+            ),
             (ExecutionMode::Batch, _) => {
                 let fmt = vec!["{}"; arity].join(",");
                 let fmt = LitStr::new(&fmt, Span::call_site());
-                quote! {
-                    writeln!(&mut file, #fmt #(, #data_accessors )*).expect("write failed");
-                }
+                (
+                    quote! { (data, _time, _diff) },
+                    quote! {
+                        writeln!(&mut file, #fmt #(, #data_accessors )*).expect("write failed");
+                    },
+                )
             }
             (ExecutionMode::Incremental, _) => {
                 // tuple fields + ",{:+}" for diff at the end
@@ -122,9 +158,13 @@ impl Compiler {
                 parts.push("{:+}");
                 let fmt = parts.join("  ");
                 let fmt = LitStr::new(&fmt, Span::call_site());
-                quote! {
-                    writeln!(&mut file, #fmt #(, #data_accessors )*, diff).expect("write failed");
-                }
+                (
+                    quote! { (data, _time, diff) },
+                    quote! {
+                        writeln!(&mut file, #fmt #(, #data_accessors )*, diff)
+                            .expect("write failed");
+                    },
+                )
             }
         };
 
@@ -139,7 +179,7 @@ impl Compiler {
                 .open(&path)
                 .unwrap_or_else(|e| panic!("failed to create {}: {}", path, e));
 
-            #var.inspect(move |(data, _time, diff)| {
+            #var.inspect(move |#inspect_pattern| {
                 use std::io::Write as _;
                 #write_stmt
             })

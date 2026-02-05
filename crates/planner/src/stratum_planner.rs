@@ -1,13 +1,14 @@
 //! Stratum planner that plans a stratum (a group of rules).
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use tracing::debug;
 
 use catalog::Catalog;
 use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
 use parser::{AggregationOperator, HeadArg};
-use std::fmt;
-use tracing::debug;
+use profiler::{with_profiler, Profiler};
 
 use crate::{RulePlanner, Transformation, TransformationInfo};
 
@@ -61,6 +62,7 @@ impl StratumPlanner {
     pub fn from_rules(
         stratum: &[FlowLogRule],
         optimizer: &mut Optimizer,
+        profiler: &mut Option<Profiler>,
         is_recursive: bool,
         iterative_relation: &[u64],
         leave_relation: &[u64],
@@ -122,6 +124,20 @@ impl StratumPlanner {
         // Debug info for per-rule plan trees
         rule_planners.iter().for_each(|rp| {
             debug!("{}", rp);
+        });
+
+        // Profiler: record rule logic profiles if enabled
+        with_profiler(profiler, |profiler| {
+            for rule_planner in rule_planners.iter() {
+                profiler.insert_rule(
+                    rule_planner.rule().to_string(),
+                    rule_planner
+                        .transformation_infos()
+                        .iter()
+                        .map(|info| (info.input_info_fp(), info.output_info_fp()))
+                        .collect(),
+                );
+            }
         });
 
         // Phase 5: Materialize deduplicated transformations
@@ -238,7 +254,7 @@ impl fmt::Display for StratumPlanner {
 
         writeln!(f, "Rules:")?;
         for (idx, rule_planner) in self.rule_planners.iter().enumerate() {
-            writeln!(f, "  ({:>2}) {}", idx, rule_planner.rule())?;
+            writeln!(f, "  ({:>2}) {:?}", idx, rule_planner.rule())?;
         }
         writeln!(f, "\n{}", "-".repeat(40))?;
 
@@ -248,7 +264,7 @@ impl fmt::Display for StratumPlanner {
             self.non_recursive_transformations.len()
         )?;
         for (idx, tx) in self.non_recursive_transformations.iter().enumerate() {
-            writeln!(f, "  [N{:>3}] {}", idx, tx)?;
+            writeln!(f, "  [N{:>3}] {:?}", idx, tx)?;
         }
         writeln!(f, "\n{}", "-".repeat(40))?;
 
@@ -259,7 +275,7 @@ impl fmt::Display for StratumPlanner {
                 self.recursive_transformations.len()
             )?;
             for (idx, tx) in self.recursive_transformations.iter().enumerate() {
-                writeln!(f, "  [R{:>3}] {}", idx, tx)?;
+                writeln!(f, "  [R{:>3}] {:?}", idx, tx)?;
             }
         } else {
             writeln!(f, "(Non-recursive stratum: no recursive transformations)")?;

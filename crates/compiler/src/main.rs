@@ -1,14 +1,15 @@
-use std::{fs, path::Path, process};
-
 use clap::Parser;
+use std::{fs, path::Path, process};
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
+
 use common::Config;
 use compiler::Compiler;
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
+use profiler::Profiler;
 use stratifier::Stratifier;
-use tracing::{error, info};
-use tracing_subscriber::EnvFilter;
 
 fn main() {
     // Initialize simple tracing
@@ -23,7 +24,7 @@ fn main() {
 
     // Backward-compat convenience: allow `--program all` or `--program --all`
     if config.should_process_all() {
-        run_all_examples();
+        run_all_examples(&config);
         return;
     }
 
@@ -33,14 +34,28 @@ fn main() {
     // Stratify the program
     let stratifier = Stratifier::from_program(&program);
 
+    // Profiler to collect profiling data
+    let mut profiler = if config.profiling_enabled() {
+        Some(Profiler::default())
+    } else {
+        None
+    };
+
     // Plan each stratum using StratumPlanner then hand transformations to compiler
     let mut optimizer = Optimizer::new();
-    generate_program(&config, &mut optimizer, &stratifier, &program);
+    generate_program(
+        &config,
+        &mut optimizer,
+        &mut profiler,
+        &stratifier,
+        &program,
+    );
 }
 
 fn generate_program(
     config: &Config,
     optimizer: &mut Optimizer,
+    profiler: &mut Option<Profiler>,
     stratifier: &Stratifier,
     program: &Program,
 ) {
@@ -53,6 +68,7 @@ fn generate_program(
         let sp = StratumPlanner::from_rules(
             &rules,
             optimizer,
+            profiler,
             is_recursive,
             stratifier.stratum_iterative_relation(stratum_idx),
             stratifier.stratum_leave_relation(stratum_idx),
@@ -64,7 +80,7 @@ fn generate_program(
     let mut compiler = Compiler::new(config.clone(), program.clone());
 
     // Generate code for the deduplicated transformation list for this stratum
-    if let Err(e) = compiler.generate_executable_at(&strata) {
+    if let Err(e) = compiler.generate_executable_at(&strata, profiler) {
         error!("Failed to generate project: {}", e);
         process::exit(1);
     }
@@ -75,7 +91,7 @@ fn generate_program(
 }
 
 /// Run compiler on all example files in the example directory
-fn run_all_examples() {
+fn run_all_examples(config: &Config) {
     let example_dir = "example";
 
     // Check if example directory exists
@@ -120,6 +136,11 @@ fn run_all_examples() {
             let program = Program::parse(file_path.to_str().unwrap());
             let stratifier = Stratifier::from_program(&program);
             let mut optimizer = Optimizer::new();
+            let mut profiler = if config.profiling_enabled() {
+                Some(Profiler::default())
+            } else {
+                None
+            };
 
             for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
                 let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
@@ -127,6 +148,7 @@ fn run_all_examples() {
                 let _sp = StratumPlanner::from_rules(
                     &rules,
                     &mut optimizer,
+                    &mut profiler,
                     is_recursive,
                     stratifier.stratum_iterative_relation(stratum_idx),
                     stratifier.stratum_leave_relation(stratum_idx),

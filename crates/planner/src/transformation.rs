@@ -402,6 +402,37 @@ impl Transformation {
 impl fmt::Display for Transformation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RowToRow { flow, .. } => {
+                write!(f, "[Row -> Row] {}", flow)
+            }
+            Self::RowToKv { flow, .. } => {
+                write!(f, "[Row -> KV] {}", flow)
+            }
+            Self::KvToRow { flow, .. } => {
+                write!(f, "[KV -> Row] {}", flow)
+            }
+            Self::KvToKv { flow, .. } => {
+                write!(f, "[KV -> KV] {}", flow)
+            }
+            Self::JnToRow { flow, .. } => {
+                write!(f, "[Join -> Row] {}", flow)
+            }
+            Self::JnToKv { flow, .. } => {
+                write!(f, "[Join -> KV] {}", flow)
+            }
+            Self::NJnToRow { flow, .. } => {
+                write!(f, "[AntiJoin -> Row] {}", flow)
+            }
+            Self::NJnToKv { flow, .. } => {
+                write!(f, "[AntiJoin -> KV] {}", flow)
+            }
+        }
+    }
+}
+
+impl fmt::Debug for Transformation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             Self::RowToRow {
                 input,
                 output,
@@ -491,11 +522,5 @@ impl fmt::Display for Transformation {
                 )
             }
         }
-    }
-}
-
-impl fmt::Debug for Transformation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
     }
 }

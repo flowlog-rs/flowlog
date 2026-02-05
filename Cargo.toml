@@ -1,12 +1,13 @@
 [workspace]
 members = [
-    "crates/common",
-    "crates/parser",
-    "crates/stratifier",
     "crates/catalog",
+    "crates/common",
+    "crates/compiler",
     "crates/optimizer",
+    "crates/parser",
     "crates/planner",
-    "crates/compiler"
+    "crates/profiler",
+    "crates/stratifier"
 ]
 resolver = "2"
 
@@ -18,12 +19,14 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0"
-clap = "4.5.51"
+clap = "4.5.54"
 itertools = "0.14.0"
 prettyplease = "0.2"
-proc-macro2 = "1.0.103"
-quote = "1.0.42"
-syn = "2.0.110"
-toml_edit = "0.23"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+proc-macro2 = "1.0.106"
+quote = "1.0.44"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+syn = "2.0.114"
+toml_edit = "0.23.9"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

@@ -13,6 +13,7 @@ use toml_edit::{value, Array, DocumentMut, Item};
 
 use super::Compiler;
 use crate::fs_utils::{ensure_dir, write_file};
+use profiler::{with_profiler_ref, Profiler};
 
 /// Embedded template for the incremental interactive command parser.
 ///
@@ -33,7 +34,11 @@ impl Compiler {
     /// Create the project layout and write Cargo.toml + .cargo/config.toml + src/main.rs.
     ///
     /// If `config.is_incremental()` is enabled, also writes `src/cmd.rs` from a template.
-    pub(crate) fn write_project(&self, main_rs: &str) -> io::Result<()> {
+    pub(crate) fn write_project(
+        &self,
+        main_rs: &str,
+        profiler: &Option<Profiler>,
+    ) -> io::Result<()> {
         let root = self.config.executable_path();
         let src_dir = root.join("src");
 
@@ -56,6 +61,11 @@ impl Compiler {
             self.write_src_prompt()?;
             self.write_src_relation()?;
         }
+
+        // Profiler logs if enabled
+        with_profiler_ref(profiler, |profiler| {
+            self.write_profiler_logs(profiler, &self.config.executable_name())
+        })?;
 
         Ok(())
     }
@@ -177,5 +187,22 @@ impl Compiler {
 
         let rendered = PROMPT_RS_TMPL.replace("\r\n", "\n");
         write_file(&src_dir.join("prompt.rs"), rendered.trim_start())
+    }
+
+    // -------------------------
+    // log/log.tsv & log/ops.json
+    // -------------------------
+
+    /// Write profiler output files into the generated project directory.
+    pub(crate) fn write_profiler_logs(
+        &self,
+        profiler: &Profiler,
+        program_name: &str,
+    ) -> io::Result<()> {
+        let log_dir = self.config.executable_path().join("log");
+        ensure_dir(&log_dir)?;
+
+        let ops_path = log_dir.join(format!("{}_ops.json", program_name));
+        profiler.write_json(&ops_path)
     }
 }

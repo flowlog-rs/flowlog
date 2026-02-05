@@ -12,7 +12,7 @@ use pest::iterators::Pair;
 use std::fmt;
 
 /// A complete FlowLog rule.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct FlowLogRule {
     head: Head,
     rhs: Vec<Predicate>,
@@ -28,6 +28,21 @@ impl fmt::Display for FlowLogRule {
             self.rhs
                 .iter()
                 .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+impl fmt::Debug for FlowLogRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} :- {}.",
+            self.head,
+            self.rhs
+                .iter()
+                .map(|p| format!("{p:?}"))
                 .collect::<Vec<_>>()
                 .join(", ")
         )

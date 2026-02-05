@@ -431,7 +431,7 @@ impl fmt::Display for Catalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", "=".repeat(80))?;
 
-        writeln!(f, "Catalog of rule:\n  {}", self.rule())?;
+        writeln!(f, "Catalog of rule:\n  {:?}", self.rule())?;
 
         let fmt_sig_list = |sigs: &[AtomArgumentSignature],
                             map: &HashMap<AtomArgumentSignature, String>|

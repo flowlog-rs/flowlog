@@ -13,6 +13,7 @@ impl Compiler {
                 quote! { .threshold(|_, w| if *w > 0 { 1i32 } else { 0 }) }
             }
             ExecutionMode::Batch => {
+                self.imports.mark_semiring_one();
                 self.imports.mark_threshold_total();
                 self.imports.mark_semiring_one();
                 quote! {
