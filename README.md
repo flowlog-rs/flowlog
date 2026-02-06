@@ -187,4 +187,4 @@ FlowLog builds on the FlowLog paper:
 Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` (and `tools/check/check.sh` when it is relevant).
 
 ## Acknowledgement
-FlowLog succeeds [FlowLog](https://github.com/hdz284/FlowLog); many thanks to [**Hangdong Zhao**](https://github.com/hdz284) for continued support throughout the transition.
+FlowLog succeeds [FlowLog-VLDB](https://github.com/flowlog-rs/FlowLog-VLDB); many thanks to [**Hangdong Zhao**](https://github.com/hdz284) for continued support throughout the transition.
