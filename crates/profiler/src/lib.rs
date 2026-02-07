@@ -247,7 +247,7 @@ impl Profiler {
         output_variable_name: String,
     ) {
         self.push_node(
-            format!("enter"),
+            "enter".to_string(),
             vec![input_variable_name],
             Some(output_variable_name),
             TAG_RUNTIME,
