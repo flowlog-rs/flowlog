@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="FlowLog.png" alt="FlowLog Logo" width="700"/>
+  <img src="FlowLog.png" alt="FlowLog Logo" width="500"/>
 </p>
 
 <p align="center">
@@ -19,13 +19,14 @@
 
 ```
 crates/
-├── common       # shared CLI/parsing utilities and fingerprint helpers
-├── parser       # Pest grammar and AST for the FlowLog language
-├── stratifier   # dependency graph + SCC-based scheduling of rules
 ├── catalog      # per-rule metadata (signatures, filters, comparisons)
+├── common       # shared CLI/parsing utilities and fingerprint helpers
+├── compiler     # compile Timely/DD executables from planned strata
 ├── optimizer    # heuristic plan trees consumed by the planner
+├── parser       # Pest grammar and AST for the FlowLog language
 ├── planner      # lowers strata into transformation flows
-└── compiler     # compile Timely/DD executables from planned strata
+├── profiler     # profiling tools and measurement helpers
+└── stratifier   # dependency graph + SCC-based scheduling of rules
 ```
 
 ## Getting Started
@@ -59,11 +60,14 @@ $ cargo run -p compiler -- <PROGRAM> [OPTIONS]
 | `-o, --output <NAME>` | Override the generated Cargo package name. | No | Default derives from `<PROGRAM>`; project is written to `../<NAME>`. |
 | `-D, --output-dir <DIR>` | Location for materializing `.output` relations. | Required when any relation uses `.output` | Pass `-` to print tuples to stderr instead of writing files. |
 | `--mode <MODE>` | Choose execution semantics: `batch` (default) or `incremental`. | No | `batch` uses `Present`; `incremental` switches the diff type to `i32`. |
+| `-P, --profile` | Enable profiling (collect execution statistics). | No | Writes profiler logs into the generated project. |
 | `-h, --help` | Show full Clap help text. | No | Includes additional examples and environment variables. |
 
 ## End-to-End Example
 
 The `example/reach.dl` program computes nodes reachable from a small seed set. Below is the same program for reference.
+
+Note: The example commands below only show batch-mode parameters. For incremental mode and profiler usage, please refer to the official website: https://www.flowlog-rs.com/
 
 ```datalog
 .decl Source(id: number)
@@ -127,53 +131,6 @@ $ bash tools/check/check.sh
 - Logs and parsed relation sizes are written to `result/logs/` and `result/parsed/`.
 - The script creates temporary Cargo projects alongside the repository (e.g., `../flowlog_reach_livejournal`) and removes them after verification.
 
-## Language Overview
-
-FlowLog accepts a Souffle-compatible Datalog dialect with modules for recursion, negation, arithmetic, and aggregations.
-
-```datalog
-.decl Edge(src: number, dst: number)
-.input Edge(IO="file", filename="edge.csv")
-
-.decl Triangle(x: number, y: number, z: number)
-.printsize Triangle
-
-.decl PathLen(src: number, dst: number, total: number)
-.printsize PathLen
-
-Triangle(x, y, z) :-
-    Edge(x, y),
-    Edge(y, z),
-    Edge(z, x),
-    x != y,
-    y != z,
-    z != x.
-
-PathLen(src, dst, sum(len)) :-
-    Edge(src, mid),
-    Edge(mid, dst),
-    len = 1.
-
-IndirectOnly(x, z) :-
-    Edge(x, y),
-    Edge(y, z),
-    !Edge(x, z).
-```
-
-Features at a glance:
-
-- Stratified negation with automatic SCC detection.
-- Arithmetic expressions in rule heads and bodies (left-associative evaluation).
-- Aggregations (`count`, `sum`, `min`, `max`) with per-relation type consistency.
-- CSV ingestion for integer or string relations, sharded across Timely workers on the first attribute.
-- Optional `.output` directives to spill IDBs to disk and `.printsize` to record cardinalities.
-
-## Current Limitations
-
-- Aggregations must appear as the final argument of an IDB head, and every rule deriving that relation must agree on the operator. The grammar accepts `average/AVG`, but the pipeline will panic if it is used (support pending).
-- Input ingestion presently assumes comma-delimited UTF-8 files even if a different delimiter is specified.
-- Generated projects are placed one directory above the workspace (e.g., `../reach_flowlog`) by design; adjust paths or move them as needed.
-
 ## Background Reading
 
 FlowLog builds on the FlowLog paper:
@@ -187,4 +144,4 @@ FlowLog builds on the FlowLog paper:
 Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` (and `tools/check/check.sh` when it is relevant).
 
 ## Acknowledgement
-FlowLog succeeds [FlowLog-VLDB](https://github.com/flowlog-rs/FlowLog-VLDB); many thanks to [**Hangdong Zhao**](https://github.com/hdz284) for continued support throughout the transition.
+FlowLog succeeds VLDB 2026 artifacts (https://github.com/flowlog-rs/vldb26-artifact); many thanks to [**Hangdong Zhao**](https://github.com/hdz284) for continued support throughout the transition.
