@@ -67,7 +67,7 @@ $ cargo run -p compiler -- <PROGRAM> [OPTIONS]
 
 The `example/reach.dl` program computes nodes reachable from a small seed set. Below is the same program for reference.
 
-Note: The example commands below only show batch-mode parameters. For incremental mode and profiler usage, please refer to the official website: https://www.flowlog-rs.com/
+> Note: The example commands below only show batch-mode parameters. For incremental mode and profiler usage, please refer to the official website: https://www.flowlog-rs.com/
 
 ```datalog
 .decl Source(id: number)
