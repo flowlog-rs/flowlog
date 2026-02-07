@@ -403,28 +403,36 @@ impl fmt::Display for Transformation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RowToRow { flow, .. } => {
-                write!(f, "[Row -> Row] {}", flow)
+                write!(f, "Map: {}", flow)
             }
             Self::RowToKv { flow, .. } => {
-                write!(f, "[Row -> KV] {}", flow)
+                write!(f, "Arrange: {}", flow)
             }
             Self::KvToRow { flow, .. } => {
-                write!(f, "[KV -> Row] {}", flow)
+                write!(f, "Flatten: {}", flow)
             }
             Self::KvToKv { flow, .. } => {
-                write!(f, "[KV -> KV] {}", flow)
+                write!(f, "Transform: {}", flow)
             }
-            Self::JnToRow { flow, .. } => {
-                write!(f, "[Join -> Row] {}", flow)
+            Self::JnToRow { input, flow, .. } => {
+                if input.0.is_k_only() {
+                    write!(f, "SemiJoin: {}", flow)
+                } else {
+                    write!(f, "Join: {}", flow)
+                }
             }
-            Self::JnToKv { flow, .. } => {
-                write!(f, "[Join -> KV] {}", flow)
+            Self::JnToKv { input, flow, .. } => {
+                if input.0.is_k_only() {
+                    write!(f, "SemiJoinMap: {}", flow)
+                } else {
+                    write!(f, "JoinMap: {}", flow)
+                }
             }
             Self::NJnToRow { flow, .. } => {
-                write!(f, "[AntiJoin -> Row] {}", flow)
+                write!(f, "AntiJoin: {}", flow)
             }
             Self::NJnToKv { flow, .. } => {
-                write!(f, "[AntiJoin -> KV] {}", flow)
+                write!(f, "AntiJoinMap: {}", flow)
             }
         }
     }

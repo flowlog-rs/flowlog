@@ -155,11 +155,7 @@ impl Compiler {
 
             // Profiler: enter operator (optional)
             with_profiler(profiler, |profiler| {
-                profiler.recursive_enter_operator(
-                    source.to_string(),
-                    source.to_string(),
-                    entered.to_string(),
-                );
+                profiler.recursive_enter_operator(source.to_string(), entered.to_string());
             });
 
             // Preserve arranged bindings for recursive paths.

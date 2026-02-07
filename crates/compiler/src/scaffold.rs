@@ -94,8 +94,8 @@ impl Compiler {
         doc["dependencies"] = Item::Table(toml_edit::Table::new());
         {
             let deps = doc["dependencies"].as_table_mut().unwrap();
-            deps["timely"] = "0.25".into();
-            deps["differential-dataflow"] = "0.18".into();
+            deps["timely"] = "0.26".into();
+            deps["differential-dataflow"] = "0.19".into();
 
             if self.config.is_incremental() {
                 deps["rustyline"] = "17".into();
