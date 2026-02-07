@@ -94,8 +94,6 @@ Key flags:
 - `-F reach` points the compiler at the directory holding `Source.csv` and `Arc.csv`.
 - `-o reach_flowlog` names the generated Cargo project (written to `../reach_flowlog`).
 - `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
-- `--mode incremental` switches the diff type to `i32` (default is batch semantics).
-
 
 ### 2. Prepare a Tiny Dataset
 
@@ -144,4 +142,4 @@ FlowLog builds on the FlowLog paper:
 Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` (and `tools/check/check.sh` when it is relevant).
 
 ## Acknowledgement
-FlowLog succeeds VLDB 2026 artifacts (https://github.com/flowlog-rs/vldb26-artifact); many thanks to [**Hangdong Zhao**](https://github.com/hdz284) for continued support throughout the transition.
+FlowLog succeeds [VLDB 2026 artifacts](https://github.com/flowlog-rs/vldb26-artifact); many thanks to [**Hangdong Zhao**](https://github.com/hdz284) for continued support throughout the transition.
