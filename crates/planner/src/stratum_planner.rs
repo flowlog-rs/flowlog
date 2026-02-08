@@ -5,12 +5,29 @@ use std::fmt;
 use tracing::debug;
 
 use catalog::Catalog;
+use common::Config;
 use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
 use parser::{AggregationOperator, HeadArg};
 use profiler::{with_profiler, Profiler};
 
 use crate::{RulePlanner, Transformation, TransformationInfo};
+
+/// Recursion-related metadata for a stratum.
+///
+/// Groups the information that stratum planner needs to
+/// separate recursive from non-recursive work and to track enter/leave
+/// collections.
+pub struct RecursionContext<'a> {
+    /// Whether the stratum contains recursive rules.
+    pub is_recursive: bool,
+    /// Fingerprints of recursive relations.
+    pub iterative_relations: &'a [u64],
+    /// Fingerprints of relations that exit recursion.
+    pub leave_relations: &'a [u64],
+    /// Fingerprints of all relations available before this stratum.
+    pub available_relations: &'a HashSet<u64>,
+}
 
 /// Planner for a single stratum (a group of parallel rules).
 ///
@@ -60,14 +77,13 @@ impl StratumPlanner {
     /// Build a stratum planner from a stratum.
     #[must_use]
     pub fn from_rules(
+        config: &Config,
         stratum: &[FlowLogRule],
         optimizer: &mut Optimizer,
         profiler: &mut Option<Profiler>,
-        is_recursive: bool,
-        iterative_relation: &[u64],
-        leave_relation: &[u64],
-        available_relations: &HashSet<u64>,
+        recursion: &RecursionContext<'_>,
     ) -> Self {
+        let is_recursive = recursion.is_recursive;
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
 
@@ -92,7 +108,16 @@ impl StratumPlanner {
             rule_planners.push(planner);
         }
 
-        // Phase 2: Core planning with optimizer guidance
+        // Phase 2: Side Information Passing (SIP) optimization
+        // to push down filters before the main join and reduce intermediate result size
+        if config.sip_enabled() {
+            for (i, planner) in rule_planners.iter_mut().enumerate() {
+                debug!("rule[{i}] SIP");
+                planner.apply_sip(&mut catalogs[i]);
+            }
+        }
+
+        // Phase 3: Core planning with optimizer guidance
         // this phase may introduce exponential blowup in intermediate results if not guided properly
         while !catalogs.iter().all(|c| c.is_planned()) {
             let join_decisions = optimizer.plan_stratum(&catalogs);
@@ -108,13 +133,13 @@ impl StratumPlanner {
             }
         }
 
-        // Phase 3: Fusion
+        // Phase 4: Fusion
         // to combine transformations and optimize execution
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
             planner.fuse(catalog.original_atom_fingerprints());
         }
 
-        // Phase 4: Post-processing
+        // Phase 5: Post-processing
         // align final output to the rule head (vars and arithmetic)
         // to apply final adjustments after fusion, e.g. convert to row type
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
@@ -140,7 +165,7 @@ impl StratumPlanner {
             }
         });
 
-        // Phase 5: Materialize deduplicated transformations
+        // Phase 6: Materialize deduplicated transformations
         // this phase also do sharing optimization across rules
         let mut stratum_planner = Self {
             rule_planners,
@@ -149,18 +174,18 @@ impl StratumPlanner {
             non_recursive_transformations: Vec::new(),
             recursive_transformations: Vec::new(),
             recursion_enter_collections: Vec::new(),
-            recursion_iterative_collections: iterative_relation.to_vec(),
-            recursion_leave_collections: leave_relation.to_vec(),
+            recursion_iterative_collections: recursion.iterative_relations.to_vec(),
+            recursion_leave_collections: recursion.leave_relations.to_vec(),
             output_to_idb_map: HashMap::new(),
             output_to_aggregation_map: HashMap::new(),
         };
         stratum_planner.materialize_transformations();
 
-        // Phase 6: Recursive split and metadata mappings
+        // Phase 7: Recursive split and metadata mappings
         // this phase to factoring optimizations
         stratum_planner.build_output_to_idb_map(&catalogs);
         stratum_planner.identify_recursive_transformations(is_recursive);
-        stratum_planner.build_recursion_enter_collections(available_relations);
+        stratum_planner.build_recursion_enter_collections(recursion.available_relations);
         stratum_planner.build_output_to_aggregation_map(&catalogs);
 
         // Debug info for non-recursive vs recursive transformations.

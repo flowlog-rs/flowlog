@@ -3,7 +3,7 @@ use clap::Parser;
 use common::{get_example_files, Config, TestResult};
 use optimizer::Optimizer;
 use parser::Program;
-use planner::StratumPlanner;
+use planner::{RecursionContext, StratumPlanner};
 use profiler::Profiler;
 use stratifier::Stratifier;
 use tracing_subscriber::EnvFilter;
@@ -44,11 +44,12 @@ fn main() {
         None
     };
 
-    plan_and_print(&mut optimizer, &stratifier, &mut profiler);
+    plan_and_print(&config, &mut optimizer, &stratifier, &mut profiler);
 }
 
 /// Plan and print results for each stratum in the stratified program
 fn plan_and_print(
+    config: &Config,
     optimizer: &mut Optimizer,
     stratifier: &Stratifier,
     profiler: &mut Option<Profiler>,
@@ -60,13 +61,16 @@ fn plan_and_print(
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
 
         let _stratum_planner = StratumPlanner::from_rules(
+            config,
             &rules,
             optimizer,
             profiler,
-            is_recursive,
-            stratifier.stratum_iterative_relation(stratum_idx),
-            stratifier.stratum_leave_relation(stratum_idx),
-            stratifier.stratum_available_relations(stratum_idx),
+            &RecursionContext {
+                is_recursive,
+                iterative_relations: stratifier.stratum_iterative_relation(stratum_idx),
+                leave_relations: stratifier.stratum_leave_relation(stratum_idx),
+                available_relations: stratifier.stratum_available_relations(stratum_idx),
+            },
         );
     }
 }
@@ -94,13 +98,16 @@ fn run_all_examples(config: &Config) {
                 let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
                 let _sp = StratumPlanner::from_rules(
+                    config,
                     &rules,
                     &mut optimizer,
                     &mut profiler,
-                    is_recursive,
-                    stratifier.stratum_iterative_relation(stratum_idx),
-                    stratifier.stratum_leave_relation(stratum_idx),
-                    stratifier.stratum_available_relations(stratum_idx),
+                    &RecursionContext {
+                        is_recursive,
+                        iterative_relations: stratifier.stratum_iterative_relation(stratum_idx),
+                        leave_relations: stratifier.stratum_leave_relation(stratum_idx),
+                        available_relations: stratifier.stratum_available_relations(stratum_idx),
+                    },
                 );
             }
 

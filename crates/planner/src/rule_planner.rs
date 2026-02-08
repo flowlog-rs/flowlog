@@ -28,6 +28,7 @@ mod core; // core join, plus fixed-point of semijoin/pushdown and projection rem
 mod fuse; // fuse KV-to-KV maps and propagate key/value layout constraints upstream
 mod post; // align final output to the rule head (vars and arithmetic)
 mod prepare; // local filters, semi-join and comparison before the core join
+mod sip; // Side Information Passing (SIP) optimization for pushing down filters
 
 /// Planner state for a single rule.
 #[derive(Debug)]
