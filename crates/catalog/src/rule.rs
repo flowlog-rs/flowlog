@@ -239,6 +239,12 @@ impl Catalog {
 
     // === Positive Atoms ===
 
+    /// Get the number of positive atoms in the RHS.
+    #[inline]
+    pub fn positive_atom_number(&self) -> usize {
+        self.positive_atom_fingerprints.len()
+    }
+
     /// Get the fingerprint of a positive atom by its index.
     #[inline]
     pub fn positive_atom_fingerprint(&self, index: usize) -> u64 {
@@ -261,6 +267,16 @@ impl Catalog {
     #[inline]
     pub fn positive_atom_rhs_id(&self, index: usize) -> usize {
         self.positive_atom_rhs_ids[index]
+    }
+
+    /// Returns `true` if two positive atoms share at least one variable,
+    /// indicating that a SIP (side-information passing) semijoin between
+    /// them may be beneficial.
+    #[inline]
+    pub fn check_sip_pair(&self, left_atom_id: usize, right_atom_id: usize) -> bool {
+        let left_vars = &self.positive_atom_argument_vars_str_sets[left_atom_id];
+        let right_vars = &self.positive_atom_argument_vars_str_sets[right_atom_id];
+        !left_vars.is_disjoint(right_vars)
     }
 
     // === Negative Atoms ===

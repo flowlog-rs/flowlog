@@ -16,7 +16,10 @@ set -euo pipefail
 #   - Does not download or read datasets (uses an empty facts directory)
 #   - Generates each project and runs `cargo check` (no execution/verification)
 
-# ANSI color palette used for status messages.
+###############################################################################
+# Constants & globals
+###############################################################################
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -24,17 +27,27 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log() {
-    # log COLOR TAG MESSAGE...
-    local color="$1"; shift
-    local tag="$1"; shift
-    echo -e "${color}[${tag}]${NC} $*"
-}
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+CONFIG_FILE_DEFAULT="${ROOT_DIR}/tools/check/config.txt"
+CONFIG_FILE="$CONFIG_FILE_DEFAULT"
+COMPILE_ONLY=0
+EMPTY_FACTS_DIR=""
 
-die() {
-    log "$RED" "ERROR" "$*"
-    exit 1
-}
+# Shared flag sets used by both run_compile_check and run_test.
+# Two independent dimensions — edit once, applies everywhere.
+#   Optimization flags: (none, --sip)
+#   Profiler flags:     (none, -P)
+OPT_FLAGS=("" "--sip")
+OPT_LABELS=("" "sip")
+PROF_FLAGS=("" "-P")
+PROF_LABELS=("" "prof")
+
+###############################################################################
+# Logging / utilities
+###############################################################################
+
+log() { local color="$1" tag="$2"; shift 2; echo -e "${color}[${tag}]${NC} $*"; }
+die() { log "$RED" "ERROR" "$*"; exit 1; }
 
 usage() {
     cat <<EOF
@@ -42,8 +55,8 @@ Usage:
   $(basename "$0") [config_file] [--compile-only]
 
 Modes:
-    Default: run all correctness tests listed in the config file.
-    --compile-only: generate each project and run cargo check only (no download/run/verify).
+  Default:         run all correctness tests listed in the config file.
+  --compile-only:  generate each project and run cargo check only (no download/run/verify).
 
 Environment:
   WORKERS=<n>    Number of workers passed to generated executables (default: 64)
@@ -55,47 +68,42 @@ Examples:
 EOF
 }
 
-# Resolve project paths and shared resources.
-ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
 
-CONFIG_FILE_DEFAULT="${ROOT_DIR}/tools/check/config.txt"
-CONFIG_FILE="$CONFIG_FILE_DEFAULT"
-COMPILE_ONLY=0
+sanitize_package_name() {
+    local s
+    s="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_')"
+    s="$(printf '%s' "$s" | sed 's/_\{2,\}/_/g; s/-\{2,\}/-/g; s/^[-_]//; s/[-_]$//')"
+    [[ -z "$s" ]] && s="flowlog_output"
+    [[ "$s" =~ ^[0-9] ]] && s="flowlog_${s}"
+    printf '%s' "$s"
+}
+
+###############################################################################
+# Argument parsing & path setup
+###############################################################################
 
 parse_args() {
-    # Backwards compatible with the old behavior:
-    #   - first non-flag arg is treated as the config file path
-    while [ $# -gt 0 ]; do
+    while (( $# )); do
         case "$1" in
-            --compile-only)
-                COMPILE_ONLY=1
-                shift
-                ;;
-            -h|--help)
-                usage
-                exit 0
-                ;;
-            --)
-                shift
-                break
-                ;;
-            -*)
-                die "Unknown option: $1 (try --help)"
-                ;;
+            --compile-only) COMPILE_ONLY=1 ;;
+            -h|--help)      usage; exit 0 ;;
+            --)             shift; break ;;
+            -*)             die "Unknown option: $1 (try --help)" ;;
             *)
-                if [ "$CONFIG_FILE" = "$CONFIG_FILE_DEFAULT" ]; then
-                    CONFIG_FILE="$1"
-                else
-                    die "Unexpected extra argument: $1"
-                fi
-                shift
+                [[ "$CONFIG_FILE" == "$CONFIG_FILE_DEFAULT" ]] \
+                    || die "Unexpected extra argument: $1"
+                CONFIG_FILE="$1"
                 ;;
         esac
+        shift
     done
-
-    if [ $# -gt 0 ]; then
-        die "Unexpected extra arguments: $*"
-    fi
+    (( $# == 0 )) || die "Unexpected extra arguments: $*"
 }
 
 init_paths() {
@@ -106,53 +114,56 @@ init_paths() {
     LOG_DIR="${RESULT_DIR}/logs"
     PARSED_DIR="${RESULT_DIR}/parsed"
     COMPILER_BIN="${ROOT_DIR}/target/release/flowlog"
-    WORKERS=${WORKERS:-64}
+    WORKERS="${WORKERS:-64}"
 
     mkdir -p "$RESULT_DIR" "$LOG_DIR" "$PARSED_DIR"
     LOG_DIR="$(realpath "$LOG_DIR")"
     PARSED_DIR="$(realpath "$PARSED_DIR")"
 }
 
-log "$BLUE" "START" "FlowLog Testing"
+###############################################################################
+# Prerequisite helpers
+###############################################################################
 
-trim() {
-    # Strip leading/trailing whitespace from configuration entries.
-    local s="$1"
-    s="${s#"${s%%[![:space:]]*}"}"
-    s="${s%"${s##*[![:space:]]}"}"
-    printf '%s' "$s"
+setup_config_file() {
+    [[ -f "$CONFIG_FILE" ]] || die "config file not found: $CONFIG_FILE"
 }
 
-sanitize_package_name() {
-    # Produce a cargo-friendly package name based on program and dataset identifiers.
-    local s
-    s="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-    s="$(printf '%s' "$s" | tr -c 'a-z0-9_-' '_')"
-    s="$(printf '%s' "$s" | sed 's/_\{2,\}/_/g; s/-\{2,\}/-/g; s/^[-_]//; s/[-_]$//')"
-    if [ -z "$s" ]; then
-        s="flowlog_output"
-    fi
-    if [[ $s =~ ^[0-9] ]]; then
-        s="flowlog_${s}"
-    fi
-    printf '%s' "$s"
+setup_size_reference() {
+    [[ -d "$SIZE_DIR" ]] || die "Reference size directory not found: $SIZE_DIR"
 }
+
+ensure_compiler_built() {
+    if [[ ! -x "$COMPILER_BIN" ]]; then
+        log "$YELLOW" "BUILD" "Building compiler (flowlog)"
+        cargo build --release --bin flowlog >/dev/null
+    fi
+}
+
+compile_release_workspace() {
+    log "$YELLOW" "BUILD" "Compiling release workspace"
+    pushd "$ROOT_DIR" >/dev/null
+    cargo build --release >/dev/null
+    popd >/dev/null
+}
+
+###############################################################################
+# Dataset management
+###############################################################################
 
 setup_dataset() {
-    # Ensure the requested dataset is present locally, downloading and extracting if needed.
     local dataset_name="$1"
     local dataset_zip="${FACT_DIR}/${dataset_name}.zip"
     local extract_path="${FACT_DIR}/${dataset_name}"
     local dataset_url="https://pages.cs.wisc.edu/~m0riarty/dataset/csv/${dataset_name}.zip"
 
-    if [ -d "$extract_path" ]; then
+    if [[ -d "$extract_path" ]]; then
         log "$GREEN" "FOUND" "Dataset $dataset_name"
         return
     fi
 
     mkdir -p "$FACT_DIR"
-
-    if [ ! -f "$dataset_zip" ]; then
+    if [[ ! -f "$dataset_zip" ]]; then
         log "$CYAN" "DOWNLOAD" "$dataset_name.zip"
         command -v wget >/dev/null 2>&1 || die "wget not found; cannot download datasets"
         wget -q -O "$dataset_zip" "$dataset_url" || die "Download failed: $dataset_name"
@@ -164,181 +175,141 @@ setup_dataset() {
 }
 
 cleanup_dataset() {
-    # Remove dataset artifacts to keep the workspace tidy between test runs.
     local dataset_name="$1"
     log "$YELLOW" "CLEANUP" "$dataset_name"
     rm -rf "${FACT_DIR}/${dataset_name}" "${FACT_DIR}/${dataset_name}.zip"
 }
 
-setup_config_file() {
-    # Verify that the test configuration file exists.
-    if [ -f "$CONFIG_FILE" ]; then
-        return
-    fi
-    die "config file not found: $CONFIG_FILE"
+###############################################################################
+# Shared flag-combo helpers (used by both modes)
+###############################################################################
+
+# Compute label_suffix and extra_flags for a given (opt, prof) index pair.
+# Sets the caller-visible variables: COMBO_EXTRA_FLAGS, COMBO_LABEL_SUFFIX
+compute_flag_combo() {
+    local oi="$1" pi="$2"
+    COMBO_EXTRA_FLAGS="$(trim "${OPT_FLAGS[$oi]} ${PROF_FLAGS[$pi]}")"
+
+    local parts=""
+    [[ -n "${OPT_LABELS[$oi]}" ]]  && parts="${OPT_LABELS[$oi]}"
+    [[ -n "${PROF_LABELS[$pi]}" ]] && parts="${parts:+${parts}_}${PROF_LABELS[$pi]}"
+    COMBO_LABEL_SUFFIX="${parts:+_${parts}}"
 }
 
-setup_size_reference() {
-    # Validate the reference directory used for result comparison.
-    if [ -d "$SIZE_DIR" ]; then
-        return
-    fi
-    die "Reference size directory not found: $SIZE_DIR"
-}
+# Invoke the FlowLog compiler. Handles the extra_flags word-splitting safely.
+invoke_compiler() {
+    local prog_path="$1" facts_dir="$2" project_dir="$3" mode="$4" extra_flags="$5"
 
-ensure_compiler_built() {
-    # Build the compiler binary if it is missing.
-    if [ ! -x "$COMPILER_BIN" ]; then
-        log "$YELLOW" "BUILD" "Building compiler (flowlog)"
-        cargo build --release --bin flowlog >/dev/null
+    log "$YELLOW" "GENERATE" "$COMPILER_BIN $prog_path -F $facts_dir -o $project_dir --mode $mode ${extra_flags}"
+    if [[ -n "$extra_flags" ]]; then
+        # shellcheck disable=SC2086
+        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$project_dir" --mode "$mode" $extra_flags
+    else
+        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$project_dir" --mode "$mode"
     fi
-}
-
-compile_release_workspace() {
-    # Compile the entire workspace so generated projects can link against fresh artifacts.
-    log "$YELLOW" "BUILD" "Compiling release workspace"
-    pushd "$ROOT_DIR" >/dev/null
-    cargo build --release >/dev/null
-    popd >/dev/null
 }
 
 ###############################################################################
-# Compile-only mode (generate + cargo check)
+# Config file iteration
 #
-# Notes:
-# - We still iterate through the config file to cover all benchmark programs.
-# - The right-hand side "dataset" from the config is treated as an identifier
-#   for naming/logging ONLY in this mode.
-# - We do not download or read datasets; generation always uses an empty facts
-#   directory because `cargo check` does not require actual data.
+# Reads lines of the form "prog_name = dataset_id", skips blanks/comments.
+# Calls the supplied callback with (prog_name, dataset_id) for each entry.
 ###############################################################################
 
-EMPTY_FACTS_DIR=""
+for_each_config_entry() {
+    local callback="$1"
 
-setup_empty_facts_dir() {
-    # Create once per run and reuse for all compile-only entries.
-    if [ -n "$EMPTY_FACTS_DIR" ]; then
-        return 0
-    fi
-    EMPTY_FACTS_DIR="$(mktemp -d -t flowlog_facts_empty_XXXXXX)"
-}
-
-cleanup_empty_facts_dir() {
-    if [ -n "$EMPTY_FACTS_DIR" ]; then
-        rm -rf "$EMPTY_FACTS_DIR"
-        EMPTY_FACTS_DIR=""
-    fi
-}
-
-run_compile_check() {
-    # Generate the project and run `cargo check` (no execution).
-    #
-    # Arguments:
-    #   $1: program file name from config (e.g., tc.dl)
-    #   $2: dataset id from config (used only for naming/logging)
-    local prog_name="$1" dataset_id="$2"
-    local prog_file
-    prog_file="$(basename "$prog_name")"
-    local prog_path="${PROG_DIR}/${prog_file}"
-
-    if [ ! -f "$prog_path" ]; then
-        die "Program not found: $prog_path"
-    fi
-
-    if [ -z "$EMPTY_FACTS_DIR" ]; then
-        die "Internal error: EMPTY_FACTS_DIR not initialized"
-    fi
-
-    local facts_dir="$EMPTY_FACTS_DIR"
-
-    local program_stem="${prog_file%.*}"
-    local mode="batch"
-
-    local profiles=("" "-P")
-    local profile_labels=("" "prof")
-
-    for idx in "${!profiles[@]}"; do
-        local profile_flag="${profiles[$idx]}"
-        local profile_label="${profile_labels[$idx]}"
-        local label_suffix="${profile_label:+_${profile_label}}"
-
-        local package_name
-        package_name="$(sanitize_package_name "${program_stem}_${dataset_id}_${mode}${label_suffix}")"
-        local project_dir="${ROOT_DIR}/${package_name}"
-
-        log "$BLUE" "CHECK" "$prog_file (id=$dataset_id, mode=$mode${label_suffix})"
-
-        rm -rf "$project_dir"
-        log "$YELLOW" "GENERATE" "$COMPILER_BIN $prog_path -F $facts_dir -o $project_dir --mode $mode ${profile_flag}"
-        if [ -n "$profile_flag" ]; then
-            "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$project_dir" --mode "$mode" "$profile_flag"
-        else
-            "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$project_dir" --mode "$mode"
-        fi
-
-        if [ ! -d "$project_dir" ]; then
-            die "Generated project not found (mode=$mode${label_suffix}): $project_dir"
-        fi
-
-        local log_file="${LOG_DIR}/${program_stem}_${dataset_id}_${mode}${label_suffix}_compile.log"
-        pushd "$project_dir" >/dev/null
-        log "$YELLOW" "RUN" "cargo check --release (mode=$mode${label_suffix})"
-        cargo check --release 2>&1 | tee "$log_file"
-        popd >/dev/null
-
-        log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
-        rm -rf "$project_dir"
-    done
-}
-
-run_all_compile_checks() {
-    log "$BLUE" "TESTS" "Running compile-only checks from config"
-
-    while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         local line="${raw_line%%#*}"
         line="$(trim "$line")"
+        [[ -z "$line" ]] && continue
 
-        if [ -z "$line" ]; then
-            continue
-        fi
-
+        local prog_name dataset_id
         IFS='=' read -r prog_name dataset_id <<< "$line"
         prog_name="$(trim "${prog_name:-}")"
         dataset_id="$(trim "${dataset_id:-}")"
+        [[ -z "$prog_name" || -z "$dataset_id" ]] && continue
 
-        if [ -z "$prog_name" ] || [ -z "$dataset_id" ]; then
-            continue
-        fi
-
-        if [ "$prog_name" = "test.dl" ]; then
+        if [[ "$prog_name" == "test.dl" ]]; then
             log "$YELLOW" "SKIP" "Skipping test.dl"
             continue
         fi
 
-        run_compile_check "$prog_name" "$dataset_id"
+        "$callback" "$prog_name" "$dataset_id"
     done < "$CONFIG_FILE"
+}
 
-    log "$GREEN" "COMPLETE" "All compile-only checks passed"
+###############################################################################
+# Compile-only mode
+###############################################################################
+
+setup_empty_facts_dir() {
+    [[ -n "$EMPTY_FACTS_DIR" ]] && return 0
+    EMPTY_FACTS_DIR="$(mktemp -d -t flowlog_facts_empty_XXXXXX)"
+}
+
+cleanup_empty_facts_dir() {
+    [[ -n "$EMPTY_FACTS_DIR" ]] && rm -rf "$EMPTY_FACTS_DIR"
+    EMPTY_FACTS_DIR=""
+}
+
+run_compile_check() {
+    local prog_name="$1" dataset_id="$2"
+    local prog_file prog_path program_stem mode="batch"
+    prog_file="$(basename "$prog_name")"
+    prog_path="${PROG_DIR}/${prog_file}"
+    program_stem="${prog_file%.*}"
+
+    [[ -f "$prog_path" ]]       || die "Program not found: $prog_path"
+    [[ -n "$EMPTY_FACTS_DIR" ]] || die "Internal error: EMPTY_FACTS_DIR not initialized"
+
+    for oi in "${!OPT_FLAGS[@]}"; do
+        for pi in "${!PROF_FLAGS[@]}"; do
+            compute_flag_combo "$oi" "$pi"
+            local suffix="$COMBO_LABEL_SUFFIX" flags="$COMBO_EXTRA_FLAGS"
+
+            local package_name project_dir log_file
+            package_name="$(sanitize_package_name "${program_stem}_${dataset_id}_${mode}${suffix}")"
+            project_dir="${ROOT_DIR}/${package_name}"
+            log_file="${LOG_DIR}/${program_stem}_${dataset_id}_${mode}${suffix}_compile.log"
+
+            log "$BLUE" "CHECK" "$prog_file (id=$dataset_id, mode=$mode${suffix})"
+
+            rm -rf "$project_dir"
+            invoke_compiler "$prog_path" "$EMPTY_FACTS_DIR" "$project_dir" "$mode" "$flags"
+            [[ -d "$project_dir" ]] || die "Generated project not found (mode=$mode${suffix}): $project_dir"
+
+            pushd "$project_dir" >/dev/null
+            log "$YELLOW" "RUN" "cargo check --release (mode=$mode${suffix})"
+            cargo check --release 2>&1 | tee "$log_file"
+            popd >/dev/null
+
+            log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
+            rm -rf "$project_dir"
+        done
+    done
 }
 
 compile_only() {
-    log "$BLUE" "MODE" "compile-only (no download; generate + cargo check only)"
+    log "$BLUE" "MODE" "compile-only (generate + cargo check only)"
     compile_release_workspace
     ensure_compiler_built
     setup_config_file
-
     setup_empty_facts_dir
     trap cleanup_empty_facts_dir EXIT
 
-    run_all_compile_checks
+    log "$BLUE" "TESTS" "Running compile-only checks from config"
+    for_each_config_entry run_compile_check
     log "$GREEN" "FINISH" "compile-only completed successfully"
 }
 
-parse_output_to_size_file() {
-    local log_file="$1"
-    local out_file="$2"
+###############################################################################
+# Full test mode (generate + run + verify)
+###############################################################################
 
-    # Guard to keep the parser from producing empty output files.
+parse_output_to_size_file() {
+    local log_file="$1" out_file="$2"
+
     if ! grep -Eq '^[[:space:]]*\[size\]\[' "$log_file"; then
         log "$RED" "ERROR" "No size lines found in $log_file"
         return 1
@@ -346,40 +317,31 @@ parse_output_to_size_file() {
 
     command -v python >/dev/null 2>&1 || die "python not found; cannot parse size output"
     python - "$log_file" "$out_file" <<'PY'
-import re
-import sys
+import re, sys
 from pathlib import Path
 
-log_path = Path(sys.argv[1])
-out_path = Path(sys.argv[2])
-
-# Matches: [size][REL] ... size=123 (time field may be anything)
+log_path, out_path = Path(sys.argv[1]), Path(sys.argv[2])
 pat = re.compile(r'^\s*\[size\]\[([^\]]+)\].*\bsize=([+-]?\d+)\b')
 
-sizes = {}  # keep the last seen size per relation
+sizes = {}
 for raw in log_path.read_text(errors="replace").splitlines():
     m = pat.match(raw)
-    if not m:
-        continue
-    rel = m.group(1).strip()
-    sz = m.group(2).strip()
-    sizes[rel] = sz
+    if m:
+        sizes[m.group(1).strip()] = m.group(2).strip()
 
 if not sizes:
     print(f"No parsable size lines found in {log_path}", file=sys.stderr)
     sys.exit(1)
 
-lines = [f"{k}: {v}" for k, v in sorted(sizes.items())]
-out_path.write_text("\n".join(lines) + "\n")
+out_path.write_text("\n".join(f"{k}: {v}" for k, v in sorted(sizes.items())) + "\n")
 PY
 }
 
 verify_results_against_truth() {
-    # Compare parsed output sizes against pre-recorded reference data.
     local prog_name="$1" dataset_name="$2" result_size_file="$3"
     local reference_size_file="${SIZE_DIR}/${prog_name}_${dataset_name}_size.txt"
 
-    if [ ! -f "$result_size_file" ] || [ ! -f "$reference_size_file" ]; then
+    if [[ ! -f "$result_size_file" || ! -f "$reference_size_file" ]]; then
         log "$RED" "ERROR" "Missing files for reference check"
         return 1
     fi
@@ -387,8 +349,6 @@ verify_results_against_truth() {
     if python - "$reference_size_file" "$result_size_file" <<'PY'
 import sys
 from pathlib import Path
-
-ref_path, actual_path = sys.argv[1], sys.argv[2]
 
 def load(path):
     data = {}
@@ -403,154 +363,93 @@ def load(path):
         data[key.strip()] = value.strip()
     return data
 
-ref = load(ref_path)
-actual = load(actual_path)
+ref, actual = load(sys.argv[1]), load(sys.argv[2])
 
-missing = [k for k in ref if k not in actual]
+missing = sorted(k for k in ref if k not in actual)
 if missing:
-    print("Missing relations:", ', '.join(sorted(missing)))
+    print("Missing relations:", ', '.join(missing))
     sys.exit(1)
 
-mismatches = []
-for key, expected in ref.items():
-    observed = actual.get(key)
-    if observed != expected:
-        mismatches.append((key, expected, observed))
-
+mismatches = [(k, ref[k], actual.get(k)) for k in ref if actual.get(k) != ref[k]]
 if mismatches:
     for key, expected, observed in mismatches:
-        obs_text = '<missing>' if observed is None else observed
-        print(f"Relation {key}: expected {expected}, actual {obs_text}")
+        print(f"Relation {key}: expected {expected}, actual {observed or '<missing>'}")
     sys.exit(1)
 
-extras = [k for k in actual if k not in ref]
+extras = sorted(k for k in actual if k not in ref)
 if extras:
-    print("Note: extra relations ignored:", ', '.join(sorted(extras)))
-
-sys.exit(0)
+    print("Note: extra relations ignored:", ', '.join(extras))
 PY
     then
         log "$GREEN" "PASS" "Reference check: $prog_name"
-        return 0
     else
         log "$RED" "FAIL" "Reference mismatch: $prog_name"
-        log "$YELLOW" "INFO" "Reference:"
-        cat "$reference_size_file"
-        log "$YELLOW" "INFO" "Actual:"
-        cat "$result_size_file"
+        log "$YELLOW" "INFO" "Reference:" && cat "$reference_size_file"
+        log "$YELLOW" "INFO" "Actual:"    && cat "$result_size_file"
         return 1
     fi
 }
 
 run_test() {
-    # Drive a single program/dataset pair through generation, execution, and verification.
     local prog_name="$1" dataset_name="$2"
-    local prog_file
+    local prog_file prog_path program_stem mode="batch"
     prog_file="$(basename "$prog_name")"
-    local prog_path="${PROG_DIR}/${prog_file}"
+    prog_path="${PROG_DIR}/${prog_file}"
+    program_stem="${prog_file%.*}"
 
-    if [ ! -f "$prog_path" ]; then
-        die "Program not found: $prog_path"
-    fi
+    [[ -f "$prog_path" ]] || die "Program not found: $prog_path"
 
     setup_dataset "$dataset_name"
-
     local dataset_path
     dataset_path="$(realpath "${FACT_DIR}/${dataset_name}")"
 
-    local program_stem="${prog_file%.*}"
-    local package_name_raw="${program_stem}_${dataset_name}"
+    for oi in "${!OPT_FLAGS[@]}"; do
+        for pi in "${!PROF_FLAGS[@]}"; do
+            compute_flag_combo "$oi" "$pi"
+            local suffix="$COMBO_LABEL_SUFFIX" flags="$COMBO_EXTRA_FLAGS"
 
-    local mode="batch"
-    local profiles=("" "-P")
-    local profile_labels=("" "prof")
+            local package_name project_dir log_file parsed_file
+            package_name="$(sanitize_package_name "${program_stem}_${dataset_name}_${mode}${suffix}")"
+            project_dir="${ROOT_DIR}/${package_name}"
+            log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${mode}${suffix}.log"
+            parsed_file="${PARSED_DIR}/${program_stem}_${dataset_name}_${mode}${suffix}_size.txt"
 
-    for idx in "${!profiles[@]}"; do
-        local profile_flag="${profiles[$idx]}"
-        local profile_label="${profile_labels[$idx]}"
-        local label_suffix="${profile_label:+_${profile_label}}"
+            log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=$mode${suffix})"
 
-        local package_name
-        package_name="$(sanitize_package_name "${package_name_raw}_${mode}${label_suffix}")"
-        local project_dir="${ROOT_DIR}/${package_name}"
+            rm -rf "$project_dir"
+            invoke_compiler "$prog_path" "$dataset_path" "$project_dir" "$mode" "$flags"
+            [[ -d "$project_dir" ]] || die "Generated project not found (mode=$mode${suffix}): $project_dir"
 
-        log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=$mode${label_suffix})"
+            pushd "$project_dir" >/dev/null
+            log "$YELLOW" "RUN" "cargo run --release -- -w $WORKERS (mode=$mode${suffix})"
+            cargo run --release -- -w "$WORKERS" 2>&1 | tee "$log_file"
+            popd >/dev/null
 
-        rm -rf "$project_dir"
+            [[ -f "$log_file" ]] || die "Run log missing (mode=$mode${suffix}): $log_file"
 
-        log "$YELLOW" "GENERATE" "$COMPILER_BIN $prog_path -F $dataset_path -o $project_dir --mode $mode ${profile_flag}"
-        if [ -n "$profile_flag" ]; then
-            "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir" --mode "$mode" "$profile_flag"
-        else
-            "$COMPILER_BIN" "$prog_path" -F "$dataset_path" -o "$project_dir" --mode "$mode"
-        fi
+            parse_output_to_size_file "$log_file" "$parsed_file" \
+                || die "Failed to parse output for $prog_file (mode=$mode${suffix})"
+            verify_results_against_truth "$program_stem" "$dataset_name" "$parsed_file" \
+                || die "Reference verification failed for $prog_file (mode=$mode${suffix})"
 
-        if [ ! -d "$project_dir" ]; then
-            die "Generated project not found (mode=$mode${label_suffix}): $project_dir"
-        fi
-
-        local log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${mode}${label_suffix}.log"
-        pushd "$project_dir" >/dev/null
-        log "$YELLOW" "RUN" "cargo run --release -- -w $WORKERS (mode=$mode${label_suffix})"
-        cargo run --release -- -w "$WORKERS" 2>&1 | tee "$log_file"
-        popd >/dev/null
-
-        if [ ! -f "$log_file" ]; then
-            die "Run log missing (mode=$mode${label_suffix}): $log_file"
-        fi
-
-        local parsed_file="${PARSED_DIR}/${program_stem}_${dataset_name}_${mode}${label_suffix}_size.txt"
-        parse_output_to_size_file "$log_file" "$parsed_file" || {
-            die "Failed to parse output for $prog_file (mode=$mode${label_suffix})"
-        }
-
-        if ! verify_results_against_truth "$program_stem" "$dataset_name" "$parsed_file"; then
-            die "Reference verification failed for $prog_file (mode=$mode${label_suffix})"
-        fi
-
-        log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
-        rm -rf "$project_dir"
+            log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
+            rm -rf "$project_dir"
+        done
     done
 
     cleanup_dataset "$dataset_name"
 }
 
-run_all_tests() {
-    # Iterate over the config file and execute every listed benchmark.
-    log "$BLUE" "TESTS" "Running compiler-mode correctness tests (batch mode)"
-
-    while IFS= read -r raw_line || [ -n "$raw_line" ]; do
-        local line="${raw_line%%#*}"
-        line="$(trim "$line")"
-
-        if [ -z "$line" ]; then
-            continue
-        fi
-
-        IFS='=' read -r prog_name dataset_name <<< "$line"
-        prog_name="$(trim "${prog_name:-}")"
-        dataset_name="$(trim "${dataset_name:-}")"
-
-        if [ -z "$prog_name" ] || [ -z "$dataset_name" ]; then
-            continue
-        fi
-
-        if [ "$prog_name" = "test.dl" ]; then
-            log "$YELLOW" "SKIP" "Skipping test.dl"
-            continue
-        fi
-
-        run_test "$prog_name" "$dataset_name"
-    done < "$CONFIG_FILE"
-
-    log "$GREEN" "COMPLETE" "All tests passed"
-}
+###############################################################################
+# Entry point
+###############################################################################
 
 main() {
     parse_args "$@"
     init_paths
+    log "$BLUE" "START" "FlowLog Testing"
 
-    if [ "$COMPILE_ONLY" -eq 1 ]; then
+    if (( COMPILE_ONLY )); then
         compile_only
         return 0
     fi
@@ -559,8 +458,9 @@ main() {
     ensure_compiler_built
     setup_config_file
     setup_size_reference
-    run_all_tests
 
+    log "$BLUE" "TESTS" "Running compiler-mode correctness tests (batch mode)"
+    for_each_config_entry run_test
     log "$GREEN" "FINISH" "testing completed successfully"
 }
 

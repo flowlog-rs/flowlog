@@ -18,7 +18,7 @@
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 
 use super::RulePlanner;
-use catalog::{ArithmeticPos, AtomSignature, Catalog};
+use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
 
 use tracing::trace;
 
@@ -27,11 +27,7 @@ use tracing::trace;
 // =========================================================================
 impl RulePlanner {
     /// Entry point for applying SIP optimizations to the current rule plan.
-    ///
-    /// # Panics
-    ///
-    /// Not yet implemented — will panic at runtime.
-    pub fn apply_sip(&mut self, _catalog: &mut Catalog) {
+    pub fn apply_sip(&mut self, catalog: &mut Catalog) {
         unimplemented!("SIP optimization is not implemented yet");
     }
 
@@ -82,7 +78,7 @@ impl RulePlanner {
         let right_arg_sigs = catalog.positive_atom_argument_signature(rhs_pos_idx);
 
         // Register both atoms as consumers of their respective inputs.
-        // The projection consumes LHS; the semijoin consumes RHS.
+        // The projection consumes LHS; the semijoin consumes the result of projection and RHS.
         self.insert_consumer(originals, left_fp, base_idx);
         self.insert_consumer(originals, right_fp, base_idx + 1);
 
@@ -93,7 +89,7 @@ impl RulePlanner {
         Self::trace_sip_partitions(catalog, &lhs_keys, &lhs_vals, &rhs_vals);
 
         // ---- Step 1: Project LHS → join keys only ----
-        let proj_tx = TransformationInfo::kv_to_kv(
+        let proj_tx = TransformationInfo::kv_to_kv_sip_projection(
             left_fp,
             originals.contains(&left_fp),
             KeyValueLayout::new(lhs_keys.clone(), lhs_vals),
@@ -112,12 +108,23 @@ impl RulePlanner {
         // ---- Step 2: Semijoin projected-LHS ⋉ RHS ----
         self.insert_consumer(originals, proj_fp, base_idx + 1);
 
+        // Rebuild the projected LHS keys with new signatures for the semijoin operator.
+        let lhs_new_keys: Vec<ArithmeticPos> = lhs_keys
+            .iter()
+            .enumerate()
+            .map(|(idx, pos)| {
+                let sig = pos.init().signature().unwrap();
+                let new_sig = AtomArgumentSignature::new(*sig.atom_signature(), idx);
+                ArithmeticPos::from_var_signature(new_sig)
+            })
+            .collect();
+
         let semijoin_tx = TransformationInfo::join_to_kv(
             proj_fp,
             right_fp,
-            KeyValueLayout::new(lhs_keys.clone(), vec![]),
-            KeyValueLayout::new(rhs_keys, rhs_vals.clone()),
-            KeyValueLayout::new(lhs_keys, rhs_vals),
+            KeyValueLayout::new(lhs_new_keys.clone(), vec![]),
+            KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
+            KeyValueLayout::new(lhs_new_keys.clone(), rhs_vals.clone()),
             vec![],
         );
         let semijoin_fp = semijoin_tx.output_info_fp();
@@ -130,7 +137,19 @@ impl RulePlanner {
         self.transformation_infos.push(semijoin_tx);
 
         // Replace the RHS atom in the catalog with the filtered version.
-        catalog.map_modify(right_atom_sig, semijoin_name, semijoin_fp);
+        let new_arguments_list = rhs_keys
+            .iter()
+            .chain(rhs_vals.iter())
+            .map(|pos| pos.init().signature().unwrap())
+            .cloned()
+            .collect();
+
+        catalog.sip_modify(
+            right_atom_sig,
+            new_arguments_list,
+            semijoin_name,
+            semijoin_fp,
+        );
     }
 
     // ------------------------------------------------------------------

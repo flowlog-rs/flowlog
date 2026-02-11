@@ -66,6 +66,19 @@ impl KeyValueLayout {
         };
         (extract(self.key()), extract(self.value()))
     }
+
+    #[inline]
+    pub fn extract_atom_id(&self) -> usize {
+        self.key()
+            .iter()
+            .chain(self.value().iter())
+            .flat_map(|pos| pos.signatures())
+            .map(|sig| sig.atom_signature().rhs_id())
+            .next()
+            .unwrap_or_else(|| {
+                panic!("Planner error: attempted to extract atom ID from empty key/value layout")
+            })
+    }
 }
 
 /// Transformation information, describing how to transform input collection(s)
@@ -92,6 +105,8 @@ pub enum TransformationInfo {
         var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
         /// Comparison expressions (e.g., x < y).
         compare_exprs_pos: Vec<ComparisonExprPos>,
+        /// SIP projection
+        is_sip_projection: bool,
     },
 
     /// Binary Join to Key-Value transformation.
@@ -167,6 +182,41 @@ impl TransformationInfo {
             const_eq_constraints,
             var_eq_constraints,
             compare_exprs_pos,
+            is_sip_projection: false,
+        }
+    }
+
+    /// Build a Key-Value to Key-Value transformation with a derived (fake) output fingerprint, marked as SIP projection.
+    pub fn kv_to_kv_sip_projection(
+        input_fake_sig: u64,
+        is_row_input: bool,
+        input_kv_layout: KeyValueLayout,
+        output_fake_kv_layout: KeyValueLayout,
+        const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
+        var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
+        compare_exprs_pos: Vec<ComparisonExprPos>,
+    ) -> Self {
+        let fake_output_sig = compute_fp((
+            "kv_to_kv",
+            &input_fake_sig,
+            &input_kv_layout,
+            &output_fake_kv_layout,
+            &const_eq_constraints,
+            &var_eq_constraints,
+            &compare_exprs_pos,
+        ));
+
+        Self::KVToKV {
+            input_info_fp: input_fake_sig,
+            output_info_fp: fake_output_sig,
+            is_row_input,
+            is_row_output: false,
+            input_kv_layout,
+            output_kv_layout: output_fake_kv_layout,
+            const_eq_constraints,
+            var_eq_constraints,
+            compare_exprs_pos,
+            is_sip_projection: true,
         }
     }
 
@@ -336,6 +386,23 @@ impl TransformationInfo {
         }
     }
 
+    // Layout modifier
+
+    /// Input layout modifier for SIP premap transformations; only applicable to KVToKV transformations.
+    #[inline]
+    pub fn update_input_layout(&mut self, new_input_kv_layout: KeyValueLayout) {
+        match self {
+            Self::KVToKV {
+                input_kv_layout, ..
+            } => {
+                *input_kv_layout = new_input_kv_layout;
+            }
+            _ => panic!(
+                "Planner error: update_input_layout is only applicable to KVToKV transformations"
+            ),
+        }
+    }
+
     // Constraint getters
 
     /// Constant equality constraints (Key-Value to Key-Value only).
@@ -481,13 +548,19 @@ impl TransformationInfo {
     ) {
         match self {
             Self::KVToKV {
-                output_kv_layout, ..
+                output_kv_layout,
+                output_info_fp,
+                ..
             }
             | Self::JoinToKV {
-                output_kv_layout, ..
+                output_kv_layout,
+                output_info_fp,
+                ..
             }
             | Self::AntiJoinToKV {
-                output_kv_layout, ..
+                output_kv_layout,
+                output_info_fp,
+                ..
             } => {
                 let all_positions: Vec<ArithmeticPos> = output_kv_layout
                     .key()
@@ -502,7 +575,8 @@ impl TransformationInfo {
                         .map(|idx| {
                             all_positions.get(*idx).cloned().unwrap_or_else(|| {
                                 panic!(
-                                    "Planner error: output layout index {} out of bounds (len {})",
+                                    "Planner error: 0x{:016x} output layout index {} out of bounds (len {})",
+                                    output_info_fp,
                                     idx,
                                     all_positions.len()
                                 )
@@ -576,6 +650,7 @@ impl TransformationInfo {
                 var_eq_constraints,
                 compare_exprs_pos,
                 output_info_fp,
+                ..
             } => {
                 *output_info_fp = compute_fp((
                     "kv_to_kv",
@@ -646,6 +721,7 @@ impl fmt::Display for TransformationInfo {
                 const_eq_constraints,
                 var_eq_constraints,
                 compare_exprs_pos,
+                ..
             } => {
                 let in_coll = fmt_collection(input_info_fp, input_kv_layout);
                 let out_coll = fmt_collection(output_info_fp, output_kv_layout);
