@@ -120,3 +120,104 @@ pub fn aggregation_merge_kv(arity: usize, agg_pos: usize) -> TokenStream {
         |&#pattern, &v| #result_tuple
     }
 }
+
+/// Generates the Min-semiring optimized aggregation pipeline as a single `TokenStream`.
+///
+/// Instead of `map(row_chop) → reduce_core(min) → as_collection(merge_kv)`,
+/// this produces a 3-phase pipeline that encodes `min` in the diff position:
+///
+/// 1. **Phase 1** – Rewrite each `(row, time, _diff)` into `(key, time, Min::new(value))`
+/// 2. **Phase 2** – `threshold_semigroup` with the `Min` semigroup; consolidation
+///    computes the running minimum, and the threshold only emits when it decreases.
+/// 3. **Phase 3** – Convert back: `(key, time, Min{value})` → `(full_row, time, SEMIRING_ONE)`
+///
+/// This replaces two arrangements (threshold + reduce_core) with one (threshold only).
+pub fn aggregation_min_optimize(arity: usize, agg_pos: usize) -> TokenStream {
+    let key_arity = arity - 1;
+
+    // Phase 1: row destructuring and key/value extraction
+    let row_fields: Vec<_> = (0..arity).map(|i| format_ident!("x{}", i)).collect();
+    let row_pat = match arity {
+        0 => quote! { () },
+        1 => {
+            let f = &row_fields[0];
+            quote! { #f }
+        }
+        _ => quote! { ( #(#row_fields),* ) },
+    };
+
+    let key_idents: Vec<_> = (0..arity)
+        .filter(|&i| i != agg_pos)
+        .map(|i| format_ident!("x{}", i))
+        .collect();
+    let key_construct = match key_idents.len() {
+        0 => quote! { () },
+        1 => {
+            let k = &key_idents[0];
+            quote! { ( #k ,) }
+        }
+        _ => quote! { ( #(#key_idents),* ) },
+    };
+
+    let agg_field = format_ident!("x{}", agg_pos);
+
+    // Phase 3: reconstruct full row from (key, Min diff)
+    let key_fields_p3: Vec<_> = (0..key_arity).map(|i| format_ident!("k{}", i)).collect();
+    let key_pat_p3 = match key_arity {
+        0 => quote! { _key },
+        1 => {
+            let f = &key_fields_p3[0];
+            quote! { ( #f ,) }
+        }
+        _ => quote! { ( #(#key_fields_p3),* ) },
+    };
+
+    let mut result_parts = Vec::new();
+    let mut ki = 0usize;
+    for i in 0..arity {
+        if i == agg_pos {
+            result_parts.push(quote! { min_val.value as i32 });
+        } else {
+            let kf = &key_fields_p3[ki];
+            result_parts.push(quote! { #kf });
+            ki += 1;
+        }
+    }
+    let result_construct = match result_parts.len() {
+        0 => quote! { () },
+        1 => {
+            let f = &result_parts[0];
+            quote! { ( #f ,) }
+        }
+        _ => quote! { ( #(#result_parts),* ) },
+    };
+
+    quote! {
+        // Phase 1: (row, time, _) → (key, time, Min::new(value))
+        .inner
+        .map(move |(#row_pat, t, _)| {
+            let key = #key_construct;
+            let value = #agg_field as u32;
+            (key, t, Min::new(value))
+        })
+        .as_collection()
+
+        // Phase 2: threshold_semigroup with Min semiring
+        .threshold_semigroup(|_k, &new_min, current_min| {
+            match current_min {
+                Some(current) if new_min < *current => Some(new_min),
+                Some(_) => None,
+                None if !new_min.is_zero() => Some(new_min),
+                None => None,
+            }
+        })
+
+        // Phase 3: (key, time, Min{value}) → (full_row, time, SEMIRING_ONE)
+        .inner
+        .map(move |(#key_pat_p3, t, min_val)| {
+            let row = #result_construct;
+            (row, t, SEMIRING_ONE)
+        })
+        .as_collection()
+    }
+}

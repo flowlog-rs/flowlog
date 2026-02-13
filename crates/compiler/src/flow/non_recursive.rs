@@ -15,9 +15,13 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use tracing::trace;
 
-use crate::aggregation::{aggregation_merge_kv, aggregation_reduce, aggregation_row_chop};
+use crate::aggregation::{
+    aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce, aggregation_row_chop,
+};
 use crate::Compiler;
 
+use common::ExecutionMode;
+use parser::AggregationOperator;
 use planner::{StratumPlanner, Transformation};
 use profiler::{with_profiler, Profiler};
 
@@ -114,22 +118,39 @@ impl Compiler {
             if let Some((agg_op, agg_pos, agg_arity)) =
                 stratum.output_to_aggregation_map().get(output_fp)
             {
-                self.imports.mark_aggregation();
                 self.imports.mark_as_collection();
                 self.imports.mark_semiring_one();
-                let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-                let reduce_logic = aggregation_reduce(agg_op);
-                let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
-                block = quote! {
-                    #block
-                    let #output = #output
-                        .map(#row_chop)
-                        .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
-                            "aggregation",
-                            #reduce_logic
-                        )
-                        .as_collection(#merge_kv);
-                };
+
+                // Min semiring fast path: replace reduce_core with threshold_semigroup
+                // using the Min semigroup, avoiding a second arrangement.
+                if matches!(agg_op, AggregationOperator::Min)
+                    && matches!(self.config.mode(), ExecutionMode::Batch)
+                {
+                    self.imports.mark_min_semiring();
+                    self.imports.mark_threshold_total();
+                    self.imports.mark_timely_map();
+                    let min_pipeline = aggregation_min_optimize(*agg_arity, *agg_pos);
+                    block = quote! {
+                        #block
+                        let #output = #output
+                            #min_pipeline;
+                    };
+                } else {
+                    self.imports.mark_aggregation();
+                    let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
+                    let reduce_logic = aggregation_reduce(agg_op);
+                    let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
+                    block = quote! {
+                        #block
+                        let #output = #output
+                            .map(#row_chop)
+                            .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+                                "aggregation",
+                                #reduce_logic
+                            )
+                            .as_collection(#merge_kv);
+                    };
+                }
 
                 // Profiler: aggregation operator (optional)
                 with_profiler(profiler, |profiler| {
