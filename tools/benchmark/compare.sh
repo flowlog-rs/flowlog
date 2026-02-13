@@ -250,9 +250,9 @@ compute_exec_time() {
 fmt_time() {
     local t="$1"
     if [[ "$t" =~ ^[0-9] ]]; then
-        printf "%15.6f" "$t"
+        printf "%13.6f" "$t"
     else
-        printf "%15s" "$t"
+        printf "%13s" "$t"
     fi
 }
 
@@ -265,6 +265,11 @@ fmt_speedup() {
     else
         echo "N/A"
     fi
+}
+
+fmt_speedup_cell() {
+    local s="$1"
+    printf "%11s" "$s"
 }
 
 # Given space-separated "time:logpath" pairs, return the median entry.
@@ -450,17 +455,17 @@ generate_results() {
     echo ""
 
     # Table header.
-    printf "| %-25s | %15s %15s %8s | %15s %15s %8s | %15s %15s %8s |\n" \
-        "" "--- Load" "Time ---" "" "--- Execute" "Time ---" "" "--- Total" "Time ---" ""
-    printf "| %-25s | %15s %15s %8s | %15s %15s %8s | %15s %15s %8s |\n" \
-        "Program-Dataset" \
-        "Interp(s)" "Compiler(s)" "Speedup" \
-        "Interp(s)" "Compiler(s)" "Speedup" \
-        "Interp(s)" "Compiler(s)" "Speedup"
-    printf "|---------------------------|"
-    printf "-----------------------------------------|"
-    printf "-----------------------------------------|"
-    printf "-----------------------------------------|\n"
+    printf "| %-25s | %-39s | %-39s | %-39s |\n" \
+        "Program-Dataset" "Load time (s)" "Execute time (s)" "Total time (s)"
+    printf "| %-25s | %13s %13s %11s | %13s %13s %11s | %13s %13s %11s |\n" \
+        "" "Interp" "Compiler" "Speedup" \
+        "Interp" "Compiler" "Speedup" \
+        "Interp" "Compiler" "Speedup"
+
+    printf '%s' "|---------------------------|"
+    printf '%s' "-----------------------------------------|"
+    printf '%s' "-----------------------------------------|"
+    printf '%s\n' "-----------------------------------------|"
 
     local csv_file="${LOG_DIR}/comparison_results.csv"
     echo "Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup" \
@@ -482,11 +487,11 @@ generate_results() {
         spd_exec=$(fmt_speedup "$i_exec" "$c_exec")
         spd_total=$(fmt_speedup "$i_total" "$c_total")
 
-        printf "| %-25s | %15s %15s %8s | %15s %15s %8s | %15s %15s %8s |\n" \
+        printf "| %-25s | %s %s %s | %s %s %s | %s %s %s |\n" \
             "$label" \
-            "$(fmt_time "$i_load")" "$(fmt_time "$c_load")" "$spd_load" \
-            "$(fmt_time "$i_exec")" "$(fmt_time "$c_exec")" "$spd_exec" \
-            "$(fmt_time "$i_total")" "$(fmt_time "$c_total")" "$spd_total"
+            "$(fmt_time "$i_load")"  "$(fmt_time "$c_load")"  "$(fmt_speedup_cell "$spd_load")" \
+            "$(fmt_time "$i_exec")"  "$(fmt_time "$c_exec")"  "$(fmt_speedup_cell "$spd_exec")" \
+            "$(fmt_time "$i_total")" "$(fmt_time "$c_total")" "$(fmt_speedup_cell "$spd_total")"
 
         echo "${stem},${DATASET_NAME},${i_load},${c_load},${spd_load},${i_exec},${c_exec},${spd_exec},${i_total},${c_total},${spd_total}" \
             >> "$csv_file"
@@ -532,18 +537,18 @@ main() {
         run_interpreter "$PROG_NAME" "$DATASET_NAME" || true
         run_compiler    "$PROG_NAME" "$DATASET_NAME" || true
 
-        local stem="${PROG_NAME%.*}"
-        print_pair_summary \
-            "${stem}_${DATASET_NAME}" \
-            "${LOG_DIR}/${stem}_${DATASET_NAME}_interpreter.log" \
-            "${LOG_DIR}/${stem}_${DATASET_NAME}_compiler.log"
+                local program_stem="${PROG_NAME%.*}"
+        local lbl="${program_stem}_${DATASET_NAME}"
+        local interp_log="${LOG_DIR}/${program_stem}_${DATASET_NAME}_interpreter.log"
+        local comp_log="${LOG_DIR}/${program_stem}_${DATASET_NAME}_compiler.log"
 
+        print_pair_summary "$lbl" "$interp_log" "$comp_log"
+
+        # Cleanup dataset to save disk space
         cleanup_dataset "$DATASET_NAME"
     done < "$CONFIG_FILE"
 
     generate_results
-
-    log "$GREEN" "FINISH" "Benchmark complete"
 }
 
 main "$@"

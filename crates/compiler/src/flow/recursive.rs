@@ -11,10 +11,13 @@ use std::collections::HashMap;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::aggregation::{aggregation_merge_kv, aggregation_reduce, aggregation_row_chop};
+use crate::aggregation::{
+    aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce, aggregation_row_chop,
+};
 use crate::ident::find_local_ident;
 use crate::Compiler;
 
+use common::ExecutionMode;
 use parser::AggregationOperator;
 use planner::StratumPlanner;
 use profiler::{with_profiler, Profiler};
@@ -227,22 +230,40 @@ impl Compiler {
             });
 
             if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
-                self.imports.mark_aggregation();
                 self.imports.mark_as_collection();
-                let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-                let reduce_logic = aggregation_reduce(agg_op);
-                let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
-                // Aggregate after union + dedup.
-                block = quote! {
-                    #block
-                    let #next_ident = #next_ident
-                        .map(#row_chop)
-                        .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
-                            "aggregation",
-                            #reduce_logic
-                        )
-                        .as_collection(#merge_kv);
-                };
+                self.imports.mark_semiring_one();
+
+                // Min semiring fast path: replace reduce_core with threshold_semigroup
+                // using the Min semigroup, avoiding a second arrangement.
+                if matches!(agg_op, AggregationOperator::Min)
+                    && matches!(self.config.mode(), ExecutionMode::Batch)
+                {
+                    self.imports.mark_min_semiring();
+                    self.imports.mark_threshold_total();
+                    self.imports.mark_timely_map();
+                    let min_pipeline = aggregation_min_optimize(*agg_arity, *agg_pos);
+                    block = quote! {
+                        #block
+                        let #next_ident = #next_ident
+                            #min_pipeline;
+                    };
+                } else {
+                    self.imports.mark_aggregation();
+                    let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
+                    let reduce_logic = aggregation_reduce(agg_op);
+                    let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
+                    // Aggregate after union + dedup.
+                    block = quote! {
+                        #block
+                        let #next_ident = #next_ident
+                            .map(#row_chop)
+                            .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+                                "aggregation",
+                                #reduce_logic
+                            )
+                            .as_collection(#merge_kv);
+                    };
+                }
 
                 // Profiler: aggregation operator (optional)
                 with_profiler(profiler, |profiler| {

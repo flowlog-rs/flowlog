@@ -26,6 +26,10 @@ const PROMPT_RS_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/templates/prompt_rs.tpl"
 ));
+const MIN_SEMIRING_RS_TMPL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/templates/min_semiring_rs.tpl"
+));
 
 // =========================================================================
 // Project File Generation
@@ -62,6 +66,11 @@ impl Compiler {
             self.write_src_relation()?;
         }
 
+        // Min semiring module (only when min aggregation is used)
+        if self.imports.needs_min_semiring() {
+            self.write_src_min_semiring()?;
+        }
+
         // Profiler logs if enabled
         with_profiler_ref(profiler, |profiler| {
             self.write_profiler_logs(profiler, &self.config.executable_name())
@@ -96,6 +105,16 @@ impl Compiler {
             let deps = doc["dependencies"].as_table_mut().unwrap();
             deps["timely"] = "0.26".into();
             deps["differential-dataflow"] = "0.19".into();
+            deps["mimalloc"] = "0.1".into();
+
+            if self.imports.needs_min_semiring() {
+                let mut serde_tbl = toml_edit::InlineTable::new();
+                serde_tbl.insert("version", "1".into());
+                let mut features = Array::new();
+                features.push("derive");
+                serde_tbl.insert("features", toml_edit::Value::Array(features));
+                deps["serde"] = toml_edit::value(serde_tbl);
+            }
 
             if self.config.is_incremental() {
                 deps["rustyline"] = "17".into();
@@ -187,6 +206,15 @@ impl Compiler {
 
         let rendered = PROMPT_RS_TMPL.replace("\r\n", "\n");
         write_file(&src_dir.join("prompt.rs"), rendered.trim_start())
+    }
+
+    /// Write `src/min_semiring.rs` into the generated project directory.
+    fn write_src_min_semiring(&self) -> io::Result<()> {
+        let src_dir = self.config.executable_path().join("src");
+        ensure_dir(&src_dir)?;
+
+        let rendered = MIN_SEMIRING_RS_TMPL.replace("\r\n", "\n");
+        write_file(&src_dir.join("min_semiring.rs"), rendered.trim_start())
     }
 
     // -------------------------

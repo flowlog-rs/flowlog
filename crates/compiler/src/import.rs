@@ -44,6 +44,8 @@ pub(crate) struct ImportTracker {
     aggregation: bool,
     /// Whether semiring one value is needed.
     semiring_one: bool,
+    /// Whether the Min semiring module is needed (min aggregation optimization).
+    min_semiring: bool,
 }
 
 impl ImportTracker {
@@ -76,6 +78,9 @@ impl ImportTracker {
         let semiring_one = self.semiring_one_value();
         let iter_type = self.iter_type();
 
+        // Global allocator (mimalloc for better multi-threaded allocation performance).
+        let allocator = self.allocator();
+
         quote! {
             #prelude
 
@@ -83,6 +88,8 @@ impl ImportTracker {
 
             #dd
             #timely
+
+            #allocator
 
             #diff_type
             #semiring_one
@@ -154,6 +161,16 @@ impl ImportTracker {
         self.semiring_one = true;
     }
 
+    /// Marks that the Min semiring module is required (min aggregation).
+    pub(crate) fn mark_min_semiring(&mut self) {
+        self.min_semiring = true;
+    }
+
+    /// Returns whether the Min semiring module should be written to the project.
+    pub(crate) fn needs_min_semiring(&self) -> bool {
+        self.min_semiring
+    }
+
     // ---------------------------------------------------------------------
     // Render helpers: grouping + ordering
     // ---------------------------------------------------------------------
@@ -216,6 +233,7 @@ impl ImportTracker {
         let operators = self.operator_imports();
         let recursive = self.recursive_imports();
         let aggregation = self.aggregation_imports();
+        let min_semiring = self.min_semiring_import();
 
         quote! {
             #input
@@ -224,6 +242,7 @@ impl ImportTracker {
             #as_collection
             #recursive
             #aggregation
+            #min_semiring
         }
     }
 
@@ -356,6 +375,18 @@ impl ImportTracker {
         }
     }
 
+    fn min_semiring_import(&self) -> TokenStream {
+        if self.min_semiring {
+            quote! {
+                mod min_semiring;
+                use min_semiring::Min;
+                use differential_dataflow::difference::IsZero;
+            }
+        } else {
+            quote! {}
+        }
+    }
+
     fn probe_imports(&self) -> TokenStream {
         match self.mode {
             ExecutionMode::Incremental => {
@@ -396,6 +427,16 @@ impl ImportTracker {
             quote! { type Iter = u16; }
         } else {
             quote! {}
+        }
+    }
+
+    /// Emit mimalloc global allocator for better multi-threaded allocation performance.
+    fn allocator(&self) -> TokenStream {
+        quote! {
+            use mimalloc::MiMalloc;
+
+            #[global_allocator]
+            static GLOBAL: MiMalloc = MiMalloc;
         }
     }
 }
