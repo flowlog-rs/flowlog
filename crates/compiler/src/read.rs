@@ -248,7 +248,11 @@ impl Compiler {
 
                 // Reuse a single buffer across all lines to avoid per-line heap allocation.
                 let mut buf = Vec::with_capacity(256);
-                while reader.read_until(b'\n', &mut buf).unwrap_or(0) > 0 {
+                let mut __line_no = 0;
+                while reader.read_until(b'\n', &mut buf)
+                    .unwrap_or_else(|e| panic!("I/O error reading {} at line {}: {}", #path, __line_no, e)) > 0
+                {
+                    __line_no += 1;
                     // Strip trailing newline (and carriage return for CRLF files).
                     if buf.last() == Some(&b'\n') { buf.pop(); }
                     if buf.last() == Some(&b'\r') { buf.pop(); }
