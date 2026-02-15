@@ -199,27 +199,36 @@ impl Compiler {
             .collect();
 
         // Sharding / "should this worker ingest this row?" logic.
-        let should_send_stmt: TokenStream = {
-            let first_key = field_idents[0].clone();
+        let first_key = field_idents[0].clone();
+        let (should_send_stmt, materialize_first_field): (TokenStream, TokenStream) =
             match data_types[0] {
-                DataType::Integer => quote! {
-                    let #first_key: i32 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i32>().ok()?;
-                    let should_send = ((#first_key as usize) % peers) == index;
-                },
-                DataType::String => quote! {
-                    let #first_key: String = std::str::from_utf8(tuple.next()?).ok()?.to_string();
-                    let should_send = {
-                        // 64-bit FNV-1a hash for stable worker assignment on string keys.
-                        let mut hash: u64 = 0xcbf29ce484222325;
-                        for &b in #first_key.as_bytes() {
-                            hash ^= b as u64;
-                            hash = hash.wrapping_mul(0x100000001b3);
-                        }
-                        ((hash as usize) % peers) == index
-                    };
-                },
-            }
-        };
+                DataType::Integer => (
+                    quote! {
+                        let #first_key: i32 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i32>().ok()?;
+                        let should_send = ((#first_key as usize) % peers) == index;
+                    },
+                    // Integer first field is already parsed; nothing more to do.
+                    quote! {},
+                ),
+                DataType::String => (
+                    quote! {
+                        let __f0_bytes = tuple.next()?;
+                        let should_send = {
+                            // 64-bit FNV-1a hash for stable worker assignment on string keys.
+                            let mut hash: u64 = 0xcbf29ce484222325;
+                            for &b in __f0_bytes {
+                                hash ^= b as u64;
+                                hash = hash.wrapping_mul(0x100000001b3);
+                            }
+                            ((hash as usize) % peers) == index
+                        };
+                    },
+                    // Materialize the String only when this worker keeps the row.
+                    quote! {
+                        let #first_key: String = std::str::from_utf8(__f0_bytes).ok()?.to_string();
+                    },
+                ),
+            };
 
         // Element expression for `.update(...)`.
         let elem_expr = if arity == 1 {
@@ -230,32 +239,45 @@ impl Compiler {
         };
 
         quote! {
-            let ingest = {
-                let reader = BufReader::new(
+            {
+                let mut reader = BufReader::new(
                     File::open(#path)
                         .unwrap_or_else(|e| panic!("failed to open {}: {}", #path, e))
                 );
                 let delim: u8 = #delimiter.as_bytes()[0];
 
-                reader
-                    .split(b'\n')
-                    .filter_map(Result::ok)          // drop I/O errors
-                    .filter(|line| !line.is_empty()) // skip empty lines
-                    .filter_map(move |line| {
-                        let mut tuple = line.split(|&bt| bt == delim);
+                // Reuse a single buffer across all lines to avoid per-line heap allocation.
+                let mut buf = Vec::with_capacity(256);
+                let mut __line_no = 0;
+                while reader.read_until(b'\n', &mut buf)
+                    .unwrap_or_else(|e| panic!("I/O error reading {} at line {}: {}", #path, __line_no, e)) > 0
+                {
+                    __line_no += 1;
+                    // Strip trailing newline (and carriage return for CRLF files).
+                    if buf.last() == Some(&b'\n') { buf.pop(); }
+                    if buf.last() == Some(&b'\r') { buf.pop(); }
 
-                        #should_send_stmt
-                        if !should_send {
-                            return None;
+                    if !buf.is_empty() {
+                        let row = (|| -> Option<_> {
+                            let mut tuple = buf.split(|&bt| bt == delim);
+
+                            #should_send_stmt
+                            if !should_send {
+                                return None;
+                            }
+
+                            #materialize_first_field
+                            #(#parse_rest_stmts)*
+
+                            Some(#elem_expr)
+                        })();
+                        if let Some(row) = row {
+                            #handle.update(row, SEMIRING_ONE);
                         }
-
-                        #(#parse_rest_stmts)*
-
-                        Some(#elem_expr)
-                    })
-            };
-
-            ingest.for_each(|row| #handle.update(row, SEMIRING_ONE));
+                    }
+                    buf.clear();
+                }
+            }
         }
     }
 
