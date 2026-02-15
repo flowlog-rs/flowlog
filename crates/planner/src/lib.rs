@@ -13,5 +13,5 @@ pub use collection::Collection;
 pub use compare::ComparisonExprArgument;
 pub use constraint::Constraints;
 pub use rule_planner::RulePlanner;
-pub use stratum_planner::{RecursionContext, StratumPlanner};
+pub use stratum_planner::StratumPlanner;
 pub use transformation::{Transformation, TransformationFlow, TransformationInfo};

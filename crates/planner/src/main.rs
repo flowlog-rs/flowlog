@@ -3,7 +3,7 @@ use clap::Parser;
 use common::{get_example_files, Config, TestResult};
 use optimizer::Optimizer;
 use parser::Program;
-use planner::{RecursionContext, StratumPlanner};
+use planner::StratumPlanner;
 use profiler::Profiler;
 use stratifier::Stratifier;
 use tracing_subscriber::EnvFilter;
@@ -55,8 +55,6 @@ fn plan_and_print(
     profiler: &mut Option<Profiler>,
 ) {
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-        let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
-
         // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
 
@@ -65,12 +63,8 @@ fn plan_and_print(
             &rules,
             optimizer,
             profiler,
-            &RecursionContext {
-                is_recursive,
-                iterative_relations: stratifier.stratum_iterative_relation(stratum_idx),
-                leave_relations: stratifier.stratum_leave_relation(stratum_idx),
-                available_relations: stratifier.stratum_available_relations(stratum_idx),
-            },
+            stratifier,
+            stratum_idx,
         );
     }
 }
@@ -95,19 +89,14 @@ fn run_all_examples(config: &Config) {
 
             // Run stratum planner without printing details
             for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-                let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
                 let _sp = StratumPlanner::from_rules(
                     config,
                     &rules,
                     &mut optimizer,
                     &mut profiler,
-                    &RecursionContext {
-                        is_recursive,
-                        iterative_relations: stratifier.stratum_iterative_relation(stratum_idx),
-                        leave_relations: stratifier.stratum_leave_relation(stratum_idx),
-                        available_relations: stratifier.stratum_available_relations(stratum_idx),
-                    },
+                    &stratifier,
+                    stratum_idx,
                 );
             }
 

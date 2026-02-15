@@ -7,7 +7,7 @@ use common::Config;
 use compiler::Compiler;
 use optimizer::Optimizer;
 use parser::Program;
-use planner::{RecursionContext, StratumPlanner};
+use planner::StratumPlanner;
 use profiler::Profiler;
 use stratifier::Stratifier;
 
@@ -61,8 +61,6 @@ fn generate_program(
 ) {
     let mut strata = Vec::new();
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-        let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
-
         // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
         let sp = StratumPlanner::from_rules(
@@ -70,12 +68,8 @@ fn generate_program(
             &rules,
             optimizer,
             profiler,
-            &RecursionContext {
-                is_recursive,
-                iterative_relations: stratifier.stratum_iterative_relation(stratum_idx),
-                leave_relations: stratifier.stratum_leave_relation(stratum_idx),
-                available_relations: stratifier.stratum_available_relations(stratum_idx),
-            },
+            stratifier,
+            stratum_idx,
         );
         strata.push(sp);
     }
@@ -146,19 +140,14 @@ fn run_all_examples(config: &Config) {
             };
 
             for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-                let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
                 let _sp = StratumPlanner::from_rules(
                     config,
                     &rules,
                     &mut optimizer,
                     &mut profiler,
-                    &RecursionContext {
-                        is_recursive,
-                        iterative_relations: stratifier.stratum_iterative_relation(stratum_idx),
-                        leave_relations: stratifier.stratum_leave_relation(stratum_idx),
-                        available_relations: stratifier.stratum_available_relations(stratum_idx),
-                    },
+                    &stratifier,
+                    stratum_idx,
                 );
                 // In batch mode, skip file generation to avoid overwriting.
             }

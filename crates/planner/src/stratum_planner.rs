@@ -10,24 +10,9 @@ use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
 use parser::{AggregationOperator, HeadArg};
 use profiler::{with_profiler, Profiler};
+use stratifier::Stratifier;
 
 use crate::{RulePlanner, Transformation, TransformationInfo};
-
-/// Recursion-related metadata for a stratum.
-///
-/// Groups the information that stratum planner needs to
-/// separate recursive from non-recursive work and to track enter/leave
-/// collections.
-pub struct RecursionContext<'a> {
-    /// Whether the stratum contains recursive rules.
-    pub is_recursive: bool,
-    /// Fingerprints of recursive relations.
-    pub iterative_relations: &'a [u64],
-    /// Fingerprints of relations that exit recursion.
-    pub leave_relations: &'a [u64],
-    /// Fingerprints of all relations available before this stratum.
-    pub available_relations: &'a HashSet<u64>,
-}
 
 /// Planner for a single stratum (a group of parallel rules).
 ///
@@ -81,9 +66,10 @@ impl StratumPlanner {
         stratum: &[FlowLogRule],
         optimizer: &mut Optimizer,
         profiler: &mut Option<Profiler>,
-        recursion: &RecursionContext<'_>,
+        stratifier: &Stratifier,
+        stratum_idx: usize,
     ) -> Self {
-        let is_recursive = recursion.is_recursive;
+        let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
 
@@ -174,8 +160,10 @@ impl StratumPlanner {
             non_recursive_transformations: Vec::new(),
             recursive_transformations: Vec::new(),
             recursion_enter_collections: Vec::new(),
-            recursion_iterative_collections: recursion.iterative_relations.to_vec(),
-            recursion_leave_collections: recursion.leave_relations.to_vec(),
+            recursion_iterative_collections: stratifier
+                .stratum_iterative_relation(stratum_idx)
+                .to_vec(),
+            recursion_leave_collections: stratifier.stratum_leave_relation(stratum_idx).to_vec(),
             output_to_idb_map: HashMap::new(),
             output_to_aggregation_map: HashMap::new(),
         };
@@ -185,7 +173,8 @@ impl StratumPlanner {
         // this phase to factoring optimizations
         stratum_planner.build_output_to_idb_map(&catalogs);
         stratum_planner.identify_recursive_transformations(is_recursive);
-        stratum_planner.build_recursion_enter_collections(recursion.available_relations);
+        stratum_planner
+            .build_recursion_enter_collections(stratifier.stratum_available_relations(stratum_idx));
         stratum_planner.build_output_to_aggregation_map(&catalogs);
 
         // Debug info for non-recursive vs recursive transformations.
