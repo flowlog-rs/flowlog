@@ -81,19 +81,15 @@ impl Compiler {
                 let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields);
                 let pred = combine_predicates(cmp_pred, cst_pred);
 
-                if let Some(pred) = pred {
-                    quote! {
-                        let #out = #inp
-                            .flat_map(|#row_pat: #row_ty| {
-                                if #pred { Some( #out_val ) } else { None }
-                            });
-                    }
+                let flat_map_body = if let Some(pred) = pred {
+                    quote! { if #pred { Some( #out_val ) } else { None } }
                 } else {
-                    // For Row -> Row, use empty key () and put data in value.
-                    quote! {
-                        let #out = #inp
-                            .flat_map(|#row_pat: #row_ty| std::iter::once( #out_val ));
-                    }
+                    quote! { std::iter::once( #out_val ) }
+                };
+
+                quote! {
+                    let #out = #inp
+                        .flat_map(|#row_pat: #row_ty| { #flat_map_body });
                 }
             }
 
@@ -150,18 +146,15 @@ impl Compiler {
                 let pred = combine_predicates(cmp_pred, cst_pred);
 
                 // Transformation logic
-                let transformation = if let Some(pred) = pred {
-                    quote! {
-                        let #out = #inp
-                            .flat_map(|#row_pat: #row_ty| {
-                                if #pred { Some( #out_expr ) } else { None }
-                            });
-                    }
+                let flat_map_body = if let Some(pred) = pred {
+                    quote! { if #pred { Some( #out_expr ) } else { None } }
                 } else {
-                    quote! {
-                        let #out = #inp
-                            .flat_map(|#row_pat: #row_ty| std::iter::once( #out_expr ));
-                    }
+                    quote! { std::iter::once( #out_expr ) }
+                };
+
+                let transformation = quote! {
+                    let #out = #inp
+                        .flat_map(|#row_pat: #row_ty| { #flat_map_body });
                 };
 
                 // Arrangement registration
@@ -219,18 +212,15 @@ impl Compiler {
                 );
 
                 // Transformation logic
-                if let Some(pred) = pred {
-                    quote! {
-                        let #out = #inp
-                            .flat_map(|( #kv_param_k, #kv_param_v )| {
-                                if #pred { Some( #out_val ) } else { None }
-                            });
-                    }
+                let flat_map_body = if let Some(pred) = pred {
+                    quote! { if #pred { Some( #out_val ) } else { None } }
                 } else {
-                    quote! {
-                        let #out = #inp
-                            .flat_map(|( #kv_param_k, #kv_param_v )| std::iter::once( #out_val ));
-                    }
+                    quote! { std::iter::once( #out_val ) }
+                };
+
+                quote! {
+                    let #out = #inp
+                        .flat_map(|( #kv_param_k, #kv_param_v )| { #flat_map_body });
                 }
             }
 
@@ -281,19 +271,34 @@ impl Compiler {
                     Some(flow.constraints()),
                 );
 
-                // Transformation logic
-                let transformation = if let Some(pred) = pred {
-                    quote! {
-                        let #out = #inp
-                            .flat_map(|( #kv_param_k, #kv_param_v )| {
-                                if #pred { Some( #out_expr ) } else { None }
-                            });
-                    }
+                // Closure parameter depends on whether input is key-only
+                let closure_param = if input.is_k_only() {
+                    quote! { |#kv_param_k| }
                 } else {
-                    quote! {
-                        let #out = #inp
-                            .flat_map(|( #kv_param_k, #kv_param_v )| std::iter::once( #out_expr ));
-                    }
+                    quote! { |( #kv_param_k, #kv_param_v )| }
+                };
+
+                // Ideally, in system design, projection (to key) in SIP optimization may introduce duplicates,
+                // we have to apply deduplication to avoid incorrect Yannakakis computation bounds.
+                // Dedup only applies when there is no predicate (predicate paths already filter).
+                let dedup_call = self.dedup_collection();
+                let out_dedup_expr = if pred.is_none() && output.is_k_only() {
+                    quote! { let #out = #out #dedup_call; }
+                } else {
+                    quote! {}
+                };
+
+                // Flat_map body depends on whether there is a predicate
+                let flat_map_body = if let Some(pred) = pred {
+                    quote! { if #pred { Some( #out_expr ) } else { None } }
+                } else {
+                    quote! { std::iter::once( #out_expr ) }
+                };
+
+                let transformation = quote! {
+                    let #out = #inp
+                        .flat_map(#closure_param { #flat_map_body });
+                    #out_dedup_expr
                 };
 
                 // Arrangement registration
@@ -347,22 +352,15 @@ impl Compiler {
                     compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
                 let out_val = build_key_val_from_join_args(flow.value());
 
-                if let Some(pred) = build_join_compare_predicate(flow.compares()) {
-                    quote! {
-                        let #out =
-                            #l
-                                .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
-                                    if #pred { Some( #out_val ) } else { None }
-                                });
-                    }
+                let join_body = if let Some(pred) = build_join_compare_predicate(flow.compares()) {
+                    quote! { if #pred { Some( #out_val ) } else { None } }
                 } else {
-                    quote! {
-                        let #out =
-                            #l
-                                .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
-                                    Some( #out_val )
-                                });
-                    }
+                    quote! { Some( #out_val ) }
+                };
+
+                quote! {
+                    let #out = #l
+                        .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| { #join_body });
                 }
             }
 
@@ -410,24 +408,16 @@ impl Compiler {
                     quote! { ( #out_key, #out_val ) }
                 };
 
-                let transformation =
-                    if let Some(pred) = build_join_compare_predicate(flow.compares()) {
-                        quote! {
-                            let #out =
-                                #l
-                                    .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
-                                        if #pred { Some( #out_expr ) } else { None }
-                                    });
-                        }
-                    } else {
-                        quote! {
-                            let #out =
-                                #l
-                                    .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| {
-                                        Some( #out_expr )
-                                    });
-                        }
-                    };
+                let join_body = if let Some(pred) = build_join_compare_predicate(flow.compares()) {
+                    quote! { if #pred { Some( #out_expr ) } else { None } }
+                } else {
+                    quote! { Some( #out_expr ) }
+                };
+
+                let transformation = quote! {
+                    let #out = #l
+                        .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| { #join_body });
+                };
 
                 let arrange_stmt = self.register_arrangement(
                     arranged_map,
@@ -477,30 +467,7 @@ impl Compiler {
                     flow,
                 );
 
-                // Weight handling for batch vs incremental
-                let pos_weight_concat = if self.config.is_incremental() {
-                    quote! {}
-                } else {
-                    quote! {
-                        .inner
-                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1i32)))
-                        .as_collection()
-                    }
-                };
-
-                let neg_weight_concat = if self.config.is_incremental() {
-                    quote! {
-                        .inner
-                        .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
-                        .as_collection()
-                    }
-                } else {
-                    quote! {
-                        .inner
-                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
-                        .as_collection()
-                    }
-                };
+                let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();
 
                 // Output expression
                 let (anti_param_k, anti_param_v) =
@@ -565,30 +532,7 @@ impl Compiler {
                     flow,
                 );
 
-                // Weight handling for batch vs incremental
-                let pos_weight_concat = if self.config.is_incremental() {
-                    quote! {}
-                } else {
-                    quote! {
-                        .inner
-                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1i32)))
-                        .as_collection()
-                    }
-                };
-
-                let neg_weight_concat = if self.config.is_incremental() {
-                    quote! {
-                        .inner
-                        .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
-                        .as_collection()
-                    }
-                } else {
-                    quote! {
-                        .inner
-                        .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
-                        .as_collection()
-                    }
-                };
+                let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();
 
                 // Output expression
                 let (anti_param_k, anti_param_v) =
@@ -642,6 +586,33 @@ impl Compiler {
 // Arrangement Management Utilities
 // =========================================================================
 impl Compiler {
+    /// Generate weight-handling token streams for antijoin (batch vs incremental).
+    fn weight_concat_tokens(&self) -> (TokenStream, TokenStream) {
+        let pos = if self.config.is_incremental() {
+            quote! {}
+        } else {
+            quote! {
+                .inner
+                .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1i32)))
+                .as_collection()
+            }
+        };
+        let neg = if self.config.is_incremental() {
+            quote! {
+                .inner
+                .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
+                .as_collection()
+            }
+        } else {
+            quote! {
+                .inner
+                .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
+                .as_collection()
+            }
+        };
+        (pos, neg)
+    }
+
     fn register_arrangement(
         &mut self,
         arranged_map: &mut HashMap<u64, Ident>,

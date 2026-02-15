@@ -18,7 +18,7 @@ use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos};
+use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, FactorPos};
 use parser::ConstType;
 
 /// Ordered consumer indices alongside their key/value index selections.
@@ -41,6 +41,10 @@ impl RulePlanner {
         );
         self.fuse_map(original_atom_fp);
         self.fuse_kv_layout(original_atom_fp);
+        trace!(
+            "Transformation infos after fusion:\n{:?}",
+            self.transformation_infos
+        );
     }
 }
 
@@ -61,12 +65,19 @@ impl RulePlanner {
                 compare_exprs_pos,
                 const_eq_constraints,
                 var_eq_constraints,
+                is_sip_projection,
                 ..
             }) = self.transformation_infos.get(index)
             else {
                 continue;
             };
 
+            // Do not fuse SIP projection transformations
+            if *is_sip_projection {
+                continue;
+            }
+
+            // Do not fuse if the input is from an EDB
             if original_atom_fp.contains(input_info_fp) {
                 trace!(
                     "[fuse_map] skip at idx {}: input is original atom {:#018x}",
@@ -196,10 +207,17 @@ impl RulePlanner {
 
             let consumer_layouts = self.collect_consumer_layout_indices(&consumers, tx_fp);
             let producer_consumer_assignments =
-                Self::assign_layout_to_producer(&producer_indices, &consumer_layouts);
+                Self::assign_layout_to_producer(tx_fp, &producer_indices, &consumer_layouts);
 
             for (producers, consumers, key_indices, value_indices) in producer_consumer_assignments
             {
+                trace!(
+                    "[fuse_kv_layout] fuse at producer fp {:#018x} -> consumers {:?}; key ids: {:?}, value ids: {:?}",
+                    tx_fp,
+                    consumers,
+                    key_indices,
+                    value_indices
+                );
                 // Update producer layout and fingerprint
                 let mut new_output_fp = 0u64;
                 for producer_idx in producers {
@@ -394,6 +412,33 @@ impl RulePlanner {
             .collect()
     }
 
+    /// Remap a key-value layout so every variable signature uses the given `atom_id`,
+    /// preserving argument ids and constants.
+    fn remap_atom_kv_layout(layout: &KeyValueLayout, atom_id: usize) -> KeyValueLayout {
+        let remap_factor = |factor: &FactorPos| -> FactorPos {
+            match factor {
+                FactorPos::Var(sig) => {
+                    let atom_sig = AtomSignature::new(sig.is_positive(), atom_id);
+                    FactorPos::Var(AtomArgumentSignature::new(atom_sig, sig.argument_id()))
+                }
+                FactorPos::Const(c) => FactorPos::Const(c.clone()),
+            }
+        };
+        let remap_pos = |pos: &ArithmeticPos| -> ArithmeticPos {
+            let init = remap_factor(pos.init());
+            let rest = pos
+                .rest()
+                .iter()
+                .map(|(op, f)| (op.clone(), remap_factor(f)))
+                .collect();
+            ArithmeticPos::new(init, rest)
+        };
+        KeyValueLayout::new(
+            layout.key().iter().map(&remap_pos).collect(),
+            layout.value().iter().map(&remap_pos).collect(),
+        )
+    }
+
     fn remap_atom_signature(
         positions: &[ArithmeticPos],
         sig: &AtomArgumentSignature,
@@ -470,62 +515,90 @@ impl RulePlanner {
     /// Collect distinct key-value layouts required by consumers of a given input fingerprint.
     /// Sorted by minimum consumer index.
     fn collect_consumer_layout_indices(
-        &self,
+        &mut self,
         consumer_indices: &[usize],
         input_fp: u64,
     ) -> Vec<ConsumerLayout> {
         // Map from (key indices, value indices) to consumer ids
         let mut layouts: BTreeMap<(Vec<usize>, Vec<usize>), Vec<usize>> = BTreeMap::new();
+        let mut real_key_value_layout = None;
 
+        // First pass: only join and antijoin contribute real key/value layout requirements.
         for &consumer_idx in consumer_indices {
-            let key_value_layout = match &self.transformation_infos[consumer_idx] {
-                TransformationInfo::KVToKV {
-                    input_info_fp,
-                    input_kv_layout,
-                    ..
-                } if *input_info_fp == input_fp => {
-                    Some(input_kv_layout.extract_argument_ids_from_layout())
-                }
+            let join_inputs = match &self.transformation_infos[consumer_idx] {
                 TransformationInfo::JoinToKV {
                     left_input_info_fp,
                     right_input_info_fp,
                     left_input_kv_layout,
                     right_input_kv_layout,
                     ..
-                } => {
-                    if *left_input_info_fp == input_fp {
-                        Some(left_input_kv_layout.extract_argument_ids_from_layout())
-                    } else if *right_input_info_fp == input_fp {
-                        Some(right_input_kv_layout.extract_argument_ids_from_layout())
-                    } else {
-                        None
-                    }
                 }
-                TransformationInfo::AntiJoinToKV {
+                | TransformationInfo::AntiJoinToKV {
                     left_input_info_fp,
                     right_input_info_fp,
                     left_input_kv_layout,
                     right_input_kv_layout,
                     ..
-                } => {
-                    if *left_input_info_fp == input_fp {
-                        Some(left_input_kv_layout.extract_argument_ids_from_layout())
-                    } else if *right_input_info_fp == input_fp {
-                        Some(right_input_kv_layout.extract_argument_ids_from_layout())
-                    } else {
-                        None
-                    }
-                }
+                } => Some((
+                    left_input_info_fp,
+                    right_input_info_fp,
+                    left_input_kv_layout,
+                    right_input_kv_layout,
+                )),
                 _ => None,
             };
 
-            let (key_indices, value_indices) = key_value_layout.unwrap_or_else(|| {
-                panic!(
-                    "Planner error: consumer idx {} missing layout for producer fp {:#018x}",
-                    consumer_idx, input_fp
-                )
-            });
+            if let Some((left_fp, right_fp, left_layout, right_layout)) = join_inputs {
+                let matched_layout = if *left_fp == input_fp {
+                    left_layout
+                } else if *right_fp == input_fp {
+                    right_layout
+                } else {
+                    panic!(
+                        "Planner error: consumer idx {} does not match input fp {:#018x} in join/antijoin layout",
+                        consumer_idx, input_fp
+                    )
+                };
 
+                if real_key_value_layout.is_none() {
+                    real_key_value_layout = Some(matched_layout.clone());
+                }
+                let (key_indices, value_indices) =
+                    matched_layout.extract_argument_ids_from_layout();
+                layouts
+                    .entry((key_indices, value_indices))
+                    .or_default()
+                    .push(consumer_idx);
+            }
+        }
+
+        // Second pass: KV-to-KV consumers inherit the join/antijoin layout requirement.
+        // They don't define their own key/value split — they adopt the first join/antijoin's.
+        for &consumer_idx in consumer_indices {
+            // Only process KV-to-KV maps whose input matches this producer.
+            if !matches!(
+                &self.transformation_infos[consumer_idx],
+                TransformationInfo::KVToKV { input_info_fp, .. } if *input_info_fp == input_fp
+            ) {
+                continue;
+            }
+
+            // The canonical layout comes from the first join/antijoin seen in pass 1.
+            let layout = real_key_value_layout.clone().unwrap_or_else(|| panic!(
+                "Planner error: consumer idx {} missing join/antijoin layout for producer fp {:#018x}",
+                consumer_idx, input_fp
+            ));
+
+            // Remap layout signatures to this consumer's atom id, then apply.
+            let consumer_tx = &mut self.transformation_infos[consumer_idx];
+            let atom_id = consumer_tx.input_kv_layout().0.extract_atom_id();
+            consumer_tx.update_input_layout(Self::remap_atom_kv_layout(&layout, atom_id));
+
+            // Group this consumer under the same (key, value) indices as the joins.
+            let (key_indices, value_indices) = layouts.keys().next().cloned().unwrap_or_else(|| panic!(
+                "Planner error: consumer idx {} missing join/antijoin layout for producer fp {:#018x}",
+                consumer_idx, input_fp
+            ));
             layouts
                 .entry((key_indices, value_indices))
                 .or_default()
@@ -547,13 +620,15 @@ impl RulePlanner {
     /// Ensures that each consumer layout kind is assigned at least one producer index
     /// that appears before its first consumer index.
     fn assign_layout_to_producer(
+        tx_fp: u64,
         producer_indices: &[usize],
         consumer_layouts: &[ConsumerLayout],
     ) -> Vec<LayoutAssignment> {
         // Check feasibility.
         if consumer_layouts.len() > producer_indices.len() {
             panic!(
-                "Planner error: {} consumer layout kinds but only {} producers available",
+                "Planner error: 0x{:016x} {} consumer layout kinds but only {} producers available",
+                tx_fp,
                 consumer_layouts.len(),
                 producer_indices.len()
             );

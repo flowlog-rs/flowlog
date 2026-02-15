@@ -44,29 +44,27 @@ fn main() {
         None
     };
 
-    plan_and_print(&mut optimizer, &stratifier, &mut profiler);
+    plan_and_print(&config, &mut optimizer, &stratifier, &mut profiler);
 }
 
 /// Plan and print results for each stratum in the stratified program
 fn plan_and_print(
+    config: &Config,
     optimizer: &mut Optimizer,
     stratifier: &Stratifier,
     profiler: &mut Option<Profiler>,
 ) {
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-        let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
-
         // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
 
         let _stratum_planner = StratumPlanner::from_rules(
+            config,
             &rules,
             optimizer,
             profiler,
-            is_recursive,
-            stratifier.stratum_iterative_relation(stratum_idx),
-            stratifier.stratum_leave_relation(stratum_idx),
-            stratifier.stratum_available_relations(stratum_idx),
+            stratifier,
+            stratum_idx,
         );
     }
 }
@@ -91,16 +89,14 @@ fn run_all_examples(config: &Config) {
 
             // Run stratum planner without printing details
             for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-                let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
                 let _sp = StratumPlanner::from_rules(
+                    config,
                     &rules,
                     &mut optimizer,
                     &mut profiler,
-                    is_recursive,
-                    stratifier.stratum_iterative_relation(stratum_idx),
-                    stratifier.stratum_leave_relation(stratum_idx),
-                    stratifier.stratum_available_relations(stratum_idx),
+                    &stratifier,
+                    stratum_idx,
                 );
             }
 

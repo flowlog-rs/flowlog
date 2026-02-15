@@ -45,6 +45,10 @@ pub struct Config {
     /// Enable profiling (collect execution statistics; only used by planner, compiler/executor)
     #[arg(long, short = 'P', action = ArgAction::SetTrue)]
     pub profile: bool,
+
+    /// Enable Side-Information Passing (SIP) optimization (only used by planner)
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub sip: bool,
 }
 
 impl Config {
@@ -116,6 +120,11 @@ impl Config {
     /// For planner, compiler/executor: check if profiling is enabled
     pub fn profiling_enabled(&self) -> bool {
         self.profile
+    }
+
+    /// For planner: check if SIP optimization is enabled
+    pub fn sip_enabled(&self) -> bool {
+        self.sip
     }
 }
 

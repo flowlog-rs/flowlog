@@ -5,12 +5,11 @@
 //!
 //! Core logic relies on optimizer to give the index of the two atoms to join.
 
-use std::collections::HashMap;
 use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
+use catalog::{AtomArgumentSignature, AtomSignature, Catalog};
 
 // =========================================================================
 // Core Planning
@@ -185,61 +184,5 @@ impl RulePlanner {
             vec![new_name],
             vec![new_fp],
         );
-    }
-
-    /// Partitions atom arguments into join keys and remaining values.
-    fn partition_shared_keys(
-        catalog: &Catalog,
-        lhs_sigs: &[AtomArgumentSignature],
-        rhs_sigs: &[AtomArgumentSignature],
-    ) -> (
-        Vec<ArithmeticPos>,
-        Vec<ArithmeticPos>,
-        Vec<ArithmeticPos>,
-        Vec<ArithmeticPos>,
-    ) {
-        // Build mapping from argument names to RHS signatures for efficient lookup
-        let mut rhs_name_to_sig = HashMap::new();
-        for sig in rhs_sigs {
-            let name = catalog.signature_to_argument_str(sig);
-            rhs_name_to_sig.insert(name.clone(), *sig);
-        }
-
-        // Partition LHS arguments into join keys and remaining values
-        let mut left_keys = Vec::new();
-        let mut left_remains = Vec::new();
-        let mut matched_names = Vec::new(); // Keep order for right_keys
-
-        for sig in lhs_sigs {
-            let name = catalog.signature_to_argument_str(sig);
-            if rhs_name_to_sig.contains_key(name) {
-                // This variable appears in both atoms - it's a join key
-                left_keys.push(ArithmeticPos::from_var_signature(*sig));
-                matched_names.push(name.clone());
-            } else {
-                // This variable only appears in LHS - it's a payload value
-                left_remains.push(ArithmeticPos::from_var_signature(*sig))
-            }
-        }
-
-        // Build right_keys in the same order as left_keys
-        let right_keys: Vec<ArithmeticPos> = matched_names
-            .iter()
-            .map(|name| {
-                let sig = rhs_name_to_sig[name];
-                ArithmeticPos::from_var_signature(sig)
-            })
-            .collect();
-
-        // Collect RHS arguments that don't participate in join (RHS payload)
-        let mut right_remains = Vec::new();
-        for sig in rhs_sigs {
-            let name = catalog.signature_to_argument_str(sig);
-            if !matched_names.contains(name) {
-                right_remains.push(ArithmeticPos::from_var_signature(*sig));
-            }
-        }
-
-        (left_keys, left_remains, right_keys, right_remains)
     }
 }

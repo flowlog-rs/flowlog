@@ -125,6 +125,39 @@ impl Catalog {
         self.update_rule_in_place(rhs_index, new_atom);
     }
 
+    /// SIP optimization, left atoms project to key and semijoin on right atom.
+    /// It should not modify the arguments on the left side, but it may reorder the arguments on
+    /// the right side to put the join keys in front.
+    pub fn sip_modify(
+        &mut self,
+        right_atom_signature: AtomSignature,
+        new_argument_list: Vec<AtomArgumentSignature>,
+        new_atom_name: String,
+        new_atom_fingerprint: u64,
+    ) {
+        let rhs_index = self.rhs_index_from_signature(right_atom_signature);
+
+        // Verify the target is a positive atom
+        assert!(
+            matches!(
+                self.rule.rhs()[rhs_index],
+                Predicate::PositiveAtomPredicate(_)
+            ),
+            "Catalog error: sip modify target predicate at rhs index {} is not a positive atom: {}",
+            rhs_index,
+            self.rule.rhs()[rhs_index]
+        );
+
+        // Create the new SIP atom by reordering arguments according to new arguments
+        let new_atom_args = new_argument_list
+            .iter()
+            .map(|arg_sig| AtomArg::Var(self.signature_to_argument_str_map[arg_sig].clone()))
+            .collect();
+
+        let new_atom = Atom::new(&new_atom_name, new_atom_args, new_atom_fingerprint);
+        self.update_rule_in_place(rhs_index, Predicate::PositiveAtomPredicate(new_atom));
+    }
+
     /// Joins multiple atoms into new atoms with specified argument mappings.
     pub fn join_modify(
         &mut self,
