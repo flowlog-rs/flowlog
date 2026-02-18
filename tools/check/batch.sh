@@ -32,13 +32,11 @@ CONFIG_FILE_DEFAULT="${ROOT_DIR}/tools/check/config.txt"
 CONFIG_FILE="$CONFIG_FILE_DEFAULT"
 COMPILE_ONLY=0
 EMPTY_FACTS_DIR=""
+ENABLE_SIP=0
 
 # Shared flag sets used by both run_compile_check and run_test.
-# Two independent dimensions — edit once, applies everywhere.
-#   Optimization flags: (none, --sip)
+#   Optimization flags: default (none); --sip adds (--sip)
 #   Profiler flags:     (none, -P)
-OPT_FLAGS=("" "--sip")
-OPT_LABELS=("" "sip")
 PROF_FLAGS=("" "-P")
 PROF_LABELS=("" "prof")
 
@@ -52,11 +50,14 @@ die() { log "$RED" "ERROR" "$*"; exit 1; }
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [config_file] [--compile-only]
+  $(basename "$0") [config_file] [--compile-only] [--sip]
 
 Modes:
   Default:         run all correctness tests listed in the config file.
   --compile-only:  generate each project and run cargo check only (no download/run/verify).
+
+Options:
+  --sip          Also test with --sip optimization (disabled by default).
 
 Environment:
   WORKERS=<n>    Number of workers passed to generated executables (default: 64)
@@ -64,7 +65,8 @@ Environment:
 Examples:
   $(basename "$0")
   $(basename "$0") tools/check/config.txt
-  $(basename "$0") --compile-only
+  $(basename "$0") --compile-only --sip
+  $(basename "$0") --sip
 EOF
 }
 
@@ -92,6 +94,7 @@ parse_args() {
     while (( $# )); do
         case "$1" in
             --compile-only) COMPILE_ONLY=1 ;;
+            --sip)          ENABLE_SIP=1 ;;
             -h|--help)      usage; exit 0 ;;
             --)             shift; break ;;
             -*)             die "Unknown option: $1 (try --help)" ;;
@@ -104,6 +107,16 @@ parse_args() {
         shift
     done
     (( $# == 0 )) || die "Unexpected extra arguments: $*"
+}
+
+init_opt_flags() {
+    OPT_FLAGS=("")
+    OPT_LABELS=("")
+    if (( ENABLE_SIP )); then
+        OPT_FLAGS+=("--sip")
+        OPT_LABELS+=("sip")
+    fi
+    log "$BLUE" "SIP" "SIP enabled: $ENABLE_SIP -> OPT_FLAGS=(${OPT_FLAGS[*]})"
 }
 
 init_paths() {
@@ -295,6 +308,7 @@ compile_only() {
     compile_release_workspace
     ensure_compiler_built
     setup_config_file
+    init_opt_flags
     setup_empty_facts_dir
     trap cleanup_empty_facts_dir EXIT
 
@@ -458,6 +472,7 @@ main() {
     ensure_compiler_built
     setup_config_file
     setup_size_reference
+    init_opt_flags
 
     log "$BLUE" "TESTS" "Running compiler-mode correctness tests (batch mode)"
     for_each_config_entry run_test
