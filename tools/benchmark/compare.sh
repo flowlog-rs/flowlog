@@ -63,6 +63,8 @@ COMPILER_BIN="${ROOT_DIR}/target/release/flowlog"
 DATASET_URL="https://pages.cs.wisc.edu/~m0riarty/dataset/csv"
 NUM_RUNS=5
 
+CSV_FILE="${LOG_DIR}/comparison_results.csv"
+
 ############################################################
 # STRING HELPERS
 ############################################################
@@ -272,6 +274,17 @@ fmt_speedup_cell() {
     printf "%11s" "$s"
 }
 
+# Compute a raw speedup number for CSV (no trailing "x").
+raw_speedup() {
+    local t1="$1" t2="$2"
+    if [[ "$t1" =~ ^[0-9] ]] && [[ "$t2" =~ ^[0-9] ]]; then
+        python3 -c "print(f'{${t1}/${t2}:.6f}') if ${t2}>0 else print('')" \
+            2>/dev/null || echo ""
+    else
+        echo ""
+    fi
+}
+
 # Given space-separated "time:logpath" pairs, return the median entry.
 pick_median() {
     local entries="$1"
@@ -446,7 +459,32 @@ run_compiler() {
 # RESULT SUMMARY
 ############################################################
 
-# Print the final comparison table and write a CSV file.
+# Initialise the CSV file with a header row.
+init_csv() {
+    mkdir -p "$(dirname "$CSV_FILE")"
+    echo "Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup" \
+        > "$CSV_FILE"
+}
+
+# Append one benchmark pair's results to the CSV (called after each pair).
+append_csv_row() {
+    local stem="$1" dataset="$2" interp_log="$3" comp_log="$4"
+
+    read -r i_total i_load i_exec <<< "$(collect_times "$interp_log")"
+    read -r c_total c_load c_exec <<< "$(collect_times "$comp_log")"
+
+    local rs_load rs_exec rs_total
+    rs_load=$(raw_speedup "$i_load" "$c_load")
+    rs_exec=$(raw_speedup "$i_exec" "$c_exec")
+    rs_total=$(raw_speedup "$i_total" "$c_total")
+
+    echo "${stem},${dataset},${i_load},${c_load},${rs_load},${i_exec},${c_exec},${rs_exec},${i_total},${c_total},${rs_total}" \
+        >> "$CSV_FILE"
+
+    log "$GREEN" "CSV" "Appended ${stem}_${dataset} to $CSV_FILE"
+}
+
+# Print the final comparison table to the terminal.
 generate_results() {
     echo ""
     echo "==================================================================================================================================================="
@@ -466,10 +504,6 @@ generate_results() {
     printf '%s' "-----------------------------------------|"
     printf '%s' "-----------------------------------------|"
     printf '%s\n' "-----------------------------------------|"
-
-    local csv_file="${LOG_DIR}/comparison_results.csv"
-    echo "Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup" \
-        > "$csv_file"
 
     while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         parse_config_line "$raw_line" || continue
@@ -492,13 +526,10 @@ generate_results() {
             "$(fmt_time "$i_load")"  "$(fmt_time "$c_load")"  "$(fmt_speedup_cell "$spd_load")" \
             "$(fmt_time "$i_exec")"  "$(fmt_time "$c_exec")"  "$(fmt_speedup_cell "$spd_exec")" \
             "$(fmt_time "$i_total")" "$(fmt_time "$c_total")" "$(fmt_speedup_cell "$spd_total")"
-
-        echo "${stem},${DATASET_NAME},${i_load},${c_load},${spd_load},${i_exec},${c_exec},${spd_exec},${i_total},${c_total},${spd_total}" \
-            >> "$csv_file"
     done < "$CONFIG_FILE"
 
     echo ""
-    log "$GREEN" "CSV" "Results saved to: $csv_file"
+    log "$GREEN" "CSV" "Results saved to: $CSV_FILE"
 }
 
 ############################################################
@@ -523,6 +554,9 @@ main() {
     rm -rf "$LOG_DIR"
     mkdir -p "$LOG_DIR"
 
+    # Initialise CSV so rows are appended incrementally.
+    init_csv
+
     # Iterate over every program/dataset pair in the config file.
     while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         parse_config_line "$raw_line" || continue
@@ -543,6 +577,9 @@ main() {
         local comp_log="${LOG_DIR}/${program_stem}_${DATASET_NAME}_compiler.log"
 
         print_pair_summary "$lbl" "$interp_log" "$comp_log"
+
+        # Append this pair's results to CSV incrementally.
+        append_csv_row "$program_stem" "$DATASET_NAME" "$interp_log" "$comp_log"
 
         # Cleanup dataset to save disk space
         cleanup_dataset "$DATASET_NAME"
