@@ -104,8 +104,10 @@ impl Compiler {
         // Static sections of the generated program.
         let input_decls = self.gen_input_decls(profiler);
         let (lhs_binding, ret_expr) = self.build_handle_binding();
-        let profile_struct_stmts = self.gen_profile_struct();
-        let profile_init_stmts = self.gen_profile_init();
+        let time_profile_struct = self.gen_time_profile_struct();
+        let memory_profile_struct = self.gen_memory_profile_struct();
+        let time_profile_init = self.gen_time_profile_init();
+        let memory_profile_init = self.gen_memory_profile_init();
 
         // Flow generation per stratum.
         let mut flow_stmts: Vec<TokenStream> = Vec::new();
@@ -180,7 +182,8 @@ impl Compiler {
             ExecutionMode::Batch => {
                 let ingest_stmts = self.gen_ingest_stmts();
                 let close_stmts = self.gen_close_stmts();
-                let profile_write_stmts = self.gen_profile_write_batch();
+                let time_profile_write = self.gen_time_profile_write_batch();
+                let memory_profile_write = self.gen_memory_profile_write_batch();
 
                 quote! {
                     fn main() {
@@ -190,8 +193,10 @@ impl Compiler {
                             let peers = worker.peers();
                             let index = worker.index();
 
-                            // --- Profile init --------------------------------------------------
-                            #profile_init_stmts
+                            // --- Time profile init ---------------------------------------------
+                            #time_profile_init
+                            // --- Memory profile init -------------------------------------------
+                            #memory_profile_init
 
                             // --- Build dataflow graph -----------------------------------------
                             let #lhs_binding =
@@ -218,8 +223,10 @@ impl Compiler {
                             // --- Execute to fixpoint -------------------------------------------
                             while worker.step() {}
 
-                            // --- Profiling writeout --------------------------------------------
-                            #profile_write_stmts
+                            // --- Time profile writeout -----------------------------------------
+                            #time_profile_write
+                            // --- Memory profile writeout ---------------------------------------
+                            #memory_profile_write
 
                             if index == 0 {
                                 println!("{:?}:\tDataflow executed", timer.elapsed());
@@ -234,7 +241,8 @@ impl Compiler {
             }
 
             ExecutionMode::Incremental => {
-                let profile_write_stmts = self.gen_profile_write_incremental();
+                let time_profile_write = self.gen_time_profile_write_incremental();
+                let memory_profile_write = self.gen_memory_profile_write_incremental();
 
                 quote! {
                     // -------------------------------
@@ -278,8 +286,10 @@ impl Compiler {
                                 let peers = worker.peers();
                                 let index = worker.index();
 
-                                // --- Profile init --------------------------------------------------
-                                #profile_init_stmts
+                                // --- Time profile init ---------------------------------------------
+                                #time_profile_init
+                                // --- Memory profile init -------------------------------------------
+                                #memory_profile_init
 
                                 // --- Build dataflow graph -----------------------------------------
                                 let #lhs_binding =
@@ -370,7 +380,8 @@ impl Compiler {
                                                     worker.step();
                                                 }
 
-                                                #profile_write_stmts
+                                                #time_profile_write
+                                                #memory_profile_write
 
                                                 barrier.wait();
                                             }
@@ -383,7 +394,8 @@ impl Compiler {
                                                     worker.step();
                                                 }
 
-                                                #profile_write_stmts
+                                                #time_profile_write
+                                                #memory_profile_write
 
                                                 barrier.wait();
                                                 should_quit = true;
@@ -472,7 +484,8 @@ impl Compiler {
                                                 worker.step();
                                             }
 
-                                            #profile_write_stmts
+                                            #time_profile_write
+                                            #memory_profile_write
 
                                             barrier.wait();
 
@@ -509,7 +522,8 @@ impl Compiler {
                                                 worker.step();
                                             }
 
-                                            #profile_write_stmts
+                                            #time_profile_write
+                                            #memory_profile_write
 
                                             barrier.wait();
 
@@ -535,7 +549,8 @@ impl Compiler {
         let file_ts: TokenStream = quote! {
             #imports
 
-            #profile_struct_stmts
+            #time_profile_struct
+            #memory_profile_struct
 
             #main_fn
         };

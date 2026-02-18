@@ -254,6 +254,7 @@ impl ImportTracker {
         let logging = if self.profiling {
             quote! {
                 use timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
+                use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
             }
         } else {
             quote! {}
