@@ -4,6 +4,8 @@
 //! based on the transformations being generated within a stratum.
 
 use common::ExecutionMode;
+use parser::DataType;
+
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -44,8 +46,10 @@ pub(crate) struct ImportTracker {
     aggregation: bool,
     /// Whether semiring one value is needed.
     semiring_one: bool,
-    /// Whether the Min semiring module is needed (min aggregation optimization).
-    min_semiring: bool,
+    /// Whether MinI32 is needed (min aggregation on int32 columns).
+    min_semiring_i32: bool,
+    /// Whether MinI64 is needed (min aggregation on int64 columns).
+    min_semiring_i64: bool,
 }
 
 impl ImportTracker {
@@ -161,14 +165,28 @@ impl ImportTracker {
         self.semiring_one = true;
     }
 
-    /// Marks that the Min semiring module is required (min aggregation).
-    pub(crate) fn mark_min_semiring(&mut self) {
-        self.min_semiring = true;
+    /// Marks that the Min semiring module is required for a specific integer type.
+    pub(crate) fn mark_min_semiring(&mut self, dt: DataType) {
+        match dt {
+            DataType::Int32 => self.min_semiring_i32 = true,
+            DataType::Int64 => self.min_semiring_i64 = true,
+            _ => unreachable!("Compiler error: min semiring only supports integer types"),
+        }
     }
 
     /// Returns whether the Min semiring module should be written to the project.
     pub(crate) fn needs_min_semiring(&self) -> bool {
-        self.min_semiring
+        self.min_semiring_i32 || self.min_semiring_i64
+    }
+
+    /// Returns whether MinI32 is needed.
+    pub(crate) fn needs_min_semiring_i32(&self) -> bool {
+        self.min_semiring_i32
+    }
+
+    /// Returns whether MinI64 is needed.
+    pub(crate) fn needs_min_semiring_i64(&self) -> bool {
+        self.min_semiring_i64
     }
 
     // ---------------------------------------------------------------------
@@ -377,14 +395,24 @@ impl ImportTracker {
     }
 
     fn min_semiring_import(&self) -> TokenStream {
-        if self.min_semiring {
-            quote! {
-                mod min_semiring;
-                use min_semiring::Min;
-                use differential_dataflow::difference::IsZero;
-            }
+        if !self.needs_min_semiring() {
+            return quote! {};
+        }
+        let use_i32 = if self.min_semiring_i32 {
+            quote! { use min_semiring::MinI32; }
         } else {
             quote! {}
+        };
+        let use_i64 = if self.min_semiring_i64 {
+            quote! { use min_semiring::MinI64; }
+        } else {
+            quote! {}
+        };
+        quote! {
+            mod min_semiring;
+            #use_i32
+            #use_i64
+            use differential_dataflow::difference::IsZero;
         }
     }
 

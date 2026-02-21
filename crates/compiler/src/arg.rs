@@ -2,6 +2,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::Index;
 
+use parser::{ArithmeticOperator, ComparisonOperator, ConstType};
 use planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
 };
@@ -293,14 +294,14 @@ pub(super) fn compute_kv_param_tokens(
 // Comparison expression predicate builders
 // ==================================================
 
-fn comparison_op_tokens(op: &parser::ComparisonOperator) -> TokenStream {
+fn comparison_op_tokens(op: &ComparisonOperator) -> TokenStream {
     match op {
-        parser::ComparisonOperator::Equal => quote! { == },
-        parser::ComparisonOperator::NotEqual => quote! { != },
-        parser::ComparisonOperator::GreaterThan => quote! { > },
-        parser::ComparisonOperator::GreaterEqualThan => quote! { >= },
-        parser::ComparisonOperator::LessThan => quote! { < },
-        parser::ComparisonOperator::LessEqualThan => quote! { <= },
+        ComparisonOperator::Equal => quote! { == },
+        ComparisonOperator::NotEqual => quote! { != },
+        ComparisonOperator::GreaterThan => quote! { > },
+        ComparisonOperator::GreaterEqualThan => quote! { >= },
+        ComparisonOperator::LessThan => quote! { < },
+        ComparisonOperator::LessEqualThan => quote! { <= },
     }
 }
 
@@ -441,10 +442,11 @@ pub(super) fn build_row_constraints_predicate(
 // Constraint helpers
 // ==================================================
 
-fn const_to_token(constant: &parser::ConstType) -> TokenStream {
+fn const_to_token(constant: &ConstType) -> TokenStream {
     match constant {
-        parser::ConstType::Integer(n) => quote! { #n },
-        parser::ConstType::Text(s) => quote! { #s.to_string() },
+        ConstType::Int32(n) => quote! { #n },
+        ConstType::Int64(n) => quote! { #n },
+        ConstType::Text(s) => quote! { #s.to_string() },
     }
 }
 
@@ -498,13 +500,13 @@ pub(super) fn combine_predicates(
 // ==================================================
 // Arithmetic expression helpers
 // ==================================================
-fn arithmetic_op_tokens(op: &parser::ArithmeticOperator) -> TokenStream {
+fn arithmetic_op_tokens(op: &ArithmeticOperator) -> TokenStream {
     match op {
-        parser::ArithmeticOperator::Plus => quote! { + },
-        parser::ArithmeticOperator::Minus => quote! { - },
-        parser::ArithmeticOperator::Multiply => quote! { * },
-        parser::ArithmeticOperator::Divide => quote! { / },
-        parser::ArithmeticOperator::Modulo => quote! { % },
+        ArithmeticOperator::Plus => quote! { + },
+        ArithmeticOperator::Minus => quote! { - },
+        ArithmeticOperator::Multiply => quote! { * },
+        ArithmeticOperator::Divide => quote! { / },
+        ArithmeticOperator::Modulo => quote! { % },
     }
 }
 

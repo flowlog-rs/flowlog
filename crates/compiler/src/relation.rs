@@ -93,6 +93,13 @@ impl Compiler {
                 (first as usize) % peers == index
             }
 
+            /// Shard on an `i64` first column by `first % peers`.
+            #[allow(dead_code)]
+            #[inline]
+            fn shard_i64(first: i64, peers: usize, index: usize) -> bool {
+                (first as usize) % peers == index
+            }
+
             /// Shard on a string first column using 32-bit FNV-1a.
             #[allow(dead_code)]
             #[inline]
@@ -222,11 +229,13 @@ fn gen_one_rel_nonnullary(rel: &Relation) -> TokenStream {
 
     // shard decision (tuple path uses `return;`, file path uses `return None;`)
     let shard_tuple = match dts[0] {
-        DataType::Integer => quote! { if !shard_i32(f0, peers, index) { return; } },
+        DataType::Int32 => quote! { if !shard_i32(f0, peers, index) { return; } },
+        DataType::Int64 => quote! { if !shard_i64(f0, peers, index) { return; } },
         DataType::String => quote! { if !shard_str(f0.as_str(), peers, index) { return; } },
     };
     let shard_file = match dts[0] {
-        DataType::Integer => quote! { if !shard_i32(f0, peers, index) { return None; } },
+        DataType::Int32 => quote! { if !shard_i32(f0, peers, index) { return None; } },
+        DataType::Int64 => quote! { if !shard_i64(f0, peers, index) { return None; } },
         DataType::String => quote! { if !shard_str(f0.as_str(), peers, index) { return None; } },
     };
 
@@ -331,7 +340,8 @@ fn gen_one_rel_nonnullary(rel: &Relation) -> TokenStream {
 
 fn dt_to_rust(dt: &DataType) -> TokenStream {
     match *dt {
-        DataType::Integer => quote! { i32 },
+        DataType::Int32 => quote! { i32 },
+        DataType::Int64 => quote! { i64 },
         DataType::String => quote! { String },
     }
 }
@@ -356,12 +366,22 @@ fn gen_parse_from_str(rel: &str, dts: &[DataType]) -> TokenStream {
         };
 
         let parse = match *dt {
-            DataType::Integer => quote! {
+            DataType::Int32 => quote! {
                 #get
                 let #v: i32 = match s.parse::<i32>() {
                     Ok(v) => v,
                     Err(_) => {
                         eprintln!("[relops][{}] bad tuple '{}': col {} not i32: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
+            DataType::Int64 => quote! {
+                #get
+                let #v: i64 = match s.parse::<i64>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not i64: '{}'", #rel, tuple, #idx, s);
                         return;
                     }
                 };
@@ -404,7 +424,7 @@ fn gen_parse_from_bytes(rel: &str, dts: &[DataType]) -> TokenStream {
         };
 
         let parse = match *dt {
-            DataType::Integer => quote! {
+            DataType::Int32 => quote! {
                 #get_raw
                 let s = match std::str::from_utf8(raw) {
                     Ok(s) => s.trim(),
@@ -424,6 +444,36 @@ fn gen_parse_from_bytes(rel: &str, dts: &[DataType]) -> TokenStream {
                     Err(_) => {
                         eprintln!(
                             "[relops][{}] bad row in {}: '{:?}' (col {} not i32: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
+            DataType::Int64 => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: i64 = match s.parse::<i64>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not i64: '{}')",
                             #rel,
                             path.display(),
                             String::from_utf8_lossy(&line),

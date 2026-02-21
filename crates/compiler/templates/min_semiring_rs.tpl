@@ -12,51 +12,52 @@ use differential_dataflow::difference::Multiply;
 
 use serde::{Deserialize, Serialize};
 
-/// A semiring whose additive operation is `min`.
-#[derive(Copy, Debug, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Min {
-    pub value: u32,
-}
+macro_rules! define_min {
+    ($name:ident, $ty:ty, $max:expr) => {
+        #[derive(Copy, Debug, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
+        pub struct $name {
+            pub value: $ty,
+        }
 
-impl Min {
-    /// Wrap a concrete value.
-    #[inline]
-    pub fn new(value: u32) -> Self {
-        Min { value }
-    }
+        impl $name {
+            #[inline]
+            pub fn new(value: $ty) -> Self {
+                $name { value }
+            }
 
-    /// Additive identity: any real value is less than infinity.
-    #[inline]
-    pub fn infinity() -> Self {
-        Min { value: u32::MAX }
-    }
-}
+            #[inline]
+            pub fn infinity() -> Self {
+                $name { value: $max }
+            }
+        }
 
-impl IsZero for Min {
-    #[inline]
-    fn is_zero(&self) -> bool {
-        false
-    }
-}
+        impl IsZero for $name {
+            #[inline]
+            fn is_zero(&self) -> bool {
+                false
+            }
+        }
 
-impl Semigroup for Min {
-    #[inline]
-    fn plus_equals(&mut self, rhs: &Self) {
-        self.value = std::cmp::min(self.value, rhs.value);
-    }
-}
+        impl Semigroup for $name {
+            #[inline]
+            fn plus_equals(&mut self, rhs: &Self) {
+                self.value = std::cmp::min(self.value, rhs.value);
+            }
+        }
 
-impl Monoid for Min {
-    #[inline]
-    fn zero() -> Self {
-        Min::infinity()
-    }
-}
+        impl Monoid for $name {
+            #[inline]
+            fn zero() -> Self {
+                $name::infinity()
+            }
+        }
 
-impl Multiply<i64> for Min {
-    type Output = Min;
-    #[inline]
-    fn multiply(self, _rhs: &i64) -> Self::Output {
-        self
-    }
+        impl Multiply<i64> for $name {
+            type Output = $name;
+            #[inline]
+            fn multiply(self, _rhs: &i64) -> Self::Output {
+                self
+            }
+        }
+    };
 }

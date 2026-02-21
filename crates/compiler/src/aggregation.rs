@@ -10,7 +10,7 @@
 //! - [`aggregation_reduce`]: Generates the aggregation logic closure for differential dataflow reduce.
 //! - [`aggregation_merge_kv`]: Generates a closure to merge (key, value) pairs into output rows.
 
-use parser::AggregationOperator;
+use parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
@@ -47,32 +47,62 @@ pub fn aggregation_row_chop(arity: usize, agg_pos: usize) -> TokenStream {
 }
 
 /// Generates the aggregation logic closure for differential dataflow's `reduce` operator.
-pub fn aggregation_reduce(op: &AggregationOperator) -> TokenStream {
+pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> TokenStream {
     match op {
-        AggregationOperator::Count => quote! {
-            |_, input, _output, updates| {
-                let count = input.len() as i32;
-                updates.push(((count,), SEMIRING_ONE));
-            }
-        },
-        AggregationOperator::Sum => quote! {
-            |_, input, _output, updates| {
-                let sum = input.iter().map(|(v, _)| *v).sum::<i32>();
-                updates.push((*sum, SEMIRING_ONE));
-            }
-        },
-        AggregationOperator::Min => quote! {
-            |_, input, _output, updates| {
-                if let Some(min) = input.iter().map(|(v, _)| *v).min() {
-                    updates.push((*min, SEMIRING_ONE));
+        AggregationOperator::Count => match agg_type {
+            DataType::Int32 => quote! {
+                |_, input, _output, updates| {
+                    let count = input.len() as i32;
+                    updates.push(((count,), SEMIRING_ONE));
                 }
+            },
+            DataType::Int64 => quote! {
+                |_, input, _output, updates| {
+                    let count = input.len() as i64;
+                    updates.push(((count,), SEMIRING_ONE));
+                }
+            },
+            DataType::String => {
+                panic!("Compiler error: count aggregation result should be integer type")
             }
         },
-        AggregationOperator::Max => quote! {
-            |_, input, _output, updates| {
-                if let Some(max) = input.iter().map(|(v, _)| *v).max() {
-                    updates.push((*max, SEMIRING_ONE));
+        AggregationOperator::Sum => match agg_type {
+            DataType::Int32 => quote! {
+                |_, input, _output, updates| {
+                    let sum = input.iter().map(|(v, _)| *v).sum::<i32>();
+                    updates.push((*sum, SEMIRING_ONE));
                 }
+            },
+            DataType::Int64 => quote! {
+                |_, input, _output, updates| {
+                    let sum = input.iter().map(|(v, _)| *v).sum::<i64>();
+                    updates.push((*sum, SEMIRING_ONE));
+                }
+            },
+            _ => panic!("Compiler error: sum aggregation result should be integer type"),
+        },
+        AggregationOperator::Min => match agg_type {
+            DataType::Int32 | DataType::Int64 => quote! {
+                |_, input, _output, updates| {
+                    if let Some(min) = input.iter().map(|(v, _)| *v).min() {
+                        updates.push((*min, SEMIRING_ONE));
+                    }
+                }
+            },
+            DataType::String => {
+                panic!("Compiler error: min aggregation is not supported on string type")
+            }
+        },
+        AggregationOperator::Max => match agg_type {
+            DataType::Int32 | DataType::Int64 => quote! {
+                |_, input, _output, updates| {
+                    if let Some(max) = input.iter().map(|(v, _)| *v).max() {
+                        updates.push((*max, SEMIRING_ONE));
+                    }
+                }
+            },
+            DataType::String => {
+                panic!("Compiler error: max aggregation is not supported on string type")
             }
         },
     }
@@ -132,7 +162,7 @@ pub fn aggregation_merge_kv(arity: usize, agg_pos: usize) -> TokenStream {
 /// 3. **Phase 3** – Convert back: `(key, time, Min{value})` → `(full_row, time, SEMIRING_ONE)`
 ///
 /// This replaces two arrangements (threshold + reduce_core) with one (threshold only).
-pub fn aggregation_min_optimize(arity: usize, agg_pos: usize) -> TokenStream {
+pub fn aggregation_min_optimize(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
     let key_arity = arity - 1;
 
     // Phase 1: row destructuring and key/value extraction
@@ -161,6 +191,13 @@ pub fn aggregation_min_optimize(arity: usize, agg_pos: usize) -> TokenStream {
 
     let agg_field = format_ident!("x{}", agg_pos);
 
+    // Choose the right Min type based on the aggregated column's data type
+    let (min_new, min_extract) = match agg_type {
+        DataType::Int32 => (quote! { MinI32::new(#agg_field) }, quote! { min_val.value }),
+        DataType::Int64 => (quote! { MinI64::new(#agg_field) }, quote! { min_val.value }),
+        _ => unreachable!("min aggregation on non-integer type"),
+    };
+
     // Phase 3: reconstruct full row from (key, Min diff)
     let key_fields_p3: Vec<_> = (0..key_arity).map(|i| format_ident!("k{}", i)).collect();
     let key_pat_p3 = match key_arity {
@@ -176,7 +213,7 @@ pub fn aggregation_min_optimize(arity: usize, agg_pos: usize) -> TokenStream {
     let mut ki = 0usize;
     for i in 0..arity {
         if i == agg_pos {
-            result_parts.push(quote! { min_val.value as i32 });
+            result_parts.push(min_extract.clone());
         } else {
             let kf = &key_fields_p3[ki];
             result_parts.push(quote! { #kf });
@@ -197,8 +234,7 @@ pub fn aggregation_min_optimize(arity: usize, agg_pos: usize) -> TokenStream {
         .inner
         .map(move |(#row_pat, t, _)| {
             let key = #key_construct;
-            let value = #agg_field as u32;
-            (key, t, Min::new(value))
+            (key, t, #min_new)
         })
         .as_collection()
 
