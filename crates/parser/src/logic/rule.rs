@@ -180,7 +180,7 @@ mod tests {
 
     fn cmp_pred() -> Predicate {
         let l = Arithmetic::new(Factor::Var("X".into()), vec![]);
-        let r = Arithmetic::new(Factor::Const(ConstType::Integer(5)), vec![]);
+        let r = Arithmetic::new(Factor::Const(ConstType::Int32(5)), vec![]);
         let c = ComparisonExpr::new(l, ComparisonOperator::GreaterThan, r);
         Predicate::ComparePredicate(c)
     }
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn boolean_detection() {
-        let head = head_named("fact", vec![head_const(ConstType::Integer(42))]);
+        let head = head_named("fact", vec![head_const(ConstType::Int32(42))]);
         let body = vec![bool_pred(true)];
         let r = FlowLogRule::new(head, body, false);
         assert!(r.is_boolean());
@@ -254,7 +254,7 @@ mod tests {
         let head3 = head_named("filtered", vec![head_var("X")]);
         let body3 = vec![pos_pred("data", vec![var_arg("X")]), {
             let l = Arithmetic::new(Factor::Var("X".into()), vec![]);
-            let r = Arithmetic::new(Factor::Const(ConstType::Integer(5)), vec![]);
+            let r = Arithmetic::new(Factor::Const(ConstType::Int32(5)), vec![]);
             Predicate::ComparePredicate(ComparisonExpr::new(l, ComparisonOperator::GreaterThan, r))
         }];
         let r3 = FlowLogRule::new(head3, body3, false);
@@ -269,7 +269,7 @@ mod tests {
         let head = head_named(
             "facts",
             vec![
-                head_const(ConstType::Integer(42)),
+                head_const(ConstType::Int32(42)),
                 head_const(ConstType::Text("hello".into())),
             ],
         );
@@ -277,7 +277,7 @@ mod tests {
 
         let c = r.extract_constants_from_head();
         assert_eq!(c.len(), 2);
-        assert_eq!(c[0], ConstType::Integer(42));
+        assert_eq!(c[0], ConstType::Int32(42));
         assert_eq!(c[1], ConstType::Text("hello".into()));
     }
 
@@ -286,7 +286,7 @@ mod tests {
     fn extract_constants_panics_on_var() {
         let head = head_named(
             "invalid",
-            vec![head_const(ConstType::Integer(1)), head_var("X")],
+            vec![head_const(ConstType::Int32(1)), head_var("X")],
         );
         let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
         let _ = r.extract_constants_from_head();
@@ -300,7 +300,7 @@ mod tests {
         let agg = Aggregation::new(AggregationOperator::Sum, arith);
         let head = head_named(
             "invalid",
-            vec![head_const(ConstType::Integer(1)), HeadArg::Aggregation(agg)],
+            vec![head_const(ConstType::Int32(1)), HeadArg::Aggregation(agg)],
         );
         let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
         let _ = r.extract_constants_from_head();
@@ -313,7 +313,7 @@ mod tests {
             Factor::Var("X".into()),
             vec![(
                 ArithmeticOperator::Plus,
-                Factor::Const(ConstType::Integer(1)),
+                Factor::Const(ConstType::Int32(1)),
             )],
         );
         let head = head_named("invalid", vec![HeadArg::Arith(complex)]);
@@ -341,7 +341,7 @@ mod tests {
         // derived(Person, Age) :- person(Person, Age), Age > 18, !blocked(Person).
         let head = head_named("derived", vec![head_var("Person"), head_var("Age")]);
         let left = Arithmetic::new(Factor::Var("Age".into()), vec![]);
-        let right = Arithmetic::new(Factor::Const(ConstType::Integer(18)), vec![]);
+        let right = Arithmetic::new(Factor::Const(ConstType::Int32(18)), vec![]);
         let age_gt = ComparisonExpr::new(left, ComparisonOperator::GreaterThan, right);
         let body = vec![
             pos_pred("person", vec![var_arg("Person"), var_arg("Age")]),

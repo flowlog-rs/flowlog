@@ -128,7 +128,8 @@ impl Compiler {
                 }
 
                 // Consts are fully typed.
-                FactorArgument::Const(ConstType::Integer(_)) => Some(DataType::Integer),
+                FactorArgument::Const(ConstType::Int32(_)) => Some(DataType::Int32),
+                FactorArgument::Const(ConstType::Int64(_)) => Some(DataType::Int64),
                 FactorArgument::Const(ConstType::Text(_)) => Some(DataType::String),
             }
         }
@@ -183,7 +184,8 @@ pub(super) fn type_tokens(input_types: &[DataType]) -> TokenStream {
     let tys: Vec<TokenStream> = input_types
         .iter()
         .map(|dt| match dt {
-            DataType::Integer => quote! { i32 },
+            DataType::Int32 => quote! { i32 },
+            DataType::Int64 => quote! { i64 },
             DataType::String => quote! { String },
         })
         .collect();

@@ -121,15 +121,23 @@ impl Compiler {
                 self.imports.mark_as_collection();
                 self.imports.mark_semiring_one();
 
+                // Look up the aggregated column's data type.
+                let (key_types, val_types) = self.find_global_type(*output_fp);
+                let agg_type = *key_types
+                    .iter()
+                    .chain(val_types)
+                    .nth(*agg_pos)
+                    .expect("Compiler error: aggregation position out of bounds");
+
                 // Min semiring fast path: replace reduce_core with threshold_semigroup
                 // using the Min semigroup, avoiding a second arrangement.
                 if matches!(agg_op, AggregationOperator::Min)
                     && matches!(self.config.mode(), ExecutionMode::Batch)
                 {
-                    self.imports.mark_min_semiring();
+                    self.imports.mark_min_semiring(agg_type);
                     self.imports.mark_threshold_total();
                     self.imports.mark_timely_map();
-                    let min_pipeline = aggregation_min_optimize(*agg_arity, *agg_pos);
+                    let min_pipeline = aggregation_min_optimize(*agg_arity, *agg_pos, agg_type);
                     block = quote! {
                         #block
                         let #output = #output
@@ -138,7 +146,7 @@ impl Compiler {
                 } else {
                     self.imports.mark_aggregation();
                     let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-                    let reduce_logic = aggregation_reduce(agg_op);
+                    let reduce_logic = aggregation_reduce(agg_op, agg_type);
                     let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
                     block = quote! {
                         #block

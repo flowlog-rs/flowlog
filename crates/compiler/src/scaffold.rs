@@ -209,11 +209,20 @@ impl Compiler {
     }
 
     /// Write `src/min_semiring.rs` into the generated project directory.
+    ///
+    /// Only emits `define_min!` invocations for the integer types actually used.
     fn write_src_min_semiring(&self) -> io::Result<()> {
         let src_dir = self.config.executable_path().join("src");
         ensure_dir(&src_dir)?;
 
-        let rendered = MIN_SEMIRING_RS_TMPL.replace("\r\n", "\n");
+        let mut rendered = MIN_SEMIRING_RS_TMPL.replace("\r\n", "\n");
+        if self.imports.needs_min_semiring_i32() {
+            rendered.push_str("define_min!(MinI32, i32, i32::MAX);\n");
+        }
+        if self.imports.needs_min_semiring_i64() {
+            rendered.push_str("define_min!(MinI64, i64, i64::MAX);\n");
+        }
+
         write_file(&src_dir.join("min_semiring.rs"), rendered.trim_start())
     }
 

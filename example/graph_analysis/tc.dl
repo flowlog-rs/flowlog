@@ -1,7 +1,7 @@
-.decl Arc(x: number, y: number)
+.decl Arc(x: int32, y: int32)
 .input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
-.decl Tc(x: number, y: number)
+.decl Tc(x: int32, y: int32)
 
 Tc(x, y) :- Arc(x, y).
 Tc(x, y) :- Tc(x, z), Arc(z, y).

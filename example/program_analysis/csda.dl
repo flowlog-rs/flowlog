@@ -1,10 +1,10 @@
-.decl NullEdge(x: number, y: number)
+.decl NullEdge(x: int32, y: int32)
 .input NullEdge(IO="file", filename="NullEdge.csv", delimiter=",")
 
-.decl Edge(x: number, y: number)
+.decl Edge(x: int32, y: int32)
 .input Edge(IO="file", filename="Edge.csv", delimiter=",")
 
-.decl NullNode(x: number, y: number)
+.decl NullNode(x: int32, y: int32)
 
 NullNode(x, y) :- NullEdge(x, y).
 NullNode(x, y) :- NullNode(x, w), Edge(w, y).

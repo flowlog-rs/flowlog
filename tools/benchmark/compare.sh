@@ -389,7 +389,7 @@ run_compiler() {
     prog_file="$(basename "$prog_name")"
     local stem="${prog_file%.*}"
 
-    local prog_path="${PROG_DIR}/${prog_file}"
+    local prog_path="${PROG_DIR}/${prog_name}"
     [[ -f "$prog_path" ]] || die "Compiler program not found: $prog_path"
 
     local dataset_path
@@ -493,14 +493,14 @@ generate_results() {
     echo ""
 
     # Table header.
-    printf "| %-25s | %-39s | %-39s | %-39s |\n" \
+    printf "| %-40s | %-39s | %-39s | %-39s |\n" \
         "Program-Dataset" "Load time (s)" "Execute time (s)" "Total time (s)"
-    printf "| %-25s | %13s %13s %11s | %13s %13s %11s | %13s %13s %11s |\n" \
+    printf "| %-40s | %13s %13s %11s | %13s %13s %11s | %13s %13s %11s |\n" \
         "" "Interp" "Compiler" "Speedup" \
         "Interp" "Compiler" "Speedup" \
         "Interp" "Compiler" "Speedup"
 
-    printf '%s' "|---------------------------|"
+    printf '%s' "|------------------------------------------|"
     printf '%s' "-----------------------------------------|"
     printf '%s' "-----------------------------------------|"
     printf '%s\n' "-----------------------------------------|"
@@ -508,10 +508,13 @@ generate_results() {
     while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         parse_config_line "$raw_line" || continue
 
-        local stem="${PROG_NAME%.*}"
-        local label="${stem}_${DATASET_NAME}"
-        local interp_log="${LOG_DIR}/${stem}_${DATASET_NAME}_interpreter.log"
-        local comp_log="${LOG_DIR}/${stem}_${DATASET_NAME}_compiler.log"
+        local prog_base
+        prog_base="$(basename "$PROG_NAME")"
+        local file_stem="${prog_base%.*}"
+        local display_stem="${PROG_NAME%.*}"
+        local label="${display_stem}_${DATASET_NAME}"
+        local interp_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_interpreter.log"
+        local comp_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_compiler.log"
 
         read -r i_total i_load i_exec <<< "$(collect_times "$interp_log")"
         read -r c_total c_load c_exec <<< "$(collect_times "$comp_log")"
@@ -521,7 +524,7 @@ generate_results() {
         spd_exec=$(fmt_speedup "$i_exec" "$c_exec")
         spd_total=$(fmt_speedup "$i_total" "$c_total")
 
-        printf "| %-25s | %s %s %s | %s %s %s | %s %s %s |\n" \
+        printf "| %-40s | %s %s %s | %s %s %s | %s %s %s |\n" \
             "$label" \
             "$(fmt_time "$i_load")"  "$(fmt_time "$c_load")"  "$(fmt_speedup_cell "$spd_load")" \
             "$(fmt_time "$i_exec")"  "$(fmt_time "$c_exec")"  "$(fmt_speedup_cell "$spd_exec")" \
@@ -571,15 +574,18 @@ main() {
         run_interpreter "$PROG_NAME" "$DATASET_NAME" || true
         run_compiler    "$PROG_NAME" "$DATASET_NAME" || true
 
-                local program_stem="${PROG_NAME%.*}"
-        local lbl="${program_stem}_${DATASET_NAME}"
-        local interp_log="${LOG_DIR}/${program_stem}_${DATASET_NAME}_interpreter.log"
-        local comp_log="${LOG_DIR}/${program_stem}_${DATASET_NAME}_compiler.log"
+        local prog_base
+        prog_base="$(basename "$PROG_NAME")"
+        local file_stem="${prog_base%.*}"
+        local display_stem="${PROG_NAME%.*}"
+        local lbl="${display_stem}_${DATASET_NAME}"
+        local interp_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_interpreter.log"
+        local comp_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_compiler.log"
 
         print_pair_summary "$lbl" "$interp_log" "$comp_log"
 
         # Append this pair's results to CSV incrementally.
-        append_csv_row "$program_stem" "$DATASET_NAME" "$interp_log" "$comp_log"
+        append_csv_row "$display_stem" "$DATASET_NAME" "$interp_log" "$comp_log"
 
         # Cleanup dataset to save disk space
         cleanup_dataset "$DATASET_NAME"

@@ -189,8 +189,11 @@ impl Compiler {
             .zip(data_types.iter())
             .skip(1)
             .map(|(ident, dt)| match *dt {
-                DataType::Integer => quote! {
+                DataType::Int32 => quote! {
                     let #ident: i32 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i32>().ok()?;
+                },
+                DataType::Int64 => quote! {
+                    let #ident: i64 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i64>().ok()?;
                 },
                 DataType::String => quote! {
                     let #ident: String = std::str::from_utf8(tuple.next()?).ok()?.to_string();
@@ -202,12 +205,20 @@ impl Compiler {
         let first_key = field_idents[0].clone();
         let (should_send_stmt, materialize_first_field): (TokenStream, TokenStream) =
             match data_types[0] {
-                DataType::Integer => (
+                DataType::Int32 => (
                     quote! {
                         let #first_key: i32 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i32>().ok()?;
                         let should_send = ((#first_key as usize) % peers) == index;
                     },
-                    // Integer first field is already parsed; nothing more to do.
+                    // Integer 32 bits first field is already parsed; nothing more to do.
+                    quote! {},
+                ),
+                DataType::Int64 => (
+                    quote! {
+                        let #first_key: i64 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i64>().ok()?;
+                        let should_send = ((#first_key as usize) % peers) == index;
+                    },
+                    // Integer 64 bits first field is already parsed; nothing more to do.
                     quote! {},
                 ),
                 DataType::String => (
@@ -301,7 +312,8 @@ impl Compiler {
                 let elems: Vec<TokenStream> = vals
                     .iter()
                     .map(|c| match c {
-                        ConstType::Integer(i) => quote! { #i },
+                        ConstType::Int32(i) => quote! { #i },
+                        ConstType::Int64(i) => quote! { #i },
                         ConstType::Text(s) => quote! { #s.to_string() },
                     })
                     .collect();

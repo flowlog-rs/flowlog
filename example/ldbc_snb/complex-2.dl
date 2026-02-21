@@ -1,0 +1,57 @@
+// Person: creationDate|id|firstName|lastName|gender|birthday|locationIP|browserUsed|LocationCityId|language|email
+.decl Person(creationDate: string, personId: int64, firstName: string, lastName: string, gender: string, birthday: string, locationIP: string, browserUsed: string, locationCityId: int64, language: string, email: string)
+.input Person(IO="file", filename="Person.csv", delimiter="|")
+
+// Person_knows_Person: creationDate|Person1Id|Person2Id
+.decl Knows(creationDate: string, person1: int64, person2: int64)
+.input Knows(IO="file", filename="Person_knows_Person.csv", delimiter="|")
+
+// Comment: creationDate|id|locationIP|browserUsed|content|length|CreatorPersonId|LocationCountryId|ParentPostId|ParentCommentId
+.decl Comment(creationDate: string, id: int64, locationIP: string, browserUsed: string, content: string, length: int64, creatorPersonId: int64, locationCountryId: int64, parentPostId: string, parentCommentId: string)
+.input Comment(IO="file", filename="Comment.csv", delimiter="|")
+
+// Post: creationDate|id|imageFile|locationIP|browserUsed|language|content|length|CreatorPersonId|ContainerForumId|LocationCountryId
+.decl Post(creationDate: string, id: int64, imageFile: string, locationIP: string, browserUsed: string, language: string, content: string, length: int64, creatorPersonId: int64, containerForumId: int64, locationCountryId: int64)
+.input Post(IO="file", filename="Post.csv", delimiter="|")
+
+// Query parameter
+.decl Param(personId: int64, maxDate: string)
+.input Param(IO="file", filename="Param.csv", delimiter="|")
+
+.decl Q2(personId: int64, firstName: string, lastName: string, messageId: int64, content: string, creationDate: string)
+
+// Match via Comment
+Q2(p2id, firstName, lastName, msgId, content, cDate) :-
+    Param(p1id, maxDate),
+    Knows(_, p1id, p2id),
+    Person(_, p2id, firstName, lastName, _, _, _, _, _, _, _),
+    Comment(cDate, msgId, _, _, content, _, p2id, _, _, _),
+    cDate < maxDate.
+
+// Match via Post
+Q2(p2id, firstName, lastName, msgId, content, cDate) :-
+    Param(p1id, maxDate),
+    Knows(_, p1id, p2id),
+    Person(_, p2id, firstName, lastName, _, _, _, _, _, _, _),
+    Post(cDate, msgId, _, _, _, _, content, _, p2id, _, _),
+    cDate < maxDate.
+
+.printsize Q2
+
+// SELECT TOP(20)
+//     p2.personId,
+//     p2.firstName,
+//     p2.lastName,
+//     Message.MessageId,
+//     coalesce(Message.imageFile, Message.content),
+//     Message.creationDate
+// FROM 
+//     Person AS p1,
+//     Person_knows_Person,
+//     Person AS p2,
+//     Message
+// WHERE MATCH(p1-(Person_knows_Person)->p2)
+//     AND p2.personId = Message.CreatorPersonId
+//     AND Message.creationDate < :maxDate
+//     AND p1.personId = :personId
+// ORDER BY creationDate DESC, MessageId ASC

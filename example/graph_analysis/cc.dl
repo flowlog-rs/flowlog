@@ -1,6 +1,6 @@
-.decl Arc(a: number, b: number)
-.decl CC2(cc: number)
-.decl CC(node: number, cc: number)
+.decl Arc(a: int32, b: int32)
+.decl CC2(node: int32, cc: int32)
+.decl CC(node: int32, cc: int32)
 
 .input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
