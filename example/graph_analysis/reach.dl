@@ -1,9 +1,9 @@
-.decl Source(id: number)
+.decl Source(id: int32)
 .input Source(IO="file", filename="Source.csv", delimiter=",")
-.decl Arc(x: number, y: number)
+.decl Arc(x: int32, y: int32)
 .input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
-.decl Reach(id: number)
+.decl Reach(id: int32)
 
 Reach(y) :- Source(y).
 Reach(y) :- Reach(x), Arc(x,y).

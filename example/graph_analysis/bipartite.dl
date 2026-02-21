@@ -1,12 +1,12 @@
-.decl Arc(y:number, x:number)
+.decl Arc(y:int32, x:int32)
 .input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
-.decl Source(x:number)
+.decl Source(x:int32)
 .input Source(IO="file", filename="Source.csv", delimiter=",")
 
-.decl BipartiteViolation(x:number)
-.decl Zero(x:number)
-.decl One(x:number)
+.decl BipartiteViolation(x:int32)
+.decl Zero(x:int32)
+.decl One(x:int32)
 
 Zero(x) :- Source(x).
 

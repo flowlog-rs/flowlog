@@ -1,12 +1,12 @@
-.decl Assign(x: number, y: number)
+.decl Assign(x: int32, y: int32)
 .input Assign(IO="file", filename="Assign.csv", delimiter=",")
 
-.decl Dereference(x: number, y: number)
+.decl Dereference(x: int32, y: int32)
 .input Dereference(IO="file", filename="Dereference.csv", delimiter=",")
 
-.decl ValueFlow(x: number, y: number)
-.decl MemoryAlias(x: number, y: number)
-.decl ValueAlias(x: number, y: number)
+.decl ValueFlow(x: int32, y: int32)
+.decl MemoryAlias(x: int32, y: int32)
+.decl ValueAlias(x: int32, y: int32)
 
 ValueFlow(y, x) :- Assign(y, x).
 ValueFlow(x, y) :- Assign(x, z), MemoryAlias(z, y).

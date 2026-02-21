@@ -1,48 +1,48 @@
 
 // .in
-.decl Insert_input(a: number, b: number, c: number, d: number)
+.decl Insert_input(a: int32, b: int32, c: int32, d: int32)
 .input Insert_input(IO="file", filename="Insert_input.csv", delimiter=",")
-.decl Remove_input(a: number, b: number)
+.decl Remove_input(a: int32, b: int32)
 .input Remove_input(IO="file", filename="Remove_input.csv", delimiter=",")
 
 // .printsize
 
 // definition of insertion into an ordered list (defines nextElem):
-.decl insert(a: number, b: number, c: number, d: number)
-.decl remove(IDCtr: number, IDN: number)
-.decl hasChild(ParentCtr: number, ParentN: number)
-.decl assign(IDCtr: number, IDN: number, ElemCtr: number, ElemN: number, Value: number)
+.decl insert(a: int32, b: int32, c: int32, d: int32)
+.decl remove(IDCtr: int32, IDN: int32)
+.decl hasChild(ParentCtr: int32, ParentN: int32)
+.decl assign(IDCtr: int32, IDN: int32, ElemCtr: int32, ElemN: int32, Value: int32)
 
-.decl laterChild(ParentCtr: number, ParentN: number, ChildCtr: number, ChildN: number)
-.decl firstChild(ParentCtr: number, ParentN: number, ChildCtr: number, ChildN: number)
-.decl sibling(ChildCtr1: number, ChildN1: number, ChildCtr2: number, ChildN2: number)
-.decl laterSibling(SibCtr1: number, SibN1: number, SibCtr2: number, SibN2: number)
-.decl laterSibling2(SibCtr1: number, SibN1: number, SibCtr3: number, SibN3: number)
-.decl nextSibling(SibCtr1: number, SibN1: number, SibCtr2: number, SibN2: number)
-.decl hasNextSibling(SibCtr1: number, SibN1: number)
-.decl nextSiblingAnc(StartCtr: number, StartN: number, NextCtr: number, NextN: number)
+.decl laterChild(ParentCtr: int32, ParentN: int32, ChildCtr: int32, ChildN: int32)
+.decl firstChild(ParentCtr: int32, ParentN: int32, ChildCtr: int32, ChildN: int32)
+.decl sibling(ChildCtr1: int32, ChildN1: int32, ChildCtr2: int32, ChildN2: int32)
+.decl laterSibling(SibCtr1: int32, SibN1: int32, SibCtr2: int32, SibN2: int32)
+.decl laterSibling2(SibCtr1: int32, SibN1: int32, SibCtr3: int32, SibN3: int32)
+.decl nextSibling(SibCtr1: int32, SibN1: int32, SibCtr2: int32, SibN2: int32)
+.decl hasNextSibling(SibCtr1: int32, SibN1: int32)
+.decl nextSiblingAnc(StartCtr: int32, StartN: int32, NextCtr: int32, NextN: int32)
 .printsize nextSiblingAnc
-.decl nextElem(PrevCtr: number, PrevN: number, NextCtr: number, NextN: number)
+.decl nextElem(PrevCtr: int32, PrevN: int32, NextCtr: int32, NextN: int32)
 
 
-.decl currentValue(ElemCtr: number, ElemN: number, Value: number)
+.decl currentValue(ElemCtr: int32, ElemN: int32, Value: int32)
 .printsize currentValue
 
-.decl hasValue(ElemCtr: number, ElemN: number)
+.decl hasValue(ElemCtr: int32, ElemN: int32)
 .printsize hasValue
 
-.decl valueStep(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.decl valueStep(FromCtr: int32, FromN: int32, ToCtr: int32, ToN: int32)
 .printsize valueStep
 
-.decl blankStep(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.decl blankStep(FromCtr: int32, FromN: int32, ToCtr: int32, ToN: int32)
 .printsize blankStep
 
-.decl value_blank_star(FromCtr: number, FromN: number, ToCtr: number, ToN: number)
+.decl value_blank_star(FromCtr: int32, FromN: int32, ToCtr: int32, ToN: int32)
 .printsize value_blank_star
-.decl nextVisible(PrevCtr: number, PrevN: number, NextCtr: number, NextN: number)
+.decl nextVisible(PrevCtr: int32, PrevN: int32, NextCtr: int32, NextN: int32)
 .printsize nextVisible
 
-.decl result(ctr1: number, ctr2: number, value: number)
+.decl result(ctr1: int32, ctr2: int32, value: int32)
 .printsize result
 
 

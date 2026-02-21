@@ -1,11 +1,11 @@
-.decl Arc(x:number, y:number, l:number)
+.decl Arc(x:int32, y:int32, l:int32)
 .input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
-.decl Zero(x:number, y:number)
+.decl Zero(x:int32, y:int32)
 .printsize Zero
-.decl One(x:number, y:number)
+.decl One(x:int32, y:int32)
 .printsize One
-.decl Dyck(x:number, y:number)
+.decl Dyck(x:int32, y:int32)
 .printsize Dyck
 
 Zero(x, y) :- Arc(x, y, 0).

@@ -1,7 +1,7 @@
-.decl arc(src: number, dest: number, weight: number) 
-.decl id(src: number)
-.decl sssp2(x: number, y: number)
-.decl sssp(x: number, y: number)
+.decl arc(src: int32, dest: int32, weight: int32) 
+.decl id(src: int32)
+.decl sssp2(x: int32, y: int32)
+.decl sssp(x: int32, y: int32)
 
 .input arc(IO="file", filename="Arc.csv", delimiter=",")
 .input id(IO="file", filename="Id.csv", delimiter=",")
