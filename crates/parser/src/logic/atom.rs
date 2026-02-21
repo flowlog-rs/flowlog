@@ -9,7 +9,7 @@
 //! use parser::primitive::ConstType;
 //! let a = Atom::new("person", vec![
 //!     AtomArg::Const(ConstType::Text("Alice".into())),
-//!     AtomArg::Const(ConstType::Integer(25)),
+//!     AtomArg::Const(ConstType::Int32(25)),
 //!     AtomArg::Placeholder,
 //! ], 0);
 //! assert!(a.to_string().starts_with("person(\"Alice\", 25, _)"));
@@ -208,14 +208,14 @@ impl Lexeme for Atom {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitive::ConstType::{Integer, Text};
+    use crate::primitive::ConstType::{Int32, Text};
     use AtomArg::*;
 
     fn v(n: &str) -> AtomArg {
         Var(n.into())
     }
     fn i(n: i32) -> AtomArg {
-        Const(Integer(n))
+        Const(Int32(n))
     }
     fn s(t: &str) -> AtomArg {
         Const(Text(t.into()))

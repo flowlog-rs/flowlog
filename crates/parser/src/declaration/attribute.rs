@@ -54,18 +54,20 @@ mod tests {
 
     #[test]
     fn display_golden() {
-        let id = Attribute::new("id".into(), Integer);
+        let id32 = Attribute::new("id".into(), Int32);
+        let id64 = Attribute::new("id".into(), Int64);
         let nm = Attribute::new("name".into(), String);
-        assert_eq!(id.to_string(), "id: number");
+        assert_eq!(id32.to_string(), "id: int32");
+        assert_eq!(id64.to_string(), "id: int64");
         assert_eq!(nm.to_string(), "name: string");
     }
 
     #[test]
     fn equality_semantics() {
-        let a = Attribute::new("age".into(), Integer);
-        let b = Attribute::new("age".into(), Integer);
+        let a = Attribute::new("age".into(), Int32);
+        let b = Attribute::new("age".into(), Int32);
         let c = Attribute::new("age".into(), String);
-        let d = Attribute::new("name".into(), Integer);
+        let d = Attribute::new("name".into(), Int32);
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_ne!(a, d);

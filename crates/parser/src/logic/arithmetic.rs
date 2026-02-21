@@ -11,7 +11,7 @@
 //!
 //! let expr = Arithmetic::new(
 //!     Factor::Var("x".into()),
-//!     vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Integer(5)))],
+//!     vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int32(5)))],
 //! );
 //! assert_eq!(expr.to_string(), "x + 5");
 //! ```
@@ -222,7 +222,7 @@ impl Lexeme for Arithmetic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitive::ConstType::{Integer, Text};
+    use crate::primitive::ConstType::{Int32, Text};
     use ArithmeticOperator::*;
     use Factor::*;
 
@@ -230,7 +230,7 @@ mod tests {
         Var(name.into())
     }
     fn i(n: i32) -> Factor {
-        Const(Integer(n))
+        Const(Int32(n))
     }
     fn s(t: &str) -> Factor {
         Const(Text(t.into()))

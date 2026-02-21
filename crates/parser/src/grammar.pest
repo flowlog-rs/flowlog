@@ -31,10 +31,13 @@ attribute_name = { identifier }
 relation_name = { identifier }
 
 // Data type specification
-data_type = { integer_type | string_type }
+data_type = { integer64_type | integer32_type | string_type }
 
-// Numeric data type for integers
-integer_type = { "number" }
+// 32-bit integer data type
+integer32_type = { "int32" }
+
+// 64-bit integer data type
+integer64_type = { "int64" }
 
 // Text data type for strings
 string_type = { "string" }

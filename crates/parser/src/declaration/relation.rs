@@ -251,12 +251,12 @@ impl Lexeme for Relation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitive::DataType::{Integer, String as TString};
+    use crate::primitive::DataType::{Int32, String};
 
     fn attrs() -> Vec<Attribute> {
         vec![
-            Attribute::new("id".into(), Integer),
-            Attribute::new("name".into(), TString),
+            Attribute::new("id".into(), Int32),
+            Attribute::new("name".into(), String),
         ]
     }
 
@@ -275,12 +275,12 @@ mod tests {
     #[test]
     fn display_variants() {
         let a = vec![
-            Attribute::new("x".into(), Integer),
-            Attribute::new("y".into(), TString),
+            Attribute::new("x".into(), Int32),
+            Attribute::new("y".into(), String),
         ];
 
         let basic = Relation::new("r", a.clone());
-        assert_eq!(basic.to_string(), ".decl r(x: number, y: string)");
+        assert_eq!(basic.to_string(), ".decl r(x: int32, y: string)");
 
         let nullary = Relation::new("flag", vec![]);
         assert_eq!(nullary.to_string(), ".decl flag()");
@@ -293,7 +293,7 @@ mod tests {
         with_input.set_input_params(params);
         assert_eq!(
             with_input.to_string(),
-            ".decl input_rel(x: number, y: string) .input(IO=\"file\", filename=\"data.csv\")"
+            ".decl input_rel(x: int32, y: string) .input(IO=\"file\", filename=\"data.csv\")"
         );
 
         // Test with output
@@ -301,7 +301,7 @@ mod tests {
         with_output.set_output(true);
         assert_eq!(
             with_output.to_string(),
-            ".decl output_rel(x: number, y: string) .output"
+            ".decl output_rel(x: int32, y: string) .output"
         );
 
         // Test with printsize
@@ -309,7 +309,7 @@ mod tests {
         with_printsize.set_printsize(true);
         assert_eq!(
             with_printsize.to_string(),
-            ".decl print_rel(x: number, y: string) .printsize"
+            ".decl print_rel(x: int32, y: string) .printsize"
         );
 
         // Test with all annotations
@@ -321,7 +321,7 @@ mod tests {
         full_rel.set_printsize(true);
         assert_eq!(
             full_rel.to_string(),
-            ".decl full_rel(x: number, y: string) .input(filename=\"input.csv\") .output .printsize"
+            ".decl full_rel(x: int32, y: string) .input(filename=\"input.csv\") .output .printsize"
         );
     }
 

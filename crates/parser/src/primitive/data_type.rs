@@ -6,14 +6,17 @@ use std::str::FromStr;
 /// Data types supported in FlowLog Datalog programs.
 ///
 /// These types correspond to the primitive types in the FlowLog grammar:
-/// - `"number"` → [`DataType::Integer`]
+/// - `"int32"` → [`DataType::Int32`]
+/// - `"int64"` → [`DataType::Int64`]
 /// - `"string"` → [`DataType::String`]
 ///
 /// They are used as attribute types in relations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataType {
-    /// 32-bit integer type.
-    Integer,
+    /// 32-bit signed integer type.
+    Int32,
+    /// 64-bit signed integer type.
+    Int64,
     /// UTF-8 string type.
     String,
 }
@@ -23,13 +26,14 @@ impl FromStr for DataType {
 
     /// Parse a [`DataType`] from its grammar string representation.
     ///
-    /// Returns `Err` if the string is not `"number"` or `"string"`.
+    /// Returns `Err` if the string is not `"int32"`, `"int64"`, or `"string"`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "number" => Ok(Self::Integer),
+            "int32" => Ok(Self::Int32),
+            "int64" => Ok(Self::Int64),
             "string" => Ok(Self::String),
             _ => Err(format!(
-                "Parser error: '{s}'. Invalid data type, expected 'number' or 'string'"
+                "Parser error: '{s}'. Invalid data type, expected 'int32', 'int64', or 'string'"
             )),
         }
     }
@@ -39,7 +43,8 @@ impl fmt::Display for DataType {
     /// Returns the grammar string representation of this type.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let type_str = match self {
-            Self::Integer => "number",
+            Self::Int32 => "int32",
+            Self::Int64 => "int64",
             Self::String => "string",
         };
         write!(f, "{type_str}")
@@ -53,7 +58,7 @@ mod tests {
 
     #[test]
     fn display_roundtrip() {
-        for t in [DataType::Integer, DataType::String] {
+        for t in [DataType::Int32, DataType::Int64, DataType::String] {
             let s = t.to_string();
             let parsed = DataType::from_str(&s).unwrap();
             assert_eq!(t, parsed);

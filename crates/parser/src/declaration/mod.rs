@@ -13,7 +13,7 @@
 //! use parser::primitive::DataType;
 //!
 //! let name = Attribute::new("name".into(), DataType::String);
-//! let age  = Attribute::new("age".into(), DataType::Integer);
+//! let age  = Attribute::new("age".into(), DataType::Int32);
 //!
 //! let person = Relation::new("person", vec![name, age]);
 //!
