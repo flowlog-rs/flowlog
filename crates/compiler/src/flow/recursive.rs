@@ -235,12 +235,11 @@ impl Compiler {
 
                 // Look up the aggregated column's data type.
                 let (key_types, val_types) = self.find_global_type(*output_fp);
-                let agg_type = key_types
+                let agg_type = *key_types
                     .iter()
                     .chain(val_types)
                     .nth(*agg_pos)
-                    .expect("Compiler error: aggregation position out of bounds")
-                    .clone();
+                    .expect("Compiler error: aggregation position out of bounds");
 
                 // Min semiring fast path: replace reduce_core with threshold_semigroup
                 // using the Min semigroup, avoiding a second arrangement.
