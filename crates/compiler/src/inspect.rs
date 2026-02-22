@@ -10,6 +10,7 @@
 use crate::Compiler;
 
 use common::ExecutionMode;
+use parser::DataType;
 use profiler::{with_profiler, Profiler};
 
 use proc_macro2::{Ident, Span, TokenStream};
@@ -67,6 +68,7 @@ impl Compiler {
         var: &Ident,
         name: &str,
         arity: usize,
+        data_types: &[DataType],
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let prefix = name.to_string();
@@ -89,9 +91,28 @@ impl Compiler {
                 #maybe_probe;
             }}
         } else {
+            let field_displays: Vec<TokenStream> = data_types
+                .iter()
+                .enumerate()
+                .map(|(i, dt)| {
+                    let idx = Index::from(i);
+                    match dt {
+                        DataType::String if self.imports.needs_string_intern() => {
+                            quote! { resolve(data.#idx) }
+                        }
+                        _ => quote! { data.#idx },
+                    }
+                })
+                .collect();
+            let fmt_str = (0..arity).map(|_| "{:?}").collect::<Vec<_>>().join(", ");
+            let fmt_full = format!(
+                "[tuple][{}]  t={{:?}}  data=({})  diff={{:+?}}",
+                prefix, fmt_str
+            );
+            let fmt_lit = LitStr::new(&fmt_full, Span::call_site());
             quote! {{
                 #var.inspect(|(data, time, diff)| {
-                    eprintln!("[tuple][{}]  t={:?}  data={:?}  diff={:+?}", #prefix, time, data, diff)
+                    eprintln!(#fmt_lit, time #(, #field_displays )*, diff);
                 })
                 #maybe_probe;
             }}
@@ -110,6 +131,7 @@ impl Compiler {
         name: &str,
         parent_dir: &str,
         arity: usize,
+        data_types: &[DataType],
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let base_dir = parent_dir.to_string();
@@ -128,7 +150,12 @@ impl Compiler {
         let data_accessors: Vec<TokenStream> = (0..arity)
             .map(|i| {
                 let idx = Index::from(i);
-                quote! { data.#idx }
+                match data_types.get(i) {
+                    Some(DataType::String) if self.imports.needs_string_intern() => {
+                        quote! { resolve(data.#idx) }
+                    }
+                    _ => quote! { data.#idx },
+                }
             })
             .collect();
 

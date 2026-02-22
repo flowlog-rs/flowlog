@@ -36,7 +36,15 @@ impl Compiler {
 
         self.imports.mark_input();
 
-        // Record enter inpus block if profiler is enabled
+        if self.config.str_intern_enabled()
+            && edbs
+                .iter()
+                .any(|rel| rel.data_type().iter().any(|dt| *dt == DataType::String))
+        {
+            self.imports.mark_string_intern();
+        }
+
+        // Record enter inputs block if profiler is enabled
         with_profiler(profiler, |profiler| {
             profiler.update_input_block();
         });
@@ -195,9 +203,17 @@ impl Compiler {
                 DataType::Int64 => quote! {
                     let #ident: i64 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i64>().ok()?;
                 },
-                DataType::String => quote! {
-                    let #ident: String = std::str::from_utf8(tuple.next()?).ok()?.to_string();
-                },
+                DataType::String => {
+                    if self.imports.needs_string_intern() {
+                        quote! {
+                            let #ident: Spur = intern(std::str::from_utf8(tuple.next()?).ok()?);
+                        }
+                    } else {
+                        quote! {
+                            let #ident: String = std::str::from_utf8(tuple.next()?).ok()?.to_string();
+                        }
+                    }
+                }
             })
             .collect();
 
@@ -221,24 +237,37 @@ impl Compiler {
                     // Integer 64 bits first field is already parsed; nothing more to do.
                     quote! {},
                 ),
-                DataType::String => (
-                    quote! {
-                        let __f0_bytes = tuple.next()?;
-                        let should_send = {
-                            // 64-bit FNV-1a hash for stable worker assignment on string keys.
-                            let mut hash: u64 = 0xcbf29ce484222325;
-                            for &b in __f0_bytes {
-                                hash ^= b as u64;
-                                hash = hash.wrapping_mul(0x100000001b3);
-                            }
-                            ((hash as usize) % peers) == index
-                        };
-                    },
-                    // Materialize the String only when this worker keeps the row.
-                    quote! {
-                        let #first_key: String = std::str::from_utf8(__f0_bytes).ok()?.to_string();
-                    },
-                ),
+                DataType::String => {
+                    if self.imports.needs_string_intern() {
+                        (
+                            quote! {
+                                let #first_key: Spur = intern(std::str::from_utf8(tuple.next()?).ok()?);
+                                let should_send = ((#first_key.into_inner().get() as usize) % peers) == index;
+                            },
+                            // Interned Spur key is already materialized; nothing more to do.
+                            quote! {},
+                        )
+                    } else {
+                        (
+                            quote! {
+                                let __f0_bytes = tuple.next()?;
+                                let should_send = {
+                                    // 64-bit FNV-1a hash for stable worker assignment on string keys.
+                                    let mut hash: u64 = 0xcbf29ce484222325;
+                                    for &b in __f0_bytes {
+                                        hash ^= b as u64;
+                                        hash = hash.wrapping_mul(0x100000001b3);
+                                    }
+                                    ((hash as usize) % peers) == index
+                                };
+                            },
+                            // Materialize the String only when this worker keeps the row.
+                            quote! {
+                                let #first_key: String = std::str::from_utf8(__f0_bytes).ok()?.to_string();
+                            },
+                        )
+                    }
+                }
             };
 
         // Element expression for `.update(...)`.
@@ -314,7 +343,13 @@ impl Compiler {
                     .map(|c| match c {
                         ConstType::Int32(i) => quote! { #i },
                         ConstType::Int64(i) => quote! { #i },
-                        ConstType::Text(s) => quote! { #s.to_string() },
+                        ConstType::Text(s) => {
+                            if self.imports.needs_string_intern() {
+                                quote! { intern(#s) }
+                            } else {
+                                quote! { #s.to_string() }
+                            }
+                        }
                     })
                     .collect();
 

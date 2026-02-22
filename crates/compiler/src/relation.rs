@@ -15,16 +15,90 @@ impl Compiler {
     ///   - Shard by first column (int mod peers; string FNV-1a).
     ///   - Delimiter is `rel.input_delimiter()` (1 byte, default comma).
     pub(crate) fn render_relops(&self, edbs: Vec<&Relation>) -> String {
+        let str_intern = self.imports.needs_string_intern();
+
+        let needs_shard_str = edbs
+            .iter()
+            .any(|rel| rel.data_type().iter().any(|dt| *dt == DataType::String));
+        let needs_shard_i32 = edbs
+            .iter()
+            .any(|rel| rel.arity() > 0 && rel.data_type().first() == Some(&DataType::Int32));
+        let needs_shard_i64 = edbs
+            .iter()
+            .any(|rel| rel.arity() > 0 && rel.data_type().first() == Some(&DataType::Int64));
+
+        let intern_import = if str_intern && needs_shard_str {
+            quote! {
+                use super::intern;
+                use lasso::Spur;
+            }
+        } else {
+            quote! {}
+        };
+
         let rel_impls: Vec<TokenStream> = edbs
             .iter()
             .map(|rel| {
                 if rel.arity() == 0 {
                     gen_one_rel_nullary(rel)
                 } else {
-                    gen_one_rel_nonnullary(rel)
+                    gen_one_rel_nonnullary(rel, str_intern)
                 }
             })
             .collect();
+
+        // Shard functions: only emit each one when actually needed.
+        let shard_i32_fn = if needs_shard_i32 {
+            quote! {
+                /// Shard on an `i32` first column by `first % peers`.
+                #[inline]
+                fn shard_i32(first: i32, peers: usize, index: usize) -> bool {
+                    (first as usize) % peers == index
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        let shard_i64_fn = if needs_shard_i64 {
+            quote! {
+                /// Shard on an `i64` first column by `first % peers`.
+                #[inline]
+                fn shard_i64(first: i64, peers: usize, index: usize) -> bool {
+                    (first as usize) % peers == index
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        let shard_string_fn = if needs_shard_str {
+            if str_intern {
+                quote! {
+                    /// Shard on a `Spur` (interned string) first column by its inner key.
+                    #[inline]
+                    fn shard_spur(first: Spur, peers: usize, index: usize) -> bool {
+                        (first.into_inner().get() as usize) % peers == index
+                    }
+                }
+            } else {
+                quote! {
+                    /// Shard on a string first column using 32-bit FNV-1a.
+                    #[inline]
+                    fn shard_str(first: &str, peers: usize, index: usize) -> bool {
+                        // 32-bit FNV-1a
+                        let mut hash: u32 = 0x811c9dc5;
+                        for &b in first.as_bytes() {
+                            hash ^= b as u32;
+                            hash = hash.wrapping_mul(0x01000193);
+                        }
+                        (hash as usize) % peers == index
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
 
         let file = quote! {
             //! Dynamic relation handlers for incremental input sessions.
@@ -41,7 +115,7 @@ impl Compiler {
             //! Sharding:
             //! - For non-nullary relations, updates are sharded by the *first* column.
             //! - Integer keys shard by `key % peers`.
-            //! - String keys shard by 32-bit FNV-1a.
+            //! - String keys shard by 32-bit FNV-1a or interned u32 ID modulo.
             //!
             //! Nullary relations:
             //! - Are handled by a dedicated generator (no parsing).
@@ -53,6 +127,8 @@ impl Compiler {
             use std::fs::File;
             use std::io::{BufRead, BufReader};
             use std::path::Path;
+
+            #intern_import
 
             /// Diff type used by incremental input sessions.
             type Diff = i32;
@@ -86,32 +162,9 @@ impl Compiler {
                 fn close(&mut self);
             }
 
-            /// Shard on an `i32` first column by `first % peers`.
-            #[allow(dead_code)]
-            #[inline]
-            fn shard_i32(first: i32, peers: usize, index: usize) -> bool {
-                (first as usize) % peers == index
-            }
-
-            /// Shard on an `i64` first column by `first % peers`.
-            #[allow(dead_code)]
-            #[inline]
-            fn shard_i64(first: i64, peers: usize, index: usize) -> bool {
-                (first as usize) % peers == index
-            }
-
-            /// Shard on a string first column using 32-bit FNV-1a.
-            #[allow(dead_code)]
-            #[inline]
-            fn shard_str(first: &str, peers: usize, index: usize) -> bool {
-                // 32-bit FNV-1a
-                let mut hash: u32 = 0x811c9dc5;
-                for &b in first.as_bytes() {
-                    hash ^= b as u32;
-                    hash = hash.wrapping_mul(0x01000193);
-                }
-                (hash as usize) % peers == index
-            }
+            #shard_i32_fn
+            #shard_i64_fn
+            #shard_string_fn
 
             #(#rel_impls)*
         };
@@ -201,7 +254,7 @@ fn gen_one_rel_nullary(rel: &Relation) -> TokenStream {
     }
 }
 
-fn gen_one_rel_nonnullary(rel: &Relation) -> TokenStream {
+fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
     let name = rel.name();
     let struct_name = format_ident!("Rel{}", name);
 
@@ -218,7 +271,7 @@ fn gen_one_rel_nonnullary(rel: &Relation) -> TokenStream {
         .unwrap_or(b',');
 
     // tuple type: (T0,), (T0,T1,...)
-    let rust_tys: Vec<TokenStream> = dts.iter().map(dt_to_rust).collect();
+    let rust_tys: Vec<TokenStream> = dts.iter().map(|dt| dt_to_rust(dt, string_intern)).collect();
     let tuple_ty: TokenStream = match arity {
         1 => {
             let t0 = &rust_tys[0];
@@ -231,16 +284,28 @@ fn gen_one_rel_nonnullary(rel: &Relation) -> TokenStream {
     let shard_tuple = match dts[0] {
         DataType::Int32 => quote! { if !shard_i32(f0, peers, index) { return; } },
         DataType::Int64 => quote! { if !shard_i64(f0, peers, index) { return; } },
-        DataType::String => quote! { if !shard_str(f0.as_str(), peers, index) { return; } },
+        DataType::String => {
+            if string_intern {
+                quote! { if !shard_spur(f0, peers, index) { return; } }
+            } else {
+                quote! { if !shard_str(f0.as_str(), peers, index) { return; } }
+            }
+        }
     };
     let shard_file = match dts[0] {
         DataType::Int32 => quote! { if !shard_i32(f0, peers, index) { return None; } },
         DataType::Int64 => quote! { if !shard_i64(f0, peers, index) { return None; } },
-        DataType::String => quote! { if !shard_str(f0.as_str(), peers, index) { return None; } },
+        DataType::String => {
+            if string_intern {
+                quote! { if !shard_spur(f0, peers, index) { return None; } }
+            } else {
+                quote! { if !shard_str(f0.as_str(), peers, index) { return None; } }
+            }
+        }
     };
 
-    let tuple_parse_stmts = gen_parse_from_str(name, &dts);
-    let file_parse_stmts = gen_parse_from_bytes(name, &dts);
+    let tuple_parse_stmts = gen_parse_from_str(name, &dts, string_intern);
+    let file_parse_stmts = gen_parse_from_bytes(name, &dts, string_intern);
 
     let update_expr = match arity {
         1 => quote! { (f0,) },
@@ -338,17 +403,23 @@ fn gen_one_rel_nonnullary(rel: &Relation) -> TokenStream {
 // Type + parsing helpers (codegen helpers)
 // ------------------------------------------------------------
 
-fn dt_to_rust(dt: &DataType) -> TokenStream {
+fn dt_to_rust(dt: &DataType, string_intern: bool) -> TokenStream {
     match *dt {
         DataType::Int32 => quote! { i32 },
         DataType::Int64 => quote! { i64 },
-        DataType::String => quote! { String },
+        DataType::String => {
+            if string_intern {
+                quote! { Spur }
+            } else {
+                quote! { String }
+            }
+        }
     }
 }
 
 /// Parse from `it: Iterator<Item=&str>` into f0..f{n-1}.
 /// On error: eprintln + return;
-fn gen_parse_from_str(rel: &str, dts: &[DataType]) -> TokenStream {
+fn gen_parse_from_str(rel: &str, dts: &[DataType], string_intern: bool) -> TokenStream {
     let mut stmts = Vec::<TokenStream>::new();
 
     for (i, dt) in dts.iter().enumerate() {
@@ -386,10 +457,19 @@ fn gen_parse_from_str(rel: &str, dts: &[DataType]) -> TokenStream {
                     }
                 };
             },
-            DataType::String => quote! {
-                #get
-                let #v: String = s.to_string();
-            },
+            DataType::String => {
+                if string_intern {
+                    quote! {
+                        #get
+                        let #v: Spur = intern(s);
+                    }
+                } else {
+                    quote! {
+                        #get
+                        let #v: String = s.to_string();
+                    }
+                }
+            }
         };
 
         stmts.push(parse);
@@ -400,7 +480,7 @@ fn gen_parse_from_str(rel: &str, dts: &[DataType]) -> TokenStream {
 
 /// Parse from `cols: Iterator<Item=&[u8]>` into f0..f{n-1}.
 /// This runs inside `filter_map(|line| { ... })`, so errors return None.
-fn gen_parse_from_bytes(rel: &str, dts: &[DataType]) -> TokenStream {
+fn gen_parse_from_bytes(rel: &str, dts: &[DataType], string_intern: bool) -> TokenStream {
     let mut stmts = Vec::<TokenStream>::new();
 
     for (i, dt) in dts.iter().enumerate() {
@@ -484,23 +564,30 @@ fn gen_parse_from_bytes(rel: &str, dts: &[DataType]) -> TokenStream {
                     }
                 };
             },
-            DataType::String => quote! {
-                #get_raw
-                let s = match std::str::from_utf8(raw) {
-                    Ok(s) => s.trim(),
-                    Err(_) => {
-                        eprintln!(
-                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
-                            #rel,
-                            path.display(),
-                            String::from_utf8_lossy(&line),
-                            #idx
-                        );
-                        return None;
-                    }
+            DataType::String => {
+                let field_stmt = if string_intern {
+                    quote! { let #v: Spur = intern(s); }
+                } else {
+                    quote! { let #v: String = s.to_string(); }
                 };
-                let #v: String = s.to_string();
-            },
+                quote! {
+                    #get_raw
+                    let s = match std::str::from_utf8(raw) {
+                        Ok(s) => s.trim(),
+                        Err(_) => {
+                            eprintln!(
+                                "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                                #rel,
+                                path.display(),
+                                String::from_utf8_lossy(&line),
+                                #idx
+                            );
+                            return None;
+                        }
+                    };
+                    #field_stmt
+                }
+            }
         };
 
         stmts.push(parse);

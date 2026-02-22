@@ -180,13 +180,22 @@ impl Compiler {
 /// - `[]` => `()`
 /// - `[T]` => `(T,)`
 /// - `[T1, T2, ...]` => `(T1, T2, ...)`
-pub(super) fn type_tokens(input_types: &[DataType]) -> TokenStream {
+///
+/// When `string_intern` is true, `DataType::String` maps to `Spur`;
+/// otherwise it maps to `String`.
+pub(super) fn type_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
     let tys: Vec<TokenStream> = input_types
         .iter()
         .map(|dt| match dt {
             DataType::Int32 => quote! { i32 },
             DataType::Int64 => quote! { i64 },
-            DataType::String => quote! { String },
+            DataType::String => {
+                if string_intern {
+                    quote! { Spur }
+                } else {
+                    quote! { String }
+                }
+            }
         })
         .collect();
 

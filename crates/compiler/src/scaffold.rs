@@ -107,7 +107,17 @@ impl Compiler {
             deps["differential-dataflow"] = "0.19".into();
             deps["mimalloc"] = "0.1".into();
 
-            if self.imports.needs_min_semiring() {
+            if self.imports.needs_string_intern() {
+                let mut lasso_tbl = toml_edit::InlineTable::new();
+                lasso_tbl.insert("version", "0.7".into());
+                let mut lasso_features = Array::new();
+                lasso_features.push("multi-threaded");
+                lasso_features.push("serialize");
+                lasso_tbl.insert("features", toml_edit::Value::Array(lasso_features));
+                deps["lasso"] = toml_edit::value(lasso_tbl);
+            }
+
+            if self.imports.needs_min_semiring() || self.imports.needs_string_intern() {
                 let mut serde_tbl = toml_edit::InlineTable::new();
                 serde_tbl.insert("version", "1".into());
                 let mut features = Array::new();

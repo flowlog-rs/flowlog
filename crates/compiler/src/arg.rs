@@ -67,10 +67,11 @@ pub(super) fn row_pattern_and_fields(
 pub(super) fn build_key_val_from_row_args(
     args: &[ArithmeticArgument],
     fields: &[Ident],
+    string_intern: bool,
 ) -> TokenStream {
     let parts: Vec<TokenStream> = args
         .iter()
-        .map(|arg| build_row_args_arithmetic_expr(arg, fields))
+        .map(|arg| build_row_args_arithmetic_expr(arg, fields, string_intern))
         .collect();
     pack_as_tuple(parts)
 }
@@ -81,8 +82,14 @@ pub(super) fn build_key_val_from_row_args(
 /// - 0 parts => ()
 /// - 1 part  => (x,)
 /// - n parts => (x, y, ...)
-pub(super) fn build_key_val_from_kv_args(args: &[ArithmeticArgument]) -> TokenStream {
-    let parts: Vec<TokenStream> = args.iter().map(build_kv_args_arithmetic_expr).collect();
+pub(super) fn build_key_val_from_kv_args(
+    args: &[ArithmeticArgument],
+    string_intern: bool,
+) -> TokenStream {
+    let parts: Vec<TokenStream> = args
+        .iter()
+        .map(|a| build_kv_args_arithmetic_expr(a, string_intern))
+        .collect();
     pack_as_tuple(parts)
 }
 
@@ -92,8 +99,14 @@ pub(super) fn build_key_val_from_kv_args(args: &[ArithmeticArgument]) -> TokenSt
 /// - 0 parts => ()
 /// - 1 part  => (x,)
 /// - n parts => (x, y, ...)
-pub(super) fn build_key_val_from_join_args(args: &[ArithmeticArgument]) -> TokenStream {
-    let parts: Vec<TokenStream> = args.iter().map(build_join_args_arithmetic_expr).collect();
+pub(super) fn build_key_val_from_join_args(
+    args: &[ArithmeticArgument],
+    string_intern: bool,
+) -> TokenStream {
+    let parts: Vec<TokenStream> = args
+        .iter()
+        .map(|a| build_join_args_arithmetic_expr(a, string_intern))
+        .collect();
     pack_as_tuple(parts)
 }
 
@@ -307,15 +320,18 @@ fn comparison_op_tokens(op: &ComparisonOperator) -> TokenStream {
 
 /// Build a combined predicate for KV-based closures from comparison expressions.
 /// Returns None when there are no comparisons.
-pub(super) fn build_kv_compare_predicate(comps: &[ComparisonExprArgument]) -> Option<TokenStream> {
+pub(super) fn build_kv_compare_predicate(
+    comps: &[ComparisonExprArgument],
+    string_intern: bool,
+) -> Option<TokenStream> {
     if comps.is_empty() {
         return None;
     }
     let parts: Vec<TokenStream> = comps
         .iter()
         .map(|c| {
-            let l = build_kv_args_arithmetic_expr(c.left());
-            let r = build_kv_args_arithmetic_expr(c.right());
+            let l = build_kv_args_arithmetic_expr(c.left(), string_intern);
+            let r = build_kv_args_arithmetic_expr(c.right(), string_intern);
             let op = comparison_op_tokens(c.operator());
             quote! { (#l) #op (#r) }
         })
@@ -328,6 +344,7 @@ pub(super) fn build_kv_compare_predicate(comps: &[ComparisonExprArgument]) -> Op
 /// Returns None when there are no comparisons.
 pub(super) fn build_join_compare_predicate(
     comps: &[ComparisonExprArgument],
+    string_intern: bool,
 ) -> Option<TokenStream> {
     if comps.is_empty() {
         return None;
@@ -335,8 +352,8 @@ pub(super) fn build_join_compare_predicate(
     let parts: Vec<TokenStream> = comps
         .iter()
         .map(|c| {
-            let l = build_join_args_arithmetic_expr(c.left());
-            let r = build_join_args_arithmetic_expr(c.right());
+            let l = build_join_args_arithmetic_expr(c.left(), string_intern);
+            let r = build_join_args_arithmetic_expr(c.right(), string_intern);
             let op = comparison_op_tokens(c.operator());
             quote! { (#l) #op (#r) }
         })
@@ -350,6 +367,7 @@ pub(super) fn build_join_compare_predicate(
 pub(super) fn build_row_compare_predicate(
     comps: &[ComparisonExprArgument],
     row_fields: &[Ident],
+    string_intern: bool,
 ) -> Option<TokenStream> {
     if comps.is_empty() {
         return None;
@@ -357,8 +375,8 @@ pub(super) fn build_row_compare_predicate(
     let parts: Vec<TokenStream> = comps
         .iter()
         .map(|c| {
-            let l = build_row_args_arithmetic_expr(c.left(), row_fields);
-            let r = build_row_args_arithmetic_expr(c.right(), row_fields);
+            let l = build_row_args_arithmetic_expr(c.left(), row_fields, string_intern);
+            let r = build_row_args_arithmetic_expr(c.right(), row_fields, string_intern);
             let op = comparison_op_tokens(c.operator());
             quote! { #l #op #r }
         })
@@ -372,14 +390,17 @@ pub(super) fn build_row_compare_predicate(
 // ==================================================
 
 /// Build predicate for KV constraints (const eq and var eq). Returns None if empty.
-pub(super) fn build_kv_constraints_predicate(constraints: &Constraints) -> Option<TokenStream> {
+pub(super) fn build_kv_constraints_predicate(
+    constraints: &Constraints,
+    string_intern: bool,
+) -> Option<TokenStream> {
     let mut parts: Vec<TokenStream> = constraints
         .constant_eq_constraints()
         .as_ref()
         .iter()
         .map(|(arg, c)| {
             let lhs = trans_arg_to_kv_expr(arg);
-            let rhs = const_to_token(c);
+            let rhs = const_to_token(c, string_intern);
             quote! { #lhs == #rhs }
         })
         .collect();
@@ -407,6 +428,7 @@ pub(super) fn build_kv_constraints_predicate(constraints: &Constraints) -> Optio
 pub(super) fn build_row_constraints_predicate(
     constraints: &Constraints,
     row_fields: &[Ident],
+    string_intern: bool,
 ) -> Option<TokenStream> {
     let mut parts: Vec<TokenStream> = constraints
         .constant_eq_constraints()
@@ -414,7 +436,7 @@ pub(super) fn build_row_constraints_predicate(
         .iter()
         .map(|(arg, c)| {
             let lhs = trans_arg_to_row_expr(arg, row_fields);
-            let rhs = const_to_token(c);
+            let rhs = const_to_token(c, string_intern);
             quote! { #lhs == #rhs }
         })
         .collect();
@@ -442,11 +464,17 @@ pub(super) fn build_row_constraints_predicate(
 // Constraint helpers
 // ==================================================
 
-fn const_to_token(constant: &ConstType) -> TokenStream {
+fn const_to_token(constant: &ConstType, string_intern: bool) -> TokenStream {
     match constant {
         ConstType::Int32(n) => quote! { #n },
         ConstType::Int64(n) => quote! { #n },
-        ConstType::Text(s) => quote! { #s.to_string() },
+        ConstType::Text(s) => {
+            if string_intern {
+                quote! { intern(#s) }
+            } else {
+                quote! { #s.to_string() }
+            }
+        }
     }
 }
 
@@ -511,7 +539,11 @@ fn arithmetic_op_tokens(op: &ArithmeticOperator) -> TokenStream {
 }
 
 // Build an arithmetic expression from a position and field identifiers.
-fn build_row_args_arithmetic_expr(expr: &ArithmeticArgument, fields: &[Ident]) -> TokenStream {
+fn build_row_args_arithmetic_expr(
+    expr: &ArithmeticArgument,
+    fields: &[Ident],
+    string_intern: bool,
+) -> TokenStream {
     let to_expr = |factor: &FactorArgument| -> TokenStream {
         match factor {
             FactorArgument::Var(trans_arg) => match trans_arg {
@@ -523,7 +555,7 @@ fn build_row_args_arithmetic_expr(expr: &ArithmeticArgument, fields: &[Ident]) -
                 }
                 _ => unreachable!("unexpected argument type in row->kv builder"),
             },
-            FactorArgument::Const(constant) => const_to_token(constant),
+            FactorArgument::Const(constant) => const_to_token(constant, string_intern),
         }
     };
 
@@ -537,7 +569,7 @@ fn build_row_args_arithmetic_expr(expr: &ArithmeticArgument, fields: &[Ident]) -
 }
 
 // Build an arithmetic expression from a position.
-fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
+fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument, string_intern: bool) -> TokenStream {
     let to_expr = |factor: &FactorArgument| -> TokenStream {
         match factor {
             FactorArgument::Var(trans_arg) => match trans_arg {
@@ -558,7 +590,7 @@ fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
                     }
                 }
             },
-            FactorArgument::Const(constant) => const_to_token(constant),
+            FactorArgument::Const(constant) => const_to_token(constant, string_intern),
         }
     };
 
@@ -572,7 +604,7 @@ fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
 }
 
 // Build an arithmetic expression from a position.
-fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
+fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument, string_intern: bool) -> TokenStream {
     // Build the initial factor
     let init_token = match expr.init() {
         FactorArgument::Var(trans_arg) => match trans_arg {
@@ -587,7 +619,7 @@ fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
             }
             _ => unreachable!("unexpected argument type in join->kv value transformation"),
         },
-        FactorArgument::Const(constant) => const_to_token(constant),
+        FactorArgument::Const(constant) => const_to_token(constant, string_intern),
     };
 
     // If no operations, return just the initial factor
@@ -611,7 +643,7 @@ fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument) -> TokenStream {
                 }
                 _ => unreachable!("unexpected argument type in join->kv value transformation"),
             },
-            FactorArgument::Const(constant) => const_to_token(constant),
+            FactorArgument::Const(constant) => const_to_token(constant, string_intern),
         };
 
         let op_token = arithmetic_op_tokens(op);

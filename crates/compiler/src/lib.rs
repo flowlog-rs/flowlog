@@ -587,8 +587,19 @@ impl Compiler {
             }
 
             if idb.output() {
+                // Mark resolve needed if this output IDB has string columns.
+                if idb.data_type().iter().any(|dt| *dt == DataType::String) {
+                    self.imports.mark_string_resolve();
+                }
+
                 if self.config.output_to_stdout() {
-                    inspect_stmts.push(self.gen_print_inspector(&var, name, idb.arity(), profiler));
+                    inspect_stmts.push(self.gen_print_inspector(
+                        &var,
+                        name,
+                        idb.arity(),
+                        &idb.data_type(),
+                        profiler,
+                    ));
                 } else {
                     let parent_dir = self.config.output_dir().expect(
                         "output directory must be provided when writing IDB output to files",
@@ -599,6 +610,7 @@ impl Compiler {
                         name,
                         parent_dir,
                         idb.arity(),
+                        &idb.data_type(),
                         profiler,
                     ));
                     merge_stmts.push(self.gen_merge_partitions(name, parent_dir));
