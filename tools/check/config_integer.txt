@@ -1,0 +1,36 @@
+# Integer-only benchmarks (no --str-intern needed)
+
+# Graph analysis
+graph_analysis/tc.dl=G5K-0.001
+graph_analysis/tc.dl=G10K-0.001
+graph_analysis/sg.dl=G5K-0.001
+graph_analysis/sg.dl=G10K-0.001
+graph_analysis/reach.dl=livejournal
+graph_analysis/reach.dl=orkut
+graph_analysis/reach.dl=twitter
+graph_analysis/cc.dl=livejournal
+graph_analysis/bipartite.dl=mind
+graph_analysis/bipartite.dl=netflix
+graph_analysis/dyck.dl=kernel
+graph_analysis/dyck.dl=postgre
+
+# Knowledge reasoning
+knowledge_reasoning/crdt.dl=crdt
+knowledge_reasoning/galen.dl=galen
+
+# Program analysis (integer-typed)
+program_analysis/andersen.dl=medium
+program_analysis/andersen.dl=large
+program_analysis/cspa.dl=cspa-httpd
+program_analysis/cspa.dl=cspa-linux
+program_analysis/cspa.dl=cspa-postgresql
+program_analysis/csda.dl=csda-httpd
+program_analysis/csda.dl=csda-linux
+program_analysis/csda.dl=csda-postgresql
+program_analysis/batik.dl=batik
+program_analysis/biojava.dl=biojava
+program_analysis/eclipse.dl=eclipse
+program_analysis/xalan.dl=xalan
+program_analysis/cvc5.dl=cvc5
+program_analysis/z3.dl=z3
+program_analysis/zxing.dl=zxing
