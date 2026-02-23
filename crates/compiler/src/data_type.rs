@@ -9,7 +9,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use super::Compiler;
-use parser::{ConstType, DataType};
+use parser::{ArithmeticOperator, ConstType, DataType};
 use planner::{ArithmeticArgument, FactorArgument, TransformationArgument, TransformationFlow};
 
 // ============================================================================
@@ -142,7 +142,7 @@ impl Compiler {
         }
 
         // Remaining factors must match.
-        for (_op, factor) in &expr.rest {
+        for (op, factor) in &expr.rest {
             if let Some(dt) = type_of_factor(factor, left_type, right_type) {
                 match inferred {
                     None => inferred = Some(dt),
@@ -150,6 +150,23 @@ impl Compiler {
                         existing == dt,
                         "Compiler error: mixed data types in arithmetic expression: {:?} vs {:?}",
                         existing,
+                        dt
+                    ),
+                }
+            }
+
+            // Validate operator-type compatibility.
+            // For now we only have one string operator (`cat`), so we can just check if the inferred type is string or not.
+            if let Some(dt) = inferred {
+                match dt {
+                    DataType::String => assert!(
+                        matches!(op, ArithmeticOperator::Cat),
+                        "Compiler error: arithmetic operator {:?} is not allowed on string type, use 'cat'",
+                        op
+                    ),
+                    DataType::Int32 | DataType::Int64 => assert!(
+                        !matches!(op, ArithmeticOperator::Cat),
+                        "Compiler error: 'cat' operator is not allowed on integer type {:?}",
                         dt
                     ),
                 }

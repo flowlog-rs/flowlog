@@ -2,6 +2,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::Index;
 
+use super::Compiler;
 use parser::{ArithmeticOperator, ComparisonOperator, ConstType};
 use planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
@@ -58,56 +59,61 @@ pub(super) fn row_pattern_and_fields(
 // Tuple builder utilities
 // ==================================================
 
-/// Row -> KV (keys/values): build from row fields by index.
-///
-/// Shape policy (tuple-ified):
-/// - 0 parts => ()
-/// - 1 part  => (x,)  // note the trailing comma: (x) is just x, not a tuple
-/// - n parts => (x, y, ...)
-pub(super) fn build_key_val_from_row_args(
-    args: &[ArithmeticArgument],
-    fields: &[Ident],
-    string_intern: bool,
-) -> TokenStream {
-    let parts: Vec<TokenStream> = args
-        .iter()
-        .map(|arg| build_row_args_arithmetic_expr(arg, fields, string_intern))
-        .collect();
-    pack_as_tuple(parts)
-}
+impl Compiler {
+    /// Row -> KV (keys/values): build from row fields by index.
+    ///
+    /// Shape policy (tuple-ified):
+    /// - 0 parts => ()
+    /// - 1 part  => (x,)  // note the trailing comma: (x) is just x, not a tuple
+    /// - n parts => (x, y, ...)
+    pub(super) fn build_key_val_from_row_args(
+        &mut self,
+        args: &[ArithmeticArgument],
+        fields: &[Ident],
+        string_intern: bool,
+    ) -> TokenStream {
+        let parts: Vec<TokenStream> = args
+            .iter()
+            .map(|arg| self.build_row_args_arithmetic_expr(arg, fields, string_intern))
+            .collect();
+        pack_as_tuple(parts)
+    }
 
-/// KV -> KV (keys/values): build from current (k, v) by index.
-///
-/// Shape policy (tuple-ified like row builder):
-/// - 0 parts => ()
-/// - 1 part  => (x,)
-/// - n parts => (x, y, ...)
-pub(super) fn build_key_val_from_kv_args(
-    args: &[ArithmeticArgument],
-    string_intern: bool,
-) -> TokenStream {
-    let parts: Vec<TokenStream> = args
-        .iter()
-        .map(|a| build_kv_args_arithmetic_expr(a, string_intern))
-        .collect();
-    pack_as_tuple(parts)
-}
+    /// KV -> KV (keys/values): build from current (k, v) by index.
+    ///
+    /// Shape policy (tuple-ified like row builder):
+    /// - 0 parts => ()
+    /// - 1 part  => (x,)
+    /// - n parts => (x, y, ...)
+    pub(super) fn build_key_val_from_kv_args(
+        &mut self,
+        args: &[ArithmeticArgument],
+        string_intern: bool,
+    ) -> TokenStream {
+        let parts: Vec<TokenStream> = args
+            .iter()
+            .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern))
+            .collect();
+        pack_as_tuple(parts)
+    }
 
-/// Join -> KV (keys/values): use k.#, lv.#, rv.# as requested.
-///
-/// Shape policy (tuple-ified like row builder):
-/// - 0 parts => ()
-/// - 1 part  => (x,)
-/// - n parts => (x, y, ...)
-pub(super) fn build_key_val_from_join_args(
-    args: &[ArithmeticArgument],
-    string_intern: bool,
-) -> TokenStream {
-    let parts: Vec<TokenStream> = args
-        .iter()
-        .map(|a| build_join_args_arithmetic_expr(a, string_intern))
-        .collect();
-    pack_as_tuple(parts)
+    /// Join -> KV (keys/values): use k.#, lv.#, rv.# as requested.
+    ///
+    /// Shape policy (tuple-ified like row builder):
+    /// - 0 parts => ()
+    /// - 1 part  => (x,)
+    /// - n parts => (x, y, ...)
+    pub(super) fn build_key_val_from_join_args(
+        &mut self,
+        args: &[ArithmeticArgument],
+        string_intern: bool,
+    ) -> TokenStream {
+        let parts: Vec<TokenStream> = args
+            .iter()
+            .map(|a| self.build_join_args_arithmetic_expr(a, string_intern))
+            .collect();
+        pack_as_tuple(parts)
+    }
 }
 
 // ==================================================
@@ -318,71 +324,76 @@ fn comparison_op_tokens(op: &ComparisonOperator) -> TokenStream {
     }
 }
 
-/// Build a combined predicate for KV-based closures from comparison expressions.
-/// Returns None when there are no comparisons.
-pub(super) fn build_kv_compare_predicate(
-    comps: &[ComparisonExprArgument],
-    string_intern: bool,
-) -> Option<TokenStream> {
-    if comps.is_empty() {
-        return None;
+impl Compiler {
+    /// Build a combined predicate for KV-based closures from comparison expressions.
+    /// Returns None when there are no comparisons.
+    pub(super) fn build_kv_compare_predicate(
+        &mut self,
+        comps: &[ComparisonExprArgument],
+        string_intern: bool,
+    ) -> Option<TokenStream> {
+        if comps.is_empty() {
+            return None;
+        }
+        let parts: Vec<TokenStream> = comps
+            .iter()
+            .map(|c| {
+                let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern);
+                let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern);
+                let op = comparison_op_tokens(c.operator());
+                quote! { (#l) #op (#r) }
+            })
+            .collect();
+
+        Some(quote! { #( #parts )&&* })
     }
-    let parts: Vec<TokenStream> = comps
-        .iter()
-        .map(|c| {
-            let l = build_kv_args_arithmetic_expr(c.left(), string_intern);
-            let r = build_kv_args_arithmetic_expr(c.right(), string_intern);
-            let op = comparison_op_tokens(c.operator());
-            quote! { (#l) #op (#r) }
-        })
-        .collect();
 
-    Some(quote! { #( #parts )&&* })
-}
+    /// Build a combined predicate for join-core closures (k, lv, rv) from comparison expressions.
+    /// Returns None when there are no comparisons.
+    pub(super) fn build_join_compare_predicate(
+        &mut self,
+        comps: &[ComparisonExprArgument],
+        string_intern: bool,
+    ) -> Option<TokenStream> {
+        if comps.is_empty() {
+            return None;
+        }
+        let parts: Vec<TokenStream> = comps
+            .iter()
+            .map(|c| {
+                let l = self.build_join_args_arithmetic_expr(c.left(), string_intern);
+                let r = self.build_join_args_arithmetic_expr(c.right(), string_intern);
+                let op = comparison_op_tokens(c.operator());
+                quote! { (#l) #op (#r) }
+            })
+            .collect();
 
-/// Build a combined predicate for join-core closures (k, lv, rv) from comparison expressions.
-/// Returns None when there are no comparisons.
-pub(super) fn build_join_compare_predicate(
-    comps: &[ComparisonExprArgument],
-    string_intern: bool,
-) -> Option<TokenStream> {
-    if comps.is_empty() {
-        return None;
+        Some(quote! { #( #parts )&&* })
     }
-    let parts: Vec<TokenStream> = comps
-        .iter()
-        .map(|c| {
-            let l = build_join_args_arithmetic_expr(c.left(), string_intern);
-            let r = build_join_args_arithmetic_expr(c.right(), string_intern);
-            let op = comparison_op_tokens(c.operator());
-            quote! { (#l) #op (#r) }
-        })
-        .collect();
 
-    Some(quote! { #( #parts )&&* })
-}
+    /// Build a combined predicate for row-based closures from comparison expressions.
+    /// Returns None when there are no comparisons.
+    pub(super) fn build_row_compare_predicate(
+        &mut self,
+        comps: &[ComparisonExprArgument],
+        row_fields: &[Ident],
+        string_intern: bool,
+    ) -> Option<TokenStream> {
+        if comps.is_empty() {
+            return None;
+        }
+        let parts: Vec<TokenStream> = comps
+            .iter()
+            .map(|c| {
+                let l = self.build_row_args_arithmetic_expr(c.left(), row_fields, string_intern);
+                let r = self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern);
+                let op = comparison_op_tokens(c.operator());
+                quote! { #l #op #r }
+            })
+            .collect();
 
-/// Build a combined predicate for row-based closures from comparison expressions.
-/// Returns None when there are no comparisons.
-pub(super) fn build_row_compare_predicate(
-    comps: &[ComparisonExprArgument],
-    row_fields: &[Ident],
-    string_intern: bool,
-) -> Option<TokenStream> {
-    if comps.is_empty() {
-        return None;
+        Some(quote! { #( #parts )&&* })
     }
-    let parts: Vec<TokenStream> = comps
-        .iter()
-        .map(|c| {
-            let l = build_row_args_arithmetic_expr(c.left(), row_fields, string_intern);
-            let r = build_row_args_arithmetic_expr(c.right(), row_fields, string_intern);
-            let op = comparison_op_tokens(c.operator());
-            quote! { #l #op #r }
-        })
-        .collect();
-
-    Some(quote! { #( #parts )&&* })
 }
 
 // ==================================================
@@ -528,86 +539,143 @@ pub(super) fn combine_predicates(
 // ==================================================
 // Arithmetic expression helpers
 // ==================================================
-fn arithmetic_op_tokens(op: &ArithmeticOperator) -> TokenStream {
+fn numeric_arithmetic_op_tokens(op: &ArithmeticOperator) -> TokenStream {
     match op {
         ArithmeticOperator::Plus => quote! { + },
         ArithmeticOperator::Minus => quote! { - },
         ArithmeticOperator::Multiply => quote! { * },
         ArithmeticOperator::Divide => quote! { / },
         ArithmeticOperator::Modulo => quote! { % },
+        _ => {
+            unreachable!(
+                "Compiler error: string operator {} found in numeric arithmetic expression",
+                op
+            )
+        }
     }
 }
 
-// Build an arithmetic expression from a position and field identifiers.
-fn build_row_args_arithmetic_expr(
-    expr: &ArithmeticArgument,
-    fields: &[Ident],
-    string_intern: bool,
-) -> TokenStream {
-    let to_expr = |factor: &FactorArgument| -> TokenStream {
-        match factor {
-            FactorArgument::Var(trans_arg) => match trans_arg {
-                TransformationArgument::KV((_, idx)) => {
-                    let ident = fields
-                        .get(*idx)
-                        .expect("row index out of bounds in row->kv builder");
-                    quote! { #ident }
-                }
-                _ => unreachable!("unexpected argument type in row->kv builder"),
-            },
-            FactorArgument::Const(constant) => const_to_token(constant, string_intern),
-        }
-    };
-
-    expr.rest()
-        .iter()
-        .fold(to_expr(expr.init()), |ts, (op, factor)| {
-            let op_token = arithmetic_op_tokens(op);
-            let factor_token = to_expr(factor);
-            quote! { ( #ts #op_token #factor_token ) }
-        })
+/// Build a batched `cat` (string concatenation) from a list of display-ready
+/// factor token streams.  Every factor must already expand to something that
+/// implements `Display` (i.e. `&str` / `String`, *not* a raw `Spur`).
+///
+/// When `string_intern` is true the result is re-interned.
+fn build_cat_batch(factors: Vec<TokenStream>, string_intern: bool) -> TokenStream {
+    debug_assert!(factors.len() >= 2, "cat requires at least 2 factors");
+    let fmt_str = "{}".repeat(factors.len());
+    if string_intern {
+        quote! { intern(&format!(#fmt_str, #(#factors),*)) }
+    } else {
+        quote! { format!(#fmt_str, #(#factors),*) }
+    }
 }
 
-// Build an arithmetic expression from a position.
-fn build_kv_args_arithmetic_expr(expr: &ArithmeticArgument, string_intern: bool) -> TokenStream {
-    let to_expr = |factor: &FactorArgument| -> TokenStream {
-        match factor {
-            FactorArgument::Var(trans_arg) => match trans_arg {
-                TransformationArgument::KV((is_key, idx)) => {
-                    let i = Index::from(*idx);
-                    if *is_key {
-                        quote! { k.#i }
-                    } else {
-                        quote! { v.#i }
+/// Generic arithmetic expression builder.
+///
+/// The only thing that varies across row / kv / join contexts is how a
+/// `TransformationArgument` is lowered to a `TokenStream`.
+impl Compiler {
+    fn build_arithmetic_expr(
+        &mut self,
+        expr: &ArithmeticArgument,
+        string_intern: bool,
+        resolve_var: impl Fn(&TransformationArgument) -> TokenStream,
+    ) -> TokenStream {
+        let to_token = |factor: &FactorArgument| -> TokenStream {
+            match factor {
+                FactorArgument::Var(arg) => resolve_var(arg),
+                FactorArgument::Const(c) => const_to_token(c, string_intern),
+            }
+        };
+
+        // Type system guarantees: if any op is Cat, all ops are Cat (string expr).
+        // Batch all factors into a single format! call.
+        if expr
+            .rest()
+            .first()
+            .map_or(false, |(op, _)| matches!(op, ArithmeticOperator::Cat))
+        {
+            // For cat we need display-ready tokens.  Variable references that are
+            // `Spur` values must be resolved first; string literal constants are
+            // used as-is (no pointless intern-then-resolve round-trip).
+            let mut to_display = |factor: &FactorArgument| -> TokenStream {
+                match factor {
+                    FactorArgument::Var(arg) => {
+                        let var_token = resolve_var(arg);
+                        if string_intern {
+                            self.imports.mark_string_resolve();
+                            quote! { resolve(#var_token) }
+                        } else {
+                            var_token
+                        }
                     }
+                    FactorArgument::Const(c) => match c {
+                        // String literals are already displayable – emit them
+                        // directly without interning first.
+                        ConstType::Text(s) => quote! { #s },
+                        _ => const_to_token(c, string_intern),
+                    },
                 }
-                TransformationArgument::Jn((_, is_key, idx)) => {
-                    let i = Index::from(*idx);
-                    if *is_key {
-                        quote! { k.#i }
-                    } else {
-                        quote! { v.#i }
-                    }
-                }
-            },
-            FactorArgument::Const(constant) => const_to_token(constant, string_intern),
+            };
+
+            let mut factors = vec![to_display(expr.init())];
+            for (_, factor) in expr.rest() {
+                factors.push(to_display(factor));
+            }
+            return build_cat_batch(factors, string_intern);
         }
-    };
 
-    expr.rest()
-        .iter()
-        .fold(to_expr(expr.init()), |ts, (op, factor)| {
-            let op_token = arithmetic_op_tokens(op);
-            let factor_token = to_expr(factor);
-            quote! { ( #ts #op_token #factor_token ) }
+        // Numeric fold: left-to-right with parentheses.
+        expr.rest()
+            .iter()
+            .fold(to_token(expr.init()), |ts, (op, factor)| {
+                let op_token = numeric_arithmetic_op_tokens(op);
+                let factor_token = to_token(factor);
+                quote! { ( #ts #op_token #factor_token ) }
+            })
+    }
+
+    fn build_row_args_arithmetic_expr(
+        &mut self,
+        expr: &ArithmeticArgument,
+        fields: &[Ident],
+        string_intern: bool,
+    ) -> TokenStream {
+        self.build_arithmetic_expr(expr, string_intern, |arg| match arg {
+            TransformationArgument::KV((_, idx)) => {
+                let ident = fields
+                    .get(*idx)
+                    .expect("row index out of bounds in row builder");
+                quote! { #ident }
+            }
+            _ => unreachable!("unexpected argument type in row builder"),
         })
-}
+    }
 
-// Build an arithmetic expression from a position.
-fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument, string_intern: bool) -> TokenStream {
-    // Build the initial factor
-    let init_token = match expr.init() {
-        FactorArgument::Var(trans_arg) => match trans_arg {
+    fn build_kv_args_arithmetic_expr(
+        &mut self,
+        expr: &ArithmeticArgument,
+        string_intern: bool,
+    ) -> TokenStream {
+        self.build_arithmetic_expr(expr, string_intern, |arg| match arg {
+            TransformationArgument::KV((is_key, idx))
+            | TransformationArgument::Jn((_, is_key, idx)) => {
+                let i = Index::from(*idx);
+                if *is_key {
+                    quote! { k.#i }
+                } else {
+                    quote! { v.#i }
+                }
+            }
+        })
+    }
+
+    fn build_join_args_arithmetic_expr(
+        &mut self,
+        expr: &ArithmeticArgument,
+        string_intern: bool,
+    ) -> TokenStream {
+        self.build_arithmetic_expr(expr, string_intern, |arg| match arg {
             TransformationArgument::Jn((is_left, is_key, idx)) => {
                 if *is_key {
                     proj_tuple_field("k", *idx)
@@ -617,42 +685,9 @@ fn build_join_args_arithmetic_expr(expr: &ArithmeticArgument, string_intern: boo
                     proj_tuple_field("rv", *idx)
                 }
             }
-            _ => unreachable!("unexpected argument type in join->kv value transformation"),
-        },
-        FactorArgument::Const(constant) => const_to_token(constant, string_intern),
-    };
-
-    // If no operations, return just the initial factor
-    if expr.rest().is_empty() {
-        return init_token;
+            _ => unreachable!("unexpected argument type in join builder"),
+        })
     }
-
-    // Build the full expression with proper left-to-right parentheses
-    let mut expr_token = init_token;
-    for (op, factor) in expr.rest() {
-        let factor_token = match factor {
-            FactorArgument::Var(trans_arg) => match trans_arg {
-                TransformationArgument::Jn((is_left, is_key, idx)) => {
-                    if *is_key {
-                        proj_tuple_field("k", *idx)
-                    } else if *is_left {
-                        proj_tuple_field("lv", *idx)
-                    } else {
-                        proj_tuple_field("rv", *idx)
-                    }
-                }
-                _ => unreachable!("unexpected argument type in join->kv value transformation"),
-            },
-            FactorArgument::Const(constant) => const_to_token(constant, string_intern),
-        };
-
-        let op_token = arithmetic_op_tokens(op);
-
-        // Wrap in parentheses for left-to-right evaluation: (prev_result op factor)
-        expr_token = quote! { ( #expr_token #op_token #factor_token ) };
-    }
-
-    expr_token
 }
 
 /// Project a field from a tuple by index.

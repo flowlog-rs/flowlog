@@ -129,7 +129,8 @@ arithmetic_op = {
     minus |   // -
     times |   // *
     divide |  // /
-    modulo    // %
+    modulo |  // %
+    cat       // string concatenation
 }
 
 // Individual arithmetic operators
@@ -138,6 +139,7 @@ minus = { "-" }
 times = { "*" }
 divide = { "/" }
 modulo = { "%" }
+cat = { "cat" }
 
 // =============================================================================
 // COMPARISON EXPRESSIONS  

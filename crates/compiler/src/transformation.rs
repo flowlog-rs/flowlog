@@ -11,9 +11,7 @@ use std::collections::HashMap;
 use profiler::{with_profiler, Profiler};
 
 use super::arg::{
-    build_join_compare_predicate, build_key_val_from_join_args, build_key_val_from_kv_args,
-    build_key_val_from_row_args, build_kv_compare_predicate, build_kv_constraints_predicate,
-    build_row_compare_predicate, build_row_constraints_predicate, combine_predicates,
+    build_kv_constraints_predicate, build_row_constraints_predicate, combine_predicates,
     compute_join_param_tokens, compute_kv_param_tokens, row_pattern_and_fields,
 };
 use super::data_type::type_tokens;
@@ -77,8 +75,8 @@ impl Compiler {
 
                 // Output expression + predicates
                 let row_ty = type_tokens(&itype, si);
-                let out_val = build_key_val_from_row_args(flow.value(), &row_fields, si);
-                let cmp_pred = build_row_compare_predicate(flow.compares(), &row_fields, si);
+                let out_val = self.build_key_val_from_row_args(flow.value(), &row_fields, si);
+                let cmp_pred = self.build_row_compare_predicate(flow.compares(), &row_fields, si);
                 let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields, si);
                 let pred = combine_predicates(cmp_pred, cst_pred);
 
@@ -134,15 +132,15 @@ impl Compiler {
 
                 // Output expression + predicates
                 let row_ty = type_tokens(&itype, si);
-                let out_key = build_key_val_from_row_args(flow.key(), &row_fields, si);
-                let out_val = build_key_val_from_row_args(flow.value(), &row_fields, si);
+                let out_key = self.build_key_val_from_row_args(flow.key(), &row_fields, si);
+                let out_val = self.build_key_val_from_row_args(flow.value(), &row_fields, si);
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
                     quote! { ( #out_key, #out_val ) }
                 };
 
-                let cmp_pred = build_row_compare_predicate(flow.compares(), &row_fields, si);
+                let cmp_pred = self.build_row_compare_predicate(flow.compares(), &row_fields, si);
                 let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields, si);
                 let pred = combine_predicates(cmp_pred, cst_pred);
 
@@ -201,8 +199,8 @@ impl Compiler {
                 );
 
                 // Output value + predicates
-                let out_val = build_key_val_from_kv_args(flow.value(), si);
-                let cmp_pred = build_kv_compare_predicate(flow.compares(), si);
+                let out_val = self.build_key_val_from_kv_args(flow.value(), si);
+                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si);
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si);
                 let pred = combine_predicates(cmp_pred, cst_pred);
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
@@ -255,14 +253,14 @@ impl Compiler {
                 );
 
                 // Output expression + predicates
-                let out_key = build_key_val_from_kv_args(flow.key(), si);
-                let out_val = build_key_val_from_kv_args(flow.value(), si);
+                let out_key = self.build_key_val_from_kv_args(flow.key(), si);
+                let out_val = self.build_key_val_from_kv_args(flow.value(), si);
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
                     quote! { ( #out_key, #out_val ) }
                 };
-                let cmp_pred = build_kv_compare_predicate(flow.compares(), si);
+                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si);
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si);
                 let pred = combine_predicates(cmp_pred, cst_pred);
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
@@ -351,10 +349,10 @@ impl Compiler {
                 // Output expression + predicates
                 let (jn_k, jn_lv, jn_rv) =
                     compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
-                let out_val = build_key_val_from_join_args(flow.value(), si);
+                let out_val = self.build_key_val_from_join_args(flow.value(), si);
 
                 let join_body =
-                    if let Some(pred) = build_join_compare_predicate(flow.compares(), si) {
+                    if let Some(pred) = self.build_join_compare_predicate(flow.compares(), si) {
                         quote! { if #pred { Some( #out_val ) } else { None } }
                     } else {
                         quote! { Some( #out_val ) }
@@ -402,8 +400,8 @@ impl Compiler {
                 // Output expression + predicates
                 let (jn_k, jn_lv, jn_rv) =
                     compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
-                let out_key = build_key_val_from_join_args(flow.key(), si);
-                let out_val = build_key_val_from_join_args(flow.value(), si);
+                let out_key = self.build_key_val_from_join_args(flow.key(), si);
+                let out_val = self.build_key_val_from_join_args(flow.value(), si);
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
@@ -411,7 +409,7 @@ impl Compiler {
                 };
 
                 let join_body =
-                    if let Some(pred) = build_join_compare_predicate(flow.compares(), si) {
+                    if let Some(pred) = self.build_join_compare_predicate(flow.compares(), si) {
                         quote! { if #pred { Some( #out_expr ) } else { None } }
                     } else {
                         quote! { Some( #out_expr ) }
@@ -475,7 +473,7 @@ impl Compiler {
                 // Output expression
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
-                let out_map_value = build_key_val_from_kv_args(flow.value(), si);
+                let out_map_value = self.build_key_val_from_kv_args(flow.value(), si);
                 let dedup_call = self.dedup_collection();
 
                 quote! {
@@ -540,8 +538,8 @@ impl Compiler {
                 // Output expression
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
-                let out_map_key = build_key_val_from_kv_args(flow.key(), si);
-                let out_map_value = build_key_val_from_kv_args(flow.value(), si);
+                let out_map_key = self.build_key_val_from_kv_args(flow.key(), si);
+                let out_map_value = self.build_key_val_from_kv_args(flow.value(), si);
                 let out_map_expr = if output.is_k_only() {
                     quote! { #out_map_key }
                 } else {
