@@ -45,5 +45,5 @@ jobs:
       - name: 🏁 Run batch smoke test
         run: |
           bash tools/check/batch.sh tools/check/config_integer.txt --compile-only --sip
-          bash tools/check/batch.sh tools/check/config_string.txt --compile-only --sip --string-intern
+          bash tools/check/batch.sh tools/check/config_str.txt --compile-only --sip --string-intern
           bash tools/check/batch.sh tools/check/config_ci.txt
