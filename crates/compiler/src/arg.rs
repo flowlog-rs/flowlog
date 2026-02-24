@@ -637,7 +637,7 @@ impl Compiler {
         if expr
             .rest()
             .first()
-            .map_or(false, |(op, _)| matches!(op, ArithmeticOperator::Cat))
+            .is_some_and(|(op, _)| matches!(op, ArithmeticOperator::Cat))
         {
             // For cat we need display-ready tokens.  Variable references that are
             // `Spur` values must be resolved first; string literal constants are
@@ -740,12 +740,10 @@ impl Compiler {
                     } else {
                         quote! { k.#i }
                     }
+                } else if needs_clone {
+                    quote! { v.#i.clone() }
                 } else {
-                    if needs_clone {
-                        quote! { v.#i.clone() }
-                    } else {
-                        quote! { v.#i }
-                    }
+                    quote! { v.#i }
                 }
             }
         })

@@ -588,7 +588,7 @@ impl Compiler {
 
             if idb.output() {
                 // Mark resolve needed if this output IDB has string columns.
-                if idb.data_type().iter().any(|dt| *dt == DataType::String) {
+                if idb.data_type().contains(&DataType::String) {
                     self.imports.mark_string_resolve();
                 }
 

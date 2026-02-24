@@ -39,7 +39,7 @@ impl Compiler {
         if self.config.str_intern_enabled()
             && edbs
                 .iter()
-                .any(|rel| rel.data_type().iter().any(|dt| *dt == DataType::String))
+                .any(|rel| rel.data_type().contains(&DataType::String))
         {
             self.imports.mark_string_intern();
         }
