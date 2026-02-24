@@ -1,5 +1,7 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use syn::Index;
 
 use super::Compiler;
@@ -56,6 +58,44 @@ pub(super) fn row_pattern_and_fields(
 }
 
 // ==================================================
+// Multi-use variable detection
+// ==================================================
+
+/// Count how many times each row field index appears across the given argument lists.
+/// Track remaining uses and only `.clone()` when necessary.
+pub(super) fn row_use_counts(arg_lists: &[&[ArithmeticArgument]]) -> HashMap<usize, usize> {
+    arg_lists
+        .iter()
+        .flat_map(|args| args.iter())
+        .flat_map(|arg| arg.transformation_arguments())
+        .filter_map(|ta| match ta {
+            TransformationArgument::KV((_, idx)) => Some(*idx),
+            _ => None,
+        })
+        .fold(HashMap::new(), |mut acc, idx| {
+            *acc.entry(idx).or_insert(0) += 1;
+            acc
+        })
+}
+
+/// Count how many times each (is_key, idx) pair appears across the given argument lists.
+/// Track remaining uses and only `.clone()` when necessary.
+pub(super) fn kv_use_counts(arg_lists: &[&[ArithmeticArgument]]) -> HashMap<(bool, usize), usize> {
+    arg_lists
+        .iter()
+        .flat_map(|args| args.iter())
+        .flat_map(|arg| arg.transformation_arguments())
+        .map(|ta| match ta {
+            TransformationArgument::KV((is_key, idx))
+            | TransformationArgument::Jn((_, is_key, idx)) => (*is_key, *idx),
+        })
+        .fold(HashMap::new(), |mut acc, key| {
+            *acc.entry(key).or_insert(0) += 1;
+            acc
+        })
+}
+
+// ==================================================
 // Tuple builder utilities
 // ==================================================
 
@@ -71,10 +111,11 @@ impl Compiler {
         args: &[ArithmeticArgument],
         fields: &[Ident],
         string_intern: bool,
+        remaining: Option<&RefCell<HashMap<usize, usize>>>,
     ) -> TokenStream {
         let parts: Vec<TokenStream> = args
             .iter()
-            .map(|arg| self.build_row_args_arithmetic_expr(arg, fields, string_intern))
+            .map(|arg| self.build_row_args_arithmetic_expr(arg, fields, string_intern, remaining))
             .collect();
         pack_as_tuple(parts)
     }
@@ -89,10 +130,11 @@ impl Compiler {
         &mut self,
         args: &[ArithmeticArgument],
         string_intern: bool,
+        remaining: Option<&RefCell<HashMap<(bool, usize), usize>>>,
     ) -> TokenStream {
         let parts: Vec<TokenStream> = args
             .iter()
-            .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern))
+            .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern, remaining))
             .collect();
         pack_as_tuple(parts)
     }
@@ -338,8 +380,8 @@ impl Compiler {
         let parts: Vec<TokenStream> = comps
             .iter()
             .map(|c| {
-                let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern);
-                let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern);
+                let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern, None);
+                let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern, None);
                 let op = comparison_op_tokens(c.operator());
                 quote! { (#l) #op (#r) }
             })
@@ -385,8 +427,10 @@ impl Compiler {
         let parts: Vec<TokenStream> = comps
             .iter()
             .map(|c| {
-                let l = self.build_row_args_arithmetic_expr(c.left(), row_fields, string_intern);
-                let r = self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern);
+                let l =
+                    self.build_row_args_arithmetic_expr(c.left(), row_fields, string_intern, None);
+                let r =
+                    self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern, None);
                 let op = comparison_op_tokens(c.operator());
                 quote! { #l #op #r }
             })
@@ -640,15 +684,28 @@ impl Compiler {
         expr: &ArithmeticArgument,
         fields: &[Ident],
         string_intern: bool,
+        remaining: Option<&RefCell<HashMap<usize, usize>>>,
     ) -> TokenStream {
         self.build_arithmetic_expr(expr, string_intern, |arg| match arg {
             TransformationArgument::KV((_, idx)) => {
                 let ident = fields
                     .get(*idx)
-                    .expect("row index out of bounds in row builder");
+                    .expect("Compiler error: row index out of bounds in row builder");
+                // When tracking remaining uses, clone only when there are future uses.
+                // The last use just moves the original value.
+                // When not tracking (None), never clone.
+                if let Some(rem) = remaining {
+                    let mut map = rem.borrow_mut();
+                    if let Some(count) = map.get_mut(idx) {
+                        *count -= 1;
+                        if *count > 0 {
+                            return quote! { #ident.clone() };
+                        }
+                    }
+                }
                 quote! { #ident }
             }
-            _ => unreachable!("unexpected argument type in row builder"),
+            _ => unreachable!("Compiler error: unexpected argument type in row builder"),
         })
     }
 
@@ -656,15 +713,39 @@ impl Compiler {
         &mut self,
         expr: &ArithmeticArgument,
         string_intern: bool,
+        remaining: Option<&RefCell<HashMap<(bool, usize), usize>>>,
     ) -> TokenStream {
         self.build_arithmetic_expr(expr, string_intern, |arg| match arg {
             TransformationArgument::KV((is_key, idx))
             | TransformationArgument::Jn((_, is_key, idx)) => {
                 let i = Index::from(*idx);
-                if *is_key {
-                    quote! { k.#i }
+                // When tracking remaining uses, clone only when there are future uses.
+                // The last use just moves the original value.
+                // When not tracking (None), never clone.
+                let needs_clone = if let Some(rem) = remaining {
+                    let key = (*is_key, *idx);
+                    let mut map = rem.borrow_mut();
+                    if let Some(count) = map.get_mut(&key) {
+                        *count -= 1;
+                        *count > 0
+                    } else {
+                        false
+                    }
                 } else {
-                    quote! { v.#i }
+                    false
+                };
+                if *is_key {
+                    if needs_clone {
+                        quote! { k.#i.clone() }
+                    } else {
+                        quote! { k.#i }
+                    }
+                } else {
+                    if needs_clone {
+                        quote! { v.#i.clone() }
+                    } else {
+                        quote! { v.#i }
+                    }
                 }
             }
         })
@@ -677,26 +758,20 @@ impl Compiler {
     ) -> TokenStream {
         self.build_arithmetic_expr(expr, string_intern, |arg| match arg {
             TransformationArgument::Jn((is_left, is_key, idx)) => {
-                if *is_key {
-                    proj_tuple_field("k", *idx)
+                let i = Index::from(*idx);
+                // `k`, `lv`, `rv` are references in join_core; clone to get owned values.
+                let ident = if *is_key {
+                    Ident::new("k", Span::call_site())
                 } else if *is_left {
-                    proj_tuple_field("lv", *idx)
+                    Ident::new("lv", Span::call_site())
                 } else {
-                    proj_tuple_field("rv", *idx)
-                }
+                    Ident::new("rv", Span::call_site())
+                };
+                quote! { #ident.#i.clone() }
             }
             _ => unreachable!("unexpected argument type in join builder"),
         })
     }
-}
-
-/// Project a field from a tuple by index.
-fn proj_tuple_field(base: &str, idx: usize) -> TokenStream {
-    let i = Index::from(idx);
-    let ident = Ident::new(base, Span::call_site());
-    // `lv` and `rv` are references to tuple values in join_core; clone to get owned field
-    // values regardless of whether the field is Copy (u64) or owned (String).
-    quote! { #ident.#i.clone() }
 }
 
 /// Pack parts as a tuple with correct 1-tuple syntax.

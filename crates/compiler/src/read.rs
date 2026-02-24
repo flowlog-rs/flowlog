@@ -178,8 +178,13 @@ impl Compiler {
             .unwrap_or_else(|| file_name);
 
         // Delimiter is expected to be a 1-byte separator (e.g., ',' or '\t').
-        // We materialize it once to avoid repeatedly indexing `.as_bytes()[0]`.
-        let delimiter = rel.input_delimiter();
+        // Unescape common escape sequences so that e.g. `\t` in the .dl file
+        // produces an actual tab byte (0x09) in the generated Rust code.
+        let delimiter = match rel.input_delimiter() {
+            "\\t" => "\t",
+            "\\n" => "\n",
+            other => other,
+        };
 
         let data_types = rel.data_type();
         debug_assert_eq!(

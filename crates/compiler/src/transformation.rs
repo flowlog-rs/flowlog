@@ -6,13 +6,15 @@
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use profiler::{with_profiler, Profiler};
 
 use super::arg::{
     build_kv_constraints_predicate, build_row_constraints_predicate, combine_predicates,
-    compute_join_param_tokens, compute_kv_param_tokens, row_pattern_and_fields,
+    compute_join_param_tokens, compute_kv_param_tokens, kv_use_counts, row_pattern_and_fields,
+    row_use_counts,
 };
 use super::data_type::type_tokens;
 use super::ident::find_local_ident;
@@ -75,7 +77,13 @@ impl Compiler {
 
                 // Output expression + predicates
                 let row_ty = type_tokens(&itype, si);
-                let out_val = self.build_key_val_from_row_args(flow.value(), &row_fields, si);
+                let remaining = RefCell::new(row_use_counts(&[flow.value()]));
+                let out_val = self.build_key_val_from_row_args(
+                    flow.value(),
+                    &row_fields,
+                    si,
+                    Some(&remaining),
+                );
                 let cmp_pred = self.build_row_compare_predicate(flow.compares(), &row_fields, si);
                 let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields, si);
                 let pred = combine_predicates(cmp_pred, cst_pred);
@@ -132,8 +140,15 @@ impl Compiler {
 
                 // Output expression + predicates
                 let row_ty = type_tokens(&itype, si);
-                let out_key = self.build_key_val_from_row_args(flow.key(), &row_fields, si);
-                let out_val = self.build_key_val_from_row_args(flow.value(), &row_fields, si);
+                let remaining = RefCell::new(row_use_counts(&[flow.key(), flow.value()]));
+                let out_key =
+                    self.build_key_val_from_row_args(flow.key(), &row_fields, si, Some(&remaining));
+                let out_val = self.build_key_val_from_row_args(
+                    flow.value(),
+                    &row_fields,
+                    si,
+                    Some(&remaining),
+                );
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
@@ -199,7 +214,8 @@ impl Compiler {
                 );
 
                 // Output value + predicates
-                let out_val = self.build_key_val_from_kv_args(flow.value(), si);
+                let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
+                let out_val = self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si);
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si);
                 let pred = combine_predicates(cmp_pred, cst_pred);
@@ -253,8 +269,9 @@ impl Compiler {
                 );
 
                 // Output expression + predicates
-                let out_key = self.build_key_val_from_kv_args(flow.key(), si);
-                let out_val = self.build_key_val_from_kv_args(flow.value(), si);
+                let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
+                let out_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining));
+                let out_val = self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
@@ -473,7 +490,9 @@ impl Compiler {
                 // Output expression
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
-                let out_map_value = self.build_key_val_from_kv_args(flow.value(), si);
+                let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
+                let out_map_value =
+                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
                 let dedup_call = self.dedup_collection();
 
                 quote! {
@@ -538,8 +557,10 @@ impl Compiler {
                 // Output expression
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
-                let out_map_key = self.build_key_val_from_kv_args(flow.key(), si);
-                let out_map_value = self.build_key_val_from_kv_args(flow.value(), si);
+                let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
+                let out_map_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining));
+                let out_map_value =
+                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
                 let out_map_expr = if output.is_k_only() {
                     quote! { #out_map_key }
                 } else {
