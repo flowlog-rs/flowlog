@@ -50,10 +50,14 @@ pub(crate) struct ImportTracker {
     min_semiring_i32: bool,
     /// Whether MinI64 is needed (min aggregation on int64 columns).
     min_semiring_i64: bool,
+
     /// Whether string interning is needed (any relation uses string columns).
     string_intern: bool,
     /// Whether string resolve is needed (an output IDB has string columns).
     string_resolve: bool,
+
+    /// Whether memchr is needed for SIMD delimiter scanning.
+    memchr: bool,
 }
 
 impl ImportTracker {
@@ -92,6 +96,9 @@ impl ImportTracker {
         // String interning support (lasso).
         let string_intern = self.string_intern_imports();
 
+        // SIMD delimiter scanning (memchr).
+        let memchr = self.memchr_import();
+
         quote! {
             #prelude
 
@@ -103,6 +110,7 @@ impl ImportTracker {
             #allocator
 
             #string_intern
+            #memchr
 
             #diff_type
             #semiring_one
@@ -211,6 +219,16 @@ impl ImportTracker {
     /// Marks that string resolve is needed (an output IDB has string columns).
     pub(crate) fn mark_string_resolve(&mut self) {
         self.string_resolve = true;
+    }
+
+    /// Marks that memchr is needed for SIMD delimiter scanning.
+    pub(crate) fn mark_memchr(&mut self) {
+        self.memchr = true;
+    }
+
+    /// Returns whether memchr is needed.
+    pub(crate) fn needs_memchr(&self) -> bool {
+        self.memchr
     }
 
     // ---------------------------------------------------------------------
@@ -446,6 +464,14 @@ impl ImportTracker {
                 quote! { use timely::dataflow::operators::probe::Handle as ProbeHandle; }
             }
             ExecutionMode::Batch => quote! {},
+        }
+    }
+
+    fn memchr_import(&self) -> TokenStream {
+        if self.memchr {
+            quote! { use memchr::memchr_iter; }
+        } else {
+            quote! {}
         }
     }
 

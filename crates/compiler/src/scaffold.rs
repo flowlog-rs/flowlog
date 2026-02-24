@@ -107,6 +107,10 @@ impl Compiler {
             deps["differential-dataflow"] = "0.19".into();
             deps["mimalloc"] = "0.1".into();
 
+            if self.imports.needs_memchr() {
+                deps["memchr"] = "2".into();
+            }
+
             if self.imports.needs_string_intern() {
                 let mut lasso_tbl = toml_edit::InlineTable::new();
                 lasso_tbl.insert("version", "0.7".into());
