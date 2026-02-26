@@ -18,7 +18,7 @@
 .decl Var_Type(var:int32, type:int32)
 .input Var_Type(IO="file", filename="Var_Type.csv", delimiter=",")
 .decl HeapAllocation_Type(heap:int32, type:int32)
-.input HeapAllocation_Type(IO="file", filename="HeapAllocation_Type.csv", delimiter=",") // modified to be an EDB now
+.input HeapAllocation_Type(IO="file", filename="HeapAllocation_Type.csv", delimiter=",")
 
 
 // Main schema
