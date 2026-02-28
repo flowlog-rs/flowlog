@@ -23,6 +23,7 @@ pub enum AggregationOperator {
     Max,
     Count,
     Sum,
+    Avg,
 }
 
 impl fmt::Display for AggregationOperator {
@@ -32,6 +33,7 @@ impl fmt::Display for AggregationOperator {
             Self::Max => write!(f, "max"),
             Self::Count => write!(f, "count"),
             Self::Sum => write!(f, "sum"),
+            Self::Avg => write!(f, "average"),
         }
     }
 }
@@ -52,6 +54,7 @@ impl Lexeme for AggregationOperator {
             Rule::max => Self::Max,
             Rule::count => Self::Count,
             Rule::sum => Self::Sum,
+            Rule::average => Self::Avg,
             other => panic!(
                 "Parser error: unexpected aggregation operator rule: {:?}",
                 other

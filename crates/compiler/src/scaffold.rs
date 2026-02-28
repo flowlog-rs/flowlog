@@ -30,6 +30,18 @@ const MIN_SEMIRING_RS_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/templates/min_semiring_rs.tpl"
 ));
+const MAX_SEMIRING_RS_TMPL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/templates/max_semiring_rs.tpl"
+));
+const SUM_SEMIRING_RS_TMPL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/templates/sum_semiring_rs.tpl"
+));
+const AVG_SEMIRING_RS_TMPL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/templates/avg_semiring_rs.tpl"
+));
 
 // =========================================================================
 // Project File Generation
@@ -66,9 +78,9 @@ impl Compiler {
             self.write_src_relation()?;
         }
 
-        // Min semiring module (only when min aggregation is used)
-        if self.imports.needs_min_semiring() {
-            self.write_src_min_semiring()?;
+        // Semiring module (when min/max aggregation is used)
+        if self.imports.needs_semiring() {
+            self.write_src_semiring()?;
         }
 
         // Profiler logs if enabled
@@ -121,7 +133,7 @@ impl Compiler {
                 deps["lasso"] = toml_edit::value(lasso_tbl);
             }
 
-            if self.imports.needs_min_semiring() || self.imports.needs_string_intern() {
+            if self.imports.needs_semiring() || self.imports.needs_string_intern() {
                 let mut serde_tbl = toml_edit::InlineTable::new();
                 serde_tbl.insert("version", "1".into());
                 let mut features = Array::new();
@@ -222,22 +234,71 @@ impl Compiler {
         write_file(&src_dir.join("prompt.rs"), rendered.trim_start())
     }
 
-    /// Write `src/min_semiring.rs` into the generated project directory.
-    ///
-    /// Only emits `define_min!` invocations for the integer types actually used.
-    fn write_src_min_semiring(&self) -> io::Result<()> {
+    /// Write `src/XX_semiring.rs` into the
+    /// generated project directory, depending on which aggregations are used.
+    fn write_src_semiring(&self) -> io::Result<()> {
         let src_dir = self.config.executable_path().join("src");
         ensure_dir(&src_dir)?;
 
-        let mut rendered = MIN_SEMIRING_RS_TMPL.replace("\r\n", "\n");
-        if self.imports.needs_min_semiring_i32() {
-            rendered.push_str("define_min!(MinI32, i32, i32::MAX);\n");
-        }
-        if self.imports.needs_min_semiring_i64() {
-            rendered.push_str("define_min!(MinI64, i64, i64::MAX);\n");
+        let s = self.imports.semirings();
+        for (tmpl, file, mac, pfx, i32, i64, bound) in [
+            (
+                MIN_SEMIRING_RS_TMPL,
+                "min_semiring.rs",
+                "define_min",
+                "Min",
+                s.min_i32,
+                s.min_i64,
+                Some("MAX"),
+            ),
+            (
+                MAX_SEMIRING_RS_TMPL,
+                "max_semiring.rs",
+                "define_max",
+                "Max",
+                s.max_i32,
+                s.max_i64,
+                Some("MIN"),
+            ),
+            (
+                SUM_SEMIRING_RS_TMPL,
+                "sum_semiring.rs",
+                "define_sum",
+                "Sum",
+                s.sum_i32,
+                s.sum_i64,
+                None,
+            ),
+            (
+                AVG_SEMIRING_RS_TMPL,
+                "avg_semiring.rs",
+                "define_avg",
+                "Avg",
+                s.avg_i32,
+                s.avg_i64,
+                None,
+            ),
+        ] {
+            if !i32 && !i64 {
+                continue;
+            }
+            let mut rendered = tmpl.replace("\r\n", "\n");
+            if i32 {
+                match bound {
+                    Some(b) => rendered.push_str(&format!("{mac}!({pfx}I32, i32, i32::{b});\n")),
+                    None => rendered.push_str(&format!("{mac}!({pfx}I32, i32);\n")),
+                }
+            }
+            if i64 {
+                match bound {
+                    Some(b) => rendered.push_str(&format!("{mac}!({pfx}I64, i64, i64::{b});\n")),
+                    None => rendered.push_str(&format!("{mac}!({pfx}I64, i64);\n")),
+                }
+            }
+            write_file(&src_dir.join(file), rendered.trim_start())?;
         }
 
-        write_file(&src_dir.join("min_semiring.rs"), rendered.trim_start())
+        Ok(())
     }
 
     // -------------------------

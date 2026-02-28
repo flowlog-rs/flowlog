@@ -1,33 +1,31 @@
-/// Min-semiring for aggregating minimum values via differential dataflow's
+/// Avg-semiring for aggregating average values via differential dataflow's
 /// built-in consolidation and `threshold_semigroup` operator.
 ///
-/// Instead of using `reduce_core` (which maintains full value traces per key),
-/// this encodes the aggregated value into the *diff* position of the DD triple
-/// `(data, time, diff)`.  Consolidation then computes min for free via
-/// `plus_equals`, and `threshold_semigroup` emits updates only when the
-/// running minimum changes.
+/// Average is decomposed into (sum, count).  Consolidation accumulates both
+/// components via `plus_equals`, and the final value is `sum / count`.
 
 use differential_dataflow::difference::{IsZero, Monoid, Semigroup};
 use differential_dataflow::difference::Multiply;
 
 use serde::{Deserialize, Serialize};
 
-macro_rules! define_min {
-    ($name:ident, $ty:ty, $max:expr) => {
+macro_rules! define_avg {
+    ($name:ident, $ty:ty) => {
         #[derive(Copy, Debug, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
         pub struct $name {
-            pub value: $ty,
+            pub sum: $ty,
+            pub count: $ty,
         }
 
         impl $name {
             #[inline]
             pub fn new(value: $ty) -> Self {
-                $name { value }
+                $name { sum: value, count: 1 }
             }
 
             #[inline]
-            pub fn infinity() -> Self {
-                $name { value: $max }
+            pub fn avg(&self) -> $ty {
+                self.sum / self.count
             }
         }
 
@@ -41,22 +39,26 @@ macro_rules! define_min {
         impl Semigroup for $name {
             #[inline]
             fn plus_equals(&mut self, rhs: &Self) {
-                self.value = std::cmp::min(self.value, rhs.value);
+                self.sum += rhs.sum;
+                self.count += rhs.count;
             }
         }
 
         impl Monoid for $name {
             #[inline]
             fn zero() -> Self {
-                $name::infinity()
+                $name { sum: 0, count: 0 }
             }
         }
 
         impl Multiply<i64> for $name {
             type Output = $name;
             #[inline]
-            fn multiply(self, _rhs: &i64) -> Self::Output {
-                self
+            fn multiply(self, rhs: &i64) -> Self::Output {
+                $name {
+                    sum: self.sum * (*rhs as $ty),
+                    count: self.count * (*rhs as $ty),
+                }
             }
         }
     };

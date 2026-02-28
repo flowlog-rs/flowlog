@@ -16,7 +16,9 @@ use quote::{format_ident, quote};
 use tracing::trace;
 
 use crate::aggregation::{
+    aggregation_avg_optimize, aggregation_count_optimize, aggregation_max_optimize,
     aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce, aggregation_row_chop,
+    aggregation_sum_optimize,
 };
 use crate::Compiler;
 
@@ -129,19 +131,40 @@ impl Compiler {
                     .nth(*agg_pos)
                     .expect("Compiler error: aggregation position out of bounds");
 
-                // Min semiring fast path: replace reduce_core with threshold_semigroup
-                // using the Min semigroup, avoiding a second arrangement.
-                if matches!(agg_op, AggregationOperator::Min)
-                    && matches!(self.config.mode(), ExecutionMode::Batch)
-                {
-                    self.imports.mark_min_semiring(agg_type);
+                // Semiring fast path: replace reduce_core with threshold_semigroup
+                // using the appropriate semigroup, avoiding a second arrangement.
+                if matches!(self.config.mode(), ExecutionMode::Batch) {
+                    match agg_op {
+                        AggregationOperator::Min => self.imports.mark_min_semiring(agg_type),
+                        AggregationOperator::Max => self.imports.mark_max_semiring(agg_type),
+                        AggregationOperator::Sum | AggregationOperator::Count => {
+                            self.imports.mark_sum_semiring(agg_type)
+                        }
+                        AggregationOperator::Avg => self.imports.mark_avg_semiring(agg_type),
+                    }
                     self.imports.mark_threshold_total();
                     self.imports.mark_timely_map();
-                    let min_pipeline = aggregation_min_optimize(*agg_arity, *agg_pos, agg_type);
+                    let pipeline = match agg_op {
+                        AggregationOperator::Min => {
+                            aggregation_min_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Max => {
+                            aggregation_max_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Sum => {
+                            aggregation_sum_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Count => {
+                            aggregation_count_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Avg => {
+                            aggregation_avg_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                    };
                     block = quote! {
                         #block
                         let #output = #output
-                            #min_pipeline;
+                            #pipeline;
                     };
 
                     // Profiler: aggregation operator (optional)

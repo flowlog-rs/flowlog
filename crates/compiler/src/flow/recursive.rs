@@ -12,7 +12,11 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use crate::aggregation::{
-    aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce, aggregation_row_chop,
+    aggregation_avg_optimize, aggregation_avg_post_leave, aggregation_avg_pre_leave,
+    aggregation_count_optimize, aggregation_count_pre_leave, aggregation_max_optimize,
+    aggregation_max_pre_leave, aggregation_merge_kv, aggregation_min_optimize,
+    aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce,
+    aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
 use crate::ident::find_local_ident;
 use crate::Compiler;
@@ -113,8 +117,12 @@ impl Compiler {
         });
 
         // Build leave outputs for recursion.
-        let (leave_pattern, leave_stmt) =
-            self.build_leave_outputs(leave_fps, &next_bindings, profiler);
+        let (leave_pattern, leave_stmt, post_leave) = self.build_leave_outputs(
+            leave_fps,
+            &next_bindings,
+            stratum.output_to_aggregation_map(),
+            profiler,
+        );
 
         quote! {
             let #leave_pattern = scope.iterative::<Iter, _, _>(|inner| {
@@ -132,6 +140,7 @@ impl Compiler {
 
                 #leave_stmt
             });
+            #post_leave
         }
     }
 
@@ -242,19 +251,40 @@ impl Compiler {
                     .nth(*agg_pos)
                     .expect("Compiler error: aggregation position out of bounds");
 
-                // Min semiring fast path: replace reduce_core with threshold_semigroup
-                // using the Min semigroup, avoiding a second arrangement.
-                if matches!(agg_op, AggregationOperator::Min)
-                    && matches!(self.config.mode(), ExecutionMode::Batch)
-                {
-                    self.imports.mark_min_semiring(agg_type);
+                // Semiring fast path: replace reduce_core with threshold_semigroup
+                // using the appropriate semigroup, avoiding a second arrangement.
+                if matches!(self.config.mode(), ExecutionMode::Batch) {
+                    match agg_op {
+                        AggregationOperator::Min => self.imports.mark_min_semiring(agg_type),
+                        AggregationOperator::Max => self.imports.mark_max_semiring(agg_type),
+                        AggregationOperator::Sum | AggregationOperator::Count => {
+                            self.imports.mark_sum_semiring(agg_type)
+                        }
+                        AggregationOperator::Avg => self.imports.mark_avg_semiring(agg_type),
+                    }
                     self.imports.mark_threshold_total();
                     self.imports.mark_timely_map();
-                    let min_pipeline = aggregation_min_optimize(*agg_arity, *agg_pos, agg_type);
+                    let pipeline = match agg_op {
+                        AggregationOperator::Min => {
+                            aggregation_min_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Max => {
+                            aggregation_max_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Sum => {
+                            aggregation_sum_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Count => {
+                            aggregation_count_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Avg => {
+                            aggregation_avg_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                    };
                     block = quote! {
                         #block
                         let #next_ident = #next_ident
-                            #min_pipeline;
+                            #pipeline;
                     };
 
                     // Profiler: aggregation operator (optional)
@@ -303,8 +333,9 @@ impl Compiler {
         &self,
         leave_fps: &[u64],
         next: &HashMap<u64, Ident>,
+        output_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         profiler: &mut Option<Profiler>,
-    ) -> (TokenStream, TokenStream) {
+    ) -> (TokenStream, TokenStream, TokenStream) {
         // Resolve target identifiers and construct pattern.
         let targets: Vec<Ident> = leave_fps
             .iter()
@@ -323,7 +354,39 @@ impl Compiler {
                 let next_ident = next.get(fp).expect(
                     "Compiler error: leave relation missing from next bindings during recursion",
                 );
-                // Profiler: leave operator (optional)
+
+                // For min/max-aggregated relations: convert to semiring diff before leave()
+                // so cross-iteration extremum is computed by consolidation after leave.
+                if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(fp) {
+                    if matches!(self.config.mode(), ExecutionMode::Batch) {
+                        let (key_types, val_types) = self.find_global_type(*fp);
+                        let agg_type = *key_types
+                            .iter()
+                            .chain(val_types)
+                            .nth(*agg_pos)
+                            .expect("Compiler error: aggregation position out of bounds");
+                        let pre_leave = match agg_op {
+                            AggregationOperator::Min => {
+                                aggregation_min_pre_leave(*agg_arity, *agg_pos, agg_type)
+                            }
+                            AggregationOperator::Max => {
+                                aggregation_max_pre_leave(*agg_arity, *agg_pos, agg_type)
+                            }
+                            AggregationOperator::Sum => {
+                                aggregation_sum_pre_leave(*agg_arity, *agg_pos, agg_type)
+                            }
+                            AggregationOperator::Count => {
+                                aggregation_count_pre_leave(*agg_arity, *agg_pos, agg_type)
+                            }
+                            AggregationOperator::Avg => {
+                                aggregation_avg_pre_leave(*agg_arity, *agg_pos, agg_type)
+                            }
+                        };
+                        return quote! { #next_ident #pre_leave .leave() };
+                    }
+                }
+
+                // Profiler: non-opt-aggregation leave operator (optional)
                 with_profiler(profiler, |profiler| {
                     profiler.recursive_leave_operator(
                         target.to_string(),
@@ -331,6 +394,7 @@ impl Compiler {
                         target.to_string(),
                     );
                 });
+
                 quote! { #next_ident.leave() }
             })
             .collect();
@@ -340,7 +404,27 @@ impl Compiler {
             _ => quote! { ( #(#leave_exprs),* ) },
         };
 
-        (pattern, leave_stmt)
+        // Post-leave: for aggregated relations, consolidate + convert back to Present.
+        let mut post_leave_stmts = Vec::new();
+        for (fp, target) in leave_fps.iter().zip(targets.iter()) {
+            if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(fp) {
+                if matches!(self.config.mode(), ExecutionMode::Batch) {
+                    let post_leave = match agg_op {
+                        AggregationOperator::Avg => {
+                            aggregation_avg_post_leave(*agg_arity, *agg_pos)
+                        }
+                        _ => aggregation_opt_post_leave(*agg_arity, *agg_pos),
+                    };
+                    post_leave_stmts.push(quote! {
+                        let #target = #target #post_leave;
+                    });
+                }
+            }
+        }
+
+        let post_leave = quote! { #(#post_leave_stmts)* };
+
+        (pattern, leave_stmt, post_leave)
     }
 
     /// Build the iterative variable bindings for recursion.
