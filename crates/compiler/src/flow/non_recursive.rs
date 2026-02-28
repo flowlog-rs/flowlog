@@ -143,6 +143,15 @@ impl Compiler {
                         let #output = #output
                             #min_pipeline;
                     };
+
+                    // Profiler: aggregation operator (optional)
+                    with_profiler(profiler, |profiler| {
+                        profiler.min_opt_aggregate_operator(
+                            output.to_string(),
+                            output.to_string(),
+                            output.to_string(),
+                        );
+                    });
                 } else {
                     self.imports.mark_aggregation();
                     let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
@@ -158,16 +167,16 @@ impl Compiler {
                             )
                             .as_collection(#merge_kv);
                     };
-                }
 
-                // Profiler: aggregation operator (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.aggregate_operator(
-                        output.to_string(),
-                        output.to_string(),
-                        output.to_string(),
-                    );
-                });
+                    // Profiler: aggregation operator (optional)
+                    with_profiler(profiler, |profiler| {
+                        profiler.general_aggregate_operator(
+                            output.to_string(),
+                            output.to_string(),
+                            output.to_string(),
+                        );
+                    });
+                }
             }
             flows.push(block);
         }

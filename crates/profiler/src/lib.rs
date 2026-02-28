@@ -207,7 +207,7 @@ impl Profiler {
         );
     }
 
-    pub fn aggregate_operator(
+    pub fn general_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -219,6 +219,22 @@ impl Profiler {
             Some(output_variable_name),
             TAG_STAGE,
             4,
+            None,
+        );
+    }
+
+    pub fn min_opt_aggregate_operator(
+        &mut self,
+        name: String,
+        input_variable_name: String,
+        output_variable_name: String,
+    ) {
+        self.push_node(
+            format!("{}: min-opt aggregate", name),
+            vec![input_variable_name],
+            Some(output_variable_name),
+            TAG_STAGE,
+            5,
             None,
         );
     }

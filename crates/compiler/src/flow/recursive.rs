@@ -198,7 +198,7 @@ impl Compiler {
             // Build concatenation expression for all sources.
             let (head, tail) = sources
                 .split_first()
-                .expect("at least one source collection for union");
+                .expect("Compiler error: at least one source collection for union");
 
             let union_expr = tail.iter().fold(quote! { #head }, |ts, ident| {
                 quote! { #ts.concat(&#ident) }
@@ -230,6 +230,7 @@ impl Compiler {
             });
 
             if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
+                let output_name = self.find_global_ident(*output_fp).to_string();
                 self.imports.mark_as_collection();
                 self.imports.mark_semiring_one();
 
@@ -255,6 +256,15 @@ impl Compiler {
                         let #next_ident = #next_ident
                             #min_pipeline;
                     };
+
+                    // Profiler: aggregation operator (optional)
+                    with_profiler(profiler, |profiler| {
+                        profiler.min_opt_aggregate_operator(
+                            output_name,
+                            next_ident.to_string(),
+                            next_ident.to_string(),
+                        );
+                    });
                 } else {
                     self.imports.mark_aggregation();
                     let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
@@ -271,16 +281,16 @@ impl Compiler {
                             )
                             .as_collection(#merge_kv);
                     };
-                }
 
-                // Profiler: aggregation operator (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.aggregate_operator(
-                        next_ident.to_string(),
-                        next_ident.to_string(),
-                        next_ident.to_string(),
-                    );
-                });
+                    // Profiler: aggregation operator (optional)
+                    with_profiler(profiler, |profiler| {
+                        profiler.general_aggregate_operator(
+                            output_name,
+                            next_ident.to_string(),
+                            next_ident.to_string(),
+                        );
+                    });
+                }
             }
             union_stmts.push(block);
         }
@@ -310,9 +320,9 @@ impl Compiler {
             .iter()
             .zip(targets.iter())
             .map(|(fp, target)| {
-                let next_ident = next
-                    .get(fp)
-                    .expect("leave relation missing from next bindings during recursion");
+                let next_ident = next.get(fp).expect(
+                    "Compiler error: leave relation missing from next bindings during recursion",
+                );
                 // Profiler: leave operator (optional)
                 with_profiler(profiler, |profiler| {
                     profiler.recursive_leave_operator(
