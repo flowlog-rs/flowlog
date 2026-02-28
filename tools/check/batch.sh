@@ -33,6 +33,7 @@ CONFIG_FILE="$CONFIG_FILE_DEFAULT"
 COMPILE_ONLY=0
 EMPTY_FACTS_DIR=""
 ENABLE_SIP=0
+ENABLE_STR_INTERN=0
 
 # Shared flag sets used by both run_compile_check and run_test.
 #   Optimization flags: default (none); --sip adds (--sip)
@@ -50,14 +51,15 @@ die() { log "$RED" "ERROR" "$*"; exit 1; }
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [config_file] [--compile-only] [--sip]
+  $(basename "$0") [config_file] [--compile-only] [--sip] [--str-intern]
 
 Modes:
   Default:         run all correctness tests listed in the config file.
   --compile-only:  generate each project and run cargo check only (no download/run/verify).
 
 Options:
-  --sip          Also test with --sip optimization (disabled by default).
+  --sip              Also test with --sip optimization (disabled by default).
+  --str-intern         Enable string interning (disabled by default).
 
 Environment:
   WORKERS=<n>    Number of workers passed to generated executables (default: 64)
@@ -67,6 +69,7 @@ Examples:
   $(basename "$0") tools/check/config.txt
   $(basename "$0") --compile-only --sip
   $(basename "$0") --sip
+  $(basename "$0") --str-intern
 EOF
 }
 
@@ -95,6 +98,7 @@ parse_args() {
         case "$1" in
             --compile-only) COMPILE_ONLY=1 ;;
             --sip)          ENABLE_SIP=1 ;;
+            --str-intern) ENABLE_STR_INTERN=1 ;;
             -h|--help)      usage; exit 0 ;;
             --)             shift; break ;;
             -*)             die "Unknown option: $1 (try --help)" ;;
@@ -117,6 +121,12 @@ init_opt_flags() {
         OPT_LABELS+=("sip")
     fi
     log "$BLUE" "SIP" "SIP enabled: $ENABLE_SIP -> OPT_FLAGS=(${OPT_FLAGS[*]})"
+
+    STR_INTERN_FLAG=""
+    if (( ENABLE_STR_INTERN )); then
+        STR_INTERN_FLAG="--str-intern"
+    fi
+    log "$BLUE" "STR_INTERN" "String interning enabled: $ENABLE_STR_INTERN"
 }
 
 init_paths() {
@@ -179,12 +189,12 @@ setup_dataset() {
     if [[ ! -f "$dataset_zip" ]]; then
         log "$CYAN" "DOWNLOAD" "$dataset_name.zip"
         command -v wget >/dev/null 2>&1 || die "wget not found; cannot download datasets"
-        wget -q -O "$dataset_zip" "$dataset_url" || die "Download failed: $dataset_name"
+        wget -O "$dataset_zip" "$dataset_url" || die "Download failed: $dataset_name"
     fi
 
     log "$YELLOW" "EXTRACT" "$dataset_name"
     command -v unzip >/dev/null 2>&1 || die "unzip not found; cannot extract datasets"
-    unzip -q "$dataset_zip" -d "$FACT_DIR" || die "Failed to extract dataset: $dataset_name"
+    unzip "$dataset_zip" -d "$FACT_DIR" || die "Failed to extract dataset: $dataset_name"
 }
 
 cleanup_dataset() {
@@ -201,7 +211,7 @@ cleanup_dataset() {
 # Sets the caller-visible variables: COMBO_EXTRA_FLAGS, COMBO_LABEL_SUFFIX
 compute_flag_combo() {
     local oi="$1" pi="$2"
-    COMBO_EXTRA_FLAGS="$(trim "${OPT_FLAGS[$oi]} ${PROF_FLAGS[$pi]}")"
+    COMBO_EXTRA_FLAGS="$(trim "${OPT_FLAGS[$oi]} ${PROF_FLAGS[$pi]} ${STR_INTERN_FLAG}")"
 
     local parts=""
     [[ -n "${OPT_LABELS[$oi]}" ]]  && parts="${OPT_LABELS[$oi]}"

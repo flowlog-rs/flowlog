@@ -36,7 +36,15 @@ impl Compiler {
 
         self.imports.mark_input();
 
-        // Record enter inpus block if profiler is enabled
+        if self.config.str_intern_enabled()
+            && edbs
+                .iter()
+                .any(|rel| rel.data_type().contains(&DataType::String))
+        {
+            self.imports.mark_string_intern();
+        }
+
+        // Record enter inputs block if profiler is enabled
         with_profiler(profiler, |profiler| {
             profiler.update_input_block();
         });
@@ -126,6 +134,7 @@ impl Compiler {
                 self.imports.mark_std_file();
                 self.imports.mark_std_buf_io();
                 self.imports.mark_semiring_one();
+                self.imports.mark_memchr();
             }
 
             self.imports.mark_semiring_one();
@@ -170,8 +179,13 @@ impl Compiler {
             .unwrap_or_else(|| file_name);
 
         // Delimiter is expected to be a 1-byte separator (e.g., ',' or '\t').
-        // We materialize it once to avoid repeatedly indexing `.as_bytes()[0]`.
-        let delimiter = rel.input_delimiter();
+        // Unescape common escape sequences so that e.g. `\t` in the .dl file
+        // produces an actual tab byte (0x09) in the generated Rust code.
+        let delimiter = match rel.input_delimiter() {
+            "\\t" => "\t",
+            "\\n" => "\n",
+            other => other,
+        };
 
         let data_types = rel.data_type();
         debug_assert_eq!(
@@ -183,6 +197,69 @@ impl Compiler {
         // Field identifiers: f0, f1, ..., f{arity-1}.
         let field_idents: Vec<Ident> = (0..arity).map(|i| format_ident!("f{}", i)).collect();
 
+        // Sharding / "should this worker ingest this row?" logic.
+        // Uses memchr_iter for SIMD-accelerated delimiter scanning.
+        let first_key = field_idents[0].clone();
+        let (should_send_stmt, materialize_first_field): (TokenStream, TokenStream) =
+            match data_types[0] {
+                DataType::Int32 => (
+                    quote! {
+                        let mut __delims = memchr_iter(delim, &buf);
+                        let __first_end = __delims.next().unwrap_or(buf.len());
+                        let #first_key: i32 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<i32>().ok()?;
+                        let mut __start = __first_end + 1;
+                        let should_send = ((#first_key as usize) % peers) == index;
+                    },
+                    quote! {},
+                ),
+                DataType::Int64 => (
+                    quote! {
+                        let mut __delims = memchr_iter(delim, &buf);
+                        let __first_end = __delims.next().unwrap_or(buf.len());
+                        let #first_key: i64 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<i64>().ok()?;
+                        let mut __start = __first_end + 1;
+                        let should_send = ((#first_key as usize) % peers) == index;
+                    },
+                    quote! {},
+                ),
+                DataType::String => {
+                    if self.imports.needs_string_intern() {
+                        (
+                            quote! {
+                                let mut __delims = memchr_iter(delim, &buf);
+                                let __first_end = __delims.next().unwrap_or(buf.len());
+                                let #first_key: Spur = intern(std::str::from_utf8(&buf[..__first_end]).ok()?);
+                                let mut __start = __first_end + 1;
+                                let should_send = ((#first_key.into_inner().get() as usize) % peers) == index;
+                            },
+                            quote! {},
+                        )
+                    } else {
+                        (
+                            quote! {
+                                let mut __delims = memchr_iter(delim, &buf);
+                                let __first_end = __delims.next().unwrap_or(buf.len());
+                                let __f0_bytes = &buf[..__first_end];
+                                let mut __start = __first_end + 1;
+                                let should_send = {
+                                    // 64-bit FNV-1a hash for stable worker assignment on string keys.
+                                    let mut hash: u64 = 0xcbf29ce484222325;
+                                    for &b in __f0_bytes {
+                                        hash ^= b as u64;
+                                        hash = hash.wrapping_mul(0x100000001b3);
+                                    }
+                                    ((hash as usize) % peers) == index
+                                };
+                            },
+                            // Materialize the String only when this worker keeps the row.
+                            quote! {
+                                let #first_key: String = std::str::from_utf8(__f0_bytes).ok()?.to_string();
+                            },
+                        )
+                    }
+                }
+            };
+
         // Parse fields f1..f{arity-1} (the first field is parsed in the sharding logic).
         let parse_rest_stmts: Vec<TokenStream> = field_idents
             .iter()
@@ -190,56 +267,32 @@ impl Compiler {
             .skip(1)
             .map(|(ident, dt)| match *dt {
                 DataType::Int32 => quote! {
-                    let #ident: i32 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i32>().ok()?;
+                    let __end = __delims.next().unwrap_or(buf.len());
+                    let #ident: i32 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i32>().ok()?;
+                    __start = __end + 1;
                 },
                 DataType::Int64 => quote! {
-                    let #ident: i64 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i64>().ok()?;
+                    let __end = __delims.next().unwrap_or(buf.len());
+                    let #ident: i64 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i64>().ok()?;
+                    __start = __end + 1;
                 },
-                DataType::String => quote! {
-                    let #ident: String = std::str::from_utf8(tuple.next()?).ok()?.to_string();
-                },
+                DataType::String => {
+                    if self.imports.needs_string_intern() {
+                        quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: Spur = intern(std::str::from_utf8(&buf[__start..__end]).ok()?);
+                            __start = __end + 1;
+                        }
+                    } else {
+                        quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: String = std::str::from_utf8(&buf[__start..__end]).ok()?.to_string();
+                            __start = __end + 1;
+                        }
+                    }
+                }
             })
             .collect();
-
-        // Sharding / "should this worker ingest this row?" logic.
-        let first_key = field_idents[0].clone();
-        let (should_send_stmt, materialize_first_field): (TokenStream, TokenStream) =
-            match data_types[0] {
-                DataType::Int32 => (
-                    quote! {
-                        let #first_key: i32 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i32>().ok()?;
-                        let should_send = ((#first_key as usize) % peers) == index;
-                    },
-                    // Integer 32 bits first field is already parsed; nothing more to do.
-                    quote! {},
-                ),
-                DataType::Int64 => (
-                    quote! {
-                        let #first_key: i64 = std::str::from_utf8(tuple.next()?).ok()?.parse::<i64>().ok()?;
-                        let should_send = ((#first_key as usize) % peers) == index;
-                    },
-                    // Integer 64 bits first field is already parsed; nothing more to do.
-                    quote! {},
-                ),
-                DataType::String => (
-                    quote! {
-                        let __f0_bytes = tuple.next()?;
-                        let should_send = {
-                            // 64-bit FNV-1a hash for stable worker assignment on string keys.
-                            let mut hash: u64 = 0xcbf29ce484222325;
-                            for &b in __f0_bytes {
-                                hash ^= b as u64;
-                                hash = hash.wrapping_mul(0x100000001b3);
-                            }
-                            ((hash as usize) % peers) == index
-                        };
-                    },
-                    // Materialize the String only when this worker keeps the row.
-                    quote! {
-                        let #first_key: String = std::str::from_utf8(__f0_bytes).ok()?.to_string();
-                    },
-                ),
-            };
 
         // Element expression for `.update(...)`.
         let elem_expr = if arity == 1 {
@@ -270,8 +323,6 @@ impl Compiler {
 
                     if !buf.is_empty() {
                         let row = (|| -> Option<_> {
-                            let mut tuple = buf.split(|&bt| bt == delim);
-
                             #should_send_stmt
                             if !should_send {
                                 return None;
@@ -314,7 +365,13 @@ impl Compiler {
                     .map(|c| match c {
                         ConstType::Int32(i) => quote! { #i },
                         ConstType::Int64(i) => quote! { #i },
-                        ConstType::Text(s) => quote! { #s.to_string() },
+                        ConstType::Text(s) => {
+                            if self.imports.needs_string_intern() {
+                                quote! { intern(#s) }
+                            } else {
+                                quote! { #s.to_string() }
+                            }
+                        }
                     })
                     .collect();
 

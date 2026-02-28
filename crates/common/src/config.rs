@@ -22,33 +22,41 @@ pub enum ExecutionMode {
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 pub struct Config {
-    /// Path of the Datalog program, or "all" to process all example files
+    /// Path to the Datalog (.dl) program file
     #[arg(value_name = "PROGRAM")]
     pub program: String,
 
-    /// Specify directory for fact files (only used by compiler/executor)
+    /// Directory containing input fact files
     #[arg(short = 'F', long, value_name = "DIR")]
     pub fact_dir: Option<String>,
 
-    /// Override the generated executable path (only used by compiler/executor)
+    /// Path for the generated Rust executable
     #[arg(short = 'o', value_name = "PATH")]
     pub executable_path: Option<String>,
 
-    /// Specify directory for output files (only used by compiler/executor). If <DIR> is `-` then stdout is used.
+    /// Directory for writing output relations. Use `-` for stdout
     #[arg(short = 'D', long, value_name = "DIR")]
     pub output_dir: Option<String>,
 
-    /// Choose execution strategy (incremental = maintain state across updates, batch = recompute each run; only used by compiler/executor)
+    /// Execution strategy: `batch` recomputes in a single pass (default);
+    /// `incremental` maintains state across updates with reference counting
     #[arg(long, value_enum, default_value = "batch", value_name = "MODE")]
     pub mode: ExecutionMode,
 
-    /// Enable profiling (collect execution statistics; only used by planner, compiler/executor)
+    /// Collect per-rule execution statistics (timing, tuple counts)
     #[arg(long, short = 'P', action = ArgAction::SetTrue)]
     pub profile: bool,
 
-    /// Enable Side-Information Passing (SIP) optimization (only used by planner)
+    /// Enable Sideways Information Passing to propagate binding constraints
+    /// from rule heads into body atoms, reducing intermediate results
     #[arg(long, action = ArgAction::SetTrue)]
     pub sip: bool,
+
+    /// Intern string columns as compact integer keys at load time for faster
+    /// joins, hashing, and lower memory usage. Recommended when the majority
+    /// of join keys are string-typed
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub str_intern: bool,
 }
 
 impl Config {
@@ -125,6 +133,11 @@ impl Config {
     /// For planner: check if SIP optimization is enabled
     pub fn sip_enabled(&self) -> bool {
         self.sip
+    }
+
+    /// Check if string interning is enabled
+    pub fn str_intern_enabled(&self) -> bool {
+        self.str_intern
     }
 }
 

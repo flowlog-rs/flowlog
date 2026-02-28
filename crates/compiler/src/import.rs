@@ -50,6 +50,14 @@ pub(crate) struct ImportTracker {
     min_semiring_i32: bool,
     /// Whether MinI64 is needed (min aggregation on int64 columns).
     min_semiring_i64: bool,
+
+    /// Whether string interning is needed (any relation uses string columns).
+    string_intern: bool,
+    /// Whether string resolve is needed (an output IDB has string columns).
+    string_resolve: bool,
+
+    /// Whether memchr is needed for SIMD delimiter scanning.
+    memchr: bool,
 }
 
 impl ImportTracker {
@@ -85,6 +93,12 @@ impl ImportTracker {
         // Global allocator (mimalloc for better multi-threaded allocation performance).
         let allocator = self.allocator();
 
+        // String interning support (lasso).
+        let string_intern = self.string_intern_imports();
+
+        // SIMD delimiter scanning (memchr).
+        let memchr = self.memchr_import();
+
         quote! {
             #prelude
 
@@ -94,6 +108,9 @@ impl ImportTracker {
             #timely
 
             #allocator
+
+            #string_intern
+            #memchr
 
             #diff_type
             #semiring_one
@@ -187,6 +204,31 @@ impl ImportTracker {
     /// Returns whether MinI64 is needed.
     pub(crate) fn needs_min_semiring_i64(&self) -> bool {
         self.min_semiring_i64
+    }
+
+    /// Marks that string interning is needed (at least one string-typed column exists).
+    pub(crate) fn mark_string_intern(&mut self) {
+        self.string_intern = true;
+    }
+
+    /// Returns whether string interning is needed.
+    pub(crate) fn needs_string_intern(&self) -> bool {
+        self.string_intern
+    }
+
+    /// Marks that string resolve is needed (an output IDB has string columns).
+    pub(crate) fn mark_string_resolve(&mut self) {
+        self.string_resolve = true;
+    }
+
+    /// Marks that memchr is needed for SIMD delimiter scanning.
+    pub(crate) fn mark_memchr(&mut self) {
+        self.memchr = true;
+    }
+
+    /// Returns whether memchr is needed.
+    pub(crate) fn needs_memchr(&self) -> bool {
+        self.memchr
     }
 
     // ---------------------------------------------------------------------
@@ -425,9 +467,63 @@ impl ImportTracker {
         }
     }
 
+    fn memchr_import(&self) -> TokenStream {
+        if self.memchr {
+            quote! { use memchr::memchr_iter; }
+        } else {
+            quote! {}
+        }
+    }
+
     // ---------------------------------------------------------------------
     // Types / constants
     // ---------------------------------------------------------------------
+
+    /// Emit string interning infrastructure using `lasso` crate.
+    ///
+    /// Provides a thread-safe global `INTERNER` that maps strings to `u32` keys
+    /// (and back) so all differential-dataflow computation operates on u32 IDs
+    /// instead of heap-allocated `String`s.
+    fn string_intern_imports(&self) -> TokenStream {
+        if !self.string_intern {
+            return quote! {};
+        }
+
+        let base = quote! {
+            use lasso::{ThreadedRodeo, Spur};
+            use std::sync::LazyLock;
+
+            /// Global, thread-safe string interner.
+            ///
+            /// Every unique string encountered at input time is assigned a compact
+            /// `Spur` key (internally a `NonZeroU32`). All dataflow computation uses
+            /// these keys. Resolution back to `&str` happens only at output time.
+            static INTERNER: LazyLock<ThreadedRodeo> = LazyLock::new(ThreadedRodeo::default);
+
+            /// Intern a string, returning its compact `Spur` key.
+            #[inline(always)]
+            fn intern(s: &str) -> Spur {
+                INTERNER.get_or_intern(s)
+            }
+        };
+
+        let resolve_fn = if self.string_resolve {
+            quote! {
+                /// Resolve a `Spur` key back to the original `&str`.
+                #[inline(always)]
+                fn resolve(key: Spur) -> &'static str {
+                    INTERNER.resolve(&key)
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        quote! {
+            #base
+            #resolve_fn
+        }
+    }
 
     fn diff_type(&self) -> TokenStream {
         match self.mode {
