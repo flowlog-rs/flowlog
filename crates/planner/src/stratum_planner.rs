@@ -310,14 +310,27 @@ impl fmt::Display for StratumPlanner {
             writeln!(f, "(Non-recursive stratum: no recursive transformations)")?;
         }
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
-        writeln!(f, "IDB to Aggregation Map:")?;
-        for (fp, (op, pos, arity)) in &self.output_to_aggregation_map {
-            writeln!(
-                f,
-                "  fp={:#018x},\n  op={:?},\n  pos={},\n  arity={}",
-                fp, op, pos, arity
-            )?;
+        if !self.output_to_aggregation_map.is_empty() {
+            writeln!(f, "\n{}", "-".repeat(40))?;
+            writeln!(f, "IDB to Aggregation Map:")?;
+            for (fp, (op, pos, arity)) in &self.output_to_aggregation_map {
+                writeln!(
+                    f,
+                    "  fp={:#018x},\n  op={:?},\n  pos={},\n  arity={}",
+                    fp, op, pos, arity
+                )?;
+            }
+        }
+
+        if !self.output_to_udf_map.is_empty() {
+            writeln!(f, "\n{}", "-".repeat(40))?;
+            writeln!(f, "IDB to UDF Map:")?;
+            for (fp, (name, start, end, arity)) in &self.output_to_udf_map {
+                writeln!(
+                    f,
+                    "  fp={fp:#018x}, fn={name}, range={start}..{end}, arity={arity}",
+                )?;
+            }
         }
 
         writeln!(f, "{}", "=".repeat(80))
@@ -553,12 +566,17 @@ impl StratumPlanner {
             );
 
             // A head cannot have both an aggregation and a UDF.
+            let has_agg = self.output_to_aggregation_map.contains_key(&head_idb_fp);
+            let has_udf = head_args.iter().any(|a| matches!(a, HeadArg::FnCall(_)));
             assert!(
-                !self.output_to_aggregation_map.contains_key(&head_idb_fp)
-                    || !head_args.iter().any(|a| matches!(a, HeadArg::FnCall(_))),
+                !(has_agg && has_udf),
                 "Planner error: rule head cannot have both aggregation and UDF for output {:#018x}",
                 head_idb_fp,
             );
+
+            if !has_udf {
+                continue;
+            }
 
             // Compute flattened output arity once.
             let output_arity: usize = head_args

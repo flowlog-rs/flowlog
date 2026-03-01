@@ -250,7 +250,7 @@ impl Compiler {
         let content = std::fs::read_to_string(udf_path).map_err(|e| {
             io::Error::new(
                 e.kind(),
-                format!("Failed to read UDF file '{}': {}", udf_path, e),
+                format!("Failed to read UDF file '{udf_path}': {e}"),
             )
         })?;
 
@@ -263,7 +263,7 @@ impl Compiler {
             .map_err(|e| {
                 io::Error::new(
                     e.kind(),
-                    format!("Failed to run rustc on '{}': {}", udf_path, e),
+                    format!("Failed to run rustc on '{udf_path}': {e}"),
                 )
             })?;
 
@@ -271,7 +271,7 @@ impl Compiler {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("UDF file '{}' failed to compile:\n{}", udf_path, stderr),
+                format!("UDF file '{udf_path}' failed to compile:\n{stderr}"),
             ));
         }
 

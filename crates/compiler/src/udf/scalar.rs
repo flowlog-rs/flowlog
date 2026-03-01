@@ -8,6 +8,7 @@ use quote::{format_ident, quote};
 /// The row has `output_arity` columns in flattened form. Columns at
 /// positions `start..end` are the UDF's input arguments; they get replaced
 /// by a single output column produced by `udf::fn_name(col_start, …, col_end-1)`.
+#[must_use]
 pub(crate) fn scalar_udf_map(
     fn_name: &str,
     start: usize,
