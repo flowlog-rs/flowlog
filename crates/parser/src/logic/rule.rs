@@ -102,7 +102,7 @@ impl FlowLogRule {
         let mut out = Vec::new();
         for arg in self.head.head_arguments() {
             match arg {
-                HeadArg::Var(_) | HeadArg::Aggregation(_) => {
+                HeadArg::Var(_) | HeadArg::Aggregation(_) | HeadArg::FnCall(_) => {
                     panic!("Boolean rule head must contain only constants: {self}")
                 }
                 HeadArg::Arith(arith) => {

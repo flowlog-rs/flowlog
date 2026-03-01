@@ -167,6 +167,9 @@ impl RulePlanner {
                     let var_sigs: Vec<_> = agg.vars().iter().map(|v| sig_of(v.as_str())).collect();
                     ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs)
                 }
+                HeadArg::FnCall(_) => {
+                    todo!("UDF in rule head not yet supported by planner")
+                }
             })
             .collect()
     }

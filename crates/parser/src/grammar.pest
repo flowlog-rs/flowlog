@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = { 
     SOI ~ 
-    (declaration | input_directive | output_directive | printsize_directive | rule)* ~
+    (declaration | extern_fn | extern_agg | input_directive | output_directive | printsize_directive | rule)* ~
     EOI
 } 
 
@@ -110,6 +110,28 @@ attributes_decl = { attribute_decl ~ ("," ~ attribute_decl)* }
 // Single attribute with name and data type
 // Example: "src: number" 
 attribute_decl = { attribute_name ~ ":" ~ data_type }
+
+// =============================================================================
+// USER-DEFINED EXTERNAL FUNCTION DECLARATIONS
+// =============================================================================
+//   Scalar:    .extern fn   name(param1: type1, ...) -> ret_type
+//   Aggregate: .extern agg  name(param1: type1, ...) -> ret_type
+
+extern_fn = {
+    ".extern" ~ "fn" ~ identifier ~
+    "(" ~ extern_fn_params? ~ ")" ~
+    "->" ~ data_type
+}
+
+extern_agg = {
+    ".extern" ~ "agg" ~ identifier ~
+    "(" ~ extern_fn_params? ~ ")" ~
+    "->" ~ data_type
+}
+
+extern_fn_params = { extern_fn_param ~ ("," ~ extern_fn_param)* }
+
+extern_fn_param = { identifier ~ ":" ~ data_type }
 
 // =============================================================================
 // ARITHMETIC EXPRESSIONS
@@ -231,8 +253,17 @@ head = {
     ")" 
 }
 
-// Can be aggregate functions or arithmetic expressions
-head_arg = { aggregate_expr | arithmetic_expr }
+// Can be aggregate functions, UDF calls, or arithmetic expressions
+head_arg = { aggregate_expr | fn_call_expr | arithmetic_expr }
+
+// User-defined function call in rule head
+// Example: my_udf(x, y + 1)
+fn_call_expr = {
+    identifier ~
+    "(" ~
+    (arithmetic_expr ~ ("," ~ arithmetic_expr)*)? ~
+    ")"
+}
 
 // Comma-separated list of predicates in the rule body
 predicates = { predicate ~ ("," ~ predicate)* }
