@@ -1,6 +1,6 @@
 //! Aggregation expressions for FlowLog Datalog programs.
 //!
-//! - [`AggregationOperator`]: `min | max | count | sum`
+//! - [`AggregationOperator`]: `min | max | count | sum | average`
 //! - [`Aggregation`]: `op(expr)` (e.g., `sum(price * qty)`)
 //!
 //! # Example
@@ -23,6 +23,7 @@ pub enum AggregationOperator {
     Max,
     Count,
     Sum,
+    Avg,
 }
 
 impl fmt::Display for AggregationOperator {
@@ -32,6 +33,7 @@ impl fmt::Display for AggregationOperator {
             Self::Max => write!(f, "max"),
             Self::Count => write!(f, "count"),
             Self::Sum => write!(f, "sum"),
+            Self::Avg => write!(f, "average"),
         }
     }
 }
@@ -40,7 +42,7 @@ impl Lexeme for AggregationOperator {
     /// Parse an aggregation operator from the grammar.
     ///
     /// # Panics
-    /// Panics if the rule is not one of `min|max|count|sum`.
+    /// Panics if the rule is not one of `min|max|count|sum|average`.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let op = parsed_rule
             .into_inner()
@@ -52,6 +54,7 @@ impl Lexeme for AggregationOperator {
             Rule::max => Self::Max,
             Rule::count => Self::Count,
             Rule::sum => Self::Sum,
+            Rule::average => Self::Avg,
             other => panic!(
                 "Parser error: unexpected aggregation operator rule: {:?}",
                 other

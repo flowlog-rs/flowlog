@@ -1,19 +1,19 @@
-/// Min-semiring for aggregating minimum values via differential dataflow's
+/// Max-semiring for aggregating maximum values via differential dataflow's
 /// built-in consolidation and `threshold_semigroup` operator.
 ///
 /// Instead of using `reduce_core` (which maintains full value traces per key),
 /// this encodes the aggregated value into the *diff* position of the DD triple
-/// `(data, time, diff)`.  Consolidation then computes min for free via
+/// `(data, time, diff)`.  Consolidation then computes max for free via
 /// `plus_equals`, and `threshold_semigroup` emits updates only when the
-/// running minimum decreases.
+/// running maximum increases.
 
 use differential_dataflow::difference::{IsZero, Monoid, Semigroup};
 use differential_dataflow::difference::Multiply;
 
 use serde::{Deserialize, Serialize};
 
-macro_rules! define_min {
-    ($name:ident, $ty:ty, $max:expr) => {
+macro_rules! define_max {
+    ($name:ident, $ty:ty, $min:expr) => {
         #[derive(Copy, Debug, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
         pub struct $name {
             pub value: $ty,
@@ -26,8 +26,8 @@ macro_rules! define_min {
             }
 
             #[inline]
-            pub fn infinity() -> Self {
-                $name { value: $max }
+            pub fn neg_infinity() -> Self {
+                $name { value: $min }
             }
         }
 
@@ -41,14 +41,14 @@ macro_rules! define_min {
         impl Semigroup for $name {
             #[inline]
             fn plus_equals(&mut self, rhs: &Self) {
-                self.value = std::cmp::min(self.value, rhs.value);
+                self.value = std::cmp::max(self.value, rhs.value);
             }
         }
 
         impl Monoid for $name {
             #[inline]
             fn zero() -> Self {
-                $name::infinity()
+                $name::neg_infinity()
             }
         }
 

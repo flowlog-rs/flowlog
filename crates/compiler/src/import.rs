@@ -9,6 +9,33 @@ use parser::DataType;
 use proc_macro2::TokenStream;
 use quote::quote;
 
+/// Tracks which semiring modules (min/max/sum/avg) are needed.
+#[derive(Default, Clone)]
+pub(crate) struct SemiringNeeds {
+    pub min_i32: bool,
+    pub min_i64: bool,
+    pub max_i32: bool,
+    pub max_i64: bool,
+    pub sum_i32: bool,
+    pub sum_i64: bool,
+    pub avg_i32: bool,
+    pub avg_i64: bool,
+}
+
+impl SemiringNeeds {
+    /// Returns whether any semiring module is needed.
+    pub fn any(&self) -> bool {
+        self.min_i32
+            || self.min_i64
+            || self.max_i32
+            || self.max_i64
+            || self.sum_i32
+            || self.sum_i64
+            || self.avg_i32
+            || self.avg_i64
+    }
+}
+
 /// Records the import requirements gathered while compiling.
 #[must_use]
 #[derive(Default)]
@@ -46,10 +73,8 @@ pub(crate) struct ImportTracker {
     aggregation: bool,
     /// Whether semiring one value is needed.
     semiring_one: bool,
-    /// Whether MinI32 is needed (min aggregation on int32 columns).
-    min_semiring_i32: bool,
-    /// Whether MinI64 is needed (min aggregation on int64 columns).
-    min_semiring_i64: bool,
+    /// Semiring requirements per aggregation kind.
+    semirings: SemiringNeeds,
 
     /// Whether string interning is needed (any relation uses string columns).
     string_intern: bool,
@@ -185,25 +210,48 @@ impl ImportTracker {
     /// Marks that the Min semiring module is required for a specific integer type.
     pub(crate) fn mark_min_semiring(&mut self, dt: DataType) {
         match dt {
-            DataType::Int32 => self.min_semiring_i32 = true,
-            DataType::Int64 => self.min_semiring_i64 = true,
+            DataType::Int32 => self.semirings.min_i32 = true,
+            DataType::Int64 => self.semirings.min_i64 = true,
             _ => unreachable!("Compiler error: min semiring only supports integer types"),
         }
     }
 
-    /// Returns whether the Min semiring module should be written to the project.
-    pub(crate) fn needs_min_semiring(&self) -> bool {
-        self.min_semiring_i32 || self.min_semiring_i64
+    /// Marks that the Max semiring module is required for a specific integer type.
+    pub(crate) fn mark_max_semiring(&mut self, dt: DataType) {
+        match dt {
+            DataType::Int32 => self.semirings.max_i32 = true,
+            DataType::Int64 => self.semirings.max_i64 = true,
+            _ => unreachable!("Compiler error: max semiring only supports integer types"),
+        }
     }
 
-    /// Returns whether MinI32 is needed.
-    pub(crate) fn needs_min_semiring_i32(&self) -> bool {
-        self.min_semiring_i32
+    /// Marks that the Sum semiring module is required for a specific integer type.
+    /// Sum semiring is used for both COUNT and SUM aggregations.
+    pub(crate) fn mark_sum_semiring(&mut self, dt: DataType) {
+        match dt {
+            DataType::Int32 => self.semirings.sum_i32 = true,
+            DataType::Int64 => self.semirings.sum_i64 = true,
+            _ => unreachable!("Compiler error: sum semiring only supports integer types"),
+        }
     }
 
-    /// Returns whether MinI64 is needed.
-    pub(crate) fn needs_min_semiring_i64(&self) -> bool {
-        self.min_semiring_i64
+    /// Marks that the Avg semiring module is required for a specific integer type.
+    pub(crate) fn mark_avg_semiring(&mut self, dt: DataType) {
+        match dt {
+            DataType::Int32 => self.semirings.avg_i32 = true,
+            DataType::Int64 => self.semirings.avg_i64 = true,
+            _ => unreachable!("Compiler error: avg semiring only supports integer types"),
+        }
+    }
+
+    /// Returns whether any semiring module (min, max, sum, or avg) should be written.
+    pub(crate) fn needs_semiring(&self) -> bool {
+        self.semirings.any()
+    }
+
+    /// Returns a reference to the semiring needs for use in code generation.
+    pub(crate) fn semirings(&self) -> &SemiringNeeds {
+        &self.semirings
     }
 
     /// Marks that string interning is needed (at least one string-typed column exists).
@@ -293,7 +341,7 @@ impl ImportTracker {
         let operators = self.operator_imports();
         let recursive = self.recursive_imports();
         let aggregation = self.aggregation_imports();
-        let min_semiring = self.min_semiring_import();
+        let semiring = self.semiring_import();
 
         quote! {
             #input
@@ -302,7 +350,7 @@ impl ImportTracker {
             #as_collection
             #recursive
             #aggregation
-            #min_semiring
+            #semiring
         }
     }
 
@@ -436,24 +484,22 @@ impl ImportTracker {
         }
     }
 
-    fn min_semiring_import(&self) -> TokenStream {
-        if !self.needs_min_semiring() {
+    fn semiring_import(&self) -> TokenStream {
+        if !self.needs_semiring() {
             return quote! {};
         }
-        let use_i32 = if self.min_semiring_i32 {
-            quote! { use min_semiring::MinI32; }
-        } else {
-            quote! {}
-        };
-        let use_i64 = if self.min_semiring_i64 {
-            quote! { use min_semiring::MinI64; }
-        } else {
-            quote! {}
-        };
+
+        let s = &self.semirings;
+        let min = semiring_mod("min_semiring", "Min", s.min_i32, s.min_i64);
+        let max = semiring_mod("max_semiring", "Max", s.max_i32, s.max_i64);
+        let sum = semiring_mod("sum_semiring", "Sum", s.sum_i32, s.sum_i64);
+        let avg = semiring_mod("avg_semiring", "Avg", s.avg_i32, s.avg_i64);
+
         quote! {
-            mod min_semiring;
-            #use_i32
-            #use_i64
+            #min
+            #max
+            #sum
+            #avg
             use differential_dataflow::difference::IsZero;
         }
     }
@@ -564,4 +610,22 @@ impl ImportTracker {
             static GLOBAL: MiMalloc = MiMalloc;
         }
     }
+}
+
+/// Emit `mod` + `use` statements for a single semiring module.
+fn semiring_mod(module: &str, prefix: &str, i32: bool, i64: bool) -> TokenStream {
+    if !i32 && !i64 {
+        return quote! {};
+    }
+    let mod_ident = proc_macro2::Ident::new(module, proc_macro2::Span::call_site());
+    let mut uses = Vec::new();
+    if i32 {
+        let ty = proc_macro2::Ident::new(&format!("{prefix}I32"), proc_macro2::Span::call_site());
+        uses.push(quote! { use #mod_ident::#ty; });
+    }
+    if i64 {
+        let ty = proc_macro2::Ident::new(&format!("{prefix}I64"), proc_macro2::Span::call_site());
+        uses.push(quote! { use #mod_ident::#ty; });
+    }
+    quote! { mod #mod_ident; #(#uses)* }
 }
