@@ -223,14 +223,14 @@ impl Profiler {
         );
     }
 
-    pub fn min_opt_aggregate_operator(
+    pub fn opt_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
     ) {
         self.push_node(
-            format!("{}: min-opt aggregate", name),
+            format!("{}: opt aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
             TAG_STAGE,
@@ -304,6 +304,22 @@ impl Profiler {
         );
     }
 
+    pub fn recursive_pre_leave_opt_aggregate_operator(
+        &mut self,
+        name: String,
+        input_variable_name: String,
+        output_variable_name: String,
+    ) {
+        self.push_node(
+            format!("{}: pre-leave opt aggregate", name),
+            vec![input_variable_name],
+            Some(output_variable_name),
+            TAG_RUNTIME,
+            1,
+            None,
+        );
+    }
+
     pub fn recursive_leave_operator(
         &mut self,
         name: String,
@@ -316,6 +332,22 @@ impl Profiler {
             Some(output_variable_name),
             TAG_RUNTIME,
             1,
+            None,
+        );
+    }
+
+    pub fn recursive_post_leave_opt_aggregate_operator(
+        &mut self,
+        name: String,
+        input_variable_name: String,
+        output_variable_name: String,
+    ) {
+        self.push_node(
+            format!("{}: post-leave opt aggregate", name),
+            vec![input_variable_name],
+            Some(output_variable_name),
+            TAG_RUNTIME,
+            4,
             None,
         );
     }

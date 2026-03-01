@@ -111,11 +111,6 @@ impl Compiler {
             })
             .collect();
 
-        // Profiler: leave recursive scope (optional)
-        with_profiler(profiler, |profiler| {
-            profiler.leave_scope();
-        });
-
         // Build leave outputs for recursion.
         let (leave_pattern, leave_stmt, post_leave) = self.build_leave_outputs(
             leave_fps,
@@ -289,7 +284,7 @@ impl Compiler {
 
                     // Profiler: aggregation operator (optional)
                     with_profiler(profiler, |profiler| {
-                        profiler.min_opt_aggregate_operator(
+                        profiler.opt_aggregate_operator(
                             output_name,
                             next_ident.to_string(),
                             next_ident.to_string(),
@@ -382,9 +377,35 @@ impl Compiler {
                                 aggregation_avg_pre_leave(*agg_arity, *agg_pos, agg_type)
                             }
                         };
+
+                        with_profiler(profiler, |profiler| {
+                            profiler.recursive_pre_leave_opt_aggregate_operator(
+                                target.to_string(),
+                                next_ident.to_string(),
+                                next_ident.to_string(),
+                            );
+                        });
+
                         return quote! { #next_ident #pre_leave .leave() };
                     }
                 }
+
+                quote! { #next_ident.leave() }
+            })
+            .collect();
+
+        // Profiler: leave recursive scope (optional)
+        with_profiler(profiler, |profiler| {
+            profiler.leave_scope();
+        });
+
+        leave_fps
+            .iter()
+            .zip(targets.iter())
+            .for_each(|(fp, target)| {
+                let next_ident = next.get(fp).expect(
+                    "Compiler error: leave relation missing from next bindings during recursion",
+                );
 
                 // Profiler: non-opt-aggregation leave operator (optional)
                 with_profiler(profiler, |profiler| {
@@ -394,10 +415,7 @@ impl Compiler {
                         target.to_string(),
                     );
                 });
-
-                quote! { #next_ident.leave() }
-            })
-            .collect();
+            });
 
         let leave_stmt = match leave_exprs.as_slice() {
             [expr] => quote! { #expr },
@@ -415,6 +433,15 @@ impl Compiler {
                         }
                         _ => aggregation_opt_post_leave(*agg_arity, *agg_pos),
                     };
+
+                    with_profiler(profiler, |profiler| {
+                        profiler.recursive_post_leave_opt_aggregate_operator(
+                            target.to_string(),
+                            target.to_string(),
+                            target.to_string(),
+                        );
+                    });
+
                     post_leave_stmts.push(quote! {
                         let #target = #target #post_leave;
                     });

@@ -169,7 +169,7 @@ impl Compiler {
 
                     // Profiler: aggregation operator (optional)
                     with_profiler(profiler, |profiler| {
-                        profiler.min_opt_aggregate_operator(
+                        profiler.opt_aggregate_operator(
                             output.to_string(),
                             output.to_string(),
                             output.to_string(),
