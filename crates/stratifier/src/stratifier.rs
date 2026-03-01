@@ -431,3 +431,51 @@ impl fmt::Display for Stratifier {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Write a Datalog source string to a temporary file and parse it.
+    fn parse_program(source: &str) -> Program {
+        let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
+        tmp.write_all(source.as_bytes())
+            .expect("failed to write temp file");
+        Program::parse(tmp.path().to_str().unwrap())
+    }
+
+    /// A(x,y) :- Edge(x,y), !B(x,y).
+    /// B(x,y) :- A(x,y).
+    /// A and B form a recursive cycle and A negates B → not stratifiable.
+    #[test]
+    #[should_panic(expected = "negation through recursion")]
+    fn rejects_negation_through_recursion() {
+        let src = "\
+            .decl Edge(a: int32, b: int32)\n\
+            .decl A(a: int32, b: int32)\n\
+            .decl B(a: int32, b: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            A(x, y) :- Edge(x, y), !B(x, y).\n\
+            B(x, y) :- A(x, y).\n\
+            .output A\n\
+            .output B\n";
+        let program = parse_program(src);
+        let _ = Stratifier::from_program(&program);
+    }
+
+    /// A(x,y) :- Edge(x,y), !A(x,y).
+    /// Self-negation → not stratifiable.
+    #[test]
+    #[should_panic(expected = "negation through recursion")]
+    fn rejects_self_negation() {
+        let src = "\
+            .decl Edge(a: int32, b: int32)\n\
+            .decl A(a: int32, b: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            A(x, y) :- Edge(x, y), !A(x, y).\n\
+            .output A\n";
+        let program = parse_program(src);
+        let _ = Stratifier::from_program(&program);
+    }
+}
