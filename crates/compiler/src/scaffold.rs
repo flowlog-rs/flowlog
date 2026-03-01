@@ -83,6 +83,11 @@ impl Compiler {
             self.write_src_semiring()?;
         }
 
+        // UDF module if a --udf-file was provided
+        if self.config.udf_file().is_some() {
+            self.write_src_udf()?;
+        }
+
         // Profiler logs if enabled
         with_profiler_ref(profiler, |profiler| {
             self.write_profiler_logs(profiler, &self.config.executable_name())
@@ -232,6 +237,47 @@ impl Compiler {
 
         let rendered = PROMPT_RS_TMPL.replace("\r\n", "\n");
         write_file(&src_dir.join("prompt.rs"), rendered.trim_start())
+    }
+
+    // -------------------------
+    // src/udf.rs (user-supplied)
+    // -------------------------
+
+    /// Copy the user-supplied UDF file into `src/udf.rs` of the generated project.
+    /// Runs `rustc` to verify the file compiles before copying.
+    fn write_src_udf(&self) -> io::Result<()> {
+        let udf_path = self.config.udf_file().expect("udf_file must be set");
+        let content = std::fs::read_to_string(udf_path).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("Failed to read UDF file '{}': {}", udf_path, e),
+            )
+        })?;
+
+        // Quick compile check before copying into the generated project.
+        let output = std::process::Command::new("rustc")
+            .args(["--edition", "2024", "--crate-type", "lib", udf_path])
+            .arg("--out-dir")
+            .arg(std::env::temp_dir())
+            .output()
+            .map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!("Failed to run rustc on '{}': {}", udf_path, e),
+                )
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("UDF file '{}' failed to compile:\n{}", udf_path, stderr),
+            ));
+        }
+
+        let src_dir = self.config.executable_path().join("src");
+        ensure_dir(&src_dir)?;
+        write_file(&src_dir.join("udf.rs"), content.trim_start())
     }
 
     /// Write `src/XX_semiring.rs` into the

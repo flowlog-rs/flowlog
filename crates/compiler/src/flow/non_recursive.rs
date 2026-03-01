@@ -20,6 +20,7 @@ use crate::aggregation::{
     aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce, aggregation_row_chop,
     aggregation_sum_optimize,
 };
+use crate::udf::scalar::scalar_udf_map;
 use crate::Compiler;
 
 use common::ExecutionMode;
@@ -201,6 +202,23 @@ impl Compiler {
                     });
                 }
             }
+
+            // Scalar UDF logic (optional, mutually exclusive with aggregation)
+            if let Some((fn_name, start, end, output_arity)) =
+                stratum.output_to_udf_map().get(output_fp)
+            {
+                for idb_fp in idb_fps {
+                    self.verify_udf_types(*output_fp, *idb_fp, fn_name, *start);
+                }
+                self.imports.mark_udf();
+                let udf_pipeline = scalar_udf_map(fn_name, *start, *end, *output_arity);
+                block = quote! {
+                    #block
+                    let #output = #output
+                        #udf_pipeline;
+                };
+            }
+
             flows.push(block);
         }
 

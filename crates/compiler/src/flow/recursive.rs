@@ -18,6 +18,7 @@ use crate::aggregation::{
     aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce,
     aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
+use crate::udf::scalar::scalar_udf_map;
 use crate::ident::find_local_ident;
 use crate::Compiler;
 
@@ -86,11 +87,12 @@ impl Compiler {
             .map(|tx| self.gen_transformation(&current, tx, &mut recursive_arranged, profiler))
             .collect();
 
-        // Collect unions and (optional) aggregation for IDB outputs.
+        // Collect unions and (optional) aggregation/UDF for IDB outputs.
         let (next_bindings, union_stmts) = self.collect_unions(
             stratum.output_to_idb_map(),
             &enter_bindings,
             stratum.output_to_aggregation_map(),
+            stratum.output_to_udf_map(),
             profiler,
         );
 
@@ -182,6 +184,7 @@ impl Compiler {
         output_to_idb_map: &HashMap<u64, Vec<u64>>,
         enter_bindings: &HashMap<u64, Ident>,
         output_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
+        output_to_udf_map: &HashMap<u64, (String, usize, usize, usize)>,
         profiler: &mut Option<Profiler>,
     ) -> (HashMap<u64, Ident>, Vec<TokenStream>) {
         let mut next_bindings: HashMap<u64, Ident> = HashMap::new();
@@ -317,6 +320,21 @@ impl Compiler {
                     });
                 }
             }
+
+            // Scalar UDF logic (optional, mutually exclusive with aggregation)
+            if let Some((fn_name, start, end, output_arity)) = output_to_udf_map.get(output_fp) {
+                for idb_fp in idb_fps {
+                    self.verify_udf_types(*output_fp, *idb_fp, fn_name, *start);
+                }
+                self.imports.mark_udf();
+                let udf_pipeline = scalar_udf_map(fn_name, *start, *end, *output_arity);
+                block = quote! {
+                    #block
+                    let #next_ident = #next_ident
+                        #udf_pipeline;
+                };
+            }
+
             union_stmts.push(block);
         }
 

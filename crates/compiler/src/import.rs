@@ -83,6 +83,9 @@ pub(crate) struct ImportTracker {
 
     /// Whether memchr is needed for SIMD delimiter scanning.
     memchr: bool,
+
+    /// Whether a user-defined function module is needed.
+    udf: bool,
 }
 
 impl ImportTracker {
@@ -124,6 +127,9 @@ impl ImportTracker {
         // SIMD delimiter scanning (memchr).
         let memchr = self.memchr_import();
 
+        // User-defined function module.
+        let udf = self.udf_import();
+
         quote! {
             #prelude
 
@@ -136,6 +142,7 @@ impl ImportTracker {
 
             #string_intern
             #memchr
+            #udf
 
             #diff_type
             #semiring_one
@@ -277,6 +284,11 @@ impl ImportTracker {
     /// Returns whether memchr is needed.
     pub(crate) fn needs_memchr(&self) -> bool {
         self.memchr
+    }
+
+    /// Marks that the UDF module is needed.
+    pub(crate) fn mark_udf(&mut self) {
+        self.udf = true;
     }
 
     // ---------------------------------------------------------------------
@@ -516,6 +528,14 @@ impl ImportTracker {
     fn memchr_import(&self) -> TokenStream {
         if self.memchr {
             quote! { use memchr::memchr_iter; }
+        } else {
+            quote! {}
+        }
+    }
+
+    fn udf_import(&self) -> TokenStream {
+        if self.udf {
+            quote! { mod udf; }
         } else {
             quote! {}
         }
