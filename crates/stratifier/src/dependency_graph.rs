@@ -2,7 +2,7 @@
 
 use itertools::Itertools;
 use parser::{logic::FlowLogRule, Predicate, Program};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 /// Represents the dependency relationships between rules.
@@ -13,7 +13,8 @@ pub(super) struct DependencyGraph {
 
     /// Edges caused by negation. Used to detect unstratifiable
     /// programs (negation through recursion).
-    negative_edges: HashSet<(usize, usize)>,
+    /// Ordered for deterministic error reporting.
+    negative_edges: BTreeSet<(usize, usize)>,
 }
 
 impl DependencyGraph {
@@ -25,7 +26,7 @@ impl DependencyGraph {
 
     /// Returns the set of dependency edges introduced by negation.
     #[must_use]
-    pub(super) fn negative_edges(&self) -> &HashSet<(usize, usize)> {
+    pub(super) fn negative_edges(&self) -> &BTreeSet<(usize, usize)> {
         &self.negative_edges
     }
 
@@ -38,7 +39,7 @@ impl DependencyGraph {
 
         let mut dependency_map: HashMap<usize, HashSet<usize>> =
             (0..rules.len()).map(|i| (i, HashSet::new())).collect();
-        let mut negative_edges: HashSet<(usize, usize)> = HashSet::new();
+        let mut negative_edges: BTreeSet<(usize, usize)> = BTreeSet::new();
 
         for (rule_id, rule) in rules.iter().enumerate() {
             Self::analyze_rule_dependencies(
@@ -76,7 +77,7 @@ impl DependencyGraph {
         rule: &FlowLogRule,
         head_to_rule_ids_map: &HashMap<String, Vec<usize>>,
         dependency_map: &mut HashMap<usize, HashSet<usize>>,
-        negative_edges: &mut HashSet<(usize, usize)>,
+        negative_edges: &mut BTreeSet<(usize, usize)>,
     ) {
         for predicate in rule.rhs() {
             // Determine the atom name and whether the dependency is negative
