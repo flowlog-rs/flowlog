@@ -235,7 +235,6 @@ impl Compiler {
 
             if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
                 let output_name = self.find_global_ident(*output_fp).to_string();
-                self.imports.mark_as_collection();
                 self.imports.mark_semiring_one();
 
                 // Look up the aggregated column's data type.
@@ -249,6 +248,7 @@ impl Compiler {
                 // Semiring fast path: replace reduce_core with threshold_semigroup
                 // using the appropriate semigroup, avoiding a second arrangement.
                 if matches!(self.config.mode(), ExecutionMode::Batch) {
+                    self.imports.mark_as_collection();
                     match agg_op {
                         AggregationOperator::Min => self.imports.mark_min_semiring(agg_type),
                         AggregationOperator::Max => self.imports.mark_max_semiring(agg_type),
@@ -350,8 +350,9 @@ impl Compiler {
                     "Compiler error: leave relation missing from next bindings during recursion",
                 );
 
-                // For min/max-aggregated relations: convert to semiring diff before leave()
-                // so cross-iteration extremum is computed by consolidation after leave.
+                // For aggregated relations (min/max/sum/count/avg) in batch mode: convert to
+                // semiring diff before leave() so cross-iteration aggregates are computed by
+                // consolidation after leave.
                 if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(fp) {
                     if matches!(self.config.mode(), ExecutionMode::Batch) {
                         let (key_types, val_types) = self.find_global_type(*fp);

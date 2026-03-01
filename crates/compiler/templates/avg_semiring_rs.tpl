@@ -25,14 +25,23 @@ macro_rules! define_avg {
 
             #[inline]
             pub fn avg(&self) -> $ty {
-                self.sum / self.count
+                if self.count == 0 {
+                    debug_assert!(
+                        false,
+                        "Attempted to compute avg() for {} with zero count",
+                        stringify!($name)
+                    );
+                    0
+                } else {
+                    self.sum / self.count
+                }
             }
         }
 
         impl IsZero for $name {
             #[inline]
             fn is_zero(&self) -> bool {
-                false
+                self.count == 0
             }
         }
 

@@ -5,7 +5,7 @@
 /// this encodes the aggregated value into the *diff* position of the DD triple
 /// `(data, time, diff)`.  Consolidation then computes max for free via
 /// `plus_equals`, and `threshold_semigroup` emits updates only when the
-/// running maximum changes.
+/// running maximum increases.
 
 use differential_dataflow::difference::{IsZero, Monoid, Semigroup};
 use differential_dataflow::difference::Multiply;
