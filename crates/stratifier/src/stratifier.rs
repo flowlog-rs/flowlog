@@ -127,15 +127,15 @@ impl Stratifier {
         let mut scc_id = vec![0usize; dep_map.len()];
         let mut strata: Vec<Vec<usize>> = Vec::new();
         let mut recursive_bitmap: Vec<bool> = Vec::new();
-        for (idx, scc) in sccs.iter().enumerate() {
+        for (idx, scc) in sccs.into_iter().enumerate() {
             let is_recursive = scc.len() > 1 || {
                 let r = scc[0];
                 dep_map.get(&r).is_some_and(|deps| deps.contains(&r))
             };
-            for &rule_id in scc {
+            for &rule_id in &scc {
                 scc_id[rule_id] = idx;
             }
-            strata.push(scc.clone());
+            strata.push(scc);
             recursive_bitmap.push(is_recursive);
         }
 
@@ -440,7 +440,7 @@ mod tests {
         let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())
             .expect("failed to write temp file");
-        Program::parse(tmp.path().to_str().unwrap())
+        Program::parse(&tmp.path().to_string_lossy())
     }
 
     /// A(x,y) :- Edge(x,y), !B(x,y).
