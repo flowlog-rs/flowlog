@@ -25,7 +25,7 @@ pub(super) fn tuple(fields: &[TokenStream]) -> TokenStream {
     }
 }
 
-/// Row destructuring pattern: `x0` (arity 1) or `(x0, x1, …)`.
+/// Row destructuring pattern: `(x0,)` (arity 1) or `(x0, x1, …)`.
 pub(super) fn row_pattern(arity: usize) -> TokenStream {
     let fields: Vec<_> = (0..arity)
         .map(|i| {
@@ -33,11 +33,7 @@ pub(super) fn row_pattern(arity: usize) -> TokenStream {
             quote! { #id }
         })
         .collect();
-    if arity == 1 {
-        fields[0].clone()
-    } else {
-        tuple(&fields)
-    }
+    tuple(&fields)
 }
 
 /// Key construction from row fields, excluding the aggregated position: `(x0,)`.
@@ -133,13 +129,13 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
             DataType::Int32 => quote! {
                 |_, input, _output, updates| {
                     let count = input.len() as i32;
-                    updates.push(((count,), SEMIRING_ONE));
+                    updates.push((count, SEMIRING_ONE));
                 }
             },
             DataType::Int64 => quote! {
                 |_, input, _output, updates| {
                     let count = input.len() as i64;
-                    updates.push(((count,), SEMIRING_ONE));
+                    updates.push((count, SEMIRING_ONE));
                 }
             },
             DataType::String => {
@@ -150,13 +146,13 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
             DataType::Int32 => quote! {
                 |_, input, _output, updates| {
                     let sum = input.iter().map(|(v, _)| *v).sum::<i32>();
-                    updates.push((*sum, SEMIRING_ONE));
+                    updates.push((sum, SEMIRING_ONE));
                 }
             },
             DataType::Int64 => quote! {
                 |_, input, _output, updates| {
                     let sum = input.iter().map(|(v, _)| *v).sum::<i64>();
-                    updates.push((*sum, SEMIRING_ONE));
+                    updates.push((sum, SEMIRING_ONE));
                 }
             },
             _ => panic!("Compiler error: sum aggregation result should be integer type"),
@@ -191,7 +187,7 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     let sum = input.iter().map(|(v, _)| *v).sum::<i32>();
                     let count = input.len() as i32;
                     let avg = sum / count;
-                    updates.push((*avg, SEMIRING_ONE));
+                    updates.push((avg, SEMIRING_ONE));
                 }
             },
             DataType::Int64 => quote! {
@@ -199,7 +195,7 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     let sum = input.iter().map(|(v, _)| *v).sum::<i64>();
                     let count = input.len() as i64;
                     let avg = sum / count;
-                    updates.push((*avg, SEMIRING_ONE));
+                    updates.push((avg, SEMIRING_ONE));
                 }
             },
             _ => panic!("Compiler error: avg aggregation result should be integer type"),

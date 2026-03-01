@@ -24,7 +24,8 @@ fn count_row_pattern(arity: usize, agg_pos: usize) -> TokenStream {
         })
         .collect();
     if arity == 1 {
-        fields[0].clone()
+        let field0 = &fields[0];
+        quote! { ( #field0 , ) }
     } else {
         quote! { ( #(#fields),* ) }
     }

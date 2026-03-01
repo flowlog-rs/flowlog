@@ -78,7 +78,7 @@ impl Compiler {
             self.write_src_relation()?;
         }
 
-        // Semiring module (when min/max aggregation is used)
+        // Semiring modules for aggregations that require them (e.g., via `needs_semiring()`)
         if self.imports.needs_semiring() {
             self.write_src_semiring()?;
         }
