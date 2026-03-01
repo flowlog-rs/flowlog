@@ -128,12 +128,18 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
         AggregationOperator::Count => match agg_type {
             DataType::Int32 => quote! {
                 |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
                     let count = input.len() as i32;
                     updates.push((count, SEMIRING_ONE));
                 }
             },
             DataType::Int64 => quote! {
                 |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
                     let count = input.len() as i64;
                     updates.push((count, SEMIRING_ONE));
                 }
@@ -145,12 +151,18 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
         AggregationOperator::Sum => match agg_type {
             DataType::Int32 => quote! {
                 |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
                     let sum = input.iter().map(|(v, _)| *v).sum::<i32>();
                     updates.push((sum, SEMIRING_ONE));
                 }
             },
             DataType::Int64 => quote! {
                 |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
                     let sum = input.iter().map(|(v, _)| *v).sum::<i64>();
                     updates.push((sum, SEMIRING_ONE));
                 }
@@ -184,6 +196,9 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
         AggregationOperator::Avg => match agg_type {
             DataType::Int32 => quote! {
                 |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
                     let sum = input.iter().map(|(v, _)| *v).sum::<i32>();
                     let count = input.len() as i32;
                     let avg = sum / count;
@@ -192,6 +207,9 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
             },
             DataType::Int64 => quote! {
                 |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
                     let sum = input.iter().map(|(v, _)| *v).sum::<i64>();
                     let count = input.len() as i64;
                     let avg = sum / count;
