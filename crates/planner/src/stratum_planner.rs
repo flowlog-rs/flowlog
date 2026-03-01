@@ -56,6 +56,12 @@ pub struct StratumPlanner {
     /// Only populated for rules whose heads contain an aggregation argument.
     /// Values are `(AggregationOperator, output_position, output_arity)` tuples.
     output_to_aggregation_map: HashMap<u64, (AggregationOperator, usize, usize)>,
+
+    /// UDF metadata keyed by final output fingerprint.
+    /// Only populated for rules whose heads contain a UDF call.
+    /// Values are `(fn_name, start_position, end_position, output_arity)` tuples,
+    /// where start..end is the range of flattened arg positions in the output layout.
+    output_to_udf_map: HashMap<u64, (String, usize, usize, usize)>,
 }
 
 impl StratumPlanner {
@@ -166,6 +172,7 @@ impl StratumPlanner {
             recursion_leave_collections: stratifier.stratum_leave_relation(stratum_idx).to_vec(),
             output_to_idb_map: HashMap::new(),
             output_to_aggregation_map: HashMap::new(),
+            output_to_udf_map: HashMap::new(),
         };
         stratum_planner.materialize_transformations();
 
@@ -176,6 +183,7 @@ impl StratumPlanner {
         stratum_planner
             .build_recursion_enter_collections(stratifier.stratum_available_relations(stratum_idx));
         stratum_planner.build_output_to_aggregation_map(&catalogs);
+        stratum_planner.build_output_to_udf_map(&catalogs);
 
         // Debug info for non-recursive vs recursive transformations.
         debug!("\n{}", stratum_planner);
@@ -247,6 +255,13 @@ impl StratumPlanner {
         &self.output_to_aggregation_map
     }
 
+    /// Get the mapping from rule output relation to corresponding UDF call.
+    /// Returns tuples of (fn_name, start position, end position, output arity).
+    #[inline]
+    pub fn output_to_udf_map(&self) -> &HashMap<u64, (String, usize, usize, usize)> {
+        &self.output_to_udf_map
+    }
+
     /// Check if this stratum is recursive.
     #[inline]
     pub fn is_recursive(&self) -> bool {
@@ -295,14 +310,27 @@ impl fmt::Display for StratumPlanner {
             writeln!(f, "(Non-recursive stratum: no recursive transformations)")?;
         }
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
-        writeln!(f, "IDB to Aggregation Map:")?;
-        for (fp, (op, pos, arity)) in &self.output_to_aggregation_map {
-            writeln!(
-                f,
-                "  fp={:#018x},\n  op={:?},\n  pos={},\n  arity={}",
-                fp, op, pos, arity
-            )?;
+        if !self.output_to_aggregation_map.is_empty() {
+            writeln!(f, "\n{}", "-".repeat(40))?;
+            writeln!(f, "IDB to Aggregation Map:")?;
+            for (fp, (op, pos, arity)) in &self.output_to_aggregation_map {
+                writeln!(
+                    f,
+                    "  fp={:#018x},\n  op={:?},\n  pos={},\n  arity={}",
+                    fp, op, pos, arity
+                )?;
+            }
+        }
+
+        if !self.output_to_udf_map.is_empty() {
+            writeln!(f, "\n{}", "-".repeat(40))?;
+            writeln!(f, "IDB to UDF Map:")?;
+            for (fp, (name, start, end, arity)) in &self.output_to_udf_map {
+                writeln!(
+                    f,
+                    "  fp={fp:#018x}, fn={name}, range={start}..{end}, arity={arity}",
+                )?;
+            }
         }
 
         writeln!(f, "{}", "=".repeat(80))
@@ -481,41 +509,110 @@ impl StratumPlanner {
 
     /// Build the mapping from each final output collection fingerprint to its aggregation requirement.
     /// Ensures consistent aggregation operator and position for a given output relation if multiple rules map to it.
-    ///
-    /// Note:
-    /// 1. Not every output relation has an aggregation.
-    /// 2. Due to sharing, not every rule has a real output fingerprint -> aggregation mapping, though it may occur
-    ///    in the `output_to_aggregation_map`.
     fn build_output_to_aggregation_map(&mut self, catalogs: &[Catalog]) {
-        for catalog in catalogs.iter() {
-            if let Some((pos, op, arity, head_idb_fp)) = catalog
-                .head_arguments()
+        for catalog in catalogs {
+            let head_args = catalog.head_arguments();
+
+            // At most one aggregation per rule head.
+            assert!(
+                head_args.iter().filter(|a| matches!(a, HeadArg::Aggregation(_))).count() <= 1,
+                "Planner error: rule head contains multiple aggregations, but at most one is allowed",
+            );
+
+            let Some((pos, op)) = head_args.iter().enumerate().find_map(|(i, arg)| match arg {
+                HeadArg::Aggregation(agg) => Some((i, *agg.operator())),
+                _ => None,
+            }) else {
+                continue;
+            };
+
+            let arity = head_args.len();
+            let head_idb_fp = catalog.head_idb_fingerprint();
+            let entry = (op, pos, arity);
+
+            match self.output_to_aggregation_map.get(&head_idb_fp) {
+                Some(&existing) if existing != entry => {
+                    panic!(
+                        "Planner error: inconsistent aggregation for output {:#018x}: \
+                         found {:?}@{} but expected {:?}@{}",
+                        head_idb_fp, op, pos, existing.0, existing.1
+                    );
+                }
+                None => {
+                    self.output_to_aggregation_map.insert(head_idb_fp, entry);
+                }
+                _ => {} // consistent duplicate — skip
+            }
+        }
+    }
+
+    /// Build the mapping from each final output collection fingerprint to its UDF requirement.
+    ///
+    /// FnCall args are flattened into separate columns in the output layout;
+    /// this records (fn_name, start..end, output_arity) so the compiler can collapse them.
+    fn build_output_to_udf_map(&mut self, catalogs: &[Catalog]) {
+        for catalog in catalogs {
+            let head_args = catalog.head_arguments();
+            let head_idb_fp = catalog.head_idb_fingerprint();
+
+            // At most one UDF per rule head.
+            assert!(
+                head_args
+                    .iter()
+                    .filter(|a| matches!(a, HeadArg::FnCall(_)))
+                    .count()
+                    <= 1,
+                "Planner error: rule head contains multiple UDF calls, but at most one is allowed",
+            );
+
+            // A head cannot have both an aggregation and a UDF.
+            let has_agg = self.output_to_aggregation_map.contains_key(&head_idb_fp);
+            let has_udf = head_args.iter().any(|a| matches!(a, HeadArg::FnCall(_)));
+            assert!(
+                !(has_agg && has_udf),
+                "Planner error: rule head cannot have both aggregation and UDF for output {:#018x}",
+                head_idb_fp,
+            );
+
+            if !has_udf {
+                continue;
+            }
+
+            // Compute flattened output arity once.
+            let output_arity: usize = head_args
                 .iter()
-                .enumerate()
-                .find_map(|(i, arg)| match arg {
-                    HeadArg::Aggregation(agg) => Some((
-                        i,
-                        *agg.operator(),
-                        catalog.head_arguments().len(),
-                        catalog.head_idb_fingerprint(),
-                    )),
-                    _ => None,
+                .map(|a| match a {
+                    HeadArg::FnCall(fc) => fc.args().len(),
+                    _ => 1,
                 })
-            {
-                match self.output_to_aggregation_map.get(&head_idb_fp) {
-                    Some(&(existing_op, existing_pos, existing_arity)) => {
-                        if existing_op != op || existing_pos != pos || existing_arity != arity {
-                            panic!(
-                                    "Planner error: inconsistent aggregation for output fingerprint {:#018x}, found {:?} at position {} but expected {:?} at position {}",
-                                    head_idb_fp, op, pos, existing_op, existing_pos
-                                );
-                        }
+                .sum();
+
+            // Walk head args, tracking the flattened position.
+            let mut flat_pos = 0usize;
+            for arg in head_args {
+                let HeadArg::FnCall(fc) = arg else {
+                    flat_pos += 1;
+                    continue;
+                };
+
+                let start = flat_pos;
+                let end = start + fc.args().len();
+                let entry = (fc.name().to_string(), start, end, output_arity);
+
+                match self.output_to_udf_map.get(&head_idb_fp) {
+                    Some(existing) if *existing != entry => {
+                        panic!(
+                            "Planner error: inconsistent UDF for output {:#018x}",
+                            head_idb_fp
+                        );
                     }
                     None => {
-                        self.output_to_aggregation_map
-                            .insert(head_idb_fp, (op, pos, arity));
+                        self.output_to_udf_map.insert(head_idb_fp, entry);
                     }
+                    _ => {} // consistent duplicate — skip
                 }
+
+                flat_pos = end;
             }
         }
     }

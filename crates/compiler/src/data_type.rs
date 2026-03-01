@@ -187,6 +187,57 @@ impl Compiler {
             )
         })
     }
+
+    /// Validate that a scalar UDF's parameter types match the flattened input columns
+    /// and that its return type matches the output relation's column type.
+    pub(crate) fn verify_udf_types(
+        &self,
+        output_fp: u64,
+        idb_fp: u64,
+        fn_name: &str,
+        start: usize,
+    ) {
+        use parser::Udf;
+
+        let ext = self
+            .program
+            .udfs()
+            .iter()
+            .find_map(|udf| {
+                let (Udf::Scalar(e) | Udf::Aggregate(e)) = udf;
+                (e.name() == fn_name).then_some(e)
+            })
+            .unwrap_or_else(|| panic!("Compiler error: UDF '{fn_name}' not found"));
+
+        let flat = |fp| {
+            let (k, v) = self.find_global_type(fp);
+            k.iter().chain(v).copied().collect::<Vec<_>>()
+        };
+
+        // Return type must match the output column at `start`.
+        let out = flat(output_fp);
+        assert_eq!(
+            out[start],
+            ext.ret_type(),
+            "Compiler error: UDF '{fn_name}' returns {:?} but output column {start} expects {:?}",
+            ext.ret_type(),
+            out[start],
+        );
+
+        // Each input parameter type must match the pre-UDF flattened column.
+        let idb = flat(idb_fp);
+        for (i, param) in ext.params().iter().enumerate() {
+            let col = start + i;
+            assert_eq!(
+                idb[col],
+                *param.data_type(),
+                "Compiler error: UDF '{fn_name}' param {i} ('{}') expects {:?} but column {col} has {:?}",
+                param.name(),
+                param.data_type(),
+                idb[col],
+            );
+        }
+    }
 }
 
 // ============================================================================

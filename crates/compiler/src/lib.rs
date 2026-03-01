@@ -19,6 +19,7 @@ mod read;
 mod relation;
 mod scaffold;
 mod transformation;
+mod udf;
 
 // =========================================================================
 // Imports

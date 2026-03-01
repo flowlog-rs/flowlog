@@ -139,7 +139,7 @@ impl RulePlanner {
             .collect()
     }
 
-    /// Resolve head arguments (variables, arithmetic expressions, aggregation) into ArithmeticPos.
+    /// Resolve head arguments (variables, arithmetic expressions, aggregation, UDF) into ArithmeticPos.
     ///
     /// Notice we handled aggregation at stratum planning phase, so here we only need to
     /// convert aggregation arguments to arithmetic expressions.
@@ -156,17 +156,30 @@ impl RulePlanner {
 
         head_args
             .iter()
-            .map(|arg| match arg {
-                HeadArg::Var(var) => ArithmeticPos::from_var_signature(sig_of(var.as_str())),
+            .flat_map(|arg| match arg {
+                HeadArg::Var(var) => {
+                    vec![ArithmeticPos::from_var_signature(sig_of(var.as_str()))]
+                }
                 HeadArg::Arith(arith) => {
                     let var_sigs: Vec<_> =
                         arith.vars().iter().map(|v| sig_of(v.as_str())).collect();
-                    ArithmeticPos::from_arithmetic(arith, &var_sigs)
+                    vec![ArithmeticPos::from_arithmetic(arith, &var_sigs)]
                 }
                 HeadArg::Aggregation(agg) => {
                     let var_sigs: Vec<_> = agg.vars().iter().map(|v| sig_of(v.as_str())).collect();
-                    ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs)
+                    vec![ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs)]
                 }
+                // Flatten fn_call args into separate ArithmeticPos columns.
+                // The compiler will later collapse them back with the actual UDF call.
+                HeadArg::FnCall(fc) => fc
+                    .args()
+                    .iter()
+                    .map(|a| {
+                        let var_sigs: Vec<_> =
+                            a.vars().iter().map(|v| sig_of(v.as_str())).collect();
+                        ArithmeticPos::from_arithmetic(a, &var_sigs)
+                    })
+                    .collect(),
             })
             .collect()
     }

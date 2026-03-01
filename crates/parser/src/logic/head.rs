@@ -15,7 +15,7 @@
 //! assert_eq!(head.to_string(), "result(X, Y + 10)");
 //! ```
 
-use super::{Aggregation, Arithmetic};
+use super::{Aggregation, Arithmetic, FnCall};
 use crate::{Lexeme, Rule};
 use common::compute_fp;
 use pest::iterators::Pair;
@@ -30,6 +30,8 @@ pub enum HeadArg {
     Arith(Arithmetic),
     /// Aggregation (e.g., `count(X)`).
     Aggregation(Aggregation),
+    /// User-defined function call (e.g., `my_hash(x, y)`).
+    FnCall(FnCall),
 }
 
 impl HeadArg {
@@ -40,6 +42,7 @@ impl HeadArg {
             Self::Var(v) => vec![v],
             Self::Arith(a) => a.vars(),
             Self::Aggregation(agg) => agg.vars(),
+            Self::FnCall(fc) => fc.vars(),
         }
     }
 }
@@ -50,6 +53,7 @@ impl fmt::Display for HeadArg {
             Self::Var(v) => write!(f, "{v}"),
             Self::Arith(a) => write!(f, "{a}"),
             Self::Aggregation(agg) => write!(f, "{agg}"),
+            Self::FnCall(fc) => write!(f, "{fc}"),
         }
     }
 }
@@ -85,6 +89,19 @@ impl Lexeme for HeadArg {
                 }
             }
             Rule::aggregate_expr => Self::Aggregation(Aggregation::from_parsed_rule(inner)),
+            Rule::fn_call_expr => {
+                let mut children = inner.into_inner();
+                let fn_name = children
+                    .next()
+                    .expect("Parser error: fn_call_expr missing function name")
+                    .as_str()
+                    .to_string();
+                let args: Vec<Arithmetic> = children
+                    .filter(|p| p.as_rule() == Rule::arithmetic_expr)
+                    .map(|p| Arithmetic::from_parsed_rule(p))
+                    .collect();
+                Self::FnCall(FnCall::new(fn_name, args))
+            }
             other => panic!("Parser error: unexpected rule for HeadArg: {:?}", other),
         }
     }
@@ -195,10 +212,7 @@ mod tests {
     fn arith_plus_x_5() -> Arithmetic {
         Arithmetic::new(
             Factor::Var("X".into()),
-            vec![(
-                ArithmeticOperator::Plus,
-                Factor::Const(ConstType::Int32(5)),
-            )],
+            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int32(5)))],
         )
     }
 
@@ -258,10 +272,7 @@ mod tests {
     fn headarg_arith_only_constants_has_no_vars() {
         let a = HeadArg::Arith(Arithmetic::new(
             Factor::Const(ConstType::Int32(10)),
-            vec![(
-                ArithmeticOperator::Plus,
-                Factor::Const(ConstType::Int32(5)),
-            )],
+            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int32(5)))],
         ));
         assert!(a.vars().is_empty());
         assert_eq!(a.to_string(), "10 + 5");

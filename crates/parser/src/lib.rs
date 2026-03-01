@@ -10,10 +10,10 @@ pub mod primitive;
 pub mod program;
 
 // Re-export core types for convenient access
-pub use declaration::{Attribute, Relation};
+pub use declaration::{Attribute, ExternFn, Relation, Udf};
 pub use logic::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
-    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, Head, HeadArg, Predicate,
+    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head, HeadArg, Predicate,
 };
 pub use primitive::{ConstType, DataType};
 pub use program::Program;

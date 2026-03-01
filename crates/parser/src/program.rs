@@ -9,7 +9,7 @@
 //! - Boolean facts extracted from rules whose bodies are *pure* booleans
 
 use super::{
-    declaration::{InputDirective, OutputDirective, PrintSizeDirective, Relation},
+    declaration::{InputDirective, OutputDirective, PrintSizeDirective, Relation, Udf},
     logic::{FlowLogRule, Predicate},
     ConstType, FlowLogParser, Lexeme, Rule,
 };
@@ -30,6 +30,8 @@ use tracing::{debug, info, warn};
 pub struct Program {
     relations: Vec<Relation>,
     rules: Vec<FlowLogRule>,
+    /// External UDF declarations (scalar and aggregate).
+    udfs: Vec<Udf>,
     /// Map: relation name -> [(constant tuple, boolean value)]
     bool_facts: HashMap<String, Vec<(Vec<ConstType>, bool)>>,
 }
@@ -59,6 +61,16 @@ impl fmt::Display for Program {
             writeln!(f, "---------------------------------------------")?;
             for relation in idb_relations {
                 writeln!(f, "{}", relation)?;
+            }
+            writeln!(f)?;
+        }
+
+        // Extern Functions Section
+        if !self.udfs.is_empty() {
+            writeln!(f, "Extern Functions")?;
+            writeln!(f, "---------------------------------------------")?;
+            for udf in &self.udfs {
+                writeln!(f, "{}", udf)?;
             }
             writeln!(f)?;
         }
@@ -107,7 +119,8 @@ impl Program {
         let root = pairs.next().expect("Parser error: no parsed rule found");
 
         // Build structure + extract boolean facts inside `from_parsed_rule` then prune.
-        let program = Self::from_parsed_rule(root).prune_dead_components();
+        let mut program = Self::from_parsed_rule(root);
+        program.prune_dead_components();
 
         // Debug info the parsed program
         debug!("\n{}", program);
@@ -174,6 +187,13 @@ impl Program {
     #[inline]
     pub fn bool_facts(&self) -> &HashMap<String, Vec<(Vec<ConstType>, bool)>> {
         &self.bool_facts
+    }
+
+    /// External UDF declarations.
+    #[must_use]
+    #[inline]
+    pub fn udfs(&self) -> &[Udf] {
+        &self.udfs
     }
 
     /// Output/Printsize relations.
@@ -311,9 +331,8 @@ impl Program {
         (needed_rules, needed_preds)
     }
 
-    /// Return a copy of the program with dead rules/relations removed, logging what was dropped.
-    #[must_use]
-    fn prune_dead_components(&self) -> Self {
+    /// Remove dead rules/relations in place, logging what was dropped.
+    fn prune_dead_components(&mut self) {
         let (needed_rules, needed_preds) = self.identify_needed_components();
 
         // Dead relations
@@ -343,34 +362,19 @@ impl Program {
             }
         }
 
-        // Keep only needed components.
-        let pruned_rules: Vec<_> = self
+        // Retain only needed components.
+        self.relations.retain(|d| needed_preds.contains(d.name()));
+
+        self.rules = self
             .rules
-            .iter()
+            .drain(..)
             .enumerate()
             .filter(|(i, _)| needed_rules.contains(i))
-            .map(|(_, r)| r.clone())
+            .map(|(_, r)| r)
             .collect();
 
-        let pruned_relations = self
-            .relations
-            .iter()
-            .filter(|d| needed_preds.contains(d.name()))
-            .cloned()
-            .collect();
-
-        let mut pruned_bool = HashMap::new();
-        for (rel, facts) in &self.bool_facts {
-            if needed_preds.contains(rel.as_str()) {
-                pruned_bool.insert(rel.clone(), facts.clone());
-            }
-        }
-
-        Self {
-            relations: pruned_relations,
-            rules: pruned_rules,
-            bool_facts: pruned_bool,
-        }
+        self.bool_facts
+            .retain(|rel, _| needed_preds.contains(rel.as_str()));
     }
 }
 
@@ -384,6 +388,7 @@ impl Lexeme for Program {
         let mut output_directives = Vec::new();
         let mut printsize_directives = Vec::new();
         let mut rules = Vec::new();
+        let mut udfs = Vec::new();
 
         // First pass: collect all declarations and directives
         for node in parsed_rule.into_inner() {
@@ -391,6 +396,10 @@ impl Lexeme for Program {
                 Rule::declaration => {
                     let relation = Relation::from_parsed_rule(node);
                     relations.push(relation);
+                }
+                Rule::extern_fn | Rule::extern_agg => {
+                    let udf = Udf::from_parsed_rule(node);
+                    udfs.push(udf);
                 }
                 Rule::input_directive => {
                     let input_dir = InputDirective::from_parsed_rule(node);
@@ -515,6 +524,7 @@ impl Lexeme for Program {
         let mut program = Self {
             relations,
             rules,
+            udfs,
             bool_facts: HashMap::new(),
         };
 

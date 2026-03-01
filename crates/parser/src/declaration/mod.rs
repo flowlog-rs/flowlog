@@ -23,8 +23,10 @@
 //! ```
 pub mod attribute;
 pub mod directive;
+pub mod extern_fn;
 pub mod relation;
 
 pub use attribute::Attribute;
 pub use directive::{InputDirective, OutputDirective, PrintSizeDirective};
+pub use extern_fn::{ExternFn, Udf};
 pub use relation::Relation;

@@ -57,6 +57,12 @@ pub struct Config {
     /// of join keys are string-typed
     #[arg(long, action = ArgAction::SetTrue)]
     pub str_intern: bool,
+
+    /// Path to a Rust source file containing UDF implementations.
+    /// Functions declared with `.extern fn` / `.extern agg` in the Datalog
+    /// program must be defined in this file.
+    #[arg(long, value_name = "PATH")]
+    pub udf_file: Option<String>,
 }
 
 impl Config {
@@ -138,6 +144,11 @@ impl Config {
     /// Check if string interning is enabled
     pub fn str_intern_enabled(&self) -> bool {
         self.str_intern
+    }
+
+    /// Path to the user-supplied UDF implementation file, if any.
+    pub fn udf_file(&self) -> Option<&str> {
+        self.udf_file.as_deref()
     }
 }
 
