@@ -126,11 +126,33 @@ impl Stratifier {
         // Identify recursion (multi-node SCC or self-loop) and collect strata.
         let mut strata: Vec<Vec<usize>> = Vec::new();
         let mut recursive_bitmap: Vec<bool> = Vec::new();
+        let negative_edges = dependency_graph.negative_edges();
         for scc in sccs {
             let is_recursive = scc.len() > 1 || {
                 let r = scc[0];
                 dep_map.get(&r).is_some_and(|deps| deps.contains(&r))
             };
+
+            // Validate: no negation through recursion.
+            // If any negative edge (rule_id, dep_rule_id) has both endpoints inside
+            // the same SCC, the program is not stratifiable.
+            if is_recursive {
+                let scc_set: HashSet<usize> = scc.iter().copied().collect();
+                for &(src, dst) in negative_edges {
+                    if scc_set.contains(&src) && scc_set.contains(&dst) {
+                        let src_rule = &program.rules()[src];
+                        let dst_rule = &program.rules()[dst];
+                        panic!(
+                            "Stratifier error: program is not stratifiable: negation through recursion detected.\n\
+                             Rule {} negates a predicate defined by rule {} within the same recursive stratum.\n\
+                             Rule {}: {}\n\
+                             Rule {}: {}",
+                            src, dst, src, src_rule, dst, dst_rule
+                        );
+                    }
+                }
+            }
+
             strata.push(scc);
             recursive_bitmap.push(is_recursive);
         }

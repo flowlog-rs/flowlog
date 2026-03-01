@@ -10,6 +10,10 @@ use std::fmt;
 pub(super) struct DependencyGraph {
     /// All dependencies: every rule whose head predicate appears in the body of another rule.
     dependency_map: HashMap<usize, HashSet<usize>>,
+
+    /// Edges caused by negation. Used to detect unstratifiable
+    /// programs (negation through recursion).
+    negative_edges: HashSet<(usize, usize)>,
 }
 
 impl DependencyGraph {
@@ -17,6 +21,12 @@ impl DependencyGraph {
     #[must_use]
     pub(super) fn dependency_map(&self) -> &HashMap<usize, HashSet<usize>> {
         &self.dependency_map
+    }
+
+    /// Returns the set of dependency edges introduced by negation.
+    #[must_use]
+    pub(super) fn negative_edges(&self) -> &HashSet<(usize, usize)> {
+        &self.negative_edges
     }
 
     /// Constructs a dependency graph from a program.
@@ -28,6 +38,7 @@ impl DependencyGraph {
 
         let mut dependency_map: HashMap<usize, HashSet<usize>> =
             (0..rules.len()).map(|i| (i, HashSet::new())).collect();
+        let mut negative_edges: HashSet<(usize, usize)> = HashSet::new();
 
         for (rule_id, rule) in rules.iter().enumerate() {
             Self::analyze_rule_dependencies(
@@ -35,10 +46,14 @@ impl DependencyGraph {
                 rule,
                 &head_to_rule_ids_map,
                 &mut dependency_map,
+                &mut negative_edges,
             );
         }
 
-        Self { dependency_map }
+        Self {
+            dependency_map,
+            negative_edges,
+        }
     }
 
     /// Builds mapping from relation names to rule IDs that define them.
@@ -61,25 +76,31 @@ impl DependencyGraph {
         rule: &FlowLogRule,
         head_to_rule_ids_map: &HashMap<String, Vec<usize>>,
         dependency_map: &mut HashMap<usize, HashSet<usize>>,
+        negative_edges: &mut HashSet<(usize, usize)>,
     ) {
         for predicate in rule.rhs() {
-            // Determine the atom name based on predicate type and handle dependencies
-            let atom_name = match predicate {
-                Predicate::PositiveAtomPredicate(atom) | Predicate::NegativeAtomPredicate(atom) => {
-                    atom.name()
-                }
+            // Determine the atom name and whether the dependency is negative
+            let (atom_name, is_negative) = match predicate {
+                Predicate::PositiveAtomPredicate(atom) => (atom.name(), false),
+                Predicate::NegativeAtomPredicate(atom) => (atom.name(), true),
                 // Other predicate types (constraints, comparisons, etc.) - skip dependency analysis
                 _ => continue,
             };
 
             // For both positive and negative atoms, check if they reference IDB relations
-            // If so, add positive dependency (the rule needs these atoms to be computed first)
+            // If so, add dependency (the rule needs these atoms to be computed first)
             if let Some(dependency_rule_ids) = head_to_rule_ids_map.get(atom_name) {
-                // Add dependency (polarity-agnostic): current rule depends on rules defining this atom
-                dependency_map
-                    .get_mut(&rule_id)
-                    .expect("Rule ID should exist in map")
-                    .extend(dependency_rule_ids.iter().copied());
+                for &dep_rule_id in dependency_rule_ids {
+                    dependency_map
+                        .get_mut(&rule_id)
+                        .expect("Stratifier error: rule ID should exist in map")
+                        .insert(dep_rule_id);
+
+                    // Track negative edges separately for stratification validation
+                    if is_negative {
+                        negative_edges.insert((rule_id, dep_rule_id));
+                    }
+                }
             }
         }
     }
