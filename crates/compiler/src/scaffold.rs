@@ -241,7 +241,7 @@ impl Compiler {
         ensure_dir(&src_dir)?;
 
         let s = self.imports.semirings();
-        for (tmpl, file, mac, pfx, i32, i64, bound) in [
+        for (tmpl, file, mac, pfx, needs_i32, needs_i64, bound) in [
             (
                 MIN_SEMIRING_RS_TMPL,
                 "min_semiring.rs",
@@ -279,17 +279,17 @@ impl Compiler {
                 None,
             ),
         ] {
-            if !i32 && !i64 {
+            if !needs_i32 && !needs_i64 {
                 continue;
             }
             let mut rendered = tmpl.replace("\r\n", "\n");
-            if i32 {
+            if needs_i32 {
                 match bound {
                     Some(b) => rendered.push_str(&format!("{mac}!({pfx}I32, i32, i32::{b});\n")),
                     None => rendered.push_str(&format!("{mac}!({pfx}I32, i32);\n")),
                 }
             }
-            if i64 {
+            if needs_i64 {
                 match bound {
                     Some(b) => rendered.push_str(&format!("{mac}!({pfx}I64, i64, i64::{b});\n")),
                     None => rendered.push_str(&format!("{mac}!({pfx}I64, i64);\n")),
