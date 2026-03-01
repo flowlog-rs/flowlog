@@ -151,20 +151,24 @@ pub fn get_example_files() -> Vec<std::path::PathBuf> {
         process::exit(1);
     }
 
-    // Read and collect .dl files
-    let entries = match fs::read_dir(example_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            eprintln!("Error reading example dir: {}", e);
-            process::exit(1);
-        }
-    };
-
+    // Recursively collect all .dl files under example/
     let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("dl") {
-            files.push(path);
+    let mut dirs = vec![PathBuf::from(example_dir)];
+    while let Some(dir) = dirs.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("Error reading dir '{}': {}", dir.display(), e);
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().and_then(|s| s.to_str()) == Some("dl") {
+                files.push(path);
+            }
         }
     }
 

@@ -1,9 +1,9 @@
 use clap::Parser;
-use std::{fs, path::Path, process};
+use std::process;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use common::Config;
+use common::{get_example_files, Config};
 use compiler::Compiler;
 use optimizer::Optimizer;
 use parser::Program;
@@ -89,37 +89,7 @@ fn generate_program(
 
 /// Run compiler on all example files in the example directory
 fn run_all_examples(config: &Config) {
-    let example_dir = "example";
-
-    // Check if example directory exists
-    if !Path::new(example_dir).exists() {
-        error!("Directory '{}' not found", example_dir);
-        process::exit(1);
-    }
-
-    // Read and collect .dl files
-    let entries = match fs::read_dir(example_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            error!("Error reading example dir: {}", e);
-            process::exit(1);
-        }
-    };
-
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("dl") {
-            files.push(path);
-        }
-    }
-
-    files.sort();
-
-    if files.is_empty() {
-        error!("No .dl files found in {}", example_dir);
-        process::exit(1);
-    }
+    let files = get_example_files();
 
     // Process all files
     info!("Running compiler on {} example files...", files.len());

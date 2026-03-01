@@ -124,15 +124,35 @@ impl Stratifier {
         // we processed original order reversed; keep as-is.
 
         // Identify recursion (multi-node SCC or self-loop) and collect strata.
+        let mut scc_id = vec![0usize; dep_map.len()];
         let mut strata: Vec<Vec<usize>> = Vec::new();
         let mut recursive_bitmap: Vec<bool> = Vec::new();
-        for scc in sccs {
+        for (idx, scc) in sccs.into_iter().enumerate() {
             let is_recursive = scc.len() > 1 || {
                 let r = scc[0];
                 dep_map.get(&r).is_some_and(|deps| deps.contains(&r))
             };
+            for &rule_id in &scc {
+                scc_id[rule_id] = idx;
+            }
             strata.push(scc);
             recursive_bitmap.push(is_recursive);
+        }
+
+        // Validate: no negation through recursion.
+        // A single scan over negative edges using the precomputed scc_id array.
+        for &(src, dst) in dependency_graph.negative_edges() {
+            if scc_id[src] == scc_id[dst] && recursive_bitmap[scc_id[src]] {
+                let src_rule = &program.rules()[src];
+                let dst_rule = &program.rules()[dst];
+                panic!(
+                    "Stratifier error: program is not stratifiable: negation through recursion detected.\n\
+                     Rule {} negates a predicate defined by rule {} within the same recursive stratum.\n\
+                     Rule {}: {}\n\
+                     Rule {}: {}",
+                    src, dst, src, src_rule, dst, dst_rule
+                );
+            }
         }
 
         // Merge phase: repeatedly take all remaining strata with no external
@@ -407,5 +427,53 @@ impl fmt::Display for Stratifier {
             writeln!(f)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Write a Datalog source string to a temporary file and parse it.
+    fn parse_program(source: &str) -> Program {
+        let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
+        tmp.write_all(source.as_bytes())
+            .expect("failed to write temp file");
+        Program::parse(&tmp.path().to_string_lossy())
+    }
+
+    /// A(x,y) :- Edge(x,y), !B(x,y).
+    /// B(x,y) :- A(x,y).
+    /// A and B form a recursive cycle and A negates B → not stratifiable.
+    #[test]
+    #[should_panic(expected = "negation through recursion")]
+    fn rejects_negation_through_recursion() {
+        let src = "\
+            .decl Edge(a: int32, b: int32)\n\
+            .decl A(a: int32, b: int32)\n\
+            .decl B(a: int32, b: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            A(x, y) :- Edge(x, y), !B(x, y).\n\
+            B(x, y) :- A(x, y).\n\
+            .output A\n\
+            .output B\n";
+        let program = parse_program(src);
+        let _ = Stratifier::from_program(&program);
+    }
+
+    /// A(x,y) :- Edge(x,y), !A(x,y).
+    /// Self-negation → not stratifiable.
+    #[test]
+    #[should_panic(expected = "negation through recursion")]
+    fn rejects_self_negation() {
+        let src = "\
+            .decl Edge(a: int32, b: int32)\n\
+            .decl A(a: int32, b: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            A(x, y) :- Edge(x, y), !A(x, y).\n\
+            .output A\n";
+        let program = parse_program(src);
+        let _ = Stratifier::from_program(&program);
     }
 }
