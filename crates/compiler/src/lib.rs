@@ -425,7 +425,7 @@ impl Compiler {
                                 let mut local_txn: TxnState = TxnState::default();
 
                                 loop {
-                                    let Some(c) = prompt.next_cmd() else { continue };
+                                    let Some(c) = prompt.next_cmd(time_stamp) else { continue };
 
                                     match c {
                                         Cmd::Help => println!("{}", cmd::help_text()),
@@ -547,11 +547,15 @@ impl Compiler {
         // Imports block (conditional on mode/recursion/etc).
         let imports = self.imports.render();
 
+        let byte_range_reader = self.gen_byte_range_reader();
+
         let file_ts: TokenStream = quote! {
             #imports
 
             #time_profile_struct
             #memory_profile_struct
+
+            #byte_range_reader
 
             #main_fn
         };
@@ -579,10 +583,17 @@ impl Compiler {
             let name = idb.name();
 
             if idb.printsize() {
-                self.imports.mark_threshold_total();
                 self.imports.mark_as_collection();
                 self.imports.mark_timely_map();
-                self.imports.mark_semiring_one();
+                match self.config.mode() {
+                    ExecutionMode::Batch => {
+                        self.imports.mark_threshold_total();
+                        self.imports.mark_semiring_one();
+                    }
+                    ExecutionMode::Incremental => {
+                        self.imports.mark_threshold();
+                    }
+                }
 
                 inspect_stmts.push(self.gen_size_inspector(&var, name, profiler));
             }

@@ -43,20 +43,37 @@ impl Compiler {
             profiler.inspect_size_operator(prefix.clone(), prefix.clone());
         });
 
-        quote! {{
-            #var
-                // Ensure each distinct record has weight `SEMIRING_ONE` under our semiring.
-                .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
-                // Drop data; keep time, emit `diff = 1` in DD's inner representation.
-                .inner
-                .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
-                // Back to a collection so we can consolidate.
-                .as_collection()
-                .map(|_| ())
-                .consolidate()
-                .inspect(|(_data, time, size)| eprintln!("[size][{}] t={:?} size={:?}", #prefix, time, size))
-                #maybe_probe;
-        }}
+        match self.config.mode() {
+            ExecutionMode::Batch => {
+                quote! {{
+                    #var
+                        // Ensure each distinct record has weight `SEMIRING_ONE` under our semiring.
+                        .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
+                        // Drop data; keep time, emit `diff = 1` in DD's inner representation.
+                        .inner
+                        .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
+                        // Back to a collection so we can consolidate.
+                        .as_collection()
+                        .map(|_| ())
+                        .consolidate()
+                        .inspect(|(_data, time, size)| eprintln!("[size][{}] t={:?} size={:?}", #prefix, time, size))
+                        #maybe_probe;
+                }}
+            }
+            ExecutionMode::Incremental => {
+                quote! {{
+                    #var
+                        .threshold(|_, w| if *w > 0 { 1i32 } else { 0 })
+                        .inner
+                        .flat_map(move |(_, t, d)| std::iter::once(((), t.clone(), d)))
+                        .as_collection()
+                        .map(|_| ())
+                        .consolidate()
+                        .inspect(|(_data, time, diff)| eprintln!("[size][{}] t={:?} size_diff={:?}", #prefix, time, diff))
+                        #maybe_probe;
+                }}
+            }
+        }
     }
 
     /// Generate code that prints each tuple update (data only) at stderr for debugging.

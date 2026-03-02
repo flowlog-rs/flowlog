@@ -113,9 +113,10 @@ impl Compiler {
             //! - Advancing / flushing / closing the underlying input session
             //!
             //! Sharding:
-            //! - For non-nullary relations, updates are sharded by the *first* column.
-            //! - Integer keys shard by `key % peers`.
-            //! - String keys shard by 32-bit FNV-1a or interned u32 ID modulo.
+            //! - For `apply_tuple`, updates are sharded by the *first* column
+            //!   (integer mod peers; string FNV-1a or interned ID modulo).
+            //! - For `apply_file`, byte-range parallel reading is used instead:
+            //!   each worker reads only its ~1/N slice of the file.
             //!
             //! Nullary relations:
             //! - Are handled by a dedicated generator (no parsing).
@@ -125,8 +126,9 @@ impl Compiler {
             use differential_dataflow::input::InputSession;
 
             use std::fs::File;
-            use std::io::{BufRead, BufReader};
+            use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
             use std::path::Path;
+            use std::time::Instant;
 
             #intern_import
 
@@ -148,8 +150,9 @@ impl Compiler {
 
                 /// Apply updates from a file.
                 ///
-                /// Implementations should read line-by-line, parse columns, shard by the first
-                /// column, and apply `diff` to each parsed tuple.
+                /// Implementations use byte-range parallel reading: each worker reads
+                /// only its ~1/N byte slice of the file, parsing and applying `diff`
+                /// to each row within its range.
                 fn apply_file(&mut self, path: &Path, diff: Diff, peers: usize, index: usize);
 
                 /// Advance the input session to logical time `t`.
@@ -165,6 +168,70 @@ impl Compiler {
             #shard_i32_fn
             #shard_i64_fn
             #shard_string_fn
+
+            /// Open a byte-range slice of a file for parallel reading.
+            ///
+            /// Each worker reads approximately `1/peers` of the file. Non-first workers
+            /// skip the partial line at their seek offset so no line is double-read or missed.
+            ///
+            /// Returns `(reader, bytes_to_read)`.
+            fn __byte_range_reader(
+                path: &Path,
+                index: usize,
+                peers: usize,
+            ) -> Option<(BufReader<File>, u64)> {
+                let mut file = match File::open(path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("[relops] failed to open {}: {}", path.display(), e);
+                        return None;
+                    }
+                };
+                let file_size = match file.metadata() {
+                    Ok(m) => m.len(),
+                    Err(e) => {
+                        eprintln!("[relops] failed to get metadata for {}: {}", path.display(), e);
+                        return None;
+                    }
+                };
+
+                let chunk = file_size / peers as u64;
+                let start = chunk * index as u64;
+                let end = if index == peers - 1 {
+                    file_size
+                } else {
+                    chunk * (index + 1) as u64
+                };
+
+                // Nothing to read for this worker.
+                if start >= end {
+                    return Some((BufReader::new(file), 0));
+                }
+
+                if index > 0 && start > 0 {
+                    // Peek the byte before our range to see if we're on a line boundary.
+                    if file.seek(SeekFrom::Start(start - 1)).is_err() {
+                        return Some((BufReader::new(file), 0));
+                    }
+                    let mut reader = BufReader::new(file);
+                    let mut peek = [0u8; 1];
+                    if reader.read_exact(&mut peek).is_err() {
+                        return Some((reader, 0));
+                    }
+
+                    if peek[0] == b'\n' {
+                        // Exactly on a line boundary.
+                        return Some((reader, end - start));
+                    }
+                    // Mid-line: skip the rest of this partial line.
+                    let mut discard = Vec::new();
+                    let skipped = reader.read_until(b'\n', &mut discard).unwrap_or(0);
+                    return Some((reader, (end - start).saturating_sub(skipped as u64)));
+                }
+
+                // Worker 0: read from the beginning.
+                Some((BufReader::new(file), end - start))
+            }
 
             #(#rel_impls)*
         };
@@ -292,18 +359,6 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
             }
         }
     };
-    let shard_file = match dts[0] {
-        DataType::Int32 => quote! { if !shard_i32(f0, peers, index) { return None; } },
-        DataType::Int64 => quote! { if !shard_i64(f0, peers, index) { return None; } },
-        DataType::String => {
-            if string_intern {
-                quote! { if !shard_spur(f0, peers, index) { return None; } }
-            } else {
-                quote! { if !shard_str(f0.as_str(), peers, index) { return None; } }
-            }
-        }
-    };
-
     let tuple_parse_stmts = gen_parse_from_str(name, &dts, string_intern);
     let file_parse_stmts = gen_parse_from_bytes(name, &dts, string_intern);
 
@@ -353,32 +408,45 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
             }
 
             fn apply_file(&mut self, path: &Path, diff: Diff, peers: usize, index: usize) {
-                let f = match File::open(path) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        eprintln!("[relops][{}] failed to open {}: {}", #name, path.display(), e);
-                        return;
-                    }
+                let load_start = Instant::now();
+                let (mut reader, byte_budget) = match __byte_range_reader(path, index, peers) {
+                    Some(r) => r,
+                    None => return,
                 };
-                let reader = BufReader::new(f);
                 let delim = self.delim;
 
-                // optimized: build ingest iterator, then apply updates
-                let ingest = reader
-                    .split(b'\n')
-                    .filter_map(Result::ok)
-                    .filter(|line| !line.is_empty())
-                    .filter_map(|line| {
+                let mut buf = Vec::with_capacity(256);
+                let mut bytes_consumed: u64 = 0;
+                while bytes_consumed < byte_budget {
+                    buf.clear();
+                    match reader.read_until(b'\n', &mut buf) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("[relops][{}] I/O error reading {}: {}", #name, path.display(), e);
+                            break;
+                        }
+                    }
+                    bytes_consumed += buf.len() as u64;
+
+                    // Strip trailing newline / carriage return.
+                    if buf.last() == Some(&b'\n') { buf.pop(); }
+                    if buf.last() == Some(&b'\r') { buf.pop(); }
+
+                    if buf.is_empty() { continue; }
+
+                    let line = &buf;
+                    let row = (|| -> Option<_> {
                         let mut cols = line.split(|&b| b == delim);
-
                         #file_parse_stmts
-
-                        #shard_file
                         Some(#update_expr)
-                    });
-
-                for row in ingest {
-                    self.h_mut().update(row, diff);
+                    })();
+                    if let Some(row) = row {
+                        self.h_mut().update(row, diff);
+                    }
+                }
+                if index == 0 {
+                    println!("{:?}:\tData loaded for {}", load_start.elapsed(), #name);
                 }
             }
 

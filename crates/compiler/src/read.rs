@@ -7,10 +7,10 @@
 //! - Ingests compile-time boolean facts (from the parsed program).
 //! - Closes all handles to signal end-of-input.
 //!
-//! Sharding strategy (to distribute ingestion across workers):
-//! - If the first column is an integer: shard by `first % peers`.
-//! - If the first column is a string: shard by a stable 64-bit FNV-1a hash of the bytes.
-
+//! Ingestion strategy (byte-range parallel reading):
+//! Each worker reads only its ~1/N byte slice of each facts file, avoiding
+//! redundant I/O. Non-first workers skip the partial first line at their
+//! seek offset.
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use std::path::Path;
@@ -150,11 +150,14 @@ impl Compiler {
         stmts
     }
 
-    /// Generate CSV ingestion for a single relation.
+    /// Generate CSV ingestion for a single relation using byte-range parallel reading.
+    ///
+    /// Each worker reads only its ~1/N byte slice of the file. Non-first workers
+    /// skip the partial first line at their seek offset. All parsed rows are fed
+    /// into the input handle.
     ///
     /// Notes:
     /// - Nullary relations do not read from CSV.
-    /// - Records are sharded by the first field to spread ingestion work.
     fn gen_csv_ingest_stmt(&self, rel: &Relation) -> TokenStream {
         let arity = rel.arity();
 
@@ -197,97 +200,72 @@ impl Compiler {
         // Field identifiers: f0, f1, ..., f{arity-1}.
         let field_idents: Vec<Ident> = (0..arity).map(|i| format_ident!("f{}", i)).collect();
 
-        // Sharding / "should this worker ingest this row?" logic.
-        // Uses memchr_iter for SIMD-accelerated delimiter scanning.
-        let first_key = field_idents[0].clone();
-        let (should_send_stmt, materialize_first_field): (TokenStream, TokenStream) =
-            match data_types[0] {
-                DataType::Int32 => (
-                    quote! {
-                        let mut __delims = memchr_iter(delim, &buf);
-                        let __first_end = __delims.next().unwrap_or(buf.len());
-                        let #first_key: i32 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<i32>().ok()?;
-                        let mut __start = __first_end + 1;
-                        let should_send = ((#first_key as usize) % peers) == index;
-                    },
-                    quote! {},
-                ),
-                DataType::Int64 => (
-                    quote! {
-                        let mut __delims = memchr_iter(delim, &buf);
-                        let __first_end = __delims.next().unwrap_or(buf.len());
-                        let #first_key: i64 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<i64>().ok()?;
-                        let mut __start = __first_end + 1;
-                        let should_send = ((#first_key as usize) % peers) == index;
-                    },
-                    quote! {},
-                ),
-                DataType::String => {
-                    if self.imports.needs_string_intern() {
-                        (
-                            quote! {
-                                let mut __delims = memchr_iter(delim, &buf);
-                                let __first_end = __delims.next().unwrap_or(buf.len());
-                                let #first_key: Spur = intern(std::str::from_utf8(&buf[..__first_end]).ok()?);
-                                let mut __start = __first_end + 1;
-                                let should_send = ((#first_key.into_inner().get() as usize) % peers) == index;
-                            },
-                            quote! {},
-                        )
-                    } else {
-                        (
-                            quote! {
-                                let mut __delims = memchr_iter(delim, &buf);
-                                let __first_end = __delims.next().unwrap_or(buf.len());
-                                let __f0_bytes = &buf[..__first_end];
-                                let mut __start = __first_end + 1;
-                                let should_send = {
-                                    // 64-bit FNV-1a hash for stable worker assignment on string keys.
-                                    let mut hash: u64 = 0xcbf29ce484222325;
-                                    for &b in __f0_bytes {
-                                        hash ^= b as u64;
-                                        hash = hash.wrapping_mul(0x100000001b3);
-                                    }
-                                    ((hash as usize) % peers) == index
-                                };
-                            },
-                            // Materialize the String only when this worker keeps the row.
-                            quote! {
-                                let #first_key: String = std::str::from_utf8(__f0_bytes).ok()?.to_string();
-                            },
-                        )
-                    }
-                }
-            };
-
-        // Parse fields f1..f{arity-1} (the first field is parsed in the sharding logic).
-        let parse_rest_stmts: Vec<TokenStream> = field_idents
+        // Parse all fields uniformly (byte-range handles partitioning).
+        let parse_stmts: Vec<TokenStream> = field_idents
             .iter()
+            .enumerate()
             .zip(data_types.iter())
-            .skip(1)
-            .map(|(ident, dt)| match *dt {
-                DataType::Int32 => quote! {
-                    let __end = __delims.next().unwrap_or(buf.len());
-                    let #ident: i32 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i32>().ok()?;
-                    __start = __end + 1;
-                },
-                DataType::Int64 => quote! {
-                    let __end = __delims.next().unwrap_or(buf.len());
-                    let #ident: i64 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i64>().ok()?;
-                    __start = __end + 1;
-                },
-                DataType::String => {
-                    if self.imports.needs_string_intern() {
-                        quote! {
-                            let __end = __delims.next().unwrap_or(buf.len());
-                            let #ident: Spur = intern(std::str::from_utf8(&buf[__start..__end]).ok()?);
-                            __start = __end + 1;
+            .map(|((i, ident), dt)| {
+                if i == 0 {
+                    // First field: find the first delimiter.
+                    match *dt {
+                        DataType::Int32 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: i32 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<i32>().ok()?;
+                            let mut __start = __first_end + 1;
+                        },
+                        DataType::Int64 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: i64 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<i64>().ok()?;
+                            let mut __start = __first_end + 1;
+                        },
+                        DataType::String => {
+                            if self.imports.needs_string_intern() {
+                                quote! {
+                                    let mut __delims = memchr_iter(delim, &buf);
+                                    let __first_end = __delims.next().unwrap_or(buf.len());
+                                    let #ident: Spur = intern(std::str::from_utf8(&buf[..__first_end]).ok()?);
+                                    let mut __start = __first_end + 1;
+                                }
+                            } else {
+                                quote! {
+                                    let mut __delims = memchr_iter(delim, &buf);
+                                    let __first_end = __delims.next().unwrap_or(buf.len());
+                                    let #ident: String = std::str::from_utf8(&buf[..__first_end]).ok()?.to_string();
+                                    let mut __start = __first_end + 1;
+                                }
+                            }
                         }
-                    } else {
-                        quote! {
+                    }
+                } else {
+                    // Subsequent fields.
+                    match *dt {
+                        DataType::Int32 => quote! {
                             let __end = __delims.next().unwrap_or(buf.len());
-                            let #ident: String = std::str::from_utf8(&buf[__start..__end]).ok()?.to_string();
+                            let #ident: i32 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i32>().ok()?;
                             __start = __end + 1;
+                        },
+                        DataType::Int64 => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: i64 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i64>().ok()?;
+                            __start = __end + 1;
+                        },
+                        DataType::String => {
+                            if self.imports.needs_string_intern() {
+                                quote! {
+                                    let __end = __delims.next().unwrap_or(buf.len());
+                                    let #ident: Spur = intern(std::str::from_utf8(&buf[__start..__end]).ok()?);
+                                    __start = __end + 1;
+                                }
+                            } else {
+                                quote! {
+                                    let __end = __delims.next().unwrap_or(buf.len());
+                                    let #ident: String = std::str::from_utf8(&buf[__start..__end]).ok()?.to_string();
+                                    __start = __end + 1;
+                                }
+                            }
                         }
                     }
                 }
@@ -304,32 +282,26 @@ impl Compiler {
 
         quote! {
             {
-                let mut reader = BufReader::new(
-                    File::open(#path)
-                        .unwrap_or_else(|e| panic!("failed to open {}: {}", #path, e))
-                );
+                let (mut __reader, __byte_budget) = __byte_range_reader(#path, index, peers);
                 let delim: u8 = #delimiter.as_bytes()[0];
 
                 // Reuse a single buffer across all lines to avoid per-line heap allocation.
                 let mut buf = Vec::with_capacity(256);
-                let mut __line_no = 0;
-                while reader.read_until(b'\n', &mut buf)
-                    .unwrap_or_else(|e| panic!("I/O error reading {} at line {}: {}", #path, __line_no, e)) > 0
-                {
-                    __line_no += 1;
+                let mut __bytes_consumed: u64 = 0;
+                while __bytes_consumed < __byte_budget {
+                    buf.clear();
+                    if __reader.read_until(b'\n', &mut buf)
+                        .unwrap_or_else(|e| panic!("I/O error reading {}: {}", #path, e)) == 0
+                    { break; }
+                    __bytes_consumed += buf.len() as u64;
+
                     // Strip trailing newline (and carriage return for CRLF files).
                     if buf.last() == Some(&b'\n') { buf.pop(); }
                     if buf.last() == Some(&b'\r') { buf.pop(); }
 
                     if !buf.is_empty() {
                         let row = (|| -> Option<_> {
-                            #should_send_stmt
-                            if !should_send {
-                                return None;
-                            }
-
-                            #materialize_first_field
-                            #(#parse_rest_stmts)*
+                            #(#parse_stmts)*
 
                             Some(#elem_expr)
                         })();
@@ -337,7 +309,6 @@ impl Compiler {
                             #handle.update(row, SEMIRING_ONE);
                         }
                     }
-                    buf.clear();
                 }
             }
         }
@@ -412,5 +383,89 @@ impl Compiler {
                 }
             })
             .collect()
+    }
+
+    /// Generate the `__byte_range_reader` helper function for byte-range parallel CSV reading.
+    ///
+    /// Each worker calls it to open its byte slice of a CSV file:
+    ///   1. Divide the file into N equal byte ranges.
+    ///   2. Seek to the start of this worker's range.
+    ///   3. Non-first workers skip the partial first line (the previous worker reads it fully).
+    ///   4. Return (reader, bytes_to_read) so the caller can read lines within its budget.
+    pub(crate) fn gen_byte_range_reader(&self) -> TokenStream {
+        if !matches!(self.config.mode(), ExecutionMode::Batch) {
+            return quote! {};
+        }
+
+        // Only emit when there are EDB relations with arity > 0 (i.e., CSV ingestion needed).
+        if !self.program.edbs().iter().any(|rel| rel.arity() > 0) {
+            return quote! {};
+        }
+
+        quote! {
+            /// Open a byte-range slice of a CSV file for parallel reading.
+            ///
+            /// Each worker reads approximately `1/peers` of the file. Non-first workers
+            /// skip the partial line at their seek offset so no line is double-read or missed.
+            ///
+            /// Returns `(reader, bytes_to_read)`:
+            /// - `reader`: a `BufReader` positioned at the first complete line in this range.
+            /// - `bytes_to_read`: the byte budget for this worker (read lines until exhausted).
+            fn __byte_range_reader(
+                path: &str,
+                index: usize,
+                peers: usize,
+            ) -> (BufReader<File>, u64) {
+                let mut file = File::open(path)
+                    .unwrap_or_else(|e| panic!("failed to open {}: {}", path, e));
+                let file_size = file
+                    .metadata()
+                    .unwrap_or_else(|e| panic!("failed to get metadata for {}: {}", path, e))
+                    .len();
+
+                let chunk = file_size / peers as u64;
+                let start = chunk * index as u64;
+                let end = if index == peers - 1 {
+                    file_size
+                } else {
+                    chunk * (index + 1) as u64
+                };
+
+                // Guard: if this worker has nothing to read (tiny file, many workers).
+                if start >= end {
+                    file.seek(SeekFrom::End(0))
+                        .unwrap_or_else(|e| panic!("failed to seek in {}: {}", path, e));
+                    return (BufReader::new(file), 0);
+                }
+
+                if index > 0 && start > 0 {
+                    // Peek the byte immediately before our range to decide whether
+                    // we landed on a line boundary or mid-line.
+                    file.seek(SeekFrom::Start(start - 1))
+                        .unwrap_or_else(|e| panic!("failed to seek in {}: {}", path, e));
+                    let mut reader = BufReader::new(file);
+                    let mut peek = [0u8; 1];
+                    reader.read_exact(&mut peek)
+                        .unwrap_or_else(|e| panic!("failed to read boundary byte in {}: {}", path, e));
+
+                    if peek[0] == b'\n' {
+                        // Exactly on a line boundary — reader is already at `start`, ready to go.
+                        return (reader, end - start);
+                    }
+                    // Mid-line: skip the rest of this partial line.
+                    let mut discard = Vec::new();
+                    let skipped = reader
+                        .read_until(b'\n', &mut discard)
+                        .unwrap_or_else(|e| {
+                            panic!("failed to skip partial line in {}: {}", path, e)
+                        });
+                    return (reader, (end - start).saturating_sub(skipped as u64));
+                }
+
+                // Worker 0 (or start == 0 for tiny files): read from the beginning.
+                let reader = BufReader::new(file);
+                (reader, end - start)
+            }
+        }
     }
 }

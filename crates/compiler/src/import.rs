@@ -419,7 +419,7 @@ impl ImportTracker {
 
     fn std_io_import(&self) -> TokenStream {
         if self.std_buf_io && self.mode == ExecutionMode::Batch {
-            quote! { use std::io::{BufRead, BufReader}; }
+            quote! { use std::io::{BufRead, BufReader, Read, Seek, SeekFrom}; }
         } else {
             quote! {}
         }
@@ -476,9 +476,19 @@ impl ImportTracker {
 
     fn recursive_imports(&self) -> TokenStream {
         if self.recursive {
-            quote! {
-                use differential_dataflow::operators::iterate::SemigroupVariable;
-                use timely::dataflow::Scope;
+            match self.mode {
+                ExecutionMode::Batch => {
+                    quote! {
+                        use differential_dataflow::operators::iterate::SemigroupVariable;
+                        use timely::dataflow::Scope;
+                    }
+                }
+                ExecutionMode::Incremental => {
+                    quote! {
+                        use differential_dataflow::operators::iterate::Variable;
+                        use timely::dataflow::Scope;
+                    }
+                }
             }
         } else {
             quote! {}

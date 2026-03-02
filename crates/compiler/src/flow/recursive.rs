@@ -72,7 +72,14 @@ impl Compiler {
                         name.to_string(),
                     );
                 });
-                quote! { let #name = SemigroupVariable::new(inner, timely::order::Product::new(Default::default(), 1)); }
+                match self.config.mode() {
+                    ExecutionMode::Batch => {
+                        quote! { let #name = SemigroupVariable::new(inner, timely::order::Product::new(Default::default(), 1)); }
+                    }
+                    ExecutionMode::Incremental => {
+                        quote! { let #name = Variable::new(inner, timely::order::Product::new(Default::default(), 1)); }
+                    }
+                }
             })
             .collect();
 
