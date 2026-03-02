@@ -547,11 +547,15 @@ impl Compiler {
         // Imports block (conditional on mode/recursion/etc).
         let imports = self.imports.render();
 
+        let byte_range_reader = self.gen_byte_range_reader();
+
         let file_ts: TokenStream = quote! {
             #imports
 
             #time_profile_struct
             #memory_profile_struct
+
+            #byte_range_reader
 
             #main_fn
         };
