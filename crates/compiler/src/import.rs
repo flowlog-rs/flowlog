@@ -476,9 +476,19 @@ impl ImportTracker {
 
     fn recursive_imports(&self) -> TokenStream {
         if self.recursive {
-            quote! {
-                use differential_dataflow::operators::iterate::SemigroupVariable;
-                use timely::dataflow::Scope;
+            match self.mode {
+                ExecutionMode::Batch => {
+                    quote! {
+                        use differential_dataflow::operators::iterate::SemigroupVariable;
+                        use timely::dataflow::Scope;
+                    }
+                }
+                ExecutionMode::Incremental => {
+                    quote! {
+                        use differential_dataflow::operators::iterate::Variable;
+                        use timely::dataflow::Scope;
+                    }
+                }
             }
         } else {
             quote! {}

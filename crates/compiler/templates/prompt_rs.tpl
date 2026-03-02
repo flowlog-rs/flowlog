@@ -110,8 +110,9 @@ impl Prompt {
     /// - returns None on empty line or Ctrl-C (caller can continue loop)
     /// - returns Some(Cmd::Quit) on EOF / Ctrl-D or readline error
     /// - otherwise parses via cmd::parse_line
-    pub fn next_cmd(&mut self) -> Option<Cmd> {
-        match self.rl.readline(">> ") {
+    pub fn next_cmd(&mut self, t: u32) -> Option<Cmd> {
+        let prompt_str = format!("[t={}] >> ", t);
+        match self.rl.readline(&prompt_str) {
             Ok(line) => {
                 let t = line.trim();
                 if t.is_empty() {
