@@ -131,8 +131,6 @@ $ bash tools/check/check.sh
 
 ## Background Reading
 
-FlowLog builds on the FlowLog paper:
-
 > **FlowLog: Efficient and Extensible Datalog via Incrementality**  \
 > Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  \
 > VLDB 2026 (Boston) — [arXiv 2511.00865](https://arxiv.org/pdf/2511.00865)
