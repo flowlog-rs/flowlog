@@ -7,10 +7,17 @@ graph_analysis/sg.dl=G5K-0.001
 graph_analysis/sg.dl=G10K-0.001
 graph_analysis/reach.dl=livejournal
 graph_analysis/reach.dl=orkut
+graph_analysis/reach.dl=arabic
 # graph_analysis/reach.dl=twitter # too big
 graph_analysis/cc.dl=livejournal
+graph_analysis/cc.dl=arabic
+graph_analysis/cc.dl=orkut
+graph_analysis/sssp.dl=livejournal-sssp
+graph_analysis/sssp.dl=orkut-sssp
 graph_analysis/bipartite.dl=mind
 graph_analysis/bipartite.dl=netflix
+graph_analysis/bipartite.dl=mag
+graph_analysis/bipartite.dl=roadNet-CA
 graph_analysis/dyck.dl=kernel
 graph_analysis/dyck.dl=postgre
 

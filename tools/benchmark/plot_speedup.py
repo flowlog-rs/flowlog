@@ -13,7 +13,6 @@ import numpy as np
 matplotlib.rcParams["font.family"] = "serif"
 matplotlib.rcParams["font.size"] = 11
 
-Y_MAX = 2.0
 BAR_WIDTH = 0.25
 FIG_SIZE = (18, 6)
 
@@ -25,7 +24,9 @@ def read_csv(path):
 
     with open(path, "r") as f:
         for row in csv.DictReader(f):
-            programs.append(row["Program"])
+            prog = row["Program"]
+            prog = os.path.splitext(os.path.basename(prog))[0]
+            programs.append(prog)
             datasets.append(row["Dataset"])
             load_sp.append(float(row["Load_Speedup"]))
             exec_sp.append(float(row["Exec_Speedup"]))
@@ -50,28 +51,17 @@ def plot_speedup(programs, datasets, load_sp, exec_sp, total_sp):
     n = len(datasets)
     x = np.arange(n)
 
-    clip = lambda vals: [min(v, Y_MAX) for v in vals]
-    load_clipped = clip(load_sp)
-    exec_clipped = clip(exec_sp)
-    total_clipped = clip(total_sp)
-
     fig, ax = plt.subplots(figsize=FIG_SIZE)
 
     # Bars grow up/down from 1.0 baseline
     series = [
-        (x - BAR_WIDTH, load_clipped, load_sp, "Load Speedup", "#2196F3"),
-        (x, exec_clipped, exec_sp, "Execute Speedup", "#FF5722"),
-        (x + BAR_WIDTH, total_clipped, total_sp, "Total Speedup", "#4CAF50"),
+        (x - BAR_WIDTH, load_sp, "Load Speedup", "#2196F3"),
+        (x, exec_sp, "Execute Speedup", "#FF5722"),
+        (x + BAR_WIDTH, total_sp, "Total Speedup", "#4CAF50"),
     ]
-    for xpos, clipped, original, label, color in series:
-        ax.bar(xpos, [v - 1.0 for v in clipped], BAR_WIDTH,
+    for xpos, vals, label, color in series:
+        ax.bar(xpos, [v - 1.0 for v in vals], BAR_WIDTH,
                bottom=1.0, label=label, color=color, zorder=3)
-
-        # Annotate outliers with their true value
-        for val, xi in zip(original, xpos):
-            if val > Y_MAX:
-                ax.text(xi, Y_MAX - 0.05, f"{val:.2f}",
-                        ha="center", va="top", fontsize=6, fontweight="bold")
 
     # Baseline
     ax.axhline(y=1.0, color="black", linestyle="-", linewidth=1.5, alpha=0.9)
@@ -95,7 +85,6 @@ def plot_speedup(programs, datasets, load_sp, exec_sp, total_sp):
     ax.legend(loc="upper right", fontsize=10, framealpha=0.9)
     ax.grid(axis="y", alpha=0.3)
     ax.set_xlim(-0.5, n - 0.5)
-    ax.set_ylim(0.4, Y_MAX + 0.05)
 
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.22)
