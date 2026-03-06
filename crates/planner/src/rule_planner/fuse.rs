@@ -20,7 +20,7 @@ use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 use catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, FactorPos,
-    FnCallPredicatePos,
+    FnCallPredicatePos, KvPredicates,
 };
 use parser::ConstType;
 
@@ -65,10 +65,7 @@ impl RulePlanner {
                 input_info_fp,
                 output_info_fp,
                 output_kv_layout,
-                compare_exprs_pos,
-                fn_call_preds_pos,
-                const_eq_constraints,
-                var_eq_constraints,
+                predicates,
                 is_sip_projection,
                 ..
             }) = self.transformation_infos.get(index)
@@ -94,17 +91,16 @@ impl RulePlanner {
             let input_fp = *input_info_fp;
             let output_fp = *output_info_fp;
             let out_kv_layout = output_kv_layout.clone();
-            let cmp_exprs = compare_exprs_pos.clone();
-            let fn_call_preds = fn_call_preds_pos.clone();
-            let const_eq_constraints = const_eq_constraints.clone();
-            let var_eq_constraints = var_eq_constraints.clone();
+            let predicates = predicates.clone();
 
             let input_producer_indices = self.producer_indices(input_fp);
             let mut input_producer_output_fp = 0u64;
             for &input_producer_index in &input_producer_indices {
                 // Short-lived borrow to check if producer is a neg join
                 let producer_tx = &self.transformation_infos[input_producer_index];
-                if producer_tx.is_neg_join() && (!cmp_exprs.is_empty() || !fn_call_preds.is_empty())
+                if producer_tx.is_neg_join()
+                    && (!predicates.compare_exprs.is_empty()
+                        || !predicates.fn_call_preds.is_empty())
                 {
                     // We always apply possible comparisons/fn_call before neg joins, so it is impossible
                     // to fuse a map with a neg join producer if there are any comparisons or fn_call predicates.
@@ -135,10 +131,7 @@ impl RulePlanner {
                     input_producer_index,
                     &key_argument_ids,
                     &value_argument_ids,
-                    &cmp_exprs,
-                    &fn_call_preds,
-                    &const_eq_constraints,
-                    &var_eq_constraints,
+                    &predicates,
                 );
             }
 
@@ -261,10 +254,7 @@ impl RulePlanner {
         producer_idx: usize,
         key_argument_ids: &[usize],
         value_argument_ids: &[usize],
-        cmp_exprs: &[ComparisonExprPos],
-        fn_call_preds: &[FnCallPredicatePos],
-        const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
-        var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
+        predicates: &KvPredicates,
     ) -> u64 {
         // Build the new output layout by selecting positions from the current producer output
         let all_positions = self.collect_output_positions(producer_idx);
@@ -275,23 +265,23 @@ impl RulePlanner {
         );
 
         let remapped_const_eq =
-            Self::remap_const_eq_constraints(&all_positions, const_eq_constraints);
-        let remapped_var_eq = Self::remap_var_eq_constraints(&all_positions, var_eq_constraints);
-        let remapped_cmps = Self::remap_comparisons(&all_positions, cmp_exprs);
-        let remapped_fn_calls = Self::remap_fn_call_preds(&all_positions, fn_call_preds);
+            Self::remap_const_eq_constraints(&all_positions, &predicates.const_eq);
+        let remapped_var_eq = Self::remap_var_eq_constraints(&all_positions, &predicates.var_eq);
+        let remapped_cmps = Self::remap_comparisons(&all_positions, &predicates.compare_exprs);
+        let remapped_fn_calls = Self::remap_fn_call_preds(&all_positions, &predicates.fn_call_preds);
 
         // Update producer output layout and comparisons
         {
             let producer_tx = &mut self.transformation_infos[producer_idx];
             producer_tx.update_output_key_value_layout(new_out_kv_layout);
-            if !const_eq_constraints.is_empty() || !var_eq_constraints.is_empty() {
+            if !predicates.const_eq.is_empty() || !predicates.var_eq.is_empty() {
                 producer_tx
                     .update_const_eq_and_var_eq_constraints(remapped_const_eq, remapped_var_eq);
             }
-            if !cmp_exprs.is_empty() {
+            if !predicates.compare_exprs.is_empty() {
                 producer_tx.update_comparisons(remapped_cmps);
             }
-            if !fn_call_preds.is_empty() {
+            if !predicates.fn_call_preds.is_empty() {
                 producer_tx.update_fn_call_preds(remapped_fn_calls);
             }
             producer_tx.update_output_fake_sig();
@@ -431,7 +421,7 @@ impl RulePlanner {
                     ArithmeticPos::new(init, rest)
                 };
 
-                let new_args = fc.args().iter().map(|a| remap_expr(a)).collect();
+                let new_args = fc.args().iter().map(remap_expr).collect();
                 FnCallPredicatePos::new(fc.name().to_string(), new_args)
             })
             .collect()

@@ -13,7 +13,7 @@
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog};
+use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
 use parser::ConstType;
 use tracing::trace;
 
@@ -151,10 +151,7 @@ impl RulePlanner {
             catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(vec![], in_vals),
             KeyValueLayout::new(vec![], out_vals.clone()),
-            vec![],                      // no const-eq
-            vec![(left_sig, right_sig)], // var-eq
-            vec![],                      // no comparisons
-            vec![],                      // no fn-call predicates
+            KvPredicates { var_eq: vec![(left_sig, right_sig)], ..Default::default() },
         );
 
         // Generate descriptive name
@@ -210,10 +207,7 @@ impl RulePlanner {
             catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(vec![], in_vals),
             KeyValueLayout::new(vec![], out_vals.clone()),
-            vec![(var_sig, const_val)], // const-eq
-            vec![],                     // no var-eq
-            vec![],                     // no comparisons
-            vec![],                     // no fn-call predicates
+            KvPredicates { const_eq: vec![(var_sig, const_val)], ..Default::default() },
         );
 
         // Generate descriptive name
@@ -268,10 +262,7 @@ impl RulePlanner {
             catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(vec![], in_vals),
             KeyValueLayout::new(vec![], out_vals.clone()),
-            vec![], // no const-eq
-            vec![], // no var-eq
-            vec![], // no comparisons
-            vec![], // no fn-call predicates
+            KvPredicates::default(),
         );
 
         // Generate descriptive name

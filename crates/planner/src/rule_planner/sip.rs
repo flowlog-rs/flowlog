@@ -18,7 +18,7 @@
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 
 use super::RulePlanner;
-use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
+use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates};
 
 use tracing::trace;
 
@@ -126,16 +126,14 @@ impl RulePlanner {
         Self::trace_sip_partitions(catalog, &lhs_keys, &lhs_vals, &rhs_vals);
 
         // ---- Step 1: Project LHS → join keys only ----
-        let proj_tx = TransformationInfo::kv_to_kv_sip_projection(
+        let proj_tx = TransformationInfo::kv_to_kv(
             left_fp,
             originals.contains(&left_fp),
             KeyValueLayout::new(lhs_keys.clone(), lhs_vals),
             KeyValueLayout::new(lhs_keys.clone(), vec![]),
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-        );
+            KvPredicates::default(),
+        )
+        .into_sip_projection();
         let proj_fp = proj_tx.output_info_fp();
 
         self.insert_producer(proj_fp, base_idx);
@@ -163,8 +161,7 @@ impl RulePlanner {
             KeyValueLayout::new(lhs_new_keys.clone(), vec![]),
             KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
             KeyValueLayout::new(lhs_new_keys.clone(), rhs_vals.clone()),
-            vec![],
-            vec![],
+            JoinPredicates::default(),
         );
         let semijoin_fp = semijoin_tx.output_info_fp();
         let semijoin_name = format!(

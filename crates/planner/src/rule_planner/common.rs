@@ -11,7 +11,9 @@ use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
+use catalog::{
+    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
+};
 
 // =========================================================================
 // Semijoin & Comparison Operations
@@ -260,8 +262,7 @@ impl RulePlanner {
                 KeyValueLayout::new(lhs_keys.clone(), Vec::new()), // LHS: keys only
                 KeyValueLayout::new(rhs_keys, rhs_vals.clone()),   // RHS: keys aligned + values
                 KeyValueLayout::new(lhs_keys.clone(), rhs_vals),
-                vec![], // no additional comparisons
-                vec![], // no fn-call predicates
+                JoinPredicates::default(), // no additional comparisons and fn call predicates
             );
 
             // Generate descriptive name for the new atom
@@ -485,10 +486,12 @@ impl RulePlanner {
                 catalog.original_atom_fingerprints().contains(&rhs_fp),
                 KeyValueLayout::new(vec![], in_vals.clone()),
                 KeyValueLayout::new(vec![], in_vals),
-                vec![], // no const-eq
-                vec![], // no var-eq
-                vec![catalog.resolve_comparison_predicates(rhs_idx, lhs_comp_idx)],
-                vec![], // no fn-call predicates
+                KvPredicates {
+                    compare_exprs: vec![
+                        catalog.resolve_comparison_predicates(rhs_idx, lhs_comp_idx)
+                    ],
+                    ..Default::default() // no const-eq, no var-eq and fn call predicates
+                },
             );
 
             // Generate descriptive name for the new atom
@@ -557,10 +560,12 @@ impl RulePlanner {
                 catalog.original_atom_fingerprints().contains(&rhs_fp),
                 KeyValueLayout::new(vec![], in_vals.clone()),
                 KeyValueLayout::new(vec![], in_vals),
-                vec![], // no const-eq
-                vec![], // no var-eq
-                vec![], // no comparisons
-                vec![catalog.resolve_fn_call_predicates(rhs_idx, lhs_fn_call_idx)],
+                KvPredicates {
+                    fn_call_preds: vec![
+                        catalog.resolve_fn_call_predicates(rhs_idx, lhs_fn_call_idx)
+                    ],
+                    ..Default::default() // no const-eq, var-eq, comparisons and fn_call predicates
+                },
             );
 
             // Generate descriptive name for the new atom
@@ -647,12 +652,9 @@ impl RulePlanner {
             let tx = TransformationInfo::kv_to_kv(
                 atom_fp,
                 catalog.original_atom_fingerprints().contains(&atom_fp),
-                KeyValueLayout::new(vec![], in_vals), // input layout
-                KeyValueLayout::new(vec![], out_vals), // output layout (projected)
-                vec![],                               // no constant equality constraints
-                vec![],                               // no variable equality constraints
-                vec![],                               // no comparison constraints
-                vec![],                               // no fn-call predicates
+                KeyValueLayout::new(vec![], in_vals),
+                KeyValueLayout::new(vec![], out_vals),
+                KvPredicates::default(), // no const-eq, var-eq, comparisons and fn_call predicates
             );
 
             // Generate descriptive name for projected atom
@@ -717,12 +719,9 @@ impl RulePlanner {
         let tx = TransformationInfo::kv_to_kv(
             edb_fp,
             true,
-            edb_layout.clone(), // input layout
-            edb_layout,         // output row layout
-            vec![],             // no constant equality constraints
-            vec![],             // no variable equality constraints
-            vec![],             // no comparison constraints
-            vec![],             // no fn-call predicates
+            edb_layout.clone(),
+            edb_layout,
+            KvPredicates::default(), // no const-eq, var-eq, comparisons and fn_call predicates
         );
 
         // Generate descriptive name for the projected atom

@@ -62,18 +62,7 @@ impl Collection {
         )
     }
 
-    /// Return `true` if this colleciton is nullary
-    #[inline]
-    pub fn is_nullary(&self) -> bool {
-        self.key_argument_signatures.is_empty() && self.value_argument_signatures.is_empty()
-    }
-
-    /// Returns `true` if this collection has a key-value structure.
-    pub fn is_kv(&self) -> bool {
-        !self.key_argument_signatures.is_empty()
-    }
-
-    /// Returns `true` if this collection has only keys (no values).
+/// Returns `true` if this collection has only keys (no values).
     pub fn is_k_only(&self) -> bool {
         self.value_argument_signatures.is_empty()
     }

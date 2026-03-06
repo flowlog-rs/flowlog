@@ -17,6 +17,7 @@ use crate::{
 };
 use catalog::{
     ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, FnCallPredicatePos,
+    JoinPredicates, KvPredicates,
 };
 use parser::{ArithmeticOperator, ConstType};
 
@@ -88,10 +89,7 @@ impl TransformationFlow {
     pub fn kv_to_kv(
         input_kv_layout: &KeyValueLayout,
         output_kv_layout: &KeyValueLayout,
-        const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
-        var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
-        compare_exprs: &[ComparisonExprPos],
-        fn_call_preds_pos: &[FnCallPredicatePos],
+        predicates: &KvPredicates,
     ) -> Self {
         // Map input expressions to transformation arguments
         let input_expr_map = Self::kv_argument_flow_map(input_kv_layout);
@@ -102,14 +100,17 @@ impl TransformationFlow {
 
         // Process constant and variable equality constraints via helpers
         let flow_const_args =
-            Self::build_const_eq_constraints(&input_expr_map, const_eq_constraints);
-        let flow_var_eq_args = Self::build_var_eq_constraints(&input_expr_map, var_eq_constraints);
+            Self::build_const_eq_constraints(&input_expr_map, &predicates.const_eq);
+        let flow_var_eq_args =
+            Self::build_var_eq_constraints(&input_expr_map, &predicates.var_eq);
 
         // Process comparison constraints
-        let flow_compares = Self::build_compare_arguments(&input_expr_map, compare_exprs);
+        let flow_compares =
+            Self::build_compare_arguments(&input_expr_map, &predicates.compare_exprs);
 
         // Process fn_call predicate constraints
-        let flow_fn_call_preds = Self::build_fn_call_arguments(&input_expr_map, fn_call_preds_pos);
+        let flow_fn_call_preds =
+            Self::build_fn_call_arguments(&input_expr_map, &predicates.fn_call_preds);
 
         Self::KVToKV {
             key: Arc::new(flow_key_args),
@@ -140,8 +141,7 @@ impl TransformationFlow {
         input_left_kv_layout: &KeyValueLayout,
         input_right_kv_layout: &KeyValueLayout,
         output_kv_layout: &KeyValueLayout,
-        compare_exprs: &[ComparisonExprPos],
-        fn_call_preds_pos: &[FnCallPredicatePos],
+        predicates: &JoinPredicates,
     ) -> Self {
         // Map input expressions to transformation arguments
         let input_expr_map =
@@ -152,10 +152,12 @@ impl TransformationFlow {
         let flow_value_args = Self::flow_over_exprs(&input_expr_map, output_kv_layout.value());
 
         // Process comparison constraints
-        let flow_compares = Self::build_compare_arguments(&input_expr_map, compare_exprs);
+        let flow_compares =
+            Self::build_compare_arguments(&input_expr_map, &predicates.compare_exprs);
 
         // Process fn_call predicate constraints
-        let flow_fn_call_preds = Self::build_fn_call_arguments(&input_expr_map, fn_call_preds_pos);
+        let flow_fn_call_preds =
+            Self::build_fn_call_arguments(&input_expr_map, &predicates.fn_call_preds);
 
         Self::JnToKV {
             key: Arc::new(flow_key_args),
@@ -221,25 +223,7 @@ impl TransformationFlow {
 // Analysis and Utility Methods
 // ========================
 impl TransformationFlow {
-    /// Checks if this flow has any constraints or filters applied.
-    ///
-    /// Returns `true` if the flow has constant constraints, variable constraints,
-    /// or comparison filters that would affect the output data.
-    pub fn is_constrained(&self) -> bool {
-        match self {
-            Self::KVToKV {
-                constraints,
-                compares,
-                fn_call_preds,
-                ..
-            } => !constraints.is_empty() || !compares.is_empty() || !fn_call_preds.is_empty(),
-            Self::JnToKV {
-                compares,
-                fn_call_preds,
-                ..
-            } => !compares.is_empty() || !fn_call_preds.is_empty(),
-        }
-    }
+
 }
 
 // ========================

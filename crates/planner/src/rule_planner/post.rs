@@ -9,7 +9,7 @@ use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog};
+use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
 use parser::HeadArg;
 
 // =========================================================================
@@ -84,10 +84,7 @@ impl RulePlanner {
             true,
             input_kv_layout,
             KeyValueLayout::new(Vec::new(), output_values),
-            Vec::new(), // no const constraints
-            Vec::new(), // no var constraints
-            Vec::new(), // no comparisons
-            vec![],     // no fn-call predicates
+            KvPredicates::default(),
         );
         post_tx.update_row_output(true);
         post_tx.update_output_fake_sig();

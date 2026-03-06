@@ -475,12 +475,6 @@ impl Catalog {
             .collect()
     }
 
-    /// Get the mapping from head argument text to its structured form.
-    #[inline]
-    pub fn head_arguments_map(&self) -> &HashMap<String, HeadArg> {
-        &self.head_arguments_map
-    }
-
     // === Unused Arguments ===
 
     /// Get unused arguments grouped by atom signature.

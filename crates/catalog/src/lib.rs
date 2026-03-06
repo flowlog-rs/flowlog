@@ -15,6 +15,8 @@ pub mod compare;
 pub mod filter;
 /// FnCall predicate helpers for tracking UDF predicate positions.
 pub mod fn_call;
+/// Predicate filter structs for planner transformations.
+pub mod predicate;
 /// Per-rule catalog with precomputed metadata and signatures.
 pub mod rule;
 
@@ -24,4 +26,5 @@ pub use atom::{AtomArgumentSignature, AtomSignature};
 pub use compare::ComparisonExprPos;
 pub use filter::Filters;
 pub use fn_call::FnCallPredicatePos;
+pub use predicate::{JoinPredicates, KvPredicates};
 pub use rule::Catalog;

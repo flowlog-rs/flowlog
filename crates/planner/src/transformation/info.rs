@@ -15,7 +15,7 @@
 use std::fmt;
 use std::hash::Hash;
 
-use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos};
+use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos, JoinPredicates, KvPredicates};
 use common::compute_fp;
 use parser::ConstType;
 
@@ -99,14 +99,8 @@ pub enum TransformationInfo {
         input_kv_layout: KeyValueLayout,
         /// Output layout (key/value positions) (fake until resolved).
         output_kv_layout: KeyValueLayout,
-        /// Constant equality constraints (lhs = const).
-        const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
-        /// Variable equality constraints (lhs = rhs).
-        var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
-        /// Comparison expressions (e.g., x < y).
-        compare_exprs_pos: Vec<ComparisonExprPos>,
-        /// Boolean UDF predicates (e.g., is_valid(x)).
-        fn_call_preds_pos: Vec<FnCallPredicatePos>,
+        /// Filter predicates (equality constraints, comparisons, UDF predicates).
+        predicates: KvPredicates,
         /// SIP projection
         is_sip_projection: bool,
     },
@@ -127,10 +121,8 @@ pub enum TransformationInfo {
         right_input_kv_layout: KeyValueLayout,
         /// Output layout (key/value positions) (fake until resolved).
         output_kv_layout: KeyValueLayout,
-        /// Join comparisons (if any).
-        compare_exprs_pos: Vec<ComparisonExprPos>,
-        /// Boolean UDF predicates (e.g., is_valid(x)).
-        fn_call_preds_pos: Vec<FnCallPredicatePos>,
+        /// Filter predicates (comparisons and UDF predicates).
+        predicates: JoinPredicates,
     },
 
     /// Binary Anti-Join to Key-Value transformation.
@@ -162,22 +154,15 @@ impl TransformationInfo {
         is_row_input: bool,
         input_kv_layout: KeyValueLayout,
         output_fake_kv_layout: KeyValueLayout,
-        const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
-        var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
-        compare_exprs_pos: Vec<ComparisonExprPos>,
-        fn_call_preds_pos: Vec<FnCallPredicatePos>,
+        predicates: KvPredicates,
     ) -> Self {
         let fake_output_sig = compute_fp((
             "kv_to_kv",
             &input_fake_sig,
             &input_kv_layout,
             &output_fake_kv_layout,
-            &const_eq_constraints,
-            &var_eq_constraints,
-            &compare_exprs_pos,
-            &fn_call_preds_pos,
+            &predicates,
         ));
-
         Self::KVToKV {
             input_info_fp: input_fake_sig,
             output_info_fp: fake_output_sig,
@@ -185,49 +170,18 @@ impl TransformationInfo {
             is_row_output: false,
             input_kv_layout,
             output_kv_layout: output_fake_kv_layout,
-            const_eq_constraints,
-            var_eq_constraints,
-            compare_exprs_pos,
-            fn_call_preds_pos,
+            predicates,
             is_sip_projection: false,
         }
     }
 
-    /// Build a Key-Value to Key-Value transformation with a derived (fake) output fingerprint, marked as SIP projection.
-    pub fn kv_to_kv_sip_projection(
-        input_fake_sig: u64,
-        is_row_input: bool,
-        input_kv_layout: KeyValueLayout,
-        output_fake_kv_layout: KeyValueLayout,
-        const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
-        var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
-        compare_exprs_pos: Vec<ComparisonExprPos>,
-        fn_call_preds_pos: Vec<FnCallPredicatePos>,
-    ) -> Self {
-        let fake_output_sig = compute_fp((
-            "kv_to_kv",
-            &input_fake_sig,
-            &input_kv_layout,
-            &output_fake_kv_layout,
-            &const_eq_constraints,
-            &var_eq_constraints,
-            &compare_exprs_pos,
-            &fn_call_preds_pos,
-        ));
-
-        Self::KVToKV {
-            input_info_fp: input_fake_sig,
-            output_info_fp: fake_output_sig,
-            is_row_input,
-            is_row_output: false,
-            input_kv_layout,
-            output_kv_layout: output_fake_kv_layout,
-            const_eq_constraints,
-            var_eq_constraints,
-            compare_exprs_pos,
-            fn_call_preds_pos,
-            is_sip_projection: true,
+    /// Mark this Key-Value transformation as a SIP projection.
+    pub fn into_sip_projection(mut self) -> Self {
+        match &mut self {
+            Self::KVToKV { is_sip_projection, .. } => *is_sip_projection = true,
+            _ => panic!("Planner error: into_sip_projection is only applicable to KVToKV"),
         }
+        self
     }
 
     /// Build a Join to Key-Value transformation with a derived (fake) output fingerprint.
@@ -237,8 +191,7 @@ impl TransformationInfo {
         left_kv_layout: KeyValueLayout,
         right_kv_layout: KeyValueLayout,
         output_fake_kv_layout: KeyValueLayout,
-        compare_exprs_pos: Vec<ComparisonExprPos>,
-        fn_call_preds_pos: Vec<FnCallPredicatePos>,
+        predicates: JoinPredicates,
     ) -> Self {
         let fake_output_sig = compute_fp((
             "join_to_kv",
@@ -247,10 +200,8 @@ impl TransformationInfo {
             &left_kv_layout,
             &right_kv_layout,
             &output_fake_kv_layout,
-            &compare_exprs_pos,
-            &fn_call_preds_pos,
+            &predicates,
         ));
-
         Self::JoinToKV {
             left_input_info_fp: left_fake_sig,
             right_input_info_fp: right_fake_sig,
@@ -259,8 +210,7 @@ impl TransformationInfo {
             left_input_kv_layout: left_kv_layout,
             right_input_kv_layout: right_kv_layout,
             output_kv_layout: output_fake_kv_layout,
-            compare_exprs_pos,
-            fn_call_preds_pos,
+            predicates,
         }
     }
 
@@ -303,12 +253,6 @@ impl TransformationInfo {
     #[inline]
     pub fn is_neg_join(&self) -> bool {
         matches!(self, Self::AntiJoinToKV { .. })
-    }
-
-    /// Whether this is a join transformation info.
-    #[inline]
-    pub fn is_general_join(&self) -> bool {
-        matches!(self, Self::AntiJoinToKV { .. } | Self::JoinToKV { .. })
     }
 
     // Fingerprint getters
@@ -416,64 +360,21 @@ impl TransformationInfo {
         }
     }
 
-    // Constraint getters
-
-    /// Constant equality constraints (Key-Value to Key-Value only).
+    /// Predicate filters for KVToKV transformations.
     #[inline]
-    pub fn const_eq_constraints(&self) -> &[(AtomArgumentSignature, ConstType)] {
+    pub fn kv_predicates(&self) -> &KvPredicates {
         match self {
-            Self::KVToKV {
-                const_eq_constraints,
-                ..
-            } => const_eq_constraints,
-            Self::JoinToKV { .. } => panic!("Planner error: JoinToKV has no const_eq_constraints"),
-            Self::AntiJoinToKV { .. } => {
-                panic!("Planner error: AntiJoinToKV has no const_eq_constraints")
-            }
+            Self::KVToKV { predicates, .. } => predicates,
+            _ => panic!("Planner error: kv_predicates is only available for KVToKV"),
         }
     }
 
-    /// Variable equality constraints (Key-Value to Key-Value only).
+    /// Predicate filters for JoinToKV transformations.
     #[inline]
-    pub fn var_eq_constraints(&self) -> &[(AtomArgumentSignature, AtomArgumentSignature)] {
+    pub fn join_predicates(&self) -> &JoinPredicates {
         match self {
-            Self::KVToKV {
-                var_eq_constraints, ..
-            } => var_eq_constraints,
-            Self::JoinToKV { .. } => panic!("Planner error: JoinToKV has no var_eq_constraints"),
-            Self::AntiJoinToKV { .. } => {
-                panic!("Planner error: AntiJoinToKV has no var_eq_constraints")
-            }
-        }
-    }
-
-    /// Comparison expressions (Key-Value to Key-Value and Join to Key-Value).
-    #[inline]
-    pub fn compare_exprs(&self) -> &[ComparisonExprPos] {
-        match self {
-            Self::KVToKV {
-                compare_exprs_pos, ..
-            }
-            | Self::JoinToKV {
-                compare_exprs_pos, ..
-            } => compare_exprs_pos,
-            Self::AntiJoinToKV { .. } => panic!("Planner error: AntiJoinToKV has no compare_exprs"),
-        }
-    }
-
-    /// Boolean UDF predicate filters (Key-Value to Key-Value and Join to Key-Value).
-    #[inline]
-    pub fn fn_call_preds(&self) -> &[FnCallPredicatePos] {
-        match self {
-            Self::KVToKV {
-                fn_call_preds_pos, ..
-            }
-            | Self::JoinToKV {
-                fn_call_preds_pos, ..
-            } => fn_call_preds_pos,
-            Self::AntiJoinToKV { .. } => {
-                panic!("Planner error: AntiJoinToKV has no fn_call_preds")
-            }
+            Self::JoinToKV { predicates, .. } => predicates,
+            _ => panic!("Planner error: join_predicates is only available for JoinToKV"),
         }
     }
 }
@@ -623,20 +524,10 @@ impl TransformationInfo {
     /// Update comparison expressions for transformations that support them.
     ///
     /// Comparison expressions should be added incrementally.
-    pub fn update_comparisons(&mut self, compare_exprs_pos: Vec<ComparisonExprPos>) {
+    pub fn update_comparisons(&mut self, new_compare_exprs: Vec<ComparisonExprPos>) {
         match self {
-            Self::KVToKV {
-                compare_exprs_pos: cmp,
-                ..
-            } => {
-                cmp.extend(compare_exprs_pos);
-            }
-            Self::JoinToKV {
-                compare_exprs_pos: cmp,
-                ..
-            } => {
-                cmp.extend(compare_exprs_pos);
-            }
+            Self::KVToKV { predicates, .. } => predicates.compare_exprs.extend(new_compare_exprs),
+            Self::JoinToKV { predicates, .. } => predicates.compare_exprs.extend(new_compare_exprs),
             Self::AntiJoinToKV { .. } => {
                 panic!("Planner error: AntiJoinToKV has no comparisons to update");
             }
@@ -646,18 +537,10 @@ impl TransformationInfo {
     /// Update boolean UDF predicate filters for transformations that support them.
     ///
     /// UDF predicates should be added incrementally.
-    pub fn update_fn_call_preds(&mut self, new_fn_call_preds_pos: Vec<FnCallPredicatePos>) {
+    pub fn update_fn_call_preds(&mut self, new_fn_call_preds: Vec<FnCallPredicatePos>) {
         match self {
-            Self::KVToKV {
-                fn_call_preds_pos, ..
-            } => {
-                fn_call_preds_pos.extend(new_fn_call_preds_pos);
-            }
-            Self::JoinToKV {
-                fn_call_preds_pos, ..
-            } => {
-                fn_call_preds_pos.extend(new_fn_call_preds_pos);
-            }
+            Self::KVToKV { predicates, .. } => predicates.fn_call_preds.extend(new_fn_call_preds),
+            Self::JoinToKV { predicates, .. } => predicates.fn_call_preds.extend(new_fn_call_preds),
             Self::AntiJoinToKV { .. } => {
                 panic!("Planner error: AntiJoinToKV has no fn_call_preds to update");
             }
@@ -667,17 +550,13 @@ impl TransformationInfo {
     /// Update constant equality constraints, avoiding duplicates.
     pub fn update_const_eq_and_var_eq_constraints(
         &mut self,
-        const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
-        var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
+        const_eq: Vec<(AtomArgumentSignature, ConstType)>,
+        var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
     ) {
         match self {
-            Self::KVToKV {
-                const_eq_constraints: existing_const_eq_constraints,
-                var_eq_constraints: existing_var_eq_constraints,
-                ..
-            } => {
-                existing_const_eq_constraints.extend(const_eq_constraints);
-                existing_var_eq_constraints.extend(var_eq_constraints);
+            Self::KVToKV { predicates, .. } => {
+                predicates.const_eq.extend(const_eq);
+                predicates.var_eq.extend(var_eq);
             }
             Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } => {
                 panic!("Planner error: attempting to append const constraints to non-unary transformation")
@@ -696,10 +575,7 @@ impl TransformationInfo {
                 is_row_output,
                 input_kv_layout,
                 output_kv_layout,
-                const_eq_constraints,
-                var_eq_constraints,
-                compare_exprs_pos,
-                fn_call_preds_pos,
+                predicates,
                 output_info_fp,
                 ..
             } => {
@@ -710,10 +586,7 @@ impl TransformationInfo {
                     is_row_output,
                     input_kv_layout,
                     output_kv_layout,
-                    const_eq_constraints,
-                    var_eq_constraints,
-                    compare_exprs_pos,
-                    fn_call_preds_pos,
+                    predicates,
                 ));
             }
             Self::JoinToKV {
@@ -723,8 +596,7 @@ impl TransformationInfo {
                 left_input_kv_layout,
                 right_input_kv_layout,
                 output_kv_layout,
-                compare_exprs_pos,
-                fn_call_preds_pos,
+                predicates,
                 output_info_fp,
             } => {
                 *output_info_fp = compute_fp((
@@ -735,8 +607,7 @@ impl TransformationInfo {
                     left_input_kv_layout,
                     right_input_kv_layout,
                     output_kv_layout,
-                    compare_exprs_pos,
-                    fn_call_preds_pos,
+                    predicates,
                 ));
             }
             Self::AntiJoinToKV {
@@ -772,19 +643,16 @@ impl fmt::Display for TransformationInfo {
                 input_kv_layout,
                 output_info_fp,
                 output_kv_layout,
-                const_eq_constraints,
-                var_eq_constraints,
-                compare_exprs_pos,
-                fn_call_preds_pos,
+                predicates,
                 ..
             } => {
                 let in_coll = fmt_collection(input_info_fp, input_kv_layout);
                 let out_coll = fmt_collection(output_info_fp, output_kv_layout);
                 let filters = fmt_flow_kv(
-                    const_eq_constraints,
-                    var_eq_constraints,
-                    compare_exprs_pos,
-                    fn_call_preds_pos,
+                    &predicates.const_eq,
+                    &predicates.var_eq,
+                    &predicates.compare_exprs,
+                    &predicates.fn_call_preds,
                 );
                 let row_flags = match (*is_row_input, *is_row_output) {
                     (true, true) => "[Row -> Row]",
@@ -816,8 +684,7 @@ impl fmt::Display for TransformationInfo {
                 left_input_kv_layout,
                 right_input_kv_layout,
                 output_kv_layout,
-                compare_exprs_pos,
-                fn_call_preds_pos,
+                predicates,
             } => {
                 let l = fmt_collection(left_input_info_fp, left_input_kv_layout);
 
@@ -831,7 +698,8 @@ impl fmt::Display for TransformationInfo {
                 );
 
                 let out = fmt_collection(output_info_fp, output_kv_layout);
-                let filters = fmt_flow_kv(&[], &[], compare_exprs_pos, fn_call_preds_pos);
+                let filters =
+                    fmt_flow_kv(&[], &[], &predicates.compare_exprs, &predicates.fn_call_preds);
                 let row_flag = if *is_row_output {
                     "[Jn -> Row]"
                 } else {
