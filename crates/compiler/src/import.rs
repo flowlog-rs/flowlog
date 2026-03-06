@@ -545,7 +545,10 @@ impl ImportTracker {
 
     fn udf_import(&self) -> TokenStream {
         if self.udf {
-            quote! { mod udf; }
+            quote! {
+                #[allow(dead_code)]
+                mod udf;
+            }
         } else {
             quote! {}
         }

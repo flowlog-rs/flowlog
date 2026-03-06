@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = { 
     SOI ~ 
-    (declaration | extern_fn | extern_agg | input_directive | output_directive | printsize_directive | rule)* ~
+    (declaration | extern_fn | input_directive | output_directive | printsize_directive | rule)* ~
     EOI
 } 
 
@@ -31,7 +31,7 @@ attribute_name = { identifier }
 relation_name = { identifier }
 
 // Data type specification
-data_type = { integer64_type | integer32_type | string_type }
+data_type = { integer64_type | integer32_type | string_type | bool_type }
 
 // 32-bit integer data type
 integer32_type = { "int32" }
@@ -42,8 +42,11 @@ integer64_type = { "int64" }
 // Text data type for strings
 string_type = { "string" }
 
+// Boolean data type
+bool_type = { "bool" }
+
 // Constant values
-constant = { integer | string } 
+constant = { boolean | integer | string } 
 
 // Integer with optional sign
 // Examples: 42, -17, +100
@@ -57,8 +60,8 @@ string = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 // Used when you don't need to reference a variable
 placeholder = { "_" } 
 
-// Boolean values used in expressions
-boolean = { "True" | "False" } 
+// Boolean literal values
+boolean = { ("True" | "False") ~ !(ASCII_ALPHANUMERIC | "_") } 
 
 // =============================================================================
 // RELATION DECLARATIONS
@@ -114,17 +117,10 @@ attribute_decl = { attribute_name ~ ":" ~ data_type }
 // =============================================================================
 // USER-DEFINED EXTERNAL FUNCTION DECLARATIONS
 // =============================================================================
-//   Scalar:    .extern fn   name(param1: type1, ...) -> ret_type
-//   Aggregate: .extern agg  name(param1: type1, ...) -> ret_type
+//   .extern fn   name(param1: type1, ...) -> ret_type
 
 extern_fn = {
     ".extern" ~ "fn" ~ identifier ~
-    "(" ~ extern_fn_params? ~ ")" ~
-    "->" ~ data_type
-}
-
-extern_agg = {
-    ".extern" ~ "agg" ~ identifier ~
     "(" ~ extern_fn_params? ~ ")" ~
     "->" ~ data_type
 }
@@ -143,7 +139,7 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
 // Basic elements in arithmetic expressions
-factor = { variable | constant }
+factor = { constant | variable }
 
 // Arithmetic operators
 arithmetic_op = { 
@@ -230,8 +226,8 @@ atom = {
 // Example: !edge(x, y)
 negative_atom = { "!" ~ atom }
 
-// Arguments in atoms can be variables, constants, or placeholders
-atom_arg = { variable | constant | placeholder } 
+// Arguments in atoms can be constants, variables, or placeholders
+atom_arg = { constant | variable | placeholder } 
 
 // =============================================================================
 // RULES SECTION
@@ -273,6 +269,7 @@ predicate = {
     atom |          // Positive atom: edge(x, y)
     negative_atom | // Negative atom: !edge(x, y)  
     compare_expr |  // Comparison: x > y
+    fn_call_expr |  // UDF predicate: is_valid(x + 1, y)
     boolean         // Boolean atom: True/False
 }
 

@@ -7,7 +7,7 @@
 //!
 //! Predicates form the antecedent of rules: `head(...) :- p1, !p2, X > Y, true.`
 
-use super::{Atom, AtomArg, ComparisonExpr};
+use super::{Atom, AtomArg, ComparisonExpr, FnCall};
 use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
 use std::fmt;
@@ -23,6 +23,8 @@ pub enum Predicate {
     ComparePredicate(ComparisonExpr),
     /// Boolean literal.
     BoolPredicate(bool),
+    /// UDF predicate call, e.g. `is_valid(X, Y + 1)`.
+    FnCallPredicate(FnCall),
 }
 
 impl Predicate {
@@ -42,6 +44,9 @@ impl Predicate {
             Self::BoolPredicate(_) => {
                 unreachable!("Cannot get arguments from a boolean predicate")
             }
+            Self::FnCallPredicate(_) => {
+                unreachable!("Cannot get arguments from a fn call predicate")
+            }
         }
     }
 
@@ -58,6 +63,9 @@ impl Predicate {
                 unreachable!("Cannot get name from a comparison predicate")
             }
             Self::BoolPredicate(_) => unreachable!("Cannot get name from a boolean predicate"),
+            Self::FnCallPredicate(_) => {
+                unreachable!("Cannot get name from a fn call predicate")
+            }
         }
     }
 
@@ -65,6 +73,12 @@ impl Predicate {
     #[inline]
     pub fn is_boolean(&self) -> bool {
         matches!(self, Self::BoolPredicate(_))
+    }
+
+    /// Is this a UDF predicate call?
+    #[inline]
+    pub fn is_fn_call(&self) -> bool {
+        matches!(self, Self::FnCallPredicate(_))
     }
 }
 
@@ -74,7 +88,10 @@ impl fmt::Display for Predicate {
             Self::PositiveAtomPredicate(atom) => write!(f, "{atom}"),
             Self::NegativeAtomPredicate(atom) => write!(f, "!{atom}"),
             Self::ComparePredicate(expr) => write!(f, "{expr}"),
-            Self::BoolPredicate(b) => write!(f, "{b}"),
+            Self::BoolPredicate(b) => {
+                write!(f, "{}", if *b { "True" } else { "False" })
+            }
+            Self::FnCallPredicate(fc) => write!(f, "{fc}"),
         }
     }
 }
@@ -85,7 +102,10 @@ impl fmt::Debug for Predicate {
             Self::PositiveAtomPredicate(atom) => write!(f, "{atom:?}"),
             Self::NegativeAtomPredicate(atom) => write!(f, "!{atom:?}"),
             Self::ComparePredicate(expr) => write!(f, "{expr}"),
-            Self::BoolPredicate(b) => write!(f, "{b}"),
+            Self::BoolPredicate(b) => {
+                write!(f, "{}", if *b { "True" } else { "False" })
+            }
+            Self::FnCallPredicate(fc) => write!(f, "{fc}"),
         }
     }
 }
@@ -117,6 +137,7 @@ impl Lexeme for Predicate {
                 "False" => Self::BoolPredicate(false),
                 other => unreachable!("Parser error: invalid boolean literal: {other}"),
             },
+            Rule::fn_call_expr => Self::FnCallPredicate(FnCall::from_parsed_rule(inner)),
             other => unreachable!("Parser error: invalid predicate type: {:?}", other),
         }
     }
@@ -181,8 +202,8 @@ mod tests {
         let t = Predicate::BoolPredicate(true);
         let f = Predicate::BoolPredicate(false);
         assert!(t.is_boolean() && f.is_boolean());
-        assert_eq!(t.to_string(), "true");
-        assert_eq!(f.to_string(), "false");
+        assert_eq!(t.to_string(), "True");
+        assert_eq!(f.to_string(), "False");
     }
 
     #[test]

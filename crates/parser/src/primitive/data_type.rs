@@ -9,6 +9,7 @@ use std::str::FromStr;
 /// - `"int32"` → [`DataType::Int32`]
 /// - `"int64"` → [`DataType::Int64`]
 /// - `"string"` → [`DataType::String`]
+/// - `"bool"` → [`DataType::Bool`]
 ///
 /// They are used as attribute types in relations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -19,6 +20,8 @@ pub enum DataType {
     Int64,
     /// UTF-8 string type.
     String,
+    /// Boolean type.
+    Bool,
 }
 
 impl FromStr for DataType {
@@ -26,14 +29,15 @@ impl FromStr for DataType {
 
     /// Parse a [`DataType`] from its grammar string representation.
     ///
-    /// Returns `Err` if the string is not `"int32"`, `"int64"`, or `"string"`.
+    /// Returns `Err` if the string is not `"int32"`, `"int64"`, `"string"`, or `"bool"`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "int32" => Ok(Self::Int32),
             "int64" => Ok(Self::Int64),
             "string" => Ok(Self::String),
+            "bool" => Ok(Self::Bool),
             _ => Err(format!(
-                "Parser error: '{s}'. Invalid data type, expected 'int32', 'int64', or 'string'"
+                "Parser error: '{s}'. Invalid data type, expected 'int32', 'int64', 'string', or 'bool'"
             )),
         }
     }
@@ -46,6 +50,7 @@ impl fmt::Display for DataType {
             Self::Int32 => "int32",
             Self::Int64 => "int64",
             Self::String => "string",
+            Self::Bool => "bool",
         };
         write!(f, "{type_str}")
     }
@@ -58,7 +63,12 @@ mod tests {
 
     #[test]
     fn display_roundtrip() {
-        for t in [DataType::Int32, DataType::Int64, DataType::String] {
+        for t in [
+            DataType::Int32,
+            DataType::Int64,
+            DataType::String,
+            DataType::Bool,
+        ] {
             let s = t.to_string();
             let parsed = DataType::from_str(&s).unwrap();
             assert_eq!(t, parsed);

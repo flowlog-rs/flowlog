@@ -238,6 +238,12 @@ impl Compiler {
                                 }
                             }
                         }
+                        DataType::Bool => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: bool = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<bool>().ok()?;
+                            let mut __start = __first_end + 1;
+                        },
                     }
                 } else {
                     // Subsequent fields.
@@ -267,6 +273,11 @@ impl Compiler {
                                 }
                             }
                         }
+                        DataType::Bool => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: bool = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<bool>().ok()?;
+                            __start = __end + 1;
+                        },
                     }
                 }
             })
@@ -343,6 +354,7 @@ impl Compiler {
                                 quote! { #s.to_string() }
                             }
                         }
+                        ConstType::Bool(b) => quote! { #b },
                     })
                     .collect();
 

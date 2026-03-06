@@ -1,15 +1,20 @@
-//! Scalar UDF code generation.
+//! Head (scalar) UDF code generation.
+//!
+//! Generates the `.flat_map()` pipeline that applies a head scalar UDF declared
+//! with `.extern fn` to columns in a rule head.  
+//! Body UDF predicates (boolean filters) are handled separately by the planner/compiler
+//! predicate pipeline.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-/// Generate a `.flat_map()` pipeline that applies a scalar UDF to a row.
+/// Generate a `.flat_map()` pipeline that applies a head scalar UDF to a row.
 ///
 /// The row has `output_arity` columns in flattened form. Columns at
 /// positions `start..end` are the UDF's input arguments; they get replaced
 /// by a single output column produced by `udf::fn_name(col_start, …, col_end-1)`.
 #[must_use]
-pub(crate) fn scalar_udf_map(
+pub(crate) fn head_udf_map(
     fn_name: &str,
     start: usize,
     end: usize,

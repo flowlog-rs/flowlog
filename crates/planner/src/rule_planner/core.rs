@@ -9,7 +9,7 @@ use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{AtomArgumentSignature, AtomSignature, Catalog};
+use catalog::{AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates};
 
 // =========================================================================
 // Core Planning
@@ -154,15 +154,15 @@ impl RulePlanner {
 
         // Create the join transformation with proper key-value layouts
         let tx = TransformationInfo::join_to_kv(
-            lhs_pos_fp,                                              // LHS input fingerprint
-            rhs_pos_fp,                                              // RHS input fingerprint
-            KeyValueLayout::new(lhs_keys.clone(), lhs_vals.clone()), // LHS layout (keys + values)
-            KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()), // RHS layout (values only)
+            lhs_pos_fp,
+            rhs_pos_fp,
+            KeyValueLayout::new(lhs_keys.clone(), lhs_vals.clone()),
+            KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
             KeyValueLayout::new(
                 lhs_keys,
-                lhs_vals.iter().chain(rhs_vals.iter()).cloned().collect(), // output layout
+                lhs_vals.iter().chain(rhs_vals.iter()).cloned().collect(),
             ),
-            vec![], // no additional comparison constraints
+            JoinPredicates::default(),
         );
 
         // Generate descriptive name and register the transformation

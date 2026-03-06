@@ -5,8 +5,8 @@ use std::fmt;
 
 use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
-use crate::ComparisonExprPos;
-use parser::{ComparisonExpr, FlowLogRule, HeadArg};
+use crate::{ArithmeticPos, ComparisonExprPos, FnCallPredicatePos};
+use parser::{ComparisonExpr, FlowLogRule, FnCall, HeadArg, Predicate};
 use tracing::debug;
 
 // Implementation modules
@@ -71,6 +71,13 @@ pub struct Catalog {
     /// For each comparison predicate, indices of positive atoms that are supersets.
     comparison_supersets: Vec<Vec<usize>>,
 
+    /// UDF fn_call predicates in the rule body.
+    fn_call_predicates: Vec<FnCall>,
+    /// Variable string sets per fn_call predicate (deduplicated).
+    fn_call_predicates_vars_str_set: Vec<HashSet<String>>,
+    /// For each fn_call predicate, indices of positive atoms that are supersets.
+    fn_call_supersets: Vec<Vec<usize>>,
+
     /// Mapping from head argument string representation to structured form.
     head_arguments_map: HashMap<String, HeadArg>,
     /// Head IDB fingerprint.
@@ -105,6 +112,9 @@ impl Catalog {
             comparison_predicates: Vec::new(),
             comparison_predicates_vars_str_set: Vec::new(),
             comparison_supersets: Vec::new(),
+            fn_call_predicates: Vec::new(),
+            fn_call_predicates_vars_str_set: Vec::new(),
+            fn_call_supersets: Vec::new(),
             head_arguments_map: HashMap::new(),
             head_idb_fingerprint: rule.head().head_fingerprint(),
             unused_arguments_per_atom: HashMap::new(),
@@ -114,8 +124,7 @@ impl Catalog {
         // Store original atom fingerprints for reference
         for predicate in rule.rhs() {
             match predicate {
-                parser::Predicate::PositiveAtomPredicate(atom)
-                | parser::Predicate::NegativeAtomPredicate(atom) => {
+                Predicate::PositiveAtomPredicate(atom) | Predicate::NegativeAtomPredicate(atom) => {
                     catalog
                         .original_atom_fingerprints
                         .insert(atom.fingerprint());
@@ -149,6 +158,9 @@ impl Catalog {
         self.comparison_predicates.clear();
         self.comparison_predicates_vars_str_set.clear();
         self.comparison_supersets.clear();
+        self.fn_call_predicates.clear();
+        self.fn_call_predicates_vars_str_set.clear();
+        self.fn_call_supersets.clear();
         self.head_arguments_map.clear();
         self.unused_arguments_per_atom.clear();
     }
@@ -193,6 +205,10 @@ impl Catalog {
         assert!(
             self.comparison_supersets.iter().all(|s| s.is_empty()),
             "Rule has comparison supersets - not a core rule"
+        );
+        assert!(
+            self.fn_call_supersets.iter().all(|s| s.is_empty()),
+            "Rule has fn_call supersets - not a core rule"
         );
         assert!(
             self.filters.is_empty(),
@@ -383,6 +399,45 @@ impl Catalog {
         )
     }
 
+    // === FnCall Predicates ===
+
+    /// Get a fn_call predicate by its index.
+    #[inline]
+    pub fn fn_call_predicate(&self, index: usize) -> &FnCall {
+        &self.fn_call_predicates[index]
+    }
+
+    /// For each fn_call predicate, get indices of positive atoms with superset variable sets.
+    #[inline]
+    pub fn fn_call_supersets(&self) -> &Vec<Vec<usize>> {
+        &self.fn_call_supersets
+    }
+
+    /// Resolve a fn_call predicate with argument positions for a given positive atom.
+    pub fn resolve_fn_call_predicates(
+        &self,
+        pos_atom_id: usize,
+        fn_call_id: usize,
+    ) -> FnCallPredicatePos {
+        let fn_call = &self.fn_call_predicates[fn_call_id];
+        let args_pos: Vec<ArithmeticPos> = fn_call
+            .args()
+            .iter()
+            .map(|arg| {
+                let var_sigs: Vec<AtomArgumentSignature> = arg
+                    .vars()
+                    .iter()
+                    .map(|&v| {
+                        self.argument_presence_in_positive_atom_map[v][pos_atom_id]
+                            .expect("variable in fn_call arg not found in positive atom")
+                    })
+                    .collect();
+                ArithmeticPos::from_arithmetic(arg, &var_sigs)
+            })
+            .collect();
+        FnCallPredicatePos::new(fn_call.name().to_string(), args_pos, fn_call.is_negated())
+    }
+
     // === Filters ===
 
     /// Get the local atom filters (var==var, var==const, placeholders).
@@ -419,12 +474,6 @@ impl Catalog {
             .collect()
     }
 
-    /// Get the mapping from head argument text to its structured form.
-    #[inline]
-    pub fn head_arguments_map(&self) -> &HashMap<String, HeadArg> {
-        &self.head_arguments_map
-    }
-
     // === Unused Arguments ===
 
     /// Get unused arguments grouped by atom signature.
@@ -440,6 +489,7 @@ impl Catalog {
             && self.negative_atom_fingerprints.is_empty()
             && self.filters.is_empty()
             && self.comparison_predicates.is_empty()
+            && self.fn_call_predicates.is_empty()
     }
 }
 
@@ -580,6 +630,29 @@ impl fmt::Display for Catalog {
         }
 
         writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "FnCall predicates:")?;
+        if self.fn_call_predicates.is_empty() {
+            writeln!(f, "  (none)")?;
+        } else {
+            for (i, fn_call_pred) in self.fn_call_predicates.iter().enumerate() {
+                let vars_set = if i < self.fn_call_predicates_vars_str_set.len() {
+                    let mut vars: Vec<_> = self.fn_call_predicates_vars_str_set[i].iter().collect();
+                    vars.sort();
+                    format!(
+                        "vars: [{}]",
+                        vars.iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    "vars: []".to_string()
+                };
+                writeln!(f, "  [{:>2}] {} ({})", i, fn_call_pred, vars_set)?;
+            }
+        }
+
+        writeln!(f, "\n{}", "-".repeat(40))?;
         writeln!(f, "Supersets (per predicate → positive atom ids):")?;
         let mut print_supersets = |label: &str, supersets: &Vec<Vec<usize>>| -> fmt::Result {
             if supersets.is_empty() || supersets.iter().all(|supers| supers.is_empty()) {
@@ -606,6 +679,7 @@ impl fmt::Display for Catalog {
         print_supersets("positives", &self.positive_supersets)?;
         print_supersets("negative", &self.negative_supersets)?;
         print_supersets("comparisons", &self.comparison_supersets)?;
+        print_supersets("fn_calls", &self.fn_call_supersets)?;
 
         writeln!(f, "\n{}", "-".repeat(40))?;
         writeln!(f, "Unused arguments per atom:")?;

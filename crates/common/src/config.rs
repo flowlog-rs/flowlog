@@ -59,7 +59,7 @@ pub struct Config {
     pub str_intern: bool,
 
     /// Path to a Rust source file containing UDF implementations.
-    /// Functions declared with `.extern fn` / `.extern agg` in the Datalog
+    /// Functions declared with `.extern fn` in the Datalog
     /// program must be defined in this file.
     #[arg(long, value_name = "PATH")]
     pub udf_file: Option<String>,

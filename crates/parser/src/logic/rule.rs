@@ -248,7 +248,7 @@ mod tests {
         let s2 = r2.to_string();
         assert!(s2.starts_with("complex(A, B) :- rel1(A)"));
         assert!(s2.contains("!rel2(B)"));
-        assert!(s2.contains("true"));
+        assert!(s2.contains("True"));
         assert!(s2.ends_with('.'));
 
         let head3 = head_named("filtered", vec![head_var("X")]);
@@ -311,10 +311,7 @@ mod tests {
     fn extract_constants_panics_on_complex_arith() {
         let complex = Arithmetic::new(
             Factor::Var("X".into()),
-            vec![(
-                ArithmeticOperator::Plus,
-                Factor::Const(ConstType::Int32(1)),
-            )],
+            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int32(1)))],
         );
         let head = head_named("invalid", vec![HeadArg::Arith(complex)]);
         let r = FlowLogRule::new(head, vec![bool_pred(true)], false);

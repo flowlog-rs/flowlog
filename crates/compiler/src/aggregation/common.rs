@@ -147,6 +147,9 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
             DataType::String => {
                 panic!("Compiler error: count aggregation result should be integer type")
             }
+            DataType::Bool => {
+                panic!("Compiler error: Bool type not supported for aggregation")
+            }
         },
         AggregationOperator::Sum => match agg_type {
             DataType::Int32 => quote! {
@@ -180,6 +183,9 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
             DataType::String => {
                 panic!("Compiler error: min aggregation is not supported on string type")
             }
+            DataType::Bool => {
+                panic!("Compiler error: Bool type not supported for aggregation")
+            }
         },
         AggregationOperator::Max => match agg_type {
             DataType::Int32 | DataType::Int64 => quote! {
@@ -191,6 +197,9 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
             },
             DataType::String => {
                 panic!("Compiler error: max aggregation is not supported on string type")
+            }
+            DataType::Bool => {
+                panic!("Compiler error: Bool type not supported for aggregation")
             }
         },
         AggregationOperator::Avg => match agg_type {

@@ -2,7 +2,7 @@
 
 use crate::dependency_graph::DependencyGraph;
 use itertools::Itertools;
-use parser::{logic::FlowLogRule, Program};
+use parser::{FlowLogRule, Predicate, Program};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use tracing::{debug, info};
@@ -302,10 +302,8 @@ impl Stratifier {
                 .flat_map(|rid| {
                     let rule = &self.program.rules()[*rid];
                     rule.rhs().iter().filter_map(|p| match p {
-                        parser::logic::Predicate::PositiveAtomPredicate(atom)
-                        | parser::logic::Predicate::NegativeAtomPredicate(atom) => {
-                            Some(atom.fingerprint())
-                        }
+                        Predicate::PositiveAtomPredicate(atom)
+                        | Predicate::NegativeAtomPredicate(atom) => Some(atom.fingerprint()),
                         _ => None,
                     })
                 })

@@ -11,6 +11,7 @@ use std::fmt;
 /// - [`ConstType::Int32`] for 32-bit signed integers
 /// - [`ConstType::Int64`] for 64-bit signed integers
 /// - [`ConstType::Text`] for UTF-8 strings
+/// - [`ConstType::Bool`] for boolean values
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstType {
     /// 32-bit signed integer constant.
@@ -21,6 +22,9 @@ pub enum ConstType {
 
     /// UTF-8 string constant.
     Text(String),
+
+    /// Boolean constant.
+    Bool(bool),
 }
 
 impl fmt::Display for ConstType {
@@ -31,6 +35,7 @@ impl fmt::Display for ConstType {
             Self::Int32(v) => write!(f, "{v}"),
             Self::Int64(v) => write!(f, "{v}"),
             Self::Text(s) => write!(f, "\"{s}\""),
+            Self::Bool(b) => write!(f, "{}", if *b { "True" } else { "False" }),
         }
     }
 }
@@ -63,6 +68,11 @@ impl Lexeme for ConstType {
                 }
             }
             Rule::string => Self::Text(inner.as_str().trim_matches('"').to_string()),
+            Rule::boolean => match inner.as_str() {
+                "True" => Self::Bool(true),
+                "False" => Self::Bool(false),
+                other => unreachable!("Parser error: invalid boolean constant: {other}"),
+            },
             _ => unreachable!(
                 "Parser error: unexpected constant rule variant {:?}",
                 inner.as_rule()
