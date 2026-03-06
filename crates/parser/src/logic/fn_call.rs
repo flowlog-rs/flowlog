@@ -17,7 +17,7 @@ use crate::{Lexeme, Rule};
 use pest::iterators::Pair;
 use std::fmt;
 
-/// A user-defined function call in a rule head.
+/// A user-defined function call in a rule head or body predicates.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FnCall {
     /// Function name.
