@@ -11,6 +11,8 @@ pub struct FnCallPredicateArgument {
     name: String,
     /// The arguments arithmetic expression.
     args: Vec<ArithmeticArgument>,
+    /// Whether the UDF result is negated.
+    is_negated: bool,
 }
 
 impl FnCallPredicateArgument {
@@ -28,6 +30,7 @@ impl FnCallPredicateArgument {
         Self {
             name: fn_call_pos.name().to_string(),
             args,
+            is_negated: fn_call_pos.is_negated(),
         }
     }
 
@@ -39,6 +42,11 @@ impl FnCallPredicateArgument {
     /// Returns the resolved arguments.
     pub fn args(&self) -> &[ArithmeticArgument] {
         &self.args
+    }
+
+    /// Whether the UDF result is negated.
+    pub fn is_negated(&self) -> bool {
+        self.is_negated
     }
 
     /// Returns all transformation arguments referenced in this fn_call predicate.
@@ -58,6 +66,10 @@ impl fmt::Display for FnCallPredicateArgument {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        write!(f, "{}({})", self.name, args_str)
+        if self.is_negated {
+            write!(f, "!{}({})", self.name, args_str)
+        } else {
+            write!(f, "{}({})", self.name, args_str)
+        }
     }
 }

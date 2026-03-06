@@ -7,7 +7,7 @@
 //! ```rust
 //! use parser::logic::{FnCall, Arithmetic, Factor};
 //! let arg = Arithmetic::new(Factor::Var("x".into()), vec![]);
-//! let fc = FnCall::new("my_udf".into(), vec![arg]);
+//! let fc = FnCall::new("my_udf".into(), vec![arg], false);
 //! assert_eq!(fc.to_string(), "my_udf(x)");
 //! ```
 
@@ -24,13 +24,19 @@ pub struct FnCall {
     name: String,
     /// Arguments.
     args: Vec<Arithmetic>,
+    /// Whether the result is negated (i.e. `!fn_name(...)`).
+    is_negated: bool,
 }
 
 impl FnCall {
     /// Create a new function call.
     #[must_use]
-    pub fn new(name: String, args: Vec<Arithmetic>) -> Self {
-        Self { name, args }
+    pub fn new(name: String, args: Vec<Arithmetic>, is_negated: bool) -> Self {
+        Self {
+            name,
+            args,
+            is_negated,
+        }
     }
 
     /// Function name.
@@ -45,6 +51,13 @@ impl FnCall {
     #[inline]
     pub fn args(&self) -> &[Arithmetic] {
         &self.args
+    }
+
+    /// Whether the UDF result is negated.
+    #[must_use]
+    #[inline]
+    pub fn is_negated(&self) -> bool {
+        self.is_negated
     }
 
     /// Variables referenced by this function call.
@@ -62,7 +75,11 @@ impl fmt::Display for FnCall {
             .map(|a| a.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        write!(f, "{}({})", self.name, args)
+        if self.is_negated {
+            write!(f, "!{}({})", self.name, args)
+        } else {
+            write!(f, "{}({})", self.name, args)
+        }
     }
 }
 
@@ -79,6 +96,64 @@ impl Lexeme for FnCall {
             .filter(|p| p.as_rule() == Rule::arithmetic_expr)
             .map(Arithmetic::from_parsed_rule)
             .collect();
-        Self::new(fn_name, args)
+        Self::new(fn_name, args, false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logic::Factor;
+
+    fn arith_var(name: &str) -> Arithmetic {
+        Arithmetic::new(Factor::Var(name.into()), vec![])
+    }
+
+    #[test]
+    fn new_non_negated() {
+        let fc = FnCall::new("my_udf".into(), vec![arith_var("x")], false);
+        assert_eq!(fc.name(), "my_udf");
+        assert_eq!(fc.args().len(), 1);
+        assert!(!fc.is_negated());
+    }
+
+    #[test]
+    fn new_negated() {
+        let fc = FnCall::new("is_valid".into(), vec![arith_var("x"), arith_var("y")], true);
+        assert_eq!(fc.name(), "is_valid");
+        assert_eq!(fc.args().len(), 2);
+        assert!(fc.is_negated());
+    }
+
+    #[test]
+    fn display_non_negated() {
+        let fc = FnCall::new("f".into(), vec![arith_var("a"), arith_var("b")], false);
+        assert_eq!(fc.to_string(), "f(a, b)");
+    }
+
+    #[test]
+    fn display_negated() {
+        let fc = FnCall::new("f".into(), vec![arith_var("a")], true);
+        assert_eq!(fc.to_string(), "!f(a)");
+    }
+
+    #[test]
+    fn vars_collects_all_arguments() {
+        let fc = FnCall::new("g".into(), vec![arith_var("x"), arith_var("y")], false);
+        let vars: Vec<&str> = fc.vars().iter().map(|s| s.as_str()).collect();
+        assert_eq!(vars, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn parse_fn_call_expr() {
+        use crate::{FlowLogParser, Lexeme, Rule};
+        use pest::Parser;
+
+        let input = "my_udf(x, y)";
+        let mut pairs = FlowLogParser::parse(Rule::fn_call_expr, input).unwrap();
+        let fc = FnCall::from_parsed_rule(pairs.next().unwrap());
+        assert_eq!(fc.name(), "my_udf");
+        assert_eq!(fc.args().len(), 2);
+        assert!(!fc.is_negated());
     }
 }

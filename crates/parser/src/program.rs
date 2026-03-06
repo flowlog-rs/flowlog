@@ -222,7 +222,7 @@ impl Program {
             let needs_rewrite = rule
                 .rhs()
                 .iter()
-                .any(|p| matches!(p, Predicate::PositiveAtomPredicate(a) if udf_names.contains(a.name())));
+                .any(|p| matches!(p, Predicate::PositiveAtomPredicate(a) | Predicate::NegativeAtomPredicate(a) if udf_names.contains(a.name())));
             if !needs_rewrite {
                 continue;
             }
@@ -231,7 +231,10 @@ impl Program {
                 .rhs()
                 .iter()
                 .map(|pred| match pred {
-                    Predicate::PositiveAtomPredicate(atom) if udf_names.contains(atom.name()) => {
+                    Predicate::PositiveAtomPredicate(atom)
+                    | Predicate::NegativeAtomPredicate(atom)
+                        if udf_names.contains(atom.name()) =>
+                    {
                         let args = atom
                             .arguments()
                             .iter()
@@ -246,7 +249,11 @@ impl Program {
                                 ),
                             })
                             .collect();
-                        Predicate::FnCallPredicate(FnCall::new(atom.name().to_string(), args))
+                        Predicate::FnCallPredicate(FnCall::new(
+                            atom.name().to_string(),
+                            args,
+                            matches!(pred, Predicate::NegativeAtomPredicate(_)),
+                        ))
                     }
                     other => other.clone(),
                 })

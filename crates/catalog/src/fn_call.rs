@@ -8,12 +8,13 @@ use std::fmt;
 pub struct FnCallPredicatePos {
     name: String,
     args: Vec<ArithmeticPos>,
+    is_negated: bool,
 }
 
 impl FnCallPredicatePos {
     /// Construct a new positional fn_call predicate.
-    pub fn new(name: String, args: Vec<ArithmeticPos>) -> Self {
-        Self { name, args }
+    pub fn new(name: String, args: Vec<ArithmeticPos>, is_negated: bool) -> Self {
+        Self { name, args, is_negated }
     }
 
     /// Returns the function name.
@@ -27,6 +28,12 @@ impl FnCallPredicatePos {
     pub fn args(&self) -> &[ArithmeticPos] {
         &self.args
     }
+
+    /// Whether the UDF result is negated.
+    #[inline]
+    pub fn is_negated(&self) -> bool {
+        self.is_negated
+    }
 }
 
 impl fmt::Display for FnCallPredicatePos {
@@ -37,6 +44,10 @@ impl fmt::Display for FnCallPredicatePos {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        write!(f, "[{}({})]", self.name, args_str)
+        if self.is_negated {
+            write!(f, "[!{}({})]", self.name, args_str)
+        } else {
+            write!(f, "[{}({})]", self.name, args_str)
+        }
     }
 }

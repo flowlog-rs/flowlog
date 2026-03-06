@@ -494,7 +494,11 @@ impl Compiler {
                     .iter()
                     .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern, None))
                     .collect();
-                quote! { udf::#fn_name(#( #args ),*) }
+                if fc.is_negated() {
+                    quote! { !udf::#fn_name(#( #args ),*) }
+                } else {
+                    quote! { udf::#fn_name(#( #args ),*) }
+                }
             })
             .collect();
 
@@ -520,7 +524,11 @@ impl Compiler {
                     .iter()
                     .map(|a| self.build_join_args_arithmetic_expr(a, string_intern))
                     .collect();
-                quote! { udf::#fn_name(#( #args ),*) }
+                if fc.is_negated() {
+                    quote! { !udf::#fn_name(#( #args ),*) }
+                } else {
+                    quote! { udf::#fn_name(#( #args ),*) }
+                }
             })
             .collect();
 
@@ -549,7 +557,11 @@ impl Compiler {
                         self.build_row_args_arithmetic_expr(a, row_fields, string_intern, None)
                     })
                     .collect();
-                quote! { udf::#fn_name(#( #args ),*) }
+                if fc.is_negated() {
+                    quote! { !udf::#fn_name(#( #args ),*) }
+                } else {
+                    quote! { udf::#fn_name(#( #args ),*) }
+                }
             })
             .collect();
 

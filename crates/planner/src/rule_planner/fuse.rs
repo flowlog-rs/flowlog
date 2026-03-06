@@ -423,7 +423,7 @@ impl RulePlanner {
                 };
 
                 let new_args = fc.args().iter().map(remap_expr).collect();
-                FnCallPredicatePos::new(fc.name().to_string(), new_args)
+                FnCallPredicatePos::new(fc.name().to_string(), new_args, fc.is_negated())
             })
             .collect()
     }

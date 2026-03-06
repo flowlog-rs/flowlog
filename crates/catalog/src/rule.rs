@@ -5,7 +5,7 @@ use std::fmt;
 
 use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::filter::Filters;
-use crate::ComparisonExprPos;
+use crate::{ArithmeticPos, ComparisonExprPos, FnCallPredicatePos};
 use parser::{ComparisonExpr, FlowLogRule, FnCall, HeadArg, Predicate};
 use tracing::debug;
 
@@ -418,9 +418,9 @@ impl Catalog {
         &self,
         pos_atom_id: usize,
         fn_call_id: usize,
-    ) -> crate::FnCallPredicatePos {
+    ) -> FnCallPredicatePos {
         let fn_call = &self.fn_call_predicates[fn_call_id];
-        let args_pos: Vec<crate::ArithmeticPos> = fn_call
+        let args_pos: Vec<ArithmeticPos> = fn_call
             .args()
             .iter()
             .map(|arg| {
@@ -432,10 +432,10 @@ impl Catalog {
                             .expect("variable in fn_call arg not found in positive atom")
                     })
                     .collect();
-                crate::ArithmeticPos::from_arithmetic(arg, &var_sigs)
+                ArithmeticPos::from_arithmetic(arg, &var_sigs)
             })
             .collect();
-        crate::FnCallPredicatePos::new(fn_call.name().to_string(), args_pos)
+        FnCallPredicatePos::new(fn_call.name().to_string(), args_pos, fn_call.is_negated())
     }
 
     // === Filters ===
