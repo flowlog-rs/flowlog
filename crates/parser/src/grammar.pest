@@ -42,11 +42,11 @@ integer64_type = { "int64" }
 // Text data type for strings
 string_type = { "string" }
 
-// Boolean data type for UDF return types
+// Boolean data type
 bool_type = { "bool" }
 
 // Constant values
-constant = { integer | string } 
+constant = { boolean | integer | string } 
 
 // Integer with optional sign
 // Examples: 42, -17, +100
@@ -60,8 +60,8 @@ string = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 // Used when you don't need to reference a variable
 placeholder = { "_" } 
 
-// Boolean values used in expressions
-boolean = { "True" | "False" } 
+// Boolean literal values
+boolean = { ("True" | "False") ~ !(ASCII_ALPHANUMERIC | "_") } 
 
 // =============================================================================
 // RELATION DECLARATIONS
@@ -139,7 +139,7 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
 // Basic elements in arithmetic expressions
-factor = { variable | constant }
+factor = { constant | variable }
 
 // Arithmetic operators
 arithmetic_op = { 
@@ -226,8 +226,8 @@ atom = {
 // Example: !edge(x, y)
 negative_atom = { "!" ~ atom }
 
-// Arguments in atoms can be variables, constants, or placeholders
-atom_arg = { variable | constant | placeholder } 
+// Arguments in atoms can be constants, variables, or placeholders
+atom_arg = { constant | variable | placeholder } 
 
 // =============================================================================
 // RULES SECTION

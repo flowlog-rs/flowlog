@@ -9,6 +9,7 @@ use std::str::FromStr;
 /// - `"int32"` → [`DataType::Int32`]
 /// - `"int64"` → [`DataType::Int64`]
 /// - `"string"` → [`DataType::String`]
+/// - `"bool"` → [`DataType::Bool`]
 ///
 /// They are used as attribute types in relations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -19,7 +20,7 @@ pub enum DataType {
     Int64,
     /// UTF-8 string type.
     String,
-    /// Boolean type (for UDF return types).
+    /// Boolean type.
     Bool,
 }
 
@@ -28,7 +29,7 @@ impl FromStr for DataType {
 
     /// Parse a [`DataType`] from its grammar string representation.
     ///
-    /// Returns `Err` if the string is not `"int32"`, `"int64"`, or `"string"`.
+    /// Returns `Err` if the string is not `"int32"`, `"int64"`, `"string"`, or `"bool"`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "int32" => Ok(Self::Int32),

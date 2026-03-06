@@ -131,6 +131,7 @@ impl Compiler {
                 FactorArgument::Const(ConstType::Int32(_)) => Some(DataType::Int32),
                 FactorArgument::Const(ConstType::Int64(_)) => Some(DataType::Int64),
                 FactorArgument::Const(ConstType::Text(_)) => Some(DataType::String),
+                FactorArgument::Const(ConstType::Bool(_)) => Some(DataType::Bool),
             }
         }
 

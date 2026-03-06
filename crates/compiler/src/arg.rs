@@ -647,6 +647,7 @@ fn const_to_token(constant: &ConstType, string_intern: bool) -> TokenStream {
                 quote! { #s.to_string() }
             }
         }
+        ConstType::Bool(b) => quote! { #b },
     }
 }
 

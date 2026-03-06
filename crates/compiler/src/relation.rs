@@ -20,9 +20,13 @@ impl Compiler {
         let needs_shard_str = edbs
             .iter()
             .any(|rel| rel.data_type().contains(&DataType::String));
-        let needs_shard_i32 = edbs
-            .iter()
-            .any(|rel| rel.arity() > 0 && rel.data_type().first() == Some(&DataType::Int32));
+        let needs_shard_i32 = edbs.iter().any(|rel| {
+            rel.arity() > 0
+                && matches!(
+                    rel.data_type().first(),
+                    Some(&DataType::Int32) | Some(&DataType::Bool)
+                )
+        });
         let needs_shard_i64 = edbs
             .iter()
             .any(|rel| rel.arity() > 0 && rel.data_type().first() == Some(&DataType::Int64));

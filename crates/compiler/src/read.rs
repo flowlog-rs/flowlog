@@ -354,6 +354,7 @@ impl Compiler {
                                 quote! { #s.to_string() }
                             }
                         }
+                        ConstType::Bool(b) => quote! { #b },
                     })
                     .collect();
 

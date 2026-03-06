@@ -88,7 +88,9 @@ impl fmt::Display for Predicate {
             Self::PositiveAtomPredicate(atom) => write!(f, "{atom}"),
             Self::NegativeAtomPredicate(atom) => write!(f, "!{atom}"),
             Self::ComparePredicate(expr) => write!(f, "{expr}"),
-            Self::BoolPredicate(b) => write!(f, "{b}"),
+            Self::BoolPredicate(b) => {
+                write!(f, "{}", if *b { "True" } else { "False" })
+            }
             Self::FnCallPredicate(fc) => write!(f, "{fc}"),
         }
     }
@@ -100,7 +102,9 @@ impl fmt::Debug for Predicate {
             Self::PositiveAtomPredicate(atom) => write!(f, "{atom:?}"),
             Self::NegativeAtomPredicate(atom) => write!(f, "!{atom:?}"),
             Self::ComparePredicate(expr) => write!(f, "{expr}"),
-            Self::BoolPredicate(b) => write!(f, "{b}"),
+            Self::BoolPredicate(b) => {
+                write!(f, "{}", if *b { "True" } else { "False" })
+            }
             Self::FnCallPredicate(fc) => write!(f, "{fc}"),
         }
     }
@@ -198,8 +202,8 @@ mod tests {
         let t = Predicate::BoolPredicate(true);
         let f = Predicate::BoolPredicate(false);
         assert!(t.is_boolean() && f.is_boolean());
-        assert_eq!(t.to_string(), "true");
-        assert_eq!(f.to_string(), "false");
+        assert_eq!(t.to_string(), "True");
+        assert_eq!(f.to_string(), "False");
     }
 
     #[test]
