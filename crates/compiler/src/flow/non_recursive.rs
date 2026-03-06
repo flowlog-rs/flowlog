@@ -79,9 +79,9 @@ impl Compiler {
             // Build union expression from IDB sources.
             let head = outs[0].clone();
             let tail = &outs[1..];
-            let mut expr: TokenStream = quote! { #head };
+            let mut expr: TokenStream = quote! { #head.clone() };
             for t in tail {
-                expr = quote! { #expr.concat(&#t) };
+                expr = quote! { #expr.concat(#t.clone()) };
             }
 
             // If this output was already computed in a previous stratum, union the previous
@@ -98,7 +98,7 @@ impl Compiler {
                 });
                 quote! {
                     let #output = #output
-                        .concat(&#expr)
+                        .concat(#expr)
                         #dedup_stats;
                 }
             } else {
@@ -185,6 +185,7 @@ impl Compiler {
                         #block
                         let #output = #output
                             .map(#row_chop)
+                            .arrange_by_key()
                             .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
                                 "aggregation",
                                 #reduce_logic
