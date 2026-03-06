@@ -72,16 +72,8 @@ impl Compiler {
                         name.to_string(),
                     );
                 });
-                match self.config.mode() {
-                    ExecutionMode::Batch => {
-                        let var_name = format_ident!("{}_var", name);
-                        quote! { let (#var_name, #name) = Variable::new(inner, timely::order::Product::new(Default::default(), 1)); }
-                    }
-                    ExecutionMode::Incremental => {
-                        let var_name = format_ident!("{}_var", name);
-                        quote! { let (#var_name, #name) = Variable::new(inner, timely::order::Product::new(Default::default(), 1)); }
-                    }
-                }
+                let var_name = format_ident!("{}_var", name);
+                quote! { let (#var_name, #name) = Variable::new(inner, timely::order::Product::new(Default::default(), 1)); }
             })
             .collect();
 
