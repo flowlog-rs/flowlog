@@ -268,7 +268,8 @@ impl RulePlanner {
             Self::remap_const_eq_constraints(&all_positions, &predicates.const_eq);
         let remapped_var_eq = Self::remap_var_eq_constraints(&all_positions, &predicates.var_eq);
         let remapped_cmps = Self::remap_comparisons(&all_positions, &predicates.compare_exprs);
-        let remapped_fn_calls = Self::remap_fn_call_preds(&all_positions, &predicates.fn_call_preds);
+        let remapped_fn_calls =
+            Self::remap_fn_call_preds(&all_positions, &predicates.fn_call_preds);
 
         // Update producer output layout and comparisons
         {

@@ -12,9 +12,9 @@ use tracing::trace;
 pub mod flow;
 pub mod info;
 
+use catalog::JoinPredicates;
 pub use flow::TransformationFlow;
 pub use info::{KeyValueLayout, TransformationInfo};
-use catalog::JoinPredicates;
 
 /// Represents a data transformation operation in a query execution plan.
 #[derive(Clone, Hash, Eq, PartialEq)]

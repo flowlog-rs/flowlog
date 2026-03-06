@@ -15,7 +15,10 @@
 use std::fmt;
 use std::hash::Hash;
 
-use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos, JoinPredicates, KvPredicates};
+use catalog::{
+    ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos, JoinPredicates,
+    KvPredicates,
+};
 use common::compute_fp;
 use parser::ConstType;
 
@@ -178,7 +181,9 @@ impl TransformationInfo {
     /// Mark this Key-Value transformation as a SIP projection.
     pub fn into_sip_projection(mut self) -> Self {
         match &mut self {
-            Self::KVToKV { is_sip_projection, .. } => *is_sip_projection = true,
+            Self::KVToKV {
+                is_sip_projection, ..
+            } => *is_sip_projection = true,
             _ => panic!("Planner error: into_sip_projection is only applicable to KVToKV"),
         }
         self
@@ -698,8 +703,12 @@ impl fmt::Display for TransformationInfo {
                 );
 
                 let out = fmt_collection(output_info_fp, output_kv_layout);
-                let filters =
-                    fmt_flow_kv(&[], &[], &predicates.compare_exprs, &predicates.fn_call_preds);
+                let filters = fmt_flow_kv(
+                    &[],
+                    &[],
+                    &predicates.compare_exprs,
+                    &predicates.fn_call_preds,
+                );
                 let row_flag = if *is_row_output {
                     "[Jn -> Row]"
                 } else {

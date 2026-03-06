@@ -151,7 +151,10 @@ impl RulePlanner {
             catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(vec![], in_vals),
             KeyValueLayout::new(vec![], out_vals.clone()),
-            KvPredicates { var_eq: vec![(left_sig, right_sig)], ..Default::default() },
+            KvPredicates {
+                var_eq: vec![(left_sig, right_sig)],
+                ..Default::default()
+            },
         );
 
         // Generate descriptive name
@@ -207,7 +210,10 @@ impl RulePlanner {
             catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(vec![], in_vals),
             KeyValueLayout::new(vec![], out_vals.clone()),
-            KvPredicates { const_eq: vec![(var_sig, const_val)], ..Default::default() },
+            KvPredicates {
+                const_eq: vec![(var_sig, const_val)],
+                ..Default::default()
+            },
         );
 
         // Generate descriptive name

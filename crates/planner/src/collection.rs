@@ -62,7 +62,7 @@ impl Collection {
         )
     }
 
-/// Returns `true` if this collection has only keys (no values).
+    /// Returns `true` if this collection has only keys (no values).
     pub fn is_k_only(&self) -> bool {
         self.value_argument_signatures.is_empty()
     }

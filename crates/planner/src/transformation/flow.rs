@@ -101,8 +101,7 @@ impl TransformationFlow {
         // Process constant and variable equality constraints via helpers
         let flow_const_args =
             Self::build_const_eq_constraints(&input_expr_map, &predicates.const_eq);
-        let flow_var_eq_args =
-            Self::build_var_eq_constraints(&input_expr_map, &predicates.var_eq);
+        let flow_var_eq_args = Self::build_var_eq_constraints(&input_expr_map, &predicates.var_eq);
 
         // Process comparison constraints
         let flow_compares =
@@ -217,13 +216,6 @@ impl TransformationFlow {
             Self::JnToKV { fn_call_preds, .. } => fn_call_preds,
         }
     }
-}
-
-// ========================
-// Analysis and Utility Methods
-// ========================
-impl TransformationFlow {
-
 }
 
 // ========================
@@ -523,7 +515,7 @@ impl fmt::Display for TransformationFlow {
                 let filters_str = if filter_parts.is_empty() {
                     String::new()
                 } else {
-                    format!(" if {}", filter_parts.join(" and "))
+                    format!("if {}", filter_parts.join(" and "))
                 };
 
                 let key_str = key

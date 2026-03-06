@@ -564,7 +564,7 @@ impl RulePlanner {
                     fn_call_preds: vec![
                         catalog.resolve_fn_call_predicates(rhs_idx, lhs_fn_call_idx)
                     ],
-                    ..Default::default() // no const-eq, var-eq, comparisons and fn_call predicates
+                    ..Default::default() // no const-eq, var-eq, or comparisons
                 },
             );
 

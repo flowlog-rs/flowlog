@@ -124,8 +124,7 @@ impl Catalog {
         // Store original atom fingerprints for reference
         for predicate in rule.rhs() {
             match predicate {
-                Predicate::PositiveAtomPredicate(atom)
-                | Predicate::NegativeAtomPredicate(atom) => {
+                Predicate::PositiveAtomPredicate(atom) | Predicate::NegativeAtomPredicate(atom) => {
                     catalog
                         .original_atom_fingerprints
                         .insert(atom.fingerprint());

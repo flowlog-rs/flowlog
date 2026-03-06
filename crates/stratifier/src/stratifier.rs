@@ -303,9 +303,7 @@ impl Stratifier {
                     let rule = &self.program.rules()[*rid];
                     rule.rhs().iter().filter_map(|p| match p {
                         Predicate::PositiveAtomPredicate(atom)
-                        | Predicate::NegativeAtomPredicate(atom) => {
-                            Some(atom.fingerprint())
-                        }
+                        | Predicate::NegativeAtomPredicate(atom) => Some(atom.fingerprint()),
                         _ => None,
                     })
                 })

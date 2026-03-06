@@ -56,26 +56,30 @@ impl Catalog {
         let mut local_placeholder_set = HashSet::new();
 
         // Partition RHS predicates into positive atoms, negative atoms, comparisons, and fn_call predicates
-        let (positive_atoms, negative_atoms, comparison_predicates, fn_call_predicates): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
-            self.rule.rhs().iter().enumerate().fold(
-                (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
-                |(mut pos, mut neg, mut comp, mut fncalls), (i, p)| {
-                    match p {
-                        Predicate::PositiveAtomPredicate(a) => {
-                            pos.push(a);
-                            self.positive_atom_rhs_ids.push(i);
-                        }
-                        Predicate::NegativeAtomPredicate(a) => {
-                            neg.push(a);
-                            self.negative_atom_rhs_ids.push(i);
-                        }
-                        Predicate::ComparePredicate(expr) => comp.push(expr.clone()),
-                        Predicate::FnCallPredicate(fc) => fncalls.push(fc.clone()),
-                        Predicate::BoolPredicate(_) => {}
-                    };
-                    (pos, neg, comp, fncalls)
-                },
-            );
+        let (positive_atoms, negative_atoms, comparison_predicates, fn_call_predicates): (
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+        ) = self.rule.rhs().iter().enumerate().fold(
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            |(mut pos, mut neg, mut comp, mut fncalls), (i, p)| {
+                match p {
+                    Predicate::PositiveAtomPredicate(a) => {
+                        pos.push(a);
+                        self.positive_atom_rhs_ids.push(i);
+                    }
+                    Predicate::NegativeAtomPredicate(a) => {
+                        neg.push(a);
+                        self.negative_atom_rhs_ids.push(i);
+                    }
+                    Predicate::ComparePredicate(expr) => comp.push(expr.clone()),
+                    Predicate::FnCallPredicate(fc) => fncalls.push(fc.clone()),
+                    Predicate::BoolPredicate(_) => {}
+                };
+                (pos, neg, comp, fncalls)
+            },
+        );
 
         // Process positive atoms: record fingerprints, build argument signatures, record var/const/placeholder, collect var set
         for (pos_rhs_id, atom) in positive_atoms.iter().enumerate() {
@@ -177,12 +181,7 @@ impl Catalog {
         // Build variable string sets for each fn_call predicate (used for superset analysis)
         self.fn_call_predicates_vars_str_set = fn_call_predicates
             .iter()
-            .map(|fc| {
-                fc.vars()
-                    .into_iter()
-                    .cloned()
-                    .collect::<HashSet<String>>()
-            })
+            .map(|fc| fc.vars().into_iter().cloned().collect::<HashSet<String>>())
             .collect();
         self.fn_call_predicates = fn_call_predicates;
     }

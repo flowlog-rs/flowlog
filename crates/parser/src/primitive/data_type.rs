@@ -63,7 +63,12 @@ mod tests {
 
     #[test]
     fn display_roundtrip() {
-        for t in [DataType::Int32, DataType::Int64, DataType::String, DataType::Bool] {
+        for t in [
+            DataType::Int32,
+            DataType::Int64,
+            DataType::String,
+            DataType::Bool,
+        ] {
             let s = t.to_string();
             let parsed = DataType::from_str(&s).unwrap();
             assert_eq!(t, parsed);

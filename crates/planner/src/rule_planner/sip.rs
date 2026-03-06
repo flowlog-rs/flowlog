@@ -18,7 +18,9 @@
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 
 use super::RulePlanner;
-use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates};
+use catalog::{
+    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
+};
 
 use tracing::trace;
 
