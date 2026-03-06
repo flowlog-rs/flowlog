@@ -19,11 +19,11 @@ use crate::aggregation::{
     aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
 use crate::ident::find_local_ident;
-use crate::udf::scalar::scalar_udf_map;
+use crate::udf::head_udf_map;
 use crate::Compiler;
 
 use common::ExecutionMode;
-use parser::{AggregationOperator, Udf};
+use parser::AggregationOperator;
 use planner::StratumPlanner;
 use profiler::{with_profiler, Profiler};
 
@@ -330,34 +330,16 @@ impl Compiler {
 
             // UDF logic (optional, mutually exclusive with aggregation)
             if let Some((fn_name, start, end, output_arity)) = output_to_udf_map.get(output_fp) {
-                let udf = self
-                    .program
-                    .udfs()
-                    .iter()
-                    .find(|u| {
-                        let (Udf::Scalar(e) | Udf::Aggregate(e)) = u;
-                        e.name() == fn_name
-                    })
-                    .unwrap_or_else(|| panic!("Compiler error: UDF '{fn_name}' not found"));
-                match udf {
-                    Udf::Scalar(_) => {
-                        for idb_fp in idb_fps {
-                            self.verify_udf_types(*output_fp, *idb_fp, fn_name, *start);
-                        }
-                        self.imports.mark_udf();
-                        let udf_pipeline = scalar_udf_map(fn_name, *start, *end, *output_arity);
-                        block = quote! {
-                            #block
-                            let #next_ident = #next_ident
-                                #udf_pipeline;
-                        };
-                    }
-                    Udf::Aggregate(_) => {
-                        unimplemented!(
-                            "Compiler error: aggregate UDF '{fn_name}' is not yet supported"
-                        )
-                    }
+                for idb_fp in idb_fps {
+                    self.verify_udf_types(*output_fp, *idb_fp, fn_name, *start);
                 }
+                self.imports.mark_udf();
+                let udf_pipeline = head_udf_map(fn_name, *start, *end, *output_arity);
+                block = quote! {
+                    #block
+                    let #next_ident = #next_ident
+                        #udf_pipeline;
+                };
             }
 
             union_stmts.push(block);

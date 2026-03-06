@@ -87,6 +87,7 @@ impl RulePlanner {
             Vec::new(), // no const constraints
             Vec::new(), // no var constraints
             Vec::new(), // no comparisons
+            vec![],     // no fn-call predicates
         );
         post_tx.update_row_output(true);
         post_tx.update_output_fake_sig();

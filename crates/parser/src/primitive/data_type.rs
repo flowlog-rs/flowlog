@@ -19,6 +19,8 @@ pub enum DataType {
     Int64,
     /// UTF-8 string type.
     String,
+    /// Boolean type (for UDF return types).
+    Bool,
 }
 
 impl FromStr for DataType {
@@ -32,8 +34,9 @@ impl FromStr for DataType {
             "int32" => Ok(Self::Int32),
             "int64" => Ok(Self::Int64),
             "string" => Ok(Self::String),
+            "bool" => Ok(Self::Bool),
             _ => Err(format!(
-                "Parser error: '{s}'. Invalid data type, expected 'int32', 'int64', or 'string'"
+                "Parser error: '{s}'. Invalid data type, expected 'int32', 'int64', 'string', or 'bool'"
             )),
         }
     }
@@ -46,6 +49,7 @@ impl fmt::Display for DataType {
             Self::Int32 => "int32",
             Self::Int64 => "int64",
             Self::String => "string",
+            Self::Bool => "bool",
         };
         write!(f, "{type_str}")
     }
@@ -58,7 +62,7 @@ mod tests {
 
     #[test]
     fn display_roundtrip() {
-        for t in [DataType::Int32, DataType::Int64, DataType::String] {
+        for t in [DataType::Int32, DataType::Int64, DataType::String, DataType::Bool] {
             let s = t.to_string();
             let parsed = DataType::from_str(&s).unwrap();
             assert_eq!(t, parsed);

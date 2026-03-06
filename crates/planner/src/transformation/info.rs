@@ -15,7 +15,7 @@
 use std::fmt;
 use std::hash::Hash;
 
-use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos};
+use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos};
 use common::compute_fp;
 use parser::ConstType;
 
@@ -105,6 +105,8 @@ pub enum TransformationInfo {
         var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
         /// Comparison expressions (e.g., x < y).
         compare_exprs_pos: Vec<ComparisonExprPos>,
+        /// Boolean UDF predicates (e.g., is_valid(x)).
+        fn_call_preds_pos: Vec<FnCallPredicatePos>,
         /// SIP projection
         is_sip_projection: bool,
     },
@@ -127,6 +129,8 @@ pub enum TransformationInfo {
         output_kv_layout: KeyValueLayout,
         /// Join comparisons (if any).
         compare_exprs_pos: Vec<ComparisonExprPos>,
+        /// Boolean UDF predicates (e.g., is_valid(x)).
+        fn_call_preds_pos: Vec<FnCallPredicatePos>,
     },
 
     /// Binary Anti-Join to Key-Value transformation.
@@ -161,6 +165,7 @@ impl TransformationInfo {
         const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
         var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
         compare_exprs_pos: Vec<ComparisonExprPos>,
+        fn_call_preds_pos: Vec<FnCallPredicatePos>,
     ) -> Self {
         let fake_output_sig = compute_fp((
             "kv_to_kv",
@@ -170,6 +175,7 @@ impl TransformationInfo {
             &const_eq_constraints,
             &var_eq_constraints,
             &compare_exprs_pos,
+            &fn_call_preds_pos,
         ));
 
         Self::KVToKV {
@@ -182,6 +188,7 @@ impl TransformationInfo {
             const_eq_constraints,
             var_eq_constraints,
             compare_exprs_pos,
+            fn_call_preds_pos,
             is_sip_projection: false,
         }
     }
@@ -195,6 +202,7 @@ impl TransformationInfo {
         const_eq_constraints: Vec<(AtomArgumentSignature, ConstType)>,
         var_eq_constraints: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
         compare_exprs_pos: Vec<ComparisonExprPos>,
+        fn_call_preds_pos: Vec<FnCallPredicatePos>,
     ) -> Self {
         let fake_output_sig = compute_fp((
             "kv_to_kv",
@@ -204,6 +212,7 @@ impl TransformationInfo {
             &const_eq_constraints,
             &var_eq_constraints,
             &compare_exprs_pos,
+            &fn_call_preds_pos,
         ));
 
         Self::KVToKV {
@@ -216,6 +225,7 @@ impl TransformationInfo {
             const_eq_constraints,
             var_eq_constraints,
             compare_exprs_pos,
+            fn_call_preds_pos,
             is_sip_projection: true,
         }
     }
@@ -228,6 +238,7 @@ impl TransformationInfo {
         right_kv_layout: KeyValueLayout,
         output_fake_kv_layout: KeyValueLayout,
         compare_exprs_pos: Vec<ComparisonExprPos>,
+        fn_call_preds_pos: Vec<FnCallPredicatePos>,
     ) -> Self {
         let fake_output_sig = compute_fp((
             "join_to_kv",
@@ -237,6 +248,7 @@ impl TransformationInfo {
             &right_kv_layout,
             &output_fake_kv_layout,
             &compare_exprs_pos,
+            &fn_call_preds_pos,
         ));
 
         Self::JoinToKV {
@@ -248,6 +260,7 @@ impl TransformationInfo {
             right_input_kv_layout: right_kv_layout,
             output_kv_layout: output_fake_kv_layout,
             compare_exprs_pos,
+            fn_call_preds_pos,
         }
     }
 
@@ -447,6 +460,22 @@ impl TransformationInfo {
             Self::AntiJoinToKV { .. } => panic!("Planner error: AntiJoinToKV has no compare_exprs"),
         }
     }
+
+    /// Boolean UDF predicate filters (Key-Value to Key-Value and Join to Key-Value).
+    #[inline]
+    pub fn fn_call_preds(&self) -> &[FnCallPredicatePos] {
+        match self {
+            Self::KVToKV {
+                fn_call_preds_pos, ..
+            }
+            | Self::JoinToKV {
+                fn_call_preds_pos, ..
+            } => fn_call_preds_pos,
+            Self::AntiJoinToKV { .. } => {
+                panic!("Planner error: AntiJoinToKV has no fn_call_preds")
+            }
+        }
+    }
 }
 
 // ========================
@@ -614,6 +643,27 @@ impl TransformationInfo {
         }
     }
 
+    /// Update boolean UDF predicate filters for transformations that support them.
+    ///
+    /// UDF predicates should be added incrementally.
+    pub fn update_fn_call_preds(&mut self, new_fn_call_preds_pos: Vec<FnCallPredicatePos>) {
+        match self {
+            Self::KVToKV {
+                fn_call_preds_pos, ..
+            } => {
+                fn_call_preds_pos.extend(new_fn_call_preds_pos);
+            }
+            Self::JoinToKV {
+                fn_call_preds_pos, ..
+            } => {
+                fn_call_preds_pos.extend(new_fn_call_preds_pos);
+            }
+            Self::AntiJoinToKV { .. } => {
+                panic!("Planner error: AntiJoinToKV has no fn_call_preds to update");
+            }
+        }
+    }
+
     /// Update constant equality constraints, avoiding duplicates.
     pub fn update_const_eq_and_var_eq_constraints(
         &mut self,
@@ -649,6 +699,7 @@ impl TransformationInfo {
                 const_eq_constraints,
                 var_eq_constraints,
                 compare_exprs_pos,
+                fn_call_preds_pos,
                 output_info_fp,
                 ..
             } => {
@@ -662,6 +713,7 @@ impl TransformationInfo {
                     const_eq_constraints,
                     var_eq_constraints,
                     compare_exprs_pos,
+                    fn_call_preds_pos,
                 ));
             }
             Self::JoinToKV {
@@ -672,6 +724,7 @@ impl TransformationInfo {
                 right_input_kv_layout,
                 output_kv_layout,
                 compare_exprs_pos,
+                fn_call_preds_pos,
                 output_info_fp,
             } => {
                 *output_info_fp = compute_fp((
@@ -683,6 +736,7 @@ impl TransformationInfo {
                     right_input_kv_layout,
                     output_kv_layout,
                     compare_exprs_pos,
+                    fn_call_preds_pos,
                 ));
             }
             Self::AntiJoinToKV {
@@ -721,12 +775,17 @@ impl fmt::Display for TransformationInfo {
                 const_eq_constraints,
                 var_eq_constraints,
                 compare_exprs_pos,
+                fn_call_preds_pos,
                 ..
             } => {
                 let in_coll = fmt_collection(input_info_fp, input_kv_layout);
                 let out_coll = fmt_collection(output_info_fp, output_kv_layout);
-                let filters =
-                    fmt_flow_kv(const_eq_constraints, var_eq_constraints, compare_exprs_pos);
+                let filters = fmt_flow_kv(
+                    const_eq_constraints,
+                    var_eq_constraints,
+                    compare_exprs_pos,
+                    fn_call_preds_pos,
+                );
                 let row_flags = match (*is_row_input, *is_row_output) {
                     (true, true) => "[Row -> Row]",
                     (true, false) => "[Row -> KV]",
@@ -758,6 +817,7 @@ impl fmt::Display for TransformationInfo {
                 right_input_kv_layout,
                 output_kv_layout,
                 compare_exprs_pos,
+                fn_call_preds_pos,
             } => {
                 let l = fmt_collection(left_input_info_fp, left_input_kv_layout);
 
@@ -771,7 +831,7 @@ impl fmt::Display for TransformationInfo {
                 );
 
                 let out = fmt_collection(output_info_fp, output_kv_layout);
-                let filters = fmt_flow_kv(&[], &[], compare_exprs_pos);
+                let filters = fmt_flow_kv(&[], &[], compare_exprs_pos, fn_call_preds_pos);
                 let row_flag = if *is_row_output {
                     "[Jn -> Row]"
                 } else {
@@ -864,11 +924,12 @@ fn fmt_collection(sig: &u64, kv_layout: &KeyValueLayout) -> String {
     }
 }
 
-/// Formats filters (const-eq, var-eq, comparisons) joined by `AND`.
+/// Formats filters (const-eq, var-eq, comparisons, fn_call predicates) joined by `AND`.
 fn fmt_flow_kv(
     consts: &[(AtomArgumentSignature, ConstType)],
     vars: &[(AtomArgumentSignature, AtomArgumentSignature)],
     comps: &[ComparisonExprPos],
+    fn_calls: &[FnCallPredicatePos],
 ) -> String {
     let consts_str = consts
         .iter()
@@ -888,6 +949,12 @@ fn fmt_flow_kv(
         .collect::<Vec<_>>()
         .join(" AND ");
 
+    let fn_calls_str = fn_calls
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
     let mut parts = Vec::new();
     if !consts.is_empty() {
         parts.push(consts_str);
@@ -897,6 +964,9 @@ fn fmt_flow_kv(
     }
     if !comps.is_empty() {
         parts.push(comps_str);
+    }
+    if !fn_calls.is_empty() {
+        parts.push(fn_calls_str);
     }
     parts.join(" AND ")
 }

@@ -7,7 +7,8 @@ use syn::Index;
 use super::Compiler;
 use parser::{ArithmeticOperator, ComparisonOperator, ConstType};
 use planner::{
-    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
+    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
+    FnCallPredicateArgument, TransformationArgument,
 };
 
 // ============================================================================
@@ -27,13 +28,21 @@ pub(super) fn row_pattern_and_fields(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
+    fn_call_preds: &[FnCallPredicateArgument],
     constraints: &Constraints,
 ) -> (TokenStream, Vec<Ident>) {
     if arity == 0 {
         return (quote! { () }, Vec::new());
     }
 
-    let used = compute_row_params_tokens(arity, key_args, value_args, compares, constraints);
+    let used = compute_row_params_tokens(
+        arity,
+        key_args,
+        value_args,
+        compares,
+        fn_call_preds,
+        constraints,
+    );
 
     let fields: Vec<Ident> = (0..arity)
         .map(|idx| {
@@ -170,6 +179,7 @@ fn compute_row_params_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
+    fn_call_preds: &[FnCallPredicateArgument],
     constraints: &Constraints,
 ) -> Vec<bool> {
     let mut used = vec![false; arity];
@@ -202,6 +212,12 @@ fn compute_row_params_tokens(
         inspect_expr(cmp.right());
     }
 
+    for fc in fn_call_preds {
+        for arg in fc.args() {
+            inspect_expr(arg);
+        }
+    }
+
     for (arg, _) in constraints.constant_eq_constraints().as_ref().iter() {
         mark(arg);
     }
@@ -221,6 +237,7 @@ pub(super) fn compute_join_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
+    fn_call_preds: &[FnCallPredicateArgument],
 ) -> (TokenStream, TokenStream, TokenStream) {
     let mut use_join_k = false;
     let mut use_join_lv = false;
@@ -258,6 +275,12 @@ pub(super) fn compute_join_param_tokens(
         inspect_expr(cmp.right());
     }
 
+    for fc in fn_call_preds {
+        for arg in fc.args() {
+            inspect_expr(arg);
+        }
+    }
+
     // Build idents, prefixing with `_` when not used to avoid warnings.
     let k_ident = if use_join_k {
         quote! { k }
@@ -285,6 +308,7 @@ pub(super) fn compute_kv_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
+    fn_call_preds: &[FnCallPredicateArgument],
     constraints: Option<&Constraints>,
 ) -> (TokenStream, TokenStream) {
     let mut use_k = false;
@@ -325,6 +349,12 @@ pub(super) fn compute_kv_param_tokens(
     for cmp in compares {
         inspect_expr(cmp.left());
         inspect_expr(cmp.right());
+    }
+
+    for fc in fn_call_preds {
+        for arg in fc.args() {
+            inspect_expr(arg);
+        }
     }
 
     if let Some(cons) = constraints {
@@ -433,6 +463,93 @@ impl Compiler {
                     self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern, None);
                 let op = comparison_op_tokens(c.operator());
                 quote! { #l #op #r }
+            })
+            .collect();
+
+        Some(quote! { #( #parts )&&* })
+    }
+}
+
+// ==================================================
+// FnCall predicate builders
+// ==================================================
+
+impl Compiler {
+    /// Build a combined predicate for KV-based closures from fn_call predicates.
+    /// Returns None when there are no fn_call predicates.
+    pub(super) fn build_kv_fn_call_predicate(
+        &mut self,
+        fn_calls: &[FnCallPredicateArgument],
+        string_intern: bool,
+    ) -> Option<TokenStream> {
+        if fn_calls.is_empty() {
+            return None;
+        }
+        let parts: Vec<TokenStream> = fn_calls
+            .iter()
+            .map(|fc| {
+                let fn_name = format_ident!("{}", fc.name());
+                let args: Vec<TokenStream> = fc
+                    .args()
+                    .iter()
+                    .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern, None))
+                    .collect();
+                quote! { udf::#fn_name(#( #args ),*) }
+            })
+            .collect();
+
+        Some(quote! { #( #parts )&&* })
+    }
+
+    /// Build a combined predicate for join-core closures from fn_call predicates.
+    /// Returns None when there are no fn_call predicates.
+    pub(super) fn build_join_fn_call_predicate(
+        &mut self,
+        fn_calls: &[FnCallPredicateArgument],
+        string_intern: bool,
+    ) -> Option<TokenStream> {
+        if fn_calls.is_empty() {
+            return None;
+        }
+        let parts: Vec<TokenStream> = fn_calls
+            .iter()
+            .map(|fc| {
+                let fn_name = format_ident!("{}", fc.name());
+                let args: Vec<TokenStream> = fc
+                    .args()
+                    .iter()
+                    .map(|a| self.build_join_args_arithmetic_expr(a, string_intern))
+                    .collect();
+                quote! { udf::#fn_name(#( #args ),*) }
+            })
+            .collect();
+
+        Some(quote! { #( #parts )&&* })
+    }
+
+    /// Build a combined predicate for row-based closures from fn_call predicates.
+    /// Returns None when there are no fn_call predicates.
+    pub(super) fn build_row_fn_call_predicate(
+        &mut self,
+        fn_calls: &[FnCallPredicateArgument],
+        row_fields: &[Ident],
+        string_intern: bool,
+    ) -> Option<TokenStream> {
+        if fn_calls.is_empty() {
+            return None;
+        }
+        let parts: Vec<TokenStream> = fn_calls
+            .iter()
+            .map(|fc| {
+                let fn_name = format_ident!("{}", fc.name());
+                let args: Vec<TokenStream> = fc
+                    .args()
+                    .iter()
+                    .map(|a| {
+                        self.build_row_args_arithmetic_expr(a, row_fields, string_intern, None)
+                    })
+                    .collect();
+                quote! { udf::#fn_name(#( #args ),*) }
             })
             .collect();
 
@@ -563,21 +680,15 @@ fn trans_arg_to_row_expr(arg: &TransformationArgument, fields: &[Ident]) -> Toke
 // Predicate composition utilities
 // ==================================================
 
-/// Combine two optional predicates with logical AND, returning the appropriate composed TokenStream.
-/// - None & None => None
-/// - Some(a) & None => Some(a)
-/// - None & Some(b) => Some(b)
-/// - Some(a) & Some(b) => Some( (a) && (b) )
-pub(super) fn combine_predicates(
-    a: Option<TokenStream>,
-    b: Option<TokenStream>,
-) -> Option<TokenStream> {
-    match (a, b) {
-        (None, None) => None,
-        (Some(x), None) => Some(x),
-        (None, Some(y)) => Some(y),
-        (Some(x), Some(y)) => Some(quote! { (#x) && (#y) }),
-    }
+/// Combine a list of optional predicates into a single `&&`-chained predicate.
+///
+/// Filters out `None` entries, then folds the remaining predicates with `&&`.
+/// Returns `None` when all inputs are `None`.
+pub(super) fn combine_predicates(preds: Vec<Option<TokenStream>>) -> Option<TokenStream> {
+    preds
+        .into_iter()
+        .flatten()
+        .reduce(|a, b| quote! { (#a) && (#b) })
 }
 
 // ==================================================

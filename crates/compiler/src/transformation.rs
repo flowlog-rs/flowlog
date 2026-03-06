@@ -37,6 +37,12 @@ impl Compiler {
     ) -> TokenStream {
         let transformation_name = format!("{transformation}");
         let si = self.imports.needs_string_intern();
+
+        // Mark UDF import needed if any fn_call predicate is present
+        if !transformation.flow().fn_call_preds().is_empty() {
+            self.imports.mark_udf();
+        }
+
         match transformation {
             // Row -> Row
             Transformation::RowToRow {
@@ -65,6 +71,7 @@ impl Compiler {
                     flow.key(),
                     flow.value(),
                     flow.compares(),
+                    flow.fn_call_preds(),
                     flow.constraints(),
                 );
                 self.verify_and_infer_global_type(
@@ -86,7 +93,9 @@ impl Compiler {
                 );
                 let cmp_pred = self.build_row_compare_predicate(flow.compares(), &row_fields, si);
                 let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields, si);
-                let pred = combine_predicates(cmp_pred, cst_pred);
+                let fc_pred =
+                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
 
                 let flat_map_body = if let Some(pred) = pred {
                     quote! { if #pred { Some( #out_val ) } else { None } }
@@ -128,6 +137,7 @@ impl Compiler {
                     flow.key(),
                     flow.value(),
                     flow.compares(),
+                    flow.fn_call_preds(),
                     flow.constraints(),
                 );
                 self.verify_and_infer_global_type(
@@ -157,7 +167,9 @@ impl Compiler {
 
                 let cmp_pred = self.build_row_compare_predicate(flow.compares(), &row_fields, si);
                 let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields, si);
-                let pred = combine_predicates(cmp_pred, cst_pred);
+                let fc_pred =
+                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
 
                 // Transformation logic
                 let flat_map_body = if let Some(pred) = pred {
@@ -218,11 +230,13 @@ impl Compiler {
                 let out_val = self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si);
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si);
-                let pred = combine_predicates(cmp_pred, cst_pred);
+                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
                     flow.value(),
                     flow.compares(),
+                    flow.fn_call_preds(),
                     Some(flow.constraints()),
                 );
 
@@ -279,11 +293,13 @@ impl Compiler {
                 };
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si);
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si);
-                let pred = combine_predicates(cmp_pred, cst_pred);
+                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
                     flow.value(),
                     flow.compares(),
+                    flow.fn_call_preds(),
                     Some(flow.constraints()),
                 );
 
@@ -364,16 +380,22 @@ impl Compiler {
                 );
 
                 // Output expression + predicates
-                let (jn_k, jn_lv, jn_rv) =
-                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
+                let (jn_k, jn_lv, jn_rv) = compute_join_param_tokens(
+                    flow.key(),
+                    flow.value(),
+                    flow.compares(),
+                    flow.fn_call_preds(),
+                );
                 let out_val = self.build_key_val_from_join_args(flow.value(), si);
 
-                let join_body =
-                    if let Some(pred) = self.build_join_compare_predicate(flow.compares(), si) {
-                        quote! { if #pred { Some( #out_val ) } else { None } }
-                    } else {
-                        quote! { Some( #out_val ) }
-                    };
+                let cmp_pred = self.build_join_compare_predicate(flow.compares(), si);
+                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si);
+                let pred = combine_predicates(vec![cmp_pred, fc_pred]);
+                let join_body = if let Some(pred) = pred {
+                    quote! { if #pred { Some( #out_val ) } else { None } }
+                } else {
+                    quote! { Some( #out_val ) }
+                };
 
                 quote! {
                     let #out = #l
@@ -415,8 +437,12 @@ impl Compiler {
                 );
 
                 // Output expression + predicates
-                let (jn_k, jn_lv, jn_rv) =
-                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
+                let (jn_k, jn_lv, jn_rv) = compute_join_param_tokens(
+                    flow.key(),
+                    flow.value(),
+                    flow.compares(),
+                    flow.fn_call_preds(),
+                );
                 let out_key = self.build_key_val_from_join_args(flow.key(), si);
                 let out_val = self.build_key_val_from_join_args(flow.value(), si);
                 let out_expr = if output.is_k_only() {
@@ -425,12 +451,14 @@ impl Compiler {
                     quote! { ( #out_key, #out_val ) }
                 };
 
-                let join_body =
-                    if let Some(pred) = self.build_join_compare_predicate(flow.compares(), si) {
-                        quote! { if #pred { Some( #out_expr ) } else { None } }
-                    } else {
-                        quote! { Some( #out_expr ) }
-                    };
+                let cmp_pred = self.build_join_compare_predicate(flow.compares(), si);
+                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si);
+                let pred = combine_predicates(vec![cmp_pred, fc_pred]);
+                let join_body = if let Some(pred) = pred {
+                    quote! { if #pred { Some( #out_expr ) } else { None } }
+                } else {
+                    quote! { Some( #out_expr ) }
+                };
 
                 let transformation = quote! {
                     let #out = #l
@@ -489,7 +517,7 @@ impl Compiler {
 
                 // Output expression
                 let (anti_param_k, anti_param_v) =
-                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
+                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
                 let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
                 let out_map_value =
                     self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
@@ -556,7 +584,7 @@ impl Compiler {
 
                 // Output expression
                 let (anti_param_k, anti_param_v) =
-                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
+                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
                 let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
                 let out_map_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining));
                 let out_map_value =

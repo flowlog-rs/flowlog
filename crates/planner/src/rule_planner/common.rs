@@ -17,14 +17,15 @@ use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog};
 // Semijoin & Comparison Operations
 // =========================================================================
 impl RulePlanner {
-    /// Attempts to apply semijoin or comparison pushdown optimizations.
+    /// Attempts to apply semijoin or comparison/fn_call pushdown optimizations.
     ///
     /// This method tries the following optimizations in order:
     /// 1. Comparison pushdown: When a comparison predicate can be pushed to atoms
-    /// 2. Positive semijoin: When a positive atom has positive supersets
-    /// 3. Anti-semijoin: When a negative atom has positive supersets  
+    /// 2. FnCall pushdown: When a boolean UDF predicate can be pushed to atoms
+    /// 3. Positive semijoin: When a positive atom has positive supersets
+    /// 4. Anti-semijoin: When a negative atom has positive supersets  
     ///
-    /// The reason why we try comparison pushdown first is that it can avoid fuse a comparison
+    /// The reason why we try comparison/fn_call pushdown first is that it can avoid fuse a comparison
     /// with a neg join producer, which is undefined in my understanding.
     ///
     /// WARNING: this method should be called as a total instead of calling individual
@@ -56,7 +57,30 @@ impl RulePlanner {
             return self.apply_comparison_pushdown(catalog, lhs_comp_idx, &rhs_pos_indices);
         }
 
-        // (2) Positive semijoin optimization
+        // (2) FnCall predicate pushdown
+        // When a boolean UDF predicate can be evaluated against specific atoms
+        if let Some((lhs_fn_call_idx, rhs_pos_indices)) = catalog
+            .fn_call_supersets()
+            .iter()
+            .enumerate()
+            .find(|(_, v)| !v.is_empty())
+            .map(|(idx, indices)| (idx, indices.clone()))
+        {
+            trace!(
+                "FnCall pushdown:\n  FnCall: {}\n  RHS atoms: {:?}",
+                catalog.fn_call_predicate(lhs_fn_call_idx),
+                rhs_pos_indices
+                    .iter()
+                    .map(|&i| (
+                        &catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)],
+                        catalog.positive_atom_rhs_id(i)
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            return self.apply_fn_call_pushdown(catalog, lhs_fn_call_idx, &rhs_pos_indices);
+        }
+
+        // (3) Positive semijoin optimization
         // When a positive atom has positive supersets, we can join them.
         // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
         if let Some((lhs_pos_idx, rhs_pos_indices)) = catalog
@@ -83,7 +107,7 @@ impl RulePlanner {
             return self.apply_positive_semijoin(catalog, lhs_pos_idx, &rhs_pos_indices);
         }
 
-        // (3) Anti-semijoin optimization
+        // (4) Anti-semijoin optimization
         // When a negative atom has positive supersets, we can anti-join them.
         // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
         if let Some((lhs_neg_idx, rhs_pos_indices)) = catalog
@@ -237,6 +261,7 @@ impl RulePlanner {
                 KeyValueLayout::new(rhs_keys, rhs_vals.clone()),   // RHS: keys aligned + values
                 KeyValueLayout::new(lhs_keys.clone(), rhs_vals),
                 vec![], // no additional comparisons
+                vec![], // no fn-call predicates
             );
 
             // Generate descriptive name for the new atom
@@ -463,6 +488,7 @@ impl RulePlanner {
                 vec![], // no const-eq
                 vec![], // no var-eq
                 vec![catalog.resolve_comparison_predicates(rhs_idx, lhs_comp_idx)],
+                vec![], // no fn-call predicates
             );
 
             // Generate descriptive name for the new atom
@@ -482,6 +508,78 @@ impl RulePlanner {
         }
 
         catalog.comparison_modify(lhs_comp_idx, right_sigs, new_names, new_fps);
+        true
+    }
+
+    /// Pushes down a boolean UDF predicate onto RHS atoms that fully cover its variables.
+    ///
+    /// FnCall pushdown moves evaluation of UDF predicates closer to data sources,
+    /// reducing the volume of data processed in subsequent operations.
+    fn apply_fn_call_pushdown(
+        &mut self,
+        catalog: &mut Catalog,
+        lhs_fn_call_idx: usize,
+        rhs_pos_indices: &[usize],
+    ) -> bool {
+        // Extract fn_call predicate information
+        let fn_call_predicate = catalog.fn_call_predicate(lhs_fn_call_idx);
+
+        // Initialize collections for new atoms created by the fn_call pushdown
+        let mut new_names = Vec::new();
+        let mut new_fps = Vec::new();
+        let mut right_sigs = Vec::new();
+
+        // Process each RHS atom for fn_call pushdown
+        for &rhs_idx in rhs_pos_indices {
+            let current_transformation_index = self.transformation_infos.len();
+
+            // Extract RHS atom information
+            let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
+            let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
+
+            // Register RHS atom as consumer of this transformation
+            self.insert_consumer(
+                catalog.original_atom_fingerprints(),
+                rhs_fp,
+                current_transformation_index,
+            );
+
+            // Store signature for catalog update
+            right_sigs.push(AtomSignature::new(true, rhs_idx));
+
+            let in_vals = rhs_args
+                .iter()
+                .map(|&sig| ArithmeticPos::from_var_signature(sig))
+                .collect::<Vec<_>>();
+
+            let tx = TransformationInfo::kv_to_kv(
+                rhs_fp,
+                catalog.original_atom_fingerprints().contains(&rhs_fp),
+                KeyValueLayout::new(vec![], in_vals.clone()),
+                KeyValueLayout::new(vec![], in_vals),
+                vec![], // no const-eq
+                vec![], // no var-eq
+                vec![], // no comparisons
+                vec![catalog.resolve_fn_call_predicates(rhs_idx, lhs_fn_call_idx)],
+            );
+
+            // Generate descriptive name for the new atom
+            let new_name = format!("fn_call_{}_filter_atom_pos{}", fn_call_predicate, rhs_idx);
+            let new_fp = tx.output_info_fp();
+
+            // Register this transformation as a producer
+            self.insert_producer(new_fp, current_transformation_index);
+
+            trace!("FnCall transformation:\n      {}", tx);
+
+            new_names.push(new_name);
+            new_fps.push(new_fp);
+
+            // Store the transformation info
+            self.transformation_infos.push(tx);
+        }
+
+        catalog.fn_call_modify(lhs_fn_call_idx, right_sigs, new_names, new_fps);
         true
     }
 }
@@ -554,6 +652,7 @@ impl RulePlanner {
                 vec![],                               // no constant equality constraints
                 vec![],                               // no variable equality constraints
                 vec![],                               // no comparison constraints
+                vec![],                               // no fn-call predicates
             );
 
             // Generate descriptive name for projected atom
@@ -623,6 +722,7 @@ impl RulePlanner {
             vec![],             // no constant equality constraints
             vec![],             // no variable equality constraints
             vec![],             // no comparison constraints
+            vec![],             // no fn-call predicates
         );
 
         // Generate descriptive name for the projected atom

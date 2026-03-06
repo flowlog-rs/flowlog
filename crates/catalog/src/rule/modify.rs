@@ -296,6 +296,70 @@ impl Catalog {
         self.remove_and_update_rule(comparison_rhs_index, right_indices, new_filtered_atoms);
     }
 
+    /// Applies a fn_call predicate to atoms, creating filtered versions of the atoms.
+    pub fn fn_call_modify(
+        &mut self,
+        fn_call_index: usize,
+        right_atom_signatures: Vec<AtomSignature>,
+        new_names: Vec<String>,
+        new_fingerprints: Vec<u64>,
+    ) {
+        // Ensure all parameter vectors have matching lengths
+        let num_atoms = right_atom_signatures.len();
+        if new_names.len() != num_atoms || new_fingerprints.len() != num_atoms {
+            panic!("Catalog error: right_atom_signatures, new_names, and new_fingerprints must have the same length");
+        }
+
+        // Get the fn_call predicate and find its position in the rule RHS
+        let fn_call_predicate = &self.fn_call_predicates[fn_call_index];
+        let fn_call_rhs_index = self
+            .rule
+            .rhs()
+            .iter()
+            .enumerate()
+            .find_map(|(idx, p)| match p {
+                Predicate::FnCallPredicate(fc) if fc == fn_call_predicate => Some(idx),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "Catalog error: FnCall predicate at index {} not found in rule RHS",
+                    fn_call_index
+                )
+            });
+
+        // Find and validate all target atoms
+        let right_indices: Vec<usize> = right_atom_signatures
+            .iter()
+            .map(|&sig| {
+                let idx = self.rhs_index_from_signature(sig);
+                match &self.rule.rhs()[idx] {
+                    Predicate::PositiveAtomPredicate(_) | Predicate::NegativeAtomPredicate(_) => {}
+                    _ => panic!("Catalog error: Right predicate must be an atom"),
+                }
+                idx
+            })
+            .collect();
+
+        // Create filtered atoms by copying original atom arguments
+        let new_filtered_atoms: Vec<Predicate> = right_indices
+            .iter()
+            .enumerate()
+            .map(|(i, &atom_idx)| {
+                let new_atom_args = match &self.rule.rhs()[atom_idx] {
+                    Predicate::PositiveAtomPredicate(atom)
+                    | Predicate::NegativeAtomPredicate(atom) => atom.arguments().to_vec(),
+                    _ => panic!("Catalog error: Expected atom predicate"),
+                };
+                let new_atom = Atom::new(&new_names[i], new_atom_args, new_fingerprints[i]);
+                Predicate::PositiveAtomPredicate(new_atom)
+            })
+            .collect();
+
+        // Remove fn_call predicate, then update rule with new filtered atoms
+        self.remove_and_update_rule(fn_call_rhs_index, right_indices, new_filtered_atoms);
+    }
+
     // ========================================================================================
     // === PRIVATE HELPER METHODS ===
     // ========================================================================================

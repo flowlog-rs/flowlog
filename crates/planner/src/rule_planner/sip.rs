@@ -134,6 +134,7 @@ impl RulePlanner {
             vec![],
             vec![],
             vec![],
+            vec![],
         );
         let proj_fp = proj_tx.output_info_fp();
 
@@ -162,6 +163,7 @@ impl RulePlanner {
             KeyValueLayout::new(lhs_new_keys.clone(), vec![]),
             KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
             KeyValueLayout::new(lhs_new_keys.clone(), rhs_vals.clone()),
+            vec![],
             vec![],
         );
         let semijoin_fp = semijoin_tx.output_info_fp();

@@ -28,5 +28,5 @@ pub mod relation;
 
 pub use attribute::Attribute;
 pub use directive::{InputDirective, OutputDirective, PrintSizeDirective};
-pub use extern_fn::{ExternFn, Udf};
+pub use extern_fn::ExternFn;
 pub use relation::Relation;

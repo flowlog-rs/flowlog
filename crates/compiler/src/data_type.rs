@@ -169,6 +169,9 @@ impl Compiler {
                         "Compiler error: 'cat' operator is not allowed on integer type {:?}",
                         dt
                     ),
+                    DataType::Bool => panic!(
+                        "Compiler error: arithmetic operations are not supported on Bool type"
+                    ),
                 }
             }
         }
@@ -197,16 +200,11 @@ impl Compiler {
         fn_name: &str,
         start: usize,
     ) {
-        use parser::Udf;
-
         let ext = self
             .program
             .udfs()
             .iter()
-            .find_map(|udf| {
-                let (Udf::Scalar(e) | Udf::Aggregate(e)) = udf;
-                (e.name() == fn_name).then_some(e)
-            })
+            .find(|e| e.name() == fn_name)
             .unwrap_or_else(|| panic!("Compiler error: UDF '{fn_name}' not found"));
 
         let flat = |fp| {
@@ -264,6 +262,7 @@ pub(super) fn type_tokens(input_types: &[DataType], string_intern: bool) -> Toke
                     quote! { String }
                 }
             }
+            DataType::Bool => quote! { bool },
         })
         .collect();
 

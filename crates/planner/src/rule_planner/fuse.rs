@@ -18,7 +18,10 @@ use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, FactorPos};
+use catalog::{
+    ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, FactorPos,
+    FnCallPredicatePos,
+};
 use parser::ConstType;
 
 /// Ordered consumer indices alongside their key/value index selections.
@@ -63,6 +66,7 @@ impl RulePlanner {
                 output_info_fp,
                 output_kv_layout,
                 compare_exprs_pos,
+                fn_call_preds_pos,
                 const_eq_constraints,
                 var_eq_constraints,
                 is_sip_projection,
@@ -91,6 +95,7 @@ impl RulePlanner {
             let output_fp = *output_info_fp;
             let out_kv_layout = output_kv_layout.clone();
             let cmp_exprs = compare_exprs_pos.clone();
+            let fn_call_preds = fn_call_preds_pos.clone();
             let const_eq_constraints = const_eq_constraints.clone();
             let var_eq_constraints = var_eq_constraints.clone();
 
@@ -99,9 +104,10 @@ impl RulePlanner {
             for &input_producer_index in &input_producer_indices {
                 // Short-lived borrow to check if producer is a neg join
                 let producer_tx = &self.transformation_infos[input_producer_index];
-                if producer_tx.is_neg_join() && !cmp_exprs.is_empty() {
-                    // We always apply possible comparisons before neg joins, so it is impossible
-                    // to fuse a map with a neg join producer if there are any comparisons.
+                if producer_tx.is_neg_join() && (!cmp_exprs.is_empty() || !fn_call_preds.is_empty())
+                {
+                    // We always apply possible comparisons/fn_call before neg joins, so it is impossible
+                    // to fuse a map with a neg join producer if there are any comparisons or fn_call predicates.
                     panic!(
                         "Planner error: [fuse_map] impossible fusion of map with neg join producer"
                     );
@@ -124,12 +130,13 @@ impl RulePlanner {
                     value_argument_ids
                 );
 
-                // Apply fused layout + comparisons to producer, and get new output fp
+                // Apply fused layout + comparisons + fn_call predicates to producer, and get new output fp
                 input_producer_output_fp = self.apply_fused_layout_filters_cmps(
                     input_producer_index,
                     &key_argument_ids,
                     &value_argument_ids,
                     &cmp_exprs,
+                    &fn_call_preds,
                     &const_eq_constraints,
                     &var_eq_constraints,
                 );
@@ -255,6 +262,7 @@ impl RulePlanner {
         key_argument_ids: &[usize],
         value_argument_ids: &[usize],
         cmp_exprs: &[ComparisonExprPos],
+        fn_call_preds: &[FnCallPredicatePos],
         const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
         var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
     ) -> u64 {
@@ -270,6 +278,7 @@ impl RulePlanner {
             Self::remap_const_eq_constraints(&all_positions, const_eq_constraints);
         let remapped_var_eq = Self::remap_var_eq_constraints(&all_positions, var_eq_constraints);
         let remapped_cmps = Self::remap_comparisons(&all_positions, cmp_exprs);
+        let remapped_fn_calls = Self::remap_fn_call_preds(&all_positions, fn_call_preds);
 
         // Update producer output layout and comparisons
         {
@@ -281,6 +290,9 @@ impl RulePlanner {
             }
             if !cmp_exprs.is_empty() {
                 producer_tx.update_comparisons(remapped_cmps);
+            }
+            if !fn_call_preds.is_empty() {
+                producer_tx.update_fn_call_preds(remapped_fn_calls);
             }
             producer_tx.update_output_fake_sig();
         }
@@ -380,6 +392,47 @@ impl RulePlanner {
                 let left = remap_expr(c.left());
                 let right = remap_expr(c.right());
                 ComparisonExprPos::from_parts(left, c.operator().clone(), right)
+            })
+            .collect()
+    }
+
+    /// Remap fn_call predicate positions by converting each variable signature to the
+    /// corresponding ArithmeticPos from the provided positions and rebuilding.
+    fn remap_fn_call_preds(
+        positions: &[ArithmeticPos],
+        fn_calls: &[FnCallPredicatePos],
+    ) -> Vec<FnCallPredicatePos> {
+        fn_calls
+            .iter()
+            .map(|fc| {
+                let remap_factor = |factor: &FactorPos| -> FactorPos {
+                    match factor {
+                        FactorPos::Var(sig) => {
+                            let id = sig.argument_id();
+                            positions
+                                .get(id)
+                                .unwrap_or_else(|| {
+                                    panic!("Planner error: missing argument id {} in positions", id)
+                                })
+                                .init()
+                                .clone()
+                        }
+                        FactorPos::Const(c) => FactorPos::Const(c.clone()),
+                    }
+                };
+
+                let remap_expr = |expr: &ArithmeticPos| -> ArithmeticPos {
+                    let init = remap_factor(expr.init());
+                    let rest = expr
+                        .rest()
+                        .iter()
+                        .map(|(op, f)| (op.clone(), remap_factor(f)))
+                        .collect();
+                    ArithmeticPos::new(init, rest)
+                };
+
+                let new_args = fc.args().iter().map(|a| remap_expr(a)).collect();
+                FnCallPredicatePos::new(fc.name().to_string(), new_args)
             })
             .collect()
     }

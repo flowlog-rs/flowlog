@@ -1,7 +1,7 @@
-//! Function call expressions for FlowLog rule heads.
+//! Function call expressions for FlowLog rule heads and body predicates.
 //!
 //! A [`FnCall`] represents a user-defined function applied to arguments
-//! in a rule head (e.g., `my_udf(x, y + 1)`).
+//! in a rule head or as a boolean predicate (e.g., `my_udf(x, y + 1)`).
 //!
 //! # Example
 //! ```rust
@@ -12,6 +12,9 @@
 //! ```
 
 use super::Arithmetic;
+use crate::{Lexeme, Rule};
+
+use pest::iterators::Pair;
 use std::fmt;
 
 /// A user-defined function call in a rule head.
@@ -60,5 +63,22 @@ impl fmt::Display for FnCall {
             .collect::<Vec<_>>()
             .join(", ");
         write!(f, "{}({})", self.name, args)
+    }
+}
+
+impl Lexeme for FnCall {
+    /// Parse a `fn_call_expr` grammar node into a [`FnCall`].
+    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+        let mut children = parsed_rule.into_inner();
+        let fn_name = children
+            .next()
+            .expect("Parser error: fn_call_expr missing function name")
+            .as_str()
+            .to_string();
+        let args: Vec<Arithmetic> = children
+            .filter(|p| p.as_rule() == Rule::arithmetic_expr)
+            .map(Arithmetic::from_parsed_rule)
+            .collect();
+        Self::new(fn_name, args)
     }
 }

@@ -163,6 +163,7 @@ impl RulePlanner {
                 lhs_vals.iter().chain(rhs_vals.iter()).cloned().collect(), // output layout
             ),
             vec![], // no additional comparison constraints
+            vec![], // no fn-call predicates
         );
 
         // Generate descriptive name and register the transformation

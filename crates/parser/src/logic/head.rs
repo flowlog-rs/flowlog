@@ -89,19 +89,7 @@ impl Lexeme for HeadArg {
                 }
             }
             Rule::aggregate_expr => Self::Aggregation(Aggregation::from_parsed_rule(inner)),
-            Rule::fn_call_expr => {
-                let mut children = inner.into_inner();
-                let fn_name = children
-                    .next()
-                    .expect("Parser error: fn_call_expr missing function name")
-                    .as_str()
-                    .to_string();
-                let args: Vec<Arithmetic> = children
-                    .filter(|p| p.as_rule() == Rule::arithmetic_expr)
-                    .map(|p| Arithmetic::from_parsed_rule(p))
-                    .collect();
-                Self::FnCall(FnCall::new(fn_name, args))
-            }
+            Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner)),
             other => panic!("Parser error: unexpected rule for HeadArg: {:?}", other),
         }
     }

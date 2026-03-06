@@ -55,11 +55,11 @@ impl Catalog {
         // Placeholders (wildcards) encountered
         let mut local_placeholder_set = HashSet::new();
 
-        // Partition RHS predicates into positive atoms, negative atoms, and comparisons
-        let (positive_atoms, negative_atoms, comparison_predicates): (Vec<_>, Vec<_>, Vec<_>) =
+        // Partition RHS predicates into positive atoms, negative atoms, comparisons, and fn_call predicates
+        let (positive_atoms, negative_atoms, comparison_predicates, fn_call_predicates): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
             self.rule.rhs().iter().enumerate().fold(
-                (Vec::new(), Vec::new(), Vec::new()),
-                |(mut pos, mut neg, mut comp), (i, p)| {
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+                |(mut pos, mut neg, mut comp, mut fncalls), (i, p)| {
                     match p {
                         Predicate::PositiveAtomPredicate(a) => {
                             pos.push(a);
@@ -70,9 +70,10 @@ impl Catalog {
                             self.negative_atom_rhs_ids.push(i);
                         }
                         Predicate::ComparePredicate(expr) => comp.push(expr.clone()),
+                        Predicate::FnCallPredicate(fc) => fncalls.push(fc.clone()),
                         Predicate::BoolPredicate(_) => {}
                     };
-                    (pos, neg, comp)
+                    (pos, neg, comp, fncalls)
                 },
             );
 
@@ -172,6 +173,18 @@ impl Catalog {
             })
             .collect();
         self.comparison_predicates = comparison_predicates;
+
+        // Build variable string sets for each fn_call predicate (used for superset analysis)
+        self.fn_call_predicates_vars_str_set = fn_call_predicates
+            .iter()
+            .map(|fc| {
+                fc.vars()
+                    .into_iter()
+                    .cloned()
+                    .collect::<HashSet<String>>()
+            })
+            .collect();
+        self.fn_call_predicates = fn_call_predicates;
     }
 
     /// Creates a map of which variables appear in which positive atoms.
@@ -227,6 +240,13 @@ impl Catalog {
             }
         }
 
+        // Count occurrences in fn_call predicates
+        for fn_call_predicate in &self.fn_call_predicates {
+            for variable in fn_call_predicate.vars() {
+                *variable_counts.entry(variable.clone()).or_insert(0) += 1;
+            }
+        }
+
         // Collect all head variables (never considered unused, even if single-occurrence)
         let head_variables = self.head_arguments_strs();
 
@@ -278,6 +298,20 @@ impl Catalog {
         // For each comparison predicate: positive atoms whose var set covers it
         self.comparison_supersets = self
             .comparison_predicates_vars_str_set
+            .iter()
+            .map(|set| {
+                pos_var_sets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, ps)| set.is_subset(ps))
+                    .map(|(j, _)| j)
+                    .collect()
+            })
+            .collect();
+
+        // For each fn_call predicate: positive atoms whose var set covers it
+        self.fn_call_supersets = self
+            .fn_call_predicates_vars_str_set
             .iter()
             .map(|set| {
                 pos_var_sets

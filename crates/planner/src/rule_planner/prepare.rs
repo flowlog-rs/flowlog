@@ -154,6 +154,7 @@ impl RulePlanner {
             vec![],                      // no const-eq
             vec![(left_sig, right_sig)], // var-eq
             vec![],                      // no comparisons
+            vec![],                      // no fn-call predicates
         );
 
         // Generate descriptive name
@@ -212,6 +213,7 @@ impl RulePlanner {
             vec![(var_sig, const_val)], // const-eq
             vec![],                     // no var-eq
             vec![],                     // no comparisons
+            vec![],                     // no fn-call predicates
         );
 
         // Generate descriptive name
@@ -269,6 +271,7 @@ impl RulePlanner {
             vec![], // no const-eq
             vec![], // no var-eq
             vec![], // no comparisons
+            vec![], // no fn-call predicates
         );
 
         // Generate descriptive name

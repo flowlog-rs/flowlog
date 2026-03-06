@@ -214,6 +214,7 @@ impl Transformation {
             info.const_eq_constraints(),
             info.var_eq_constraints(),
             info.compare_exprs(),
+            info.fn_call_preds(),
         );
 
         let is_row_in = info.is_row_input(); // Input is Row
@@ -284,6 +285,7 @@ impl Transformation {
             info.input_kv_layout().1.unwrap(),
             info.output_kv_layout(),
             info.compare_exprs(),
+            info.fn_call_preds(),
         );
 
         let is_row_output = info.is_row_output(); // Output is Row
@@ -357,6 +359,7 @@ impl Transformation {
             info.input_kv_layout().1.unwrap(),
             info.output_kv_layout(),
             &[], // No comparison expressions for antijoins
+            &[], // No fn_call predicates for antijoins
         );
 
         // Determine antijoin type based on output collection characteristics

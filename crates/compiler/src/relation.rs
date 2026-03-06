@@ -358,6 +358,7 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
                 quote! { if !shard_str(f0.as_str(), peers, index) { return; } }
             }
         }
+        DataType::Bool => quote! { if !shard_i32(f0 as i32, peers, index) { return; } },
     };
     let tuple_parse_stmts = gen_parse_from_str(name, &dts, string_intern);
     let file_parse_stmts = gen_parse_from_bytes(name, &dts, string_intern);
@@ -482,6 +483,7 @@ fn dt_to_rust(dt: &DataType, string_intern: bool) -> TokenStream {
                 quote! { String }
             }
         }
+        DataType::Bool => quote! { bool },
     }
 }
 
@@ -538,6 +540,16 @@ fn gen_parse_from_str(rel: &str, dts: &[DataType], string_intern: bool) -> Token
                     }
                 }
             }
+            DataType::Bool => quote! {
+                #get
+                let #v: bool = match s.parse::<bool>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not bool: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
         };
 
         stmts.push(parse);
@@ -656,6 +668,36 @@ fn gen_parse_from_bytes(rel: &str, dts: &[DataType], string_intern: bool) -> Tok
                     #field_stmt
                 }
             }
+            DataType::Bool => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: bool = match s.parse::<bool>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not bool: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
         };
 
         stmts.push(parse);

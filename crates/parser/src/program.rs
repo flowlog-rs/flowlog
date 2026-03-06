@@ -9,8 +9,8 @@
 //! - Boolean facts extracted from rules whose bodies are *pure* booleans
 
 use super::{
-    declaration::{InputDirective, OutputDirective, PrintSizeDirective, Relation, Udf},
-    logic::{FlowLogRule, Predicate},
+    declaration::{ExternFn, InputDirective, OutputDirective, PrintSizeDirective, Relation},
+    logic::{Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Predicate},
     ConstType, FlowLogParser, Lexeme, Rule,
 };
 use pest::{iterators::Pair, Parser};
@@ -30,8 +30,8 @@ use tracing::{debug, info, warn};
 pub struct Program {
     relations: Vec<Relation>,
     rules: Vec<FlowLogRule>,
-    /// External UDF declarations (scalar and aggregate).
-    udfs: Vec<Udf>,
+    /// External scalar UDF declarations.
+    udfs: Vec<ExternFn>,
     /// Map: relation name -> [(constant tuple, boolean value)]
     bool_facts: HashMap<String, Vec<(Vec<ConstType>, bool)>>,
 }
@@ -192,7 +192,7 @@ impl Program {
     /// External UDF declarations.
     #[must_use]
     #[inline]
-    pub fn udfs(&self) -> &[Udf] {
+    pub fn udfs(&self) -> &[ExternFn] {
         &self.udfs
     }
 
@@ -204,6 +204,56 @@ impl Program {
             .iter()
             .filter(|rel| rel.is_output_printsize())
             .collect()
+    }
+
+    /// Reclassify body atoms whose name matches an `.extern fn` as [`FnCallPredicate`].
+    ///
+    /// PEG grammars resolve `name(args...)` as `atom` before `fn_call_expr` since
+    /// they share identical syntax. The distinction is semantic (declared as a
+    /// relation vs. an extern function), so we correct it here after all
+    /// declarations have been collected.
+    fn reclassify_udf_predicates(rules: &mut [FlowLogRule], udfs: &[ExternFn]) {
+        let udf_names: HashSet<&str> = udfs.iter().map(ExternFn::name).collect();
+        if udf_names.is_empty() {
+            return;
+        }
+
+        for rule in rules.iter_mut() {
+            let needs_rewrite = rule
+                .rhs()
+                .iter()
+                .any(|p| matches!(p, Predicate::PositiveAtomPredicate(a) if udf_names.contains(a.name())));
+            if !needs_rewrite {
+                continue;
+            }
+
+            let new_rhs = rule
+                .rhs()
+                .iter()
+                .map(|pred| match pred {
+                    Predicate::PositiveAtomPredicate(atom) if udf_names.contains(atom.name()) => {
+                        let args = atom
+                            .arguments()
+                            .iter()
+                            .map(|a| match a {
+                                AtomArg::Var(v) => Arithmetic::new(Factor::Var(v.clone()), vec![]),
+                                AtomArg::Const(c) => {
+                                    Arithmetic::new(Factor::Const(c.clone()), vec![])
+                                }
+                                AtomArg::Placeholder => panic!(
+                                    "Parser error: placeholder '_' not allowed in UDF call '{}'",
+                                    atom.name()
+                                ),
+                            })
+                            .collect();
+                        Predicate::FnCallPredicate(FnCall::new(atom.name().to_string(), args))
+                    }
+                    other => other.clone(),
+                })
+                .collect();
+
+            *rule = FlowLogRule::new(rule.head().clone(), new_rhs, rule.is_planning());
+        }
     }
 
     /// Extract boolean facts from rules whose *entire* body is boolean.
@@ -397,9 +447,9 @@ impl Lexeme for Program {
                     let relation = Relation::from_parsed_rule(node);
                     relations.push(relation);
                 }
-                Rule::extern_fn | Rule::extern_agg => {
-                    let udf = Udf::from_parsed_rule(node);
-                    udfs.push(udf);
+                Rule::extern_fn => {
+                    let ext_fn = ExternFn::from_parsed_rule(node);
+                    udfs.push(ext_fn);
                 }
                 Rule::input_directive => {
                     let input_dir = InputDirective::from_parsed_rule(node);
@@ -520,6 +570,9 @@ impl Lexeme for Program {
                 );
             }
         }
+
+        // Semantic pass: reclassify body atoms that match extern fn names.
+        Self::reclassify_udf_predicates(&mut rules, &udfs);
 
         let mut program = Self {
             relations,

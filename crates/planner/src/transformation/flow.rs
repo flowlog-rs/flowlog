@@ -12,10 +12,13 @@ use tracing::trace;
 
 use super::KeyValueLayout;
 use crate::{
-    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
+    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
+    FnCallPredicateArgument, TransformationArgument,
 };
-use catalog::{ArithmeticPos, AtomArgumentSignature, ComparisonExprPos};
-use parser::ConstType;
+use catalog::{
+    ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, FnCallPredicatePos,
+};
+use parser::{ArithmeticOperator, ConstType};
 
 /// Represents data transformation flows in query execution.
 ///
@@ -39,6 +42,8 @@ pub enum TransformationFlow {
         constraints: Constraints,
         /// Comparison filters (e.g., `x > y`)
         compares: Vec<ComparisonExprArgument>,
+        /// Boolean UDF predicate filters (e.g., `is_valid(x)`)
+        fn_call_preds: Vec<FnCallPredicateArgument>,
     },
 
     /// Join operations between two relations.
@@ -54,6 +59,8 @@ pub enum TransformationFlow {
         value: Arc<Vec<ArithmeticArgument>>,
         /// Join filters
         compares: Vec<ComparisonExprArgument>,
+        /// Boolean UDF predicate filters (e.g., `is_valid(x)`)
+        fn_call_preds: Vec<FnCallPredicateArgument>,
     },
 }
 
@@ -84,6 +91,7 @@ impl TransformationFlow {
         const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
         var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
         compare_exprs: &[ComparisonExprPos],
+        fn_call_preds_pos: &[FnCallPredicatePos],
     ) -> Self {
         // Map input expressions to transformation arguments
         let input_expr_map = Self::kv_argument_flow_map(input_kv_layout);
@@ -100,11 +108,15 @@ impl TransformationFlow {
         // Process comparison constraints
         let flow_compares = Self::build_compare_arguments(&input_expr_map, compare_exprs);
 
+        // Process fn_call predicate constraints
+        let flow_fn_call_preds = Self::build_fn_call_arguments(&input_expr_map, fn_call_preds_pos);
+
         Self::KVToKV {
             key: Arc::new(flow_key_args),
             value: Arc::new(flow_value_args),
             constraints: Constraints::new(flow_const_args, flow_var_eq_args),
             compares: flow_compares,
+            fn_call_preds: flow_fn_call_preds,
         }
     }
 
@@ -129,6 +141,7 @@ impl TransformationFlow {
         input_right_kv_layout: &KeyValueLayout,
         output_kv_layout: &KeyValueLayout,
         compare_exprs: &[ComparisonExprPos],
+        fn_call_preds_pos: &[FnCallPredicatePos],
     ) -> Self {
         // Map input expressions to transformation arguments
         let input_expr_map =
@@ -141,10 +154,14 @@ impl TransformationFlow {
         // Process comparison constraints
         let flow_compares = Self::build_compare_arguments(&input_expr_map, compare_exprs);
 
+        // Process fn_call predicate constraints
+        let flow_fn_call_preds = Self::build_fn_call_arguments(&input_expr_map, fn_call_preds_pos);
+
         Self::JnToKV {
             key: Arc::new(flow_key_args),
             value: Arc::new(flow_value_args),
             compares: flow_compares,
+            fn_call_preds: flow_fn_call_preds,
         }
     }
 }
@@ -190,6 +207,14 @@ impl TransformationFlow {
             Self::JnToKV { compares, .. } => compares,
         }
     }
+
+    /// Returns the boolean UDF predicate filters.
+    pub fn fn_call_preds(&self) -> &Vec<FnCallPredicateArgument> {
+        match self {
+            Self::KVToKV { fn_call_preds, .. } => fn_call_preds,
+            Self::JnToKV { fn_call_preds, .. } => fn_call_preds,
+        }
+    }
 }
 
 // ========================
@@ -205,9 +230,14 @@ impl TransformationFlow {
             Self::KVToKV {
                 constraints,
                 compares,
+                fn_call_preds,
                 ..
-            } => !constraints.is_empty() || !compares.is_empty(),
-            Self::JnToKV { compares, .. } => !compares.is_empty(),
+            } => !constraints.is_empty() || !compares.is_empty() || !fn_call_preds.is_empty(),
+            Self::JnToKV {
+                compares,
+                fn_call_preds,
+                ..
+            } => !compares.is_empty() || !fn_call_preds.is_empty(),
         }
     }
 }
@@ -312,7 +342,7 @@ impl TransformationFlow {
                     // Not found as complete expression - build factor by factor
                     // Find the init factor
                     let init_factor = match expr.init() {
-                        catalog::FactorPos::Var(sig) => {
+                        FactorPos::Var(sig) => {
                             // Look up the single-var expression directly
                             let key = ArithmeticPos::from_var_signature(*sig);
                             let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
@@ -323,16 +353,16 @@ impl TransformationFlow {
                             });
                             FactorArgument::Var(trans_arg)
                         }
-                        catalog::FactorPos::Const(c) => FactorArgument::Const(c.clone()),
+                        FactorPos::Const(c) => FactorArgument::Const(c.clone()),
                     };
 
                     // Find the rest factors
-                    let rest_factors: Vec<(parser::ArithmeticOperator, FactorArgument)> = expr
+                    let rest_factors: Vec<(ArithmeticOperator, FactorArgument)> = expr
                         .rest()
                         .iter()
                         .map(|(op, factor)| {
                             let factor_arg = match factor {
-                                catalog::FactorPos::Var(sig) => {
+                                FactorPos::Var(sig) => {
                                     // Look up the single-var expression directly
                                     let key = ArithmeticPos::from_var_signature(*sig);
                                     let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
@@ -343,7 +373,7 @@ impl TransformationFlow {
                                     });
                                     FactorArgument::Var(trans_arg)
                                 }
-                                catalog::FactorPos::Const(c) => FactorArgument::Const(c.clone()),
+                                FactorPos::Const(c) => FactorArgument::Const(c.clone()),
                             };
                             (op.clone(), factor_arg)
                         })
@@ -445,6 +475,33 @@ impl TransformationFlow {
             })
             .collect()
     }
+
+    /// Helper to construct fn_call predicate arguments from input expression map and fn_call positions.
+    fn build_fn_call_arguments(
+        input_expr_map: &HashMap<ArithmeticPos, TransformationArgument>,
+        fn_call_preds: &[FnCallPredicatePos],
+    ) -> Vec<FnCallPredicateArgument> {
+        fn_call_preds
+            .iter()
+            .map(|fc| {
+                let per_arg_trans: Vec<Vec<TransformationArgument>> =
+                    fc.args()
+                        .iter()
+                        .map(|arg_pos| {
+                            let exprs: Vec<ArithmeticPos> = arg_pos
+                                .signatures()
+                                .iter()
+                                .map(|&sig| ArithmeticPos::from_var_signature(*sig))
+                                .collect();
+                            TransformationArgument::from_arithmetic_arguments(
+                                Self::flow_over_exprs(input_expr_map, &exprs),
+                            )
+                        })
+                        .collect();
+                FnCallPredicateArgument::from_fn_call_pos(fc, &per_arg_trans)
+            })
+            .collect()
+    }
 }
 
 impl fmt::Display for TransformationFlow {
@@ -455,27 +512,34 @@ impl fmt::Display for TransformationFlow {
                 value,
                 constraints,
                 compares,
+                fn_call_preds,
             } => {
-                let filters_str = match (constraints.is_empty(), compares.is_empty()) {
-                    (true, true) => String::new(),
-                    (false, true) => format!(" if {}", constraints),
-                    (true, false) => format!(
-                        " if {}",
+                let mut filter_parts: Vec<String> = Vec::new();
+                if !constraints.is_empty() {
+                    filter_parts.push(format!("{}", constraints));
+                }
+                if !compares.is_empty() {
+                    filter_parts.push(
                         compares
                             .iter()
                             .map(ToString::to_string)
                             .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    (false, false) => format!(
-                        " if {} and {}",
-                        constraints,
-                        compares
+                            .join(", "),
+                    );
+                }
+                if !fn_call_preds.is_empty() {
+                    filter_parts.push(
+                        fn_call_preds
                             .iter()
                             .map(ToString::to_string)
                             .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
+                            .join(", "),
+                    );
+                }
+                let filters_str = if filter_parts.is_empty() {
+                    String::new()
+                } else {
+                    format!(" if {}", filter_parts.join(" and "))
                 };
 
                 let key_str = key
@@ -507,18 +571,31 @@ impl fmt::Display for TransformationFlow {
                 key,
                 value,
                 compares,
+                fn_call_preds,
             } => {
-                let filters_str = if compares.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " if {}",
+                let mut filter_parts: Vec<String> = Vec::new();
+                if !compares.is_empty() {
+                    filter_parts.push(
                         compares
                             .iter()
                             .map(ToString::to_string)
                             .collect::<Vec<_>>()
-                            .join(", ")
-                    )
+                            .join(", "),
+                    );
+                }
+                if !fn_call_preds.is_empty() {
+                    filter_parts.push(
+                        fn_call_preds
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                }
+                let filters_str = if filter_parts.is_empty() {
+                    String::new()
+                } else {
+                    format!("if {}", filter_parts.join(" and "))
                 };
 
                 let key_str = key
