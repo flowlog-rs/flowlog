@@ -176,7 +176,7 @@ compile_release_workspace() {
 
 setup_dataset() {
     local dataset_name="$1"
-    local dataset_zip="${FACT_DIR}/${dataset_name}.zip"
+    local dataset_zip="/dev/shm/${dataset_name}.zip"
     local extract_path="${FACT_DIR}/${dataset_name}"
     local dataset_url="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/dataset/csv/${dataset_name}.zip"
 
@@ -186,21 +186,22 @@ setup_dataset() {
     fi
 
     mkdir -p "$FACT_DIR"
-    if [[ ! -f "$dataset_zip" ]]; then
-        log "$CYAN" "DOWNLOAD" "$dataset_name.zip"
-        command -v wget >/dev/null 2>&1 || die "wget not found; cannot download datasets"
-        wget -O "$dataset_zip" "$dataset_url" || die "Download failed: $dataset_name"
-    fi
+    log "$CYAN" "DOWNLOAD" "$dataset_name.zip -> /dev/shm (tmpfs)"
+    command -v wget >/dev/null 2>&1 || die "wget not found; cannot download datasets"
+    wget -O "$dataset_zip" "$dataset_url" || die "Download failed: $dataset_name"
 
     log "$YELLOW" "EXTRACT" "$dataset_name"
     command -v unzip >/dev/null 2>&1 || die "unzip not found; cannot extract datasets"
     unzip "$dataset_zip" -d "$FACT_DIR" || die "Failed to extract dataset: $dataset_name"
+
+    rm -f "$dataset_zip"
+    log "$GREEN" "CLEANED" "Removed $dataset_zip from tmpfs"
 }
 
 cleanup_dataset() {
     local dataset_name="$1"
     log "$YELLOW" "CLEANUP" "$dataset_name"
-    rm -rf "${FACT_DIR}/${dataset_name}" "${FACT_DIR}/${dataset_name}.zip"
+    rm -rf "${FACT_DIR}/${dataset_name}"
 }
 
 ###############################################################################

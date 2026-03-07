@@ -116,7 +116,7 @@ parse_config_line() {
 # Download and extract a dataset into FACT_DIR if not already present.
 setup_dataset() {
     local name="$1"
-    local zip="${FACT_DIR}/${name}.zip"
+    local zip="/dev/shm/${name}.zip"
     local dir="${FACT_DIR}/${name}"
 
     if [[ -d "$dir" ]]; then
@@ -126,21 +126,22 @@ setup_dataset() {
 
     mkdir -p "$FACT_DIR"
 
-    if [[ ! -f "$zip" ]]; then
-        log "$CYAN" "DOWNLOAD" "${name}.zip"
-        wget -q -O "$zip" "${DATASET_URL}/${name}.zip" \
-            || die "Download failed: $name"
-    fi
+    log "$CYAN" "DOWNLOAD" "${name}.zip -> /dev/shm (tmpfs)"
+    wget -q -O "$zip" "${DATASET_URL}/${name}.zip" \
+        || die "Download failed: $name"
 
     log "$YELLOW" "EXTRACT" "$name"
     unzip -q "$zip" -d "$FACT_DIR" || die "Extract failed: $name"
+
+    rm -f "$zip"
+    log "$GREEN" "CLEANED" "Removed $zip from tmpfs"
 }
 
 # Remove dataset files to reclaim disk space after a benchmark pair.
 cleanup_dataset() {
     local name="$1"
     log "$YELLOW" "CLEANUP" "$name"
-    rm -rf "${FACT_DIR}/${name}" "${FACT_DIR}/${name}.zip"
+    rm -rf "${FACT_DIR}/${name}"
 }
 
 ############################################################
