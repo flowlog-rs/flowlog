@@ -14,7 +14,11 @@ pub struct FnCallPredicatePos {
 impl FnCallPredicatePos {
     /// Construct a new positional fn_call predicate.
     pub fn new(name: String, args: Vec<ArithmeticPos>, is_negated: bool) -> Self {
-        Self { name, args, is_negated }
+        Self {
+            name,
+            args,
+            is_negated,
+        }
     }
 
     /// Returns the function name.

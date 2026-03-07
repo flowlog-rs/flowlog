@@ -72,14 +72,8 @@ impl Compiler {
                         name.to_string(),
                     );
                 });
-                match self.config.mode() {
-                    ExecutionMode::Batch => {
-                        quote! { let #name = SemigroupVariable::new(inner, timely::order::Product::new(Default::default(), 1)); }
-                    }
-                    ExecutionMode::Incremental => {
-                        quote! { let #name = Variable::new(inner, timely::order::Product::new(Default::default(), 1)); }
-                    }
-                }
+                let var_name = format_ident!("{}_var", name);
+                quote! { let (#var_name, #name) = Variable::new(inner, timely::order::Product::new(Default::default(), 1)); }
             })
             .collect();
 
@@ -116,7 +110,8 @@ impl Compiler {
                         next_ident.to_string(),
                     );
                 });
-                quote! { #iter_var.set(&#next_ident); }
+                let var_name = format_ident!("{}_var", iter_var);
+                quote! { #var_name.set(#next_ident.clone()); }
             })
             .collect();
 
@@ -214,8 +209,8 @@ impl Compiler {
                 .split_first()
                 .expect("Compiler error: at least one source collection for union");
 
-            let union_expr = tail.iter().fold(quote! { #head }, |ts, ident| {
-                quote! { #ts.concat(&#ident) }
+            let union_expr = tail.iter().fold(quote! { #head.clone() }, |ts, ident| {
+                quote! { #ts.concat(#ident.clone()) }
             });
 
             // Apply dedup to merged collection.
@@ -310,6 +305,7 @@ impl Compiler {
                         #block
                         let #next_ident = #next_ident
                             .map(#row_chop)
+                            .arrange_by_key()
                             .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
                                 "aggregation",
                                 #reduce_logic

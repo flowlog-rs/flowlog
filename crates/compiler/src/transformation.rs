@@ -104,7 +104,7 @@ impl Compiler {
                 };
 
                 quote! {
-                    let #out = #inp
+                    let #out = #inp.clone()
                         .flat_map(|#row_pat: #row_ty| { #flat_map_body });
                 }
             }
@@ -179,7 +179,7 @@ impl Compiler {
                 };
 
                 let transformation = quote! {
-                    let #out = #inp
+                    let #out = #inp.clone()
                         .flat_map(|#row_pat: #row_ty| { #flat_map_body });
                 };
 
@@ -248,7 +248,7 @@ impl Compiler {
                 };
 
                 quote! {
-                    let #out = #inp
+                    let #out = #inp.clone()
                         .flat_map(|( #kv_param_k, #kv_param_v )| { #flat_map_body });
                 }
             }
@@ -328,7 +328,7 @@ impl Compiler {
                 };
 
                 let transformation = quote! {
-                    let #out = #inp
+                    let #out = #inp.clone()
                         .flat_map(#closure_param { #flat_map_body });
                     #out_dedup_expr
                 };
@@ -398,8 +398,8 @@ impl Compiler {
                 };
 
                 quote! {
-                    let #out = #l
-                        .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| { #join_body });
+                    let #out = #l.clone()
+                        .join_core(#r.clone(), |#jn_k, #jn_lv, #jn_rv| { #join_body });
                 }
             }
 
@@ -461,8 +461,8 @@ impl Compiler {
                 };
 
                 let transformation = quote! {
-                    let #out = #l
-                        .join_core(&#r, |#jn_k, #jn_lv, #jn_rv| { #join_body });
+                    let #out = #l.clone()
+                        .join_core(#r.clone(), |#jn_k, #jn_lv, #jn_rv| { #join_body });
                 };
 
                 let arrange_stmt = self.register_arrangement(
@@ -525,14 +525,14 @@ impl Compiler {
 
                 quote! {
                     let #out =
-                        #r
+                        #r.clone()
                             .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
                             #dedup_call
                             #pos_weight_concat
                             .concat(
-                                &{
-                                    #l
-                                    .join_core(&#r, |aj_k, _, aj_rv| {
+                                {
+                                    #l.clone()
+                                    .join_core(#r.clone(), |aj_k, _, aj_rv| {
                                         Some((aj_k.clone(), aj_rv.clone()))
                                     })
                                     #dedup_call
@@ -598,14 +598,14 @@ impl Compiler {
 
                 let transformation = quote! {
                     let #out =
-                        #r
+                        #r.clone()
                             .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
                             #dedup_call
                             #pos_weight_concat
                             .concat(
-                                &{
-                                    #l
-                                        .join_core(&#r, |aj_k, _, aj_rv| {
+                                {
+                                    #l.clone()
+                                        .join_core(#r.clone(), |aj_k, _, aj_rv| {
                                             Some((aj_k.clone(), aj_rv.clone()))
                                         })
                                         #dedup_call
@@ -674,11 +674,9 @@ impl Compiler {
         arranged_map.insert(fingerprint, arrangement_ident.clone());
 
         if only_key {
-            self.imports.mark_arrange_by_self();
-            quote! { let #arrangement_ident = #collection_ident.arrange_by_self(); }
+            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_self(); }
         } else {
-            self.imports.mark_arrange_by_key();
-            quote! { let #arrangement_ident = #collection_ident.arrange_by_key(); }
+            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_key(); }
         }
     }
 }

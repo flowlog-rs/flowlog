@@ -119,7 +119,11 @@ mod tests {
 
     #[test]
     fn new_negated() {
-        let fc = FnCall::new("is_valid".into(), vec![arith_var("x"), arith_var("y")], true);
+        let fc = FnCall::new(
+            "is_valid".into(),
+            vec![arith_var("x"), arith_var("y")],
+            true,
+        );
         assert_eq!(fc.name(), "is_valid");
         assert_eq!(fc.args().len(), 2);
         assert!(fc.is_negated());

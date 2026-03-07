@@ -54,14 +54,8 @@ pub(crate) struct ImportTracker {
 
     /// Differential dataflow Input trait.
     dd_input: bool,
-    /// ArrangeByKey operator.
-    arrange_by_key: bool,
-    /// ArrangeBySelf operator.
-    arrange_by_self: bool,
     /// AsCollection conversions.
     as_collection: bool,
-    /// Threshold operator trait.
-    threshold: bool,
     /// ThresholdTotal operator trait.
     threshold_total: bool,
     /// Timely map operator trait (used on raw streams).
@@ -169,24 +163,9 @@ impl ImportTracker {
         self.dd_input = true;
     }
 
-    /// Marks that `ArrangeByKey` must be imported.
-    pub(crate) fn mark_arrange_by_key(&mut self) {
-        self.arrange_by_key = true;
-    }
-
-    /// Marks that `ArrangeBySelf` must be imported.
-    pub(crate) fn mark_arrange_by_self(&mut self) {
-        self.arrange_by_self = true;
-    }
-
     /// Marks that `AsCollection` conversions are required.
     pub(crate) fn mark_as_collection(&mut self) {
         self.as_collection = true;
-    }
-
-    /// Marks that the `Threshold` operator is required.
-    pub(crate) fn mark_threshold(&mut self) {
-        self.threshold = true;
     }
 
     /// Marks that the `ThresholdTotal` operator is required.
@@ -348,7 +327,6 @@ impl ImportTracker {
     /// Differential Dataflow imports (operators, traits, etc).
     fn dd_imports(&self) -> TokenStream {
         let input = self.input_import();
-        let arrange = self.arrange_import();
         let as_collection = self.as_collection_import();
         let operators = self.operator_imports();
         let recursive = self.recursive_imports();
@@ -358,7 +336,6 @@ impl ImportTracker {
         quote! {
             #input
             #operators
-            #arrange
             #as_collection
             #recursive
             #aggregation
@@ -393,9 +370,6 @@ impl ImportTracker {
 
     fn operator_imports(&self) -> TokenStream {
         let mut traits = Vec::new();
-        if self.threshold {
-            traits.push(quote! { Threshold });
-        }
         if self.threshold_total {
             traits.push(quote! { ThresholdTotal });
         }
@@ -441,23 +415,6 @@ impl ImportTracker {
         }
     }
 
-    fn arrange_import(&self) -> TokenStream {
-        let mut traits = Vec::new();
-
-        if self.arrange_by_key {
-            traits.push(quote! { ArrangeByKey });
-        }
-        if self.arrange_by_self {
-            traits.push(quote! { ArrangeBySelf });
-        }
-
-        if traits.is_empty() {
-            quote! {}
-        } else {
-            quote! { use differential_dataflow::operators::arrange::{ #(#traits),* }; }
-        }
-    }
-
     fn as_collection_import(&self) -> TokenStream {
         if self.as_collection {
             quote! { use differential_dataflow::AsCollection; }
@@ -468,7 +425,7 @@ impl ImportTracker {
 
     fn timely_map_import(&self) -> TokenStream {
         if self.timely_map {
-            quote! { use timely::dataflow::operators::Map; }
+            quote! { use timely::dataflow::operators::vec::Map; }
         } else {
             quote! {}
         }
@@ -476,19 +433,9 @@ impl ImportTracker {
 
     fn recursive_imports(&self) -> TokenStream {
         if self.recursive {
-            match self.mode {
-                ExecutionMode::Batch => {
-                    quote! {
-                        use differential_dataflow::operators::iterate::SemigroupVariable;
-                        use timely::dataflow::Scope;
-                    }
-                }
-                ExecutionMode::Incremental => {
-                    quote! {
-                        use differential_dataflow::operators::iterate::Variable;
-                        use timely::dataflow::Scope;
-                    }
-                }
+            quote! {
+                use differential_dataflow::operators::iterate::Variable;
+                use timely::dataflow::Scope;
             }
         } else {
             quote! {}
@@ -498,7 +445,6 @@ impl ImportTracker {
     fn aggregation_imports(&self) -> TokenStream {
         if self.aggregation {
             quote! {
-                use differential_dataflow::operators::reduce::ReduceCore;
                 use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
             }
         } else {

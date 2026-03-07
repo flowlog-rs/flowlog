@@ -55,12 +55,12 @@ WORKERS="${WORKERS:-64}"
 INTERPRETER_DIR="${ROOT_DIR}/../vldb26-artifact"
 INTERPRETER_BIN="${INTERPRETER_DIR}/target/release/executing"
 INTERPRETER_PROG_DIR="${INTERPRETER_DIR}/test/correctness_test/program/flowlog"
-INTERPRETER_PROG_URL="https://pages.cs.wisc.edu/~m0riarty/program/flowlog"
+INTERPRETER_PROG_URL="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/program/flowlog_interpreter"
 
 # Compiler binary built from this repo.
 COMPILER_BIN="${ROOT_DIR}/target/release/flowlog"
 
-DATASET_URL="https://pages.cs.wisc.edu/~m0riarty/dataset/csv"
+DATASET_URL="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/dataset/csv"
 NUM_RUNS=5
 
 CSV_FILE="${LOG_DIR}/comparison_results.csv"
@@ -116,7 +116,7 @@ parse_config_line() {
 # Download and extract a dataset into FACT_DIR if not already present.
 setup_dataset() {
     local name="$1"
-    local zip="${FACT_DIR}/${name}.zip"
+    local zip="/dev/shm/${name}.zip"
     local dir="${FACT_DIR}/${name}"
 
     if [[ -d "$dir" ]]; then
@@ -126,21 +126,22 @@ setup_dataset() {
 
     mkdir -p "$FACT_DIR"
 
-    if [[ ! -f "$zip" ]]; then
-        log "$CYAN" "DOWNLOAD" "${name}.zip"
-        wget -q -O "$zip" "${DATASET_URL}/${name}.zip" \
-            || die "Download failed: $name"
-    fi
+    log "$CYAN" "DOWNLOAD" "${name}.zip -> /dev/shm (tmpfs)"
+    wget -q -O "$zip" "${DATASET_URL}/${name}.zip" \
+        || die "Download failed: $name"
 
     log "$YELLOW" "EXTRACT" "$name"
     unzip -q "$zip" -d "$FACT_DIR" || die "Extract failed: $name"
+
+    rm -f "$zip"
+    log "$GREEN" "CLEANED" "Removed $zip from tmpfs"
 }
 
 # Remove dataset files to reclaim disk space after a benchmark pair.
 cleanup_dataset() {
     local name="$1"
     log "$YELLOW" "CLEANUP" "$name"
-    rm -rf "${FACT_DIR}/${name}" "${FACT_DIR}/${name}.zip"
+    rm -rf "${FACT_DIR}/${name}"
 }
 
 ############################################################
