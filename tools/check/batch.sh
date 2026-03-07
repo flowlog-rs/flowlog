@@ -178,7 +178,7 @@ setup_dataset() {
     local dataset_name="$1"
     local dataset_zip="${FACT_DIR}/${dataset_name}.zip"
     local extract_path="${FACT_DIR}/${dataset_name}"
-    local dataset_url="https://pages.cs.wisc.edu/~m0riarty/dataset/csv/${dataset_name}.zip"
+    local dataset_url="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/dataset/csv/${dataset_name}.zip"
 
     if [[ -d "$extract_path" ]]; then
         log "$GREEN" "FOUND" "Dataset $dataset_name"

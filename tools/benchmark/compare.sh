@@ -55,12 +55,12 @@ WORKERS="${WORKERS:-64}"
 INTERPRETER_DIR="${ROOT_DIR}/../vldb26-artifact"
 INTERPRETER_BIN="${INTERPRETER_DIR}/target/release/executing"
 INTERPRETER_PROG_DIR="${INTERPRETER_DIR}/test/correctness_test/program/flowlog"
-INTERPRETER_PROG_URL="https://pages.cs.wisc.edu/~m0riarty/program/flowlog"
+INTERPRETER_PROG_URL="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/program/flowlog_interpreter"
 
 # Compiler binary built from this repo.
 COMPILER_BIN="${ROOT_DIR}/target/release/flowlog"
 
-DATASET_URL="https://pages.cs.wisc.edu/~m0riarty/dataset/csv"
+DATASET_URL="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/dataset/csv"
 NUM_RUNS=5
 
 CSV_FILE="${LOG_DIR}/comparison_results.csv"
