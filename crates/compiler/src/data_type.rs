@@ -81,13 +81,13 @@ impl Compiler {
                         .0
                         .iter()
                         .zip(&key_types)
-                        .all(|(decl, inf)| inf.as_ref().map_or(true, |t| t == decl));
+                        .all(|(decl, inf)| inf.as_ref().is_none_or(|t| t == decl));
                 let vals_ok = existing.1.len() == value_types.len()
                     && existing
                         .1
                         .iter()
                         .zip(&value_types)
-                        .all(|(decl, inf)| inf.as_ref().map_or(true, |t| t == decl));
+                        .all(|(decl, inf)| inf.as_ref().is_none_or(|t| t == decl));
                 assert!(
                     keys_ok && vals_ok,
                     "Compiler error: type mismatch for fingerprint 0x{:016x}",
