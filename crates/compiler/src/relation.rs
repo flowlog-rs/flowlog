@@ -20,16 +20,17 @@ impl Compiler {
         let needs_shard_str = edbs
             .iter()
             .any(|rel| rel.data_type().contains(&DataType::String));
-        let needs_shard_i32 = edbs.iter().any(|rel| {
+        let needs_shard_int = edbs.iter().any(|rel| {
             rel.arity() > 0
                 && matches!(
                     rel.data_type().first(),
-                    Some(&DataType::Int32) | Some(&DataType::Bool)
+                    Some(&DataType::Int8)
+                        | Some(&DataType::Int16)
+                        | Some(&DataType::Int32)
+                        | Some(&DataType::Int64)
+                        | Some(&DataType::Bool)
                 )
         });
-        let needs_shard_i64 = edbs
-            .iter()
-            .any(|rel| rel.arity() > 0 && rel.data_type().first() == Some(&DataType::Int64));
 
         let intern_import = if str_intern && needs_shard_str {
             quote! {
@@ -52,23 +53,11 @@ impl Compiler {
             .collect();
 
         // Shard functions: only emit each one when actually needed.
-        let shard_i32_fn = if needs_shard_i32 {
+        let shard_int_fn = if needs_shard_int {
             quote! {
-                /// Shard on an `i32` first column by `first % peers`.
+                /// Shard on an integer first column by `first % peers`.
                 #[inline]
-                fn shard_i32(first: i32, peers: usize, index: usize) -> bool {
-                    (first as usize) % peers == index
-                }
-            }
-        } else {
-            quote! {}
-        };
-
-        let shard_i64_fn = if needs_shard_i64 {
-            quote! {
-                /// Shard on an `i64` first column by `first % peers`.
-                #[inline]
-                fn shard_i64(first: i64, peers: usize, index: usize) -> bool {
+                fn shard_int(first: i64, peers: usize, index: usize) -> bool {
                     (first as usize) % peers == index
                 }
             }
@@ -169,8 +158,7 @@ impl Compiler {
                 fn close(&mut self);
             }
 
-            #shard_i32_fn
-            #shard_i64_fn
+            #shard_int_fn
             #shard_string_fn
 
             /// Open a byte-range slice of a file for parallel reading.
@@ -353,8 +341,10 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
 
     // shard decision (tuple path uses `return;`, file path uses `return None;`)
     let shard_tuple = match dts[0] {
-        DataType::Int32 => quote! { if !shard_i32(f0, peers, index) { return; } },
-        DataType::Int64 => quote! { if !shard_i64(f0, peers, index) { return; } },
+        DataType::Int8 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        DataType::Int16 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        DataType::Int32 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        DataType::Int64 => quote! { if !shard_int(f0, peers, index) { return; } },
         DataType::String => {
             if string_intern {
                 quote! { if !shard_spur(f0, peers, index) { return; } }
@@ -362,7 +352,7 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
                 quote! { if !shard_str(f0.as_str(), peers, index) { return; } }
             }
         }
-        DataType::Bool => quote! { if !shard_i32(f0 as i32, peers, index) { return; } },
+        DataType::Bool => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
     };
     let tuple_parse_stmts = gen_parse_from_str(name, &dts, string_intern);
     let file_parse_stmts = gen_parse_from_bytes(name, &dts, string_intern);
@@ -478,6 +468,8 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
 
 fn dt_to_rust(dt: &DataType, string_intern: bool) -> TokenStream {
     match *dt {
+        DataType::Int8 => quote! { i8 },
+        DataType::Int16 => quote! { i16 },
         DataType::Int32 => quote! { i32 },
         DataType::Int64 => quote! { i64 },
         DataType::String => {
@@ -511,6 +503,26 @@ fn gen_parse_from_str(rel: &str, dts: &[DataType], string_intern: bool) -> Token
         };
 
         let parse = match *dt {
+            DataType::Int8 => quote! {
+                #get
+                let #v: i8 = match s.parse::<i8>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not i8: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
+            DataType::Int16 => quote! {
+                #get
+                let #v: i16 = match s.parse::<i16>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not i16: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
             DataType::Int32 => quote! {
                 #get
                 let #v: i32 = match s.parse::<i32>() {
@@ -588,6 +600,66 @@ fn gen_parse_from_bytes(rel: &str, dts: &[DataType], string_intern: bool) -> Tok
         };
 
         let parse = match *dt {
+            DataType::Int8 => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: i8 = match s.parse::<i8>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not i8: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
+            DataType::Int16 => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: i16 = match s.parse::<i16>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not i16: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
             DataType::Int32 => quote! {
                 #get_raw
                 let s = match std::str::from_utf8(raw) {

@@ -14,6 +14,8 @@ use super::common::{key_from_row, key_pattern, result_from_key, row_pattern};
 fn min_new(agg_pos: usize, agg_type: DataType) -> TokenStream {
     let field = format_ident!("x{}", agg_pos);
     match agg_type {
+        DataType::Int8 => quote! { MinI8::new(#field) },
+        DataType::Int16 => quote! { MinI16::new(#field) },
         DataType::Int32 => quote! { MinI32::new(#field) },
         DataType::Int64 => quote! { MinI64::new(#field) },
         _ => unreachable!("Compiler error: min aggregation on non-integer type"),

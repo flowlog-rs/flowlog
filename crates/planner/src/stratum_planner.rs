@@ -48,20 +48,24 @@ pub struct StratumPlanner {
     /// Fingerprints of collections that exit recursion.
     recursion_leave_collections: Vec<u64>,
 
-    /// Map each stratum output relation to the rule head IDBs that feed it.
+    /// Map each IDB fingerprint to the per-rule head fingerprints that feed it.
     /// Enables the compiler to locate the materialized results per rule.
-    output_to_idb_map: HashMap<u64, Vec<u64>>,
+    idb_to_heads_map: HashMap<u64, Vec<u64>>,
 
-    /// Aggregation metadata keyed by final output fingerprint.
+    /// Reverse map: per-rule head fingerprint → IDB fingerprint.
+    /// Used by the compiler to type-check rule outputs against their target IDB.
+    head_to_idb_map: HashMap<u64, u64>,
+
+    /// Aggregation metadata keyed by IDB fingerprint.
     /// Only populated for rules whose heads contain an aggregation argument.
     /// Values are `(AggregationOperator, output_position, output_arity)` tuples.
-    output_to_aggregation_map: HashMap<u64, (AggregationOperator, usize, usize)>,
+    idb_to_aggregation_map: HashMap<u64, (AggregationOperator, usize, usize)>,
 
-    /// UDF metadata keyed by final output fingerprint.
+    /// UDF metadata keyed by IDB fingerprint.
     /// Only populated for rules whose heads contain a UDF call.
     /// Values are `(fn_name, start_position, end_position, output_arity)` tuples,
     /// where start..end is the range of flattened arg positions in the output layout.
-    output_to_udf_map: HashMap<u64, (String, usize, usize, usize)>,
+    idb_to_udf_map: HashMap<u64, (String, usize, usize, usize)>,
 }
 
 impl StratumPlanner {
@@ -170,20 +174,21 @@ impl StratumPlanner {
                 .stratum_iterative_relation(stratum_idx)
                 .to_vec(),
             recursion_leave_collections: stratifier.stratum_leave_relation(stratum_idx).to_vec(),
-            output_to_idb_map: HashMap::new(),
-            output_to_aggregation_map: HashMap::new(),
-            output_to_udf_map: HashMap::new(),
+            idb_to_heads_map: HashMap::new(),
+            head_to_idb_map: HashMap::new(),
+            idb_to_aggregation_map: HashMap::new(),
+            idb_to_udf_map: HashMap::new(),
         };
         stratum_planner.materialize_transformations();
 
         // Phase 7: Recursive split and metadata mappings
         // this phase to factoring optimizations
-        stratum_planner.build_output_to_idb_map(&catalogs);
+        stratum_planner.build_idb_to_heads_map(&catalogs);
         stratum_planner.identify_recursive_transformations(is_recursive);
         stratum_planner
             .build_recursion_enter_collections(stratifier.stratum_available_relations(stratum_idx));
-        stratum_planner.build_output_to_aggregation_map(&catalogs);
-        stratum_planner.build_output_to_udf_map(&catalogs);
+        stratum_planner.build_idb_to_aggregation_map(&catalogs);
+        stratum_planner.build_idb_to_udf_map(&catalogs);
 
         // Debug info for non-recursive vs recursive transformations.
         debug!("\n{}", stratum_planner);
@@ -239,27 +244,33 @@ impl StratumPlanner {
     /// Output relation fingerprints produced by this stratum.
     #[inline]
     pub fn output_relations(&self) -> HashSet<u64> {
-        self.output_to_idb_map.keys().cloned().collect()
+        self.idb_to_heads_map.keys().cloned().collect()
     }
 
-    /// Get the mapping from each rule output relation to corresponding head IDBs.
+    /// Get the mapping from each IDB fingerprint to per-rule head fingerprints.
     #[inline]
-    pub fn output_to_idb_map(&self) -> &HashMap<u64, Vec<u64>> {
-        &self.output_to_idb_map
+    pub fn idb_to_heads_map(&self) -> &HashMap<u64, Vec<u64>> {
+        &self.idb_to_heads_map
     }
 
-    /// Get the mapping from rule output relation to corresponding aggregation.
+    /// Get the reverse mapping from per-rule head fingerprint to IDB fingerprint.
+    #[inline]
+    pub fn head_to_idb_map(&self) -> &HashMap<u64, u64> {
+        &self.head_to_idb_map
+    }
+
+    /// Get the mapping from IDB fingerprint to corresponding aggregation.
     /// Returns tuples of (AggregationOperator, position in output relation, output arity).
     #[inline]
-    pub fn output_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
-        &self.output_to_aggregation_map
+    pub fn idb_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
+        &self.idb_to_aggregation_map
     }
 
-    /// Get the mapping from rule output relation to corresponding UDF call.
+    /// Get the mapping from IDB fingerprint to corresponding UDF call.
     /// Returns tuples of (fn_name, start position, end position, output arity).
     #[inline]
-    pub fn output_to_udf_map(&self) -> &HashMap<u64, (String, usize, usize, usize)> {
-        &self.output_to_udf_map
+    pub fn idb_to_udf_map(&self) -> &HashMap<u64, (String, usize, usize, usize)> {
+        &self.idb_to_udf_map
     }
 
     /// Check if this stratum is recursive.
@@ -310,10 +321,10 @@ impl fmt::Display for StratumPlanner {
             writeln!(f, "(Non-recursive stratum: no recursive transformations)")?;
         }
 
-        if !self.output_to_aggregation_map.is_empty() {
+        if !self.idb_to_aggregation_map.is_empty() {
             writeln!(f, "\n{}", "-".repeat(40))?;
             writeln!(f, "IDB to Aggregation Map:")?;
-            for (fp, (op, pos, arity)) in &self.output_to_aggregation_map {
+            for (fp, (op, pos, arity)) in &self.idb_to_aggregation_map {
                 writeln!(
                     f,
                     "  fp={:#018x},\n  op={:?},\n  pos={},\n  arity={}",
@@ -322,10 +333,10 @@ impl fmt::Display for StratumPlanner {
             }
         }
 
-        if !self.output_to_udf_map.is_empty() {
+        if !self.idb_to_udf_map.is_empty() {
             writeln!(f, "\n{}", "-".repeat(40))?;
             writeln!(f, "IDB to UDF Map:")?;
-            for (fp, (name, start, end, arity)) in &self.output_to_udf_map {
+            for (fp, (name, start, end, arity)) in &self.idb_to_udf_map {
                 writeln!(
                     f,
                     "  fp={fp:#018x}, fn={name}, range={start}..{end}, arity={arity}",
@@ -410,7 +421,7 @@ impl StratumPlanner {
 
         // Step 1: Initialize with output relations fingerprints.
         let mut dynamic_fingerprints: HashSet<u64> =
-            self.output_to_idb_map.keys().copied().collect();
+            self.idb_to_heads_map.keys().copied().collect();
 
         // Step 2: Left-to-right propagation through transformations
         let mut dynamic_indices = HashSet::new();
@@ -488,28 +499,29 @@ impl StratumPlanner {
             .collect()
     }
 
-    /// Build the mapping from each final output collection fingerprint to the rule head IDB fingerprints
-    /// that produce it. Multiple rules may contribute to the same output relation.
+    /// Build the mapping from each IDB fingerprint to the rule heads fingerprints
+    /// that produce it. Multiple rules may contribute to the same IDB relation.
     ///
     /// Note:
-    /// 1. Due to sharing, not every rule has a real output fingerprint -> head IDB mapping, though it may occur
-    ///    in the `output_to_idb_map`.
-    fn build_output_to_idb_map(&mut self, catalogs: &[Catalog]) {
+    /// 1. Due to sharing, not every rule has a real IDB -> head mapping, though it may occur
+    ///    in the `idb_to_heads_map`.
+    fn build_idb_to_heads_map(&mut self, catalogs: &[Catalog]) {
         for (rule_idx, catalog) in catalogs.iter().enumerate() {
             let head_idb_fp = catalog.head_idb_fingerprint();
             if let Some(final_info) = self.rule_planners[rule_idx].transformation_infos().last() {
-                let output_fp = final_info.output_info_fp();
-                self.output_to_idb_map
+                let head_fp = final_info.output_info_fp();
+                self.idb_to_heads_map
                     .entry(head_idb_fp)
                     .or_default()
-                    .push(output_fp);
+                    .push(head_fp);
+                self.head_to_idb_map.insert(head_fp, head_idb_fp);
             }
         }
     }
 
     /// Build the mapping from each final output collection fingerprint to its aggregation requirement.
     /// Ensures consistent aggregation operator and position for a given output relation if multiple rules map to it.
-    fn build_output_to_aggregation_map(&mut self, catalogs: &[Catalog]) {
+    fn build_idb_to_aggregation_map(&mut self, catalogs: &[Catalog]) {
         for catalog in catalogs {
             let head_args = catalog.head_arguments();
 
@@ -530,7 +542,7 @@ impl StratumPlanner {
             let head_idb_fp = catalog.head_idb_fingerprint();
             let entry = (op, pos, arity);
 
-            match self.output_to_aggregation_map.get(&head_idb_fp) {
+            match self.idb_to_aggregation_map.get(&head_idb_fp) {
                 Some(&existing) if existing != entry => {
                     panic!(
                         "Planner error: inconsistent aggregation for output {:#018x}: \
@@ -539,7 +551,7 @@ impl StratumPlanner {
                     );
                 }
                 None => {
-                    self.output_to_aggregation_map.insert(head_idb_fp, entry);
+                    self.idb_to_aggregation_map.insert(head_idb_fp, entry);
                 }
                 _ => {} // consistent duplicate — skip
             }
@@ -550,7 +562,7 @@ impl StratumPlanner {
     ///
     /// FnCall args are flattened into separate columns in the output layout;
     /// this records (fn_name, start..end, output_arity) so the compiler can collapse them.
-    fn build_output_to_udf_map(&mut self, catalogs: &[Catalog]) {
+    fn build_idb_to_udf_map(&mut self, catalogs: &[Catalog]) {
         for catalog in catalogs {
             let head_args = catalog.head_arguments();
             let head_idb_fp = catalog.head_idb_fingerprint();
@@ -566,7 +578,7 @@ impl StratumPlanner {
             );
 
             // A head cannot have both an aggregation and a UDF.
-            let has_agg = self.output_to_aggregation_map.contains_key(&head_idb_fp);
+            let has_agg = self.idb_to_aggregation_map.contains_key(&head_idb_fp);
             let has_udf = head_args.iter().any(|a| matches!(a, HeadArg::FnCall(_)));
             assert!(
                 !(has_agg && has_udf),
@@ -599,7 +611,7 @@ impl StratumPlanner {
                 let end = start + fc.args().len();
                 let entry = (fc.name().to_string(), start, end, output_arity);
 
-                match self.output_to_udf_map.get(&head_idb_fp) {
+                match self.idb_to_udf_map.get(&head_idb_fp) {
                     Some(existing) if *existing != entry => {
                         panic!(
                             "Planner error: inconsistent UDF for output {:#018x}",
@@ -607,7 +619,7 @@ impl StratumPlanner {
                         );
                     }
                     None => {
-                        self.output_to_udf_map.insert(head_idb_fp, entry);
+                        self.idb_to_udf_map.insert(head_idb_fp, entry);
                     }
                     _ => {} // consistent duplicate — skip
                 }

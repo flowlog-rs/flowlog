@@ -15,6 +15,8 @@ use super::common::{key_from_row, key_pattern, row_pattern, tuple};
 fn avg_new(agg_pos: usize, agg_type: DataType) -> TokenStream {
     let field = format_ident!("x{}", agg_pos);
     match agg_type {
+        DataType::Int8 => quote! { AvgI8::new(#field) },
+        DataType::Int16 => quote! { AvgI16::new(#field) },
         DataType::Int32 => quote! { AvgI32::new(#field) },
         DataType::Int64 => quote! { AvgI64::new(#field) },
         _ => unreachable!("Compiler error: avg aggregation on non-integer type"),

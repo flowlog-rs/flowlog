@@ -31,7 +31,13 @@ attribute_name = { identifier }
 relation_name = { identifier }
 
 // Data type specification
-data_type = { integer64_type | integer32_type | string_type | bool_type }
+data_type = { integer8_type | integer16_type | integer32_type | integer64_type | string_type | bool_type }
+
+// 8-bit integer data type
+integer8_type = { "int8" }
+
+// 16-bit integer data type
+integer16_type = { "int16" }
 
 // 32-bit integer data type
 integer32_type = { "int32" }

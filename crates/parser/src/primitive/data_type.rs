@@ -6,6 +6,8 @@ use std::str::FromStr;
 /// Data types supported in FlowLog Datalog programs.
 ///
 /// These types correspond to the primitive types in the FlowLog grammar:
+/// - `"int8"` → [`DataType::Int8`]
+/// - `"int16"` → [`DataType::Int16`]
 /// - `"int32"` → [`DataType::Int32`]
 /// - `"int64"` → [`DataType::Int64`]
 /// - `"string"` → [`DataType::String`]
@@ -14,6 +16,10 @@ use std::str::FromStr;
 /// They are used as attribute types in relations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataType {
+    /// 8-bit signed integer type.
+    Int8,
+    /// 16-bit signed integer type.
+    Int16,
     /// 32-bit signed integer type.
     Int32,
     /// 64-bit signed integer type.
@@ -32,12 +38,14 @@ impl FromStr for DataType {
     /// Returns `Err` if the string is not `"int32"`, `"int64"`, `"string"`, or `"bool"`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "int8" => Ok(Self::Int8),
+            "int16" => Ok(Self::Int16),
             "int32" => Ok(Self::Int32),
             "int64" => Ok(Self::Int64),
             "string" => Ok(Self::String),
             "bool" => Ok(Self::Bool),
             _ => Err(format!(
-                "Parser error: '{s}'. Invalid data type, expected 'int32', 'int64', 'string', or 'bool'"
+                "Parser error: '{s}'. Invalid data type, expected 'int8', 'int16', 'int32', 'int64', 'string', or 'bool'"
             )),
         }
     }
@@ -47,6 +55,8 @@ impl fmt::Display for DataType {
     /// Returns the grammar string representation of this type.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let type_str = match self {
+            Self::Int8 => "int8",
+            Self::Int16 => "int16",
             Self::Int32 => "int32",
             Self::Int64 => "int64",
             Self::String => "string",
@@ -64,6 +74,8 @@ mod tests {
     #[test]
     fn display_roundtrip() {
         for t in [
+            DataType::Int8,
+            DataType::Int16,
             DataType::Int32,
             DataType::Int64,
             DataType::String,
