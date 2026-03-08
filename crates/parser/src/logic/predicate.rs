@@ -156,15 +156,15 @@ mod tests {
     fn var(name: &str) -> AtomArg {
         AtomArg::Var(name.into())
     }
-    fn int(v: i32) -> AtomArg {
-        AtomArg::Const(ConstType::Int32(v))
+    fn int(v: i64) -> AtomArg {
+        AtomArg::Const(ConstType::Int(v))
     }
     fn txt(s: &str) -> AtomArg {
         AtomArg::Const(ConstType::Text(s.into()))
     }
     fn cmp_expr_gt_x_5() -> ComparisonExpr {
         let l = Arithmetic::new(Factor::Var("X".into()), vec![]);
-        let r = Arithmetic::new(Factor::Const(ConstType::Int32(5)), vec![]);
+        let r = Arithmetic::new(Factor::Const(ConstType::Int(5)), vec![]);
         ComparisonExpr::new(l, ComparisonOperator::GreaterThan, r)
     }
 
@@ -242,7 +242,7 @@ mod tests {
 
         // All comparison ops
         let l = Arithmetic::new(Factor::Var("x".into()), vec![]);
-        let r = Arithmetic::new(Factor::Const(ConstType::Int32(10)), vec![]);
+        let r = Arithmetic::new(Factor::Const(ConstType::Int(10)), vec![]);
         let cases = [
             (ComparisonOperator::Equal, "x == 10"),
             (ComparisonOperator::NotEqual, "x ≠ 10"),
@@ -261,10 +261,10 @@ mod tests {
             Factor::Var("salary".into()),
             vec![(
                 ArithmeticOperator::Multiply,
-                Factor::Const(ConstType::Int32(12)),
+                Factor::Const(ConstType::Int(12)),
             )],
         );
-        let right = Arithmetic::new(Factor::Const(ConstType::Int32(100000)), vec![]);
+        let right = Arithmetic::new(Factor::Const(ConstType::Int(100000)), vec![]);
         let complex = Predicate::ComparePredicate(ComparisonExpr::new(
             left,
             ComparisonOperator::GreaterThan,

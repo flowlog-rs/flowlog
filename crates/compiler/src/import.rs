@@ -12,12 +12,20 @@ use quote::quote;
 /// Tracks which semiring modules (min/max/sum/avg) are needed.
 #[derive(Default, Clone)]
 pub(crate) struct SemiringNeeds {
+    pub min_i8: bool,
+    pub min_i16: bool,
     pub min_i32: bool,
     pub min_i64: bool,
+    pub max_i8: bool,
+    pub max_i16: bool,
     pub max_i32: bool,
     pub max_i64: bool,
+    pub sum_i8: bool,
+    pub sum_i16: bool,
     pub sum_i32: bool,
     pub sum_i64: bool,
+    pub avg_i8: bool,
+    pub avg_i16: bool,
     pub avg_i32: bool,
     pub avg_i64: bool,
 }
@@ -25,12 +33,20 @@ pub(crate) struct SemiringNeeds {
 impl SemiringNeeds {
     /// Returns whether any semiring module is needed.
     pub fn any(&self) -> bool {
-        self.min_i32
+        self.min_i8
+            || self.min_i16
+            || self.min_i32
             || self.min_i64
+            || self.max_i8
+            || self.max_i16
             || self.max_i32
             || self.max_i64
+            || self.sum_i8
+            || self.sum_i16
             || self.sum_i32
             || self.sum_i64
+            || self.avg_i8
+            || self.avg_i16
             || self.avg_i32
             || self.avg_i64
     }
@@ -196,6 +212,8 @@ impl ImportTracker {
     /// Marks that the Min semiring module is required for a specific integer type.
     pub(crate) fn mark_min_semiring(&mut self, dt: DataType) {
         match dt {
+            DataType::Int8 => self.semirings.min_i8 = true,
+            DataType::Int16 => self.semirings.min_i16 = true,
             DataType::Int32 => self.semirings.min_i32 = true,
             DataType::Int64 => self.semirings.min_i64 = true,
             _ => unreachable!("Compiler error: min semiring only supports integer types"),
@@ -205,6 +223,8 @@ impl ImportTracker {
     /// Marks that the Max semiring module is required for a specific integer type.
     pub(crate) fn mark_max_semiring(&mut self, dt: DataType) {
         match dt {
+            DataType::Int8 => self.semirings.max_i8 = true,
+            DataType::Int16 => self.semirings.max_i16 = true,
             DataType::Int32 => self.semirings.max_i32 = true,
             DataType::Int64 => self.semirings.max_i64 = true,
             _ => unreachable!("Compiler error: max semiring only supports integer types"),
@@ -215,6 +235,8 @@ impl ImportTracker {
     /// Sum semiring is used for both COUNT and SUM aggregations.
     pub(crate) fn mark_sum_semiring(&mut self, dt: DataType) {
         match dt {
+            DataType::Int8 => self.semirings.sum_i8 = true,
+            DataType::Int16 => self.semirings.sum_i16 = true,
             DataType::Int32 => self.semirings.sum_i32 = true,
             DataType::Int64 => self.semirings.sum_i64 = true,
             _ => unreachable!("Compiler error: sum semiring only supports integer types"),
@@ -224,6 +246,8 @@ impl ImportTracker {
     /// Marks that the Avg semiring module is required for a specific integer type.
     pub(crate) fn mark_avg_semiring(&mut self, dt: DataType) {
         match dt {
+            DataType::Int8 => self.semirings.avg_i8 = true,
+            DataType::Int16 => self.semirings.avg_i16 = true,
             DataType::Int32 => self.semirings.avg_i32 = true,
             DataType::Int64 => self.semirings.avg_i64 = true,
             _ => unreachable!("Compiler error: avg semiring only supports integer types"),
@@ -458,10 +482,38 @@ impl ImportTracker {
         }
 
         let s = &self.semirings;
-        let min = semiring_mod("min_semiring", "Min", s.min_i32, s.min_i64);
-        let max = semiring_mod("max_semiring", "Max", s.max_i32, s.max_i64);
-        let sum = semiring_mod("sum_semiring", "Sum", s.sum_i32, s.sum_i64);
-        let avg = semiring_mod("avg_semiring", "Avg", s.avg_i32, s.avg_i64);
+        let min = semiring_mod(
+            "min_semiring",
+            "Min",
+            s.min_i8,
+            s.min_i16,
+            s.min_i32,
+            s.min_i64,
+        );
+        let max = semiring_mod(
+            "max_semiring",
+            "Max",
+            s.max_i8,
+            s.max_i16,
+            s.max_i32,
+            s.max_i64,
+        );
+        let sum = semiring_mod(
+            "sum_semiring",
+            "Sum",
+            s.sum_i8,
+            s.sum_i16,
+            s.sum_i32,
+            s.sum_i64,
+        );
+        let avg = semiring_mod(
+            "avg_semiring",
+            "Avg",
+            s.avg_i8,
+            s.avg_i16,
+            s.avg_i32,
+            s.avg_i64,
+        );
 
         quote! {
             #min
@@ -592,12 +644,27 @@ impl ImportTracker {
 }
 
 /// Emit `mod` + `use` statements for a single semiring module.
-fn semiring_mod(module: &str, prefix: &str, i32: bool, i64: bool) -> TokenStream {
-    if !i32 && !i64 {
+fn semiring_mod(
+    module: &str,
+    prefix: &str,
+    i8: bool,
+    i16: bool,
+    i32: bool,
+    i64: bool,
+) -> TokenStream {
+    if !i8 && !i16 && !i32 && !i64 {
         return quote! {};
     }
     let mod_ident = proc_macro2::Ident::new(module, proc_macro2::Span::call_site());
     let mut uses = Vec::new();
+    if i8 {
+        let ty = proc_macro2::Ident::new(&format!("{prefix}I8"), proc_macro2::Span::call_site());
+        uses.push(quote! { use #mod_ident::#ty; });
+    }
+    if i16 {
+        let ty = proc_macro2::Ident::new(&format!("{prefix}I16"), proc_macro2::Span::call_site());
+        uses.push(quote! { use #mod_ident::#ty; });
+    }
     if i32 {
         let ty = proc_macro2::Ident::new(&format!("{prefix}I32"), proc_macro2::Span::call_site());
         uses.push(quote! { use #mod_ident::#ty; });

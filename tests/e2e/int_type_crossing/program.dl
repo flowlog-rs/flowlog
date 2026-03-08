@@ -1,0 +1,47 @@
+// Type-crossing test.
+// Exercises type boundaries: join keys across widths, IDB reuse across strata,
+// multiple rules feeding one IDB, and constants in narrow columns.
+
+// ---------- EDB ----------
+
+.decl A(x: int8, y: int8)
+.input A(IO="file", filename="A.csv", delimiter=",")
+
+.decl B(x: int8, z: int16)
+.input B(IO="file", filename="B.csv", delimiter=",")
+
+.decl C(x: int8, w: int32)
+.input C(IO="file", filename="C.csv", delimiter=",")
+
+// ---------- Rule 1: i8 join key, mixed-width output (i8 × i8 × i16) ----------
+
+.decl AB(x: int8, y: int8, z: int16)
+AB(x, y, z) :- A(x, y), B(x, z).
+.output AB
+
+// ---------- Rule 2: i8 join key, crossing i8 and i32 ----------
+
+.decl AC(x: int8, y: int8, w: int32)
+AC(x, y, w) :- A(x, y), C(x, w).
+.output AC
+
+// ---------- Rule 3: IDB-to-IDB join across strata (AB × C) ----------
+// AB's types (i8, i8, i16) must be correctly carried into this stratum.
+
+.decl ABC(x: int8, y: int8, z: int16, w: int32)
+ABC(x, y, z, w) :- AB(x, y, z), C(x, w).
+.output ABC
+
+// ---------- Rule 4: Two rules feeding same IDB ----------
+// Both must produce (i8, i32) — tests that type checking across rules agrees.
+
+.decl Multi(x: int8, v: int32)
+Multi(x, w) :- C(x, w).
+Multi(x, w) :- AC(x, _, w).
+.output Multi
+
+// ---------- Rule 5: Constants in different-width positions ----------
+
+.decl WithConst(x: int8, tag: int16, big: int32)
+WithConst(x, 42, 999) :- A(x, _).
+.output WithConst

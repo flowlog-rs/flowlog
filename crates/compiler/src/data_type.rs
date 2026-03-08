@@ -7,6 +7,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
+use std::collections::HashMap;
 
 use super::Compiler;
 use parser::{ArithmeticOperator, ConstType, DataType};
@@ -41,6 +42,7 @@ impl Compiler {
         right_fingerprint: Option<u64>,
         output_fingerprint: u64,
         flow: &TransformationFlow,
+        head_to_idb_map: &HashMap<u64, u64>,
     ) {
         let left_type = self.find_global_type(left_fingerprint);
         let right_type = right_fingerprint.map(|rf| self.find_global_type(rf));
@@ -52,28 +54,57 @@ impl Compiler {
             right_type,
         );
 
-        let key_types: Vec<DataType> = flow
+        let key_types: Vec<Option<DataType>> = flow
             .key()
             .iter()
             .map(|expr| Self::infer_expr_type(expr, left_type, right_type))
             .collect();
 
-        let value_types: Vec<DataType> = flow
+        let value_types: Vec<Option<DataType>> = flow
             .value()
             .iter()
             .map(|expr| Self::infer_expr_type(expr, left_type, right_type))
             .collect();
 
+        // If this head feeds into a declared IDB, resolve to the IDB fingerprint
+        // so we verify/insert against the IDB's declared types directly.
+        let output_fingerprint = head_to_idb_map
+            .get(&output_fingerprint)
+            .copied()
+            .unwrap_or(output_fingerprint);
+
         self.global_fp_to_type
             .entry(output_fingerprint)
             .and_modify(|existing| {
+                let keys_ok = existing.0.len() == key_types.len()
+                    && existing
+                        .0
+                        .iter()
+                        .zip(&key_types)
+                        .all(|(decl, inf)| inf.as_ref().map_or(true, |t| t == decl));
+                let vals_ok = existing.1.len() == value_types.len()
+                    && existing
+                        .1
+                        .iter()
+                        .zip(&value_types)
+                        .all(|(decl, inf)| inf.as_ref().map_or(true, |t| t == decl));
                 assert!(
-                    existing.0 == key_types && existing.1 == value_types,
+                    keys_ok && vals_ok,
                     "Compiler error: type mismatch for fingerprint 0x{:016x}",
                     output_fingerprint
                 );
             })
-            .or_insert((key_types, value_types));
+            .or_insert_with(|| {
+                let keys = key_types
+                    .into_iter()
+                    .map(|t| t.expect("Compiler error: cannot infer type for all-constant position for intermediate relation without IDB declaration"))
+                    .collect();
+                let vals = value_types
+                    .into_iter()
+                    .map(|t| t.expect("Compiler error: cannot infer type for all-constant position for intermediate relation without IDB declaration"))
+                    .collect();
+                (keys, vals)
+            });
     }
 
     /// Assert that in a join operator the *key* types agree between inputs.
@@ -101,7 +132,7 @@ impl Compiler {
         expr: &ArithmeticArgument,
         left_type: &(Vec<DataType>, Vec<DataType>),
         right_type: Option<&(Vec<DataType>, Vec<DataType>)>,
-    ) -> DataType {
+    ) -> Option<DataType> {
         fn type_of_factor(
             factor: &FactorArgument,
             left_type: &(Vec<DataType>, Vec<DataType>),
@@ -127,9 +158,7 @@ impl Compiler {
                     src.get(*idx).cloned()
                 }
 
-                // Consts are fully typed.
-                FactorArgument::Const(ConstType::Int32(_)) => Some(DataType::Int32),
-                FactorArgument::Const(ConstType::Int64(_)) => Some(DataType::Int64),
+                FactorArgument::Const(ConstType::Int(_)) => None,
                 FactorArgument::Const(ConstType::Text(_)) => Some(DataType::String),
                 FactorArgument::Const(ConstType::Bool(_)) => Some(DataType::Bool),
             }
@@ -165,7 +194,7 @@ impl Compiler {
                         "Compiler error: arithmetic operator {:?} is not allowed on string type, use 'cat'",
                         op
                     ),
-                    DataType::Int32 | DataType::Int64 => assert!(
+                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => assert!(
                         !matches!(op, ArithmeticOperator::Cat),
                         "Compiler error: 'cat' operator is not allowed on integer type {:?}",
                         dt
@@ -177,9 +206,7 @@ impl Compiler {
             }
         }
 
-        inferred.expect(
-            "Compiler error: unable to infer data type for arithmetic expression (no factors)",
-        )
+        inferred
     }
 
     /// Look up the `(key_types, value_types)` for a fingerprint.
@@ -254,6 +281,8 @@ pub(super) fn type_tokens(input_types: &[DataType], string_intern: bool) -> Toke
     let tys: Vec<TokenStream> = input_types
         .iter()
         .map(|dt| match dt {
+            DataType::Int8 => quote! { i8 },
+            DataType::Int16 => quote! { i16 },
             DataType::Int32 => quote! { i32 },
             DataType::Int64 => quote! { i64 },
             DataType::String => {

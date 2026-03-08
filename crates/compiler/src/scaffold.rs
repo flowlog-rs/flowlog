@@ -287,12 +287,14 @@ impl Compiler {
         ensure_dir(&src_dir)?;
 
         let s = self.imports.semirings();
-        for (tmpl, file, mac, pfx, needs_i32, needs_i64, bound) in [
+        for (tmpl, file, mac, pfx, needs_i8, needs_i16, needs_i32, needs_i64, bound) in [
             (
                 MIN_SEMIRING_RS_TMPL,
                 "min_semiring.rs",
                 "define_min",
                 "Min",
+                s.min_i8,
+                s.min_i16,
                 s.min_i32,
                 s.min_i64,
                 Some("MAX"),
@@ -302,6 +304,8 @@ impl Compiler {
                 "max_semiring.rs",
                 "define_max",
                 "Max",
+                s.max_i8,
+                s.max_i16,
                 s.max_i32,
                 s.max_i64,
                 Some("MIN"),
@@ -311,6 +315,8 @@ impl Compiler {
                 "sum_semiring.rs",
                 "define_sum",
                 "Sum",
+                s.sum_i8,
+                s.sum_i16,
                 s.sum_i32,
                 s.sum_i64,
                 None,
@@ -320,15 +326,29 @@ impl Compiler {
                 "avg_semiring.rs",
                 "define_avg",
                 "Avg",
+                s.avg_i8,
+                s.avg_i16,
                 s.avg_i32,
                 s.avg_i64,
                 None,
             ),
         ] {
-            if !needs_i32 && !needs_i64 {
+            if !needs_i8 && !needs_i16 && !needs_i32 && !needs_i64 {
                 continue;
             }
             let mut rendered = tmpl.replace("\r\n", "\n");
+            if needs_i8 {
+                match bound {
+                    Some(b) => rendered.push_str(&format!("{mac}!({pfx}I8, i8, i8::{b});\n")),
+                    None => rendered.push_str(&format!("{mac}!({pfx}I8, i8);\n")),
+                }
+            }
+            if needs_i16 {
+                match bound {
+                    Some(b) => rendered.push_str(&format!("{mac}!({pfx}I16, i16, i16::{b});\n")),
+                    None => rendered.push_str(&format!("{mac}!({pfx}I16, i16);\n")),
+                }
+            }
             if needs_i32 {
                 match bound {
                     Some(b) => rendered.push_str(&format!("{mac}!({pfx}I32, i32, i32::{b});\n")),

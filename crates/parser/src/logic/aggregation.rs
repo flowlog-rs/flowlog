@@ -152,7 +152,7 @@ mod tests {
 
         let count1 = Aggregation::new(
             Count,
-            Arithmetic::new(Factor::Const(ConstType::Int32(1)), vec![]),
+            Arithmetic::new(Factor::Const(ConstType::Int(1)), vec![]),
         );
         assert_eq!(count1.to_string(), "count(1)");
 
@@ -182,7 +182,7 @@ mod tests {
 
         let c = Aggregation::new(
             Count,
-            Arithmetic::new(Factor::Const(ConstType::Int32(0)), vec![]),
+            Arithmetic::new(Factor::Const(ConstType::Int(0)), vec![]),
         );
         assert!(c.vars().is_empty());
     }
