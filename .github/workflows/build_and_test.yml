@@ -44,6 +44,7 @@ jobs:
           command: test
       - name: 🏁 Run batch smoke test
         run: |
+          bash tests/e2e/run.sh
           bash tools/check/batch.sh tools/check/config_integer.txt --compile-only --sip
           bash tools/check/batch.sh tools/check/config_str.txt --compile-only --sip --str-intern
           bash tools/check/batch.sh tools/check/config_ci.txt
