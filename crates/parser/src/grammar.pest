@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = { 
     SOI ~ 
-    (declaration | extern_fn | input_directive | output_directive | printsize_directive | rule)* ~
+    (declaration | extern_fn | input_directive | output_directive | printsize_directive | fact | rule)* ~
     EOI
 } 
 
@@ -242,6 +242,10 @@ atom_arg = { constant | variable | placeholder }
 // Format: head :- body.
 // Example: reachable(x, z) :- edge(x, y), reachable(y, z).
 
+// A fact is a ground tuple inserted directly into a relation.
+// Example: edge(1, 2).
+fact = { head ~ "." }
+
 // Single rule with head, body predicates, and optional optimization directive
 // Format: head :- predicate1, predicate2, ... .
 rule = { head ~ ":-" ~ predicates ~ "." ~ optimize? }
@@ -275,8 +279,7 @@ predicate = {
     atom |          // Positive atom: edge(x, y)
     negative_atom | // Negative atom: !edge(x, y)  
     compare_expr |  // Comparison: x > y
-    fn_call_expr |  // UDF predicate: is_valid(x + 1, y)
-    boolean         // Boolean atom: True/False
+    fn_call_expr    // UDF predicate: is_valid(x + 1, y)
 }
 
 // Optimization hint directives for query planning

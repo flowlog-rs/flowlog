@@ -75,7 +75,6 @@ impl Catalog {
                     }
                     Predicate::ComparePredicate(expr) => comp.push(expr.clone()),
                     Predicate::FnCallPredicate(fc) => fncalls.push(fc.clone()),
-                    Predicate::BoolPredicate(_) => {}
                 };
                 (pos, neg, comp, fncalls)
             },

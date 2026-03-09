@@ -6,11 +6,11 @@
 //! - Output directives (specify which relations to output)
 //! - Print size directives (specify which relations to print size for)
 //! - Rules
-//! - Boolean facts extracted from rules whose bodies are *pure* booleans
+//! - Inline facts (ground tuples like `relation(1, 2).`)
 
 use super::{
     declaration::{ExternFn, InputDirective, OutputDirective, PrintSizeDirective, Relation},
-    logic::{Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Predicate},
+    logic::{Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, Predicate},
     ConstType, FlowLogParser, Lexeme, Rule,
 };
 use pest::{iterators::Pair, Parser};
@@ -32,8 +32,8 @@ pub struct Program {
     rules: Vec<FlowLogRule>,
     /// External scalar UDF declarations.
     udfs: Vec<ExternFn>,
-    /// Map: relation name -> [(constant tuple, boolean value)]
-    bool_facts: HashMap<String, Vec<(Vec<ConstType>, bool)>>,
+    /// Map: relation name -> [constant tuple]
+    facts: HashMap<String, Vec<Vec<ConstType>>>,
 }
 
 impl fmt::Display for Program {
@@ -85,19 +85,18 @@ impl fmt::Display for Program {
             writeln!(f)?;
         }
 
-        // Boolean Facts Section
-        if !self.bool_facts.is_empty() {
-            writeln!(f, "Boolean Facts")?;
+        // Facts Section
+        if !self.facts.is_empty() {
+            writeln!(f, "Facts")?;
             writeln!(f, "---------------------------------------------")?;
-            for (rel_name, facts) in &self.bool_facts {
-                for (vals, boolean) in facts {
+            for (rel_name, facts) in &self.facts {
+                for vals in facts {
                     let values = vals
                         .iter()
                         .map(|c| c.to_string())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    let b = if *boolean { "True" } else { "False" };
-                    writeln!(f, "{}({}) :- {}.", rel_name, values, b)?;
+                    writeln!(f, "{}({}).", rel_name, values)?;
                 }
             }
         }
@@ -107,7 +106,7 @@ impl fmt::Display for Program {
 }
 
 impl Program {
-    /// Parse a program from a file, extract boolean facts, and prune dead components.
+    /// Parse a program from a file, extract facts, and prune dead components.
     ///
     /// Panics on I/O or parse errors.
     #[must_use]
@@ -118,7 +117,7 @@ impl Program {
             .expect("Parser error: failed to parse FlowLog program");
         let root = pairs.next().expect("Parser error: no parsed rule found");
 
-        // Build structure + extract boolean facts inside `from_parsed_rule` then prune.
+        // Build structure + extract facts inside `from_parsed_rule` then prune.
         let mut program = Self::from_parsed_rule(root);
         program.prune_dead_components();
 
@@ -175,18 +174,18 @@ impl Program {
         self.relations.iter().filter(|rel| !rel.is_edb()).collect()
     }
 
-    /// Transformation rules (boolean-only rules are extracted into `bool_facts`).
+    /// Transformation rules.
     #[must_use]
     #[inline]
     pub fn rules(&self) -> &[FlowLogRule] {
         &self.rules
     }
 
-    /// Extracted boolean facts.
+    /// Inline facts (ground tuples).
     #[must_use]
     #[inline]
-    pub fn bool_facts(&self) -> &HashMap<String, Vec<(Vec<ConstType>, bool)>> {
-        &self.bool_facts
+    pub fn facts(&self) -> &HashMap<String, Vec<Vec<ConstType>>> {
+        &self.facts
     }
 
     /// External UDF declarations.
@@ -263,45 +262,17 @@ impl Program {
         }
     }
 
-    /// Extract boolean facts from rules whose *entire* body is boolean.
+    /// Extract inline facts from parsed fact nodes.
     ///
-    /// - A rule is considered a boolean fact rule iff `rhs().iter().all(BoolPredicate)`.
-    /// - The overall boolean value is the conjunction of those literals (all must be `true`).
-    /// - Only `true` facts are materialized; `false` are ignored (can be added later).
-    fn extract_boolean_facts(&mut self) {
-        let mut keep = Vec::with_capacity(self.rules.len());
-
-        for rule in self.rules.drain(..) {
-            let all_bool = rule
-                .rhs()
-                .iter()
-                .all(|p| matches!(p, Predicate::BoolPredicate(_)));
-            if !all_bool {
-                keep.push(rule);
-                continue;
-            }
-
-            // Conjunction of boolean literals.
-            let overall_true = rule
-                .rhs()
-                .iter()
-                .all(|p| matches!(p, Predicate::BoolPredicate(true)));
-
-            if overall_true {
-                let rel_name = rule.head().name().to_string();
-                let tuple = rule.extract_constants_from_head(); // panics if head isn't constants
-                self.bool_facts
-                    .entry(rel_name)
-                    .or_default()
-                    .push((tuple, true));
-            }
-            // If overall is false: ignore (no fact contributed).
-        }
-
-        self.rules = keep;
+    /// Facts are ground tuples: `relation(1, 2).`
+    /// They are stored in `facts` and used for compile-time insertion.
+    fn extract_fact(&mut self, fact_rule: FlowLogRule) {
+        let rel_name = fact_rule.head().name().to_string();
+        let tuple = fact_rule.extract_constants_from_head();
+        self.facts.entry(rel_name).or_default().push(tuple);
     }
 
-    /// Compute the transitive closure of dependencies needed by outputs + boolean facts.
+    /// Compute the transitive closure of dependencies needed by outputs + facts.
     ///
     /// Returns `(needed_rule_indices, needed_predicate_names)`.
     #[must_use]
@@ -312,8 +283,8 @@ impl Program {
             .map(|d| d.name().to_string())
             .collect();
 
-        // Boolean fact relations are always needed.
-        needed_preds.extend(self.bool_facts.keys().cloned());
+        // Fact relations are always needed.
+        needed_preds.extend(self.facts.keys().cloned());
 
         // If no outputs and no bool facts, keep everything.
         if needed_preds.is_empty() {
@@ -430,7 +401,7 @@ impl Program {
             .map(|(_, r)| r)
             .collect();
 
-        self.bool_facts
+        self.facts
             .retain(|rel, _| needed_preds.contains(rel.as_str()));
     }
 }
@@ -438,7 +409,7 @@ impl Program {
 impl Lexeme for Program {
     /// Build a program from the top-level grammar node.
     ///
-    /// Performs section dispatch and boolean fact extraction.
+    /// Performs section dispatch and fact extraction.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let mut relations = Vec::new();
         let mut input_directives = Vec::new();
@@ -446,6 +417,7 @@ impl Lexeme for Program {
         let mut printsize_directives = Vec::new();
         let mut rules = Vec::new();
         let mut udfs = Vec::new();
+        let mut facts = Vec::new();
 
         // First pass: collect all declarations and directives
         for node in parsed_rule.into_inner() {
@@ -472,6 +444,15 @@ impl Lexeme for Program {
                 }
                 Rule::rule => {
                     rules.push(FlowLogRule::from_parsed_rule(node));
+                }
+                Rule::fact => {
+                    // Parse the head from the fact node
+                    let head_node = node
+                        .into_inner()
+                        .next()
+                        .expect("Parser error: fact missing head");
+                    let head = Head::from_parsed_rule(head_node);
+                    facts.push(FlowLogRule::new(head, vec![], false));
                 }
                 _ => {}
             }
@@ -585,11 +566,13 @@ impl Lexeme for Program {
             relations,
             rules,
             udfs,
-            bool_facts: HashMap::new(),
+            facts: HashMap::new(),
         };
 
-        // Extract boolean-only rules into `bool_facts`.
-        program.extract_boolean_facts();
+        // Extract inline facts.
+        for fact in facts {
+            program.extract_fact(fact);
+        }
         program
     }
 }
