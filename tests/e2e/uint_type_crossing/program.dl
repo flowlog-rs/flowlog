@@ -1,0 +1,45 @@
+// Unsigned integer type-crossing test.
+// Exercises uint8/uint16/uint32/uint64 across joins, IDB reuse across strata,
+// multiple rules feeding one IDB, constants, and the "unsigned" alias.
+
+// ---------- EDB ----------
+
+.decl A(x: uint8, y: uint8)
+.input A(IO="file", filename="A.csv", delimiter=",")
+
+.decl B(x: uint8, z: uint16)
+.input B(IO="file", filename="B.csv", delimiter=",")
+
+.decl C(x: uint8, w: unsigned)
+.input C(IO="file", filename="C.csv", delimiter=",")
+
+// ---------- Rule 1: u8 join key, mixed-width output (u8 × u8 × u16) ----------
+
+.decl AB(x: uint8, y: uint8, z: uint16)
+AB(x, y, z) :- A(x, y), B(x, z).
+.output AB
+
+// ---------- Rule 2: u8 join key, crossing u8 and u32 ----------
+
+.decl AC(x: uint8, y: uint8, w: unsigned)
+AC(x, y, w) :- A(x, y), C(x, w).
+.output AC
+
+// ---------- Rule 3: IDB-to-IDB join across strata (AB × C) ----------
+
+.decl ABC(x: uint8, y: uint8, z: uint16, w: uint32)
+ABC(x, y, z, w) :- AB(x, y, z), C(x, w).
+.output ABC
+
+// ---------- Rule 4: Two rules feeding same IDB ----------
+
+.decl Multi(x: uint8, v: uint32)
+Multi(x, w) :- C(x, w).
+Multi(x, w) :- AC(x, _, w).
+.output Multi
+
+// ---------- Rule 5: Constants in different-width positions ----------
+
+.decl WithConst(x: uint8, tag: uint16, big: uint32)
+WithConst(x, 42, 999) :- A(x, _).
+.output WithConst

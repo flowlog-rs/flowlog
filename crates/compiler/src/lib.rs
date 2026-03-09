@@ -596,17 +596,17 @@ impl Compiler {
                 inspect_stmts.push(self.gen_size_inspector(&var, name, profiler));
             }
 
+            // Mark ordered-float needed if any IDB has float columns.
+            if idb.data_type().contains(&DataType::Float32)
+                || idb.data_type().contains(&DataType::Float64)
+            {
+                self.imports.mark_ordered_float();
+            }
+
             if idb.output() {
                 // Mark resolve needed if this output IDB has string columns.
                 if idb.data_type().contains(&DataType::String) {
                     self.imports.mark_string_resolve();
-                }
-
-                // Mark ordered-float needed if this output IDB has float columns.
-                if idb.data_type().contains(&DataType::Float32)
-                    || idb.data_type().contains(&DataType::Float64)
-                {
-                    self.imports.mark_ordered_float();
                 }
 
                 if self.config.output_to_stdout() {

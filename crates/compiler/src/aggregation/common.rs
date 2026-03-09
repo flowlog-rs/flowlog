@@ -361,9 +361,9 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v as i32).sum::<i32>();
-                    let count = input.len() as i32;
-                    let avg = (sum / count) as i8;
+                    let sum = input.iter().map(|(v, _)| *v).sum::<i8>();
+                    let count = input.len() as i8;
+                    let avg = sum / count;
                     updates.push((avg, SEMIRING_ONE));
                 }
             },
@@ -372,9 +372,9 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v as i32).sum::<i32>();
-                    let count = input.len() as i32;
-                    let avg = (sum / count) as i16;
+                    let sum = input.iter().map(|(v, _)| *v).sum::<i16>();
+                    let count = input.len() as i16;
+                    let avg = sum / count;
                     updates.push((avg, SEMIRING_ONE));
                 }
             },
@@ -405,9 +405,9 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v as u32).sum::<u32>();
-                    let count = input.len() as u32;
-                    let avg = (sum / count) as u8;
+                    let sum = input.iter().map(|(v, _)| *v).sum::<u8>();
+                    let count = input.len() as u8;
+                    let avg = sum / count;
                     updates.push((avg, SEMIRING_ONE));
                 }
             },
@@ -416,9 +416,9 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v as u32).sum::<u32>();
-                    let count = input.len() as u32;
-                    let avg = (sum / count) as u16;
+                    let sum = input.iter().map(|(v, _)| *v).sum::<u16>();
+                    let count = input.len() as u16;
+                    let avg = sum / count;
                     updates.push((avg, SEMIRING_ONE));
                 }
             },

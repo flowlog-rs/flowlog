@@ -71,7 +71,12 @@ impl FromStr for DataType {
             "f64" => Ok(Self::Float64),
             "string" | "symbol" => Ok(Self::String),
             "bool" => Ok(Self::Bool),
-            _ => Err(format!("Parser error: '{s}'. Invalid data type")),
+            _ => Err(format!(
+                "Parser error: '{s}'. Invalid data type. Expected one of: \
+                int8, int16, int32 (number), int64, \
+                uint8, uint16, uint32 (unsigned), uint64, \
+                f32 (float), f64, string (symbol), bool."
+            )),
         }
     }
 }
