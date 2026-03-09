@@ -3,9 +3,8 @@
 //! - Positive atoms: `edge(X, Y)`
 //! - Negative atoms: `!edge(X, Y)`
 //! - Comparisons: `X > 5`, `Age ≥ 18`
-//! - Boolean literals: `true`, `false`
 //!
-//! Predicates form the antecedent of rules: `head(...) :- p1, !p2, X > Y, true.`
+//! Predicates form the antecedent of rules: `head(...) :- p1, !p2, X > Y.`
 
 use super::{Atom, AtomArg, ComparisonExpr, FnCall};
 use crate::{Lexeme, Rule};
@@ -21,8 +20,6 @@ pub enum Predicate {
     NegativeAtomPredicate(Atom),
     /// Comparison expression, e.g. `X > 5`.
     ComparePredicate(ComparisonExpr),
-    /// Boolean literal.
-    BoolPredicate(bool),
     /// UDF predicate call, e.g. `is_valid(X, Y + 1)`.
     FnCallPredicate(FnCall),
 }
@@ -40,9 +37,6 @@ impl Predicate {
             }
             Self::ComparePredicate(_) => {
                 unreachable!("Cannot get arguments from a comparison predicate")
-            }
-            Self::BoolPredicate(_) => {
-                unreachable!("Cannot get arguments from a boolean predicate")
             }
             Self::FnCallPredicate(_) => {
                 unreachable!("Cannot get arguments from a fn call predicate")
@@ -62,17 +56,10 @@ impl Predicate {
             Self::ComparePredicate(_) => {
                 unreachable!("Cannot get name from a comparison predicate")
             }
-            Self::BoolPredicate(_) => unreachable!("Cannot get name from a boolean predicate"),
             Self::FnCallPredicate(_) => {
                 unreachable!("Cannot get name from a fn call predicate")
             }
         }
-    }
-
-    /// Is this a boolean literal?
-    #[inline]
-    pub fn is_boolean(&self) -> bool {
-        matches!(self, Self::BoolPredicate(_))
     }
 
     /// Is this a UDF predicate call?
@@ -88,9 +75,6 @@ impl fmt::Display for Predicate {
             Self::PositiveAtomPredicate(atom) => write!(f, "{atom}"),
             Self::NegativeAtomPredicate(atom) => write!(f, "!{atom}"),
             Self::ComparePredicate(expr) => write!(f, "{expr}"),
-            Self::BoolPredicate(b) => {
-                write!(f, "{}", if *b { "True" } else { "False" })
-            }
             Self::FnCallPredicate(fc) => write!(f, "{fc}"),
         }
     }
@@ -102,9 +86,6 @@ impl fmt::Debug for Predicate {
             Self::PositiveAtomPredicate(atom) => write!(f, "{atom:?}"),
             Self::NegativeAtomPredicate(atom) => write!(f, "!{atom:?}"),
             Self::ComparePredicate(expr) => write!(f, "{expr}"),
-            Self::BoolPredicate(b) => {
-                write!(f, "{}", if *b { "True" } else { "False" })
-            }
             Self::FnCallPredicate(fc) => write!(f, "{fc}"),
         }
     }
@@ -132,11 +113,6 @@ impl Lexeme for Predicate {
                 Self::NegativeAtomPredicate(Atom::from_parsed_rule(atom_rule))
             }
             Rule::compare_expr => Self::ComparePredicate(ComparisonExpr::from_parsed_rule(inner)),
-            Rule::boolean => match inner.as_str() {
-                "True" => Self::BoolPredicate(true),
-                "False" => Self::BoolPredicate(false),
-                other => unreachable!("Parser error: invalid boolean literal: {other}"),
-            },
             Rule::fn_call_expr => Self::FnCallPredicate(FnCall::from_parsed_rule(inner)),
             other => unreachable!("Parser error: invalid predicate type: {:?}", other),
         }
@@ -172,7 +148,6 @@ mod tests {
     fn positive_atom_predicate() {
         let p = Predicate::PositiveAtomPredicate(atom("edge", vec![var("X"), var("Y")]));
         assert_eq!(p.name(), "edge");
-        assert!(!p.is_boolean());
         assert!(p.to_string().starts_with("edge(X, Y)"));
         let args = p.arguments();
         assert_eq!(args.len(), 2);
@@ -193,17 +168,7 @@ mod tests {
     #[test]
     fn comparison_predicate_display() {
         let p = Predicate::ComparePredicate(cmp_expr_gt_x_5());
-        assert!(!p.is_boolean());
         assert_eq!(p.to_string(), "X > 5");
-    }
-
-    #[test]
-    fn boolean_predicates() {
-        let t = Predicate::BoolPredicate(true);
-        let f = Predicate::BoolPredicate(false);
-        assert!(t.is_boolean() && f.is_boolean());
-        assert_eq!(t.to_string(), "True");
-        assert_eq!(f.to_string(), "False");
     }
 
     #[test]
@@ -214,23 +179,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Cannot get arguments from a boolean predicate")]
-    fn boolean_arguments_panics() {
-        let p = Predicate::BoolPredicate(true);
-        let _ = p.arguments();
-    }
-
-    #[test]
     #[should_panic(expected = "Cannot get name from a comparison predicate")]
     fn compare_name_panics() {
         let p = Predicate::ComparePredicate(cmp_expr_gt_x_5());
-        let _ = p.name();
-    }
-
-    #[test]
-    #[should_panic(expected = "Cannot get name from a boolean predicate")]
-    fn boolean_name_panics() {
-        let p = Predicate::BoolPredicate(false);
         let _ = p.name();
     }
 
@@ -291,7 +242,7 @@ mod tests {
         let mut set = HashSet::new();
         set.insert(a);
         set.insert(b);
-        set.insert(Predicate::BoolPredicate(true));
+        set.insert(Predicate::ComparePredicate(cmp_expr_gt_x_5()));
         assert_eq!(set.len(), 2);
     }
 }

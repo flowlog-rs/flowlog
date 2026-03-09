@@ -11,11 +11,13 @@
 //!
 //! # Example
 //! ```rust
-//! use parser::logic::{FlowLogRule, Head, HeadArg, Predicate};
+//! use parser::logic::{FlowLogRule, Head, HeadArg, Predicate, Atom, AtomArg};
 //!
 //! // result(X) :- input(X).
 //! let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
-//! let body = vec![Predicate::BoolPredicate(true)]; // adjust to your real body/predicate
+//! let body = vec![Predicate::PositiveAtomPredicate(
+//!     Atom::new("input", vec![AtomArg::Var("X".to_string())], 0),
+//! )];
 //! let rule = FlowLogRule::new(head, body, false);
 //! ```
 

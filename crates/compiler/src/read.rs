@@ -4,7 +4,7 @@
 //! - Declares `(handle, collection)` pairs for each EDB relation.
 //! - Creates *mutable* bindings for handles so we can call `update(...)`.
 //! - Ingests EDB facts from CSV-like files (arity > 0).
-//! - Ingests compile-time boolean facts (from the parsed program).
+//! - Ingests compile-time inline facts (from the parsed program).
 //! - Closes all handles to signal end-of-input.
 //!
 //! Ingestion strategy (byte-range parallel reading):
@@ -133,7 +133,7 @@ impl Compiler {
 
     /// Generate ingestion code for every EDB relation:
     /// - CSV ingestion for arity > 0
-    /// - boolean fact ingestion (if present)
+    /// - fact ingestion (if present)
     pub(super) fn gen_ingest_stmts(&mut self) -> Vec<TokenStream> {
         let mut stmts = Vec::new();
         for rel in self.program.edbs() {
@@ -147,10 +147,10 @@ impl Compiler {
             self.imports.mark_semiring_one();
 
             let csv_ingest = self.gen_csv_ingest_stmt(rel);
-            let bool_ingest = self.gen_bool_fact_ingest_stmt(rel);
+            let fact_ingest = self.gen_fact_ingest_stmt(rel);
             stmts.push(quote! {
                 #csv_ingest
-                #bool_ingest
+                #fact_ingest
             });
         }
 
@@ -168,7 +168,7 @@ impl Compiler {
     fn gen_csv_ingest_stmt(&self, rel: &Relation) -> TokenStream {
         let arity = rel.arity();
 
-        // Nullary relations do not read from files; they are handled via boolean facts (if any).
+        // Nullary relations do not read from files; they are handled via inline facts (if any).
         if arity == 0 {
             return quote! {};
         }
@@ -420,23 +420,22 @@ impl Compiler {
         }
     }
 
-    /// Generate ingestion code for boolean facts associated with `rel`.
+    /// Generate ingestion code for inline facts associated with `rel`.
     ///
     /// This is used for facts provided directly in the program (not via CSV files),
     /// typically for nullary relations or small compile-time datasets.
-    fn gen_bool_fact_ingest_stmt(&self, rel: &Relation) -> TokenStream {
+    fn gen_fact_ingest_stmt(&self, rel: &Relation) -> TokenStream {
         let handle = format_ident!("h{}", rel.name());
         let rel_name = rel.name().to_string();
 
-        let Some(facts) = self.program.bool_facts().get(&rel_name) else {
+        let Some(facts) = self.program.facts().get(&rel_name) else {
             return quote! {};
         };
 
-        // Build literal tuples for all `true` facts only.
+        // Build literal tuples for inline facts.
         let tuples: Vec<TokenStream> = facts
             .iter()
-            .filter(|(_, b)| *b)
-            .map(|(vals, _)| {
+            .map(|vals| {
                 let elems: Vec<TokenStream> = vals
                     .iter()
                     .map(|c| match c {
