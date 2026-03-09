@@ -50,7 +50,7 @@ Usage:
 Run FlowLog end-to-end tests. Each test is a directory under tests/e2e/ with:
   program.dl    Datalog source using .output directives
   data/         CSV input facts
-  expected/     Expected output files (one per relation, tab-separated)
+  expected/     Expected output files (one per relation, comma-separated)
 
 Examples:
   $(basename "$0")                # run all tests
@@ -112,7 +112,9 @@ run_test() {
     # 2. Copy input data into project directory
     # ------------------------------------------------------------------
     if [[ -d "$test_dir/data" ]]; then
-        cp "$test_dir"/data/* "$project_dir/"
+        if compgen -G "$test_dir/data/*" > /dev/null; then
+            cp "$test_dir"/data/* "$project_dir/"
+        fi
     fi
     mkdir -p "$output_dir"
 

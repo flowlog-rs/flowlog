@@ -58,7 +58,7 @@ impl Compiler {
                 /// Shard on an integer first column by `first % peers`.
                 #[inline]
                 fn shard_int(first: i64, peers: usize, index: usize) -> bool {
-                    (first as usize) % peers == index
+                    first.rem_euclid(peers as i64) as usize == index
                 }
             }
         } else {

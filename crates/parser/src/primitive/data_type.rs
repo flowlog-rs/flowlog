@@ -35,7 +35,7 @@ impl FromStr for DataType {
 
     /// Parse a [`DataType`] from its grammar string representation.
     ///
-    /// Returns `Err` if the string is not `"int32"`, `"int64"`, `"string"`, or `"bool"`.
+    /// Returns `Err` if the string is not `"int8"`, `"int16"`, `"int32"`, `"int64"`, `"string"`, or `"bool"`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "int8" => Ok(Self::Int8),
