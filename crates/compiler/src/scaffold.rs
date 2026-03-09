@@ -408,12 +408,22 @@ impl Compiler {
                 for (i, (suffix, inner)) in FLOAT_TYPES.iter().enumerate() {
                     if float_needs[i] {
                         match bound_kw {
-                            Some(bk) => rendered.push_str(&format!(
-                                "\n{mac}!({pfx}{suffix}, OrderedFloat<{inner}>, OrderedFloat({inner}::{bk}));\n"
-                            )),
-                            None => rendered.push_str(&format!(
-                                "\n{mac}!({pfx}{suffix}, {inner});\n"
-                            )),
+                            Some(bk) => {
+                                // For floating-point semirings, use infinities rather than
+                                // finite MAX/MIN bounds so that sentinel values are outside
+                                // the representable finite domain.
+                                let float_bound_kw = match bk {
+                                    "MAX" => "INFINITY",
+                                    "MIN" => "NEG_INFINITY",
+                                    other => other,
+                                };
+                                rendered.push_str(&format!(
+                                    "\n{mac}!({pfx}{suffix}, OrderedFloat<{inner}>, OrderedFloat({inner}::{float_bound_kw}));\n"
+                                ));
+                            }
+                            None => {
+                                rendered.push_str(&format!("\n{mac}!({pfx}{suffix}, {inner});\n"))
+                            }
                         }
                     }
                 }
