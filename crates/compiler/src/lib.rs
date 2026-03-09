@@ -120,8 +120,11 @@ impl Compiler {
                 profiler.update_stratum_block(idx);
             });
 
-            let (core_flows, non_recursive_arranged_map) = self
-                .gen_non_recursive_core_flows(stratum.non_recursive_transformations(), profiler);
+            let (core_flows, non_recursive_arranged_map) = self.gen_non_recursive_core_flows(
+                stratum.non_recursive_transformations(),
+                stratum.head_to_idb_map(),
+                profiler,
+            );
             flow_stmts.extend(core_flows);
 
             if stratum.is_recursive() {

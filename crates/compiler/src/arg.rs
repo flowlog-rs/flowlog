@@ -650,8 +650,10 @@ pub(super) fn build_row_constraints_predicate(
 
 fn const_to_token(constant: &ConstType, string_intern: bool) -> TokenStream {
     match constant {
-        ConstType::Int32(n) => quote! { #n },
-        ConstType::Int64(n) => quote! { #n },
+        ConstType::Int(n) => {
+            let lit = proc_macro2::Literal::i64_unsuffixed(*n);
+            quote! { #lit }
+        }
         ConstType::Text(s) => {
             if string_intern {
                 quote! { intern(#s) }

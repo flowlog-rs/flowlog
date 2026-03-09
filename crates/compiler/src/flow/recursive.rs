@@ -85,15 +85,23 @@ impl Compiler {
         let flow_stmts: Vec<TokenStream> = stratum
             .recursive_transformations()
             .iter()
-            .map(|tx| self.gen_transformation(&current, tx, &mut recursive_arranged, profiler))
+            .map(|tx| {
+                self.gen_transformation(
+                    &current,
+                    tx,
+                    &mut recursive_arranged,
+                    stratum.head_to_idb_map(),
+                    profiler,
+                )
+            })
             .collect();
 
         // Collect unions and (optional) aggregation/UDF for IDB outputs.
         let (next_bindings, union_stmts) = self.collect_unions(
-            stratum.output_to_idb_map(),
+            stratum.idb_to_heads_map(),
             &enter_bindings,
-            stratum.output_to_aggregation_map(),
-            stratum.output_to_udf_map(),
+            stratum.idb_to_aggregation_map(),
+            stratum.idb_to_udf_map(),
             profiler,
         );
 
@@ -119,7 +127,7 @@ impl Compiler {
         let (leave_pattern, leave_stmt, post_leave) = self.build_leave_outputs(
             leave_fps,
             &next_bindings,
-            stratum.output_to_aggregation_map(),
+            stratum.idb_to_aggregation_map(),
             profiler,
         );
 
@@ -183,24 +191,26 @@ impl Compiler {
     /// Collect union statements for all IDB relations in the stratum.
     fn collect_unions(
         &mut self,
-        output_to_idb_map: &HashMap<u64, Vec<u64>>,
+        idb_to_heads_map: &HashMap<u64, Vec<u64>>,
         enter_bindings: &HashMap<u64, Ident>,
-        output_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
-        output_to_udf_map: &HashMap<u64, (String, usize, usize, usize)>,
+        idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
+        idb_to_udf_map: &HashMap<u64, (String, usize, usize, usize)>,
         profiler: &mut Option<Profiler>,
     ) -> (HashMap<u64, Ident>, Vec<TokenStream>) {
         let mut next_bindings: HashMap<u64, Ident> = HashMap::new();
         let mut union_stmts = Vec::new();
 
-        for (output_fp, idb_fps) in output_to_idb_map {
+        for (idb_fp, head_fps) in idb_to_heads_map {
             // Determine output binding name and union sources.
-            let next_ident = format_ident!("next_{}", output_fp);
-            next_bindings.insert(*output_fp, next_ident.clone());
+            let next_ident = format_ident!("next_{}", idb_fp);
+            next_bindings.insert(*idb_fp, next_ident.clone());
 
-            let mut sources: Vec<Ident> =
-                idb_fps.iter().map(|fp| format_ident!("t_{}", fp)).collect();
+            let mut sources: Vec<Ident> = head_fps
+                .iter()
+                .map(|fp| format_ident!("t_{}", fp))
+                .collect();
 
-            if let Some(entered) = enter_bindings.get(output_fp) {
+            if let Some(entered) = enter_bindings.get(idb_fp) {
                 sources.push(entered.clone());
             }
 
@@ -221,7 +231,7 @@ impl Compiler {
 
             // Profiler: union / dedup operator (optional)
             with_profiler(profiler, |profiler| {
-                let output_name = self.find_global_ident(*output_fp).to_string();
+                let output_name = self.find_global_ident(*idb_fp).to_string();
                 if sources.len() > 1 {
                     profiler.concat_operator(
                         output_name,
@@ -238,12 +248,12 @@ impl Compiler {
                 }
             });
 
-            if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(output_fp) {
-                let output_name = self.find_global_ident(*output_fp).to_string();
+            if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(idb_fp) {
+                let output_name = self.find_global_ident(*idb_fp).to_string();
                 self.imports.mark_semiring_one();
 
                 // Look up the aggregated column's data type.
-                let (key_types, val_types) = self.find_global_type(*output_fp);
+                let (key_types, val_types) = self.find_global_type(*idb_fp);
                 let agg_type = *key_types
                     .iter()
                     .chain(val_types)
@@ -325,9 +335,9 @@ impl Compiler {
             }
 
             // UDF logic (optional, mutually exclusive with aggregation)
-            if let Some((fn_name, start, end, output_arity)) = output_to_udf_map.get(output_fp) {
-                for idb_fp in idb_fps {
-                    self.verify_udf_types(*output_fp, *idb_fp, fn_name, *start);
+            if let Some((fn_name, start, end, output_arity)) = idb_to_udf_map.get(idb_fp) {
+                for head_fp in head_fps {
+                    self.verify_udf_types(*idb_fp, *head_fp, fn_name, *start);
                 }
                 self.imports.mark_udf();
                 let udf_pipeline = head_udf_map(fn_name, *start, *end, *output_arity);
@@ -349,7 +359,7 @@ impl Compiler {
         &self,
         leave_fps: &[u64],
         next: &HashMap<u64, Ident>,
-        output_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
+        idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         profiler: &mut Option<Profiler>,
     ) -> (TokenStream, TokenStream, TokenStream) {
         // Resolve target identifiers and construct pattern.
@@ -374,7 +384,7 @@ impl Compiler {
                 // For aggregated relations (min/max/sum/count/avg) in batch mode: convert to
                 // semiring diff before leave() so cross-iteration aggregates are computed by
                 // consolidation after leave.
-                if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(fp) {
+                if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp) {
                     if matches!(self.config.mode(), ExecutionMode::Batch) {
                         let (key_types, val_types) = self.find_global_type(*fp);
                         let agg_type = *key_types
@@ -447,7 +457,7 @@ impl Compiler {
         // Post-leave: for aggregated relations, consolidate + convert back to Present.
         let mut post_leave_stmts = Vec::new();
         for (fp, target) in leave_fps.iter().zip(targets.iter()) {
-            if let Some((agg_op, agg_pos, agg_arity)) = output_to_aggregation_map.get(fp) {
+            if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp) {
                 if matches!(self.config.mode(), ExecutionMode::Batch) {
                     let post_leave = match agg_op {
                         AggregationOperator::Avg => {

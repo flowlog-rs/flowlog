@@ -28,7 +28,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/*.pest') }}
       - name: 🔨 Build
         uses: actions-rs/cargo@v1
         with:
@@ -44,6 +44,7 @@ jobs:
           command: test
       - name: 🏁 Run batch smoke test
         run: |
+          bash tests/e2e/run.sh
           bash tools/check/batch.sh tools/check/config_integer.txt --compile-only --sip
           bash tools/check/batch.sh tools/check/config_str.txt --compile-only --sip --str-intern
           bash tools/check/batch.sh tools/check/config_ci.txt

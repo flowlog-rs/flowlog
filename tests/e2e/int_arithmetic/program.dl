@@ -1,0 +1,37 @@
+// Mixed-integer end-to-end test.
+// Tests different integer widths in the same relation, multi-way joins,
+// arithmetic heads, comparisons, and aggregation.
+
+// ---------- EDB ----------
+
+.decl Edge(src: int8, dst: int8)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Weight(src: int8, dst: int8, w: int16)
+.input Weight(IO="file", filename="Weight.csv", delimiter=",")
+
+.decl Score(node: int8, s: int32)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+// ---------- 3-way join + mixed-width output ----------
+// Edge(s,d) JOIN Weight(s,d,w) JOIN Score(d,sc)
+// => (s:i8, w+1:i16, sc+1:i32)
+
+.decl Joined(src: int8, ww: int16, sc1: int32)
+Joined(s, w + 1, sc + 1) :- Edge(s, d), Weight(s, d, w), Score(d, sc).
+.output Joined
+
+// ---------- 2-way join + comparison + constant ----------
+// Edge(s,d) JOIN Score(s,sc) where sc > 500
+// => (d:i8, sc*2:i32, 77:i16)
+
+.decl Filtered(dst: int8, doubled: int32, tag: int16)
+Filtered(d, sc * 2, 77) :- Edge(s, d), Score(s, sc), sc > 500.
+.output Filtered
+
+// ---------- Aggregation over 3-way join ----------
+// For each src, sum of sc across all edges from src.
+
+.decl AggJoin(src: int8, total: int32)
+AggJoin(s, sum(sc)) :- Edge(s, d), Weight(s, d, _), Score(d, sc).
+.output AggJoin

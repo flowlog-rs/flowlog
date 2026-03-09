@@ -8,7 +8,7 @@
 //! use parser::logic::{Arithmetic, ComparisonExpr, ComparisonOperator, Factor};
 //! use parser::primitive::ConstType;
 //! let lhs = Arithmetic::new(Factor::Var("age".into()), vec![]);
-//! let rhs = Arithmetic::new(Factor::Const(ConstType::Int32(18)), vec![]);
+//! let rhs = Arithmetic::new(Factor::Const(ConstType::Int(18)), vec![]);
 //! let cmp = ComparisonExpr::new(lhs, ComparisonOperator::GreaterEqualThan, rhs);
 //! assert_eq!(cmp.to_string(), "age ≥ 18");
 //! ```
@@ -179,8 +179,8 @@ mod tests {
     fn var(name: &str) -> Arithmetic {
         Arithmetic::new(Factor::Var(name.into()), vec![])
     }
-    fn iconst(v: i32) -> Arithmetic {
-        Arithmetic::new(Factor::Const(ConstType::Int32(v)), vec![])
+    fn iconst(v: i64) -> Arithmetic {
+        Arithmetic::new(Factor::Const(ConstType::Int(v)), vec![])
     }
 
     #[test]

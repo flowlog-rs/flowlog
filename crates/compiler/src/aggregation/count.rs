@@ -34,6 +34,8 @@ fn count_row_pattern(arity: usize, agg_pos: usize) -> TokenStream {
 /// `Sum{I32,I64}::new(1)` expression — every tuple contributes 1 to the count.
 fn count_one(agg_type: DataType) -> TokenStream {
     match agg_type {
+        DataType::Int8 => quote! { SumI8::new(1) },
+        DataType::Int16 => quote! { SumI16::new(1) },
         DataType::Int32 => quote! { SumI32::new(1) },
         DataType::Int64 => quote! { SumI64::new(1) },
         _ => unreachable!("Compiler error: count aggregation on non-integer type"),

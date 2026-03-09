@@ -33,6 +33,7 @@ impl Compiler {
         local_fp_to_ident: &HashMap<u64, Ident>,
         transformation: &Transformation,
         arranged_map: &mut HashMap<u64, Ident>,
+        head_to_idb_map: &HashMap<u64, u64>,
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let transformation_name = format!("{transformation}");
@@ -79,6 +80,7 @@ impl Compiler {
                     None,
                     output.fingerprint(),
                     flow,
+                    head_to_idb_map,
                 );
                 let itype = self.find_global_type(input.fingerprint()).1.clone();
 
@@ -145,6 +147,7 @@ impl Compiler {
                     None,
                     output.fingerprint(),
                     flow,
+                    head_to_idb_map,
                 );
                 let itype = self.find_global_type(input.fingerprint()).1.clone();
 
@@ -223,6 +226,7 @@ impl Compiler {
                     None,
                     output.fingerprint(),
                     flow,
+                    head_to_idb_map,
                 );
 
                 // Output value + predicates
@@ -280,6 +284,7 @@ impl Compiler {
                     None,
                     output.fingerprint(),
                     flow,
+                    head_to_idb_map,
                 );
 
                 // Output expression + predicates
@@ -377,6 +382,7 @@ impl Compiler {
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
+                    head_to_idb_map,
                 );
 
                 // Output expression + predicates
@@ -434,6 +440,7 @@ impl Compiler {
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
+                    head_to_idb_map,
                 );
 
                 // Output expression + predicates
@@ -511,6 +518,7 @@ impl Compiler {
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
+                    head_to_idb_map,
                 );
 
                 let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();
@@ -578,6 +586,7 @@ impl Compiler {
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
+                    head_to_idb_map,
                 );
 
                 let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();

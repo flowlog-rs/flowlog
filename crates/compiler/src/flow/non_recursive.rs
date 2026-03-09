@@ -37,6 +37,7 @@ impl Compiler {
     pub(crate) fn gen_non_recursive_core_flows(
         &mut self,
         transformations: &[Transformation],
+        head_to_idb_map: &HashMap<u64, u64>,
         profiler: &mut Option<Profiler>,
     ) -> (Vec<TokenStream>, HashMap<u64, Ident>) {
         let mut flows = Vec::new();
@@ -49,6 +50,7 @@ impl Compiler {
                 &global_fp_to_ident,
                 transformation,
                 &mut non_recursive_arranged_map,
+                head_to_idb_map,
                 profiler,
             ));
         }
@@ -67,13 +69,13 @@ impl Compiler {
         let mut flows = Vec::new();
         let dedup_stats = self.dedup_collection();
 
-        for (output_fp, idb_fps) in stratum.output_to_idb_map() {
+        for (idb_fp, head_fps) in stratum.idb_to_heads_map() {
             // Rule outputs
-            let output = self.find_global_ident(*output_fp);
+            let output = self.find_global_ident(*idb_fp);
             let mut outs: Vec<Ident> = Vec::new();
 
-            for idb_fp in idb_fps {
-                outs.push(format_ident!("t_{}", idb_fp));
+            for head_fp in head_fps {
+                outs.push(format_ident!("t_{}", head_fp));
             }
 
             // Build union expression from IDB sources.
@@ -86,7 +88,7 @@ impl Compiler {
 
             // If this output was already computed in a previous stratum, union the previous
             // collection with the newly produced tuples before applying distinct.
-            let mut block = if calculated_output_fps.contains(output_fp) {
+            let mut block = if calculated_output_fps.contains(idb_fp) {
                 // Profiler: concat for repeated output (optional)
                 with_profiler(profiler, |profiler| {
                     profiler.concat_operator(
@@ -118,13 +120,12 @@ impl Compiler {
             };
 
             // Aggregation logic (optional)
-            if let Some((agg_op, agg_pos, agg_arity)) =
-                stratum.output_to_aggregation_map().get(output_fp)
+            if let Some((agg_op, agg_pos, agg_arity)) = stratum.idb_to_aggregation_map().get(idb_fp)
             {
                 self.imports.mark_semiring_one();
 
                 // Look up the aggregated column's data type.
-                let (key_types, val_types) = self.find_global_type(*output_fp);
+                let (key_types, val_types) = self.find_global_type(*idb_fp);
                 let agg_type = *key_types
                     .iter()
                     .chain(val_types)
@@ -205,11 +206,10 @@ impl Compiler {
             }
 
             // UDF logic (optional, mutually exclusive with aggregation)
-            if let Some((fn_name, start, end, output_arity)) =
-                stratum.output_to_udf_map().get(output_fp)
+            if let Some((fn_name, start, end, output_arity)) = stratum.idb_to_udf_map().get(idb_fp)
             {
-                for idb_fp in idb_fps {
-                    self.verify_udf_types(*output_fp, *idb_fp, fn_name, *start);
+                for head_fp in head_fps {
+                    self.verify_udf_types(*idb_fp, *head_fp, fn_name, *start);
                 }
                 self.imports.mark_udf();
                 let udf_pipeline = head_udf_map(fn_name, *start, *end, *output_arity);

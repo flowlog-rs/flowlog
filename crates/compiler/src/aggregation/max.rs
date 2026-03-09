@@ -16,6 +16,8 @@ use super::common::{key_from_row, key_pattern, result_from_key, row_pattern};
 fn max_new(agg_pos: usize, agg_type: DataType) -> TokenStream {
     let field = format_ident!("x{}", agg_pos);
     match agg_type {
+        DataType::Int8 => quote! { MaxI8::new(#field) },
+        DataType::Int16 => quote! { MaxI16::new(#field) },
         DataType::Int32 => quote! { MaxI32::new(#field) },
         DataType::Int64 => quote! { MaxI64::new(#field) },
         _ => unreachable!("Compiler error: max aggregation on non-integer type"),

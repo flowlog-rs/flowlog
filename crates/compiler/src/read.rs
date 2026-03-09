@@ -209,6 +209,18 @@ impl Compiler {
                 if i == 0 {
                     // First field: find the first delimiter.
                     match *dt {
+                        DataType::Int8 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: i8 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<i8>().ok()?;
+                            let mut __start = __first_end + 1;
+                        },
+                        DataType::Int16 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: i16 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<i16>().ok()?;
+                            let mut __start = __first_end + 1;
+                        },
                         DataType::Int32 => quote! {
                             let mut __delims = memchr_iter(delim, &buf);
                             let __first_end = __delims.next().unwrap_or(buf.len());
@@ -248,6 +260,16 @@ impl Compiler {
                 } else {
                     // Subsequent fields.
                     match *dt {
+                        DataType::Int8 => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: i8 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i8>().ok()?;
+                            __start = __end + 1;
+                        },
+                        DataType::Int16 => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: i16 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i16>().ok()?;
+                            __start = __end + 1;
+                        },
                         DataType::Int32 => quote! {
                             let __end = __delims.next().unwrap_or(buf.len());
                             let #ident: i32 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i32>().ok()?;
@@ -345,8 +367,10 @@ impl Compiler {
                 let elems: Vec<TokenStream> = vals
                     .iter()
                     .map(|c| match c {
-                        ConstType::Int32(i) => quote! { #i },
-                        ConstType::Int64(i) => quote! { #i },
+                        ConstType::Int(i) => {
+                            let lit = proc_macro2::Literal::i64_unsuffixed(*i);
+                            quote! { #lit }
+                        }
                         ConstType::Text(s) => {
                             if self.imports.needs_string_intern() {
                                 quote! { intern(#s) }

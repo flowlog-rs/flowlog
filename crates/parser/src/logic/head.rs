@@ -9,7 +9,7 @@
 //! use parser::primitive::ConstType;
 //! let inc = Arithmetic::new(
 //!     Factor::Var("Y".into()),
-//!     vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int32(10)))],
+//!     vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(10)))],
 //! );
 //! let head = Head::new("result".into(), vec![HeadArg::Var("X".into()), HeadArg::Arith(inc)]);
 //! assert_eq!(head.to_string(), "result(X, Y + 10)");
@@ -200,7 +200,7 @@ mod tests {
     fn arith_plus_x_5() -> Arithmetic {
         Arithmetic::new(
             Factor::Var("X".into()),
-            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int32(5)))],
+            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(5)))],
         )
     }
 
@@ -259,8 +259,8 @@ mod tests {
     #[test]
     fn headarg_arith_only_constants_has_no_vars() {
         let a = HeadArg::Arith(Arithmetic::new(
-            Factor::Const(ConstType::Int32(10)),
-            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int32(5)))],
+            Factor::Const(ConstType::Int(10)),
+            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(5)))],
         ));
         assert!(a.vars().is_empty());
         assert_eq!(a.to_string(), "10 + 5");

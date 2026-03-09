@@ -13,7 +13,7 @@
 //! use std::str::FromStr;
 //!
 //! let ty = DataType::from_str("int32").unwrap();
-//! let c = ConstType::Int32(42);
+//! let c = ConstType::Int(42);
 //! assert_eq!(ty.to_string(), "int32");
 //! assert_eq!(c.to_string(), "42");
 //! ```
