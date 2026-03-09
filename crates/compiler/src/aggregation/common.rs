@@ -361,10 +361,10 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<i8>();
-                    let count = input.len() as i8;
+                    let sum = input.iter().map(|(v, _)| *v as i64).sum::<i64>();
+                    let count = input.len() as i64;
                     let avg = sum / count;
-                    updates.push((avg, SEMIRING_ONE));
+                    updates.push((avg as i8, SEMIRING_ONE));
                 }
             },
             DataType::Int16 => quote! {
@@ -372,10 +372,10 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<i16>();
-                    let count = input.len() as i16;
+                    let sum = input.iter().map(|(v, _)| *v as i64).sum::<i64>();
+                    let count = input.len() as i64;
                     let avg = sum / count;
-                    updates.push((avg, SEMIRING_ONE));
+                    updates.push((avg as i16, SEMIRING_ONE));
                 }
             },
             DataType::Int32 => quote! {
@@ -383,10 +383,10 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<i32>();
-                    let count = input.len() as i32;
+                    let sum = input.iter().map(|(v, _)| *v as i64).sum::<i64>();
+                    let count = input.len() as i64;
                     let avg = sum / count;
-                    updates.push((avg, SEMIRING_ONE));
+                    updates.push((avg as i32, SEMIRING_ONE));
                 }
             },
             DataType::Int64 => quote! {
@@ -405,10 +405,10 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<u8>();
-                    let count = input.len() as u8;
+                    let sum = input.iter().map(|(v, _)| *v as u64).sum::<u64>();
+                    let count = input.len() as u64;
                     let avg = sum / count;
-                    updates.push((avg, SEMIRING_ONE));
+                    updates.push((avg as u8, SEMIRING_ONE));
                 }
             },
             DataType::UInt16 => quote! {
@@ -416,10 +416,10 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<u16>();
-                    let count = input.len() as u16;
+                    let sum = input.iter().map(|(v, _)| *v as u64).sum::<u64>();
+                    let count = input.len() as u64;
                     let avg = sum / count;
-                    updates.push((avg, SEMIRING_ONE));
+                    updates.push((avg as u16, SEMIRING_ONE));
                 }
             },
             DataType::UInt32 => quote! {
@@ -427,10 +427,10 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     if input.is_empty() {
                         return;
                     }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<u32>();
-                    let count = input.len() as u32;
+                    let sum = input.iter().map(|(v, _)| *v as u64).sum::<u64>();
+                    let count = input.len() as u64;
                     let avg = sum / count;
-                    updates.push((avg, SEMIRING_ONE));
+                    updates.push((avg as u32, SEMIRING_ONE));
                 }
             },
             DataType::UInt64 => quote! {
