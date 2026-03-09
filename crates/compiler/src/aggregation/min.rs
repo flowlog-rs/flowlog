@@ -18,7 +18,13 @@ fn min_new(agg_pos: usize, agg_type: DataType) -> TokenStream {
         DataType::Int16 => quote! { MinI16::new(#field) },
         DataType::Int32 => quote! { MinI32::new(#field) },
         DataType::Int64 => quote! { MinI64::new(#field) },
-        _ => unreachable!("Compiler error: min aggregation on non-integer type"),
+        DataType::UInt8 => quote! { MinU8::new(#field) },
+        DataType::UInt16 => quote! { MinU16::new(#field) },
+        DataType::UInt32 => quote! { MinU32::new(#field) },
+        DataType::UInt64 => quote! { MinU64::new(#field) },
+        DataType::Float32 => quote! { MinF32::new(#field) },
+        DataType::Float64 => quote! { MinF64::new(#field) },
+        _ => unreachable!("Compiler error: min aggregation on non-numeric type"),
     }
 }
 

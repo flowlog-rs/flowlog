@@ -602,6 +602,13 @@ impl Compiler {
                     self.imports.mark_string_resolve();
                 }
 
+                // Mark ordered-float needed if this output IDB has float columns.
+                if idb.data_type().contains(&DataType::Float32)
+                    || idb.data_type().contains(&DataType::Float64)
+                {
+                    self.imports.mark_ordered_float();
+                }
+
                 if self.config.output_to_stdout() {
                     inspect_stmts.push(self.gen_print_inspector(
                         &var,

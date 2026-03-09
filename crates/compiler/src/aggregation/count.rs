@@ -38,7 +38,13 @@ fn count_one(agg_type: DataType) -> TokenStream {
         DataType::Int16 => quote! { SumI16::new(1) },
         DataType::Int32 => quote! { SumI32::new(1) },
         DataType::Int64 => quote! { SumI64::new(1) },
-        _ => unreachable!("Compiler error: count aggregation on non-integer type"),
+        DataType::UInt8 => quote! { SumU8::new(1) },
+        DataType::UInt16 => quote! { SumU16::new(1) },
+        DataType::UInt32 => quote! { SumU32::new(1) },
+        DataType::UInt64 => quote! { SumU64::new(1) },
+        DataType::Float32 => quote! { SumF32::new(OrderedFloat(1.0)) },
+        DataType::Float64 => quote! { SumF64::new(OrderedFloat(1.0)) },
+        _ => unreachable!("Compiler error: count aggregation on non-numeric type"),
     }
 }
 

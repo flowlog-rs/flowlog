@@ -162,11 +162,62 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     updates.push((count, SEMIRING_ONE));
                 }
             },
-            DataType::String => {
-                panic!("Compiler error: count aggregation result should be integer type")
-            }
-            DataType::Bool => {
-                panic!("Compiler error: Bool type not supported for aggregation")
+            DataType::UInt8 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let count = input.len() as u8;
+                    updates.push((count, SEMIRING_ONE));
+                }
+            },
+            DataType::UInt16 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let count = input.len() as u16;
+                    updates.push((count, SEMIRING_ONE));
+                }
+            },
+            DataType::UInt32 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let count = input.len() as u32;
+                    updates.push((count, SEMIRING_ONE));
+                }
+            },
+            DataType::UInt64 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let count = input.len() as u64;
+                    updates.push((count, SEMIRING_ONE));
+                }
+            },
+            DataType::Float32 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let count = OrderedFloat(input.len() as f32);
+                    updates.push((count, SEMIRING_ONE));
+                }
+            },
+            DataType::Float64 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let count = OrderedFloat(input.len() as f64);
+                    updates.push((count, SEMIRING_ONE));
+                }
+            },
+            _ => {
+                panic!("Compiler error: count aggregation result should be numeric type")
             }
         },
         AggregationOperator::Sum => match agg_type {
@@ -206,36 +257,102 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     updates.push((sum, SEMIRING_ONE));
                 }
             },
-            _ => panic!("Compiler error: sum aggregation result should be integer type"),
+            DataType::UInt8 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum = input.iter().map(|(v, _)| *v).sum::<u8>();
+                    updates.push((sum, SEMIRING_ONE));
+                }
+            },
+            DataType::UInt16 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum = input.iter().map(|(v, _)| *v).sum::<u16>();
+                    updates.push((sum, SEMIRING_ONE));
+                }
+            },
+            DataType::UInt32 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum = input.iter().map(|(v, _)| *v).sum::<u32>();
+                    updates.push((sum, SEMIRING_ONE));
+                }
+            },
+            DataType::UInt64 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum = input.iter().map(|(v, _)| *v).sum::<u64>();
+                    updates.push((sum, SEMIRING_ONE));
+                }
+            },
+            DataType::Float32 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum: OrderedFloat<f32> = input.iter().map(|(v, _)| *v).fold(OrderedFloat(0.0f32), |a, b| a + b);
+                    updates.push((sum, SEMIRING_ONE));
+                }
+            },
+            DataType::Float64 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum: OrderedFloat<f64> = input.iter().map(|(v, _)| *v).fold(OrderedFloat(0.0f64), |a, b| a + b);
+                    updates.push((sum, SEMIRING_ONE));
+                }
+            },
+            _ => panic!("Compiler error: sum aggregation result should be numeric type"),
         },
         AggregationOperator::Min => match agg_type {
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => quote! {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64 => quote! {
                 |_, input, _output, updates| {
                     if let Some(min) = input.iter().map(|(v, _)| *v).min() {
                         updates.push((*min, SEMIRING_ONE));
                     }
                 }
             },
-            DataType::String => {
-                panic!("Compiler error: min aggregation is not supported on string type")
-            }
-            DataType::Bool => {
-                panic!("Compiler error: Bool type not supported for aggregation")
+            _ => {
+                panic!("Compiler error: min aggregation is not supported on non-numeric type")
             }
         },
         AggregationOperator::Max => match agg_type {
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => quote! {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64 => quote! {
                 |_, input, _output, updates| {
                     if let Some(max) = input.iter().map(|(v, _)| *v).max() {
                         updates.push((*max, SEMIRING_ONE));
                     }
                 }
             },
-            DataType::String => {
-                panic!("Compiler error: max aggregation is not supported on string type")
-            }
-            DataType::Bool => {
-                panic!("Compiler error: Bool type not supported for aggregation")
+            _ => {
+                panic!("Compiler error: max aggregation is not supported on non-numeric type")
             }
         },
         AggregationOperator::Avg => match agg_type {
@@ -283,7 +400,73 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
                     updates.push((avg, SEMIRING_ONE));
                 }
             },
-            _ => panic!("Compiler error: avg aggregation result should be integer type"),
+            DataType::UInt8 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum = input.iter().map(|(v, _)| *v as u32).sum::<u32>();
+                    let count = input.len() as u32;
+                    let avg = (sum / count) as u8;
+                    updates.push((avg, SEMIRING_ONE));
+                }
+            },
+            DataType::UInt16 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum = input.iter().map(|(v, _)| *v as u32).sum::<u32>();
+                    let count = input.len() as u32;
+                    let avg = (sum / count) as u16;
+                    updates.push((avg, SEMIRING_ONE));
+                }
+            },
+            DataType::UInt32 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum = input.iter().map(|(v, _)| *v).sum::<u32>();
+                    let count = input.len() as u32;
+                    let avg = sum / count;
+                    updates.push((avg, SEMIRING_ONE));
+                }
+            },
+            DataType::UInt64 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum = input.iter().map(|(v, _)| *v).sum::<u64>();
+                    let count = input.len() as u64;
+                    let avg = sum / count;
+                    updates.push((avg, SEMIRING_ONE));
+                }
+            },
+            DataType::Float32 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum: f32 = input.iter().map(|(v, _)| v.into_inner()).sum::<f32>();
+                    let count = input.len() as f32;
+                    let avg = OrderedFloat(sum / count);
+                    updates.push((avg, SEMIRING_ONE));
+                }
+            },
+            DataType::Float64 => quote! {
+                |_, input, _output, updates| {
+                    if input.is_empty() {
+                        return;
+                    }
+                    let sum: f64 = input.iter().map(|(v, _)| v.into_inner()).sum::<f64>();
+                    let count = input.len() as f64;
+                    let avg = OrderedFloat(sum / count);
+                    updates.push((avg, SEMIRING_ONE));
+                }
+            },
+            _ => panic!("Compiler error: avg aggregation result should be numeric type"),
         },
     }
 }

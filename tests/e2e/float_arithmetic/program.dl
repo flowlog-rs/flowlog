@@ -1,0 +1,45 @@
+// Float arithmetic end-to-end test.
+// All join keys are float types (f32 or f64) to test
+// float equality / hashing via OrderedFloat.
+// Exercises joins, arithmetic, comparisons, float constants, aggregation.
+
+// ---------- EDB ----------
+
+.decl Edge(src: f32, dst: f32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Weight(src: f32, dst: f32, w: f32)
+.input Weight(IO="file", filename="Weight.csv", delimiter=",")
+
+.decl Score(node: f32, s: f64)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+// ---------- 3-way join on f32 keys + float arithmetic ----------
+
+.decl Joined(src: f32, ww: f32, sc1: f64)
+Joined(s, w + 1.5, sc + 0.5) :- Edge(s, d), Weight(s, d, w), Score(d, sc).
+.output Joined
+
+// ---------- 2-way join on f32 keys + float comparison ----------
+
+.decl Filtered(dst: f32, doubled: f64)
+Filtered(d, sc * 2.0) :- Edge(s, d), Score(s, sc), sc > 5.0.
+.output Filtered
+
+// ---------- Aggregation: sum of f64 ----------
+
+.decl AggSum(src: f32, total: f64)
+AggSum(s, sum(sc)) :- Edge(s, d), Weight(s, d, _), Score(d, sc).
+.output AggSum
+
+// ---------- Aggregation: min of f32 ----------
+
+.decl MinWeight(src: f32, mw: f32)
+MinWeight(s, min(w)) :- Edge(s, d), Weight(s, d, w).
+.output MinWeight
+
+// ---------- Aggregation: max of f64 ----------
+
+.decl MaxScore(src: f32, ms: f64)
+MaxScore(s, max(sc)) :- Edge(s, d), Score(d, sc).
+.output MaxScore

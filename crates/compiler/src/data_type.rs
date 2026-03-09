@@ -159,6 +159,7 @@ impl Compiler {
                 }
 
                 FactorArgument::Const(ConstType::Int(_)) => None,
+                FactorArgument::Const(ConstType::Float(_)) => None,
                 FactorArgument::Const(ConstType::Text(_)) => Some(DataType::String),
                 FactorArgument::Const(ConstType::Bool(_)) => Some(DataType::Bool),
             }
@@ -194,9 +195,11 @@ impl Compiler {
                         "Compiler error: arithmetic operator {:?} is not allowed on string type, use 'cat'",
                         op
                     ),
-                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => assert!(
+                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+                    | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+                    | DataType::Float32 | DataType::Float64 => assert!(
                         !matches!(op, ArithmeticOperator::Cat),
-                        "Compiler error: 'cat' operator is not allowed on integer type {:?}",
+                        "Compiler error: 'cat' operator is not allowed on numeric type {:?}",
                         dt
                     ),
                     DataType::Bool => panic!(
@@ -285,6 +288,12 @@ pub(super) fn type_tokens(input_types: &[DataType], string_intern: bool) -> Toke
             DataType::Int16 => quote! { i16 },
             DataType::Int32 => quote! { i32 },
             DataType::Int64 => quote! { i64 },
+            DataType::UInt8 => quote! { u8 },
+            DataType::UInt16 => quote! { u16 },
+            DataType::UInt32 => quote! { u32 },
+            DataType::UInt64 => quote! { u64 },
+            DataType::Float32 => quote! { OrderedFloat<f32> },
+            DataType::Float64 => quote! { OrderedFloat<f64> },
             DataType::String => {
                 if string_intern {
                     quote! { Spur }

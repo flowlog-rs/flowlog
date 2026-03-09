@@ -26,21 +26,37 @@ const PROMPT_RS_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/templates/prompt_rs.tpl"
 ));
-const MIN_SEMIRING_RS_TMPL: &str = include_str!(concat!(
+const MIN_INT_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/templates/min_semiring_rs.tpl"
+    "/templates/semiring/min_int.tpl"
 ));
-const MAX_SEMIRING_RS_TMPL: &str = include_str!(concat!(
+const MIN_FLOAT_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/templates/max_semiring_rs.tpl"
+    "/templates/semiring/min_float.tpl"
 ));
-const SUM_SEMIRING_RS_TMPL: &str = include_str!(concat!(
+const MAX_INT_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/templates/sum_semiring_rs.tpl"
+    "/templates/semiring/max_int.tpl"
 ));
-const AVG_SEMIRING_RS_TMPL: &str = include_str!(concat!(
+const MAX_FLOAT_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/templates/avg_semiring_rs.tpl"
+    "/templates/semiring/max_float.tpl"
+));
+const SUM_INT_TMPL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/templates/semiring/sum_int.tpl"
+));
+const SUM_FLOAT_TMPL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/templates/semiring/sum_float.tpl"
+));
+const AVG_INT_TMPL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/templates/semiring/avg_int.tpl"
+));
+const AVG_FLOAT_TMPL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/templates/semiring/avg_float.tpl"
 ));
 
 // =========================================================================
@@ -136,6 +152,15 @@ impl Compiler {
                 lasso_features.push("serialize");
                 lasso_tbl.insert("features", toml_edit::Value::Array(lasso_features));
                 deps["lasso"] = toml_edit::value(lasso_tbl);
+            }
+
+            if self.imports.needs_ordered_float() {
+                let mut of_tbl = toml_edit::InlineTable::new();
+                of_tbl.insert("version", "5".into());
+                let mut of_features = Array::new();
+                of_features.push("serde");
+                of_tbl.insert("features", toml_edit::Value::Array(of_features));
+                deps["ordered-float"] = toml_edit::value(of_tbl);
             }
 
             if self.imports.needs_semiring() || self.imports.needs_string_intern() {
@@ -280,89 +305,130 @@ impl Compiler {
         write_file(&src_dir.join("udf.rs"), content.trim_start())
     }
 
-    /// Write `src/XX_semiring.rs` into the
-    /// generated project directory, depending on which aggregations are used.
+    /// Write semiring modules into `src/semiring/` of the generated project,
+    /// splitting integer and float types into separate files.
     fn write_src_semiring(&self) -> io::Result<()> {
-        let src_dir = self.config.executable_path().join("src");
-        ensure_dir(&src_dir)?;
+        let semiring_dir = self.config.executable_path().join("src").join("semiring");
+        ensure_dir(&semiring_dir)?;
 
         let s = self.imports.semirings();
-        for (tmpl, file, mac, pfx, needs_i8, needs_i16, needs_i32, needs_i64, bound) in [
+
+        // Int/uint type table: (suffix, rust_type)
+        const INT_TYPES: [(&str, &str); 8] = [
+            ("I8", "i8"),
+            ("I16", "i16"),
+            ("I32", "i32"),
+            ("I64", "i64"),
+            ("U8", "u8"),
+            ("U16", "u16"),
+            ("U32", "u32"),
+            ("U64", "u64"),
+        ];
+        // Float type table: (suffix, inner_type)
+        const FLOAT_TYPES: [(&str, &str); 2] = [("F32", "f32"), ("F64", "f64")];
+
+        let mut modules: Vec<String> = Vec::new();
+
+        // (int_tmpl, float_tmpl, kind, macro_name, type_prefix, bound_keyword,
+        //  int_needs[8], float_needs[2])
+        for (int_tmpl, float_tmpl, kind, mac, pfx, bound_kw, int_needs, float_needs) in [
             (
-                MIN_SEMIRING_RS_TMPL,
-                "min_semiring.rs",
+                MIN_INT_TMPL,
+                MIN_FLOAT_TMPL,
+                "min",
                 "define_min",
                 "Min",
-                s.min_i8,
-                s.min_i16,
-                s.min_i32,
-                s.min_i64,
                 Some("MAX"),
+                [
+                    s.min_i8, s.min_i16, s.min_i32, s.min_i64, s.min_u8, s.min_u16, s.min_u32,
+                    s.min_u64,
+                ],
+                [s.min_f32, s.min_f64],
             ),
             (
-                MAX_SEMIRING_RS_TMPL,
-                "max_semiring.rs",
+                MAX_INT_TMPL,
+                MAX_FLOAT_TMPL,
+                "max",
                 "define_max",
                 "Max",
-                s.max_i8,
-                s.max_i16,
-                s.max_i32,
-                s.max_i64,
                 Some("MIN"),
+                [
+                    s.max_i8, s.max_i16, s.max_i32, s.max_i64, s.max_u8, s.max_u16, s.max_u32,
+                    s.max_u64,
+                ],
+                [s.max_f32, s.max_f64],
             ),
             (
-                SUM_SEMIRING_RS_TMPL,
-                "sum_semiring.rs",
+                SUM_INT_TMPL,
+                SUM_FLOAT_TMPL,
+                "sum",
                 "define_sum",
                 "Sum",
-                s.sum_i8,
-                s.sum_i16,
-                s.sum_i32,
-                s.sum_i64,
                 None,
+                [
+                    s.sum_i8, s.sum_i16, s.sum_i32, s.sum_i64, s.sum_u8, s.sum_u16, s.sum_u32,
+                    s.sum_u64,
+                ],
+                [s.sum_f32, s.sum_f64],
             ),
             (
-                AVG_SEMIRING_RS_TMPL,
-                "avg_semiring.rs",
+                AVG_INT_TMPL,
+                AVG_FLOAT_TMPL,
+                "avg",
                 "define_avg",
                 "Avg",
-                s.avg_i8,
-                s.avg_i16,
-                s.avg_i32,
-                s.avg_i64,
                 None,
+                [
+                    s.avg_i8, s.avg_i16, s.avg_i32, s.avg_i64, s.avg_u8, s.avg_u16, s.avg_u32,
+                    s.avg_u64,
+                ],
+                [s.avg_f32, s.avg_f64],
             ),
         ] {
-            if !needs_i8 && !needs_i16 && !needs_i32 && !needs_i64 {
-                continue;
-            }
-            let mut rendered = tmpl.replace("\r\n", "\n");
-            if needs_i8 {
-                match bound {
-                    Some(b) => rendered.push_str(&format!("{mac}!({pfx}I8, i8, i8::{b});\n")),
-                    None => rendered.push_str(&format!("{mac}!({pfx}I8, i8);\n")),
+            // Int/uint file
+            if int_needs.iter().any(|n| *n) {
+                let mut rendered = int_tmpl.replace("\r\n", "\n");
+                for (i, (suffix, ty)) in INT_TYPES.iter().enumerate() {
+                    if int_needs[i] {
+                        match bound_kw {
+                            Some(bk) => rendered
+                                .push_str(&format!("\n{mac}!({pfx}{suffix}, {ty}, {ty}::{bk});\n")),
+                            None => rendered.push_str(&format!("\n{mac}!({pfx}{suffix}, {ty});\n")),
+                        }
+                    }
                 }
+                let file_name = format!("{kind}_int.rs");
+                write_file(&semiring_dir.join(&file_name), rendered.trim_start())?;
+                modules.push(format!("{kind}_int"));
             }
-            if needs_i16 {
-                match bound {
-                    Some(b) => rendered.push_str(&format!("{mac}!({pfx}I16, i16, i16::{b});\n")),
-                    None => rendered.push_str(&format!("{mac}!({pfx}I16, i16);\n")),
+
+            // Float file
+            if float_needs.iter().any(|n| *n) {
+                let mut rendered = float_tmpl.replace("\r\n", "\n");
+                for (i, (suffix, inner)) in FLOAT_TYPES.iter().enumerate() {
+                    if float_needs[i] {
+                        match bound_kw {
+                            Some(bk) => rendered.push_str(&format!(
+                                "\n{mac}!({pfx}{suffix}, OrderedFloat<{inner}>, OrderedFloat({inner}::{bk}));\n"
+                            )),
+                            None => rendered.push_str(&format!(
+                                "\n{mac}!({pfx}{suffix}, {inner});\n"
+                            )),
+                        }
+                    }
                 }
+                let file_name = format!("{kind}_float.rs");
+                write_file(&semiring_dir.join(&file_name), rendered.trim_start())?;
+                modules.push(format!("{kind}_float"));
             }
-            if needs_i32 {
-                match bound {
-                    Some(b) => rendered.push_str(&format!("{mac}!({pfx}I32, i32, i32::{b});\n")),
-                    None => rendered.push_str(&format!("{mac}!({pfx}I32, i32);\n")),
-                }
-            }
-            if needs_i64 {
-                match bound {
-                    Some(b) => rendered.push_str(&format!("{mac}!({pfx}I64, i64, i64::{b});\n")),
-                    None => rendered.push_str(&format!("{mac}!({pfx}I64, i64);\n")),
-                }
-            }
-            write_file(&src_dir.join(file), rendered.trim_start())?;
         }
+
+        // Write mod.rs declaring all generated submodules.
+        let mut mod_rs = String::new();
+        for m in &modules {
+            mod_rs.push_str(&format!("pub mod {m};\n"));
+        }
+        write_file(&semiring_dir.join("mod.rs"), &mod_rs)?;
 
         Ok(())
     }

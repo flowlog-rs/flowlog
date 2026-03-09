@@ -1,0 +1,47 @@
+// Float type-crossing test.
+// Exercises BOTH f32 and f64 as join keys,
+// IDB-to-EDB join across strata, multi-rule IDBs,
+// and float constants in typed positions.
+// All values are binary-exact to avoid display ambiguity.
+
+// ---------- EDB ----------
+
+.decl A(x: f32, y: f32)
+.input A(IO="file", filename="A.csv", delimiter=",")
+
+.decl B(x: f32, z: f64)
+.input B(IO="file", filename="B.csv", delimiter=",")
+
+.decl C(z: f64, w: f32)
+.input C(IO="file", filename="C.csv", delimiter=",")
+
+// ---------- Rule 1: join on f32 key ----------
+
+.decl AB(x: f32, y: f32, z: f64)
+AB(x, y, z) :- A(x, y), B(x, z).
+.output AB
+
+// ---------- Rule 2: join on f64 key ----------
+
+.decl BC(x: f32, z: f64, w: f32)
+BC(x, z, w) :- B(x, z), C(z, w).
+.output BC
+
+// ---------- Rule 3: IDB-to-EDB join on f64 key across strata ----------
+
+.decl ABC(x: f32, y: f32, z: f64, w: f32)
+ABC(x, y, z, w) :- AB(x, y, z), C(z, w).
+.output ABC
+
+// ---------- Rule 4: Two rules feeding same IDB ----------
+
+.decl Multi(x: f32, v: f32)
+Multi(x, y) :- A(x, y).
+Multi(x, w) :- BC(x, _, w).
+.output Multi
+
+// ---------- Rule 5: Float constants in typed positions ----------
+
+.decl WithConst(x: f32, tag: f32, big: f64)
+WithConst(x, 1.25, 2.75) :- A(x, _).
+.output WithConst

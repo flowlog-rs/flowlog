@@ -31,28 +31,53 @@ attribute_name = { identifier }
 relation_name = { identifier }
 
 // Data type specification
-data_type = { integer8_type | integer16_type | integer32_type | integer64_type | string_type | bool_type }
+data_type = { integer8_type | integer16_type | integer32_type | integer64_type
+            | uinteger8_type | uinteger16_type | uinteger32_type | uinteger64_type
+            | float32_type | float64_type
+            | string_type | bool_type }
 
-// 8-bit integer data type
+// 8-bit signed integer data type
 integer8_type = { "int8" }
 
-// 16-bit integer data type
+// 16-bit signed integer data type
 integer16_type = { "int16" }
 
-// 32-bit integer data type
-integer32_type = { "int32" }
+// 32-bit signed integer data type ("number" is an alias for "int32")
+integer32_type = { "int32" | "number" }
 
-// 64-bit integer data type
+// 64-bit signed integer data type
 integer64_type = { "int64" }
 
-// Text data type for strings
-string_type = { "string" }
+// 8-bit unsigned integer data type
+uinteger8_type = { "uint8" }
+
+// 16-bit unsigned integer data type
+uinteger16_type = { "uint16" }
+
+// 32-bit unsigned integer data type ("unsigned" is an alias for "uint32")
+uinteger32_type = { "uint32" | "unsigned" }
+
+// 64-bit unsigned integer data type
+uinteger64_type = { "uint64" }
+
+// 32-bit floating point data type ("float" is an alias for "f32")
+float32_type = { "float" | "f32" }
+
+// 64-bit floating point data type
+float64_type = { "f64" }
+
+// Text data type for strings ("symbol" is an alias for "string")
+string_type = { "string" | "symbol" }
 
 // Boolean data type
 bool_type = { "bool" }
 
 // Constant values
-constant = { boolean | integer | string } 
+constant = { boolean | float | integer | string } 
+
+// Float with optional sign, must contain a decimal point
+// Examples: 1.5, -3.14, +0.0
+float = @{ ("+" | "-")? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 
 // Integer with optional sign
 // Examples: 42, -17, +100

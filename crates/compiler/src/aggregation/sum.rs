@@ -21,7 +21,13 @@ fn sum_new(agg_pos: usize, agg_type: DataType) -> TokenStream {
         DataType::Int16 => quote! { SumI16::new(#field) },
         DataType::Int32 => quote! { SumI32::new(#field) },
         DataType::Int64 => quote! { SumI64::new(#field) },
-        _ => unreachable!("Compiler error: sum aggregation on non-integer type"),
+        DataType::UInt8 => quote! { SumU8::new(#field) },
+        DataType::UInt16 => quote! { SumU16::new(#field) },
+        DataType::UInt32 => quote! { SumU32::new(#field) },
+        DataType::UInt64 => quote! { SumU64::new(#field) },
+        DataType::Float32 => quote! { SumF32::new(#field) },
+        DataType::Float64 => quote! { SumF64::new(#field) },
+        _ => unreachable!("Compiler error: sum aggregation on non-numeric type"),
     }
 }
 
