@@ -1,8 +1,18 @@
-// Unsigned integer type-crossing test.
-// Exercises uint8/uint16/uint32/uint64 across joins, IDB reuse across strata,
-// multiple rules feeding one IDB, constants, and the "unsigned" alias.
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : uint_type_crossing
+// Feature : unsigned integer type boundaries across widths (u8 / u16 / u32)
+// Covers  : join keys shared across different-width unsigned relations,
+//           IDB-to-EDB join spanning strata, multiple rules feeding one IDB
+//           (type unification), literal constants in u16/u32 columns,
+//           "unsigned" type alias (u32 shorthand)
+//
+// Data layout
+//   A  (x:u8,  y:u8)      — x ∈ {1,2,3}
+//   B  (x:u8,  z:u16)     — x ∈ {1,2}
+//   C  (x:u8,  w:unsigned) — x ∈ {1,3};  "unsigned" is an alias for uint32
+// ════════════════════════════════════════════════════════════════════════════
 
-// ---------- EDB ----------
+// ── EDB ──────────────────────────────────────────────────────────────────────
 
 .decl A(x: uint8, y: uint8)
 .input A(IO="file", filename="A.csv", delimiter=",")
@@ -13,32 +23,54 @@
 .decl C(x: uint8, w: unsigned)
 .input C(IO="file", filename="C.csv", delimiter=",")
 
-// ---------- Rule 1: u8 join key, mixed-width output (u8 × u8 × u16) ----------
+// ── TEST AB: 2-way join on u8 key producing (u8 × u8 × u16) output ───────────
+// Verifies : u8 column works as a join key between relations with different
+//            unsigned widths; x=3 (only in A) produces no output.
+// Sample   : A(1,10), B(1,100) → AB(1, 10, 100)
+//            A(3,30)           → no output  [x=3 absent from B]
 
 .decl AB(x: uint8, y: uint8, z: uint16)
 AB(x, y, z) :- A(x, y), B(x, z).
 .output AB
 
-// ---------- Rule 2: u8 join key, crossing u8 and u32 ----------
+// ── TEST AC: 2-way join on u8 key crossing u8 and uint32 ("unsigned") ────────
+// Verifies : u8 key joins correctly with a u32 column declared using the
+//            "unsigned" alias; x=2 (only in A) produces no output.
+// Sample   : A(1,10), C(1,1000) → AC(1, 10, 1000)
+//            A(2,20)            → no output  [x=2 absent from C]
 
 .decl AC(x: uint8, y: uint8, w: unsigned)
 AC(x, y, w) :- A(x, y), C(x, w).
 .output AC
 
-// ---------- Rule 3: IDB-to-IDB join across strata (AB × C) ----------
+// ── TEST ABC: IDB-to-EDB join — AB (IDB, stratum 1) joined with C (EDB) ───────
+// Verifies : type metadata of IDB relation AB (u8, u8, u16) is preserved
+//            across strata and correctly matched against C's u32 column;
+//            only x values present in both AB and C appear in output.
+// Sample   : AB(1,10,100), C(1,1000) → ABC(1, 10, 100, 1000)
+//            AB(2,20,200)            → no output  [x=2 absent from C]
 
 .decl ABC(x: uint8, y: uint8, z: uint16, w: uint32)
 ABC(x, y, z, w) :- AB(x, y, z), C(x, w).
 .output ABC
 
-// ---------- Rule 4: Two rules feeding same IDB ----------
+// ── TEST Multi: two rules feeding the same IDB must agree on output types ──────
+// Verifies : both rules produce (u8, u32); the union is deduplicated (AC
+//            and C yield the same pairs for x ∈ {1,3}).
+// Sample   : C(1,1000) → Multi(1,1000)  via rule 1
+//            AC(1,_,1000) → Multi(1,1000) via rule 2  [duplicate, kept once]
+//            C(3,3000) → Multi(3,3000)   via rule 1 only
 
 .decl Multi(x: uint8, v: uint32)
 Multi(x, w) :- C(x, w).
 Multi(x, w) :- AC(x, _, w).
 .output Multi
 
-// ---------- Rule 5: Constants in different-width positions ----------
+// ── TEST WithConst: literal constants assigned to u16 and u32 columns ─────────
+// Verifies : integer literal 42 fits in a u16 column and 999 in a u32 column;
+//            u8 key x passes through unchanged for all three rows of A.
+// Sample   : A(1,_) → WithConst(1, 42, 999)
+//            A(3,_) → WithConst(3, 42, 999)
 
 .decl WithConst(x: uint8, tag: uint16, big: uint32)
 WithConst(x, 42, 999) :- A(x, _).
