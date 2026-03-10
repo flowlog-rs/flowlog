@@ -1,8 +1,18 @@
-// Type-crossing test.
-// Exercises type boundaries: join keys across widths, IDB reuse across strata,
-// multiple rules feeding one IDB, and constants in narrow columns.
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : int_type_crossing
+// Feature : signed integer type boundaries across widths (i8 / i16 / i32)
+// Covers  : join keys shared across different-width relations, IDB-to-EDB
+//           join spanning strata, multiple rules feeding one IDB (type
+//           unification), literal constants in narrow and wide columns,
+//           negative values throughout
+//
+// Data layout
+//   A  (x:i8, y:i8)   — x ∈ {1,2,3,4}; y=−5 for x=4 tests negatives
+//   B  (x:i8, z:i16)  — x ∈ {1,2,4};   z=−50 for x=4
+//   C  (x:i8, w:i32)  — x ∈ {1,3,4};   w=−400 for x=4
+// ════════════════════════════════════════════════════════════════════════════
 
-// ---------- EDB ----------
+// ── EDB ──────────────────────────────────────────────────────────────────────
 
 .decl A(x: int8, y: int8)
 .input A(IO="file", filename="A.csv", delimiter=",")
@@ -13,34 +23,59 @@
 .decl C(x: int8, w: int32)
 .input C(IO="file", filename="C.csv", delimiter=",")
 
-// ---------- Rule 1: i8 join key, mixed-width output (i8 × i8 × i16) ----------
+// ── TEST AB: 2-way join on i8 key producing (i8 × i8 × i16) output ───────────
+// Verifies : an i8 column can serve as a join key between relations whose
+//            other columns have different widths; values that appear only in
+//            A (x=3) or only in B are excluded.
+// Sample   : A(1,10), B(1,100) → AB(1, 10, 100)
+//            A(4,−5), B(4,−50) → AB(4, −5, −50)   [negative values preserved]
+//            A(3,30)           → no output          [x=3 absent from B]
 
 .decl AB(x: int8, y: int8, z: int16)
 AB(x, y, z) :- A(x, y), B(x, z).
 .output AB
 
-// ---------- Rule 2: i8 join key, crossing i8 and i32 ----------
+// ── TEST AC: 2-way join on i8 key crossing i8 and i32 widths ─────────────────
+// Verifies : i8 join key works when the second relation carries i32 values;
+//            values that appear only in A (x=2) or only in C are excluded.
+// Sample   : A(1,10), C(1,1000) → AC(1, 10, 1000)
+//            A(4,−5), C(4,−400) → AC(4, −5, −400)
+//            A(2,20)            → no output          [x=2 absent from C]
 
 .decl AC(x: int8, y: int8, w: int32)
 AC(x, y, w) :- A(x, y), C(x, w).
 .output AC
 
-// ---------- Rule 3: IDB-to-IDB join across strata (AB × C) ----------
-// AB's types (i8, i8, i16) must be correctly carried into this stratum.
+// ── TEST ABC: IDB-to-EDB join — AB (IDB, stratum 1) joined with C (EDB) ───────
+// Verifies : type metadata of IDB relation AB (i8, i8, i16) is preserved
+//            and correctly used when AB is joined with an EDB relation C in a
+//            later stratum; only x values present in both AB and C appear.
+// Sample   : AB(1,10,100), C(1,1000) → ABC(1, 10, 100, 1000)
+//            AB(2,20,200)            → no output  [x=2 absent from C]
+//            AB(4,−5,−50), C(4,−400)→ ABC(4, −5, −50, −400)
 
 .decl ABC(x: int8, y: int8, z: int16, w: int32)
 ABC(x, y, z, w) :- AB(x, y, z), C(x, w).
 .output ABC
 
-// ---------- Rule 4: Two rules feeding same IDB ----------
-// Both must produce (i8, i32) — tests that type checking across rules agrees.
+// ── TEST Multi: two rules feeding the same IDB must agree on output types ──────
+// Verifies : when two distinct rules derive tuples for the same IDB relation,
+//            the compiler enforces that both rules produce (i8, i32); the
+//            union is deduplicated (both rules yield the same set here).
+// Sample   : C(1,1000) → Multi(1,1000)  via rule 1
+//            AC(1,_,1000) → Multi(1,1000) via rule 2  [duplicate, kept once]
+//            C(3,3000) → Multi(3,3000)   via rule 1 only
 
 .decl Multi(x: int8, v: int32)
 Multi(x, w) :- C(x, w).
 Multi(x, w) :- AC(x, _, w).
 .output Multi
 
-// ---------- Rule 5: Constants in different-width positions ----------
+// ── TEST WithConst: literal constants assigned to narrow and wide columns ──────
+// Verifies : integer literal 42 is accepted in an i16 column and 999 in an
+//            i32 column; the i8 join key x passes through unchanged.
+// Sample   : A(1,_) → WithConst(1, 42, 999)
+//            A(4,_) → WithConst(4, 42, 999)   [all four rows of A covered]
 
 .decl WithConst(x: int8, tag: int16, big: int32)
 WithConst(x, 42, 999) :- A(x, _).

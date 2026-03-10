@@ -1,11 +1,4 @@
-/// Min-semiring for aggregating minimum values via differential dataflow's
-/// built-in consolidation and `threshold_semigroup` operator.
-///
-/// Instead of using `reduce_core` (which maintains full value traces per key),
-/// this encodes the aggregated value into the *diff* position of the DD triple
-/// `(data, time, diff)`.  Consolidation then computes min for free via
-/// `plus_equals`, and `threshold_semigroup` emits updates only when the
-/// running minimum decreases.
+/// Integer min-semiring for aggregating minimum values.
 
 use differential_dataflow::difference::{IsZero, Monoid, Semigroup};
 use differential_dataflow::difference::Multiply;

@@ -1,0 +1,56 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : wide_types
+// Feature : 64-bit integer types (int64 / uint64)
+// Covers  : int64 join key, int64 × uint64 type crossing, head arithmetic
+//           on values > 2³¹ (confirming i32 would overflow), sum aggregation
+//           over multiple int64 contributions per group
+//
+// Data layout
+//   A  (x:i64, y:i64)   — x=1 has two rows so AggSum is non-trivial;
+//                          y values exceed INT32_MAX (2 147 483 647)
+//   B  (x:i64, z:u64)   — z values exceed INT32_MAX
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl A(x: int64, y: int64)
+.input A(IO="file", filename="A.csv", delimiter=",")
+
+.decl B(x: int64, z: uint64)
+.input B(IO="file", filename="B.csv", delimiter=",")
+
+// ── TEST Joined: join on i64 key + arithmetic with >2³¹ values ───────────────
+// Verifies : int64 works as a join key; head expressions y+1 (i64) and z+2
+//            (u64) are computed correctly on values that would overflow i32.
+// Sample   : A(1, y=3_000_000_000), B(1, z=6_000_000_000)
+//            → Joined(1, 3_000_000_001, 6_000_000_002)
+//            A(1, y=4_000_000_000), B(1, z=6_000_000_000)
+//            → Joined(1, 4_000_000_001, 6_000_000_002)
+
+.decl Joined(x: int64, y: int64, z: uint64)
+Joined(x, y + 1, z + 2) :- A(x, y), B(x, z).
+.output Joined
+
+// ── TEST Crossed: type crossing — i64 and u64 columns in the same output ──────
+// Verifies : a single output relation can hold both i64 (signed) and u64
+//            (unsigned) 64-bit columns without type errors; tuples are the
+//            Cartesian product filtered by the shared i64 join key x.
+// Sample   : A(1, 3_000_000_000), B(1, 6_000_000_000)
+//            → Crossed(1, 3_000_000_000, 6_000_000_000)
+//            A(1, 4_000_000_000), B(1, 6_000_000_000)
+//            → Crossed(1, 4_000_000_000, 6_000_000_000)
+
+.decl Crossed(x: int64, y: int64, z: uint64)
+Crossed(x, y, z) :- A(x, y), B(x, z).
+.output Crossed
+
+// ── TEST AggSum: sum of int64 values over multiple contributions per group ─────
+// Verifies : sum() correctly accumulates i64 values; x=1 has two rows in A
+//            so the result must be their sum, not just one of them.
+//            The sum (7 000 000 000) also exceeds INT32_MAX.
+// Sample   : x=1 → sum(3_000_000_000, 4_000_000_000) = 7_000_000_000
+//            x=2 → sum(5_000_000_000)                 = 5_000_000_000
+
+.decl AggSum(x: int64, total: int64)
+AggSum(x, sum(y)) :- A(x, y).
+.output AggSum

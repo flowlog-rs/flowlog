@@ -654,6 +654,10 @@ fn const_to_token(constant: &ConstType, string_intern: bool) -> TokenStream {
             let lit = proc_macro2::Literal::i64_unsuffixed(*n);
             quote! { #lit }
         }
+        ConstType::Float(v) => {
+            let lit = proc_macro2::Literal::f64_unsuffixed(v.into_inner());
+            quote! { OrderedFloat(#lit) }
+        }
         ConstType::Text(s) => {
             if string_intern {
                 quote! { intern(#s) }

@@ -20,7 +20,13 @@ fn max_new(agg_pos: usize, agg_type: DataType) -> TokenStream {
         DataType::Int16 => quote! { MaxI16::new(#field) },
         DataType::Int32 => quote! { MaxI32::new(#field) },
         DataType::Int64 => quote! { MaxI64::new(#field) },
-        _ => unreachable!("Compiler error: max aggregation on non-integer type"),
+        DataType::UInt8 => quote! { MaxU8::new(#field) },
+        DataType::UInt16 => quote! { MaxU16::new(#field) },
+        DataType::UInt32 => quote! { MaxU32::new(#field) },
+        DataType::UInt64 => quote! { MaxU64::new(#field) },
+        DataType::Float32 => quote! { MaxF32::new(#field) },
+        DataType::Float64 => quote! { MaxF64::new(#field) },
+        _ => unreachable!("Compiler error: max aggregation on non-numeric type"),
     }
 }
 

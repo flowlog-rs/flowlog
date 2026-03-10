@@ -15,3 +15,4 @@ common = { path = "../common" }
 # Parser-specific dependencies
 pest = "2.8"
 pest_derive = "2.8"
+ordered-float = "5.1"

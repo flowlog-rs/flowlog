@@ -1,0 +1,92 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : float_arithmetic
+// Feature : floating-point arithmetic across widths (f32 / f64)
+// Covers  : f32 join keys (OrderedFloat hashing/equality), head arithmetic
+//           (+, *), float literal constant, comparison filter (>),
+//           aggregation (sum, min, max, average)
+//
+// Data layout
+//   Edge   (src:f32, dst:f32)            — src=1.5 has two edges (→2.5, →3.5)
+//                                           so multi-value aggregations are
+//                                           exercised for that source
+//   Weight (src:f32, dst:f32, w:f32)     — all weights binary-exact
+//   Score  (node:f32, s:f64)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl Edge(src: f32, dst: f32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Weight(src: f32, dst: f32, w: f32)
+.input Weight(IO="file", filename="Weight.csv", delimiter=",")
+
+.decl Score(node: f32, s: f64)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+// ── TEST Joined: 3-way join on f32 keys + float addition in the head ──────────
+// Verifies : f32 values are usable as join keys (requires OrderedFloat
+//            hashing and equality); head expressions w+1.5 and sc+0.5
+//            preserve f32 / f64 types respectively.
+// Sample   : Edge(1.5,2.5), Weight(1.5,2.5, w=0.5), Score(2.5, sc=5.0)
+//            → Joined(1.5, 2.0, 5.5)
+//            Edge(1.5,3.5), Weight(1.5,3.5, w=0.75), Score(3.5, sc=7.0)
+//            → Joined(1.5, 2.25, 7.5)
+
+.decl Joined(src: f32, ww: f32, sc1: f64)
+Joined(s, w + 1.5, sc + 0.5) :- Edge(s, d), Weight(s, d, w), Score(d, sc).
+.output Joined
+
+// ── TEST Filtered: float comparison filter + multiplication ───────────────────
+// Verifies : f64 comparison (sc > 5.0) correctly prunes body tuples;
+//            multiplication of an f64 value by a float literal (2.0)
+//            produces an f64 result.
+// Sample   : Edge(3.5,4.5), Score(3.5, sc=7.0) — 7.0 > 5.0 passes
+//            → Filtered(4.5, 14.0)
+//            Score(2.5)=5.0 — 5.0 > 5.0 is false, no output for src=2.5
+
+.decl Filtered(dst: f32, doubled: f64)
+Filtered(d, sc * 2.0) :- Edge(s, d), Score(s, sc), sc > 5.0.
+.output Filtered
+
+// ── TEST AggSum: sum of f64 over multiple contributions per group ─────────────
+// Verifies : sum() accumulates f64 values across multiple tuples sharing a
+//            group key; src=1.5 collects two scores via its two edges.
+// Sample   : src=1.5 → sum(Score(2.5)=5.0, Score(3.5)=7.0) = 12.0
+//            src=2.5 → sum(Score(3.5)=7.0) = 7.0
+
+.decl AggSum(src: f32, total: f64)
+AggSum(s, sum(sc)) :- Edge(s, d), Weight(s, d, _), Score(d, sc).
+.output AggSum
+
+// ── TEST MinWeight: min aggregation over f32 values ───────────────────────────
+// Verifies : min() correctly selects the smallest f32 value in a group.
+//            src=1.5 has two weights (0.5, 0.75); min must return 0.5.
+// Sample   : src=1.5 → min(0.5, 0.75) = 0.5
+//            src=2.5 → min(1.5)        = 1.5
+
+.decl MinWeight(src: f32, mw: f32)
+MinWeight(s, min(w)) :- Edge(s, d), Weight(s, d, w).
+.output MinWeight
+
+// ── TEST MaxScore: max aggregation over f64 values, multi-value group ─────────
+// Verifies : max() correctly selects the largest f64 value; src=1.5 has two
+//            candidate scores (5.0, 7.0) and must return 7.0, not 5.0.
+// Sample   : src=1.5 → max(Score(2.5)=5.0, Score(3.5)=7.0) = 7.0
+//            src=3.5 → max(Score(4.5)=9.0) = 9.0
+
+.decl MaxScore(src: f32, ms: f64)
+MaxScore(s, max(sc)) :- Edge(s, d), Score(d, sc).
+.output MaxScore
+
+// ── TEST AvgScore: average aggregation over f64 values ───────────────────────
+// Verifies : average() over f64 performs true floating-point division
+//            (unlike integer average which truncates).
+//            Uses Edge without the Weight filter so src=1.5 reaches
+//            Score(2.5)=5.0 and Score(3.5)=7.0 via both its edges.
+// Sample   : src=1.5 → average(5.0, 7.0) = 12.0 / 2.0 = 6.0  (exact)
+//            src=2.5 → average(7.0)        = 7.0
+
+.decl AvgScore(src: f32, mean: f64)
+AvgScore(s, average(sc)) :- Edge(s, d), Score(d, sc).
+.output AvgScore

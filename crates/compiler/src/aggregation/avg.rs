@@ -19,7 +19,13 @@ fn avg_new(agg_pos: usize, agg_type: DataType) -> TokenStream {
         DataType::Int16 => quote! { AvgI16::new(#field) },
         DataType::Int32 => quote! { AvgI32::new(#field) },
         DataType::Int64 => quote! { AvgI64::new(#field) },
-        _ => unreachable!("Compiler error: avg aggregation on non-integer type"),
+        DataType::UInt8 => quote! { AvgU8::new(#field) },
+        DataType::UInt16 => quote! { AvgU16::new(#field) },
+        DataType::UInt32 => quote! { AvgU32::new(#field) },
+        DataType::UInt64 => quote! { AvgU64::new(#field) },
+        DataType::Float32 => quote! { AvgF32::new(#field) },
+        DataType::Float64 => quote! { AvgF64::new(#field) },
+        _ => unreachable!("Compiler error: avg aggregation on non-numeric type"),
     }
 }
 

@@ -1,6 +1,7 @@
 //! Constant value types for FlowLog Datalog programs.
 
 use crate::{Lexeme, Rule};
+use ordered_float::OrderedFloat;
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -21,6 +22,9 @@ pub enum ConstType {
     /// Integer constant (stored as i64).
     Int(i64),
 
+    /// Floating-point constant (stored as OrderedFloat<f64>).
+    Float(OrderedFloat<f64>),
+
     /// UTF-8 string constant.
     Text(String),
 
@@ -34,6 +38,7 @@ impl fmt::Display for ConstType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Int(v) => write!(f, "{v}"),
+            Self::Float(v) => write!(f, "{v}"),
             Self::Text(s) => write!(f, "\"{s}\""),
             Self::Bool(b) => write!(f, "{}", if *b { "True" } else { "False" }),
         }
@@ -54,6 +59,13 @@ impl Lexeme for ConstType {
             .next()
             .expect("Parser error: constant rule had no inner value");
         match inner.as_rule() {
+            Rule::float => {
+                let s = inner.as_str();
+                Self::Float(OrderedFloat(
+                    s.parse::<f64>()
+                        .expect("Parser error: failed to parse float literal as f64"),
+                ))
+            }
             Rule::integer => {
                 let s = inner.as_str();
                 Self::Int(
