@@ -63,10 +63,8 @@ EOF
 ###############################################################################
 
 ensure_compiler_built() {
-    if [[ ! -x "$COMPILER_BIN" ]]; then
-        log "$YELLOW" "BUILD" "Building compiler (release)"
-        (cd "$ROOT_DIR" && cargo build --release -p compiler 2>&1 | tail -1)
-    fi
+    log "$YELLOW" "BUILD" "Building compiler (release)"
+    (cd "$ROOT_DIR" && cargo build --release -p compiler 2>&1 | tail -1)
     [[ -x "$COMPILER_BIN" ]] || die "Compiler binary not found: $COMPILER_BIN"
 }
 
