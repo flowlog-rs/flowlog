@@ -1,0 +1,51 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : negation
+// Feature : negation-as-failure (!relation) in rule bodies
+// Covers  : basic anti-filter (negated EDB against a body variable),
+//           anti-join where both positive and negated literals share variables
+//           from the same relation (cross-product anti-join)
+//
+// Data layout
+//   bar  (X:i32)              — exclusion set  {1, 3, 4}
+//   baz  (X0:i32, X1:i32)    — pairs          {(1,2), (1,3), (2,3)}
+//   node (X:i32)              — node set       {1, 3, 5}
+//   edge (X0:i32, X1:i32)    — directed edges {(1,3),(3,1),(3,5),(5,3)}
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl bar(X: int32)
+.input bar(IO="file", filename="bar", delimiter=",")
+
+.decl baz(X0: int32, X1: int32)
+.input baz(IO="file", filename="baz", delimiter=",")
+
+.decl node(X: int32)
+.input node(IO="file", filename="node", delimiter=",")
+
+.decl edge(X0: int32, X1: int32)
+.input edge(IO="file", filename="edge", delimiter=",")
+
+// ── TEST foo: basic negation — filter body variable against an EDB set ────────
+// Verifies : !bar(X) removes all X values that appear in bar from the result;
+//            variables bound only by the positive literal (Y) are existential.
+// Sample   : baz(1,2) → X=2, bar(2) absent → foo(2) produced
+//            baz(1,3) → X=3, bar(3) present → suppressed
+//            baz(2,3) → X=3, bar(3) present → suppressed
+
+.decl foo(X: int32)
+foo(X) :- baz(Y, X), !bar(X).
+.output foo
+
+// ── TEST antijoin: negation over cross-product of same relation ───────────────
+// Verifies : !edge(X,Y) with both X and Y drawn from node forms an anti-join
+//            over the full cross-product node × node; X survives iff at least
+//            one Y exists such that edge(X,Y) is absent.
+// Sample   : node={1,3,5}, edge={(1,3),(3,1),(3,5),(5,3)}
+//            X=1: (1,1)∉edge → antijoin(1) produced  [(1,3)∈edge but (1,1)∉edge]
+//            X=3: (3,3)∉edge → antijoin(3) produced  [(3,1),(3,5)∈edge but (3,3)∉edge]
+//            X=5: (5,1)∉edge → antijoin(5) produced  [(5,3)∈edge but (5,1)∉edge]
+
+.decl antijoin(X: int32)
+antijoin(X) :- node(X), node(Y), !edge(X, Y).
+.output antijoin
