@@ -286,7 +286,7 @@ impl Program {
         // Fact relations are always needed.
         needed_preds.extend(self.facts.keys().cloned());
 
-        // If no outputs and no bool facts, keep everything.
+        // If no outputs and no facts, keep everything.
         if needed_preds.is_empty() {
             let all_rules = (0..self.rules.len()).collect();
             let all_preds = self
