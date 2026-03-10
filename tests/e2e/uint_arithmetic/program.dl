@@ -1,0 +1,70 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : uint_arithmetic
+// Feature : unsigned integer arithmetic across widths (u8 / u16 / u32)
+// Covers  : multi-way join, head arithmetic (addition +, subtraction −),
+//           aggregation (sum, count)
+//           Subtraction uses values ≥ 10 to guarantee no unsigned underflow.
+//
+// Data layout
+//   Edge   (src:u8, dst:u8)              — src=1 has two edges (→2, →3)
+//                                           so aggregations are non-trivial
+//   Weight (src:u8, dst:u8, w:u16)       — all weights ≥ 10
+//   Score  (node:u8, s:u32)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl Edge(src: uint8, dst: uint8)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Weight(src: uint8, dst: uint8, w: uint16)
+.input Weight(IO="file", filename="Weight.csv", delimiter=",")
+
+.decl Score(node: uint8, s: uint32)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+// ── TEST Joined: 3-way join with unsigned addition in the head ────────────────
+// Verifies : u8 join keys propagate through Edge ⋈ Weight ⋈ Score;
+//            head expressions w+1 (u16) and sc+1 (u32) are computed correctly
+//            for unsigned types.
+// Sample   : Edge(1,2), Weight(1,2, w=10), Score(2, sc=100)
+//            → Joined(1, 11, 101)
+//            Edge(1,3), Weight(1,3, w=15), Score(3, sc=200)
+//            → Joined(1, 16, 201)
+
+.decl Joined(src: uint8, ww: uint16, sc1: uint32)
+Joined(s, w + 1, sc + 1) :- Edge(s, d), Weight(s, d, w), Score(d, sc).
+.output Joined
+
+// ── TEST Decremented: subtraction from unsigned values (no underflow) ─────────
+// Verifies : the − operator works on u16 values; all weights are ≥ 10 so
+//            w−1 ≥ 9 > 0, guaranteeing no unsigned underflow.
+// Sample   : Weight(1,2, w=10) → Decremented(1, 9)
+//            Weight(1,3, w=15) → Decremented(1, 14)
+//            Weight(3,4, w=30) → Decremented(3, 29)
+
+.decl Decremented(src: uint8, dw: uint16)
+Decremented(s, w - 1) :- Weight(s, _, w).
+.output Decremented
+
+// ── TEST AggSum: sum aggregation over multiple contributions per group ─────────
+// Verifies : sum() accumulates u32 values across multiple tuples sharing a
+//            group key; src=1 collects Score(2)=100 and Score(3)=200.
+// Sample   : src=1 → sum(100, 200) = 300   [two contributions]
+//            src=2 → sum(200)      = 200   [one contribution]
+
+.decl AggSum(src: uint8, total: uint32)
+AggSum(s, sum(sc)) :- Edge(s, d), Weight(s, d, _), Score(d, sc).
+.output AggSum
+
+// ── TEST CountEdge: count aggregation ─────────────────────────────────────────
+// Verifies : count(1) produces the number of body-tuples per group key;
+//            count(1) is used (integer constant has no inferred type, so no
+//            width conflict); dst must be named (not wildcard) so both edges
+//            from src=1 remain distinct tuples before counting.
+// Sample   : src=1 has two edges (→2 and →3) → CountEdge(1, 2)
+//            src=2 has one  edge (→3)          → CountEdge(2, 1)
+
+.decl CountJoin(src: uint8, n: uint32)
+CountJoin(s, count(sc)) :- Edge(s, d), Score(d, sc).
+.output CountJoin

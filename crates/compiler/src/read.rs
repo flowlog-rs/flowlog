@@ -44,6 +44,13 @@ impl Compiler {
             self.imports.mark_string_intern();
         }
 
+        if edbs.iter().any(|rel| {
+            rel.data_type().contains(&DataType::Float32)
+                || rel.data_type().contains(&DataType::Float64)
+        }) {
+            self.imports.mark_ordered_float();
+        }
+
         // Record enter inputs block if profiler is enabled
         with_profiler(profiler, |profiler| {
             profiler.update_input_block();
@@ -233,6 +240,42 @@ impl Compiler {
                             let #ident: i64 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<i64>().ok()?;
                             let mut __start = __first_end + 1;
                         },
+                        DataType::UInt8 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: u8 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<u8>().ok()?;
+                            let mut __start = __first_end + 1;
+                        },
+                        DataType::UInt16 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: u16 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<u16>().ok()?;
+                            let mut __start = __first_end + 1;
+                        },
+                        DataType::UInt32 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: u32 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<u32>().ok()?;
+                            let mut __start = __first_end + 1;
+                        },
+                        DataType::UInt64 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: u64 = std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<u64>().ok()?;
+                            let mut __start = __first_end + 1;
+                        },
+                        DataType::Float32 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: OrderedFloat<f32> = OrderedFloat(std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<f32>().ok()?);
+                            let mut __start = __first_end + 1;
+                        },
+                        DataType::Float64 => quote! {
+                            let mut __delims = memchr_iter(delim, &buf);
+                            let __first_end = __delims.next().unwrap_or(buf.len());
+                            let #ident: OrderedFloat<f64> = OrderedFloat(std::str::from_utf8(&buf[..__first_end]).ok()?.parse::<f64>().ok()?);
+                            let mut __start = __first_end + 1;
+                        },
                         DataType::String => {
                             if self.imports.needs_string_intern() {
                                 quote! {
@@ -278,6 +321,36 @@ impl Compiler {
                         DataType::Int64 => quote! {
                             let __end = __delims.next().unwrap_or(buf.len());
                             let #ident: i64 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<i64>().ok()?;
+                            __start = __end + 1;
+                        },
+                        DataType::UInt8 => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: u8 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<u8>().ok()?;
+                            __start = __end + 1;
+                        },
+                        DataType::UInt16 => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: u16 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<u16>().ok()?;
+                            __start = __end + 1;
+                        },
+                        DataType::UInt32 => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: u32 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<u32>().ok()?;
+                            __start = __end + 1;
+                        },
+                        DataType::UInt64 => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: u64 = std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<u64>().ok()?;
+                            __start = __end + 1;
+                        },
+                        DataType::Float32 => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: OrderedFloat<f32> = OrderedFloat(std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<f32>().ok()?);
+                            __start = __end + 1;
+                        },
+                        DataType::Float64 => quote! {
+                            let __end = __delims.next().unwrap_or(buf.len());
+                            let #ident: OrderedFloat<f64> = OrderedFloat(std::str::from_utf8(&buf[__start..__end]).ok()?.parse::<f64>().ok()?);
                             __start = __end + 1;
                         },
                         DataType::String => {
@@ -369,6 +442,10 @@ impl Compiler {
                         ConstType::Int(i) => {
                             let lit = proc_macro2::Literal::i64_unsuffixed(*i);
                             quote! { #lit }
+                        }
+                        ConstType::Float(v) => {
+                            let lit = proc_macro2::Literal::f64_unsuffixed(v.into_inner());
+                            quote! { OrderedFloat(#lit) }
                         }
                         ConstType::Text(s) => {
                             if self.imports.needs_string_intern() {

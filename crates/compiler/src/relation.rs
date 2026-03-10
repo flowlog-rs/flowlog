@@ -28,6 +28,12 @@ impl Compiler {
                         | Some(&DataType::Int16)
                         | Some(&DataType::Int32)
                         | Some(&DataType::Int64)
+                        | Some(&DataType::UInt8)
+                        | Some(&DataType::UInt16)
+                        | Some(&DataType::UInt32)
+                        | Some(&DataType::UInt64)
+                        | Some(&DataType::Float32)
+                        | Some(&DataType::Float64)
                         | Some(&DataType::Bool)
                 )
         });
@@ -345,6 +351,16 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
         DataType::Int16 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
         DataType::Int32 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
         DataType::Int64 => quote! { if !shard_int(f0, peers, index) { return; } },
+        DataType::UInt8 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        DataType::UInt16 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        DataType::UInt32 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        DataType::UInt64 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        DataType::Float32 => {
+            quote! { if !shard_int(f0.into_inner().to_bits() as i64, peers, index) { return; } }
+        }
+        DataType::Float64 => {
+            quote! { if !shard_int(f0.into_inner().to_bits() as i64, peers, index) { return; } }
+        }
         DataType::String => {
             if string_intern {
                 quote! { if !shard_spur(f0, peers, index) { return; } }
@@ -472,6 +488,12 @@ fn dt_to_rust(dt: &DataType, string_intern: bool) -> TokenStream {
         DataType::Int16 => quote! { i16 },
         DataType::Int32 => quote! { i32 },
         DataType::Int64 => quote! { i64 },
+        DataType::UInt8 => quote! { u8 },
+        DataType::UInt16 => quote! { u16 },
+        DataType::UInt32 => quote! { u32 },
+        DataType::UInt64 => quote! { u64 },
+        DataType::Float32 => quote! { OrderedFloat<f32> },
+        DataType::Float64 => quote! { OrderedFloat<f64> },
         DataType::String => {
             if string_intern {
                 quote! { Spur }
@@ -539,6 +561,66 @@ fn gen_parse_from_str(rel: &str, dts: &[DataType], string_intern: bool) -> Token
                     Ok(v) => v,
                     Err(_) => {
                         eprintln!("[relops][{}] bad tuple '{}': col {} not i64: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
+            DataType::UInt8 => quote! {
+                #get
+                let #v: u8 = match s.parse::<u8>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not u8: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
+            DataType::UInt16 => quote! {
+                #get
+                let #v: u16 = match s.parse::<u16>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not u16: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
+            DataType::UInt32 => quote! {
+                #get
+                let #v: u32 = match s.parse::<u32>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not u32: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
+            DataType::UInt64 => quote! {
+                #get
+                let #v: u64 = match s.parse::<u64>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not u64: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
+            DataType::Float32 => quote! {
+                #get
+                let #v: OrderedFloat<f32> = match s.parse::<f32>() {
+                    Ok(v) => OrderedFloat(v),
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not f32: '{}'", #rel, tuple, #idx, s);
+                        return;
+                    }
+                };
+            },
+            DataType::Float64 => quote! {
+                #get
+                let #v: OrderedFloat<f64> = match s.parse::<f64>() {
+                    Ok(v) => OrderedFloat(v),
+                    Err(_) => {
+                        eprintln!("[relops][{}] bad tuple '{}': col {} not f64: '{}'", #rel, tuple, #idx, s);
                         return;
                     }
                 };
@@ -710,6 +792,186 @@ fn gen_parse_from_bytes(rel: &str, dts: &[DataType], string_intern: bool) -> Tok
                     Err(_) => {
                         eprintln!(
                             "[relops][{}] bad row in {}: '{:?}' (col {} not i64: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
+            DataType::UInt8 => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: u8 = match s.parse::<u8>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not u8: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
+            DataType::UInt16 => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: u16 = match s.parse::<u16>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not u16: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
+            DataType::UInt32 => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: u32 = match s.parse::<u32>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not u32: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
+            DataType::UInt64 => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: u64 = match s.parse::<u64>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not u64: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
+            DataType::Float32 => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: OrderedFloat<f32> = match s.parse::<f32>() {
+                    Ok(v) => OrderedFloat(v),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not f32: '{}')",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx,
+                            s
+                        );
+                        return None;
+                    }
+                };
+            },
+            DataType::Float64 => quote! {
+                #get_raw
+                let s = match std::str::from_utf8(raw) {
+                    Ok(s) => s.trim(),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not utf8)",
+                            #rel,
+                            path.display(),
+                            String::from_utf8_lossy(&line),
+                            #idx
+                        );
+                        return None;
+                    }
+                };
+                let #v: OrderedFloat<f64> = match s.parse::<f64>() {
+                    Ok(v) => OrderedFloat(v),
+                    Err(_) => {
+                        eprintln!(
+                            "[relops][{}] bad row in {}: '{:?}' (col {} not f64: '{}')",
                             #rel,
                             path.display(),
                             String::from_utf8_lossy(&line),

@@ -1,15 +1,9 @@
-/// Max-semiring for aggregating maximum values via differential dataflow's
-/// built-in consolidation and `threshold_semigroup` operator.
-///
-/// Instead of using `reduce_core` (which maintains full value traces per key),
-/// this encodes the aggregated value into the *diff* position of the DD triple
-/// `(data, time, diff)`.  Consolidation then computes max for free via
-/// `plus_equals`, and `threshold_semigroup` emits updates only when the
-/// running maximum increases.
+/// Float max-semiring for aggregating maximum values.
 
 use differential_dataflow::difference::{IsZero, Monoid, Semigroup};
 use differential_dataflow::difference::Multiply;
 
+use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 macro_rules! define_max {
