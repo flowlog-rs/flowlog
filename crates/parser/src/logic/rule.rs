@@ -81,20 +81,13 @@ impl FlowLogRule {
         self.is_planning
     }
 
-    /// Whether any body predicate is a boolean literal.
-    #[must_use]
-    #[inline]
-    pub fn is_boolean(&self) -> bool {
-        self.rhs.iter().any(|p| p.is_boolean())
-    }
-
     /// Indexed access to a body predicate (panics if out of bounds).
     #[inline]
     pub fn get(&self, i: usize) -> &Predicate {
         &self.rhs[i]
     }
 
-    /// Extract constants from a boolean rule's head.
+    /// Extract constants from a fact's head.
     ///
     /// Panics if any head argument is not a simple constant.
     #[must_use]
@@ -103,7 +96,7 @@ impl FlowLogRule {
         for arg in self.head.head_arguments() {
             match arg {
                 HeadArg::Var(_) | HeadArg::Aggregation(_) | HeadArg::FnCall(_) => {
-                    panic!("Boolean rule head must contain only constants: {self}")
+                    panic!("Fact head must contain only constants: {self}")
                 }
                 HeadArg::Arith(arith) => {
                     if arith.is_const() {
@@ -111,10 +104,10 @@ impl FlowLogRule {
                             out.push(c.clone());
                         } else {
                             // Defensive (shouldn't happen if is_const() is true).
-                            panic!("Boolean rule head must contain only constants: {self}");
+                            panic!("Fact head must contain only constants: {self}");
                         }
                     } else {
-                        panic!("Boolean rule head must contain only constants: {self}");
+                        panic!("Fact head must contain only constants: {self}");
                     }
                 }
             }
@@ -174,9 +167,6 @@ mod tests {
     fn neg_pred(name: &str, args: Vec<AtomArg>) -> Predicate {
         Predicate::NegativeAtomPredicate(atom(name, args))
     }
-    fn bool_pred(v: bool) -> Predicate {
-        Predicate::BoolPredicate(v)
-    }
 
     fn cmp_pred() -> Predicate {
         let l = Arithmetic::new(Factor::Var("X".into()), vec![]);
@@ -192,7 +182,6 @@ mod tests {
         let r = FlowLogRule::new(head, body, false);
 
         assert!(!r.is_planning());
-        assert!(!r.is_boolean());
         assert_eq!(r.head().name(), "result");
         assert_eq!(r.rhs().len(), 1);
     }
@@ -206,20 +195,11 @@ mod tests {
     }
 
     #[test]
-    fn boolean_detection() {
-        let head = head_named("fact", vec![head_const(ConstType::Int(42))]);
-        let body = vec![bool_pred(true)];
-        let r = FlowLogRule::new(head, body, false);
-        assert!(r.is_boolean());
-    }
-
-    #[test]
     fn get_by_index() {
         let head = head_named("multi", vec![head_var("X")]);
         let body = vec![
             pos_pred("first", vec![var_arg("X")]),
             cmp_pred(),
-            bool_pred(false),
         ];
         let r = FlowLogRule::new(head, body, false);
 
@@ -228,7 +208,6 @@ mod tests {
             _ => panic!("expected positive atom"),
         }
         matches!(r.get(1), Predicate::ComparePredicate(_));
-        matches!(r.get(2), Predicate::BoolPredicate(false));
     }
 
     #[test]
@@ -242,13 +221,11 @@ mod tests {
         let body2 = vec![
             pos_pred("rel1", vec![var_arg("A")]),
             neg_pred("rel2", vec![var_arg("B")]),
-            bool_pred(true),
         ];
         let r2 = FlowLogRule::new(head2, body2, false);
         let s2 = r2.to_string();
         assert!(s2.starts_with("complex(A, B) :- rel1(A)"));
         assert!(s2.contains("!rel2(B)"));
-        assert!(s2.contains("True"));
         assert!(s2.ends_with('.'));
 
         let head3 = head_named("filtered", vec![head_var("X")]);
@@ -273,7 +250,7 @@ mod tests {
                 head_const(ConstType::Text("hello".into())),
             ],
         );
-        let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
+        let r = FlowLogRule::new(head, vec![], false);
 
         let c = r.extract_constants_from_head();
         assert_eq!(c.len(), 2);
@@ -282,18 +259,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Boolean rule head must contain only constants")]
+    #[should_panic(expected = "Fact head must contain only constants")]
     fn extract_constants_panics_on_var() {
         let head = head_named(
             "invalid",
             vec![head_const(ConstType::Int(1)), head_var("X")],
         );
-        let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
+        let r = FlowLogRule::new(head, vec![], false);
         let _ = r.extract_constants_from_head();
     }
 
     #[test]
-    #[should_panic(expected = "Boolean rule head must contain only constants")]
+    #[should_panic(expected = "Fact head must contain only constants")]
     fn extract_constants_panics_on_aggregation() {
         use crate::logic::{Aggregation, AggregationOperator};
         let arith = Arithmetic::new(Factor::Var("X".into()), vec![]);
@@ -302,19 +279,19 @@ mod tests {
             "invalid",
             vec![head_const(ConstType::Int(1)), HeadArg::Aggregation(agg)],
         );
-        let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
+        let r = FlowLogRule::new(head, vec![], false);
         let _ = r.extract_constants_from_head();
     }
 
     #[test]
-    #[should_panic(expected = "Boolean rule head must contain only constants")]
+    #[should_panic(expected = "Fact head must contain only constants")]
     fn extract_constants_panics_on_complex_arith() {
         let complex = Arithmetic::new(
             Factor::Var("X".into()),
             vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(1)))],
         );
         let head = head_named("invalid", vec![HeadArg::Arith(complex)]);
-        let r = FlowLogRule::new(head, vec![bool_pred(true)], false);
+        let r = FlowLogRule::new(head, vec![], false);
         let _ = r.extract_constants_from_head();
     }
 
@@ -350,7 +327,6 @@ mod tests {
         assert_eq!(r.head().name(), "derived");
         assert_eq!(r.head().arity(), 2);
         assert_eq!(r.rhs().len(), 3);
-        assert!(!r.is_boolean());
         assert!(!r.is_planning());
         let sr = r.to_string();
         assert!(sr.starts_with("derived(Person, Age) :- person(Person, Age)"));

@@ -1,0 +1,36 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : fact_syntax
+// Feature : inline fact syntax  —  relation(c1, c2).
+// Covers  : inline facts supplement CSV-backed EDB relations; inline fact
+//           participates in recursive rules; reachability is computed over
+//           the union of CSV edges and the compile-time inline edge
+//
+// Data layout
+//   Edge  (src:i32, dst:i32)  — CSV provides (1,2) and (2,3);
+//                               inline fact provides (3,4)
+//
+// Expected
+//   Reach = transitive closure of all three edges
+//         = {(1,2), (1,3), (1,4), (2,3), (2,4), (3,4)}
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+// Inline fact: this edge is declared directly in the program, not in a CSV.
+// Verifies : the new  relation(c1, c2).  syntax is parsed and ingested
+//            correctly at compile-time alongside file-backed EDB data.
+Edge(3, 4).
+
+// ── TEST Reach: transitive closure over CSV + inline edges ───────────────────
+// Verifies : the inline fact (3,4) is visible to recursive rules;
+//            reachability paths that cross the inline edge are produced.
+// Sample   : CSV gives Edge(1,2), Edge(2,3); inline gives Edge(3,4)
+//            → Reach must contain (1,4), (2,4), (3,4) among others
+
+.decl Reach(src: int32, dst: int32)
+Reach(X, Y) :- Edge(X, Y).
+Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
+.output Reach
