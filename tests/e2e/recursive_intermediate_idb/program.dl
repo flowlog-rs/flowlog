@@ -1,0 +1,32 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : recursive_intermediate_idb
+// Feature : recursive strata with IDB relations that are purely intermediate
+//           (used only within the recursion, no .output, not referenced later)
+//
+// Regression test for: intermediate IDB relations causing unused-variable
+// compiler errors in generated Rust code.
+//
+// `even` and `odd` form a mutually recursive stratum.
+// Only `even` has .output; `odd` is purely intermediate.
+// Before the fix, `odd` would still be extracted from the iterative block,
+// producing an unused variable in the generated Rust code and a compile error.
+//
+// Data layout
+//   zero (x: int32)            — base case {0}
+//   succ (x: int32, y: int32)  — successor pairs {(0,1),(1,2),(2,3),(3,4)}
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl zero(x: int32)
+.input zero(IO="file", filename="zero", delimiter=",")
+
+.decl succ(x: int32, y: int32)
+.input succ(IO="file", filename="succ", delimiter=",")
+
+.decl even(x: int32)
+.decl odd(x: int32)
+
+even(X) :- zero(X).
+odd(Y)  :- even(X), succ(X, Y).
+even(Y) :- odd(X),  succ(X, Y).
+
+.output even
