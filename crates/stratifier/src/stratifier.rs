@@ -313,15 +313,14 @@ impl Stratifier {
 
         let n = self.stratum.len();
 
-        // Precompute fingerprints of IDB relations that require inspection (output/printsize).
+        // Precompute fingerprints of IDB relations (annotated with .output or .printsize).
         // These are always retained in the leave set so they remain accessible after the dataflow,
         // even if no later stratum references them.
-        // IDB relations only needed within a stratum are excluded; they are kept by `later_body_atoms`.
+        // Internal relations only needed within a stratum are excluded; they are kept by `later_body_atoms`.
         let idb_fp_set: HashSet<u64> = self
             .program
             .idbs()
             .into_iter()
-            .filter(|r| r.output() || r.printsize())
             .map(|r| r.fingerprint())
             .collect();
         // For each stratum, compute the set of body atoms referenced by any STRICTLY later stratum.

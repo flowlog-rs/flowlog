@@ -1,0 +1,40 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : hybrid_relation
+// Feature : hybrid relation — same relation has both .input and .output,
+//           with derivation rules that enrich the loaded facts.
+//
+// arc is loaded from CSV (directed, non-symmetric) and simultaneously
+// enriched by two rules:
+//   - symmetric closure:   arc(b,a) :- arc(a,b)
+//   - transitive closure:  arc(a,c) :- arc(a,b), arc(b,c)
+//
+// A second relation reach is derived from the final arc to show that
+// downstream consumers see the fully enriched relation.
+//
+// Data layout
+//   arc (a:i32, b:i32) — CSV provides (1,2), (2,3), (4,5)
+//
+// Expected arc (symmetric + transitive closure of input):
+//   (1,2),(2,1),(2,3),(3,2),(4,5),(5,4)   ← symmetric
+//   (1,3),(3,1),(1,1),(2,2),(3,3)         ← transitive (via enriched arcs)
+//   ...
+//
+// Expected reach (nodes reachable from node 1):
+//   reach(1,1), reach(1,2), reach(1,3)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Hybrid: loaded from file AND derived ─────────────────────────────────────
+
+.decl arc(a: int32, b: int32)
+.input arc(IO="file", filename="arc.csv", delimiter=",")
+
+arc(b, a) :- arc(a, b).
+arc(a, c) :- arc(a, b), arc(b, c).
+
+.output arc
+
+// ── IDB: reachability from node 1 using the enriched arc ─────────────────────
+
+.decl reach(src: int32, dst: int32)
+reach(1, b) :- arc(1, b).
+.output reach

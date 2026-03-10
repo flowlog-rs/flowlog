@@ -22,15 +22,9 @@ impl Compiler {
     pub(super) fn make_global_ident_map(&mut self) {
         self.global_fp_to_ident = self
             .program
-            .edbs()
-            .into_iter()
+            .relations()
+            .iter()
             .map(|rel| (rel.fingerprint(), format_ident!("{}", rel.name())))
-            .chain(
-                self.program
-                    .idbs()
-                    .into_iter()
-                    .map(|rel| (rel.fingerprint(), format_ident!("{}", rel.name()))),
-            )
             .collect();
     }
 

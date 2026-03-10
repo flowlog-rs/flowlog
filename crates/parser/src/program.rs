@@ -165,13 +165,13 @@ impl Program {
             .collect()
     }
 
-    /// IDB relations (those without input parameters).
+    /// IDB relations (those annotated with .output or .printsize).
     ///
     /// Returned in declaration order.
     #[must_use]
     #[inline]
     pub fn idbs(&self) -> Vec<&Relation> {
-        self.relations.iter().filter(|rel| !rel.is_edb()).collect()
+        self.relations.iter().filter(|rel| rel.is_output_printsize()).collect()
     }
 
     /// Transformation rules.
@@ -492,26 +492,6 @@ impl Lexeme for Program {
             }
         }
 
-        // Check for invalid combinations: EDB relations cannot have output/printsize, IDB relations cannot have input
-        for input_dir in &input_directives {
-            let relation_name = input_dir.relation_name();
-
-            // Check if this relation also has output directive
-            if output_relation_names.contains(relation_name) {
-                panic!(
-                    "Parser error: relation '{}' cannot have both input and output directives. Relations must be either EDB (input only) or IDB (output/printsize only).",
-                    relation_name
-                );
-            }
-
-            // Check if this relation also has printsize directive
-            if printsize_relation_names.contains(relation_name) {
-                panic!(
-                    "Parser error: relation '{}' cannot have both input and printsize directives. Relations must be either EDB (input only) or IDB (output/printsize only).",
-                    relation_name
-                );
-            }
-        }
 
         // Apply input directives (creates EDB relations)
         for input_dir in input_directives {

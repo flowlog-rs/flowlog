@@ -24,9 +24,8 @@ impl Compiler {
     pub(super) fn make_global_type_map(&mut self) {
         self.global_fp_to_type = self
             .program
-            .edbs()
-            .into_iter()
-            .chain(self.program.idbs())
+            .relations()
+            .iter()
             .map(|rel| (rel.fingerprint(), (Vec::new(), rel.data_type())))
             .collect();
     }
