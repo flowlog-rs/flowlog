@@ -2,10 +2,10 @@
 
 use crate::dependency_graph::DependencyGraph;
 use itertools::Itertools;
-use parser::{FlowLogRule, Predicate, Program};
+use parser::{AggregationOperator, FlowLogRule, HeadArg, Predicate, Program};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Stratify a program into group of rules.
 ///
@@ -139,19 +139,27 @@ impl Stratifier {
             recursive_bitmap.push(is_recursive);
         }
 
-        // Validate: no negation through recursion.
+        // Warn: negation through recursion (stratified negation).
         // A single scan over negative edges using the precomputed scc_id array.
         for &(src, dst) in dependency_graph.negative_edges() {
             if scc_id[src] == scc_id[dst] && recursive_bitmap[scc_id[src]] {
                 let src_rule = &program.rules()[src];
-                let dst_rule = &program.rules()[dst];
-                panic!(
-                    "Stratifier error: program is not stratifiable: negation through recursion detected.\n\
-                     Rule {} negates a predicate defined by rule {} within the same recursive stratum.\n\
-                     Rule {}: {}\n\
-                     Rule {}: {}",
-                    src, dst, src, src_rule, dst, dst_rule
-                );
+                if src == dst {
+                    warn!(
+                        "Negation in recursive stratum (rule {} negates itself): \
+                         negation is not monotone; the fixpoint may never converge.\n  \
+                         Rule {}: {}",
+                        src, src, src_rule
+                    );
+                } else {
+                    let dst_rule = &program.rules()[dst];
+                    warn!(
+                        "Negation in recursive stratum (rule {} negates rule {}): \
+                         negation is not monotone; the fixpoint may never converge.\n  \
+                         Rule {}: {}\n  Rule {}: {}",
+                        src, dst, src, src_rule, dst, dst_rule
+                    );
+                }
             }
         }
 
@@ -212,6 +220,39 @@ impl Stratifier {
         };
 
         instance.build_stratum_metadata();
+
+        // Warn: non-monotone aggregation (sum/count/avg) in a recursive stratum.
+        // min/max are monotone and safe; sum/count/avg accumulate across iterations
+        // and will never stabilise, so the fixpoint cannot be reached.
+        for (idx, stratum) in instance.stratum.iter().enumerate() {
+            if !instance.is_recursive_stratum(idx) {
+                continue;
+            }
+            for &rid in stratum {
+                let rule = &instance.program.rules()[rid];
+                for arg in rule.head().head_arguments() {
+                    if let HeadArg::Aggregation(agg) = arg {
+                        match agg.operator() {
+                            AggregationOperator::Sum
+                            | AggregationOperator::Count
+                            | AggregationOperator::Avg => {
+                                warn!(
+                                    "`{}` in recursive stratum #{} (rule {}): \
+                                     not monotone; the fixpoint may never converge.\n  \
+                                     Rule {}: {}",
+                                    agg.operator(),
+                                    idx + 1,
+                                    rid,
+                                    rid,
+                                    rule
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
 
         // Debug info print
         debug!("\n{}", instance);
@@ -435,6 +476,7 @@ impl fmt::Display for Stratifier {
 mod tests {
     use super::*;
     use std::io::Write;
+    use tracing_test::traced_test;
 
     /// Write a Datalog source string to a temporary file and parse it.
     fn parse_program(source: &str) -> Program {
@@ -446,10 +488,10 @@ mod tests {
 
     /// A(x,y) :- Edge(x,y), !B(x,y).
     /// B(x,y) :- A(x,y).
-    /// A and B form a recursive cycle and A negates B → not stratifiable.
+    /// A and B form a recursive cycle and A negates B → stratified negation warning.
     #[test]
-    #[should_panic(expected = "negation through recursion")]
-    fn rejects_negation_through_recursion() {
+    #[traced_test]
+    fn warns_negation_through_recursion() {
         let src = "\
             .decl Edge(a: int32, b: int32)\n\
             .decl A(a: int32, b: int32)\n\
@@ -459,22 +501,102 @@ mod tests {
             B(x, y) :- A(x, y).\n\
             .output A\n\
             .output B\n";
-        let program = parse_program(src);
-        let _ = Stratifier::from_program(&program);
+        let _ = Stratifier::from_program(&parse_program(src));
+        assert!(logs_contain("Negation in recursive stratum"));
     }
 
     /// A(x,y) :- Edge(x,y), !A(x,y).
-    /// Self-negation → not stratifiable.
+    /// Self-negation → stratified negation warning.
     #[test]
-    #[should_panic(expected = "negation through recursion")]
-    fn rejects_self_negation() {
+    #[traced_test]
+    fn warns_self_negation() {
         let src = "\
             .decl Edge(a: int32, b: int32)\n\
             .decl A(a: int32, b: int32)\n\
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             A(x, y) :- Edge(x, y), !A(x, y).\n\
             .output A\n";
-        let program = parse_program(src);
-        let _ = Stratifier::from_program(&program);
+        let _ = Stratifier::from_program(&parse_program(src));
+        assert!(logs_contain("Negation in recursive stratum"));
+    }
+
+    /// Running(x, sum(cost)) :- Running(x, prev), Edge(x, y, cost).
+    /// sum in the head of a recursive rule → non-monotone aggregation warning.
+    #[test]
+    #[traced_test]
+    fn warns_sum_in_recursive_stratum() {
+        let src = "\
+            .decl Edge(x: int32, y: int32, cost: int32)\n\
+            .decl Running(x: int32, total: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            Running(x, sum(cost)) :- Edge(x, y, cost).\n\
+            Running(x, sum(cost)) :- Running(x, prev), Edge(x, y, cost).\n\
+            .output Running\n";
+        let _ = Stratifier::from_program(&parse_program(src));
+        assert!(logs_contain("`sum` in recursive stratum"));
+    }
+
+    /// Reachable(x, count(y)) :- Reachable(x, n), Edge(x, y).
+    /// count in the head of a recursive rule → non-monotone aggregation warning.
+    #[test]
+    #[traced_test]
+    fn warns_count_in_recursive_stratum() {
+        let src = "\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl Reachable(x: int32, n: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            Reachable(x, count(y)) :- Edge(x, y).\n\
+            Reachable(x, count(y)) :- Reachable(x, n), Edge(x, y).\n\
+            .output Reachable\n";
+        let _ = Stratifier::from_program(&parse_program(src));
+        assert!(logs_contain("`count` in recursive stratum"));
+    }
+
+    /// Score(x, AVG(v)) :- Score(x, s), Base(x, v).
+    /// avg in the head of a recursive rule → non-monotone aggregation warning.
+    #[test]
+    #[traced_test]
+    fn warns_avg_in_recursive_stratum() {
+        let src = "\
+            .decl Base(x: int32, v: int32)\n\
+            .decl Score(x: int32, s: int32)\n\
+            .input Base(IO=\"file\", filename=\"Base.csv\", delimiter=\",\")\n\
+            Score(x, AVG(v)) :- Base(x, v).\n\
+            Score(x, AVG(v)) :- Score(x, s), Base(x, v).\n\
+            .output Score\n";
+        let _ = Stratifier::from_program(&parse_program(src));
+        assert!(logs_contain("`average` in recursive stratum"));
+    }
+
+    /// Best(x, min(cost)) :- Best(x, b), Edge(x, y, cost).
+    /// min is monotone → no fixpoint warning emitted.
+    #[test]
+    #[traced_test]
+    fn no_warn_min_in_recursive_stratum() {
+        let src = "\
+            .decl Edge(x: int32, y: int32, cost: int32)\n\
+            .decl Best(x: int32, b: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            Best(x, min(cost)) :- Edge(x, y, cost).\n\
+            Best(x, min(cost)) :- Best(x, b), Edge(x, y, cost).\n\
+            .output Best\n";
+        let _ = Stratifier::from_program(&parse_program(src));
+        assert!(!logs_contain("fixpoint may never converge"));
+    }
+
+    /// Best(x, max(cost)) :- Best(x, b), Edge(x, y, cost).
+    /// max is monotone → no fixpoint warning emitted.
+    #[test]
+    #[traced_test]
+    fn no_warn_max_in_recursive_stratum() {
+        let src = "\
+            .decl Edge(x: int32, y: int32, cost: int32)\n\
+            .decl Best(x: int32, b: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            Best(x, max(cost)) :- Edge(x, y, cost).\n\
+            Best(x, max(cost)) :- Best(x, b), Edge(x, y, cost).\n\
+            .output Best\n";
+        let _ = Stratifier::from_program(&parse_program(src));
+        assert!(!logs_contain("fixpoint may never converge"));
     }
 }
