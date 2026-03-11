@@ -5,11 +5,11 @@
 // for declarative data processing and rule-based queries.
 
 // Main grammar entry point
-main_grammar = { 
-    SOI ~ 
-    (declaration | extern_fn | input_directive | output_directive | printsize_directive | fact | rule)* ~
+main_grammar = {
+    SOI ~
+    (declaration | extern_fn | import_directive | input_directive | output_directive | printsize_directive | fact | rule)* ~
     EOI
-} 
+}
 
 // =============================================================================
 // BASIC ELEMENTS (IDENTIFIERS, LITERALS, TYPES)
@@ -135,6 +135,13 @@ output_directive = {
 // Example: .printsize Relation
 printsize_directive = {
     ".printsize" ~ relation_name
+}
+
+// Import directive - include another .dl file into the current program.
+// Path is resolved relative to the importing file's directory.
+// Example: .import "lib/base.dl"
+import_directive = {
+    ".import" ~ string
 }
 
 // Comma-separated list of attribute declarations

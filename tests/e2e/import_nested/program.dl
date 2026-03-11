@@ -1,0 +1,15 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : import_nested
+// Feature : nested .import chain  program → lib/a → lib/b → lib/c
+// Verifies: declarations and rules from all depths are visible after merge;
+//           the .output directives in imported files are honoured.
+//
+// Graph (edges)
+//   1 → 2 → 3 → 1   (a cycle: all three nodes can reach themselves)
+//   4 → 5            (a tail: neither node is in a cycle)
+//
+// Expected tc  : full transitive closure of the edge relation
+// Expected in_cycle: nodes whose tc includes a self-loop → {1, 2, 3}
+// ════════════════════════════════════════════════════════════════════════════
+
+.import "lib/a.dl"

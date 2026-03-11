@@ -1,0 +1,8 @@
+// Level A — nodes reachable from themselves (cycle membership).
+// Imports B for tc, imported by program.dl.
+
+.import "b.dl"
+
+.decl in_cycle(x: int32)
+in_cycle(x) :- tc(x, x).
+.output in_cycle
