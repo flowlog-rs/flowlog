@@ -43,24 +43,13 @@ impl fmt::Display for Program {
         writeln!(f, "=============================================")?;
         writeln!(f)?;
 
-        // EDB Section (Extensional Database - Input Relations)
-        let edb_relations = self.edbs();
-        if !edb_relations.is_empty() {
-            writeln!(f, "EDB Relations")?;
+        // Relations Section
+        let all_relations = self.relations();
+        if !all_relations.is_empty() {
+            writeln!(f, "Relations")?;
             writeln!(f, "---------------------------------------------")?;
-            for relation in edb_relations {
-                writeln!(f, "{}", relation)?;
-            }
-            writeln!(f)?;
-        }
-
-        // IDB Section (Intensional Database - Computed Relations)
-        let idb_relations = self.idbs();
-        if !idb_relations.is_empty() {
-            writeln!(f, "IDB Relations")?;
-            writeln!(f, "---------------------------------------------")?;
-            for relation in idb_relations {
-                writeln!(f, "{}", relation)?;
+            for rel in all_relations {
+                writeln!(f, "{}", rel)?;
             }
             writeln!(f)?;
         }
@@ -165,13 +154,13 @@ impl Program {
             .collect()
     }
 
-    /// IDB relations (those without input parameters).
+    /// IDB relations (those annotated with .output or .printsize).
     ///
     /// Returned in declaration order.
     #[must_use]
     #[inline]
     pub fn idbs(&self) -> Vec<&Relation> {
-        self.relations.iter().filter(|rel| !rel.is_edb()).collect()
+        self.relations.iter().filter(|rel| rel.is_output_printsize()).collect()
     }
 
     /// Transformation rules.
@@ -193,16 +182,6 @@ impl Program {
     #[inline]
     pub fn udfs(&self) -> &[ExternFn] {
         &self.udfs
-    }
-
-    /// Output/Printsize relations.
-    /// Notice not every IDB is an output/printsize relation.
-    #[must_use]
-    fn output_printsize_relations(&self) -> Vec<&Relation> {
-        self.relations
-            .iter()
-            .filter(|rel| rel.is_output_printsize())
-            .collect()
     }
 
     /// Reclassify body atoms whose name matches an `.extern fn` as [`FnCallPredicate`].
@@ -278,7 +257,7 @@ impl Program {
     #[must_use]
     fn identify_needed_components(&self) -> (HashSet<usize>, HashSet<String>) {
         let mut needed_preds: HashSet<String> = self
-            .output_printsize_relations()
+            .idbs()
             .into_iter()
             .map(|d| d.name().to_string())
             .collect();
@@ -492,26 +471,6 @@ impl Lexeme for Program {
             }
         }
 
-        // Check for invalid combinations: EDB relations cannot have output/printsize, IDB relations cannot have input
-        for input_dir in &input_directives {
-            let relation_name = input_dir.relation_name();
-
-            // Check if this relation also has output directive
-            if output_relation_names.contains(relation_name) {
-                panic!(
-                    "Parser error: relation '{}' cannot have both input and output directives. Relations must be either EDB (input only) or IDB (output/printsize only).",
-                    relation_name
-                );
-            }
-
-            // Check if this relation also has printsize directive
-            if printsize_relation_names.contains(relation_name) {
-                panic!(
-                    "Parser error: relation '{}' cannot have both input and printsize directives. Relations must be either EDB (input only) or IDB (output/printsize only).",
-                    relation_name
-                );
-            }
-        }
 
         // Apply input directives (creates EDB relations)
         for input_dir in input_directives {

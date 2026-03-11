@@ -31,14 +31,10 @@ fn run_all_examples() {
 
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
             Ok(program) => {
-                let edbs = program.edbs();
-                let idbs = program.idbs();
-                let rules = program.rules();
                 let stats = format!(
-                    "rules={}, edbs={}, idbs={}",
-                    rules.len(),
-                    edbs.len(),
-                    idbs.len()
+                    "rules={}, relations={}",
+                    program.rules().len(),
+                    program.relations().len()
                 );
                 formatter.report_success(file_name, Some(&stats));
             }

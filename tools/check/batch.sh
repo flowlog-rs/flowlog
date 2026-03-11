@@ -28,7 +28,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-CONFIG_FILE_DEFAULT="${ROOT_DIR}/tools/check/config.txt"
+CONFIG_FILE_DEFAULT="${ROOT_DIR}/tools/config/config_integer.txt"
 CONFIG_FILE="$CONFIG_FILE_DEFAULT"
 COMPILE_ONLY=0
 EMPTY_FACTS_DIR=""
@@ -66,7 +66,7 @@ Environment:
 
 Examples:
   $(basename "$0")
-  $(basename "$0") tools/check/config.txt
+  $(basename "$0") tools/config/config_integer.txt
   $(basename "$0") --compile-only --sip
   $(basename "$0") --sip
   $(basename "$0") --str-intern

@@ -39,10 +39,9 @@ fn run_all_examples() {
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
             Ok(program) => {
                 let stats = format!(
-                    "rules={}, edbs={}, idbs={}",
+                    "rules={}, relations={}",
                     program.rules().len(),
-                    program.edbs().len(),
-                    program.idbs().len()
+                    program.relations().len()
                 );
                 formatter.report_success(file_name, Some(&stats));
             }
