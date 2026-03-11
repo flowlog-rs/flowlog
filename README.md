@@ -124,7 +124,7 @@ The regression harness in `tools/check` automates dataset downloads, code genera
 $ bash tools/check/check.sh
 ```
 
-- Programs and datasets are enumerated in `tools/check/config.txt`.
+- Programs and datasets are enumerated in config files under `tools/config/` (e.g., `tools/config/config_integer.txt`).
 - Datasets are cached under `facts/` and cleaned up between runs.
 - Logs and parsed relation sizes are written to `result/logs/` and `result/parsed/`.
 - The script creates temporary Cargo projects alongside the repository (e.g., `../flowlog_reach_livejournal`) and removes them after verification.

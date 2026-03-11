@@ -45,7 +45,7 @@ die() { log "$RED" "ERROR" "$*"; exit 1; }
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
-CONFIG_FILE="${1:-${ROOT_DIR}/tools/check/config_integer.txt}"
+CONFIG_FILE="${1:-${ROOT_DIR}/tools/config/config_integer.txt}"
 PROG_DIR="${ROOT_DIR}/example"
 FACT_DIR="${ROOT_DIR}/facts"
 LOG_DIR="${ROOT_DIR}/result/benchmark"
