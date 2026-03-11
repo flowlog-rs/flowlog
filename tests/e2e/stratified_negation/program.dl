@@ -1,0 +1,75 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : stratified_negation
+// Feature : multi-step stratified negation chain — no cycles, no panic
+// Covers  : negation-as-failure across 7 strata; both negation edges
+//           (¬contested, ¬has_assignment) point strictly forward so the
+//           program is safely stratifiable and must not warn or panic.
+//
+// Negation chain:
+//   pref → best_rank → top_choice → ¬contested → assigned → ¬has_assignment → unassigned
+//    S1       S2           S3            S4           S5            S6              S7
+//
+// Data layout
+//   task   (t:number)                      — {1, 2, 3, 4, 5}
+//   worker (w:number)                      — {1, 2, 3, 4, 5, 6}
+//   pref   (w:number, t:number, rank:number)
+//            worker 1 → task 1 (rank 1), task 3 (rank 2)
+//            worker 2 → task 1 (rank 1), task 2 (rank 2)   conflicts w1 on task 1
+//            worker 3 → task 2 (rank 1), task 5 (rank 1)   tie: two top-choices
+//            worker 4 → task 5 (rank 1), task 4 (rank 2)   conflicts w3 on task 5
+//            worker 5 → task 3 (rank 1), task 4 (rank 2)
+//            worker 6 → (no preferences)                   never reaches top_choice
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl task(t: number)
+.input task(IO="file", filename="Task", delimiter=",")
+
+.decl worker(w: number)
+.input worker(IO="file", filename="Worker", delimiter=",")
+
+.decl pref(w: number, t: number, rank: number)
+.input pref(IO="file", filename="Pref", delimiter=",")
+
+// ── S1/S2: best preference rank per worker, then top-choice task ─────────────
+// Verifies : min aggregation picks the lowest rank per worker;
+//            ties (worker 3, rank 1 on tasks 2 and 5) produce multiple rows.
+// Sample   : pref(3,2,1) and pref(3,5,1) → best_rank(3,1)
+//            → top_choice(3,2) and top_choice(3,5) both produced
+
+.decl best_rank(w: number, r: number)
+best_rank(w, min(rank)) :- pref(w, _, rank).
+
+.decl top_choice(w: number, t: number)
+top_choice(w, t) :- pref(w, t, r), best_rank(w, r).
+
+// ── S3/S4: conflict detection then negation-filtered assignment ───────────────
+// Verifies : !contested(t) suppresses any top_choice whose task was also
+//            claimed by a different worker; uncontested tasks go through.
+// Sample   : task 1 contested by workers 1 & 2 → neither assigned
+//            task 5 contested by workers 3 & 4 → neither assigned
+//            task 2 only top-choice of worker 3 → assigned(3,2) produced
+//            task 3 only top-choice of worker 5 → assigned(5,3) produced
+
+.decl contested(t: number)
+contested(t) :- top_choice(w1, t), top_choice(w2, t), w1 != w2.
+
+.decl assigned(w: number, t: number)
+assigned(w, t) :- top_choice(w, t), !contested(t).
+
+// ── S5/S6: identify unassigned workers via second negation edge ───────────────
+// Verifies : !has_assignment(w) filters out workers that received any task;
+//            worker 6 (no preferences) is unassigned without ever entering
+//            top_choice — the negation chain handles both cases correctly.
+// Sample   : workers 1,2 lost contest; worker 4 lost contest; worker 6 had
+//            no preferences → all four appear in unassigned
+
+.decl has_assignment(w: number)
+has_assignment(w) :- assigned(w, _).
+
+.decl unassigned(w: number)
+unassigned(w) :- worker(w), !has_assignment(w).
+
+.output assigned
+.output unassigned
