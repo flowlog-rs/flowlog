@@ -1,0 +1,9 @@
+// Level B — transitive closure over edges.
+// Imports C for the EDB, imported by a.dl.
+
+.import "c.dl"
+
+.decl tc(x: int32, y: int32)
+tc(x, y) :- edge(x, y).
+tc(x, y) :- tc(x, z), edge(z, y).
+.output tc
