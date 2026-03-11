@@ -300,12 +300,12 @@ impl Program {
             match node.as_rule() {
                 Rule::declaration => relations.push(Relation::from_parsed_rule(node)),
                 Rule::extern_fn => udfs.push(ExternFn::from_parsed_rule(node)),
-                Rule::import_directive => {
+                Rule::import_directive | Rule::include_directive => {
                     // Child is the `string` token, e.g. `"lib/base.dl"` — strip quotes.
                     let raw = node
                         .into_inner()
                         .next()
-                        .expect("Parser error: import directive missing path")
+                        .expect("Parser error: import/include directive missing path")
                         .as_str();
                     import_paths.push(raw.trim_matches('"').to_string());
                 }
@@ -350,7 +350,7 @@ impl Program {
     ///
     /// Panics on duplicate directives or directives that reference undeclared relations.
     fn apply_directives(
-        relations: &mut Vec<Relation>,
+        relations: &mut [Relation],
         input_directives: Vec<InputDirective>,
         output_directives: Vec<OutputDirective>,
         printsize_directives: Vec<PrintSizeDirective>,
