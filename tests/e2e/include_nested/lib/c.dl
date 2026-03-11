@@ -1,5 +1,5 @@
 // Level C — raw EDB declarations.
-// Imported by b.dl.
+// Included by b.dl.
 
 .decl edge(x: int32, y: int32)
 .input edge(IO="file", filename="edge", delimiter=",")

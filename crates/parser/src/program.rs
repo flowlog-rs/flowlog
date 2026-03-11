@@ -300,7 +300,7 @@ impl Program {
             match node.as_rule() {
                 Rule::declaration => relations.push(Relation::from_parsed_rule(node)),
                 Rule::extern_fn => udfs.push(ExternFn::from_parsed_rule(node)),
-                Rule::import_directive | Rule::include_directive => {
+                Rule::include_directive => {
                     // Child is the `string` token, e.g. `"lib/base.dl"` — strip quotes.
                     let raw = node
                         .into_inner()

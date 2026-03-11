@@ -1,5 +1,5 @@
 // Level A — nodes reachable from themselves (cycle membership).
-// Imports B for tc, imported by program.dl.
+// Includes b.dl for tc; included by program.dl.
 
 .include "b.dl"
 

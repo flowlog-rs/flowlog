@@ -1,8 +1,8 @@
 // ════════════════════════════════════════════════════════════════════════════
-// Suite   : import_nested
-// Feature : nested .import chain  program → lib/a → lib/b → lib/c
+// Suite   : include_nested
+// Feature : nested .include chain  program → lib/a → lib/b → lib/c
 // Verifies: declarations and rules from all depths are visible after merge;
-//           the .output directives in imported files are honoured.
+//           the .output directives in included files are honoured.
 //
 // Graph (edges)
 //   1 → 2 → 3 → 1   (a cycle: all three nodes can reach themselves)
@@ -12,4 +12,4 @@
 // Expected in_cycle: nodes whose tc includes a self-loop → {1, 2, 3}
 // ════════════════════════════════════════════════════════════════════════════
 
-.import "lib/a.dl"
+.include "lib/a.dl"

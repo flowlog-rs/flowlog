@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = {
     SOI ~
-    (declaration | extern_fn | import_directive | include_directive | input_directive | output_directive | printsize_directive | fact | rule)* ~
+    (declaration | extern_fn | include_directive | input_directive | output_directive | printsize_directive | fact | rule)* ~
     EOI
 }
 
@@ -137,12 +137,9 @@ printsize_directive = {
     ".printsize" ~ relation_name
 }
 
-// Import / include directives — both pull another .dl file into the current
-// program. Path is resolved relative to the importing file's directory.
-// Examples:
-//   .import "lib/base.dl"
-//   .include "lib/base.dl"
-import_directive  = { ".import"  ~ string }
+// Include directive — pull another .dl file into the current program.
+// Path is resolved relative to the including file's directory.
+// Example: .include "lib/base.dl"
 include_directive = { ".include" ~ string }
 
 // Comma-separated list of attribute declarations
