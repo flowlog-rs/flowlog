@@ -6,7 +6,8 @@
 use crate::dependency_graph::DependencyGraph;
 use itertools::Itertools;
 use parser::{
-    AggregationOperator, FlowLogRule, HeadArg, LoopCondition, Predicate, Program, Segment,
+    AggregationOperator, FlowLogRule, HeadArg, LoopCondition, LoopStopExpr, Predicate, Program,
+    Segment,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -234,6 +235,7 @@ impl Stratifier {
         };
 
         instance.build_stratum_metadata();
+        instance.validate_loop_conditions();
         instance.warn_aggregation();
 
         debug!("\n{}", instance);
@@ -606,6 +608,39 @@ impl Stratifier {
             available.extend(&edb_fps);
             self.stratum_available_relations.push(available);
             accumulated.extend(leave);
+        }
+    }
+
+    /// Validate that every relation referenced in a loop block's stop condition
+    /// is iterative (i.e., updated during the loop's recursion).
+    ///
+    /// A [`LoopStopExpr::RelationEmpty`] or [`LoopStopExpr::RelationNonEmpty`]
+    /// condition that references a non-iterative relation is always static — its
+    /// value is fixed before the first iteration and never changes, so it cannot
+    /// meaningfully control termination.  This is rejected as a hard error.
+    fn validate_loop_conditions(&self) {
+        for (idx, condition) in self.stratum_loop_condition.iter().enumerate() {
+            let Some(cond) = condition else { continue };
+            let iterative = &self.stratum_iterative_relation[idx];
+
+            for stop_expr in cond.exprs() {
+                let (rel_name, fp) = match stop_expr {
+                    LoopStopExpr::RelationEmpty(name, fp)
+                    | LoopStopExpr::RelationNonEmpty(name, fp) => (name.as_str(), *fp),
+                    _ => continue,
+                };
+                if !iterative.contains(&fp) {
+                    panic!(
+                        "Stratifier error: loop condition in stratum #{} references relation \
+                         `{}`, which is not iterative (no recursive rule inside the loop body \
+                         derives it).\n  \
+                         Hint: only relations that appear in both the head and body of rules \
+                         within the loop block can drive a stop condition.",
+                        idx + 1,
+                        rel_name
+                    );
+                }
+            }
         }
     }
 

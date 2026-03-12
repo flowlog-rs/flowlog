@@ -535,13 +535,11 @@ impl Program {
         }
     }
 
-    /// Validate that every relation name appearing in a loop condition:
-    /// 1. Has a corresponding `.decl` declaration.
-    /// 2. Is derived within the same loop block (i.e. appears as the head of at
-    ///    least one rule inside it).  A stop condition on a relation that is
-    ///    never updated inside the loop is static — its value never changes
-    ///    during iteration, making the condition trivially fixed from the start,
-    ///    which is always a programmer error.
+    /// Validate that every relation name appearing in a loop condition has a
+    /// corresponding `.decl` declaration.
+    ///
+    /// Whether the relation is actually iterative within the loop is a deeper
+    /// semantic property checked later by the stratifier.
     fn validate_loop_conditions(items: &[Segment], relations: &[Relation]) {
         use crate::logic::LoopStopExpr;
 
@@ -552,16 +550,9 @@ impl Program {
                 continue;
             };
 
-            let derived_in_block: HashSet<&str> =
-                block.rules().iter().map(|r| r.head().name()).collect();
-
-            let condition = block.condition();
-            let all_exprs =
-                std::iter::once(condition.first()).chain(condition.rest().iter().map(|(_, e)| e));
-
-            for expr in all_exprs {
+            for expr in block.condition().exprs() {
                 let name = match expr {
-                    LoopStopExpr::RelationNonEmpty(n) | LoopStopExpr::RelationEmpty(n) => {
+                    LoopStopExpr::RelationNonEmpty(n, _) | LoopStopExpr::RelationEmpty(n, _) => {
                         Some(n.as_str())
                     }
                     LoopStopExpr::Fixpoint | LoopStopExpr::Iteration(_) => None,
@@ -571,14 +562,6 @@ impl Program {
                         panic!(
                             "Parser error: loop condition references undeclared relation '{}'. \
                              Declare it with .decl first.",
-                            name
-                        );
-                    }
-                    if !derived_in_block.contains(name) {
-                        panic!(
-                            "Parser error: loop condition references relation '{}', but it is \
-                             never derived inside this loop block. The condition would be static \
-                             and never change during iteration.",
                             name
                         );
                     }

@@ -8,7 +8,7 @@ use catalog::Catalog;
 use common::Config;
 use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
-use parser::{AggregationOperator, HeadArg};
+use parser::{AggregationOperator, HeadArg, LoopCondition};
 use profiler::{with_profiler, Profiler};
 use stratifier::Stratifier;
 
@@ -66,6 +66,10 @@ pub struct StratumPlanner {
     /// Values are `(fn_name, start_position, end_position, output_arity)` tuples,
     /// where start..end is the range of flattened arg positions in the output layout.
     idb_to_udf_map: HashMap<u64, (String, usize, usize, usize)>,
+
+    /// Loop stop condition for this stratum, if it was declared as a loop block.
+    /// `None` for plain strata (which run to fixpoint implicitly).
+    loop_condition: Option<LoopCondition>,
 }
 
 impl StratumPlanner {
@@ -178,6 +182,7 @@ impl StratumPlanner {
             head_to_idb_map: HashMap::new(),
             idb_to_aggregation_map: HashMap::new(),
             idb_to_udf_map: HashMap::new(),
+            loop_condition: stratifier.loop_condition(stratum_idx).cloned(),
         };
         stratum_planner.materialize_transformations();
 
@@ -271,6 +276,12 @@ impl StratumPlanner {
     #[inline]
     pub fn idb_to_udf_map(&self) -> &HashMap<u64, (String, usize, usize, usize)> {
         &self.idb_to_udf_map
+    }
+
+    /// Get the loop stop condition for this stratum, if it is a loop block.
+    #[inline]
+    pub fn loop_condition(&self) -> Option<&LoopCondition> {
+        self.loop_condition.as_ref()
     }
 
     /// Check if this stratum is recursive.

@@ -11,6 +11,7 @@
 
 use super::FlowLogRule;
 use crate::{Lexeme, Rule};
+use common::compute_fp;
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -29,9 +30,9 @@ pub enum LoopStopExpr {
     /// Stop after exactly N iterations.
     Iteration(u64),
     /// Stop when the named relation becomes empty.
-    RelationEmpty(String),
+    RelationEmpty(String, u64),
     /// Stop when the named relation becomes non-empty.
-    RelationNonEmpty(String),
+    RelationNonEmpty(String, u64),
 }
 
 /// The composite stop condition of a loop block.
@@ -58,6 +59,12 @@ impl LoopCondition {
     #[must_use]
     pub fn rest(&self) -> &[(LoopConnective, LoopStopExpr)] {
         &self.rest
+    }
+
+    /// Returns an iterator over all stop expressions in the condition,
+    /// starting with [`first`](Self::first) and followed by the `rest`.
+    pub fn exprs(&self) -> impl Iterator<Item = &LoopStopExpr> {
+        std::iter::once(&self.first).chain(self.rest.iter().map(|(_, e)| e))
     }
 }
 
@@ -98,8 +105,8 @@ impl fmt::Display for LoopStopExpr {
         match self {
             Self::Fixpoint => write!(f, "fixpoint"),
             Self::Iteration(n) => write!(f, "{n}"),
-            Self::RelationEmpty(name) => write!(f, "!{name}"),
-            Self::RelationNonEmpty(name) => write!(f, "{name}"),
+            Self::RelationEmpty(name, _) => write!(f, "!{name}"),
+            Self::RelationNonEmpty(name, _) => write!(f, "{name}"),
         }
     }
 }
@@ -141,7 +148,10 @@ impl Lexeme for LoopStopExpr {
     fn from_parsed_rule(pair: Pair<Rule>) -> Self {
         // `pair` is `loop_stop_expr` — its single inner child is one of the
         // four concrete stop-expression rules.
-        let inner = pair.into_inner().next().expect("loop_stop_expr: missing child");
+        let inner = pair
+            .into_inner()
+            .next()
+            .expect("loop_stop_expr: missing child");
         match inner.as_rule() {
             Rule::loop_fixpoint => Self::Fixpoint,
             Rule::loop_iter_count => {
@@ -164,7 +174,8 @@ impl Lexeme for LoopStopExpr {
                     .expect("loop_relation_empty: missing relation_name")
                     .as_str()
                     .to_string();
-                Self::RelationEmpty(name)
+                let fp = compute_fp(&name);
+                Self::RelationEmpty(name, fp)
             }
             Rule::loop_relation_non_empty => {
                 // inner child: relation_name
@@ -174,7 +185,8 @@ impl Lexeme for LoopStopExpr {
                     .expect("loop_relation_non_empty: missing relation_name")
                     .as_str()
                     .to_string();
-                Self::RelationNonEmpty(name)
+                let fp = compute_fp(&name);
+                Self::RelationNonEmpty(name, fp)
             }
             r => panic!("loop_stop_expr: unexpected rule {r:?}"),
         }
@@ -185,18 +197,27 @@ impl Lexeme for LoopCondition {
     fn from_parsed_rule(pair: Pair<Rule>) -> Self {
         let mut inner = pair.into_inner();
 
-        let first_stop = inner.next().expect("loop_condition: missing first stop expr");
+        let first_stop = inner
+            .next()
+            .expect("loop_condition: missing first stop expr");
         let first = LoopStopExpr::from_parsed_rule(first_stop);
 
         let mut rest = Vec::new();
         // Remaining children alternate: loop_connective, loop_stop_expr, ...
         while let Some(conn_pair) = inner.next() {
-            let connective = match conn_pair.into_inner().next().expect("loop_connective: missing child").as_rule() {
+            let connective = match conn_pair
+                .into_inner()
+                .next()
+                .expect("loop_connective: missing child")
+                .as_rule()
+            {
                 Rule::loop_and => LoopConnective::And,
                 Rule::loop_or => LoopConnective::Or,
                 r => panic!("loop_connective: unexpected rule {r:?}"),
             };
-            let expr_pair = inner.next().expect("loop_condition: missing stop expr after connective");
+            let expr_pair = inner
+                .next()
+                .expect("loop_condition: missing stop expr after connective");
             let expr = LoopStopExpr::from_parsed_rule(expr_pair);
             rest.push((connective, expr));
         }
@@ -255,7 +276,7 @@ mod tests {
         let block = parse_loop_block("loop done { }");
         assert_eq!(
             *block.condition().first(),
-            LoopStopExpr::RelationNonEmpty("done".to_string())
+            LoopStopExpr::RelationNonEmpty("done".to_string(), compute_fp("done"))
         );
     }
 
@@ -264,7 +285,7 @@ mod tests {
         let block = parse_loop_block("loop !queue { }");
         assert_eq!(
             *block.condition().first(),
-            LoopStopExpr::RelationEmpty("queue".to_string())
+            LoopStopExpr::RelationEmpty("queue".to_string(), compute_fp("queue"))
         );
     }
 
@@ -283,7 +304,10 @@ mod tests {
         let block = parse_loop_block("loop fixpoint or done { }");
         let rest = block.condition().rest();
         assert_eq!(rest[0].0, LoopConnective::Or);
-        assert_eq!(rest[0].1, LoopStopExpr::RelationNonEmpty("done".to_string()));
+        assert_eq!(
+            rest[0].1,
+            LoopStopExpr::RelationNonEmpty("done".to_string(), compute_fp("done"))
+        );
     }
 
     #[test]
