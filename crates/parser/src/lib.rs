@@ -8,15 +8,18 @@ pub mod declaration;
 pub mod logic;
 pub mod primitive;
 pub mod program;
+pub mod segment;
 
 // Re-export core types for convenient access
 pub use declaration::{Attribute, ExternFn, Relation};
 pub use logic::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
-    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head, HeadArg, Predicate,
+    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head, HeadArg,
+    LoopBlock, LoopCondition, LoopConnective, LoopStopExpr, Predicate,
 };
 pub use primitive::{ConstType, DataType};
 pub use program::Program;
+pub use segment::Segment;
 
 use pest::iterators::Pair;
 use pest_derive::Parser;

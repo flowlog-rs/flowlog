@@ -32,7 +32,7 @@ fn main() {
     let program = Program::parse(config.program());
 
     // Stratify the program
-    let stratifier = Stratifier::from_program(&program);
+    let stratifier = Stratifier::from_program(&program, config.extended_enabled());
 
     // Plan each stratum using StratumPlanner
     let mut optimizer = Optimizer::new();
@@ -79,7 +79,7 @@ fn run_all_examples(config: &Config) {
 
         match std::panic::catch_unwind(|| {
             let program = Program::parse(file_path.to_str().unwrap());
-            let stratifier = Stratifier::from_program(&program);
+            let stratifier = Stratifier::from_program(&program, config.extended_enabled());
             let mut optimizer = Optimizer::new();
             let mut profiler = if config.profiling_enabled() {
                 Some(Profiler::default())

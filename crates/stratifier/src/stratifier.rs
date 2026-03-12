@@ -1,115 +1,348 @@
-//! Stratification for FlowLog Datalog programs.
+//! Core stratification logic for FlowLog programs.
+//!
+//! See the crate-level documentation for an overview of strata, recursion, and
+//! the Extended Datalog mode.
 
 use crate::dependency_graph::DependencyGraph;
 use itertools::Itertools;
-use parser::{AggregationOperator, FlowLogRule, HeadArg, Predicate, Program};
+use parser::{
+    AggregationOperator, FlowLogRule, HeadArg, LoopCondition, Predicate, Program, Segment,
+};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use tracing::{debug, info, warn};
 
-/// Stratify a program into group of rules.
+// =============================================================================
+// Stratifier
+// =============================================================================
+
+/// Evaluation plan for a FlowLog program, partitioned into ordered strata.
 ///
-/// Each stratum is a set of rule IDs that can be evaluated parallelyas a unit after all
-/// preceding strata have been computed. A stratum is marked recursive when it
-/// corresponds to a strongly connected component (SCC) with more than one rule
-/// or a single rule with a self‑dependency.
+/// Each stratum is a slice of rule IDs that must be evaluated as a unit after
+/// all preceding strata have been fully computed.  The stratifier identifies
+/// two kinds of strata:
+///
+/// - **Non-recursive** — rules with no mutual dependency cycle; evaluated in a
+///   single pass.
+/// - **Recursive** — rules forming a strongly-connected component (SCC), or a
+///   single rule that references its own head; evaluated iteratively until a
+///   fixpoint or stop condition is reached.
+///
+/// ## Loop blocks
+///
+/// A `loop` block in the source program is always a **single recursive
+/// stratum** with an associated [`LoopCondition`] that controls when iteration
+/// stops.  All rules inside the block iterate together — there is exactly one
+/// recursive stratum per `loop` block, with no further internal stratification.
+/// Loop blocks act as hard evaluation barriers: the stratifier cannot move
+/// rules across their boundaries.
+///
+/// ## Extended Datalog mode
+///
+/// When `extended = true` is passed to [`Stratifier::from_program`], the
+/// program is validated under *Extended Datalog* semantics: any recursive
+/// dependency found in plain (non-loop) rules is a hard error.  All recursion
+/// must be expressed explicitly via `loop` blocks.  In standard mode
+/// (`extended = false`) recursion in plain rules is allowed and handled
+/// implicitly, matching classic stratified-Datalog semantics.
+///
+/// ## Relation metadata
+///
+/// After stratification, three sets of relation fingerprints are precomputed
+/// for each stratum:
+///
+/// | Metadata | Meaning |
+/// |----------|---------|
+/// | *iterative* | Relations that participate in the recursive fixpoint loop (recursive strata only). |
+/// | *leave* | Relations whose values must be retained after the stratum finishes, because a later stratum or an IDB output needs them. |
+/// | *available* | Relations that are already fully computed before this stratum begins (EDB + leaves from all prior strata). |
 #[derive(Debug, Clone)]
 pub struct Stratifier {
     /// The original program being stratified.
     program: Program,
 
-    /// Underlying dependency graph (rule -> rules it depends on).
-    dependency_graph: DependencyGraph,
-
-    /// Rule IDs per stratum in evaluation order
+    /// Rule IDs per stratum in evaluation order.
+    /// Each inner `Vec<usize>` is one stratum; IDs are global source-order indices.
     stratum: Vec<Vec<usize>>,
 
-    /// True iff corresponding stratum is recursive
+    /// `true` iff the corresponding stratum is recursive (parallel with `stratum`).
     is_recursive_stratum_bitmap: Vec<bool>,
 
-    /// Mapping of stratum IDs to their iterative relations (rule IDs) (recursive strata only).
+    /// The stop condition for each stratum.
+    ///
+    /// `Some` only for loop-derived strata; `None` for SCC-derived plain strata.
+    /// Parallel with `stratum`.
+    stratum_loop_condition: Vec<Option<LoopCondition>>,
+
+    /// Relation fingerprints that participate in the recursive fixpoint loop.
+    ///
+    /// Non-empty only for recursive strata: the set of head relations that also
+    /// appear in the bodies of rules in the same stratum.  Parallel with `stratum`.
     stratum_iterative_relation: Vec<Vec<u64>>,
 
-    /// Mapping of stratum IDs to their leave relations (rule IDs) required by later stratum.
+    /// Relation fingerprints that must be preserved after a stratum finishes.
+    ///
+    /// A head relation is in the leave set if it is referenced by any later
+    /// stratum or is annotated as an IDB output (`.output` / `.printsize`).
+    /// Parallel with `stratum`.
     stratum_leave_relation: Vec<Vec<u64>>,
 
-    /// Mapping of stratum IDs to the relations available before planning that stratum.
+    /// Relations that are fully computed before a stratum begins.
+    ///
+    /// Always includes all EDB relations.  For stratum *i*, this is the union
+    /// of the leave sets of strata *0 … i-1*.  Parallel with `stratum`.
     stratum_available_relations: Vec<HashSet<u64>>,
 }
 
+// =============================================================================
+// Public API
+// =============================================================================
+
 impl Stratifier {
-    /// The original (owned) program being stratified.
+    /// The original program that was stratified.
     #[must_use]
     pub fn program(&self) -> &Program {
         &self.program
     }
 
-    /// Bitmap indicating which strata are recursive (parallel with `strata`).
+    /// A parallel bitmap indicating which strata are recursive.
+    ///
+    /// `bitmap[i]` is `true` when stratum *i* contains a dependency cycle and
+    /// requires iterative evaluation.
     #[must_use]
     pub fn is_recursive_stratum_bitmap(&self) -> &[bool] {
         &self.is_recursive_stratum_bitmap
     }
 
-    /// Whether the given stratum (by index) is recursive.
+    /// Returns `true` if stratum `idx` is recursive.
     #[must_use]
     pub fn is_recursive_stratum(&self, idx: usize) -> bool {
         self.is_recursive_stratum_bitmap[idx]
     }
 
-    /// Return stratum as rule references instead of IDs (helper for display/tests).
+    /// Returns the stop condition for a loop-derived stratum, or `None` for a
+    /// plain SCC-derived stratum.
     #[must_use]
-    pub fn stratum(&self) -> Vec<Vec<&FlowLogRule>> {
-        let mut out = Vec::with_capacity(self.stratum.len());
-        for s in &self.stratum {
-            out.push(s.iter().map(|&rid| &self.program.rules()[rid]).collect());
-        }
-        out
+    pub fn loop_condition(&self, idx: usize) -> Option<&LoopCondition> {
+        self.stratum_loop_condition[idx].as_ref()
     }
 
-    /// Return iterative relations.
+    /// Returns each stratum as a slice of rule references (resolved from IDs).
+    ///
+    /// Primarily useful for display and tests; prefer index-based accessors for
+    /// performance-sensitive paths.
+    #[must_use]
+    pub fn stratum(&self) -> Vec<Vec<&FlowLogRule>> {
+        self.stratum
+            .iter()
+            .map(|s| s.iter().map(|&rid| self.program.rule(rid)).collect())
+            .collect()
+    }
+
+    /// Relation fingerprints that participate in the fixpoint loop for stratum `idx`.
+    ///
+    /// Empty for non-recursive strata.
     #[must_use]
     pub fn stratum_iterative_relation(&self, idx: usize) -> &Vec<u64> {
         &self.stratum_iterative_relation[idx]
     }
 
-    /// Return leave relations.
+    /// Relation fingerprints whose values must be retained after stratum `idx`.
     #[must_use]
     pub fn stratum_leave_relation(&self, idx: usize) -> &Vec<u64> {
         &self.stratum_leave_relation[idx]
     }
 
-    /// Return relations available prior to the given stratum (union of leaves from earlier strata).
+    /// Relations that are fully computed before stratum `idx` begins.
+    ///
+    /// Always includes EDB relations and the leave sets of all earlier strata.
     #[must_use]
     pub fn stratum_available_relations(&self, idx: usize) -> &HashSet<u64> {
         &self.stratum_available_relations[idx]
     }
+}
 
-    /// Build strata by computing SCCs then merging independent non‑recursive strata.
+// =============================================================================
+// Construction
+// =============================================================================
+
+impl Stratifier {
+    /// Stratify a program, returning an ordered evaluation plan.
     ///
-    /// Algorithm outline:
-    /// 1. Build rule dependency graph (already polarity-agnostic).
-    /// 2. Run Kosaraju to obtain SCCs (gives base strata + recursion detection).
-    /// 3. Mark recursive strata (size > 1 or self loop).
-    /// 4. Iteratively merge all currently dependency‑free non‑recursive strata
-    ///    into a single wider stratum to reduce evaluation passes.
+    /// Processes [`Segment`]s in source order:
+    ///
+    /// - **`Segment::Plain`** — stratified via SCC detection + merging.
+    ///   Cross-segment references are treated as already-computed EDB from
+    ///   prior segments.  In Extended Datalog mode (`extended = true`), any
+    ///   recursive SCC here is a hard error.
+    ///
+    /// - **`Segment::Loop`** — always becomes exactly one recursive stratum
+    ///   tagged with its [`LoopCondition`].  All rules inside the block
+    ///   iterate together; no further internal stratification is performed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `extended = true` and a recursive dependency is detected
+    /// outside a `loop` block.
     #[must_use]
-    pub fn from_program(program: &Program) -> Self {
-        let dependency_graph = DependencyGraph::from_program(program);
-        let dep_map = dependency_graph.dependency_map();
+    pub fn from_program(program: &Program, extended: bool) -> Self {
+        let mut strata: Vec<Vec<usize>> = Vec::new();
+        let mut bitmap: Vec<bool> = Vec::new();
+        let mut loop_conditions: Vec<Option<LoopCondition>> = Vec::new();
+        let mut id_offset = 0usize;
 
-        // Kosaraju step 1: order by finish time.
-        let mut order = Vec::with_capacity(dep_map.len());
-        let mut visited = vec![false; dep_map.len()];
-        for &rule_id in dep_map.keys() {
-            Self::dfs_order(dep_map, &mut visited, &mut order, rule_id);
+        for seg in program.segments() {
+            match seg {
+                Segment::Plain(rules) => {
+                    let (seg_strata, seg_bitmap) =
+                        Self::stratify_segment(rules, id_offset, extended);
+                    let n = seg_strata.len();
+                    strata.extend(seg_strata);
+                    bitmap.extend(seg_bitmap);
+                    loop_conditions.extend(std::iter::repeat_n(None, n));
+                    id_offset += rules.len();
+                }
+                Segment::Loop(block) => {
+                    // A loop block is always exactly one recursive stratum.
+                    // No SCC analysis is performed inside: all rules iterate
+                    // together under the block's stop condition.
+                    let rules = block.rules();
+                    let rule_count = rules.len();
+
+                    // Every negative edge inside a loop block is negation
+                    // through recursion — the whole block is one recursive
+                    // stratum, so no filter is needed.
+                    let dep_graph = DependencyGraph::from_rules(rules);
+                    Self::warn_negation_edges(&dep_graph, rules, id_offset, |_, _| true);
+
+                    strata.push((id_offset..id_offset + rule_count).collect());
+                    bitmap.push(true);
+                    loop_conditions.push(Some(block.condition().clone()));
+                    id_offset += rule_count;
+                }
+            }
+        }
+
+        let mut instance = Self {
+            program: program.clone(),
+            stratum: strata,
+            is_recursive_stratum_bitmap: bitmap,
+            stratum_loop_condition: loop_conditions,
+            stratum_iterative_relation: Vec::new(),
+            stratum_leave_relation: Vec::new(),
+            stratum_available_relations: Vec::new(),
+        };
+
+        instance.build_stratum_metadata();
+        instance.warn_aggregation();
+
+        debug!("\n{}", instance);
+        info!(
+            "Successfully stratified program: produced {} strata ({} recursive)",
+            instance.stratum.len(),
+            instance
+                .is_recursive_stratum_bitmap
+                .iter()
+                .filter(|&&b| b)
+                .count()
+        );
+
+        instance
+    }
+
+    /// Stratify a single `Segment::Plain` slice of rules.
+    ///
+    /// Rule IDs are 0-based local indices within the slice; on return they are
+    /// shifted to global IDs by adding `id_offset`.
+    ///
+    /// Steps:
+    /// 1. Build the intra-segment dependency graph.
+    /// 2. Compute SCCs (Kosaraju's algorithm).
+    /// 3. In Extended Datalog mode, reject any recursive SCC.
+    /// 4. Emit negation-in-recursive-stratum warnings.
+    /// 5. Merge dependency-free non-recursive SCCs into a single wider stratum
+    ///    to reduce evaluation passes.
+    fn stratify_segment(
+        rules: &[FlowLogRule],
+        id_offset: usize,
+        extended: bool,
+    ) -> (Vec<Vec<usize>>, Vec<bool>) {
+        if rules.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+
+        let dep_graph = DependencyGraph::from_rules(rules);
+        let dep_map = dep_graph.dependency_map();
+        let (sccs, scc_bitmap, scc_id) = Self::compute_sccs(dep_map);
+
+        // Extended Datalog mode: recursion in plain rules is forbidden.
+        // Every recursive SCC must be inside an explicit `loop` block.
+        if extended {
+            for (scc, &is_rec) in sccs.iter().zip(scc_bitmap.iter()) {
+                if is_rec {
+                    let rule_ids: Vec<String> = scc
+                        .iter()
+                        .map(|&local| (local + id_offset).to_string())
+                        .collect();
+                    panic!(
+                        "Extended Datalog error: recursive rules must be inside an explicit \
+                         `loop` block, but recursion was found in plain rules: [{}]\n  \
+                         Hint: wrap these rules in `loop fixpoint {{ ... }}` or another loop form.",
+                        rule_ids.join(", ")
+                    );
+                }
+            }
+        }
+
+        // Warn when negation appears on a back-edge within a recursive SCC.
+        // The filter keeps only edges where both ends are in the same recursive SCC.
+        Self::warn_negation_edges(&dep_graph, rules, id_offset, |src, dst| {
+            scc_id.get(&src) == scc_id.get(&dst)
+                && scc_id.get(&src).is_some_and(|&idx| scc_bitmap[idx])
+        });
+
+        let (merged_sccs, merged_bitmap) = Self::merge_strata(sccs, scc_bitmap, dep_map);
+
+        // Shift local IDs to global IDs.
+        let global_strata = merged_sccs
+            .into_iter()
+            .map(|s| s.into_iter().map(|local| local + id_offset).collect())
+            .collect();
+
+        (global_strata, merged_bitmap)
+    }
+}
+
+// =============================================================================
+// SCC computation (Kosaraju's algorithm)
+// =============================================================================
+
+impl Stratifier {
+    /// Compute SCCs of the dependency graph using Kosaraju's two-pass DFS.
+    ///
+    /// Returns `(sccs, recursive_bitmap, scc_id_map)` where:
+    /// - `sccs` — each SCC as a list of local rule IDs.
+    /// - `recursive_bitmap` — `true` when the corresponding SCC has a cycle
+    ///   (more than one rule, or a single rule with a self-dependency).
+    /// - `scc_id_map` — maps each rule ID to its SCC index; used for
+    ///   negation-through-recursion warnings.
+    fn compute_sccs(
+        dep_map: &HashMap<usize, HashSet<usize>>,
+    ) -> (Vec<Vec<usize>>, Vec<bool>, HashMap<usize, usize>) {
+        let n = dep_map.len();
+
+        // Pass 1: DFS on the original graph to record nodes in reverse finish order.
+        let mut order = Vec::with_capacity(n);
+        let mut visited = vec![false; n];
+        for &id in dep_map.keys() {
+            Self::dfs_order(dep_map, &mut visited, &mut order, id);
         }
         order.reverse();
 
-        // Transpose graph.
+        // Pass 2: DFS on the transposed graph in reverse-finish order.
+        // Each DFS tree rooted in this pass is one SCC.
         let transpose = Self::transpose(dep_map);
-
-        // Kosaraju step 2: assign SCCs on transposed graph in reverse finish order.
-        let mut assigned = vec![false; dep_map.len()];
+        let mut assigned = vec![false; n];
         let mut sccs: Vec<Vec<usize>> = Vec::new();
         for node in order {
             if !assigned[node] {
@@ -119,117 +352,275 @@ impl Stratifier {
             }
         }
 
-        // Topological order of SCCs (already in reverse postorder of transpose if we reverse again):
-        // We currently have SCCs in evaluation order (dependencies before dependents) because
-        // we processed original order reversed; keep as-is.
-
-        // Identify recursion (multi-node SCC or self-loop) and collect strata.
-        let mut scc_id = vec![0usize; dep_map.len()];
-        let mut strata: Vec<Vec<usize>> = Vec::new();
-        let mut recursive_bitmap: Vec<bool> = Vec::new();
-        for (idx, scc) in sccs.into_iter().enumerate() {
-            let is_recursive = scc.len() > 1 || {
-                let r = scc[0];
-                dep_map.get(&r).is_some_and(|deps| deps.contains(&r))
-            };
-            for &rule_id in &scc {
-                scc_id[rule_id] = idx;
-            }
-            strata.push(scc);
-            recursive_bitmap.push(is_recursive);
-        }
-
-        // Warn: negation through recursion (stratified negation).
-        // A single scan over negative edges using the precomputed scc_id array.
-        for &(src, dst) in dependency_graph.negative_edges() {
-            if scc_id[src] == scc_id[dst] && recursive_bitmap[scc_id[src]] {
-                let src_rule = &program.rules()[src];
-                if src == dst {
-                    warn!(
-                        "Negation in recursive stratum (rule {} negates itself): \
-                         negation is not monotone; the fixpoint may never converge.\n  \
-                         Rule {}: {}",
-                        src, src, src_rule
-                    );
-                } else {
-                    let dst_rule = &program.rules()[dst];
-                    warn!(
-                        "Negation in recursive stratum (rule {} negates rule {}): \
-                         negation is not monotone; the fixpoint may never converge.\n  \
-                         Rule {}: {}\n  Rule {}: {}",
-                        src, dst, src, src_rule, dst, dst_rule
-                    );
-                }
+        // Classify each SCC as recursive or not, and build the scc_id lookup.
+        let mut scc_id: HashMap<usize, usize> = HashMap::new();
+        let mut bitmap: Vec<bool> = Vec::new();
+        for (idx, scc) in sccs.iter().enumerate() {
+            let is_rec = scc.len() > 1
+                || dep_map
+                    .get(&scc[0])
+                    .is_some_and(|deps| deps.contains(&scc[0]));
+            bitmap.push(is_rec);
+            for &rid in scc {
+                scc_id.insert(rid, idx);
             }
         }
 
-        // Merge phase: repeatedly take all remaining strata with no external
-        // dependencies. Merge all non‑recursive ones together; keep recursive
-        // ones separate to preserve fixpoint boundaries.
+        (sccs, bitmap, scc_id)
+    }
+
+    /// Merge phase: collapse dependency-free non-recursive SCCs into a single
+    /// wider stratum to reduce the total number of evaluation passes.
+    ///
+    /// Recursive SCCs are never merged — each keeps its own fixpoint boundary.
+    ///
+    /// The algorithm repeatedly peels off all SCCs that have no unresolved
+    /// dependency (i.e. no dependency on a rule still in `pending`), batches
+    /// the non-recursive ones into one combined stratum, and emits each
+    /// recursive one as its own stratum.
+    fn merge_strata(
+        strata: Vec<Vec<usize>>,
+        bitmap: Vec<bool>,
+        dep_map: &HashMap<usize, HashSet<usize>>,
+    ) -> (Vec<Vec<usize>>, Vec<bool>) {
         let mut merged: Vec<Vec<usize>> = Vec::new();
         let mut merged_bitmap: Vec<bool> = Vec::new();
-        let mut pending = strata.into_iter().zip(recursive_bitmap).collect::<Vec<_>>();
+        let mut pending: Vec<(Vec<usize>, bool)> = strata.into_iter().zip(bitmap).collect();
 
         while !pending.is_empty() {
-            // Partition strata by whether they still depend on *remaining* strata.
-            let mut batch_non_recursive: Vec<usize> = Vec::new();
-            let mut batch_recursive: Vec<(Vec<usize>, bool)> = Vec::new();
-
-            let remaining_ids: HashSet<usize> = pending
+            let remaining: HashSet<usize> = pending
                 .iter()
                 .flat_map(|(s, _)| s.iter().copied())
                 .collect();
 
             let mut still: Vec<(Vec<usize>, bool)> = Vec::new();
-            for (s, is_rec) in pending.into_iter() {
-                // Check if this stratum depends on any rule that remains in another (unprocessed) stratum.
-                let external_dep_exists = s.iter().any(|rid| {
+            let mut batch_non_rec: Vec<usize> = Vec::new();
+            let mut batch_rec: Vec<(Vec<usize>, bool)> = Vec::new();
+
+            for (s, is_rec) in pending {
+                // A stratum has a pending dependency if any of its rules depend on
+                // a rule that is still unresolved and not inside the same stratum.
+                let has_pending_dep = s.iter().any(|rid| {
                     dep_map.get(rid).is_some_and(|deps| {
-                        deps.iter()
-                            .any(|d| remaining_ids.contains(d) && !s.contains(d))
+                        deps.iter().any(|d| remaining.contains(d) && !s.contains(d))
                     })
                 });
-                if external_dep_exists {
+                if has_pending_dep {
                     still.push((s, is_rec));
                 } else if is_rec {
-                    batch_recursive.push((s, is_rec));
+                    batch_rec.push((s, is_rec));
                 } else {
-                    batch_non_recursive.extend(s);
+                    batch_non_rec.extend(s);
                 }
             }
             pending = still;
 
-            if !batch_non_recursive.is_empty() {
-                merged.push(batch_non_recursive);
+            if !batch_non_rec.is_empty() {
+                merged.push(batch_non_rec);
                 merged_bitmap.push(false);
             }
-            for (s, is_rec) in batch_recursive {
+            for (s, is_rec) in batch_rec {
                 merged.push(s);
                 merged_bitmap.push(is_rec);
             }
         }
 
-        let mut instance = Self {
-            program: program.clone(),
-            dependency_graph,
-            stratum: merged,
-            is_recursive_stratum_bitmap: merged_bitmap,
-            stratum_iterative_relation: Vec::new(),
-            stratum_leave_relation: Vec::new(),
-            stratum_available_relations: Vec::new(),
-        };
+        (merged, merged_bitmap)
+    }
 
-        instance.build_stratum_metadata();
+    /// Build the transpose (reverse adjacency map) of `dep_map`.
+    fn transpose(dep_map: &HashMap<usize, HashSet<usize>>) -> HashMap<usize, HashSet<usize>> {
+        let mut out: HashMap<usize, HashSet<usize>> =
+            dep_map.keys().map(|&k| (k, HashSet::new())).collect();
+        for (&src, dsts) in dep_map {
+            for &dst in dsts {
+                out.entry(dst).or_default().insert(src);
+            }
+        }
+        out
+    }
 
-        // Warn: non-monotone aggregation (sum/count/avg) in a recursive stratum.
-        // min/max are monotone and safe; sum/count/avg accumulate across iterations
-        // and will never stabilise, so the fixpoint cannot be reached.
-        for (idx, stratum) in instance.stratum.iter().enumerate() {
-            if !instance.is_recursive_stratum(idx) {
+    /// DFS pass 1 (Kosaraju): visit `node` and push it onto `order` in
+    /// post-order (i.e. after all descendants).
+    fn dfs_order(
+        dep_map: &HashMap<usize, HashSet<usize>>,
+        visited: &mut [bool],
+        order: &mut Vec<usize>,
+        node: usize,
+    ) {
+        if visited[node] {
+            return;
+        }
+        visited[node] = true;
+        if let Some(children) = dep_map.get(&node) {
+            for &c in children {
+                Self::dfs_order(dep_map, visited, order, c);
+            }
+        }
+        order.push(node);
+    }
+
+    /// Emit a warning for each negative edge `(src, dst)` that satisfies
+    /// `include(src, dst)`.
+    ///
+    /// Shared by plain-rule stratification (filter: same recursive SCC) and
+    /// loop-block processing (filter: always true — every edge is recursive).
+    fn warn_negation_edges(
+        dep_graph: &DependencyGraph,
+        rules: &[FlowLogRule],
+        id_offset: usize,
+        include: impl Fn(usize, usize) -> bool,
+    ) {
+        for &(src, dst) in dep_graph.negative_edges() {
+            if !include(src, dst) {
+                continue;
+            }
+            if src == dst {
+                warn!(
+                    "Negation in recursive stratum (rule {} negates itself): \
+                     negation is not monotone; the fixpoint may never converge.\n  \
+                     Rule {}: {}",
+                    src + id_offset,
+                    src + id_offset,
+                    rules[src]
+                );
+            } else {
+                warn!(
+                    "Negation in recursive stratum (rule {} negates rule {}): \
+                     negation is not monotone; the fixpoint may never converge.\n  \
+                     Rule {}: {}\n  Rule {}: {}",
+                    src + id_offset,
+                    dst + id_offset,
+                    src + id_offset,
+                    rules[src],
+                    dst + id_offset,
+                    rules[dst]
+                );
+            }
+        }
+    }
+
+    /// DFS pass 2 (Kosaraju): collect all nodes reachable from `node` in the
+    /// transposed graph into `scc`.
+    fn dfs_assign(
+        transpose: &HashMap<usize, HashSet<usize>>,
+        assigned: &mut [bool],
+        scc: &mut Vec<usize>,
+        node: usize,
+    ) {
+        if assigned[node] {
+            return;
+        }
+        assigned[node] = true;
+        scc.push(node);
+        if let Some(parents) = transpose.get(&node) {
+            for &p in parents {
+                Self::dfs_assign(transpose, assigned, scc, p);
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Stratum metadata
+// =============================================================================
+
+impl Stratifier {
+    /// Populate `stratum_iterative_relation`, `stratum_leave_relation`, and
+    /// `stratum_available_relations` after the strata list is finalised.
+    fn build_stratum_metadata(&mut self) {
+        // Precompute head and body-atom fingerprint sets per stratum.
+        let mut heads_per_stratum: Vec<HashSet<u64>> = Vec::new();
+        let mut body_atoms_per_stratum: Vec<HashSet<u64>> = Vec::new();
+
+        for stratum in &self.stratum {
+            let heads: HashSet<u64> = stratum
+                .iter()
+                .map(|&rid| self.program.rule(rid).head().head_fingerprint())
+                .collect();
+            heads_per_stratum.push(heads);
+
+            let body_atoms: HashSet<u64> = stratum
+                .iter()
+                .flat_map(|&rid| {
+                    self.program.rule(rid).rhs().iter().filter_map(|p| match p {
+                        Predicate::PositiveAtomPredicate(atom)
+                        | Predicate::NegativeAtomPredicate(atom) => Some(atom.fingerprint()),
+                        _ => None,
+                    })
+                })
+                .collect();
+            body_atoms_per_stratum.push(body_atoms);
+        }
+
+        let n = self.stratum.len();
+
+        // IDB fingerprints — always kept in the leave set so outputs remain
+        // accessible after the dataflow even if no later stratum reads them.
+        let idb_fp_set: HashSet<u64> = self
+            .program
+            .idbs()
+            .into_iter()
+            .map(|r| r.fingerprint())
+            .collect();
+
+        // For each stratum, accumulate body atoms referenced by all *strictly
+        // later* strata in reverse order so we can answer in one forward pass.
+        let mut later_union: HashSet<u64> = HashSet::new();
+        let mut later_body_atoms_per_stratum: Vec<HashSet<u64>> = vec![HashSet::new(); n];
+        for i in (0..n).rev() {
+            later_body_atoms_per_stratum[i] = later_union.clone();
+            later_union.extend(body_atoms_per_stratum[i].iter().copied());
+        }
+
+        // Build per-stratum iterative and leave sets.
+        for i in 0..n {
+            let heads = &heads_per_stratum[i];
+            let body_atoms = &body_atoms_per_stratum[i];
+            let later_body_atoms = &later_body_atoms_per_stratum[i];
+
+            // Iterative relations: head relations that also appear in the bodies
+            // of rules within the same stratum.  Only meaningful for recursive
+            // strata, where they are the relations updated each iteration.
+            let iterative = if self.is_recursive_stratum(i) {
+                heads.intersection(body_atoms).copied().collect()
+            } else {
+                Vec::new()
+            };
+            self.stratum_iterative_relation.push(iterative);
+
+            // Leave relations: head relations needed by later strata or outputs.
+            let leave: Vec<u64> = heads
+                .iter()
+                .filter(|fp| later_body_atoms.contains(fp) || idb_fp_set.contains(fp))
+                .copied()
+                .collect();
+            self.stratum_leave_relation.push(leave);
+        }
+
+        // Available relations: EDB ∪ leaves from all preceding strata.
+        let edb_fps = self.program.edb_fingerprints();
+        let mut accumulated: HashSet<u64> = HashSet::new();
+        for leave in &self.stratum_leave_relation {
+            let mut available = accumulated.clone();
+            available.extend(&edb_fps);
+            self.stratum_available_relations.push(available);
+            accumulated.extend(leave);
+        }
+    }
+
+    /// Emit warnings for non-monotone aggregation operators in recursive strata.
+    ///
+    /// `min` and `max` are monotone and safe in a fixpoint loop.  `sum`,
+    /// `count`, and `avg` accumulate across iterations and will never stabilise,
+    /// so the fixpoint may never be reached.
+    fn warn_aggregation(&self) {
+        for (idx, stratum) in self.stratum.iter().enumerate() {
+            if !self.is_recursive_stratum(idx) {
                 continue;
             }
             for &rid in stratum {
-                let rule = &instance.program.rules()[rid];
+                let rule = self.program.rule(rid);
                 for arg in rule.head().head_arguments() {
                     if let HeadArg::Aggregation(agg) = arg {
                         match agg.operator() {
@@ -253,179 +644,24 @@ impl Stratifier {
                 }
             }
         }
-
-        // Debug info print
-        debug!("\n{}", instance);
-
-        info!(
-            "Successfully stratified program: produced {} strata ({} recursive)",
-            instance.stratum.len(),
-            instance
-                .is_recursive_stratum_bitmap
-                .iter()
-                .filter(|&&b| b)
-                .count()
-        );
-
-        instance
-    }
-
-    /// Build the reverse adjacency map (transpose of the dependency graph).
-    fn transpose(
-        rule_dependency_map: &HashMap<usize, HashSet<usize>>,
-    ) -> HashMap<usize, HashSet<usize>> {
-        let mut out: HashMap<usize, HashSet<usize>> = rule_dependency_map
-            .keys()
-            .map(|&k| (k, HashSet::new()))
-            .collect();
-        for (&src, dests) in rule_dependency_map.iter() {
-            for &dst in dests {
-                out.entry(dst).or_default().insert(src);
-            }
-        }
-        out
-    }
-
-    /// DFS used in the first pass of Kosaraju to record finishing order.
-    fn dfs_order(
-        rule_dependency_map: &HashMap<usize, HashSet<usize>>,
-        visited: &mut [bool],
-        order: &mut Vec<usize>,
-        node: usize,
-    ) {
-        if visited[node] {
-            return;
-        }
-        visited[node] = true;
-        if let Some(children) = rule_dependency_map.get(&node) {
-            for &c in children {
-                Self::dfs_order(rule_dependency_map, visited, order, c);
-            }
-        }
-        order.push(node);
-    }
-
-    /// DFS on the transposed graph to collect one SCC.
-    fn dfs_assign(
-        transpose: &HashMap<usize, HashSet<usize>>,
-        assigned: &mut [bool],
-        scc: &mut Vec<usize>,
-        node: usize,
-    ) {
-        if assigned[node] {
-            return;
-        }
-        assigned[node] = true;
-        scc.push(node);
-        if let Some(parents) = transpose.get(&node) {
-            for &p in parents {
-                Self::dfs_assign(transpose, assigned, scc, p);
-            }
-        }
-    }
-
-    fn build_stratum_metadata(&mut self) {
-        // Precompute heads and body atoms per stratum.
-        let mut heads_per_stratum = Vec::new();
-        let mut body_atoms_per_stratum = Vec::new();
-
-        for stratum in &self.stratum {
-            // Heads in this stratum
-            let heads: HashSet<u64> = stratum
-                .iter()
-                .map(|rid| self.program.rules()[*rid].head().head_fingerprint())
-                .collect();
-            heads_per_stratum.push(heads);
-
-            // Body atoms in this stratum
-            let body_atoms: HashSet<u64> = stratum
-                .iter()
-                .flat_map(|rid| {
-                    let rule = &self.program.rules()[*rid];
-                    rule.rhs().iter().filter_map(|p| match p {
-                        Predicate::PositiveAtomPredicate(atom)
-                        | Predicate::NegativeAtomPredicate(atom) => Some(atom.fingerprint()),
-                        _ => None,
-                    })
-                })
-                .collect();
-            body_atoms_per_stratum.push(body_atoms);
-        }
-
-        let n = self.stratum.len();
-
-        // Precompute fingerprints of IDB relations (annotated with .output or .printsize).
-        // These are always retained in the leave set so they remain accessible after the dataflow,
-        // even if no later stratum references them.
-        // Internal relations only needed within a stratum are excluded; they are kept by `later_body_atoms`.
-        let idb_fp_set: HashSet<u64> = self
-            .program
-            .idbs()
-            .into_iter()
-            .map(|r| r.fingerprint())
-            .collect();
-        // For each stratum, compute the set of body atoms referenced by any STRICTLY later stratum.
-        let mut later_union: HashSet<u64> = HashSet::new();
-        let mut later_body_atoms_per_stratum: Vec<HashSet<u64>> = vec![HashSet::new(); n];
-
-        for i in (0..n).rev() {
-            // For stratum i, the "later" set is what we've accumulated so far.
-            later_body_atoms_per_stratum[i] = later_union.clone();
-            // Include current stratum's body atoms for earlier strata to see.
-            later_union.extend(body_atoms_per_stratum[i].iter().copied());
-        }
-
-        // Build iterative and leave relations per stratum.
-        for i in 0..n {
-            let heads = &heads_per_stratum[i];
-            let body_atoms = &body_atoms_per_stratum[i];
-            let later_body_atoms = &later_body_atoms_per_stratum[i];
-
-            // Iterative relations only for recursive strata: heads that appear in bodies within the same stratum.
-            if self.is_recursive_stratum(i) {
-                let iterative: Vec<u64> = heads.intersection(body_atoms).copied().collect();
-                self.stratum_iterative_relation.push(iterative);
-            } else {
-                self.stratum_iterative_relation.push(Vec::new());
-            }
-
-            // Leave relations: heads from this stratum that are referenced by any later stratum.
-            // Additionally retain heads that correspond to IDB relations even if not referenced later.
-            let leave: Vec<u64> = heads
-                .iter()
-                .filter(|fp| later_body_atoms.contains(fp) || idb_fp_set.contains(fp))
-                .copied()
-                .collect();
-            self.stratum_leave_relation.push(leave);
-        }
-
-        // Build available relations per stratum by accumulating leaves from previous strata
-        // and always including original EDB relation fingerprints (facts available from the start).
-        let mut accumulated: HashSet<u64> = HashSet::new();
-        for leave in &self.stratum_leave_relation {
-            let mut available_relations = accumulated.clone();
-            available_relations.extend(self.program.edb_fingerprints().iter().copied());
-            self.stratum_available_relations.push(available_relations);
-            accumulated.extend(leave.iter().copied());
-        }
     }
 }
 
+// =============================================================================
+// Display
+// =============================================================================
+
 impl fmt::Display for Stratifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", self.dependency_graph)?;
-
         writeln!(f, "\nStratum:")?;
         writeln!(f, "{}", "-".repeat(45))?;
 
-        // Build a lookup from relation fingerprint to relation name for nicer printing.
         let fp2name: HashMap<u64, String> = self
             .program
             .relations()
             .iter()
             .map(|r| (r.fingerprint(), r.name().to_string()))
             .collect();
-
         let fmt_fps = |fps: &[u64]| -> String {
             let mut names: Vec<String> = fps
                 .iter()
@@ -443,28 +679,31 @@ impl fmt::Display for Stratifier {
 
         for (idx, stratum) in self.stratum.iter().enumerate() {
             let recursive = self.is_recursive_stratum(idx);
-            write!(
-                f,
-                "#{} [{}] ",
-                idx + 1,
-                if recursive {
-                    "recursive"
-                } else {
-                    "non-recursive"
-                }
-            )?;
+            let label = if let Some(cond) = &self.stratum_loop_condition[idx] {
+                format!("loop: {}", cond)
+            } else if recursive {
+                "recursive".to_string()
+            } else {
+                "non-recursive".to_string()
+            };
             let ids = stratum.iter().sorted().map(|r| r.to_string()).join(", ");
-            writeln!(f, "[{}]", ids)?;
+            writeln!(f, "#{} [{}] [{}]", idx + 1, label, ids)?;
 
-            let iters = &self.stratum_iterative_relation[idx];
-            let leaves = &self.stratum_leave_relation[idx];
             if recursive {
-                writeln!(f, "  iterative: [{}]", fmt_fps(iters))?;
+                writeln!(
+                    f,
+                    "  iterative: [{}]",
+                    fmt_fps(&self.stratum_iterative_relation[idx])
+                )?;
             }
-            writeln!(f, "  leave: [{}]", fmt_fps(leaves))?;
+            writeln!(
+                f,
+                "  leave: [{}]",
+                fmt_fps(&self.stratum_leave_relation[idx])
+            )?;
 
-            for rid in stratum {
-                writeln!(f, "{}", self.program.rules()[*rid])?;
+            for &rid in stratum {
+                writeln!(f, "{}", self.program.rule(rid))?;
             }
             writeln!(f)?;
         }
@@ -472,13 +711,16 @@ impl fmt::Display for Stratifier {
     }
 }
 
+// =============================================================================
+// Tests
+// =============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
     use tracing_test::traced_test;
 
-    /// Write a Datalog source string to a temporary file and parse it.
     fn parse_program(source: &str) -> Program {
         let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())
@@ -501,7 +743,7 @@ mod tests {
             B(x, y) :- A(x, y).\n\
             .output A\n\
             .output B\n";
-        let _ = Stratifier::from_program(&parse_program(src));
+        let _ = Stratifier::from_program(&parse_program(src), false);
         assert!(logs_contain("Negation in recursive stratum"));
     }
 
@@ -516,7 +758,7 @@ mod tests {
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             A(x, y) :- Edge(x, y), !A(x, y).\n\
             .output A\n";
-        let _ = Stratifier::from_program(&parse_program(src));
+        let _ = Stratifier::from_program(&parse_program(src), false);
         assert!(logs_contain("Negation in recursive stratum"));
     }
 
@@ -532,7 +774,7 @@ mod tests {
             Running(x, sum(cost)) :- Edge(x, y, cost).\n\
             Running(x, sum(cost)) :- Running(x, prev), Edge(x, y, cost).\n\
             .output Running\n";
-        let _ = Stratifier::from_program(&parse_program(src));
+        let _ = Stratifier::from_program(&parse_program(src), false);
         assert!(logs_contain("`sum` in recursive stratum"));
     }
 
@@ -548,7 +790,7 @@ mod tests {
             Reachable(x, count(y)) :- Edge(x, y).\n\
             Reachable(x, count(y)) :- Reachable(x, n), Edge(x, y).\n\
             .output Reachable\n";
-        let _ = Stratifier::from_program(&parse_program(src));
+        let _ = Stratifier::from_program(&parse_program(src), false);
         assert!(logs_contain("`count` in recursive stratum"));
     }
 
@@ -564,7 +806,7 @@ mod tests {
             Score(x, AVG(v)) :- Base(x, v).\n\
             Score(x, AVG(v)) :- Score(x, s), Base(x, v).\n\
             .output Score\n";
-        let _ = Stratifier::from_program(&parse_program(src));
+        let _ = Stratifier::from_program(&parse_program(src), false);
         assert!(logs_contain("`average` in recursive stratum"));
     }
 
@@ -580,7 +822,7 @@ mod tests {
             Best(x, min(cost)) :- Edge(x, y, cost).\n\
             Best(x, min(cost)) :- Best(x, b), Edge(x, y, cost).\n\
             .output Best\n";
-        let _ = Stratifier::from_program(&parse_program(src));
+        let _ = Stratifier::from_program(&parse_program(src), false);
         assert!(!logs_contain("fixpoint may never converge"));
     }
 
@@ -596,7 +838,102 @@ mod tests {
             Best(x, max(cost)) :- Edge(x, y, cost).\n\
             Best(x, max(cost)) :- Best(x, b), Edge(x, y, cost).\n\
             .output Best\n";
-        let _ = Stratifier::from_program(&parse_program(src));
+        let _ = Stratifier::from_program(&parse_program(src), false);
         assert!(!logs_contain("fixpoint may never converge"));
+    }
+
+    /// A `loop` block becomes exactly one recursive stratum tagged with its condition.
+    #[test]
+    fn loop_block_is_single_recursive_stratum() {
+        let src = "\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl Reach(x: int32, y: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Reach\n\
+            loop fixpoint {\n\
+                Reach(x, y) :- Edge(x, y).\n\
+                Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
+            }\n";
+        let s = Stratifier::from_program(&parse_program(src), false);
+        assert_eq!(s.stratum.len(), 1);
+        assert!(s.is_recursive_stratum(0));
+        assert!(s.loop_condition(0).is_some());
+    }
+
+    /// Plain rules before and after a loop block are stratified independently
+    /// from the loop stratum, yielding at least three strata total.
+    #[test]
+    fn segments_stratified_independently() {
+        let src = "\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl A(x: int32)\n\
+            .decl Reach(x: int32, y: int32)\n\
+            .decl Out(x: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            .output Reach\n\
+            A(x) :- Edge(x, y).\n\
+            loop fixpoint {\n\
+                Reach(x, y) :- Edge(x, y).\n\
+                Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
+            }\n\
+            Out(x) :- A(x).\n";
+        let s = Stratifier::from_program(&parse_program(src), false);
+        assert!(s.stratum.len() >= 3);
+        let loop_idx = (0..s.stratum.len())
+            .find(|&i| s.loop_condition(i).is_some())
+            .expect("no loop stratum");
+        assert!(s.is_recursive_stratum(loop_idx));
+    }
+
+    /// Negation inside a `loop` block is always negation-through-recursion →
+    /// warning, because the whole block is one recursive stratum.
+    #[test]
+    #[traced_test]
+    fn warns_negation_in_loop_block() {
+        let src = "\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl A(x: int32, y: int32)\n\
+            .decl B(x: int32, y: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output A\n\
+            .output B\n\
+            loop fixpoint {\n\
+                A(x, y) :- Edge(x, y), !B(x, y).\n\
+                B(x, y) :- A(x, y).\n\
+            }\n";
+        let _ = Stratifier::from_program(&parse_program(src), false);
+        assert!(logs_contain("Negation in recursive stratum"));
+    }
+
+    /// Extended Datalog mode: recursive rules inside a `loop` block are valid.
+    #[test]
+    fn extended_mode_loop_recursion_ok() {
+        let src = "\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl Reach(x: int32, y: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Reach\n\
+            loop fixpoint {\n\
+                Reach(x, y) :- Edge(x, y).\n\
+                Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
+            }\n";
+        let s = Stratifier::from_program(&parse_program(src), true);
+        assert_eq!(s.stratum.len(), 1);
+        assert!(s.is_recursive_stratum(0));
+    }
+
+    /// Extended Datalog mode: recursive rules in a plain segment are a hard error.
+    #[test]
+    #[should_panic(expected = "Extended Datalog error")]
+    fn extended_mode_plain_recursion_errors() {
+        let src = "\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl Reach(x: int32, y: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Reach\n\
+            Reach(x, y) :- Edge(x, y).\n\
+            Reach(x, z) :- Edge(x, y), Reach(y, z).\n";
+        let _ = Stratifier::from_program(&parse_program(src), true);
     }
 }

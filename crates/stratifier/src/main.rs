@@ -20,7 +20,7 @@ fn main() {
         .init();
 
     let program = Program::parse(config.program());
-    let _stratifier = Stratifier::from_program(&program);
+    let _stratifier = Stratifier::from_program(&program, config.extended_enabled());
 }
 
 fn run_all_examples() {
@@ -32,7 +32,7 @@ fn run_all_examples() {
 
         match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
             Ok(program) => {
-                let stratifier = Stratifier::from_program(&program);
+                let stratifier = Stratifier::from_program(&program, false);
                 let recursive_cnt = stratifier
                     .is_recursive_stratum_bitmap()
                     .iter()

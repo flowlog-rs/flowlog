@@ -29,7 +29,7 @@ fn main() {
     let program = Program::parse(config.program());
 
     // Stratify the program
-    let stratifier = Stratifier::from_program(&program);
+    let stratifier = Stratifier::from_program(&program, config.extended_enabled());
 
     // Optimize each stratum
     let mut optimizer = Optimizer::new();
@@ -56,7 +56,7 @@ fn run_all_examples() {
 
         match std::panic::catch_unwind(|| {
             let program = Program::parse(file_path.to_str().unwrap());
-            let stratifier = Stratifier::from_program(&program);
+            let stratifier = Stratifier::from_program(&program, false);
             let optimizer = Optimizer::new();
 
             // Just run optimization without printing details

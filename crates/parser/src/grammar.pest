@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = {
     SOI ~
-    (declaration | extern_fn | include_directive | input_directive | output_directive | printsize_directive | fact | rule)* ~
+    (declaration | extern_fn | include_directive | input_directive | output_directive | printsize_directive | loop_block | fact | rule)* ~
     EOI
 }
 
@@ -314,6 +314,57 @@ predicate = {
 
 // Optimization hint directives for query planning
 optimize = { ".plan" }
+
+// =============================================================================
+// LOOP BLOCKS
+// =============================================================================
+// A loop block executes a set of rules with a bounded/conditional iteration.
+// The block is a hard evaluation barrier — the stratifier cannot move rules
+// across its boundaries.
+//
+// Syntax:  loop <condition> { rules... }
+//
+// Examples:
+//   loop fixpoint { ... }             // standard Datalog fixpoint
+//   loop 10 { ... }                   // exactly 10 iterations
+//   loop !done { ... }                // until 'done' relation is non-empty
+//   loop fixpoint and 100 { ... }     // fixpoint, but at most 100 iterations
+
+loop_block = {
+    "loop" ~ loop_condition ~ "{" ~ rule* ~ "}"
+}
+
+// One or more stop expressions joined by "and" / "or".
+loop_condition = { loop_stop_expr ~ (loop_connective ~ loop_stop_expr)* }
+
+// A single stop expression.  Alternatives are tried in order, so the more
+// specific literals ("fixpoint", "iteration ==") are matched before the
+// catch-all relation_name.
+loop_stop_expr = {
+    loop_fixpoint             // stop when fixpoint reached
+  | loop_iter_count           // stop after N iterations (bare N, or "iteration == N")
+  | loop_relation_empty       // stop when the relation is empty
+  | loop_relation_non_empty   // stop when the relation is non-empty
+}
+
+// "fixpoint" keyword with word-boundary guard.
+loop_fixpoint = @{ "fixpoint" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// N  |  iteration == N
+// The "iteration ==" prefix is optional syntactic sugar; both forms produce
+// the same AST node.
+loop_iter_count = { ("iteration" ~ "==")? ~ integer }
+
+// !relation_name — stop when the named relation becomes empty.
+loop_relation_empty = { "!" ~ relation_name }
+
+// relation_name — stop when the named relation becomes non-empty.
+loop_relation_non_empty = { relation_name }
+
+// Boolean connective joining stop expressions.
+loop_connective = { loop_and | loop_or }
+loop_and        = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
+loop_or         = @{ "or"  ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // =============================================================================
 // WHITESPACE AND COMMENTS
