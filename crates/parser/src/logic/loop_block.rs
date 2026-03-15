@@ -73,8 +73,8 @@ pub enum LoopConnective {
 /// Examples:
 /// - `iter <= 6`                → `[(0, 6)]`
 /// - `iter >= 5 and iter <= 10` → `[(5, 10)]`
-/// - `iter < 5 or iter > 10`    → `[(0, 4), (11, u16::MAX)]`
-pub type IterWindows = Vec<(u16, u16)>;
+/// - `iter < 5 or iter > 10`    → `[(0, 4), (11, u32::MAX)]`
+pub type IterWindows = Vec<(u32, u32)>;
 
 /// A single nullary (boolean) relation referenced in a `stop` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -142,7 +142,7 @@ impl LoopCondition {
 
     /// The parsed iter windows from the `continue { ... }` clause, if present.
     #[must_use]
-    pub fn continue_part(&self) -> Option<&[(u16, u16)]> {
+    pub fn continue_part(&self) -> Option<&[(u32, u32)]> {
         self.continue_part.as_deref()
     }
 
@@ -237,15 +237,15 @@ impl fmt::Display for LoopCondition {
     }
 }
 
-fn display_windows(windows: &[(u16, u16)]) -> String {
+fn display_windows(windows: &[(u32, u32)]) -> String {
     let parts: Vec<String> = windows
         .iter()
         .map(|(lo, hi)| {
-            if *lo == 0 && *hi == u16::MAX {
+            if *lo == 0 && *hi == u32::MAX {
                 "iter >= 0".to_string()
             } else if *lo == 0 {
                 format!("iter <= {hi}")
-            } else if *hi == u16::MAX {
+            } else if *hi == u32::MAX {
                 format!("iter >= {lo}")
             } else if lo == hi {
                 format!("iter == {lo}")
@@ -281,7 +281,7 @@ impl fmt::Display for LoopBlock {
 // =============================================================================
 
 /// Compute the allowed iteration range for a single `iter op n` constraint.
-fn range_for_op(op: &str, n: u16) -> Vec<(u16, u16)> {
+fn range_for_op(op: &str, n: u32) -> Vec<(u32, u32)> {
     match op {
         "==" => vec![(n, n)],
         "<" => {
@@ -293,19 +293,19 @@ fn range_for_op(op: &str, n: u16) -> Vec<(u16, u16)> {
         }
         "<=" => vec![(0, n)],
         ">" => {
-            if n == u16::MAX {
+            if n == u32::MAX {
                 vec![]
             } else {
-                vec![(n + 1, u16::MAX)]
+                vec![(n + 1, u32::MAX)]
             }
         }
-        ">=" => vec![(n, u16::MAX)],
+        ">=" => vec![(n, u32::MAX)],
         _ => panic!("Parser error: loop_iter_expr unknown comparison operator '{op}'"),
     }
 }
 
 /// Intersect two range sets (AND semantics).
-fn intersect_ranges(a: &[(u16, u16)], b: &[(u16, u16)]) -> Vec<(u16, u16)> {
+fn intersect_ranges(a: &[(u32, u32)], b: &[(u32, u32)]) -> Vec<(u32, u32)> {
     let mut result = Vec::new();
     for &(a_lo, a_hi) in a {
         for &(b_lo, b_hi) in b {
@@ -320,7 +320,7 @@ fn intersect_ranges(a: &[(u16, u16)], b: &[(u16, u16)]) -> Vec<(u16, u16)> {
 }
 
 /// Union two range sets (OR semantics).
-fn union_ranges(a: &[(u16, u16)], b: &[(u16, u16)]) -> Vec<(u16, u16)> {
+fn union_ranges(a: &[(u32, u32)], b: &[(u32, u32)]) -> Vec<(u32, u32)> {
     let mut result = a.to_vec();
     result.extend_from_slice(b);
     result
@@ -352,13 +352,13 @@ fn parse_iter_expr(pair: Pair<Rule>) -> IterWindows {
         .expect("Parser error: loop_iter_expr missing first compare op")
         .as_str()
         .to_string();
-    let first_n: u16 = children
+    let first_n: u32 = children
         .next()
         .expect("Parser error: loop_iter_expr missing first integer")
         .as_str()
         .trim_start_matches('+')
         .parse()
-        .expect("Parser error: loop_iter_expr iteration bound must fit in u16");
+        .expect("Parser error: loop_iter_expr iteration bound must fit in u32");
     let mut ranges = range_for_op(&first_op, first_n);
 
     // Subsequent: loop_connective, compare_op, integer (repeated).
@@ -369,13 +369,13 @@ fn parse_iter_expr(pair: Pair<Rule>) -> IterWindows {
             .expect("Parser error: loop_iter_expr missing compare op in repeat")
             .as_str()
             .to_string();
-        let n: u16 = children
+        let n: u32 = children
             .next()
             .expect("Parser error: loop_iter_expr missing integer in repeat")
             .as_str()
             .trim_start_matches('+')
             .parse()
-            .expect("Parser error: loop_iter_expr iteration bound must fit in u16");
+            .expect("Parser error: loop_iter_expr iteration bound must fit in u32");
         let new_range = range_for_op(&op, n);
         ranges = match connective {
             LoopConnective::And => intersect_ranges(&ranges, &new_range),
@@ -414,7 +414,7 @@ fn parse_bool_relation(pair: Pair<Rule>) -> StopRelation {
         .next()
         .expect("Parser error: loop_bool_relation missing relation_name")
         .as_str()
-        .to_string();
+        .to_ascii_lowercase();
     let fp = compute_fp(&name);
     StopRelation { name, fp }
 }

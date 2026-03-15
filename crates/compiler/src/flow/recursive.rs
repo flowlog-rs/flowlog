@@ -642,7 +642,7 @@ struct ConditionPlan {
     /// Arranged stop-gate (`<ident>_arr`) or `None` if there is no `stop` clause.
     boolean_stop_conditions: Option<Ident>,
     /// Iteration windows from the `continue` clause, or `None` if absent.
-    iter_continue_conditions: Option<Vec<(u16, u16)>>,
+    iter_continue_conditions: Option<Vec<(u32, u32)>>,
     /// Connective joining the `stop` and `continue` clauses, if both are present.
     connective: Option<LoopConnective>,
 }
@@ -651,23 +651,23 @@ struct ConditionPlan {
 // Token-building helpers
 // =========================================================================
 
-/// Boolean expression: `true` when `i` (DD inner counter as `u16`) is in any window.
-fn build_iter_conditions(ranges: &[(u16, u16)]) -> TokenStream {
+/// Boolean expression: `true` when `i` (DD inner counter) is in any window.
+fn build_iter_conditions(ranges: &[(u32, u32)]) -> TokenStream {
     ranges
         .iter()
         .map(|&(lo, hi)| match (lo, hi) {
-            (0, u16::MAX) => quote! { true },
+            (0, u32::MAX) => quote! { true },
             (0, hi) => {
-                let h = proc_macro2::Literal::u16_suffixed(hi);
+                let h = proc_macro2::Literal::u32_suffixed(hi);
                 quote! { i <= #h }
             }
-            (lo, u16::MAX) => {
-                let l = proc_macro2::Literal::u16_suffixed(lo);
+            (lo, u32::MAX) => {
+                let l = proc_macro2::Literal::u32_suffixed(lo);
                 quote! { i >= #l }
             }
             (lo, hi) => {
-                let l = proc_macro2::Literal::u16_suffixed(lo);
-                let h = proc_macro2::Literal::u16_suffixed(hi);
+                let l = proc_macro2::Literal::u32_suffixed(lo);
+                let h = proc_macro2::Literal::u32_suffixed(hi);
                 quote! { (i >= #l && i <= #h) }
             }
         })
@@ -718,7 +718,7 @@ fn continue_stmt(next: &Ident, cond_expr: TokenStream) -> TokenStream {
         #next.clone()
             .inner
             .flat_map(|(data, time, diff)| {
-                let i = time.inner as u16;
+                let i = time.inner;
                 if #cond_expr { Some((data, time, diff)) } else { None }
             })
             .as_collection()

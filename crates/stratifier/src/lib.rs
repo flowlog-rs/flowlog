@@ -26,7 +26,7 @@
 //! where recursion must be written explicitly using `loop` blocks:
 //!
 //! ```text
-//! loop fixpoint {
+//! loop {
 //!     Reach(x, y) :- Edge(x, y).
 //!     Reach(x, z) :- Edge(x, y), Reach(y, z).
 //! }
