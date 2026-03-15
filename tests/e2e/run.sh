@@ -86,7 +86,11 @@ run_test() {
     # ------------------------------------------------------------------
     rm -rf "$project_dir"
     local compile_log="${BUILD_DIR}/${test_name}_compile.log"
-    if ! "$COMPILER_BIN" -D output "$test_dir/program.dl" >"$compile_log" 2>&1; then
+    local extra_flags=()
+    if [[ -f "$test_dir/flags" ]]; then
+        mapfile -t extra_flags < "$test_dir/flags"
+    fi
+    if ! "$COMPILER_BIN" -D output "${extra_flags[@]}" "$test_dir/program.dl" >"$compile_log" 2>&1; then
         log "$RED" "FAIL" "$test_name — FlowLog compilation failed"
         log "$YELLOW" "HINT" "Compiler output:"
         sed 's/^/       /' "$compile_log"

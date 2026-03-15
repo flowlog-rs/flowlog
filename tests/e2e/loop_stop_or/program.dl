@@ -1,0 +1,53 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : loop_stop_or
+// Feature : loop block with `or` connective — relation OR iteration cap
+//           (`loop continue { iter <= 0 } or stop { Done }`)
+//
+// OR = max semantics: stop when BOTH conditions fire simultaneously.
+// The iteration cap (iter <= 0) blocks from round 2 onward (time.inner >= 1).
+// Done() fires at round 3 (when (1,4) enters the delta).
+// With OR (max): the loop continues until BOTH fire — i.e., until Done fires
+// at round 3. The iter-blocked portion is still fed back as long as the
+// relation gate has not fired; once Done fires, both gates are active → stop.
+//
+// Same chain and target as loop_stop_and. OR (max) produces the SAME 14 pairs
+// because Done fires at round 3 which is the binding constraint (cap alone
+// would stop at round 2, but OR requires both to fire).
+//
+// Data layout
+//   Edge   — chain 1→2→3→4→5→6
+//   Target — {4}
+//
+// Evaluation trace:
+//   Before loop : Reach = {(1,2),(2,3),(3,4),(4,5),(5,6)}
+//   Round 1     : delta = entered; iter=0 ≤ 0 → iter passes; Done? No → passes.
+//                 OR: either passes → continue.  new = {(1,3),(2,4),(3,5),(4,6)}
+//   Round 2     : delta = round-1 new; iter=1 > 0 → iter blocks; Done? No → passes.
+//                 OR: Done passes → continue (iter_blocked + antijoin(no Done yet)).
+//                 new = {(1,4),(2,5),(3,6)}
+//   Round 3     : delta = round-2 new; iter=2 > 0 → iter blocks; Done: (1,4)∈delta → fires!
+//                 OR: BOTH fire → stop.  new = {(1,5),(2,6)} (computed, then gate stops).
+//
+// Expected
+//   Reach = 14 pairs (full closure minus (1,6)) — same as stop_and
+//   Done  = {()}
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Target(node: int32)
+.input Target(IO="file", filename="Target.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+.decl Done()
+
+Reach(X, Y) :- Edge(X, Y).
+
+loop continue { iter <= 0 } or stop { Done } {
+    Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
+    Done()      :- Reach(1, Y), Target(Y).
+}
+
+.output Reach
+.output Done
