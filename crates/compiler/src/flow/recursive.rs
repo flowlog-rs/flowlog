@@ -520,11 +520,19 @@ impl Compiler {
 
         let (prelude, boolean_stop_conditions) = self.build_stop_conditions(cond, next_bindings);
 
-        let iter_continue_conditions = cond
-            .continue_part()
-            .filter(|r| !r.is_empty())
-            .map(|r| r.to_vec());
-        if iter_continue_conditions.is_some() {
+        // Preserve empty window lists as Some([]) rather than collapsing them to
+        // None.  An empty list arises from contradictory bounds (e.g. `iter >= 5
+        // and iter < 3`) and means "never continue" — blocking all feedback so
+        // the loop performs zero iterations.
+        //
+        // This fix works in tandem with build_iter_conditions returning `false`
+        // for an empty range list.  Both are required: collapsing Some([]) to
+        // None here would make the empty case unreachable there, and the loop
+        // would run forever instead of zero iterations.
+        let iter_continue_conditions = cond.continue_part().map(|r| r.to_vec());
+        // Timely map/collection imports are only needed when there are actual
+        // window comparisons to emit; skip them for the always-false empty case.
+        if matches!(iter_continue_conditions, Some(ref r) if !r.is_empty()) {
             self.imports.mark_timely_map();
             self.imports.mark_as_collection();
         }
@@ -642,7 +650,7 @@ struct ConditionPlan {
     /// Arranged stop-gate (`<ident>_arr`) or `None` if there is no `stop` clause.
     boolean_stop_conditions: Option<Ident>,
     /// Iteration windows from the `continue` clause, or `None` if absent.
-    iter_continue_conditions: Option<Vec<(u32, u32)>>,
+    iter_continue_conditions: Option<Vec<(u16, u16)>>,
     /// Connective joining the `stop` and `continue` clauses, if both are present.
     connective: Option<LoopConnective>,
 }
@@ -651,28 +659,28 @@ struct ConditionPlan {
 // Token-building helpers
 // =========================================================================
 
-/// Boolean expression: `true` when `i` (DD inner counter) is in any window.
-fn build_iter_conditions(ranges: &[(u32, u32)]) -> TokenStream {
+/// Boolean expression: `true` when `i` (DD inner counter as `u16`) is in any window.
+fn build_iter_conditions(ranges: &[(u16, u16)]) -> TokenStream {
     ranges
         .iter()
         .map(|&(lo, hi)| match (lo, hi) {
-            (0, u32::MAX) => quote! { true },
+            (0, u16::MAX) => quote! { true },
             (0, hi) => {
-                let h = proc_macro2::Literal::u32_suffixed(hi);
+                let h = proc_macro2::Literal::u16_suffixed(hi);
                 quote! { i <= #h }
             }
-            (lo, u32::MAX) => {
-                let l = proc_macro2::Literal::u32_suffixed(lo);
+            (lo, u16::MAX) => {
+                let l = proc_macro2::Literal::u16_suffixed(lo);
                 quote! { i >= #l }
             }
             (lo, hi) => {
-                let l = proc_macro2::Literal::u32_suffixed(lo);
-                let h = proc_macro2::Literal::u32_suffixed(hi);
+                let l = proc_macro2::Literal::u16_suffixed(lo);
+                let h = proc_macro2::Literal::u16_suffixed(hi);
                 quote! { (i >= #l && i <= #h) }
             }
         })
         .reduce(|acc, c| quote! { #acc || #c })
-        .unwrap_or_else(|| quote! { true })
+        .unwrap_or_else(|| quote! { false })
 }
 
 /// Build the feedback expression for one recursive variable given a `ConditionPlan`.

@@ -73,8 +73,8 @@ pub enum LoopConnective {
 /// Examples:
 /// - `iter <= 6`                → `[(0, 6)]`
 /// - `iter >= 5 and iter <= 10` → `[(5, 10)]`
-/// - `iter < 5 or iter > 10`    → `[(0, 4), (11, u32::MAX)]`
-pub type IterWindows = Vec<(u32, u32)>;
+/// - `iter < 5 or iter > 10`    → `[(0, 4), (11, u16::MAX)]`
+pub type IterWindows = Vec<(u16, u16)>;
 
 /// A single nullary (boolean) relation referenced in a `stop` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -142,7 +142,7 @@ impl LoopCondition {
 
     /// The parsed iter windows from the `continue { ... }` clause, if present.
     #[must_use]
-    pub fn continue_part(&self) -> Option<&[(u32, u32)]> {
+    pub fn continue_part(&self) -> Option<&[(u16, u16)]> {
         self.continue_part.as_deref()
     }
 
@@ -222,7 +222,9 @@ impl fmt::Display for LoopCondition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match (&self.continue_part, &self.connective, &self.stop_part) {
             (Some(windows), conn, stop) => {
-                write!(f, "continue {{ {} }}", display_windows(windows))?;
+                if !windows.is_empty() {
+                    write!(f, "continue {{ {} }}", display_windows(windows))?;
+                }
                 if let Some(sg) = stop {
                     let c = conn.as_ref().map(|c| format!(" {c} ")).unwrap_or_default();
                     write!(f, "{c}stop {{ {sg} }}")?;
@@ -237,15 +239,15 @@ impl fmt::Display for LoopCondition {
     }
 }
 
-fn display_windows(windows: &[(u32, u32)]) -> String {
+fn display_windows(windows: &[(u16, u16)]) -> String {
     let parts: Vec<String> = windows
         .iter()
         .map(|(lo, hi)| {
-            if *lo == 0 && *hi == u32::MAX {
+            if *lo == 0 && *hi == u16::MAX {
                 "iter >= 0".to_string()
             } else if *lo == 0 {
                 format!("iter <= {hi}")
-            } else if *hi == u32::MAX {
+            } else if *hi == u16::MAX {
                 format!("iter >= {lo}")
             } else if lo == hi {
                 format!("iter == {lo}")
@@ -255,7 +257,7 @@ fn display_windows(windows: &[(u32, u32)]) -> String {
         })
         .collect();
     if parts.is_empty() {
-        "iter".to_string()
+        String::new()
     } else {
         parts.join(" or ")
     }
@@ -281,7 +283,7 @@ impl fmt::Display for LoopBlock {
 // =============================================================================
 
 /// Compute the allowed iteration range for a single `iter op n` constraint.
-fn range_for_op(op: &str, n: u32) -> Vec<(u32, u32)> {
+fn range_for_op(op: &str, n: u16) -> Vec<(u16, u16)> {
     match op {
         "==" => vec![(n, n)],
         "<" => {
@@ -293,19 +295,19 @@ fn range_for_op(op: &str, n: u32) -> Vec<(u32, u32)> {
         }
         "<=" => vec![(0, n)],
         ">" => {
-            if n == u32::MAX {
+            if n == u16::MAX {
                 vec![]
             } else {
-                vec![(n + 1, u32::MAX)]
+                vec![(n + 1, u16::MAX)]
             }
         }
-        ">=" => vec![(n, u32::MAX)],
+        ">=" => vec![(n, u16::MAX)],
         _ => panic!("Parser error: loop_iter_expr unknown comparison operator '{op}'"),
     }
 }
 
 /// Intersect two range sets (AND semantics).
-fn intersect_ranges(a: &[(u32, u32)], b: &[(u32, u32)]) -> Vec<(u32, u32)> {
+fn intersect_ranges(a: &[(u16, u16)], b: &[(u16, u16)]) -> Vec<(u16, u16)> {
     let mut result = Vec::new();
     for &(a_lo, a_hi) in a {
         for &(b_lo, b_hi) in b {
@@ -320,7 +322,7 @@ fn intersect_ranges(a: &[(u32, u32)], b: &[(u32, u32)]) -> Vec<(u32, u32)> {
 }
 
 /// Union two range sets (OR semantics).
-fn union_ranges(a: &[(u32, u32)], b: &[(u32, u32)]) -> Vec<(u32, u32)> {
+fn union_ranges(a: &[(u16, u16)], b: &[(u16, u16)]) -> Vec<(u16, u16)> {
     let mut result = a.to_vec();
     result.extend_from_slice(b);
     result
@@ -352,13 +354,13 @@ fn parse_iter_expr(pair: Pair<Rule>) -> IterWindows {
         .expect("Parser error: loop_iter_expr missing first compare op")
         .as_str()
         .to_string();
-    let first_n: u32 = children
+    let first_n: u16 = children
         .next()
         .expect("Parser error: loop_iter_expr missing first integer")
         .as_str()
         .trim_start_matches('+')
         .parse()
-        .expect("Parser error: loop_iter_expr iteration bound must fit in u32");
+        .expect("Parser error: loop_iter_expr iteration bound must fit in u16");
     let mut ranges = range_for_op(&first_op, first_n);
 
     // Subsequent: loop_connective, compare_op, integer (repeated).
@@ -369,13 +371,13 @@ fn parse_iter_expr(pair: Pair<Rule>) -> IterWindows {
             .expect("Parser error: loop_iter_expr missing compare op in repeat")
             .as_str()
             .to_string();
-        let n: u32 = children
+        let n: u16 = children
             .next()
             .expect("Parser error: loop_iter_expr missing integer in repeat")
             .as_str()
             .trim_start_matches('+')
             .parse()
-            .expect("Parser error: loop_iter_expr iteration bound must fit in u32");
+            .expect("Parser error: loop_iter_expr iteration bound must fit in u16");
         let new_range = range_for_op(&op, n);
         ranges = match connective {
             LoopConnective::And => intersect_ranges(&ranges, &new_range),
@@ -409,13 +411,13 @@ fn parse_stop_group(pair: Pair<Rule>) -> StopGroup {
 
 /// Parse a `loop_bool_relation` pair into a [`StopRelation`].
 fn parse_bool_relation(pair: Pair<Rule>) -> StopRelation {
-    let name = pair
+    let raw = pair
         .into_inner()
         .next()
         .expect("Parser error: loop_bool_relation missing relation_name")
-        .as_str()
-        .to_ascii_lowercase();
-    let fp = compute_fp(&name);
+        .as_str();
+    let fp = compute_fp(raw);
+    let name = raw.to_ascii_lowercase();
     StopRelation { name, fp }
 }
 
@@ -529,7 +531,7 @@ mod tests {
     fn continue_iter_less_equal() {
         let block = parse_loop_block("loop continue { iter <= 6 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 6u32)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 6u16)]);
         assert!(cond.stop_part().is_none());
     }
 
@@ -537,14 +539,14 @@ mod tests {
     fn continue_iter_greater_equal() {
         let block = parse_loop_block("loop continue { iter >= 10 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(10u32, u32::MAX)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(10u16, u16::MAX)]);
     }
 
     #[test]
     fn continue_iter_and_intersection() {
         let block = parse_loop_block("loop continue { iter >= 5 and iter <= 10 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(5u32, 10u32)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(5u16, 10u16)]);
     }
 
     #[test]
@@ -553,7 +555,7 @@ mod tests {
         let cond = block.condition().unwrap();
         assert_eq!(
             cond.continue_part().unwrap(),
-            &[(0u32, 4u32), (11u32, u32::MAX)]
+            &[(0u16, 4u16), (11u16, u16::MAX)]
         );
         assert!(cond.stop_part().is_none());
     }
@@ -584,7 +586,7 @@ mod tests {
     fn continue_and_stop() {
         let block = parse_loop_block("loop continue { iter <= 6 } and stop { done } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 6u32)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 6u16)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::And));
         let sg = cond.stop_part().unwrap();
         assert_eq!(sg.first().name, "done");
@@ -594,7 +596,7 @@ mod tests {
     fn stop_and_continue() {
         let block = parse_loop_block("loop stop { done } and continue { iter <= 3 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 3u32)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 3u16)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::And));
         assert_eq!(cond.stop_part().unwrap().first().name, "done");
     }
@@ -603,7 +605,7 @@ mod tests {
     fn stop_or_continue() {
         let block = parse_loop_block("loop stop { done } or continue { iter <= 1 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 1u32)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 1u16)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::Or));
         assert_eq!(cond.stop_part().unwrap().first().name, "done");
     }
@@ -612,7 +614,7 @@ mod tests {
     fn continue_or_stop() {
         let block = parse_loop_block("loop continue { iter <= 0 } or stop { done } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 0u32)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 0u16)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::Or));
         assert_eq!(cond.stop_part().unwrap().first().name, "done");
     }
