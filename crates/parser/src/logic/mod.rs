@@ -16,7 +16,7 @@
 //! // result(X) :- input(X).
 //! let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
 //! let body = vec![Predicate::PositiveAtomPredicate(
-//!     Atom::new("input", vec![AtomArg::Var("X".to_string())], 0),
+//!     Atom::new("input".to_string(), vec![AtomArg::Var("X".to_string())], 0),
 //! )];
 //! let rule = FlowLogRule::new(head, body, false);
 //! ```

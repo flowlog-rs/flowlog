@@ -526,9 +526,12 @@ impl Compiler {
         // None here would make the empty case unreachable there, and the loop
         // would run forever instead of zero iterations.
         let iter_continue_conditions = cond.continue_part().map(|r| r.to_vec());
-        // Timely map/collection imports are only needed when there are actual
-        // window comparisons to emit; skip them for the always-false empty case.
-        if matches!(iter_continue_conditions, Some(ref r) if !r.is_empty()) {
+        // Mark imports whenever a `continue` clause is present, even if the
+        // resolved range list is empty (contradictory bounds like `iter >= 5
+        // and iter < 3`). The generated feedback still goes through
+        // `continue_stmt(...).flat_map(...).as_collection()`, which requires
+        // these imports regardless of whether the range evaluates to `false`.
+        if iter_continue_conditions.is_some() {
             self.imports.mark_timely_map();
             self.imports.mark_as_collection();
         }

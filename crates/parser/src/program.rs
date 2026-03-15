@@ -682,10 +682,10 @@ impl Program {
 // =============================================================================
 
 /// Sentinel used in the dependency map to represent a predicate that has no
-/// top-level (plain-segment) rule deriving it — e.g. a pure `.input` relation,
-/// a hybrid relation whose rules are all inside loop blocks, or any otherwise
-/// externally-satisfied predicate.  No rule index exists, so this is stored
-/// instead to signal that DFS traversal should stop here.
+/// rule deriving it anywhere in the program — e.g. a pure `.input` relation
+/// or any otherwise externally-satisfied predicate.  No rule index exists for
+/// such predicates in the flattened rule list, so this is stored instead to
+/// signal that DFS traversal should stop here.
 const NO_TOP_LEVEL_RULE_ID: usize = usize::MAX;
 
 impl Program {
