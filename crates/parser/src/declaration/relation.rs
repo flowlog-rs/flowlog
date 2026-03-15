@@ -39,9 +39,11 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
+        let name = name.to_lowercase();
+        let fingerprint = compute_fp(&name);
         Self {
-            name: name.to_lowercase(),
-            fingerprint: compute_fp(name),
+            name,
+            fingerprint,
             attributes,
             input_params: None,
             output: false,

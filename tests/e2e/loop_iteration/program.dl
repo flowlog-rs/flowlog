@@ -1,0 +1,33 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : loop_iteration
+// Feature : loop block with bounded iteration count (`loop continue { iter <= 1 }`)
+//
+// The base rule runs in a plain stratum first.  The loop block then extends
+// Reach for iterations 0 and 1 (2 join rounds).  On a 4-edge chain 1→2→3→4→5:
+//
+//   Before loop : Reach = {(1,2),(2,3),(3,4),(4,5)}  (direct edges)
+//   Loop round 1: +{(1,3),(2,4),(3,5)}   (time.inner=0 ≤ 1 → passes)
+//   Loop round 2: +{(1,4),(2,5)}         (time.inner=1 ≤ 1 → passes)
+//                 (time.inner=2 > 1 → stop)
+//
+// The length-4 path (1→5) requires round 3 and is NOT produced.
+//
+// Data layout
+//   Edge (src: int32, dst: int32)  — chain 1→2→3→4→5
+//
+// Expected
+//   Reach = {(1,2),(2,3),(3,4),(4,5),(1,3),(2,4),(3,5),(1,4),(2,5)}
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+
+Reach(X, Y) :- Edge(X, Y).
+
+loop continue { iter <= 1 } {
+    Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
+}
+
+.output Reach

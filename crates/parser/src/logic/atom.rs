@@ -192,7 +192,8 @@ impl Lexeme for Atom {
             .next()
             .expect("Parser error: atom missing relation name")
             .as_str()
-            .to_string();
+            .to_lowercase();
+        let fingerprint = compute_fp(&name);
 
         let mut arguments = Vec::new();
         for pair in inner {
@@ -201,7 +202,7 @@ impl Lexeme for Atom {
             }
         }
 
-        Self::new(&name, arguments, compute_fp(&name))
+        Self::new(&name, arguments, fingerprint)
     }
 }
 
@@ -252,7 +253,7 @@ mod tests {
         assert!(a0.to_string().starts_with("flag()"));
 
         // unary
-        let a1 = Atom::new("Student", vec![v("X")], 0);
+        let a1 = Atom::new("student", vec![v("X")], 0);
         assert_eq!(a1.arity(), 1);
         assert!(a1.to_string().starts_with("student(X)"));
 

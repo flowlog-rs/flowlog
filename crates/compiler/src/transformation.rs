@@ -646,7 +646,7 @@ impl Compiler {
 // =========================================================================
 impl Compiler {
     /// Generate weight-handling token streams for antijoin (batch vs incremental).
-    fn weight_concat_tokens(&self) -> (TokenStream, TokenStream) {
+    pub(crate) fn weight_concat_tokens(&self) -> (TokenStream, TokenStream) {
         let pos = if self.config.is_incremental() {
             quote! {}
         } else {

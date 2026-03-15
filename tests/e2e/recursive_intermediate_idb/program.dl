@@ -8,7 +8,7 @@
 //
 // `even` and `odd` form a mutually recursive stratum.
 // Only `even` has .output; `odd` is purely intermediate.
-// Before the fix, `odd` would still be extracted from the iterative block,
+// Before the fix, `odd` would still be extracted from the recursive block,
 // producing an unused variable in the generated Rust code and a compile error.
 //
 // Data layout

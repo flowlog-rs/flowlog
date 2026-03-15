@@ -197,10 +197,7 @@ mod tests {
     #[test]
     fn get_by_index() {
         let head = head_named("multi", vec![head_var("X")]);
-        let body = vec![
-            pos_pred("first", vec![var_arg("X")]),
-            cmp_pred(),
-        ];
+        let body = vec![pos_pred("first", vec![var_arg("X")]), cmp_pred()];
         let r = FlowLogRule::new(head, body, false);
 
         match r.get(0) {

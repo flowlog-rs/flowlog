@@ -179,11 +179,11 @@ impl Compiler {
         // Generate the inspect pattern and write statement based on mode and arity.
         let (inspect_pattern, write_stmt) = match (self.config.mode(), arity) {
             (ExecutionMode::Batch, 0) => (
-                quote! { (data, _time, _diff) },
+                quote! { (_data, _time, _diff) },
                 quote! { writeln!(&mut file, "True").expect("write failed"); },
             ),
             (ExecutionMode::Incremental, 0) => (
-                quote! { (data, _time, diff) },
+                quote! { (_data, _time, diff) },
                 quote! { writeln!(&mut file, "True").expect("write failed"); },
             ),
             (ExecutionMode::Batch, _) => {

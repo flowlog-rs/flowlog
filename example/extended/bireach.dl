@@ -1,0 +1,25 @@
+.decl Arc(x: int32, y: int32)
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
+
+.decl Source(id: int32)
+.input Source(IO="file", filename="Source.csv", delimiter=",")
+
+.decl Sink(id: int32)
+.input Sink(IO="file", filename="Sink.csv", delimiter=",")
+
+.decl FwdReach(id: int32)
+.decl BwdReach(id: int32)
+.decl Connected()
+
+FwdReach(x) :- Source(x).
+BwdReach(x) :- Sink(x).
+
+loop stop { Connected } {
+    FwdReach(y)  :- FwdReach(x), Arc(x, y).
+    BwdReach(x)  :- BwdReach(y), Arc(x, y).
+    Connected()  :- FwdReach(x), BwdReach(x).
+}
+
+.output Connected
+.output FwdReach
+.output BwdReach

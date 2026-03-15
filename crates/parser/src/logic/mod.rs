@@ -27,6 +27,7 @@ pub mod atom;
 pub mod comparison;
 pub mod fn_call;
 pub mod head;
+pub mod loop_block;
 pub mod predicate;
 pub mod rule;
 
@@ -37,5 +38,6 @@ pub use atom::{Atom, AtomArg};
 pub use comparison::{ComparisonExpr, ComparisonOperator};
 pub use fn_call::FnCall;
 pub use head::{Head, HeadArg};
+pub use loop_block::{LoopBlock, LoopCondition, LoopConnective, StopGroup, StopRelation};
 pub use predicate::Predicate;
 pub use rule::FlowLogRule;

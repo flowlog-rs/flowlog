@@ -8,7 +8,7 @@ use catalog::Catalog;
 use common::Config;
 use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
-use parser::{AggregationOperator, HeadArg};
+use parser::{AggregationOperator, HeadArg, LoopCondition};
 use profiler::{with_profiler, Profiler};
 use stratifier::Stratifier;
 
@@ -42,8 +42,8 @@ pub struct StratumPlanner {
     /// Fingerprints of collections that enter recursion.
     recursion_enter_collections: Vec<u64>,
 
-    /// Fingerprints of collections updated within recursion.
-    recursion_iterative_collections: Vec<u64>,
+    /// Fingerprints of recursive collections within recursion.
+    recursion_recursive_collections: Vec<u64>,
 
     /// Fingerprints of collections that exit recursion.
     recursion_leave_collections: Vec<u64>,
@@ -66,6 +66,10 @@ pub struct StratumPlanner {
     /// Values are `(fn_name, start_position, end_position, output_arity)` tuples,
     /// where start..end is the range of flattened arg positions in the output layout.
     idb_to_udf_map: HashMap<u64, (String, usize, usize, usize)>,
+
+    /// Loop stop condition for this stratum, if it was declared as a loop block.
+    /// `None` for plain strata (which run to fixpoint implicitly).
+    loop_condition: Option<LoopCondition>,
 }
 
 impl StratumPlanner {
@@ -170,14 +174,15 @@ impl StratumPlanner {
             non_recursive_transformations: Vec::new(),
             recursive_transformations: Vec::new(),
             recursion_enter_collections: Vec::new(),
-            recursion_iterative_collections: stratifier
-                .stratum_iterative_relation(stratum_idx)
+            recursion_recursive_collections: stratifier
+                .stratum_recursive_relation(stratum_idx)
                 .to_vec(),
             recursion_leave_collections: stratifier.stratum_leave_relation(stratum_idx).to_vec(),
             idb_to_heads_map: HashMap::new(),
             head_to_idb_map: HashMap::new(),
             idb_to_aggregation_map: HashMap::new(),
             idb_to_udf_map: HashMap::new(),
+            loop_condition: stratifier.loop_condition(stratum_idx).cloned(),
         };
         stratum_planner.materialize_transformations();
 
@@ -229,10 +234,10 @@ impl StratumPlanner {
         &self.recursion_enter_collections
     }
 
-    /// Get fingerprints of collections that are iterative (i.e., updated during recursion).
+    /// Get fingerprints of recursive collections within recursion.
     #[inline]
-    pub fn recursion_iterative_collections(&self) -> &[u64] {
-        &self.recursion_iterative_collections
+    pub fn recursion_recursive_collections(&self) -> &[u64] {
+        &self.recursion_recursive_collections
     }
 
     /// Get fingerprints of collections that leave recursion.
@@ -271,6 +276,12 @@ impl StratumPlanner {
     #[inline]
     pub fn idb_to_udf_map(&self) -> &HashMap<u64, (String, usize, usize, usize)> {
         &self.idb_to_udf_map
+    }
+
+    /// Get the loop stop condition for this stratum, if it is a loop block.
+    #[inline]
+    pub fn loop_condition(&self) -> Option<&LoopCondition> {
+        self.loop_condition.as_ref()
     }
 
     /// Check if this stratum is recursive.

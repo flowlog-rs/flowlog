@@ -63,6 +63,11 @@ pub struct Config {
     /// program must be defined in this file.
     #[arg(long, value_name = "PATH")]
     pub udf_file: Option<String>,
+
+    /// Enable Extended Datalog mode: recursion is only allowed inside explicit
+    /// `loop` blocks. Any recursive dependency in plain rules is a hard error.
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub extended: bool,
 }
 
 impl Config {
@@ -149,6 +154,11 @@ impl Config {
     /// Path to the user-supplied UDF implementation file, if any.
     pub fn udf_file(&self) -> Option<&str> {
         self.udf_file.as_deref()
+    }
+
+    /// Whether Extended Datalog mode is enabled.
+    pub fn extended_enabled(&self) -> bool {
+        self.extended
     }
 }
 
