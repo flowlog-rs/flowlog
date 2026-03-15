@@ -29,7 +29,7 @@ fn main() {
     }
 
     // Parse and process single file
-    let program = Program::parse(config.program());
+    let program = Program::parse(config.program(), config.extended_enabled());
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program, config.extended_enabled());
@@ -100,7 +100,7 @@ fn run_all_examples(config: &Config) {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| {
-            let program = Program::parse(file_path.to_str().unwrap());
+            let program = Program::parse(file_path.to_str().unwrap(), config.extended_enabled());
             let stratifier = Stratifier::from_program(&program, config.extended_enabled());
             let mut optimizer = Optimizer::new();
             let mut profiler = if config.profiling_enabled() {

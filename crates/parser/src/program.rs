@@ -46,7 +46,7 @@ use tracing::{debug, info, warn};
 /// [`Lexeme`] impl on an already-parsed pest node.
 ///
 /// ```ignore
-/// let program = Program::parse("path/to/program.fl");
+/// let program = Program::parse("path/to/program.fl", false);
 /// println!("{}", program);
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -143,8 +143,11 @@ impl Program {
     ///
     /// Included files are resolved relative to the including file's directory.
     /// Panics on I/O errors, parse errors, or circular includes.
+    ///
+    /// If `extended` is `false`, panics when the program contains any `loop`
+    /// blocks — those require Extended Datalog mode (`--extended`).
     #[must_use]
-    pub fn parse(path: &str) -> Self {
+    pub fn parse(path: &str, extended: bool) -> Self {
         let file_path = Path::new(path);
         let source = fs::read_to_string(file_path)
             .unwrap_or_else(|_| panic!("Parser error: failed to read '{}'", path));
@@ -158,7 +161,7 @@ impl Program {
             .unwrap_or_else(|e| panic!("Parser error in '{}': {}", path, e));
         let root = pairs.next().expect("Parser error: no parsed rule found");
 
-        let mut program = Self::collect_program(root);
+        let mut program = Self::collect_program(root, extended);
         program.prune_dead_components();
 
         debug!("\n{}", program);
@@ -398,7 +401,7 @@ impl Program {
     ///   `Segment::Plain`, then the loop is appended.
     /// - After the loop, rules resume accumulating into a fresh buffer.
     /// - Trailing rules after the last loop are sealed at the end.
-    fn collect_program(parsed_rule: Pair<Rule>) -> Self {
+    fn collect_program(parsed_rule: Pair<Rule>, extended: bool) -> Self {
         let mut relations: Vec<Relation> = Vec::new();
         let mut input_directives: Vec<InputDirective> = Vec::new();
         let mut output_directives: Vec<OutputDirective> = Vec::new();
@@ -428,6 +431,12 @@ impl Program {
                 // ── Rules and loop blocks ─────────────────────────────────────
                 Rule::rule => current_rules.push(FlowLogRule::from_parsed_rule(node)),
                 Rule::loop_block => {
+                    if !extended {
+                        panic!(
+                            "Parser error: `loop` blocks require Extended Datalog mode. \
+                             Rerun with `--extended`."
+                        );
+                    }
                     flush_rules(&mut current_rules, &mut segments);
                     segments.push(Segment::Loop(LoopBlock::from_parsed_rule(node)));
                 }
@@ -866,25 +875,10 @@ impl Program {
     }
 }
 
-// =============================================================================
-// Lexeme trait
-// =============================================================================
-
-impl Lexeme for Program {
-    /// Build a program from an already-inlined parse-tree node.
-    ///
-    /// For file-based parsing with include resolution use [`Program::parse`],
-    /// which calls [`resolve_includes`] before invoking this.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
-        Self::collect_program(parsed_rule)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FlowLogParser, Lexeme, Rule};
-    use pest::Parser;
+    use std::io::Write;
 
     fn loop_blocks(program: &Program) -> Vec<&LoopBlock> {
         program
@@ -895,9 +889,10 @@ mod tests {
     }
 
     fn parse_program(src: &str) -> Program {
-        let mut pairs = FlowLogParser::parse(Rule::main_grammar, src)
-            .unwrap_or_else(|e| panic!("parse error: {e}"));
-        Program::from_parsed_rule(pairs.next().unwrap())
+        let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
+        tmp.write_all(src.as_bytes())
+            .expect("failed to write temp file");
+        Program::parse(&tmp.path().to_string_lossy(), true)
     }
 
     #[test]
@@ -927,7 +922,7 @@ mod tests {
             .output a
             a(1) :- b(1).
             a(2) :- b(2).
-            loop { }
+            loop { a(X) :- b(X). }
         ";
         let program = parse_program(src);
         let items = program.segments();

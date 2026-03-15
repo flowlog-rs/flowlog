@@ -15,7 +15,7 @@ fn main() {
                 EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
             )
             .init();
-        run_all_examples();
+        run_all_examples(&config);
         return;
     }
 
@@ -26,7 +26,7 @@ fn main() {
         .init();
 
     // Parse and process single file
-    let program = Program::parse(config.program());
+    let program = Program::parse(config.program(), config.extended_enabled());
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program, config.extended_enabled());
@@ -47,7 +47,7 @@ fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
 }
 
 /// Run optimizer on all example files in the example directory
-fn run_all_examples() {
+fn run_all_examples(config: &Config) {
     let example_files = get_example_files();
     let mut formatter = TestResult::new("optimizer", example_files.len());
 
@@ -55,8 +55,8 @@ fn run_all_examples() {
         let file_name = file_path.file_stem().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| {
-            let program = Program::parse(file_path.to_str().unwrap());
-            let stratifier = Stratifier::from_program(&program, false);
+            let program = Program::parse(file_path.to_str().unwrap(), config.extended_enabled());
+            let stratifier = Stratifier::from_program(&program, config.extended_enabled());
             let optimizer = Optimizer::new();
 
             // Just run optimization without printing details

@@ -47,7 +47,7 @@
 //! use parser::Program;
 //! use stratifier::Stratifier;
 //!
-//! let program = Program::parse("path/to/program.dl");
+//! let program = Program::parse("path/to/program.dl", false);
 //!
 //! // Standard Datalog mode — recursion in plain rules is fine.
 //! let s = Stratifier::from_program(&program, false);

@@ -63,13 +63,18 @@ impl DependencyGraph {
             }
         }
 
-        Self { dependency_map, negative_edges }
+        Self {
+            dependency_map,
+            negative_edges,
+        }
     }
 
     fn build_head_to_rule_map(rules: &[FlowLogRule]) -> HashMap<String, Vec<usize>> {
         let mut map: HashMap<String, Vec<usize>> = HashMap::new();
         for (id, rule) in rules.iter().enumerate() {
-            map.entry(rule.head().name().to_string()).or_default().push(id);
+            map.entry(rule.head().name().to_string())
+                .or_default()
+                .push(id);
         }
         map
     }

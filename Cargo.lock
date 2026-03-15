@@ -432,6 +432,7 @@ dependencies = [
  "ordered-float",
  "pest",
  "pest_derive",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

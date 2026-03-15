@@ -16,3 +16,6 @@ common = { path = "../common" }
 pest = "2.8"
 pest_derive = "2.8"
 ordered-float = "5.1"
+
+[dev-dependencies]
+tempfile.workspace = true

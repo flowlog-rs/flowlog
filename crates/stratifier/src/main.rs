@@ -11,7 +11,7 @@ fn main() {
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::new("info"))
             .init();
-        run_all_examples();
+        run_all_examples(&config);
         return;
     }
 
@@ -19,20 +19,22 @@ fn main() {
         .with_env_filter(EnvFilter::new("debug"))
         .init();
 
-    let program = Program::parse(config.program());
+    let program = Program::parse(config.program(), config.extended_enabled());
     let _stratifier = Stratifier::from_program(&program, config.extended_enabled());
 }
 
-fn run_all_examples() {
+fn run_all_examples(config: &Config) {
     let example_files = get_example_files();
     let mut formatter = TestResult::new("stratifier", example_files.len());
 
     for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
-        match std::panic::catch_unwind(|| Program::parse(file_path.to_str().unwrap())) {
+        match std::panic::catch_unwind(|| {
+            Program::parse(file_path.to_str().unwrap(), config.extended_enabled())
+        }) {
             Ok(program) => {
-                let stratifier = Stratifier::from_program(&program, false);
+                let stratifier = Stratifier::from_program(&program, config.extended_enabled());
                 let recursive_cnt = stratifier
                     .is_recursive_stratum_bitmap()
                     .iter()

@@ -647,10 +647,7 @@ impl Stratifier {
                     if edb_fps.contains(&fp) || available.contains(&fp) || heads.contains(&fp) {
                         continue;
                     }
-                    let rel_name = fp_to_name
-                        .get(&fp)
-                        .copied()
-                        .unwrap_or("<unknown>");
+                    let rel_name = fp_to_name.get(&fp).copied().unwrap_or("<unknown>");
                     panic!(
                         "Stratifier error: rule {} in stratum #{} references relation `{}`, \
                          which is not yet defined at this point in the program.\n  \
@@ -847,7 +844,7 @@ mod tests {
         let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())
             .expect("failed to write temp file");
-        Program::parse(&tmp.path().to_string_lossy())
+        Program::parse(&tmp.path().to_string_lossy(), true)
     }
 
     /// A(x,y) :- Edge(x,y), !B(x,y).
@@ -976,7 +973,7 @@ mod tests {
                 Reach(x, y) :- Edge(x, y).\n\
                 Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             }\n";
-        let s = Stratifier::from_program(&parse_program(src), false);
+        let s = Stratifier::from_program(&parse_program(src), true);
         assert_eq!(s.stratum.len(), 1);
         // A `loop {}` block always becomes one recursive stratum; the condition
         // is None because fixpoint is implicit (no explicit stop condition).
@@ -1001,7 +998,7 @@ mod tests {
                 Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             }\n\
             Out(x) :- A(x).\n";
-        let s = Stratifier::from_program(&parse_program(src), false);
+        let s = Stratifier::from_program(&parse_program(src), true);
         assert!(s.stratum.len() >= 3);
         // The loop block is the only recursive stratum.
         let loop_idx = (0..s.stratum.len())
@@ -1026,7 +1023,7 @@ mod tests {
                 A(x, y) :- Edge(x, y), !B(x, y).\n\
                 B(x, y) :- A(x, y).\n\
             }\n";
-        let _ = Stratifier::from_program(&parse_program(src), false);
+        let _ = Stratifier::from_program(&parse_program(src), true);
         assert!(logs_contain("Negation in recursive stratum"));
     }
 

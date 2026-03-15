@@ -15,5 +15,5 @@ common = { path = "../common" }
 parser = { path = "../parser" }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 tracing-test.workspace = true
