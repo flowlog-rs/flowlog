@@ -529,7 +529,7 @@ mod tests {
     fn continue_iter_less_equal() {
         let block = parse_loop_block("loop continue { iter <= 6 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 6u16)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 6u32)]);
         assert!(cond.stop_part().is_none());
     }
 
@@ -537,14 +537,14 @@ mod tests {
     fn continue_iter_greater_equal() {
         let block = parse_loop_block("loop continue { iter >= 10 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(10u16, u16::MAX)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(10u32, u32::MAX)]);
     }
 
     #[test]
     fn continue_iter_and_intersection() {
         let block = parse_loop_block("loop continue { iter >= 5 and iter <= 10 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(5u16, 10u16)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(5u32, 10u32)]);
     }
 
     #[test]
@@ -553,7 +553,7 @@ mod tests {
         let cond = block.condition().unwrap();
         assert_eq!(
             cond.continue_part().unwrap(),
-            &[(0u16, 4u16), (11u16, u16::MAX)]
+            &[(0u32, 4u32), (11u32, u32::MAX)]
         );
         assert!(cond.stop_part().is_none());
     }
@@ -584,7 +584,7 @@ mod tests {
     fn continue_and_stop() {
         let block = parse_loop_block("loop continue { iter <= 6 } and stop { done } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 6u16)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 6u32)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::And));
         let sg = cond.stop_part().unwrap();
         assert_eq!(sg.first().name, "done");
@@ -594,7 +594,7 @@ mod tests {
     fn stop_and_continue() {
         let block = parse_loop_block("loop stop { done } and continue { iter <= 3 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 3u16)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 3u32)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::And));
         assert_eq!(cond.stop_part().unwrap().first().name, "done");
     }
@@ -603,7 +603,7 @@ mod tests {
     fn stop_or_continue() {
         let block = parse_loop_block("loop stop { done } or continue { iter <= 1 } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 1u16)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 1u32)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::Or));
         assert_eq!(cond.stop_part().unwrap().first().name, "done");
     }
@@ -612,7 +612,7 @@ mod tests {
     fn continue_or_stop() {
         let block = parse_loop_block("loop continue { iter <= 0 } or stop { done } { }");
         let cond = block.condition().unwrap();
-        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 0u16)]);
+        assert_eq!(cond.continue_part().unwrap(), &[(0u32, 0u32)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::Or));
         assert_eq!(cond.stop_part().unwrap().first().name, "done");
     }
