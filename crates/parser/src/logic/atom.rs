@@ -7,7 +7,7 @@
 //! ```rust
 //! use parser::logic::{Atom, AtomArg};
 //! use parser::primitive::ConstType;
-//! let a = Atom::new("person".to_string(), vec![
+//! let a = Atom::new("person", vec![
 //!     AtomArg::Const(ConstType::Text("Alice".into())),
 //!     AtomArg::Const(ConstType::Int(25)),
 //!     AtomArg::Placeholder,
@@ -101,9 +101,9 @@ impl Atom {
     ///
     /// Converts the name to lowercase.
     #[must_use]
-    pub fn new(name: String, arguments: Vec<AtomArg>, fingerprint: u64) -> Self {
+    pub fn new(name: &str, arguments: Vec<AtomArg>, fingerprint: u64) -> Self {
         Self {
-            name,
+            name: name.to_lowercase(),
             arguments,
             fingerprint,
         }
@@ -202,7 +202,7 @@ impl Lexeme for Atom {
             }
         }
 
-        Self::new(name, arguments, fingerprint)
+        Self::new(&name, arguments, fingerprint)
     }
 }
 
@@ -248,21 +248,17 @@ mod tests {
     #[test]
     fn atom_smoke() {
         // nullary
-        let a0 = Atom::new("flag".to_string(), vec![], 0);
+        let a0 = Atom::new("flag", vec![], 0);
         assert_eq!(a0.arity(), 0);
         assert!(a0.to_string().starts_with("flag()"));
 
         // unary
-        let a1 = Atom::new("student".to_string(), vec![v("X")], 0);
+        let a1 = Atom::new("student", vec![v("X")], 0);
         assert_eq!(a1.arity(), 1);
         assert!(a1.to_string().starts_with("student(X)"));
 
         // mixed
-        let a = Atom::new(
-            "person".to_string(),
-            vec![s("Alice"), i(25), Placeholder, v("Z")],
-            0,
-        );
+        let a = Atom::new("person", vec![s("Alice"), i(25), Placeholder, v("Z")], 0);
         assert_eq!(a.arity(), 4);
         assert_eq!(a.name(), "person");
         assert!(a.to_string().starts_with("person(\"Alice\", 25, _, Z)"));
@@ -270,7 +266,7 @@ mod tests {
 
     #[test]
     fn push_arg() {
-        let mut a = Atom::new("r".to_string(), vec![], 0);
+        let mut a = Atom::new("r", vec![], 0);
         a.push_arg(v("X"));
         a.push_arg(i(7));
         assert_eq!(a.arity(), 2);

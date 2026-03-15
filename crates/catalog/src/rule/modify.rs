@@ -32,7 +32,7 @@ impl Catalog {
         let new_atom = match &self.rule.rhs()[rhs_index] {
             Predicate::PositiveAtomPredicate(atom) | Predicate::NegativeAtomPredicate(atom) => {
                 let new_atom = Atom::new(
-                    new_atom_name,
+                    &new_atom_name,
                     atom.arguments().to_vec(),
                     new_atom_fingerprint,
                 );
@@ -102,7 +102,7 @@ impl Catalog {
                 });
 
                 // Create new atom
-                let new_atom = Atom::new(new_atom_name, new_args, new_atom_fingerprint);
+                let new_atom = Atom::new(&new_atom_name, new_args, new_atom_fingerprint);
                 match &self.rule.rhs()[rhs_index] {
                     Predicate::PositiveAtomPredicate(_) => {
                         Predicate::PositiveAtomPredicate(new_atom)
@@ -154,7 +154,7 @@ impl Catalog {
             .map(|arg_sig| AtomArg::Var(self.signature_to_argument_str_map[arg_sig].clone()))
             .collect();
 
-        let new_atom = Atom::new(new_atom_name, new_atom_args, new_atom_fingerprint);
+        let new_atom = Atom::new(&new_atom_name, new_atom_args, new_atom_fingerprint);
         self.update_rule_in_place(rhs_index, Predicate::PositiveAtomPredicate(new_atom));
     }
 
@@ -219,7 +219,7 @@ impl Catalog {
                     .collect();
 
                 // Create the new joined atom
-                let new_atom = Atom::new(new_names[i].clone(), new_atom_args, new_fingerprints[i]);
+                let new_atom = Atom::new(&new_names[i], new_atom_args, new_fingerprints[i]);
                 Predicate::PositiveAtomPredicate(new_atom)
             })
             .collect();
@@ -287,7 +287,7 @@ impl Catalog {
                 };
 
                 // Create the new filtered atom with copied arguments
-                let new_atom = Atom::new(new_names[i].clone(), new_atom_args, new_fingerprints[i]);
+                let new_atom = Atom::new(&new_names[i], new_atom_args, new_fingerprints[i]);
                 Predicate::PositiveAtomPredicate(new_atom)
             })
             .collect();
@@ -351,7 +351,7 @@ impl Catalog {
                     | Predicate::NegativeAtomPredicate(atom) => atom.arguments().to_vec(),
                     _ => panic!("Catalog error: Expected atom predicate"),
                 };
-                let new_atom = Atom::new(new_names[i].clone(), new_atom_args, new_fingerprints[i]);
+                let new_atom = Atom::new(&new_names[i], new_atom_args, new_fingerprints[i]);
                 Predicate::PositiveAtomPredicate(new_atom)
             })
             .collect();
