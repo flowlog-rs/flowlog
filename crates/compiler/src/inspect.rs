@@ -46,7 +46,7 @@ impl Compiler {
         match self.config.mode() {
             ExecutionMode::Batch => {
                 quote! {{
-                    #var
+                    #var.clone()
                         // Ensure each distinct record has weight `SEMIRING_ONE` under our semiring.
                         .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
                         // Drop data; keep time, emit `diff = 1` in DD's inner representation.
@@ -187,7 +187,7 @@ impl Compiler {
                 quote! { writeln!(&mut file, "True").expect("write failed"); },
             ),
             (ExecutionMode::Batch, _) => {
-                let fmt = vec!["{}"; arity].join(",");
+                let fmt = vec!["{}"; arity].join("|");
                 let fmt = LitStr::new(&fmt, Span::call_site());
                 (
                     quote! { (data, _time, _diff) },

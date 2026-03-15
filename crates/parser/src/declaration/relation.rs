@@ -100,6 +100,17 @@ impl Relation {
             .unwrap_or(",")
     }
 
+    /// Whether to skip the first (header) line when reading this EDB relation.
+    #[must_use]
+    #[inline]
+    pub fn input_has_header(&self) -> bool {
+        self.input_params
+            .as_ref()
+            .and_then(|m| m.get("header").map(String::as_str))
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
     /// Whether to print size for this relation.
     #[must_use]
     #[inline]

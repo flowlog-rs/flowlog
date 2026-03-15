@@ -386,6 +386,21 @@ impl Compiler {
             quote! { ( #(#field_idents),* ) }
         };
 
+        let skip_header = rel.input_has_header();
+        let maybe_skip_header = if skip_header {
+            quote! {
+                // Skip header line (only worker 0 skips; others start mid-file and won't see it).
+                if index == 0 {
+                    let mut __hdr = Vec::new();
+                    __reader.read_until(b'\n', &mut __hdr)
+                        .unwrap_or_else(|e| panic!("I/O error skipping header in {}: {}", #path, e));
+                    __bytes_consumed += __hdr.len() as u64;
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         quote! {
             {
                 let (mut __reader, __byte_budget) = __byte_range_reader(#path, index, peers);
@@ -394,6 +409,7 @@ impl Compiler {
                 // Reuse a single buffer across all lines to avoid per-line heap allocation.
                 let mut buf = Vec::with_capacity(256);
                 let mut __bytes_consumed: u64 = 0;
+                #maybe_skip_header
                 while __bytes_consumed < __byte_budget {
                     buf.clear();
                     if __reader.read_until(b'\n', &mut buf)

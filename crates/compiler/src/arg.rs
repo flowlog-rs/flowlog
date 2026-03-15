@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use syn::Index;
 
 use super::Compiler;
-use parser::{ArithmeticOperator, ComparisonOperator, ConstType};
+use parser::{ArithmeticOperator, ComparisonOperator, ConstType, DataType};
 use planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
     FnCallPredicateArgument, TransformationArgument,
@@ -403,6 +403,7 @@ impl Compiler {
         &mut self,
         comps: &[ComparisonExprArgument],
         string_intern: bool,
+        input_type: &(Vec<DataType>, Vec<DataType>),
     ) -> Option<TokenStream> {
         if comps.is_empty() {
             return None;
@@ -413,7 +414,16 @@ impl Compiler {
                 let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern, None);
                 let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern, None);
                 let op = comparison_op_tokens(c.operator());
-                quote! { (#l) #op (#r) }
+                if string_intern
+                    && c.operator().is_inequality()
+                    && Self::infer_expr_type(c.left(), input_type, None) == Some(DataType::String)
+                    && Self::infer_expr_type(c.right(), input_type, None) == Some(DataType::String)
+                {
+                    self.imports.mark_string_resolve();
+                    quote! { resolve(#l) #op resolve(#r) }
+                } else {
+                    quote! { (#l) #op (#r) }
+                }
             })
             .collect();
 
@@ -426,17 +436,30 @@ impl Compiler {
         &mut self,
         comps: &[ComparisonExprArgument],
         string_intern: bool,
+        left_type: &(Vec<DataType>, Vec<DataType>),
+        right_type: &(Vec<DataType>, Vec<DataType>),
     ) -> Option<TokenStream> {
         if comps.is_empty() {
             return None;
         }
         let parts: Vec<TokenStream> = comps
             .iter()
-            .map(|c| {
+            .map(|c: &ComparisonExprArgument| {
                 let l = self.build_join_args_arithmetic_expr(c.left(), string_intern);
                 let r = self.build_join_args_arithmetic_expr(c.right(), string_intern);
                 let op = comparison_op_tokens(c.operator());
-                quote! { (#l) #op (#r) }
+                if string_intern
+                    && c.operator().is_inequality()
+                    && Self::infer_expr_type(c.left(), left_type, Some(right_type))
+                        == Some(DataType::String)
+                    && Self::infer_expr_type(c.right(), left_type, Some(right_type))
+                        == Some(DataType::String)
+                {
+                    self.imports.mark_string_resolve();
+                    quote! { resolve(#l) #op resolve(#r) }
+                } else {
+                    quote! { (#l) #op (#r) }
+                }
             })
             .collect();
 
@@ -450,6 +473,7 @@ impl Compiler {
         comps: &[ComparisonExprArgument],
         row_fields: &[Ident],
         string_intern: bool,
+        input_type: &(Vec<DataType>, Vec<DataType>),
     ) -> Option<TokenStream> {
         if comps.is_empty() {
             return None;
@@ -462,7 +486,16 @@ impl Compiler {
                 let r =
                     self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern, None);
                 let op = comparison_op_tokens(c.operator());
-                quote! { #l #op #r }
+                if string_intern
+                    && c.operator().is_inequality()
+                    && Self::infer_expr_type(c.left(), input_type, None) == Some(DataType::String)
+                    && Self::infer_expr_type(c.right(), input_type, None) == Some(DataType::String)
+                {
+                    self.imports.mark_string_resolve();
+                    quote! { resolve(#l) #op resolve(#r) }
+                } else {
+                    quote! { #l #op #r }
+                }
             })
             .collect();
 

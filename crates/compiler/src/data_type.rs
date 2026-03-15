@@ -127,7 +127,7 @@ impl Compiler {
     /// Infer the `DataType` of a single arithmetic expression.
     ///
     /// All factors (init + rest) must agree on the same data type.
-    fn infer_expr_type(
+    pub(super) fn infer_expr_type(
         expr: &ArithmeticArgument,
         left_type: &(Vec<DataType>, Vec<DataType>),
         right_type: Option<&(Vec<DataType>, Vec<DataType>)>,
