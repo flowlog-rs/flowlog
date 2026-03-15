@@ -6,8 +6,7 @@
 use crate::dependency_graph::DependencyGraph;
 use itertools::Itertools;
 use parser::{
-    AggregationOperator, FlowLogRule, HeadArg, LoopCondition, LoopStopExpr, Predicate, Program,
-    Segment,
+    AggregationOperator, FlowLogRule, HeadArg, LoopCondition, Predicate, Program, Segment,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -26,7 +25,7 @@ use tracing::{debug, info, warn};
 /// - **Non-recursive** — rules with no mutual dependency cycle; evaluated in a
 ///   single pass.
 /// - **Recursive** — rules forming a strongly-connected component (SCC), or a
-///   single rule that references its own head; evaluated iteratively until a
+///   single rule that references its own head; evaluated recursively until a
 ///   fixpoint or stop condition is reached.
 ///
 /// ## Loop blocks
@@ -54,7 +53,7 @@ use tracing::{debug, info, warn};
 ///
 /// | Metadata | Meaning |
 /// |----------|---------|
-/// | *iterative* | Relations that participate in the recursive fixpoint loop (recursive strata only). |
+/// | *recursive* | Self-referential relations that grow monotonically each round. |
 /// | *leave* | Relations whose values must be retained after the stratum finishes, because a later stratum or an IDB output needs them. |
 /// | *available* | Relations that are already fully computed before this stratum begins (EDB + leaves from all prior strata). |
 #[derive(Debug, Clone)]
@@ -75,11 +74,11 @@ pub struct Stratifier {
     /// Parallel with `stratum`.
     stratum_loop_condition: Vec<Option<LoopCondition>>,
 
-    /// Relation fingerprints that participate in the recursive fixpoint loop.
+    /// Recursive relations per stratum.
     ///
-    /// Non-empty only for recursive strata: the set of head relations that also
-    /// appear in the bodies of rules in the same stratum.  Parallel with `stratum`.
-    stratum_iterative_relation: Vec<Vec<u64>>,
+    /// Head relations that also appear in the body of the same stratum.
+    /// Non-empty only for recursive strata.  Parallel with `stratum`.
+    stratum_recursive_relation: Vec<Vec<u64>>,
 
     /// Relation fingerprints that must be preserved after a stratum finishes.
     ///
@@ -109,7 +108,7 @@ impl Stratifier {
     /// A parallel bitmap indicating which strata are recursive.
     ///
     /// `bitmap[i]` is `true` when stratum *i* contains a dependency cycle and
-    /// requires iterative evaluation.
+    /// requires recursive evaluation.
     #[must_use]
     pub fn is_recursive_stratum_bitmap(&self) -> &[bool] {
         &self.is_recursive_stratum_bitmap
@@ -140,12 +139,13 @@ impl Stratifier {
             .collect()
     }
 
-    /// Relation fingerprints that participate in the fixpoint loop for stratum `idx`.
+    /// Recursive relations for stratum `idx`.
     ///
+    /// Head relations that also appear in the body of the same stratum.
     /// Empty for non-recursive strata.
     #[must_use]
-    pub fn stratum_iterative_relation(&self, idx: usize) -> &Vec<u64> {
-        &self.stratum_iterative_relation[idx]
+    pub fn stratum_recursive_relation(&self, idx: usize) -> &Vec<u64> {
+        &self.stratum_recursive_relation[idx]
     }
 
     /// Relation fingerprints whose values must be retained after stratum `idx`.
@@ -218,7 +218,7 @@ impl Stratifier {
 
                     strata.push((id_offset..id_offset + rule_count).collect());
                     bitmap.push(true);
-                    loop_conditions.push(Some(block.condition().clone()));
+                    loop_conditions.push(block.condition().cloned());
                     id_offset += rule_count;
                 }
             }
@@ -229,7 +229,7 @@ impl Stratifier {
             stratum: strata,
             is_recursive_stratum_bitmap: bitmap,
             stratum_loop_condition: loop_conditions,
-            stratum_iterative_relation: Vec::new(),
+            stratum_recursive_relation: Vec::new(),
             stratum_leave_relation: Vec::new(),
             stratum_available_relations: Vec::new(),
         };
@@ -289,7 +289,7 @@ impl Stratifier {
                     panic!(
                         "Extended Datalog error: recursive rules must be inside an explicit \
                          `loop` block, but recursion was found in plain rules: [{}]\n  \
-                         Hint: wrap these rules in `loop fixpoint {{ ... }}` or another loop form.",
+                         Hint: wrap these rules in `loop {{ ... }}` or another loop form.",
                         rule_ids.join(", ")
                     );
                 }
@@ -528,8 +528,7 @@ impl Stratifier {
 // =============================================================================
 
 impl Stratifier {
-    /// Populate `stratum_iterative_relation`, `stratum_leave_relation`, and
-    /// `stratum_available_relations` after the strata list is finalised.
+    /// Populate recursive, leave and available relations after the strata list is finalised.
     fn build_stratum_metadata(&mut self) {
         // Precompute head and body-atom fingerprint sets per stratum.
         let mut heads_per_stratum: Vec<HashSet<u64>> = Vec::new();
@@ -575,21 +574,19 @@ impl Stratifier {
             later_union.extend(body_atoms_per_stratum[i].iter().copied());
         }
 
-        // Build per-stratum iterative and leave sets.
+        // Build per-stratum recursive and leave sets.
         for i in 0..n {
             let heads = &heads_per_stratum[i];
             let body_atoms = &body_atoms_per_stratum[i];
             let later_body_atoms = &later_body_atoms_per_stratum[i];
 
-            // Iterative relations: head relations that also appear in the bodies
-            // of rules within the same stratum.  Only meaningful for recursive
-            // strata, where they are the relations updated each iteration.
-            let iterative = if self.is_recursive_stratum(i) {
-                heads.intersection(body_atoms).copied().collect()
+            // Recursive relations: heads that also appear in the body of the same stratum.
+            if self.is_recursive_stratum(i) {
+                let recursive: Vec<u64> = heads.intersection(body_atoms).copied().collect();
+                self.stratum_recursive_relation.push(recursive);
             } else {
-                Vec::new()
+                self.stratum_recursive_relation.push(Vec::new());
             };
-            self.stratum_iterative_relation.push(iterative);
 
             // Leave relations: head relations needed by later strata or outputs.
             let leave: Vec<u64> = heads
@@ -612,30 +609,32 @@ impl Stratifier {
     }
 
     /// Validate that every relation referenced in a loop block's stop condition
-    /// is iterative (i.e., updated during the loop's recursion).
+    /// is derived by at least one rule inside the loop body.
     ///
-    /// A [`LoopStopExpr::RelationEmpty`] or [`LoopStopExpr::RelationNonEmpty`]
-    /// condition that references a non-iterative relation is always static — its
-    /// value is fixed before the first iteration and never changes, so it cannot
-    /// meaningfully control termination.  This is rejected as a hard error.
+    /// A relation that appears as a head in the loop is guaranteed to change
+    /// as the loop progresses (either directly or via the recursive IDBs it
+    /// depends on), making it a valid termination signal.  A relation that is
+    /// never derived inside the loop is static and cannot meaningfully control
+    /// termination — this is rejected as a hard error.
     fn validate_loop_conditions(&self) {
         for (idx, condition) in self.stratum_loop_condition.iter().enumerate() {
             let Some(cond) = condition else { continue };
-            let iterative = &self.stratum_iterative_relation[idx];
+            let heads: HashSet<u64> = self.stratum[idx]
+                .iter()
+                .map(|&rid| self.program.rule(rid).head().head_fingerprint())
+                .collect();
 
-            for stop_expr in cond.exprs() {
-                let (rel_name, fp) = match stop_expr {
-                    LoopStopExpr::RelationEmpty(name, fp)
-                    | LoopStopExpr::RelationNonEmpty(name, fp) => (name.as_str(), *fp),
-                    _ => continue,
-                };
-                if !iterative.contains(&fp) {
+            let Some(stop_group) = cond.stop_part() else {
+                continue;
+            };
+            for rel in stop_group.relations() {
+                let (rel_name, fp) = (rel.name.as_str(), rel.fp);
+                if !heads.contains(&fp) {
                     panic!(
                         "Stratifier error: loop condition in stratum #{} references relation \
-                         `{}`, which is not iterative (no recursive rule inside the loop body \
-                         derives it).\n  \
-                         Hint: only relations that appear in both the head and body of rules \
-                         within the loop block can drive a stop condition.",
+                         `{}`, which has no rule inside the loop body that derives it.\n  \
+                         Hint: the stop-condition relation must appear as the head of at least \
+                         one rule inside the loop block.",
                         idx + 1,
                         rel_name
                     );
@@ -727,8 +726,8 @@ impl fmt::Display for Stratifier {
             if recursive {
                 writeln!(
                     f,
-                    "  iterative: [{}]",
-                    fmt_fps(&self.stratum_iterative_relation[idx])
+                    "  recursive: [{}]",
+                    fmt_fps(&self.stratum_recursive_relation[idx])
                 )?;
             }
             writeln!(
@@ -885,14 +884,15 @@ mod tests {
             .decl Reach(x: int32, y: int32)\n\
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .output Reach\n\
-            loop fixpoint {\n\
+            loop {\n\
                 Reach(x, y) :- Edge(x, y).\n\
                 Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             }\n";
         let s = Stratifier::from_program(&parse_program(src), false);
         assert_eq!(s.stratum.len(), 1);
+        // A `loop {}` block always becomes one recursive stratum; the condition
+        // is None because fixpoint is implicit (no explicit stop condition).
         assert!(s.is_recursive_stratum(0));
-        assert!(s.loop_condition(0).is_some());
     }
 
     /// Plain rules before and after a loop block are stratified independently
@@ -908,15 +908,16 @@ mod tests {
             .output Out\n\
             .output Reach\n\
             A(x) :- Edge(x, y).\n\
-            loop fixpoint {\n\
+            loop {\n\
                 Reach(x, y) :- Edge(x, y).\n\
                 Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             }\n\
             Out(x) :- A(x).\n";
         let s = Stratifier::from_program(&parse_program(src), false);
         assert!(s.stratum.len() >= 3);
+        // The loop block is the only recursive stratum.
         let loop_idx = (0..s.stratum.len())
-            .find(|&i| s.loop_condition(i).is_some())
+            .find(|&i| s.is_recursive_stratum(i))
             .expect("no loop stratum");
         assert!(s.is_recursive_stratum(loop_idx));
     }
@@ -933,7 +934,7 @@ mod tests {
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .output A\n\
             .output B\n\
-            loop fixpoint {\n\
+            loop {\n\
                 A(x, y) :- Edge(x, y), !B(x, y).\n\
                 B(x, y) :- A(x, y).\n\
             }\n";
@@ -949,7 +950,7 @@ mod tests {
             .decl Reach(x: int32, y: int32)\n\
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .output Reach\n\
-            loop fixpoint {\n\
+            loop {\n\
                 Reach(x, y) :- Edge(x, y).\n\
                 Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             }\n";

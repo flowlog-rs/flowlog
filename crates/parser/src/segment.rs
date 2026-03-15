@@ -14,11 +14,11 @@ use crate::logic::{FlowLogRule, LoopBlock};
 /// .decl ...
 /// rule_a(X) :- edb(X).          // ─┐ Segment::Plain
 /// rule_b(X) :- rule_a(X).       //  │
-///                                // ─┘
-/// loop fixpoint {                // ─┐ Segment::Loop
+///                               // ─┘
+/// loop {                        // ─┐ Segment::Loop
 ///     reach(X,Z) :- edge(X,Y),  //  │
 ///                   reach(Y,Z). //  │
-/// }                              // ─┘
+/// }                             // ─┘
 /// out(X) :- rule_b(X).          // ─── Segment::Plain
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +32,7 @@ pub enum Segment {
 impl Segment {
     /// Rules in this segment. Returns an empty slice for `Loop`
     /// (use [`LoopBlock::rules`] to access rules inside the loop).
+    #[must_use]
     pub fn as_rules(&self) -> &[FlowLogRule] {
         match self {
             Self::Plain(rules) => rules,
@@ -39,21 +40,9 @@ impl Segment {
         }
     }
 
-    pub fn as_rules_mut(&mut self) -> Option<&mut Vec<FlowLogRule>> {
-        match self {
-            Self::Plain(rules) => Some(rules),
-            Self::Loop(_) => None,
-        }
-    }
-
+    /// The [`LoopBlock`] if this is a `Loop` segment; `None` otherwise.
+    #[must_use]
     pub fn as_loop(&self) -> Option<&LoopBlock> {
-        match self {
-            Self::Loop(block) => Some(block),
-            Self::Plain(_) => None,
-        }
-    }
-
-    pub fn as_loop_mut(&mut self) -> Option<&mut LoopBlock> {
         match self {
             Self::Loop(block) => Some(block),
             Self::Plain(_) => None,

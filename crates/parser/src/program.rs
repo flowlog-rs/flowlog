@@ -536,13 +536,12 @@ impl Program {
     }
 
     /// Validate that every relation name appearing in a loop condition has a
-    /// corresponding `.decl` declaration.
+    /// corresponding `.decl` declaration and is nullary (arity 0).
     ///
-    /// Whether the relation is actually iterative within the loop is a deeper
-    /// semantic property checked later by the stratifier.
+    /// Loop condition relations act as boolean flags: a non-empty `rel()` means
+    /// the condition holds.  Non-nullary relations are rejected here so the
+    /// compiler can assume `Collection<G, ()>` without an extra `.map(|_| ())`.
     fn validate_loop_conditions(items: &[Segment], relations: &[Relation]) {
-        use crate::logic::LoopStopExpr;
-
         let declared: HashSet<&str> = relations.iter().map(|r| r.name()).collect();
 
         for item in items {
@@ -550,21 +549,40 @@ impl Program {
                 continue;
             };
 
-            for expr in block.condition().exprs() {
-                let name = match expr {
-                    LoopStopExpr::RelationNonEmpty(n, _) | LoopStopExpr::RelationEmpty(n, _) => {
-                        Some(n.as_str())
-                    }
-                    LoopStopExpr::Fixpoint | LoopStopExpr::Iteration(_) => None,
-                };
-                if let Some(name) = name {
-                    if !declared.contains(name) {
-                        panic!(
-                            "Parser error: loop condition references undeclared relation '{}'. \
-                             Declare it with .decl first.",
-                            name
-                        );
-                    }
+            let Some(cond) = block.condition() else {
+                continue;
+            };
+
+            let Some(stop_group) = cond.stop_part() else {
+                continue;
+            };
+
+            for rel in stop_group.relations() {
+                let name = rel.name.as_str();
+                // Relation names are stored lowercase internally (Relation::new
+                // lowercases them), so compare case-insensitively.
+                if !declared.contains(name) && !declared.contains(name.to_lowercase().as_str()) {
+                    panic!(
+                        "Parser error: loop condition references undeclared relation '{}'. \
+                         Declare it with .decl first.",
+                        name
+                    );
+                }
+
+                // Loop condition relations must be nullary (boolean flag).
+                let decl = relations
+                    .iter()
+                    .find(|r| r.name() == name || r.name() == name.to_lowercase().as_str())
+                    .expect("already confirmed declared above");
+                if decl.arity() != 0 {
+                    panic!(
+                        "Parser error: loop condition relation '{}' must be nullary \
+                         (declared as '.decl {}()' with no arguments). \
+                         Got arity {}.",
+                        name,
+                        decl.name(),
+                        decl.arity()
+                    );
                 }
             }
         }
@@ -884,7 +902,7 @@ mod tests {
             .decl c(x: number)
             .output c
             a(X) :- b(X).
-            loop fixpoint { b(X) :- a(X). }
+            loop { b(X) :- a(X). }
             c(X) :- a(X).
         ";
         let program = parse_program(src);
@@ -903,7 +921,7 @@ mod tests {
             .output a
             a(1) :- b(1).
             a(2) :- b(2).
-            loop fixpoint { }
+            loop { }
         ";
         let program = parse_program(src);
         let items = program.segments();
@@ -920,7 +938,7 @@ mod tests {
             .decl b(x: number)
             .output a
             a(X) :- b(X).
-            loop fixpoint { }
+            loop { }
             a(1) :- b(1).
         ";
         let program = parse_program(src);
@@ -934,29 +952,29 @@ mod tests {
             .decl done()
             .decl edge(x: number, y: number)
             .output done
-            loop done { done() :- edge(1, 2). }
+            loop stop { done } { done() :- edge(1, 2). }
         ";
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
     }
 
     #[test]
-    fn loop_fixpoint_needs_no_declaration() {
+    fn loop_pure_fixpoint_needs_no_declaration() {
         let src = "
             .decl edge(x: number, y: number)
             .output edge
-            loop fixpoint { edge(1, 2) :- edge(1, 2). }
+            loop { edge(1, 2) :- edge(1, 2). }
         ";
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
     }
 
     #[test]
-    fn loop_iter_count_needs_no_declaration() {
+    fn loop_iter_needs_no_declaration() {
         let src = "
             .decl edge(x: number, y: number)
             .output edge
-            loop 10 { edge(1, 2) :- edge(1, 2). }
+            loop continue { iter <= 9 } { edge(1, 2) :- edge(1, 2). }
         ";
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
@@ -964,20 +982,18 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "loop condition references undeclared relation 'done'")]
-    fn loop_relation_non_empty_undeclared_panics() {
-        parse_program("loop done { }");
+    fn loop_bool_relation_undeclared_panics() {
+        parse_program("loop stop { done } { }");
     }
 
     #[test]
-    #[should_panic(expected = "loop condition references undeclared relation 'queue'")]
-    fn loop_relation_empty_undeclared_panics() {
-        parse_program("loop !queue { }");
-    }
-
-    #[test]
-    #[should_panic(expected = "loop condition references undeclared relation 'done'")]
-    fn loop_and_condition_second_undeclared_panics() {
-        // first expr is fixpoint (fine), second is undeclared relation
-        parse_program("loop fixpoint and done { }");
+    #[should_panic(expected = "loop condition relation 'done' must be nullary")]
+    fn loop_relation_non_nullary_panics() {
+        let src = "
+            .decl done(x: number)
+            .output done
+            loop stop { done } { done(1) :- done(1). }
+        ";
+        parse_program(src);
     }
 }

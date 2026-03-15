@@ -1,6 +1,6 @@
 //! FlowLog Parser Library
 //!
-//! A parser for the FlowLog, an efficient, scalable and extensible Datalog language engine.
+//! A parser for FlowLog, an efficient, scalable, and extensible Datalog language engine.
 //! Provides structured representations for Datalog programs including
 //! relation declarations, logic rules, and primitive types.
 
@@ -14,8 +14,8 @@ pub mod segment;
 pub use declaration::{Attribute, ExternFn, Relation};
 pub use logic::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
-    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head, HeadArg,
-    LoopBlock, LoopCondition, LoopConnective, LoopStopExpr, Predicate,
+    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head, HeadArg, LoopBlock,
+    LoopCondition, LoopConnective, Predicate, StopGroup, StopRelation,
 };
 pub use primitive::{ConstType, DataType};
 pub use program::Program;

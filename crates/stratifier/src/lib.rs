@@ -17,7 +17,7 @@
 //!
 //! A stratum is *recursive* when it contains a cycle — either a multi-rule SCC
 //! or a single rule that references its own head in its body.  Recursive strata
-//! are evaluated iteratively until a fixpoint is reached; non-recursive strata
+//! are evaluated recursively until a fixpoint is reached; non-recursive strata
 //! are evaluated in a single pass.
 //!
 //! ## Loop blocks and Extended Datalog mode

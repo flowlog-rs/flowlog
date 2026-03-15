@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "WebSearch",
+      "WebFetch(domain:egglog-python.readthedocs.io)",
+      "WebFetch(domain:ztatlock.net)",
+      "WebFetch(domain:www.philipzucker.com)",
+      "WebFetch(domain:egraphs-good.github.io)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:github.com)",
+      "Bash(cargo clippy:*)",
+      "Bash(grep -n \"loop_condition\\\\|is_recursive_stratum\\\\|stratum_loop\" /users/zhhong/flowlog/crates/compiler/src/*.rs)",
+      "Bash(grep -r \"differential-dataflow\\\\|antijoin_u\\\\|semijoin_u\" /users/zhhong/flowlog/target/e2e --include=*.rs -l)",
+      "Bash(grep -r \"antijoin\\\\|semijoin\" /users/zhhong/flowlog/target/e2e --include=*.rs)",
+      "Read(//users/zhhong/.cargo/registry/src/**)",
+      "Bash(find ~/.cargo/registry/src -path *differential-dataflow* -name antijoin.rs)",
+      "Read(//users/zhhong/.cargo/**)",
+      "Bash(tests/e2e/run.sh loop_fixpoint loop_iteration)",
+      "Bash(./target/release/flowlog --extended -D /tmp/loop_test_out tests/e2e/loop_fixpoint/program.dl)",
+      "Bash(/users/zhhong/flowlog/target/release/flowlog --extended -D output /users/zhhong/flowlog/tests/e2e/loop_fixpoint/program.dl)",
+      "Bash(/users/zhhong/flowlog/target/release/flowlog -D output /users/zhhong/flowlog/tests/e2e/fact_syntax/program.dl)",
+      "Bash(tests/e2e/run.sh)",
+      "Bash(tests/e2e/run.sh loop_stop_relation loop_stop_and loop_stop_or)",
+      "Bash(/users/zhhong/flowlog/target/release/flowlog --extended -D output /users/zhhong/flowlog/tests/e2e/loop_stop_relation/program.dl)",
+      "Bash(bash tests/e2e/run.sh)"
+    ],
+    "additionalDirectories": [
+      "/users/zhhong/.claude/projects/-users-zhhong-flowlog"
+    ]
+  }
+}

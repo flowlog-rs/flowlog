@@ -316,52 +316,77 @@ predicate = {
 optimize = { ".plan" }
 
 // =============================================================================
-// LOOP BLOCKS
+// LOOP BLOCK
 // =============================================================================
 // A loop block executes a set of rules with a bounded/conditional iteration.
 // The block is a hard evaluation barrier — the stratifier cannot move rules
 // across its boundaries.
 //
-// Syntax:  loop <condition> { rules... }
+// Syntax:  loop [condition] { rules... }
+//
+// The optional condition is composed of at most one `continue` clause and one
+// `stop` clause joined by `and` / `or`, in either order:
+//
+//   continue { iter_expr }  — keep looping while the iteration constraint holds.
+//       iter_expr is one or more "iter op N" sub-conditions (joined by and/or)
+//       that describe allowed iteration windows.
+//         iter <= 6                  → run iterations 0..=6
+//         iter >= 5 and iter <= 10   → run iterations 5..=10
+//         iter < 5 or iter > 10      → run iterations 0..=4 and 11..
+//
+//   stop { rel_expr }       — halt when the listed bool relation(s) become true.
+//       rel_expr is one or more nullary relation names joined by and/or.
+//         stop { Done }              → stop when Done holds
+//         stop { Done1 or Done2 }    → stop when either holds
+//
+//   Combining continue and stop:
+//     continue C and stop S  — stop as soon as EITHER condition triggers
+//     continue C or  stop S  — stop only when BOTH conditions trigger
 //
 // Examples:
-//   loop fixpoint { ... }             // standard Datalog fixpoint
-//   loop 10 { ... }                   // exactly 10 iterations
-//   loop !done { ... }                // until 'done' relation is non-empty
-//   loop fixpoint and 100 { ... }     // fixpoint, but at most 100 iterations
+//   loop { ... }
+//   loop continue { iter <= 10 } { ... }
+//   loop stop { Done } { ... }
+//   loop stop { Done1 or Done2 } { ... }
+//   loop continue { iter <= 100 } and stop { Done } { ... }
+//   loop continue { iter <= 100 } or  stop { Done } { ... }
+//   loop stop { Done } and continue { iter >= 5 and iter <= 10 } { ... }
 
 loop_block = {
-    "loop" ~ loop_condition ~ "{" ~ rule* ~ "}"
+    "loop" ~ loop_condition? ~ "{" ~ rule* ~ "}"
 }
 
-// One or more stop expressions joined by "and" / "or".
-loop_condition = { loop_stop_expr ~ (loop_connective ~ loop_stop_expr)* }
-
-// A single stop expression.  Alternatives are tried in order, so the more
-// specific literals ("fixpoint", "iteration ==") are matched before the
-// catch-all relation_name.
-loop_stop_expr = {
-    loop_fixpoint             // stop when fixpoint reached
-  | loop_iter_count           // stop after N iterations (bare N, or "iteration == N")
-  | loop_relation_empty       // stop when the relation is empty
-  | loop_relation_non_empty   // stop when the relation is non-empty
+// At most one continue clause and one stop clause, in either order,
+// optionally joined by a boolean connective.
+loop_condition = {
+    loop_continue ~ (loop_connective ~ loop_stop)?
+  | loop_stop     ~ (loop_connective ~ loop_continue)?
 }
 
-// "fixpoint" keyword with word-boundary guard.
-loop_fixpoint = @{ "fixpoint" ~ !(ASCII_ALPHANUMERIC | "_") }
+// continue { iter_expr } — loop while iteration is in the specified window(s).
+loop_continue = { "continue" ~ "{" ~ loop_iter_expr ~ "}" }
 
-// N  |  iteration == N
-// The "iteration ==" prefix is optional syntactic sugar; both forms produce
-// the same AST node.
-loop_iter_count = { ("iteration" ~ "==")? ~ integer }
+// stop { rel_expr } — stop when the listed relation(s) become true.
+loop_stop = { "stop" ~ "{" ~ loop_stop_group ~ "}" }
 
-// !relation_name — stop when the named relation becomes empty.
-loop_relation_empty = { "!" ~ relation_name }
+// One or more bool relations joined by and/or inside the stop clause.
+loop_stop_group = { loop_bool_relation ~ (loop_connective ~ loop_bool_relation)* }
 
-// relation_name — stop when the named relation becomes non-empty.
-loop_relation_non_empty = { relation_name }
+// One or more "iter op N" sub-conditions joined by and/or.
+// Resolved at parse time into a list of allowed iteration windows Vec<(u16,u16)>.
+loop_iter_expr = {
+    "iter" ~ loop_iter_compare_op ~ integer
+    ~ (loop_connective ~ "iter" ~ loop_iter_compare_op ~ integer)*
+}
 
-// Boolean connective joining stop expressions.
+// Comparison operators for iteration sub-conditions.
+// Longer tokens must come before shorter ones to avoid premature match.
+loop_iter_compare_op = { "<=" | ">=" | "==" | "<" | ">" }
+
+// A single nullary (boolean) relation name used in a stop clause.
+loop_bool_relation = { relation_name }
+
+// Boolean connective joining clauses or sub-conditions.
 loop_connective = { loop_and | loop_or }
 loop_and        = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
 loop_or         = @{ "or"  ~ !(ASCII_ALPHANUMERIC | "_") }
