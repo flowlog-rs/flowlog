@@ -10,7 +10,7 @@
   <a href="#end-to-end-example">Quick Start</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#compiler-cli">Compiler CLI</a> •
-  <a href="https://arxiv.org/pdf/2511.00865">FlowLog Paper</a>
+  <a href="https://www.vldb.org/pvldb/vol19/p361-zhao.pdf">FlowLog Paper</a>
 </p>
 
 **Status:** FlowLog is under active development; interfaces may change without notice.
@@ -135,7 +135,7 @@ FlowLog builds on the FlowLog paper:
 
 > **FlowLog: Efficient and Extensible Datalog via Incrementality**  \
 > Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  \
-> VLDB 2026 (Boston) — [arXiv 2511.00865](https://arxiv.org/pdf/2511.00865)
+> VLDB 2026 (Boston) — [arXiv 2511.00865](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf)
 
 ## Contributing
 
