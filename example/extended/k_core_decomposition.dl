@@ -1,0 +1,14 @@
+.decl edge(x: int32, y: int32)
+.input edge(IO="file", filename="edge.csv", delimiter=",")
+
+.decl active_edge(x: int32, y: int32)
+.decl degree(x: int32, y: int32)
+.decl removed(x: int32)
+
+loop iterative { active_edge, degree } {
+    active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).
+    degree(x, count(y)) :- active_edge(x, y).
+    removed(x) :- degree(x, d), d < 2.
+}
+
+.printsize active_edge
