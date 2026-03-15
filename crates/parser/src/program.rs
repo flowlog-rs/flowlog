@@ -352,11 +352,11 @@ fn resolve_includes(
         in_progress.remove(&canonical);
         completed.insert(canonical);
 
-        if out.chars().last().map_or(false, |c| !c.is_whitespace()) {
+        if out.chars().last().is_some_and(|c| !c.is_whitespace()) {
             out.push('\n');
         }
         out.push_str(&inlined);
-        if out.chars().last().map_or(false, |c| !c.is_whitespace()) {
+        if out.chars().last().is_some_and(|c| !c.is_whitespace()) {
             out.push('\n');
         }
     }
