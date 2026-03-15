@@ -126,7 +126,7 @@ mod tests {
     use crate::primitive::ConstType;
 
     // Helpers
-    fn atom(name: &str, args: Vec<AtomArg>) -> Atom {
+    fn atom(name: String, args: Vec<AtomArg>) -> Atom {
         Atom::new(name, args, 0)
     }
     fn var(name: &str) -> AtomArg {
@@ -146,7 +146,8 @@ mod tests {
 
     #[test]
     fn positive_atom_predicate() {
-        let p = Predicate::PositiveAtomPredicate(atom("edge", vec![var("X"), var("Y")]));
+        let p =
+            Predicate::PositiveAtomPredicate(atom("edge".to_string(), vec![var("X"), var("Y")]));
         assert_eq!(p.name(), "edge");
         assert!(p.to_string().starts_with("edge(X, Y)"));
         let args = p.arguments();
@@ -157,7 +158,7 @@ mod tests {
 
     #[test]
     fn negative_atom_predicate() {
-        let p = Predicate::NegativeAtomPredicate(atom("blocked", vec![var("User")]));
+        let p = Predicate::NegativeAtomPredicate(atom("blocked".to_string(), vec![var("User")]));
         assert_eq!(p.name(), "blocked");
         assert!(p.to_string().starts_with("!blocked(User)"));
         let args = p.arguments();
@@ -188,7 +189,10 @@ mod tests {
     #[test]
     fn display_matrix_and_complex_examples() {
         // Mixed atom
-        let pa = Predicate::PositiveAtomPredicate(atom("person", vec![txt("Alice"), int(30)]));
+        let pa = Predicate::PositiveAtomPredicate(atom(
+            "person".to_string(),
+            vec![txt("Alice"), int(30)],
+        ));
         assert!(pa.to_string().starts_with("person(\"Alice\", 30)"));
 
         // All comparison ops
@@ -226,7 +230,7 @@ mod tests {
 
     #[test]
     fn nullary_atom_predicate() {
-        let p = Predicate::PositiveAtomPredicate(atom("flag", vec![]));
+        let p = Predicate::PositiveAtomPredicate(atom("flag".to_string(), vec![]));
         assert_eq!(p.name(), "flag");
         assert!(p.to_string().starts_with("flag()"));
         assert!(p.arguments().is_empty());
@@ -234,7 +238,7 @@ mod tests {
 
     #[test]
     fn clone_hash_eq() {
-        let a = Predicate::PositiveAtomPredicate(atom("t", vec![var("X")]));
+        let a = Predicate::PositiveAtomPredicate(atom("t".to_string(), vec![var("X")]));
         let b = a.clone();
         assert_eq!(a, b);
 

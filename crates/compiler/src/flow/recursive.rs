@@ -57,10 +57,6 @@ impl Compiler {
 
         // --- Recursive variable bindings -------------------------
         let recursive_fps = stratum.recursion_recursive_collections();
-        assert!(
-            !recursive_fps.is_empty(),
-            "Compiler error: recursive stratum has no recursive relations"
-        );
         let (recursive_names, recursive_bindings) = self.build_recursive_bindings(recursive_fps);
 
         // Initialize recursive variables and record feedback operators.

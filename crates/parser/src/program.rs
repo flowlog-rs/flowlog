@@ -352,7 +352,13 @@ fn resolve_includes(
         in_progress.remove(&canonical);
         completed.insert(canonical);
 
+        if out.chars().last().map_or(false, |c| !c.is_whitespace()) {
+            out.push('\n');
+        }
         out.push_str(&inlined);
+        if out.chars().last().map_or(false, |c| !c.is_whitespace()) {
+            out.push('\n');
+        }
     }
 
     // Append any remaining source after the last include directive.

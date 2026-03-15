@@ -148,7 +148,7 @@ mod tests {
     fn var_arg(name: &str) -> AtomArg {
         AtomArg::Var(name.into())
     }
-    fn atom(name: &str, args: Vec<AtomArg>) -> Atom {
+    fn atom(name: String, args: Vec<AtomArg>) -> Atom {
         Atom::new(name, args, 0)
     }
     fn head_var(name: &str) -> HeadArg {
@@ -161,10 +161,10 @@ mod tests {
         Head::new(name.into(), args)
     }
 
-    fn pos_pred(name: &str, args: Vec<AtomArg>) -> Predicate {
+    fn pos_pred(name: String, args: Vec<AtomArg>) -> Predicate {
         Predicate::PositiveAtomPredicate(atom(name, args))
     }
-    fn neg_pred(name: &str, args: Vec<AtomArg>) -> Predicate {
+    fn neg_pred(name: String, args: Vec<AtomArg>) -> Predicate {
         Predicate::NegativeAtomPredicate(atom(name, args))
     }
 
@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn create_and_access() {
         let head = head_named("result", vec![head_var("X")]);
-        let body = vec![pos_pred("input", vec![var_arg("X")])];
+        let body = vec![pos_pred("input".to_string(), vec![var_arg("X")])];
         let r = FlowLogRule::new(head, body, false);
 
         assert!(!r.is_planning());
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn planning_flag() {
         let head = head_named("optimized", vec![head_var("Y")]);
-        let body = vec![pos_pred("source", vec![var_arg("Y")])];
+        let body = vec![pos_pred("source".to_string(), vec![var_arg("Y")])];
         let r = FlowLogRule::new(head, body, true);
         assert!(r.is_planning());
     }
@@ -198,7 +198,7 @@ mod tests {
     fn get_by_index() {
         let head = head_named("multi", vec![head_var("X")]);
         let body = vec![
-            pos_pred("first", vec![var_arg("X")]),
+            pos_pred("first".to_string(), vec![var_arg("X")]),
             cmp_pred(),
         ];
         let r = FlowLogRule::new(head, body, false);
@@ -213,14 +213,14 @@ mod tests {
     #[test]
     fn display_formats() {
         let head = head_named("result", vec![head_var("X")]);
-        let body = vec![pos_pred("input", vec![var_arg("X")])];
+        let body = vec![pos_pred("input".to_string(), vec![var_arg("X")])];
         let r = FlowLogRule::new(head, body, false);
         assert!(r.to_string().starts_with("result(X) :- input(X)"));
 
         let head2 = head_named("complex", vec![head_var("A"), head_var("B")]);
         let body2 = vec![
-            pos_pred("rel1", vec![var_arg("A")]),
-            neg_pred("rel2", vec![var_arg("B")]),
+            pos_pred("rel1".to_string(), vec![var_arg("A")]),
+            neg_pred("rel2".to_string(), vec![var_arg("B")]),
         ];
         let r2 = FlowLogRule::new(head2, body2, false);
         let s2 = r2.to_string();
@@ -229,7 +229,7 @@ mod tests {
         assert!(s2.ends_with('.'));
 
         let head3 = head_named("filtered", vec![head_var("X")]);
-        let body3 = vec![pos_pred("data", vec![var_arg("X")]), {
+        let body3 = vec![pos_pred("data".to_string(), vec![var_arg("X")]), {
             let l = Arithmetic::new(Factor::Var("X".into()), vec![]);
             let r = Arithmetic::new(Factor::Const(ConstType::Int(5)), vec![]);
             Predicate::ComparePredicate(ComparisonExpr::new(l, ComparisonOperator::GreaterThan, r))
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn clone_hash_eq() {
         let head = head_named("test", vec![head_var("X")]);
-        let body = vec![pos_pred("input", vec![var_arg("X")])];
+        let body = vec![pos_pred("input".to_string(), vec![var_arg("X")])];
         let r = FlowLogRule::new(head, body, false);
         let c = r.clone();
         assert_eq!(r, c);
@@ -318,9 +318,12 @@ mod tests {
         let right = Arithmetic::new(Factor::Const(ConstType::Int(18)), vec![]);
         let age_gt = ComparisonExpr::new(left, ComparisonOperator::GreaterThan, right);
         let body = vec![
-            pos_pred("person", vec![var_arg("Person"), var_arg("Age")]),
+            pos_pred(
+                "person".to_string(),
+                vec![var_arg("Person"), var_arg("Age")],
+            ),
             Predicate::ComparePredicate(age_gt),
-            neg_pred("blocked", vec![var_arg("Person")]),
+            neg_pred("blocked".to_string(), vec![var_arg("Person")]),
         ];
         let r = FlowLogRule::new(head, body, false);
 

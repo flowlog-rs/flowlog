@@ -235,6 +235,8 @@ impl Stratifier {
         };
 
         instance.build_stratum_metadata();
+        instance.validate_forward_references();
+        instance.validate_recursive_strata();
         instance.validate_loop_conditions();
         instance.warn_aggregation();
 
@@ -336,7 +338,7 @@ impl Stratifier {
         // Pass 1: DFS on the original graph to record nodes in reverse finish order.
         let mut order = Vec::with_capacity(n);
         let mut visited = vec![false; n];
-        for &id in dep_map.keys() {
+        for &id in dep_map.keys().sorted() {
             Self::dfs_order(dep_map, &mut visited, &mut order, id);
         }
         order.reverse();
@@ -605,6 +607,92 @@ impl Stratifier {
             available.extend(&edb_fps);
             self.stratum_available_relations.push(available);
             accumulated.extend(leave);
+        }
+    }
+
+    /// Validate that no stratum references an IDB relation defined only in a later stratum.
+    ///
+    /// Each body atom in stratum *i* must be either:
+    /// - an EDB relation (always available), or
+    /// - in `stratum_available_relations[i]` (derived and left by a prior stratum), or
+    /// - a head of the same stratum (recursive self-reference).
+    ///
+    /// A body atom that fails all three is a forward reference: the relation is
+    /// only defined in a later segment and will be empty when stratum *i* runs,
+    /// silently producing wrong results.
+    fn validate_forward_references(&self) {
+        let fp_to_name: HashMap<u64, &str> = self
+            .program
+            .relations()
+            .iter()
+            .map(|r| (r.fingerprint(), r.name()))
+            .collect();
+        let edb_fps = self.program.edb_fingerprints();
+
+        for (i, stratum) in self.stratum.iter().enumerate() {
+            let available = &self.stratum_available_relations[i];
+            let heads: HashSet<u64> = stratum
+                .iter()
+                .map(|&rid| self.program.rule(rid).head().head_fingerprint())
+                .collect();
+
+            for &rid in stratum {
+                let rule = self.program.rule(rid);
+                for predicate in rule.rhs() {
+                    let fp = match predicate {
+                        Predicate::PositiveAtomPredicate(atom)
+                        | Predicate::NegativeAtomPredicate(atom) => atom.fingerprint(),
+                        _ => continue,
+                    };
+                    if edb_fps.contains(&fp) || available.contains(&fp) || heads.contains(&fp) {
+                        continue;
+                    }
+                    let rel_name = fp_to_name
+                        .get(&fp)
+                        .copied()
+                        .unwrap_or("<unknown>");
+                    panic!(
+                        "Stratifier error: rule {} in stratum #{} references relation `{}`, \
+                         which is not yet defined at this point in the program.\n  \
+                         Rule: {}\n  \
+                         Hint: `{}` appears to be defined in a later segment. \
+                         Move the rule after the segment that derives `{}`.",
+                        rid,
+                        i + 1,
+                        rel_name,
+                        rule,
+                        rel_name,
+                        rel_name,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Validate that every recursive stratum has at least one recursive relation.
+    ///
+    /// A recursive stratum with an empty recursive-relation set is structurally
+    /// invalid: the compiler's iterative scope requires at least one feedback
+    /// variable to wire up.  For loop blocks this arises when every rule inside
+    /// the block is non-self-referential (no head relation ever appears as a body
+    /// atom), making iteration pointless.
+    fn validate_recursive_strata(&self) {
+        for (idx, is_rec) in self.is_recursive_stratum_bitmap.iter().enumerate() {
+            if *is_rec && self.stratum_recursive_relation[idx].is_empty() {
+                let rule_ids: Vec<String> = self.stratum[idx]
+                    .iter()
+                    .map(|&rid| rid.to_string())
+                    .collect();
+                panic!(
+                    "Stratifier error: recursive stratum #{} has no recursive relations \
+                     (no head relation appears as a body atom in the same stratum).\n  \
+                     Rules: [{}]\n  \
+                     Hint: a `loop` block must contain at least one rule whose head \
+                     relation also appears in a body atom within the same block.",
+                    idx + 1,
+                    rule_ids.join(", ")
+                );
+            }
         }
     }
 
@@ -971,5 +1059,40 @@ mod tests {
             Reach(x, y) :- Edge(x, y).\n\
             Reach(x, z) :- Edge(x, y), Reach(y, z).\n";
         let _ = Stratifier::from_program(&parse_program(src), true);
+    }
+
+    /// A plain-segment rule that references a relation only defined inside a
+    /// later `loop` block is a forward reference → stratifier hard error.
+    #[test]
+    #[should_panic(expected = "Stratifier error: rule 0 in stratum #1 references relation `b`")]
+    fn forward_reference_across_loop_barrier_errors() {
+        let src = "\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl A(x: int32, y: int32)\n\
+            .decl B(x: int32, y: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output A\n\
+            A(x, y) :- B(x, y).\n\
+            loop {\n\
+                B(x, y) :- Edge(x, y).\n\
+                B(x, z) :- Edge(x, y), B(y, z).\n\
+            }\n";
+        let _ = Stratifier::from_program(&parse_program(src), false);
+    }
+
+    /// A `loop` block where no head relation appears as a body atom has no
+    /// recursive relations → stratifier hard error.
+    #[test]
+    #[should_panic(expected = "Stratifier error: recursive stratum #1 has no recursive relations")]
+    fn loop_block_with_no_recursive_relations_errors() {
+        let src = "\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl A(x: int32, y: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output A\n\
+            loop {\n\
+                A(x, y) :- Edge(x, y).\n\
+            }\n";
+        let _ = Stratifier::from_program(&parse_program(src), false);
     }
 }

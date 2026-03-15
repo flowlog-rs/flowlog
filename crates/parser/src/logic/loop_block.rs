@@ -411,13 +411,13 @@ fn parse_stop_group(pair: Pair<Rule>) -> StopGroup {
 
 /// Parse a `loop_bool_relation` pair into a [`StopRelation`].
 fn parse_bool_relation(pair: Pair<Rule>) -> StopRelation {
-    let raw = pair
+    let name = pair
         .into_inner()
         .next()
         .expect("Parser error: loop_bool_relation missing relation_name")
-        .as_str();
-    let fp = compute_fp(raw);
-    let name = raw.to_ascii_lowercase();
+        .as_str()
+        .to_ascii_lowercase();
+    let fp = compute_fp(&name);
     StopRelation { name, fp }
 }
 

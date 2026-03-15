@@ -109,9 +109,11 @@ impl Head {
     /// Converts the name to lowercase.
     #[must_use]
     pub fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
+        let name = name.to_lowercase();
+        let head_fingerprint = compute_fp(&name);
         Self {
-            name: name.to_ascii_lowercase(),
-            head_fingerprint: compute_fp(&name),
+            name,
+            head_fingerprint,
             head_arguments,
         }
     }
