@@ -199,7 +199,7 @@ impl Compiler {
                 // tuple fields + ",{:+}" for diff at the end
                 let mut parts = vec!["{}"; idb.arity()];
                 parts.push("{:+}");
-                let fmt = parts.join("  ");
+                let fmt = parts.join(",");
                 let fmt = LitStr::new(&fmt, Span::call_site());
                 (
                     quote! { (data, _time, diff) },

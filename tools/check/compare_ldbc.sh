@@ -26,6 +26,10 @@ pass() { echo -e "${GREEN}[PASS]${NC}  $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}  $*"; }
 die()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
+# Verify required external commands are available early, before doing any work.
+command -v timeout >/dev/null 2>&1 || die "Required dependency 'timeout' not found on PATH; please install it."
+command -v python3 >/dev/null 2>&1 || die "Required dependency 'python3' not found on PATH; please install Python 3."
+
 CONFIG="${ROOT_DIR}/tools/config/config_ldbc.txt"
 MAX_PARAMS=0
 TIMEOUT_SECS=300
@@ -56,7 +60,9 @@ mkdir -p "$WORK_DIR" "$FACT_DIR"
 fmt_ms() {
     local ms=${1:-0}
     if [[ $ms -ge 1000 ]]; then
-        printf "%.2fs" "$(echo "scale=2; $ms/1000" | bc)"
+        local sec=$((ms / 1000))
+        local cs=$(((ms % 1000) / 10))  # centiseconds (two decimal places)
+        printf "%d.%02ds" "$sec" "$cs"
     else
         printf "%dms" "$ms"
     fi
@@ -117,8 +123,14 @@ run_per_param() {
 
     # Detect param filename from DL
     local param_fname
-    param_fname=$(grep 'filename=' "$dl_file" | grep -i param | head -1 \
-                  | sed 's/.*filename="\([^"]*\)".*/\1/')
+    param_fname=$(
+        { grep 'filename=' "$dl_file" | grep -i param | head -1 \
+            | sed 's/.*filename="\([^"]*\)".*/\1/'; } || true
+    )
+    if [[ -z "${param_fname:-}" ]]; then
+        fail "$query: could not determine param filename from $dl_file"
+        return 1
+    fi
     local param_file="${data_dir}/${param_fname}"
     [[ -f "$param_file" ]] || { fail "$query: param file not found: $param_file"; return 1; }
 
@@ -139,14 +151,18 @@ run_per_param() {
         return 1
     fi
     local fl_bin
-    fl_bin=$(find "$fl_proj/target/release" -maxdepth 1 -type f -executable | grep -v '\.d$' | head -1)
+    fl_bin=$(find "$fl_proj/target/release" -maxdepth 1 -type f -executable | grep -v '\.d$' | head -1 || true)
     if [[ -z "$fl_bin" ]]; then
         fail "$query: Flowlog binary not found after build"
         return 1
     fi
     local fl_out_hardcoded
     fl_out_hardcoded=$(grep 'base_dir = ' "$fl_proj/src/main.rs" | grep -v '//' | head -1 \
-                       | sed 's/.*"\(.*\)".*/\1/')
+                       | sed 's/.*"\(.*\)".*/\1/' || true)
+    if [[ -z "$fl_out_hardcoded" ]]; then
+        fail "$query: could not detect Flowlog base_dir from main.rs"
+        return 1
+    fi
     mkdir -p "$fl_out_hardcoded"
 
     # ── Load params ──
@@ -184,8 +200,12 @@ run_per_param() {
         find "$fl_out_hardcoded" -maxdepth 1 -type f -delete 2>/dev/null || true
         printf "\r${CYAN}[CHECK]${NC} Flowlog  [%d/%d]  " "$idx" "$total" >&2
         _t0=$(date +%s%3N)
-        timeout "$TIMEOUT_SECS" "$fl_bin" -w "$WORKERS" >/dev/null 2>&1
-        _exit_code=$?
+        if timeout "$TIMEOUT_SECS" "$fl_bin" -w "$WORKERS" >/dev/null 2>&1;
+        then
+            _exit_code=0
+        else
+            _exit_code=$?
+        fi
         _t1=$(date +%s%3N)
         fl_ms=$(( _t1 - _t0 ))
         if [[ $_exit_code -eq 0 ]]; then
@@ -207,9 +227,12 @@ run_per_param() {
         printf 'SET threads=%s;\n%s\n' "$WORKERS" "$sql_subst" > "$exec_sql"
         printf "\r${CYAN}[CHECK]${NC} DuckDB   [%d/%d]  " "$idx" "$total" >&2
         _t0=$(date +%s%3N)
-        timeout "$TIMEOUT_SECS" "$DUCKDB_BIN" -csv :memory: < "$exec_sql" 2>/dev/null \
-            | tail -n +2 > "$db_param_out"
-        _exit_code=${PIPESTATUS[0]}
+        if timeout "$TIMEOUT_SECS" "$DUCKDB_BIN" -csv :memory: < "$exec_sql" 2>/dev/null \
+                | tail -n +2 > "$db_param_out"; then
+            _exit_code=0
+        else
+            _exit_code=${PIPESTATUS[0]}
+        fi
         _t1=$(date +%s%3N)
         db_ms=$(( _t1 - _t0 ))
         if [[ $_exit_code -eq 0 ]]; then
