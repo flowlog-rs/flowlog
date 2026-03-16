@@ -628,6 +628,7 @@ impl Compiler {
                         parent_dir,
                         idb.arity(),
                         &idb.data_type(),
+                        idb.output_delimiter(),
                         profiler,
                     ));
                     merge_stmts.push(self.gen_merge_partitions(name, parent_dir));

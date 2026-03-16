@@ -28,6 +28,9 @@ pub struct Relation {
     /// Whether to output detailed results
     output: bool,
 
+    /// Output parameters (e.g., delimiter="|")
+    output_params: Option<HashMap<String, String>>,
+
     /// Whether to print results size (e.g. row count)
     printsize: bool,
 }
@@ -47,6 +50,7 @@ impl Relation {
             attributes,
             input_params: None,
             output: false,
+            output_params: None,
             printsize: false,
         }
     }
@@ -148,6 +152,21 @@ impl Relation {
     /// Mark relation for output.
     pub fn set_output(&mut self, output: bool) {
         self.output = output;
+    }
+
+    /// Set output parameters for this relation.
+    pub fn set_output_params(&mut self, params: HashMap<String, String>) {
+        self.output_params = Some(params);
+    }
+
+    /// Get the output delimiter. Defaults to `","`.
+    #[must_use]
+    #[inline]
+    pub fn output_delimiter(&self) -> &str {
+        self.output_params
+            .as_ref()
+            .and_then(|m| m.get("delimiter").map(String::as_str))
+            .unwrap_or(",")
     }
 
     /// Set printsize flag.

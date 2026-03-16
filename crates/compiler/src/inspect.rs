@@ -149,6 +149,7 @@ impl Compiler {
         parent_dir: &str,
         arity: usize,
         data_types: &[DataType],
+        delimiter: &str,
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let base_dir = parent_dir.to_string();
@@ -187,7 +188,7 @@ impl Compiler {
                 quote! { writeln!(&mut file, "True").expect("write failed"); },
             ),
             (ExecutionMode::Batch, _) => {
-                let fmt = vec!["{}"; arity].join("|");
+                let fmt = vec!["{}"; arity].join(delimiter);
                 let fmt = LitStr::new(&fmt, Span::call_site());
                 (
                     quote! { (data, _time, _diff) },

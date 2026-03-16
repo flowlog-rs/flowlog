@@ -530,7 +530,12 @@ impl Program {
         }
         for d in output_directives {
             match relations.iter_mut().find(|r| r.name() == d.relation_name()) {
-                Some(rel) => rel.set_output(true),
+                Some(rel) => {
+                    rel.set_output(true);
+                    if !d.parameters().is_empty() {
+                        rel.set_output_params(d.parameters().clone());
+                    }
+                }
                 None => panic!(
                     "Parser error: .output directive for undeclared relation '{}' — \
                      declare it with .decl first",
