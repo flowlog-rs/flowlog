@@ -82,7 +82,8 @@ impl Compiler {
                     flow,
                     head_to_idb_map,
                 );
-                let itype = self.find_global_type(input.fingerprint()).1.clone();
+                let input_type = self.find_global_type(input.fingerprint()).clone();
+                let itype = input_type.1.clone();
 
                 // Output expression + predicates
                 let row_ty = type_tokens(&itype, si);
@@ -93,7 +94,8 @@ impl Compiler {
                     si,
                     Some(&remaining),
                 );
-                let cmp_pred = self.build_row_compare_predicate(flow.compares(), &row_fields, si);
+                let cmp_pred =
+                    self.build_row_compare_predicate(flow.compares(), &row_fields, si, &input_type);
                 let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields, si);
                 let fc_pred =
                     self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si);
@@ -149,7 +151,8 @@ impl Compiler {
                     flow,
                     head_to_idb_map,
                 );
-                let itype = self.find_global_type(input.fingerprint()).1.clone();
+                let input_type = self.find_global_type(input.fingerprint()).clone();
+                let itype = input_type.1.clone();
 
                 // Output expression + predicates
                 let row_ty = type_tokens(&itype, si);
@@ -168,7 +171,8 @@ impl Compiler {
                     quote! { ( #out_key, #out_val ) }
                 };
 
-                let cmp_pred = self.build_row_compare_predicate(flow.compares(), &row_fields, si);
+                let cmp_pred =
+                    self.build_row_compare_predicate(flow.compares(), &row_fields, si, &input_type);
                 let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields, si);
                 let fc_pred =
                     self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si);
@@ -230,9 +234,10 @@ impl Compiler {
                 );
 
                 // Output value + predicates
+                let input_type = self.find_global_type(input.fingerprint()).clone();
                 let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
                 let out_val = self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
-                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si);
+                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type);
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si);
                 let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si);
                 let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
@@ -288,6 +293,7 @@ impl Compiler {
                 );
 
                 // Output expression + predicates
+                let input_type = self.find_global_type(input.fingerprint()).clone();
                 let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
                 let out_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining));
                 let out_val = self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
@@ -296,7 +302,7 @@ impl Compiler {
                 } else {
                     quote! { ( #out_key, #out_val ) }
                 };
-                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si);
+                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type);
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si);
                 let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si);
                 let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
@@ -394,7 +400,10 @@ impl Compiler {
                 );
                 let out_val = self.build_key_val_from_join_args(flow.value(), si);
 
-                let cmp_pred = self.build_join_compare_predicate(flow.compares(), si);
+                let left_type = self.find_global_type(left.fingerprint()).clone();
+                let right_type = self.find_global_type(right.fingerprint()).clone();
+                let cmp_pred =
+                    self.build_join_compare_predicate(flow.compares(), si, &left_type, &right_type);
                 let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si);
                 let pred = combine_predicates(vec![cmp_pred, fc_pred]);
                 let join_body = if let Some(pred) = pred {
@@ -458,7 +467,10 @@ impl Compiler {
                     quote! { ( #out_key, #out_val ) }
                 };
 
-                let cmp_pred = self.build_join_compare_predicate(flow.compares(), si);
+                let left_type = self.find_global_type(left.fingerprint()).clone();
+                let right_type = self.find_global_type(right.fingerprint()).clone();
+                let cmp_pred =
+                    self.build_join_compare_predicate(flow.compares(), si, &left_type, &right_type);
                 let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si);
                 let pred = combine_predicates(vec![cmp_pred, fc_pred]);
                 let join_body = if let Some(pred) = pred {

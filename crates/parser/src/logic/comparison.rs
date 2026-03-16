@@ -36,6 +36,15 @@ impl ComparisonOperator {
     pub fn is_equal(&self) -> bool {
         matches!(self, Self::Equal)
     }
+
+    #[must_use]
+    #[inline]
+    pub fn is_inequality(&self) -> bool {
+        matches!(
+            self,
+            Self::LessThan | Self::LessEqualThan | Self::GreaterThan | Self::GreaterEqualThan
+        )
+    }
 }
 
 impl fmt::Display for ComparisonOperator {

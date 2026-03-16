@@ -1,0 +1,61 @@
+// person.txt: id|firstName|lastName|gender|birthday|creationDate|locationIP|browserUsed
+.decl Person(id: int64, firstName: string, lastName: string, gender: string, birthday: string, creationDate: string, locationIP: string, browserUsed: string)
+.input Person(IO="file", filename="person.txt", delimiter="|", header="true")
+
+// person_knows_person.txt: Person.id|Person.id|creationDate
+.decl Knows(person1: int64, person2: int64, creationDate: string)
+.input Knows(IO="file", filename="person_knows_person.txt", delimiter="|", header="true")
+
+// comment.txt: id|creationDate|locationIP|browserUsed|content|length
+.decl Comment(id: int64, creationDate: string, locationIP: string, browserUsed: string, content: string, length: int64)
+.input Comment(IO="file", filename="comment.txt", delimiter="|", header="true")
+
+// comment_hasCreator_person.txt: Comment.id|Person.id
+.decl CommentHasCreator(commentId: int64, creatorId: int64)
+.input CommentHasCreator(IO="file", filename="comment_hasCreator_person.txt", delimiter="|", header="true")
+
+// post.txt: id|imageFile|creationDate|locationIP|browserUsed|language|content|length
+.decl Post(id: int64, imageFile: string, creationDate: string, locationIP: string, browserUsed: string, language: string, content: string, length: int64)
+.input Post(IO="file", filename="post.txt", delimiter="|", header="true")
+
+// post_hasCreator_person.txt: Post.id|Person.id
+.decl PostHasCreator(postId: int64, creatorId: int64)
+.input PostHasCreator(IO="file", filename="post_hasCreator_person.txt", delimiter="|", header="true")
+
+// Query parameter: personId|maxDate (maxDate as ISO string)
+.decl Param(personId: int64, maxDate: string)
+.input Param(IO="file", filename="interactive_2_param.txt", delimiter="|", header="true")
+
+.decl Q2(personId: int64, firstName: string, lastName: string, messageId: int64, content: string, creationDate: string)
+
+// Match via Comment
+Q2(p2id, firstName, lastName, msgId, content, cDate) :-
+    Param(p1id, maxDate),
+    Knows(p1id, p2id, _),
+    CommentHasCreator(msgId, p2id),
+    Comment(msgId, cDate, _, _, content, _),
+    Person(p2id, firstName, lastName, _, _, _, _, _),
+    cDate < maxDate.
+
+// Match via Post with imageFile (use imageFile as content, matching COALESCE behaviour)
+Q2(p2id, firstName, lastName, msgId, imageFile, cDate) :-
+    Param(p1id, maxDate),
+    Knows(p1id, p2id, _),
+    PostHasCreator(msgId, p2id),
+    Post(msgId, imageFile, cDate, _, _, _, _, _),
+    Person(p2id, firstName, lastName, _, _, _, _, _),
+    imageFile != "",
+    cDate < maxDate.
+
+// Match via Post without imageFile (fall back to content)
+Q2(p2id, firstName, lastName, msgId, content, cDate) :-
+    Param(p1id, maxDate),
+    Knows(p1id, p2id, _),
+    PostHasCreator(msgId, p2id),
+    Post(msgId, imageFile, cDate, _, _, _, content, _),
+    Person(p2id, firstName, lastName, _, _, _, _, _),
+    imageFile = "",
+    cDate < maxDate.
+
+.printsize Q2
+.output Q2(delimiter="|")

@@ -109,27 +109,28 @@ declaration = {
 
 // Input directive for EDB relations - separate from declaration
 // Example: .input Relation(IO="file", filename="data.csv", delimiter=",")
-input_directive = { 
-    ".input" ~ relation_name ~ "(" ~ input_params? ~ ")"
+input_directive = {
+    ".input" ~ relation_name ~ "(" ~ io_params? ~ ")"
 }
 
-// Input parameters
-input_params = { input_param ~ ("," ~ input_param)* }
+// Output directive for relations
+// Example: .output Relation
+// Example: .output Relation(delimiter="|")
+output_directive = {
+    ".output" ~ relation_name ~ ("(" ~ io_params? ~ ")")?
+}
 
-// Individual input parameter
-input_param = { parameter_name ~ "=" ~ parameter_value }
+// Shared key=value parameter list used by both input and output directives
+io_params = { io_param ~ ("," ~ io_param)* }
+
+// Individual parameter
+io_param = { parameter_name ~ "=" ~ parameter_value }
 
 // Parameter name (IO, filename, delimiter, etc.)
 parameter_name = { identifier }
 
 // Parameter value (quoted string)
 parameter_value = { string }
-
-// Output directive for relations
-// Example: .output Relation
-output_directive = { 
-    ".output" ~ relation_name
-}
 
 // Print size directive for relations - separate from declaration
 // Example: .printsize Relation

@@ -2,10 +2,12 @@
 
 pub mod config;
 pub mod formatter;
+pub mod macros;
 
 // Re-export main types for backwards compatibility
 pub use config::{get_example_files, Config, ExecutionMode};
 pub use formatter::TestResult;
+pub use macros::INTERN_MAX_RETRIES;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

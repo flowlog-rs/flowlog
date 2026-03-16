@@ -36,48 +36,39 @@ impl InputDirective {
     }
 }
 
+/// Parse `io_params` children from a directive's inner pairs into a key→value map.
+fn parse_io_params<'i>(inner: impl Iterator<Item = pest::iterators::Pair<'i, Rule>>) -> HashMap<String, String> {
+    let mut parameters = HashMap::new();
+    for node in inner {
+        if node.as_rule() == Rule::io_params {
+            for io_param in node.into_inner() {
+                let mut kv = io_param.into_inner();
+                let key = kv.next().expect("Parser error: io parameter missing name").as_str().to_string();
+                let value = kv.next().expect("Parser error: io parameter missing value").as_str().trim_matches('"').to_string();
+                parameters.insert(key, value);
+            }
+        }
+    }
+    parameters
+}
+
 impl Lexeme for InputDirective {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let mut inner = parsed_rule.into_inner();
-
-        // First child is always the relation name
         let relation_name = inner
             .next()
             .expect("Parser error: input directive missing relation name")
             .as_str()
             .to_string();
-
-        let mut parameters = HashMap::new();
-
-        // Parse all key=value style parameters
-        for param in inner {
-            if param.as_rule() == Rule::input_params {
-                for input_param in param.into_inner() {
-                    let mut param_inner = input_param.into_inner();
-                    let key = param_inner
-                        .next()
-                        .expect("Parser error: input parameter missing name")
-                        .as_str()
-                        .to_string();
-                    let value = param_inner
-                        .next()
-                        .expect("Parser error: input parameter missing value")
-                        .as_str()
-                        .trim_matches('"')
-                        .to_string();
-                    parameters.insert(key, value);
-                }
-            }
-        }
-
-        Self::new(relation_name, parameters)
+        Self::new(relation_name, parse_io_params(inner))
     }
 }
 
-/// Represents an output directive (which relation to write)
+/// Represents an output directive (which relation to write, with optional parameters)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputDirective {
     relation_name: String,
+    parameters: HashMap<String, String>,
 }
 
 impl OutputDirective {
@@ -85,9 +76,10 @@ impl OutputDirective {
     ///
     /// Converts the relation name to lowercase.
     #[must_use]
-    pub fn new(relation_name: String) -> Self {
+    pub fn new(relation_name: String, parameters: HashMap<String, String>) -> Self {
         Self {
             relation_name: relation_name.to_lowercase(),
+            parameters,
         }
     }
 
@@ -96,20 +88,23 @@ impl OutputDirective {
     pub fn relation_name(&self) -> &str {
         &self.relation_name
     }
+
+    /// Get all output parameters
+    #[must_use]
+    pub fn parameters(&self) -> &HashMap<String, String> {
+        &self.parameters
+    }
 }
 
 impl Lexeme for OutputDirective {
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let mut inner = parsed_rule.into_inner();
-
-        // First child is relation name
         let relation_name = inner
             .next()
             .expect("Parser error: output directive missing relation name")
             .as_str()
             .to_string();
-
-        Self::new(relation_name)
+        Self::new(relation_name, parse_io_params(inner))
     }
 }
 
@@ -174,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_output_directive_creation() {
-        let output_dir = OutputDirective::new("OutputRelation".to_string());
+        let output_dir = OutputDirective::new("OutputRelation".to_string(), HashMap::new());
         assert_eq!(output_dir.relation_name(), "outputrelation");
     }
 
@@ -193,9 +188,9 @@ mod tests {
         assert_eq!(input1, input2);
         assert_ne!(input1, input3);
 
-        let output1 = OutputDirective::new("Test".to_string());
-        let output2 = OutputDirective::new("Test".to_string());
-        let output3 = OutputDirective::new("Other".to_string());
+        let output1 = OutputDirective::new("Test".to_string(), HashMap::new());
+        let output2 = OutputDirective::new("Test".to_string(), HashMap::new());
+        let output3 = OutputDirective::new("Other".to_string(), HashMap::new());
 
         assert_eq!(output1, output2);
         assert_ne!(output1, output3);
