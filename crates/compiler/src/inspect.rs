@@ -10,7 +10,7 @@
 use crate::Compiler;
 
 use common::ExecutionMode;
-use parser::DataType;
+use parser::{DataType, Relation};
 use profiler::{with_profiler, Profiler};
 
 use proc_macro2::{Ident, Span, TokenStream};
@@ -147,9 +147,7 @@ impl Compiler {
         var: &Ident,
         name: &str,
         parent_dir: &str,
-        arity: usize,
-        data_types: &[DataType],
-        delimiter: &str,
+        idb: &Relation,
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let base_dir = parent_dir.to_string();
@@ -165,10 +163,10 @@ impl Compiler {
             profiler.inspect_content_file_operator(rel_name.clone(), rel_name.clone());
         });
 
-        let data_accessors: Vec<TokenStream> = (0..arity)
+        let data_accessors: Vec<TokenStream> = (0..idb.arity())
             .map(|i| {
                 let idx = Index::from(i);
-                match data_types.get(i) {
+                match idb.data_type().get(i) {
                     Some(DataType::String) if self.imports.needs_string_intern() => {
                         quote! { resolve(data.#idx) }
                     }
@@ -178,7 +176,7 @@ impl Compiler {
             .collect();
 
         // Generate the inspect pattern and write statement based on mode and arity.
-        let (inspect_pattern, write_stmt) = match (self.config.mode(), arity) {
+        let (inspect_pattern, write_stmt) = match (self.config.mode(), idb.arity()) {
             (ExecutionMode::Batch, 0) => (
                 quote! { (_data, _time, _diff) },
                 quote! { writeln!(&mut file, "True").expect("write failed"); },
@@ -188,7 +186,7 @@ impl Compiler {
                 quote! { writeln!(&mut file, "True").expect("write failed"); },
             ),
             (ExecutionMode::Batch, _) => {
-                let fmt = vec!["{}"; arity].join(delimiter);
+                let fmt = vec!["{}"; idb.arity()].join(idb.output_delimiter());
                 let fmt = LitStr::new(&fmt, Span::call_site());
                 (
                     quote! { (data, _time, _diff) },
@@ -199,7 +197,7 @@ impl Compiler {
             }
             (ExecutionMode::Incremental, _) => {
                 // tuple fields + ",{:+}" for diff at the end
-                let mut parts = vec!["{}"; arity];
+                let mut parts = vec!["{}"; idb.arity()];
                 parts.push("{:+}");
                 let fmt = parts.join("  ");
                 let fmt = LitStr::new(&fmt, Span::call_site());

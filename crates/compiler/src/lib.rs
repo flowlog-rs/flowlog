@@ -622,15 +622,8 @@ impl Compiler {
                         "output directory must be provided when writing IDB output to files",
                     );
 
-                    inspect_stmts.push(self.gen_write_inspector(
-                        &var,
-                        name,
-                        parent_dir,
-                        idb.arity(),
-                        &idb.data_type(),
-                        idb.output_delimiter(),
-                        profiler,
-                    ));
+                    inspect_stmts
+                        .push(self.gen_write_inspector(&var, name, parent_dir, idb, profiler));
                     merge_stmts.push(self.gen_merge_partitions(name, parent_dir));
 
                     if self.config.is_incremental() {
