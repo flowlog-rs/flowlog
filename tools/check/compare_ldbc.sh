@@ -13,7 +13,7 @@
 #   --timeout    per-param timeout in seconds (default: 300)
 #
 # Environment variables:
-#   DUCKDB_BIN  - path to duckdb binary (default: duckdb on PATH, then /tmp/duckdb)
+#   DUCKDB_BIN  - path to duckdb binary (default: duckdb on PATH)
 #   WORKERS     - parallelism for both engines (default: 64)
 # =============================================================================
 set -euo pipefail
@@ -85,34 +85,15 @@ setup_dataset() {
         return
     fi
 
-    # If a pre-built directory exists in /dev/shm, symlink it instead of downloading
-    if [[ -d "/dev/shm/${dataset_name}" ]]; then
-        log "Dataset $dataset_name found in /dev/shm, symlinking"
-        ln -s "/dev/shm/${dataset_name}" "$extract_path"
-        return
-    fi
-
     command -v wget >/dev/null 2>&1 || die "wget not found; cannot download datasets"
 
-    # Try .tar.zst first, fall back to .tar.gz
-    local dataset_tar_zst="/dev/shm/${dataset_name}.tar.zst"
-    local dataset_tar_gz="/dev/shm/${dataset_name}.tar.gz"
-
-    if wget -q --spider "${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst" 2>/dev/null; then
-        log "Downloading $dataset_name (.tar.zst) ..."
-        wget -q -O "$dataset_tar_zst" "${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst" \
-            || die "Download failed"
-        log "Extracting $dataset_name ..."
-        tar --use-compress-program=zstd -xf "$dataset_tar_zst" -C "$FACT_DIR"
-        rm -f "$dataset_tar_zst"
-    else
-        log "Downloading $dataset_name (.tar.gz) ..."
-        wget -q -O "$dataset_tar_gz" "${HF_BASE}/dataset/ldbc/${dataset_name}.tar.gz" \
-            || die "Download failed: ${HF_BASE}/dataset/ldbc/${dataset_name}.tar.gz"
-        log "Extracting $dataset_name ..."
-        tar -xzf "$dataset_tar_gz" -C "$FACT_DIR"
-        rm -f "$dataset_tar_gz"
-    fi
+    local dataset_tar="/dev/shm/${dataset_name}.tar.zst"
+    log "Downloading $dataset_name (.tar.zst) ..."
+    wget -q -O "$dataset_tar" "${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst" \
+        || die "Download failed: ${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst"
+    log "Extracting $dataset_name ..."
+    tar --use-compress-program=zstd -xf "$dataset_tar" -C "$FACT_DIR"
+    rm -f "$dataset_tar"
 
     log "Dataset $dataset_name ready at $extract_path"
 }
@@ -121,13 +102,7 @@ cleanup_dataset() {
     local dataset_name="$1"
     local extract_path="${FACT_DIR}/${dataset_name}"
     log "Cleaning up dataset $dataset_name"
-    if [[ -L "$extract_path" ]]; then
-        rm -f "$extract_path"
-        rm -rf "/dev/shm/${dataset_name}"
-    else
-        rm -rf "$extract_path"
-    fi
-    rm -f "/dev/shm/${dataset_name}.tar.zst" "/dev/shm/${dataset_name}.tar.gz"
+    rm -rf "$extract_path"
 }
 
 # ── Per-param runner ──────────────────────────────────────────────────────────

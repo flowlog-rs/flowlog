@@ -3,7 +3,7 @@
 //! This module tracks which external crates and traits need to be imported
 //! based on the transformations being generated within a stratum.
 
-use common::ExecutionMode;
+use common::{ExecutionMode, INTERN_MAX_RETRIES};
 use parser::DataType;
 
 use proc_macro2::TokenStream;
@@ -648,6 +648,7 @@ impl ImportTracker {
             return quote! {};
         }
 
+        let max_retries = INTERN_MAX_RETRIES;
         let base = quote! {
             use lasso::{ThreadedRodeo, Spur};
             use std::sync::LazyLock;
@@ -663,12 +664,17 @@ impl ImportTracker {
             /// Retries on transient allocation failures under high thread contention.
             #[inline(always)]
             fn intern(s: &str) -> Spur {
-                loop {
+                for _ in 0..#max_retries {
                     match INTERNER.try_get_or_intern(s) {
                         Ok(key) => return key,
                         Err(_) => std::thread::yield_now(),
                     }
                 }
+                panic!(
+                    "string interner failed after {} attempts for {:?}",
+                    #max_retries,
+                    s
+                );
             }
         };
 
