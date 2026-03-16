@@ -29,6 +29,8 @@ die()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 # Verify required external commands are available early, before doing any work.
 command -v timeout >/dev/null 2>&1 || die "Required dependency 'timeout' not found on PATH; please install it."
 command -v python3 >/dev/null 2>&1 || die "Required dependency 'python3' not found on PATH; please install Python 3."
+command -v tar >/dev/null 2>&1 || die "Required dependency 'tar' not found on PATH; please install it."
+command -v zstd >/dev/null 2>&1 || die "Required dependency 'zstd' not found on PATH; please install it."
 
 CONFIG="${ROOT_DIR}/tools/config/config_ldbc.txt"
 MAX_PARAMS=0
@@ -95,7 +97,7 @@ setup_dataset() {
 
     local dataset_tar="/dev/shm/${dataset_name}.tar.zst"
     log "Downloading $dataset_name (.tar.zst) ..."
-    wget -q -O "$dataset_tar" "${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst" \
+    wget -q --max-redirect=5 -O "$dataset_tar" "${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst" \
         || die "Download failed: ${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst"
     log "Extracting $dataset_name ..."
     tar --use-compress-program=zstd -xf "$dataset_tar" -C "$FACT_DIR"
@@ -343,7 +345,9 @@ PYEOF
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-total=0; passed=0; failed=0
+# Group queries by dataset so each dataset is downloaded/cleaned up only once.
+declare -A dataset_queries   # dataset -> space-separated query list
+declare -a dataset_order=()  # preserve first-seen order
 
 while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
     line="${raw_line%%#*}"
@@ -354,28 +358,39 @@ while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
     dataset="$(trim "${line#*=}")"
     [[ -z "$query" || -z "$dataset" ]] && continue
 
-    log "$query (dataset: $dataset)"
+    if [[ -z "${dataset_queries[$dataset]+x}" ]]; then
+        dataset_queries[$dataset]=""
+        dataset_order+=( "$dataset" )
+    fi
+    dataset_queries[$dataset]+="${query} "
+done < "$CONFIG"
 
-    DL_FILE="${DL_DIR}/${query}.dl"
-    SQL_FILE="${SQL_DIR}/${query}.sql"
+total=0; passed=0; failed=0
 
-    [[ -f "$DL_FILE" ]]  || { fail "$query: missing $DL_FILE";  failed=$((failed+1)); continue; }
-    [[ -f "$SQL_FILE" ]] || { fail "$query: missing $SQL_FILE"; failed=$((failed+1)); continue; }
-
-    total=$((total + 1))
-
+for dataset in "${dataset_order[@]}"; do
     setup_dataset "$dataset"
     DATA_DIR="${FACT_DIR}/${dataset}"
 
-    if run_per_param "$query" "$DATA_DIR"; then
-        passed=$((passed+1))
-    else
-        failed=$((failed+1))
-    fi
+    for query in ${dataset_queries[$dataset]}; do
+        log "$query (dataset: $dataset)"
+
+        DL_FILE="${DL_DIR}/${query}.dl"
+        SQL_FILE="${SQL_DIR}/${query}.sql"
+
+        [[ -f "$DL_FILE" ]]  || { fail "$query: missing $DL_FILE";  failed=$((failed+1)); continue; }
+        [[ -f "$SQL_FILE" ]] || { fail "$query: missing $SQL_FILE"; failed=$((failed+1)); continue; }
+
+        total=$((total + 1))
+
+        if run_per_param "$query" "$DATA_DIR"; then
+            passed=$((passed+1))
+        else
+            failed=$((failed+1))
+        fi
+    done
 
     cleanup_dataset "$dataset"
-
-done < "$CONFIG"
+done
 
 echo ""
 echo "=========================================="

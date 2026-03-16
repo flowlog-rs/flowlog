@@ -196,10 +196,10 @@ impl Compiler {
                 )
             }
             (ExecutionMode::Incremental, _) => {
-                // tuple fields + ",{:+}" for diff at the end
+                // tuple fields + delimiter + "{:+}" for diff at the end
                 let mut parts = vec!["{}"; idb.arity()];
                 parts.push("{:+}");
-                let fmt = parts.join(",");
+                let fmt = parts.join(idb.output_delimiter());
                 let fmt = LitStr::new(&fmt, Span::call_site());
                 (
                     quote! { (data, _time, diff) },
