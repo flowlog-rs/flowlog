@@ -32,18 +32,18 @@
 Q2(p2id, firstName, lastName, msgId, content, cDate) :-
     Param(p1id, maxDate),
     Knows(p1id, p2id, _),
-    Person(p2id, firstName, lastName, _, _, _, _, _),
-    Comment(msgId, cDate, _, _, content, _),
     CommentHasCreator(msgId, p2id),
+    Comment(msgId, cDate, _, _, content, _),
+    Person(p2id, firstName, lastName, _, _, _, _, _),
     cDate < maxDate.
 
 // Match via Post with imageFile (use imageFile as content, matching COALESCE behaviour)
 Q2(p2id, firstName, lastName, msgId, imageFile, cDate) :-
     Param(p1id, maxDate),
     Knows(p1id, p2id, _),
-    Person(p2id, firstName, lastName, _, _, _, _, _),
-    Post(msgId, imageFile, cDate, _, _, _, _, _),
     PostHasCreator(msgId, p2id),
+    Post(msgId, imageFile, cDate, _, _, _, _, _),
+    Person(p2id, firstName, lastName, _, _, _, _, _),
     imageFile != "",
     cDate < maxDate.
 
@@ -51,9 +51,9 @@ Q2(p2id, firstName, lastName, msgId, imageFile, cDate) :-
 Q2(p2id, firstName, lastName, msgId, content, cDate) :-
     Param(p1id, maxDate),
     Knows(p1id, p2id, _),
-    Person(p2id, firstName, lastName, _, _, _, _, _),
-    Post(msgId, imageFile, cDate, _, _, _, content, _),
     PostHasCreator(msgId, p2id),
+    Post(msgId, imageFile, cDate, _, _, _, content, _),
+    Person(p2id, firstName, lastName, _, _, _, _, _),
     imageFile = "",
     cDate < maxDate.
 

@@ -29,12 +29,14 @@ die()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 CONFIG="${ROOT_DIR}/tools/config/config_ldbc.txt"
 MAX_PARAMS=0
 TIMEOUT_SECS=300
+EXTRA_FL_FLAGS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --config)              CONFIG="$2";       shift 2 ;;
         --param_num)           MAX_PARAMS="$2";   shift 2 ;;
         --timeout|--time_out)  TIMEOUT_SECS="$2"; shift 2 ;;
+        --sip)                 EXTRA_FL_FLAGS="$EXTRA_FL_FLAGS --sip"; shift ;;
         *) die "Unknown argument: $1" ;;
     esac
 done
@@ -43,7 +45,7 @@ HF_BASE="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main"
 FACT_DIR="${ROOT_DIR}/facts/ldbc"
 
 FLOWLOG_BIN="${ROOT_DIR}/target/release/flowlog"
-DUCKDB_BIN="${DUCKDB_BIN:-$(command -v duckdb 2>/dev/null || echo /tmp/duckdb)}"
+DUCKDB_BIN="${DUCKDB_BIN:-$(command -v duckdb 2>/dev/null || die "duckdb not found in PATH; set DUCKDB_BIN or install duckdb")}"
 
 DL_DIR="${ROOT_DIR}/example/ldbc_snb/flowlog"
 SQL_DIR="${ROOT_DIR}/example/ldbc_snb/duckdb"
@@ -149,10 +151,24 @@ run_per_param() {
     log "$query: compiling Flowlog..."
     rm -rf "$fl_proj" "$fl_out_dir"
     mkdir -p "$fl_out_dir"
-    "$FLOWLOG_BIN" "$dl_file" -F "$data_dir" -D "$fl_out_dir" -o "$fl_proj" --str-intern >/dev/null 2>&1
-    (cd "$fl_proj" && cargo build --release 2>/dev/null)
+    local fl_compile_log="${qwork}/fl_compile.log"
+    if ! "$FLOWLOG_BIN" "$dl_file" -F "$data_dir" -D "$fl_out_dir" -o "$fl_proj" --str-intern $EXTRA_FL_FLAGS >"$fl_compile_log" 2>&1; then
+        fail "$query: Flowlog compilation failed"
+        echo "         $(tail -3 "$fl_compile_log")"
+        return 1
+    fi
+    local cargo_log="${qwork}/cargo_build.log"
+    if ! (cd "$fl_proj" && cargo build --release >"$cargo_log" 2>&1); then
+        fail "$query: Flowlog cargo build failed"
+        echo "         $(tail -3 "$cargo_log")"
+        return 1
+    fi
     local fl_bin
     fl_bin=$(find "$fl_proj/target/release" -maxdepth 1 -type f -executable | grep -v '\.d$' | head -1)
+    if [[ -z "$fl_bin" ]]; then
+        fail "$query: Flowlog binary not found after build"
+        return 1
+    fi
     local fl_out_hardcoded
     fl_out_hardcoded=$(grep 'base_dir = ' "$fl_proj/src/main.rs" | grep -v '//' | head -1 \
                        | sed 's/.*"\(.*\)".*/\1/')
@@ -174,7 +190,7 @@ run_per_param() {
     trap "cp '$orig_backup' '$param_file' 2>/dev/null; trap - EXIT INT TERM" EXIT INT TERM
 
     local fl_times=() db_times=()
-    local timeout_rows=() mismatch_rows=()
+    local timeout_rows=() error_rows=() mismatch_rows=()
     local total_rows=0
     local sql_subst idx=0
     sql_subst=$(sed "s|:dataDir|'${data_dir}'|g" "$sql_file")
@@ -186,21 +202,28 @@ run_per_param() {
         local fl_param_out="${qwork}/fl_${idx}.txt"
         local db_param_out="${qwork}/db_${idx}.csv"
         local fl_ok=true db_ok=true
-        local _t0 _t1
+        local fl_ms=0 db_ms=0
+        local _t0 _t1 _exit_code
 
         # Flowlog
         find "$fl_out_hardcoded" -maxdepth 1 -type f -delete 2>/dev/null || true
         printf "\r${CYAN}[CHECK]${NC} Flowlog  [%d/%d]  " "$idx" "$total" >&2
         _t0=$(date +%s%3N)
-        if timeout "$TIMEOUT_SECS" "$fl_bin" -w "$WORKERS" >/dev/null 2>&1; then
-            _t1=$(date +%s%3N)
-            fl_times+=( $(( _t1 - _t0 )) )
+        timeout "$TIMEOUT_SECS" "$fl_bin" -w "$WORKERS" >/dev/null 2>&1
+        _exit_code=$?
+        _t1=$(date +%s%3N)
+        fl_ms=$(( _t1 - _t0 ))
+        if [[ $_exit_code -eq 0 ]]; then
             for f in "$fl_out_hardcoded"/*; do
                 [[ -f "$f" ]] && grep -v '^$' "$f" >> "$fl_param_out" || true
             done
+        elif [[ $_exit_code -eq 124 ]]; then
+            fl_ok=false
+            timeout_rows+=( "  param[$idx] ($row): Flowlog timeout (${TIMEOUT_SECS}s)" )
+            > "$fl_param_out"
         else
             fl_ok=false
-            timeout_rows+=( "  param[$idx] ($row): Flowlog timeout/error" )
+            error_rows+=( "  param[$idx] ($row): Flowlog runtime error (exit=$_exit_code)" )
             > "$fl_param_out"
         fi
 
@@ -209,14 +232,27 @@ run_per_param() {
         printf 'SET threads=%s;\n%s\n' "$WORKERS" "$sql_subst" > "$exec_sql"
         printf "\r${CYAN}[CHECK]${NC} DuckDB   [%d/%d]  " "$idx" "$total" >&2
         _t0=$(date +%s%3N)
-        if timeout "$TIMEOUT_SECS" "$DUCKDB_BIN" -csv :memory: < "$exec_sql" 2>/dev/null \
-            | tail -n +2 > "$db_param_out"; then
-            _t1=$(date +%s%3N)
-            db_times+=( $(( _t1 - _t0 )) )
+        timeout "$TIMEOUT_SECS" "$DUCKDB_BIN" -csv :memory: < "$exec_sql" 2>/dev/null \
+            | tail -n +2 > "$db_param_out"
+        _exit_code=${PIPESTATUS[0]}
+        _t1=$(date +%s%3N)
+        db_ms=$(( _t1 - _t0 ))
+        if [[ $_exit_code -eq 0 ]]; then
+            : # ok
+        elif [[ $_exit_code -eq 124 ]]; then
+            db_ok=false
+            timeout_rows+=( "  param[$idx] ($row): DuckDB timeout (${TIMEOUT_SECS}s)" )
+            > "$db_param_out"
         else
             db_ok=false
-            timeout_rows+=( "  param[$idx] ($row): DuckDB timeout/error" )
+            error_rows+=( "  param[$idx] ($row): DuckDB runtime error (exit=$_exit_code)" )
             > "$db_param_out"
+        fi
+
+        # Only count times when both engines succeed (no timeout, no error)
+        if $fl_ok && $db_ok; then
+            fl_times+=( "$fl_ms" )
+            db_times+=( "$db_ms" )
         fi
 
         # Per-param comparison
@@ -263,7 +299,7 @@ PYEOF
 
     # ── Summary ──
     local has_issues=false
-    if [[ ${#timeout_rows[@]} -gt 0 || ${#mismatch_rows[@]} -gt 0 ]]; then
+    if [[ ${#timeout_rows[@]} -gt 0 || ${#error_rows[@]} -gt 0 || ${#mismatch_rows[@]} -gt 0 ]]; then
         has_issues=true
     fi
 
@@ -281,15 +317,20 @@ PYEOF
 
     rm -rf "$qwork"
 
+    local counted=${#fl_times[@]}
     if ! $has_issues; then
         pass "${query}  (${total_rows} rows, ${total} params)"
         echo "         Flowlog  avg=$(fmt_ms $fl_avg)  median=$(fmt_ms $fl_med)"
         echo "         DuckDB   avg=$(fmt_ms $db_avg)  median=$(fmt_ms $db_med)"
         return 0
     else
-        fail "${query}  (${total} params)"
+        fail "${query}  (${total} params, ${counted} counted)"
         echo "         Flowlog  avg=$(fmt_ms $fl_avg)  median=$(fmt_ms $fl_med)"
         echo "         DuckDB   avg=$(fmt_ms $db_avg)  median=$(fmt_ms $db_med)"
+        if [[ ${#error_rows[@]} -gt 0 ]]; then
+            echo "         Errors (${#error_rows[@]}):"
+            printf '         %s\n' "${error_rows[@]}"
+        fi
         if [[ ${#timeout_rows[@]} -gt 0 ]]; then
             echo "         Timeouts (${#timeout_rows[@]}):"
             printf '         %s\n' "${timeout_rows[@]}"
