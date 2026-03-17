@@ -742,9 +742,7 @@ fn continue_stmt(next: &Ident, cond_expr: TokenStream) -> TokenStream {
 }
 
 /// Convergent stop-condition: `input - (input ⋈ gate) + (recursive ⋈ gate)`.
-///
-/// Evaluates to `input` when gate is empty, or `recursive` when gate fires,
-/// ensuring the Variable converges to a fixed point instead of oscillating.
+/// Returns `input` when gate is empty; converges to `recursive` when gate fires.
 fn stop_stmt(
     input: TokenStream,
     recursive: &Ident,

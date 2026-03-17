@@ -657,17 +657,11 @@ impl Compiler {
 // Arrangement Management Utilities
 // =========================================================================
 impl Compiler {
-    /// Generate weight-handling token streams for the stop-condition antijoin.
+    /// Weight-conversion tokens for antijoin arithmetic (`pos` / `neg`).
     ///
-    /// `StandardBatch` uses `Present` diff, so both `pos` and `neg` must
-    /// convert to fixed `i32` weights (`1` / `-1`) for arithmetic.
-    ///
-    /// `ExtendedBatch` already carries `i32` diffs, so `pos` is a no-op.
-    /// `neg` uses fixed `-1` (equivalent to `-d` since batch diffs are
-    /// always 1 after threshold).
-    ///
-    /// Incremental modes preserve the actual diff value (`-d`) for correct
-    /// change propagation across transactions.
+    /// - `StandardBatch` (`Present` diff): convert to `1i32` / `-1i32`.
+    /// - `ExtendedBatch` (`i32` diff, always 1): `pos` is no-op, `neg` uses fixed `-1`.
+    /// - Incremental (`i32` diff, variable): `pos` is no-op, `neg` negates actual diff (`-d`).
     pub(crate) fn weight_concat_tokens(&self) -> (TokenStream, TokenStream) {
         let pos = if self.config.is_standard_batch() {
             // Convert Present diff → 1i32
