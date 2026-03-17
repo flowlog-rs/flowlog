@@ -9,7 +9,6 @@
 
 use crate::Compiler;
 
-use common::ExecutionMode;
 use parser::{DataType, Relation};
 use profiler::{with_profiler, Profiler};
 
@@ -33,9 +32,10 @@ impl Compiler {
     ) -> TokenStream {
         let prefix = name.to_string();
 
-        let maybe_probe = match self.config.mode() {
-            ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
-            ExecutionMode::Batch => quote! {},
+        let maybe_probe = if self.config.is_incremental() {
+            quote! { .probe_with(&mut probe) }
+        } else {
+            quote! {}
         };
 
         // Record inspect size operator in profiler if enabled
@@ -43,36 +43,33 @@ impl Compiler {
             profiler.inspect_size_operator(prefix.clone(), prefix.clone());
         });
 
-        match self.config.mode() {
-            ExecutionMode::Batch => {
-                quote! {{
-                    #var.clone()
-                        // Ensure each distinct record has weight `SEMIRING_ONE` under our semiring.
-                        .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
-                        // Drop data; keep time, emit `diff = 1` in DD's inner representation.
-                        .inner
-                        .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
-                        // Back to a collection so we can consolidate.
-                        .as_collection()
-                        .map(|_| ())
-                        .consolidate()
-                        .inspect(|(_data, time, size)| eprintln!("[size][{}] t={:?} size={:?}", #prefix, time, size))
-                        #maybe_probe;
-                }}
-            }
-            ExecutionMode::Incremental => {
-                quote! {{
-                    #var
-                        .threshold(|_, w| if *w > 0 { 1i32 } else { 0 })
-                        .inner
-                        .flat_map(move |(_, t, d)| std::iter::once(((), t.clone(), d)))
-                        .as_collection()
-                        .map(|_| ())
-                        .consolidate()
-                        .inspect(|(_data, time, diff)| eprintln!("[size][{}] t={:?} size_diff={:?}", #prefix, time, diff))
-                        #maybe_probe;
-                }}
-            }
+        if self.config.is_standard_batch() {
+            quote! {{
+                #var.clone()
+                    // Ensure each distinct record has weight `SEMIRING_ONE` under our semiring.
+                    .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
+                    // Drop data; keep time, emit `diff = 1` in DD's inner representation.
+                    .inner
+                    .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
+                    // Back to a collection so we can consolidate.
+                    .as_collection()
+                    .map(|_| ())
+                    .consolidate()
+                    .inspect(|(_data, time, size)| eprintln!("[size][{}] t={:?} size={:?}", #prefix, time, size))
+                    #maybe_probe;
+            }}
+        } else {
+            quote! {{
+                #var
+                    .threshold(|_, w| if *w > 0 { 1i32 } else { 0 })
+                    .inner
+                    .flat_map(move |(_, t, d)| std::iter::once(((), t.clone(), d)))
+                    .as_collection()
+                    .map(|_| ())
+                    .consolidate()
+                    .inspect(|(_data, time, diff)| eprintln!("[size][{}] t={:?} size_diff={:?}", #prefix, time, diff))
+                    #maybe_probe;
+            }}
         }
     }
 
@@ -90,9 +87,10 @@ impl Compiler {
     ) -> TokenStream {
         let prefix = name.to_string();
 
-        let maybe_probe = match self.config.mode() {
-            ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
-            ExecutionMode::Batch => quote! {},
+        let maybe_probe = if self.config.is_incremental() {
+            quote! { .probe_with(&mut probe) }
+        } else {
+            quote! {}
         };
 
         // Record inspect content terminal operator in profiler if enabled
@@ -153,9 +151,10 @@ impl Compiler {
         let base_dir = parent_dir.to_string();
         let rel_name = name.to_string();
 
-        let maybe_probe = match self.config.mode() {
-            ExecutionMode::Incremental => quote! { .probe_with(&mut probe) },
-            ExecutionMode::Batch => quote! {},
+        let maybe_probe = if self.config.is_incremental() {
+            quote! { .probe_with(&mut probe) }
+        } else {
+            quote! {}
         };
 
         // Record inspect content file operator in profiler if enabled
@@ -176,16 +175,17 @@ impl Compiler {
             .collect();
 
         // Generate the inspect pattern and write statement based on mode and arity.
-        let (inspect_pattern, write_stmt) = match (self.config.mode(), idb.arity()) {
-            (ExecutionMode::Batch, 0) => (
-                quote! { (_data, _time, _diff) },
-                quote! { writeln!(&mut file, "True").expect("write failed"); },
-            ),
-            (ExecutionMode::Incremental, 0) => (
-                quote! { (_data, _time, diff) },
-                quote! { writeln!(&mut file, "True").expect("write failed"); },
-            ),
-            (ExecutionMode::Batch, _) => {
+        //
+        // Batch modes (Standard and Extended) output only positive facts — the diff
+        // column is omitted. Incremental modes include the diff column for change
+        // tracking.
+        let (inspect_pattern, write_stmt) = if self.config.is_batch() {
+            if idb.arity() == 0 {
+                (
+                    quote! { (_data, _time, _diff) },
+                    quote! { writeln!(&mut file, "True").expect("write failed"); },
+                )
+            } else {
                 let fmt = vec!["{}"; idb.arity()].join(idb.output_delimiter());
                 let fmt = LitStr::new(&fmt, Span::call_site());
                 (
@@ -195,8 +195,14 @@ impl Compiler {
                     },
                 )
             }
-            (ExecutionMode::Incremental, _) => {
-                // tuple fields + delimiter + "{:+}" for diff at the end
+        } else {
+            // Incremental: include diff column for change tracking.
+            if idb.arity() == 0 {
+                (
+                    quote! { (_data, _time, _diff) },
+                    quote! { writeln!(&mut file, "True").expect("write failed"); },
+                )
+            } else {
                 let mut parts = vec!["{}"; idb.arity()];
                 parts.push("{:+}");
                 let fmt = parts.join(idb.output_delimiter());
@@ -242,23 +248,24 @@ impl Compiler {
         let base_dir = base_path.to_string();
         let rel_name = name.to_string();
 
-        let write_merged_file = match self.config.mode() {
-            ExecutionMode::Incremental => quote! {
+        let write_merged_file = if self.config.is_incremental() {
+            quote! {
                 let out_path = format!("{}/{}_t{}", base_dir, rel_name, time_stamp);
                 if let Err(e) = std::fs::write(&out_path, &merged) {
                     eprintln!("[merge] failed to write {}: {}", out_path, e);
                 }
-            },
-            ExecutionMode::Batch => quote! {
+            }
+        } else {
+            quote! {
                 let out_path = format!("{}/{}", base_dir, rel_name);
                 if let Err(e) = std::fs::write(&out_path, &merged) {
                     eprintln!("[merge] failed to write {}: {}", out_path, e);
                 }
-            },
+            }
         };
 
-        let cleanup_partitions = match self.config.mode() {
-            ExecutionMode::Incremental => quote! {
+        let cleanup_partitions = if self.config.is_incremental() {
+            quote! {
                 // Keep partition files but clear contents (truncate) for next epoch.
                 for wid in 0..peers {
                     let p = format!("{}/{}{}", base_dir, rel_name, wid);
@@ -266,8 +273,9 @@ impl Compiler {
                         eprintln!("[merge] failed to clear {}: {}", p, e);
                     }
                 }
-            },
-            ExecutionMode::Batch => gen_delete_partitions(name, base_path),
+            }
+        } else {
+            gen_delete_partitions(name, base_path)
         };
 
         quote! {{

@@ -92,7 +92,7 @@ impl Compiler {
         let edb_names = self.program.edb_names();
 
         match self.config.mode() {
-            ExecutionMode::Batch => match edb_names.len() {
+            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch => match edb_names.len() {
                 0 => (quote! { _handles }, quote! { () }),
                 1 => {
                     let h = format_ident!("h{}", edb_names[0]);
@@ -105,7 +105,7 @@ impl Compiler {
                 }
             },
 
-            ExecutionMode::Incremental => {
+            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental => {
                 let probe = format_ident!("probe");
 
                 match edb_names.len() {
@@ -521,7 +521,7 @@ impl Compiler {
     ///   3. Non-first workers skip the partial first line (the previous worker reads it fully).
     ///   4. Return (reader, bytes_to_read) so the caller can read lines within its budget.
     pub(crate) fn gen_byte_range_reader(&self) -> TokenStream {
-        if !matches!(self.config.mode(), ExecutionMode::Batch) {
+        if !self.config.is_batch() {
             return quote! {};
         }
 

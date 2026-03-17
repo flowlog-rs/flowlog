@@ -147,8 +147,8 @@ impl Compiler {
         let (inspect_stmts, merge_stmts, delete_stmts) = self.collect_inspectors(profiler);
 
         let timestamp_type = match self.config.mode() {
-            ExecutionMode::Incremental => quote! { u32 },
-            ExecutionMode::Batch => quote! { () },
+            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental => quote! { u32 },
+            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch => quote! { () },
         };
 
         // Incremental-only: generate relation registry inserts from the EDB list.
@@ -157,7 +157,7 @@ impl Compiler {
         // - input handle idents are named `h{rel_name}` (e.g., `hsource`)
         // - rel ops concrete types are named `Rel{rel_name}` (e.g., `Relsource`)
         let rel_build_stmts: Vec<TokenStream> =
-            if matches!(self.config.mode(), ExecutionMode::Incremental) {
+            if self.config.is_incremental() {
                 self.program
                     .edbs()
                     .iter()
@@ -183,7 +183,7 @@ impl Compiler {
             };
 
         let main_fn = match self.config.mode() {
-            ExecutionMode::Batch => {
+            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch => {
                 let ingest_stmts = self.gen_ingest_stmts();
                 let close_stmts = self.gen_close_stmts();
                 let time_profile_write = self.gen_time_profile_write_batch();
@@ -244,7 +244,7 @@ impl Compiler {
                 }
             }
 
-            ExecutionMode::Incremental => {
+            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental => {
                 let time_profile_write = self.gen_time_profile_write_incremental();
                 let memory_profile_write = self.gen_memory_profile_write_incremental();
 
@@ -588,7 +588,7 @@ impl Compiler {
             if idb.printsize() {
                 self.imports.mark_as_collection();
                 self.imports.mark_timely_map();
-                if self.config.mode() == ExecutionMode::Batch {
+                if self.config.is_batch() {
                     self.imports.mark_threshold_total();
                     self.imports.mark_semiring_one();
                 }

@@ -1,5 +1,4 @@
 use crate::Compiler;
-use common::ExecutionMode;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -7,17 +6,14 @@ use quote::quote;
 impl Compiler {
     /// Deduplication for differential dataflow collections.
     pub(crate) fn dedup_collection(&mut self) -> TokenStream {
-        match self.config.mode() {
-            ExecutionMode::Incremental => {
-                quote! { .threshold(|_, w| if *w > 0 { 1i32 } else { 0 }) }
+        if self.config.is_standard_batch() {
+            self.imports.mark_semiring_one();
+            self.imports.mark_threshold_total();
+            quote! {
+                .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
             }
-            ExecutionMode::Batch => {
-                self.imports.mark_semiring_one();
-                self.imports.mark_threshold_total();
-                quote! {
-                    .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
-                }
-            }
+        } else {
+            quote! { .threshold(|_, w| if *w > 0 { 1i32 } else { 0 }) }
         }
     }
 }

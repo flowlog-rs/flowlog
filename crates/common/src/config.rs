@@ -1,21 +1,28 @@
 //! Command line argument parsing for FlowLog tools.
 
-use clap::{ArgAction, Parser, ValueEnum};
+use clap::{Parser, ValueEnum};
 use std::path::{Path, PathBuf};
 use std::{fs, process};
 
 /// Execution strategy for FlowLog workflows
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Default)]
 pub enum ExecutionMode {
-    /// Maintain state across updates.
-    /// Tracking how many times each fact is derived,
-    /// supporting incremental view maintenance.
-    Incremental,
-    /// Recompute outputs in a single pass.
+    /// Standard single-pass batch execution.
     /// Only tracks whether facts are present or absent,
     /// making it suitable for high-performance static execution.
     #[default]
-    Batch,
+    StandardBatch,
+    /// Standard incremental execution.
+    /// Maintains state across updates, tracking how many times each fact
+    /// is derived, supporting incremental view maintenance.
+    StandardIncremental,
+    /// Extended batch execution with explicit `loop` blocks.
+    /// Recursion is only allowed inside `loop` blocks; any recursive
+    /// dependency in plain rules is a hard error.
+    ExtendedBatch,
+    /// Extended incremental execution with explicit `loop` blocks.
+    /// Combines incremental view maintenance with explicit loop control.
+    ExtendedIncremental,
 }
 
 /// Command line arguments for FlowLog tools
@@ -38,24 +45,25 @@ pub struct Config {
     #[arg(short = 'D', long, value_name = "DIR")]
     pub output_dir: Option<String>,
 
-    /// Execution strategy: `batch` recomputes in a single pass (default);
-    /// `incremental` maintains state across updates with reference counting
-    #[arg(long, value_enum, default_value = "batch", value_name = "MODE")]
+    /// Execution strategy: `standard-batch` (default), `standard-incremental`,
+    /// `extended-batch`, or `extended-incremental`.
+    /// Extended modes enable explicit `loop` blocks and forbid implicit recursion.
+    #[arg(long, value_enum, default_value = "standard-batch", value_name = "MODE")]
     pub mode: ExecutionMode,
 
     /// Collect per-rule execution statistics (timing, tuple counts)
-    #[arg(long, short = 'P', action = ArgAction::SetTrue)]
+    #[arg(long, short = 'P')]
     pub profile: bool,
 
     /// Enable Sideways Information Passing to propagate binding constraints
     /// from rule heads into body atoms, reducing intermediate results
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(long)]
     pub sip: bool,
 
     /// Intern string columns as compact integer keys at load time for faster
     /// joins, hashing, and lower memory usage. Recommended when the majority
     /// of join keys are string-typed
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(long)]
     pub str_intern: bool,
 
     /// Path to a Rust source file containing UDF implementations.
@@ -63,11 +71,6 @@ pub struct Config {
     /// program must be defined in this file.
     #[arg(long, value_name = "PATH")]
     pub udf_file: Option<String>,
-
-    /// Enable Extended Datalog mode: recursion is only allowed inside explicit
-    /// `loop` blocks. Any recursive dependency in plain rules is a hard error.
-    #[arg(long, action = ArgAction::SetTrue)]
-    pub extended: bool,
 }
 
 impl Config {
@@ -118,35 +121,62 @@ impl Config {
         self.mode
     }
 
+    /// Whether the mode is an incremental mode (`StandardIncremental` or `ExtendedIncremental`).
     pub fn is_incremental(&self) -> bool {
-        self.mode == ExecutionMode::Incremental
+        matches!(
+            self.mode,
+            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental
+        )
     }
 
-    /// For compiler/executor: get fact_dir with validation
+    /// Whether the mode is a batch mode (`StandardBatch` or `ExtendedBatch`).
+    pub fn is_batch(&self) -> bool {
+        matches!(
+            self.mode,
+            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch
+        )
+    }
+
+    /// Whether the mode is `StandardBatch`. This is the only mode that uses
+    /// `Present` diff; all other modes use `i32` diff for multiplicity tracking.
+    pub fn is_standard_batch(&self) -> bool {
+        self.mode == ExecutionMode::StandardBatch
+    }
+
+    /// Whether Extended Datalog mode is enabled (loop blocks allowed,
+    /// implicit recursion forbidden).
+    pub fn is_extended(&self) -> bool {
+        matches!(
+            self.mode,
+            ExecutionMode::ExtendedBatch | ExecutionMode::ExtendedIncremental
+        )
+    }
+
+    /// Returns the configured fact directory, panicking if unset.
     pub fn fact_dir_required(&self) -> &str {
         self.fact_dir
             .as_ref()
             .expect("--fact-dir is required for this tool")
     }
 
-    /// For compiler/executor: get output_dir with validation  
+    /// Returns the configured output directory, panicking if unset.
     pub fn output_dir_required(&self) -> &str {
         self.output_dir
             .as_ref()
             .expect("--output-dir is required for this tool")
     }
 
-    /// For planner, compiler/executor: check if profiling is enabled
+    /// Whether profiling instrumentation is enabled.
     pub fn profiling_enabled(&self) -> bool {
         self.profile
     }
 
-    /// For planner: check if SIP optimization is enabled
+    /// Whether Sideways Information Passing (SIP) optimization is enabled.
     pub fn sip_enabled(&self) -> bool {
         self.sip
     }
 
-    /// Check if string interning is enabled
+    /// Whether string interning is enabled.
     pub fn str_intern_enabled(&self) -> bool {
         self.str_intern
     }
@@ -154,11 +184,6 @@ impl Config {
     /// Path to the user-supplied UDF implementation file, if any.
     pub fn udf_file(&self) -> Option<&str> {
         self.udf_file.as_deref()
-    }
-
-    /// Whether Extended Datalog mode is enabled.
-    pub fn extended_enabled(&self) -> bool {
-        self.extended
     }
 }
 

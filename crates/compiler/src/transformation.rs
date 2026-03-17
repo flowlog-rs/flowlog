@@ -657,27 +657,41 @@ impl Compiler {
 // Arrangement Management Utilities
 // =========================================================================
 impl Compiler {
-    /// Generate weight-handling token streams for antijoin (batch vs incremental).
+    /// Generate weight-handling token streams for the stop-condition antijoin.
+    ///
+    /// `StandardBatch` uses `Present` diff, so both `pos` and `neg` must
+    /// convert to fixed `i32` weights (`1` / `-1`) for arithmetic.
+    ///
+    /// `ExtendedBatch` already carries `i32` diffs, so `pos` is a no-op.
+    /// `neg` uses fixed `-1` (equivalent to `-d` since batch diffs are
+    /// always 1 after threshold).
+    ///
+    /// Incremental modes preserve the actual diff value (`-d`) for correct
+    /// change propagation across transactions.
     pub(crate) fn weight_concat_tokens(&self) -> (TokenStream, TokenStream) {
-        let pos = if self.config.is_incremental() {
-            quote! {}
-        } else {
+        let pos = if self.config.is_standard_batch() {
+            // Convert Present diff → 1i32
             quote! {
                 .inner
                 .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1i32)))
                 .as_collection()
             }
-        };
-        let neg = if self.config.is_incremental() {
-            quote! {
-                .inner
-                .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
-                .as_collection()
-            }
         } else {
+            // i32 diff — no conversion needed
+            quote! {}
+        };
+        let neg = if self.config.is_batch() {
+            // Batch: fixed -1 weight (no retractions possible)
             quote! {
                 .inner
                 .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
+                .as_collection()
+            }
+        } else {
+            // Incremental: negate the actual diff
+            quote! {
+                .inner
+                .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
                 .as_collection()
             }
         };

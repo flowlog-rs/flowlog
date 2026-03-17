@@ -19,8 +19,8 @@ fn main() {
         .with_env_filter(EnvFilter::new("debug"))
         .init();
 
-    let program = Program::parse(config.program(), config.extended_enabled());
-    let _stratifier = Stratifier::from_program(&program, config.extended_enabled());
+    let program = Program::parse(config.program(), config.is_extended());
+    let _stratifier = Stratifier::from_program(&program, config.is_extended());
 }
 
 fn run_all_examples(config: &Config) {
@@ -31,10 +31,10 @@ fn run_all_examples(config: &Config) {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| {
-            Program::parse(file_path.to_str().unwrap(), config.extended_enabled())
+            Program::parse(file_path.to_str().unwrap(), config.is_extended())
         }) {
             Ok(program) => {
-                let stratifier = Stratifier::from_program(&program, config.extended_enabled());
+                let stratifier = Stratifier::from_program(&program, config.is_extended());
                 let recursive_cnt = stratifier
                     .is_recursive_stratum_bitmap()
                     .iter()

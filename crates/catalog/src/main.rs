@@ -19,7 +19,7 @@ fn main() {
         .with_env_filter(EnvFilter::new("debug"))
         .init();
 
-    let program = Program::parse(config.program(), config.extended_enabled());
+    let program = Program::parse(config.program(), config.is_extended());
     print_catalogs(&program);
 }
 
@@ -37,7 +37,7 @@ fn run_all_examples(config: &Config) {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| {
-            Program::parse(file_path.to_str().unwrap(), config.extended_enabled())
+            Program::parse(file_path.to_str().unwrap(), config.is_extended())
         }) {
             Ok(program) => {
                 let stats = format!(
