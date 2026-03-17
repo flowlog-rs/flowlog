@@ -21,7 +21,6 @@ use crate::ident::find_local_ident;
 use crate::udf::head_udf_map;
 use crate::Compiler;
 
-use common::ExecutionMode;
 use parser::{AggregationOperator, LoopCondition, LoopConnective};
 use planner::StratumPlanner;
 use profiler::{with_profiler, Profiler};
@@ -257,7 +256,7 @@ impl Compiler {
 
                 // Semiring fast path: replace reduce_core with threshold_semigroup
                 // using the appropriate semigroup, avoiding a second arrangement.
-                if matches!(self.config.mode(), ExecutionMode::Batch) {
+                if self.config.is_standard_batch() {
                     self.imports.mark_as_collection();
                     match agg_op {
                         AggregationOperator::Min => self.imports.mark_min_semiring(agg_type),
@@ -378,11 +377,11 @@ impl Compiler {
                     "Compiler error: leave relation missing from next bindings during recursion",
                 );
 
-                // For aggregated relations (min/max/sum/count/avg) in batch mode: convert to
-                // semiring diff before leave() so cross-iteration aggregates are computed by
-                // consolidation after leave.
+                // For aggregated relations (min/max/sum/count/avg) in standard-batch mode:
+                // convert to semiring diff before leave() so cross-iteration aggregates
+                // are computed by consolidation after leave.
                 if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp) {
-                    if matches!(self.config.mode(), ExecutionMode::Batch) {
+                    if self.config.is_standard_batch() {
                         let (key_types, val_types) = self.find_global_type(*fp);
                         let agg_type = *key_types
                             .iter()
@@ -456,7 +455,7 @@ impl Compiler {
         let mut post_leave_stmts = Vec::new();
         for (fp, target) in leave_fps.iter().zip(targets.iter()) {
             if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp) {
-                if matches!(self.config.mode(), ExecutionMode::Batch) {
+                if self.config.is_standard_batch() {
                     let post_leave = match agg_op {
                         AggregationOperator::Avg => {
                             aggregation_avg_post_leave(*agg_arity, *agg_pos)
@@ -558,12 +557,12 @@ impl Compiler {
     ) -> Vec<TokenStream> {
         let (mut stmts, plan) = self.prepare_loop_condition(condition, next_bindings);
 
-        for (fp, iter_ident) in recursive_bindings {
+        for (fp, recursive_ident) in recursive_bindings {
             let next_ident = next_bindings.get(fp).unwrap_or_else(|| {
                 panic!("Compiler: recursive relation fp {fp} missing next binding")
             });
             let iter_var = find_local_ident(recursive_bindings, *fp);
-            // Profiler: resultin operator (optional)
+            // Profiler: results-in operator (optional)
             with_profiler(profiler, |profiler| {
                 profiler.recursive_resultsin_operator(
                     iter_var.to_string(),
@@ -571,10 +570,11 @@ impl Compiler {
                     next_ident.to_string(),
                 );
             });
-            let var_name = format_ident!("{}_var", iter_ident);
+            let var_name = format_ident!("{}_var", recursive_ident);
             let (pos, neg) = self.weight_concat_tokens();
             let dedup = self.dedup_collection();
-            let feedback = build_feedback_expr(next_ident, &plan, &pos, &neg, &dedup);
+            let feedback =
+                build_feedback_expr(next_ident, recursive_ident, &plan, &pos, &neg, &dedup);
             stmts.push(quote! { #var_name.set(#feedback); });
         }
 
@@ -685,6 +685,7 @@ fn build_iter_conditions(ranges: &[(u16, u16)]) -> TokenStream {
 /// Build the feedback expression for one recursive variable given a `ConditionPlan`.
 fn build_feedback_expr(
     next: &Ident,
+    recursive: &Ident,
     plan: &ConditionPlan,
     pos: &TokenStream,
     neg: &TokenStream,
@@ -696,7 +697,7 @@ fn build_feedback_expr(
     ) {
         (None, None) => quote! { #next.clone() },
         (Some(ranges), None) => continue_stmt(next, build_iter_conditions(ranges)),
-        (None, Some(arr)) => stop_stmt(quote! { #next.clone() }, arr, pos, neg, dedup),
+        (None, Some(arr)) => stop_stmt(quote! { #next.clone() }, recursive, arr, pos, neg, dedup),
         (Some(ranges), Some(arr)) => {
             let range_cond = build_iter_conditions(ranges);
             if matches!(plan.connective, Some(LoopConnective::Or)) {
@@ -705,6 +706,7 @@ fn build_feedback_expr(
                 let allowed = continue_stmt(next, range_cond.clone());
                 let blocked = stop_stmt(
                     continue_stmt(next, quote! { !(#range_cond) }),
+                    recursive,
                     arr,
                     pos,
                     neg,
@@ -713,7 +715,14 @@ fn build_feedback_expr(
                 quote! { { #allowed.concat(#blocked) #dedup } }
             } else {
                 // AND: rows must be in-range AND not stopped.
-                stop_stmt(continue_stmt(next, range_cond), arr, pos, neg, dedup)
+                stop_stmt(
+                    continue_stmt(next, range_cond),
+                    recursive,
+                    arr,
+                    pos,
+                    neg,
+                    dedup,
+                )
             }
         }
     }
@@ -732,9 +741,11 @@ fn continue_stmt(next: &Ident, cond_expr: TokenStream) -> TokenStream {
     }
 }
 
-/// `input \ (input ⋈ gate)` — drop tuples whose unit key appears in `gate`.
+/// Convergent stop-condition: `input - (input ⋈ gate) + (recursive ⋈ gate)`.
+/// Returns `input` when gate is empty; converges to `recursive` when gate fires.
 fn stop_stmt(
     input: TokenStream,
+    recursive: &Ident,
     gate: &Ident,
     pos: &TokenStream,
     neg: &TokenStream,
@@ -744,12 +755,18 @@ fn stop_stmt(
         {
             let keyed = (#input).map(|t| ((), t));
             let keyed_arr = keyed.clone().arrange_by_key();
+            let keyed_rec = #recursive.clone().map(|t| ((), t));
+            let keyed_rec_arr = keyed_rec.arrange_by_key();
             keyed
                 #pos
                 .concat({
                     keyed_arr
                         .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
                         #neg
+                })
+                .concat({
+                    keyed_rec_arr
+                        .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
                 })
                 .map(|((), t)| t)
                 #dedup

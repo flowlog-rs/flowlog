@@ -657,27 +657,35 @@ impl Compiler {
 // Arrangement Management Utilities
 // =========================================================================
 impl Compiler {
-    /// Generate weight-handling token streams for antijoin (batch vs incremental).
+    /// Weight-conversion tokens for antijoin arithmetic (`pos` / `neg`).
+    ///
+    /// - `StandardBatch` (`Present` diff): convert to `1i32` / `-1i32`.
+    /// - `ExtendedBatch` (`i32` diff, always 1): `pos` is no-op, `neg` uses fixed `-1`.
+    /// - Incremental (`i32` diff, variable): `pos` is no-op, `neg` negates actual diff (`-d`).
     pub(crate) fn weight_concat_tokens(&self) -> (TokenStream, TokenStream) {
-        let pos = if self.config.is_incremental() {
-            quote! {}
-        } else {
+        let pos = if self.config.is_standard_batch() {
+            // Convert Present diff → 1i32
             quote! {
                 .inner
                 .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1i32)))
                 .as_collection()
             }
-        };
-        let neg = if self.config.is_incremental() {
-            quote! {
-                .inner
-                .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
-                .as_collection()
-            }
         } else {
+            // i32 diff — no conversion needed
+            quote! {}
+        };
+        let neg = if self.config.is_batch() {
+            // Batch: fixed -1 weight (no retractions possible)
             quote! {
                 .inner
                 .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
+                .as_collection()
+            }
+        } else {
+            // Incremental: negate the actual diff
+            quote! {
+                .inner
+                .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
                 .as_collection()
             }
         };

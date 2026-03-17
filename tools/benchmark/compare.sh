@@ -410,7 +410,7 @@ run_compiler() {
     "$COMPILER_BIN" "$prog_path" \
         -F "$dataset_path" \
         -o "$project_dir" \
-        --mode batch \
+        --mode standard-batch \
         || die "Code generation failed for $prog_file"
     [[ -d "$project_dir" ]] || die "Generated project not found: $project_dir"
 

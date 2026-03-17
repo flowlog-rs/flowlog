@@ -29,10 +29,10 @@ fn main() {
     }
 
     // Parse and process single file
-    let program = Program::parse(config.program(), config.extended_enabled());
+    let program = Program::parse(config.program(), config.is_extended());
 
     // Stratify the program
-    let stratifier = Stratifier::from_program(&program, config.extended_enabled());
+    let stratifier = Stratifier::from_program(&program, config.is_extended());
 
     // Profiler to collect profiling data
     let mut profiler = if config.profiling_enabled() {
@@ -100,8 +100,8 @@ fn run_all_examples(config: &Config) {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         match std::panic::catch_unwind(|| {
-            let program = Program::parse(file_path.to_str().unwrap(), config.extended_enabled());
-            let stratifier = Stratifier::from_program(&program, config.extended_enabled());
+            let program = Program::parse(file_path.to_str().unwrap(), config.is_extended());
+            let stratifier = Stratifier::from_program(&program, config.is_extended());
             let mut optimizer = Optimizer::new();
             let mut profiler = if config.profiling_enabled() {
                 Some(Profiler::default())
@@ -119,7 +119,7 @@ fn run_all_examples(config: &Config) {
                     &stratifier,
                     stratum_idx,
                 );
-                // In batch mode, skip file generation to avoid overwriting.
+                // Skip code generation; just validate compilation of each example.
             }
 
             (program.rules().len(), stratifier.stratum().len())
