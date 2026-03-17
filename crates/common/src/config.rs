@@ -7,22 +7,22 @@ use std::{fs, process};
 /// Execution strategy for FlowLog workflows
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Default)]
 pub enum ExecutionMode {
-    /// Standard single-pass batch execution.
+    /// Datalog single-pass batch execution.
     /// Only tracks whether facts are present or absent,
     /// making it suitable for high-performance static execution.
     #[default]
-    StandardBatch,
-    /// Standard incremental execution.
+    DatalogBatch,
+    /// Datalog incremental execution.
     /// Maintains state across updates, tracking how many times each fact
     /// is derived, supporting incremental view maintenance.
-    StandardIncremental,
+    DatalogInc,
     /// Extended batch execution with explicit `loop` blocks.
     /// Recursion is only allowed inside `loop` blocks; any recursive
     /// dependency in plain rules is a hard error.
-    ExtendedBatch,
+    ExtendBatch,
     /// Extended incremental execution with explicit `loop` blocks.
     /// Combines incremental view maintenance with explicit loop control.
-    ExtendedIncremental,
+    ExtendInc,
 }
 
 /// Command line arguments for FlowLog tools
@@ -45,10 +45,10 @@ pub struct Config {
     #[arg(short = 'D', long, value_name = "DIR")]
     pub output_dir: Option<String>,
 
-    /// Execution strategy: `standard-batch` (default), `standard-incremental`,
-    /// `extended-batch`, or `extended-incremental`.
+    /// Execution strategy: `datalog-batch` (default), `datalog-inc`,
+    /// `extend-batch`, or `extend-inc`.
     /// Extended modes enable explicit `loop` blocks and forbid implicit recursion.
-    #[arg(long, value_enum, default_value = "standard-batch", value_name = "MODE")]
+    #[arg(long, value_enum, default_value = "datalog-batch", value_name = "MODE")]
     pub mode: ExecutionMode,
 
     /// Collect per-rule execution statistics (timing, tuple counts)
@@ -121,26 +121,26 @@ impl Config {
         self.mode
     }
 
-    /// Whether the mode is an incremental mode (`StandardIncremental` or `ExtendedIncremental`).
+    /// Whether the mode is an incremental mode (`DatalogInc` or `ExtendInc`).
     pub fn is_incremental(&self) -> bool {
         matches!(
             self.mode,
-            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental
+            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc
         )
     }
 
-    /// Whether the mode is a batch mode (`StandardBatch` or `ExtendedBatch`).
+    /// Whether the mode is a batch mode (`DatalogBatch` or `ExtendBatch`).
     pub fn is_batch(&self) -> bool {
         matches!(
             self.mode,
-            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch
+            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch
         )
     }
 
-    /// Whether the mode is `StandardBatch`. This is the only mode that uses
+    /// Whether the mode is `DatalogBatch`. This is the only mode that uses
     /// `Present` diff; all other modes use `i32` diff for multiplicity tracking.
-    pub fn is_standard_batch(&self) -> bool {
-        self.mode == ExecutionMode::StandardBatch
+    pub fn is_datalog_batch(&self) -> bool {
+        self.mode == ExecutionMode::DatalogBatch
     }
 
     /// Whether Extended Datalog mode is enabled (loop blocks allowed,
@@ -148,7 +148,7 @@ impl Config {
     pub fn is_extended(&self) -> bool {
         matches!(
             self.mode,
-            ExecutionMode::ExtendedBatch | ExecutionMode::ExtendedIncremental
+            ExecutionMode::ExtendBatch | ExecutionMode::ExtendInc
         )
     }
 

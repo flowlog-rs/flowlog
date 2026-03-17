@@ -133,7 +133,7 @@ impl Compiler {
 
                 // Semiring fast path: replace reduce_core with threshold_semigroup
                 // using the appropriate semigroup, avoiding a second arrangement.
-                if self.config.is_standard_batch() {
+                if self.config.is_datalog_batch() {
                     self.imports.mark_as_collection();
                     match agg_op {
                         AggregationOperator::Min => self.imports.mark_min_semiring(agg_type),

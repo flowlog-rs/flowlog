@@ -659,11 +659,11 @@ impl Compiler {
 impl Compiler {
     /// Weight-conversion tokens for antijoin arithmetic (`pos` / `neg`).
     ///
-    /// - `StandardBatch` (`Present` diff): convert to `1i32` / `-1i32`.
-    /// - `ExtendedBatch` (`i32` diff, always 1): `pos` is no-op, `neg` uses fixed `-1`.
+    /// - `DatalogBatch` (`Present` diff): convert to `1i32` / `-1i32`.
+    /// - `ExtendBatch` (`i32` diff, always `1`): `pos` is no-op, `neg` uses fixed `-1`.
     /// - Incremental (`i32` diff, variable): `pos` is no-op, `neg` negates actual diff (`-d`).
     pub(crate) fn weight_concat_tokens(&self) -> (TokenStream, TokenStream) {
-        let pos = if self.config.is_standard_batch() {
+        let pos = if self.config.is_datalog_batch() {
             // Convert Present diff → 1i32
             quote! {
                 .inner

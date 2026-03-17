@@ -256,7 +256,7 @@ impl Compiler {
 
                 // Semiring fast path: replace reduce_core with threshold_semigroup
                 // using the appropriate semigroup, avoiding a second arrangement.
-                if self.config.is_standard_batch() {
+                if self.config.is_datalog_batch() {
                     self.imports.mark_as_collection();
                     match agg_op {
                         AggregationOperator::Min => self.imports.mark_min_semiring(agg_type),
@@ -377,11 +377,11 @@ impl Compiler {
                     "Compiler error: leave relation missing from next bindings during recursion",
                 );
 
-                // For aggregated relations (min/max/sum/count/avg) in standard-batch mode:
+                // For aggregated relations (min/max/sum/count/avg) in datalog-batch mode:
                 // convert to semiring diff before leave() so cross-iteration aggregates
                 // are computed by consolidation after leave.
                 if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp) {
-                    if self.config.is_standard_batch() {
+                    if self.config.is_datalog_batch() {
                         let (key_types, val_types) = self.find_global_type(*fp);
                         let agg_type = *key_types
                             .iter()
@@ -455,7 +455,7 @@ impl Compiler {
         let mut post_leave_stmts = Vec::new();
         for (fp, target) in leave_fps.iter().zip(targets.iter()) {
             if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp) {
-                if self.config.is_standard_batch() {
+                if self.config.is_datalog_batch() {
                     let post_leave = match agg_op {
                         AggregationOperator::Avg => {
                             aggregation_avg_post_leave(*agg_arity, *agg_pos)

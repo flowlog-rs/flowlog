@@ -43,7 +43,7 @@ impl Compiler {
             profiler.inspect_size_operator(prefix.clone(), prefix.clone());
         });
 
-        if self.config.is_standard_batch() {
+        if self.config.is_datalog_batch() {
             quote! {{
                 #var.clone()
                     // Ensure each distinct record has weight `SEMIRING_ONE` under our semiring.

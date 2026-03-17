@@ -10,7 +10,7 @@
 .decl Knows(person1Id: int64, person2Id: int64, creationDate: string)
 .input Knows(IO="file", filename="person_knows_person.txt", delimiter="|", header="true")
 
-// Parameterized BFS: directed traversal (mirrors the SQL which follows edges as stored).
+// BFS: run one param pair at a time via external script.
 // Dist(src, personId, dist) = shortest directed distance from src to personId.
 .decl Dist(src: int64, personId: int64, dist: int64)
 Dist(p1, p1, 0) :- Param(p1, _).

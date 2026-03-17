@@ -92,7 +92,7 @@ impl Compiler {
         let edb_names = self.program.edb_names();
 
         match self.config.mode() {
-            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch => match edb_names.len() {
+            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => match edb_names.len() {
                 0 => (quote! { _handles }, quote! { () }),
                 1 => {
                     let h = format_ident!("h{}", edb_names[0]);
@@ -105,7 +105,7 @@ impl Compiler {
                 }
             },
 
-            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental => {
+            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
                 let probe = format_ident!("probe");
 
                 match edb_names.len() {

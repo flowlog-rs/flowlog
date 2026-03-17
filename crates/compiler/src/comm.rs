@@ -6,7 +6,7 @@ use quote::quote;
 impl Compiler {
     /// Deduplication for differential dataflow collections.
     pub(crate) fn dedup_collection(&mut self) -> TokenStream {
-        if self.config.is_standard_batch() {
+        if self.config.is_datalog_batch() {
             self.imports.mark_semiring_one();
             self.imports.mark_threshold_total();
             quote! {

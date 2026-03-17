@@ -23,7 +23,7 @@
 //! ## Loop blocks and Extended Datalog mode
 //!
 //! FlowLog supports an **Extended Datalog** mode (enabled with
-//! `--mode extended-batch` or `--mode extended-incremental`) where recursion
+//! `--mode extend-batch` or `--mode extend-inc`) where recursion
 //! must be written explicitly using `loop` blocks:
 //!
 //! ```text
@@ -38,7 +38,7 @@
 //! block's [`LoopCondition`].  In Extended Datalog mode, any recursive
 //! dependency found outside a `loop` block is a hard error.
 //!
-//! In standard modes (`standard-batch` / `standard-incremental`), recursion in
+//! In datalog modes (`datalog-batch` / `datalog-inc`), recursion in
 //! plain rules is allowed and handled implicitly via SCC detection, matching
 //! classic stratified-Datalog semantics.
 //!

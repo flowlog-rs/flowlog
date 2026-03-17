@@ -6,7 +6,7 @@ CREATE TABLE knows AS
 CREATE TABLE param AS SELECT * FROM read_csv(:dataDir || '/interactive_13_param.txt',
     delim='|', header=true, columns={'person1Id':'BIGINT', 'person2Id':'BIGINT'});
 
--- Multi-source BFS over all param pairs at once.
+-- BFS run one param pair at a time.
 -- Depth bound of 5 is sufficient: bidirectional knows guarantees all LDBC param pairs
 -- are connected with diameter <= 3 (six degrees of separation).
 -- Multiple (src, node, dist) entries may arise from delta semantics; MIN picks shortest.

@@ -279,7 +279,7 @@ cleanup_empty_facts_dir() {
 
 run_compile_check() {
     local prog_name="$1" dataset_id="$2"
-    local prog_file prog_path program_stem mode="standard-batch"
+    local prog_file prog_path program_stem mode="datalog-batch"
     prog_file="$(basename "$prog_name")"
     prog_path="${PROG_DIR}/${prog_name}"
     program_stem="${prog_file%.*}"
@@ -417,7 +417,7 @@ PY
 
 run_test() {
     local prog_name="$1" dataset_name="$2"
-    local prog_file prog_path program_stem mode="standard-batch"
+    local prog_file prog_path program_stem mode="datalog-batch"
     prog_file="$(basename "$prog_name")"
     prog_path="${PROG_DIR}/${prog_name}"
     program_stem="${prog_file%.*}"

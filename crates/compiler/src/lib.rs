@@ -147,8 +147,8 @@ impl Compiler {
         let (inspect_stmts, merge_stmts, delete_stmts) = self.collect_inspectors(profiler);
 
         let timestamp_type = match self.config.mode() {
-            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental => quote! { u32 },
-            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch => quote! { () },
+            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => quote! { u32 },
+            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => quote! { () },
         };
 
         // Incremental-only: generate relation registry inserts from the EDB list.
@@ -183,7 +183,7 @@ impl Compiler {
             };
 
         let main_fn = match self.config.mode() {
-            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch => {
+            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => {
                 let ingest_stmts = self.gen_ingest_stmts();
                 let close_stmts = self.gen_close_stmts();
                 let time_profile_write = self.gen_time_profile_write_batch();
@@ -244,7 +244,7 @@ impl Compiler {
                 }
             }
 
-            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental => {
+            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
                 let time_profile_write = self.gen_time_profile_write_incremental();
                 let memory_profile_write = self.gen_memory_profile_write_incremental();
 

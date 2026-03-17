@@ -145,8 +145,8 @@ impl Program {
     /// Panics on I/O errors, parse errors, or circular includes.
     ///
     /// If `extended` is `false`, panics when the program contains any `loop`
-    /// blocks — those require Extended Datalog mode (`--mode extended-batch`
-    /// or `--mode extended-incremental`).
+    /// blocks — those require Extended Datalog mode (`--mode extend-batch`
+    /// or `--mode extend-inc`).
     #[must_use]
     pub fn parse(path: &str, extended: bool) -> Self {
         let file_path = Path::new(path);
@@ -435,7 +435,7 @@ impl Program {
                     if !extended {
                         panic!(
                             "Parser error: `loop` blocks require Extended Datalog mode. \
-                             Rerun with `--mode extended-batch` or `--mode extended-incremental`."
+                             Rerun with `--mode extend-batch` or `--mode extend-inc`."
                         );
                     }
                     flush_rules(&mut current_rules, &mut segments);

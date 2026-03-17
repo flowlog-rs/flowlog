@@ -390,7 +390,7 @@ impl ImportTracker {
     /// Incremental-only module prelude and related imports.
     fn prelude_imports(&mut self) -> TokenStream {
         match self.mode {
-            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental => {
+            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
                 // Incremental runtime needs HashMap for cmd/prompt/relation helpers.
                 self.std_hashmap = true;
 
@@ -406,7 +406,7 @@ impl ImportTracker {
                     use std::sync::{Arc, Barrier, RwLock};
                 }
             }
-            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch => quote! {},
+            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => quote! {},
         }
     }
 
@@ -497,7 +497,7 @@ impl ImportTracker {
     }
 
     fn std_file_import(&self) -> TokenStream {
-        if self.std_file && matches!(self.mode, ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch) {
+        if self.std_file && matches!(self.mode, ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch) {
             quote! { use std::fs::File; }
         } else {
             quote! {}
@@ -505,7 +505,7 @@ impl ImportTracker {
     }
 
     fn std_io_import(&self) -> TokenStream {
-        if self.std_buf_io && matches!(self.mode, ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch) {
+        if self.std_buf_io && matches!(self.mode, ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch) {
             quote! { use std::io::{BufRead, BufReader, Read, Seek, SeekFrom}; }
         } else {
             quote! {}
@@ -600,10 +600,10 @@ impl ImportTracker {
 
     fn probe_imports(&self) -> TokenStream {
         match self.mode {
-            ExecutionMode::StandardIncremental | ExecutionMode::ExtendedIncremental => {
+            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
                 quote! { use timely::dataflow::operators::probe::Handle as ProbeHandle; }
             }
-            ExecutionMode::StandardBatch | ExecutionMode::ExtendedBatch => quote! {},
+            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => quote! {},
         }
     }
 
@@ -698,7 +698,7 @@ impl ImportTracker {
 
     fn diff_type(&self) -> TokenStream {
         match self.mode {
-            ExecutionMode::StandardBatch => {
+            ExecutionMode::DatalogBatch => {
                 quote! { type Diff = differential_dataflow::difference::Present; }
             }
             _ => quote! { type Diff = i32; },
@@ -711,7 +711,7 @@ impl ImportTracker {
         }
 
         match self.mode {
-            ExecutionMode::StandardBatch => {
+            ExecutionMode::DatalogBatch => {
                 quote! { const SEMIRING_ONE: Diff = differential_dataflow::difference::Present; }
             }
             _ => quote! { const SEMIRING_ONE: Diff = 1; },

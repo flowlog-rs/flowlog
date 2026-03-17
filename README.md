@@ -59,7 +59,7 @@ $ cargo run -p compiler -- <PROGRAM> [OPTIONS]
 | `-F, --fact-dir <DIR>` | Directory containing input CSVs referenced by `.input` directives. | When `.input` uses relative filenames | Prepends `<DIR>` to each `filename=` parameter; omit to use paths embedded in the program. |
 | `-o, --output <NAME>` | Override the generated Cargo package name. | No | Default derives from `<PROGRAM>`; project is written to `../<NAME>`. |
 | `-D, --output-dir <DIR>` | Location for materializing `.output` relations. | Required when any relation uses `.output` | Pass `-` to print tuples to stderr instead of writing files. |
-| `--mode <MODE>` | Choose execution semantics: `standard-batch` (default), `standard-incremental`, `extended-batch`, or `extended-incremental`. | No | `standard-batch` uses `Present` diff; all other modes use `i32`. Extended modes enable explicit `loop` blocks. |
+| `--mode <MODE>` | Choose execution semantics: `datalog-batch` (default), `datalog-inc`, `extend-batch`, or `extend-inc`. | No | `datalog-batch` uses `Present` diff; all other modes use `i32`. Extended modes enable explicit `loop` blocks. |
 | `-P, --profile` | Enable profiling (collect execution statistics). | No | Writes profiler logs into the generated project. |
 | `-h, --help` | Show full Clap help text. | No | Includes additional examples and environment variables. |
 
