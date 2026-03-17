@@ -135,7 +135,7 @@ FlowLog builds on the FlowLog paper:
 
 > **FlowLog: Efficient and Extensible Datalog via Incrementality**  \
 > Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  \
-> VLDB 2026 (Boston) — [arXiv 2511.00865](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf)
+> VLDB 2026 (Boston) — [pVLDB](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf)
 
 ## Contributing
 
