@@ -189,7 +189,11 @@ impl LoopBlock {
         condition: Option<LoopCondition>,
         rules: Vec<FlowLogRule>,
     ) -> Self {
-        Self { iterative_relations, condition, rules }
+        Self {
+            iterative_relations,
+            condition,
+            rules,
+        }
     }
 
     /// Relations explicitly marked as iterative (replacement semantics).
@@ -292,8 +296,11 @@ impl fmt::Display for LoopBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "loop")?;
         if !self.iterative_relations.is_empty() {
-            let names: Vec<&str> =
-                self.iterative_relations.iter().map(|(n, _)| n.as_str()).collect();
+            let names: Vec<&str> = self
+                .iterative_relations
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect();
             write!(f, " iterative {{ {} }}", names.join(", "))?;
         }
         if let Some(cond) = &self.condition {
@@ -697,8 +704,7 @@ mod tests {
 
     #[test]
     fn iterative_list_with_condition() {
-        let block =
-            parse_loop_block("loop iterative { active_edge } continue { iter <= 5 } { }");
+        let block = parse_loop_block("loop iterative { active_edge } continue { iter <= 5 } { }");
         let itr = block.iterative_relations();
         assert_eq!(itr.len(), 1);
         assert_eq!(itr[0].0, "active_edge");

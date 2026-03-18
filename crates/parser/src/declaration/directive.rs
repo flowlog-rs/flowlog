@@ -37,14 +37,25 @@ impl InputDirective {
 }
 
 /// Parse `io_params` children from a directive's inner pairs into a key→value map.
-fn parse_io_params<'i>(inner: impl Iterator<Item = pest::iterators::Pair<'i, Rule>>) -> HashMap<String, String> {
+fn parse_io_params<'i>(
+    inner: impl Iterator<Item = pest::iterators::Pair<'i, Rule>>,
+) -> HashMap<String, String> {
     let mut parameters = HashMap::new();
     for node in inner {
         if node.as_rule() == Rule::io_params {
             for io_param in node.into_inner() {
                 let mut kv = io_param.into_inner();
-                let key = kv.next().expect("Parser error: io parameter missing name").as_str().to_string();
-                let value = kv.next().expect("Parser error: io parameter missing value").as_str().trim_matches('"').to_string();
+                let key = kv
+                    .next()
+                    .expect("Parser error: io parameter missing name")
+                    .as_str()
+                    .to_string();
+                let value = kv
+                    .next()
+                    .expect("Parser error: io parameter missing value")
+                    .as_str()
+                    .trim_matches('"')
+                    .to_string();
                 parameters.insert(key, value);
             }
         }

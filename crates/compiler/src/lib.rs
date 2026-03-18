@@ -156,31 +156,30 @@ impl Compiler {
         // Assumptions (match current generated code):
         // - input handle idents are named `h{rel_name}` (e.g., `hsource`)
         // - rel ops concrete types are named `Rel{rel_name}` (e.g., `Relsource`)
-        let rel_build_stmts: Vec<TokenStream> =
-            if self.config.is_incremental() {
-                self.program
-                    .edbs()
-                    .iter()
-                    .map(|edb| {
-                        let rel_name = edb.name().to_ascii_lowercase();
+        let rel_build_stmts: Vec<TokenStream> = if self.config.is_incremental() {
+            self.program
+                .edbs()
+                .iter()
+                .map(|edb| {
+                    let rel_name = edb.name().to_ascii_lowercase();
 
-                        let handle_ident =
-                            Ident::new(&format!("h{rel_name}"), proc_macro2::Span::call_site());
+                    let handle_ident =
+                        Ident::new(&format!("h{rel_name}"), proc_macro2::Span::call_site());
 
-                        let ops_ty_ident =
-                            Ident::new(&format!("Rel{rel_name}"), proc_macro2::Span::call_site());
+                    let ops_ty_ident =
+                        Ident::new(&format!("Rel{rel_name}"), proc_macro2::Span::call_site());
 
-                        quote! {
-                            rels.insert(
-                                #rel_name.to_string(),
-                                Box::new(#ops_ty_ident::new(#handle_ident)),
-                            );
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+                    quote! {
+                        rels.insert(
+                            #rel_name.to_string(),
+                            Box::new(#ops_ty_ident::new(#handle_ident)),
+                        );
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         let main_fn = match self.config.mode() {
             ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => {
@@ -588,7 +587,7 @@ impl Compiler {
             if idb.printsize() {
                 self.imports.mark_as_collection();
                 self.imports.mark_timely_map();
-                if self.config.is_batch() {
+                if self.config.is_datalog_batch() {
                     self.imports.mark_threshold_total();
                     self.imports.mark_semiring_one();
                 }

@@ -497,7 +497,12 @@ impl ImportTracker {
     }
 
     fn std_file_import(&self) -> TokenStream {
-        if self.std_file && matches!(self.mode, ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch) {
+        if self.std_file
+            && matches!(
+                self.mode,
+                ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch
+            )
+        {
             quote! { use std::fs::File; }
         } else {
             quote! {}
@@ -505,7 +510,12 @@ impl ImportTracker {
     }
 
     fn std_io_import(&self) -> TokenStream {
-        if self.std_buf_io && matches!(self.mode, ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch) {
+        if self.std_buf_io
+            && matches!(
+                self.mode,
+                ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch
+            )
+        {
             quote! { use std::io::{BufRead, BufReader, Read, Seek, SeekFrom}; }
         } else {
             quote! {}
