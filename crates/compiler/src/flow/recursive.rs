@@ -83,8 +83,9 @@ impl Compiler {
             });
         }
 
-        // Iterative: Variable::new_from(base) when an EDB base enters the scope,
-        // otherwise Variable::new (semantically equivalent to new_from with empty).
+        // Iterative: always Variable::new_from for replacement semantics.
+        // When an EDB base enters the scope, seed from it; otherwise seed from
+        // an empty collection so that old values are still retracted each iteration.
         for (fp, name) in itr_fps.iter().zip(&itr_names) {
             with_profiler(profiler, |profiler| {
                 profiler.recursive_feedback_operator(
@@ -97,7 +98,14 @@ impl Compiler {
             let init = if let Some(base) = enter_bindings.get(fp) {
                 quote! { let (#var_name, #name) = Variable::new_from(#base.clone(), #step); }
             } else {
-                quote! { let (#var_name, #name) = Variable::new(inner, #step); }
+                quote! {
+                    let (#var_name, #name) = Variable::new_from(
+                        ::differential_dataflow::Collection::new(
+                            ::timely::dataflow::operators::generic::operator::empty(inner)
+                        ),
+                        #step,
+                    );
+                }
             };
             recursive_var_inits.push(init);
         }
