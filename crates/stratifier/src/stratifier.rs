@@ -6,8 +6,7 @@
 use crate::dependency_graph::DependencyGraph;
 use itertools::Itertools;
 use parser::{
-    AggregationOperator, FlowLogRule, HeadArg, LoopCondition, Predicate, Program,
-    Segment,
+    AggregationOperator, FlowLogRule, HeadArg, LoopCondition, Predicate, Program, Segment,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -241,7 +240,11 @@ impl Stratifier {
                     bitmap.push(true);
                     loop_conditions.push(block.condition().cloned());
                     iterative_fps.push(
-                        block.iterative_relations().iter().map(|(_, fp)| *fp).collect(),
+                        block
+                            .iterative_relations()
+                            .iter()
+                            .map(|(_, fp)| *fp)
+                            .collect(),
                     );
                     id_offset += rule_count;
                 }
@@ -622,8 +625,7 @@ impl Stratifier {
                 let iterative_fps = &iterative_fps_per_stratum[i];
 
                 // Validate every listed iterative relation before the split.
-                let recursive_fps: HashSet<u64> =
-                    heads.intersection(body_atoms).copied().collect();
+                let recursive_fps: HashSet<u64> = heads.intersection(body_atoms).copied().collect();
                 for fp in iterative_fps {
                     let rel_name = fp_to_name.get(fp).copied().unwrap_or("<unknown>");
                     if !heads.contains(fp) {
@@ -770,81 +772,116 @@ impl Stratifier {
         }
     }
 
-    /// Validate that every relation referenced in a loop block's stop condition
-    /// is derived by at least one rule inside the loop body.
+    /// Validate that every relation in a loop stop condition:
+    ///   1. is derived by at least one rule inside the loop body, and
+    ///   2. transitively depends on a recursive relation in the same stratum.
     ///
-    /// A relation that appears as a head in the loop is guaranteed to change
-    /// as the loop progresses (either directly or via the recursive IDBs it
-    /// depends on), making it a valid termination signal.  A relation that is
-    /// never derived inside the loop is static and cannot meaningfully control
-    /// termination — this is rejected as a hard error.
+    /// A stop relation that is never derived or is independent of the recursive
+    /// computation can never change across iterations and is rejected.
     fn validate_loop_conditions(&self) {
-        for (idx, _) in self.stratum_loop_condition.iter().enumerate() {
-            // Precompute heads and body atoms for this stratum.
-            let heads: HashSet<u64> = self.stratum[idx]
+        for (idx, cond_opt) in self.stratum_loop_condition.iter().enumerate() {
+            let Some(cond) = cond_opt else {
+                continue;
+            };
+            let Some(stop_group) = cond.stop_part() else {
+                continue;
+            };
+
+            let stratum_rules: Vec<_> = self.stratum[idx]
                 .iter()
-                .map(|&rid| self.program.rule(rid).head().head_fingerprint())
+                .map(|&rid| self.program.rule(rid).clone())
                 .collect();
-            let body_atoms: HashSet<u64> = self.stratum[idx]
+            let dep_graph = DependencyGraph::from_rules(&stratum_rules);
+
+            let local_head_fp: Vec<u64> = stratum_rules
                 .iter()
-                .flat_map(|&rid| {
-                    self.program.rule(rid).rhs().iter().filter_map(|p| match p {
-                        Predicate::PositiveAtomPredicate(atom)
-                        | Predicate::NegativeAtomPredicate(atom) => Some(atom.fingerprint()),
+                .map(|r| r.head().head_fingerprint())
+                .collect();
+            let heads: HashSet<u64> = local_head_fp.iter().copied().collect();
+
+            // Recursive relations: heads that also appear in a body within the stratum.
+            let body_fps: HashSet<u64> = stratum_rules
+                .iter()
+                .flat_map(|r| {
+                    r.rhs().iter().filter_map(|p| match p {
+                        Predicate::PositiveAtomPredicate(a)
+                        | Predicate::NegativeAtomPredicate(a) => Some(a.fingerprint()),
                         _ => None,
                     })
                 })
                 .collect();
-            let recursive_fps: HashSet<u64> =
-                heads.intersection(&body_atoms).copied().collect();
+            let recursive_fps: HashSet<u64> = heads.intersection(&body_fps).copied().collect();
 
-            // Validate stop condition relations.
-            if let Some(cond) = &self.stratum_loop_condition[idx] {
-                if let Some(stop_group) = cond.stop_part() {
-                    for rel in stop_group.relations() {
-                        let (rel_name, fp) = (rel.name.as_str(), rel.fp);
-                        if !heads.contains(&fp) {
-                            panic!(
-                                "Stratifier error: loop stop condition in stratum #{} references \
-                                 relation `{}`, which has no rule inside the loop body that \
-                                 derives it.\n  \
-                                 Hint: the stop-condition relation must appear as the head of \
-                                 at least one rule inside the loop block.",
-                                idx + 1,
-                                rel_name
-                            );
-                        }
-                        // The stop-condition relation must depend on at least one
-                        // recursive relation (directly used in its body), otherwise
-                        // it can never change as the loop progresses and can never
-                        // act as a meaningful termination signal.
-                        let depends_on_recursive = self.stratum[idx].iter().any(|&rid| {
-                            let rule = self.program.rule(rid);
-                            rule.head().head_fingerprint() == fp
-                                && rule.rhs().iter().any(|p| match p {
-                                    Predicate::PositiveAtomPredicate(atom)
-                                    | Predicate::NegativeAtomPredicate(atom) => {
-                                        recursive_fps.contains(&atom.fingerprint())
-                                    }
-                                    _ => false,
-                                })
-                        });
-                        if !depends_on_recursive {
-                            panic!(
-                                "Stratifier error: loop stop condition in stratum #{} references \
-                                 relation `{}`, which does not depend on any recursive relation \
-                                 in this loop.\n  \
-                                 Hint: a stop-condition relation must be derived from the loop's \
-                                 recursive computation to be a meaningful termination signal.",
-                                idx + 1,
-                                rel_name
-                            );
-                        }
-                    }
+            // Rule indices whose head is a recursive relation.
+            let recursive_rule_ids: HashSet<usize> = local_head_fp
+                .iter()
+                .enumerate()
+                .filter(|(_, fp)| recursive_fps.contains(fp))
+                .map(|(i, _)| i)
+                .collect();
+
+            for rel in stop_group.relations() {
+                let (rel_name, fp) = (rel.name.as_str(), rel.fp);
+
+                if !heads.contains(&fp) {
+                    panic!(
+                        "Stratifier error: loop stop condition in stratum #{} references \
+                         relation `{}`, which has no rule inside the loop body that \
+                         derives it.\n  \
+                         Hint: the stop-condition relation must appear as the head of \
+                         at least one rule inside the loop block.",
+                        idx + 1,
+                        rel_name
+                    );
+                }
+
+                // BFS from the stop relation's rules through the dependency graph
+                // to verify it transitively reaches a recursive relation.
+                let seed: Vec<usize> = local_head_fp
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, h)| **h == fp)
+                    .map(|(i, _)| i)
+                    .collect();
+                if !self.reaches_recursive(&dep_graph, &seed, &recursive_rule_ids) {
+                    panic!(
+                        "Stratifier error: loop stop condition in stratum #{} references \
+                         relation `{}`, which does not depend on any recursive relation \
+                         in this loop.\n  \
+                         Hint: a stop-condition relation must be derived from the loop's \
+                         recursive computation to be a meaningful termination signal.",
+                        idx + 1,
+                        rel_name
+                    );
                 }
             }
-
         }
+    }
+
+    /// Returns `true` if any rule in `seeds` transitively depends on a rule in
+    /// `targets` via the given dependency graph.
+    fn reaches_recursive(
+        &self,
+        dep_graph: &DependencyGraph,
+        seeds: &[usize],
+        targets: &HashSet<usize>,
+    ) -> bool {
+        let mut visited = HashSet::new();
+        let mut stack: Vec<usize> = seeds.to_vec();
+        while let Some(cur) = stack.pop() {
+            if !visited.insert(cur) {
+                continue;
+            }
+            if let Some(deps) = dep_graph.dependency_map().get(&cur) {
+                for &dep in deps {
+                    if targets.contains(&dep) {
+                        return true;
+                    }
+                    stack.push(dep);
+                }
+            }
+        }
+        false
     }
 
     /// Emit warnings for non-monotone aggregation operators in recursive strata.
