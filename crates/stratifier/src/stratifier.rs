@@ -1243,24 +1243,16 @@ mod tests {
         let itr = s.stratum_iterative_recursive_relation(0);
 
         // active_edge and degree are explicitly iterative.
+        assert_eq!(itr.len(), 2, "active_edge and degree should be iterative");
         // removed feeds back (it appears in active_edge's body) → recursive,
         // but not in the iterative list → accumulative.
-        assert!(
-            !itr.is_empty(),
-            "iterative list should be non-empty (active_edge and/or degree)"
-        );
-        // removed should be in accumulate, not iterative.
-        // We verify by checking that at least one fp is in acc and none of the
-        // iterative fps are also in acc (disjoint split).
+        assert_eq!(acc.len(), 1, "removed should be accumulative");
+        // Iterative and accumulative sets must be disjoint.
         let itr_set: HashSet<u64> = itr.iter().copied().collect();
         let acc_set: HashSet<u64> = acc.iter().copied().collect();
         assert!(
             itr_set.is_disjoint(&acc_set),
             "iterative and accumulative sets must be disjoint"
-        );
-        assert!(
-            !acc_set.is_empty() || !itr_set.is_empty(),
-            "at least one recursive relation must exist"
         );
     }
 
