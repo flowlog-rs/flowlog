@@ -9,7 +9,9 @@
 //! ## Grammar
 //!
 //! ```text
-//! loop_block = { "loop" ~ loop_condition? ~ "{" ~ rule* ~ "}" }
+//! loop_block = { "loop" ~ loop_iterative_list? ~ loop_condition? ~ "{" ~ rule* ~ "}" }
+//!
+//! loop_iterative_list = { "iterative" ~ "{" ~ relation_name ~ ("," ~ relation_name)* ~ "}" }
 //!
 //! loop_condition = { loop_continue ~ (loop_connective ~ loop_stop)?
 //!                  | loop_stop     ~ (loop_connective ~ loop_continue)? }
@@ -25,6 +27,13 @@
 //! loop_bool_relation   = { relation_name }
 //! loop_connective      = { "and" | "or" }
 //! ```
+//!
+//! ## Iterative semantics
+//!
+//! Relations listed in `iterative { rel1, rel2, ... }` use *replacement* semantics:
+//! each iteration they are re-derived from scratch (`Variable::new_from`), so stale
+//! facts are retracted when they are no longer derivable.  Unlisted relations use
+//! *accumulative* semantics: facts once derived are never retracted (`Variable::new`).
 //!
 //! ## Condition semantics
 //!
@@ -45,6 +54,8 @@
 //!
 //! ```text
 //! loop { ... }
+//! loop iterative { active_edge, degree } { ... }
+//! loop iterative { active_edge } continue { iter <= 100 } { ... }
 //! loop continue { iter <= 10 } { ... }
 //! loop stop { Done } { ... }
 //! loop stop { Done1 or Done2 } { ... }
@@ -159,9 +170,13 @@ impl LoopCondition {
     }
 }
 
-/// A loop block: an optional condition plus the rules evaluated inside.
+/// A loop block: an optional iterative relation list, an optional condition,
+/// and the rules evaluated inside.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LoopBlock {
+    /// Relations using replacement (iterative) semantics — `Variable::new_from`.
+    /// Relations absent from this list default to accumulative (`Variable::new`) semantics.
+    iterative_relations: Vec<(String, u64)>,
     /// `None` means a pure fixpoint loop (DD terminates when delta is empty).
     condition: Option<LoopCondition>,
     rules: Vec<FlowLogRule>,
@@ -169,8 +184,18 @@ pub struct LoopBlock {
 
 impl LoopBlock {
     #[must_use]
-    pub fn new(condition: Option<LoopCondition>, rules: Vec<FlowLogRule>) -> Self {
-        Self { condition, rules }
+    pub fn new(
+        iterative_relations: Vec<(String, u64)>,
+        condition: Option<LoopCondition>,
+        rules: Vec<FlowLogRule>,
+    ) -> Self {
+        Self { iterative_relations, condition, rules }
+    }
+
+    /// Relations explicitly marked as iterative (replacement semantics).
+    #[must_use]
+    pub fn iterative_relations(&self) -> &[(String, u64)] {
+        &self.iterative_relations
     }
 
     /// The stop condition, or `None` for a pure fixpoint loop.
@@ -266,6 +291,11 @@ fn display_windows(windows: &[(u16, u16)]) -> String {
 impl fmt::Display for LoopBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "loop")?;
+        if !self.iterative_relations.is_empty() {
+            let names: Vec<&str> =
+                self.iterative_relations.iter().map(|(n, _)| n.as_str()).collect();
+            write!(f, " iterative {{ {} }}", names.join(", "))?;
+        }
         if let Some(cond) = &self.condition {
             writeln!(f, " {} {{", cond)?;
         } else {
@@ -494,17 +524,32 @@ impl Lexeme for LoopBlock {
     fn from_parsed_rule(pair: Pair<Rule>) -> Self {
         let mut inner = pair.into_inner().peekable();
 
+        // Optional iterative relation list.
+        let iterative_relations =
+            if inner.peek().map(|p| p.as_rule()) == Some(Rule::loop_iterative_list) {
+                let list_pair = inner.next().unwrap();
+                list_pair
+                    .into_inner()
+                    .map(|p| {
+                        let name = p.as_str().to_ascii_lowercase();
+                        let fp = compute_fp(&name);
+                        (name, fp)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
         // Optional condition clause.
         let condition = if inner.peek().map(|p| p.as_rule()) == Some(Rule::loop_condition) {
-            let cond_pair = inner.next().unwrap();
-            Some(LoopCondition::from_parsed_rule(cond_pair))
+            Some(LoopCondition::from_parsed_rule(inner.next().unwrap()))
         } else {
             None
         };
 
         let rules = inner.map(FlowLogRule::from_parsed_rule).collect();
 
-        Self::new(condition, rules)
+        Self::new(iterative_relations, condition, rules)
     }
 }
 
@@ -622,9 +667,58 @@ mod tests {
     #[test]
     fn with_rule() {
         let block = parse_loop_block("loop { reach(X, Z) :- edge(X, Y), reach(Y, Z). }");
+        assert!(block.iterative_relations().is_empty());
         assert!(block.condition().is_none());
         assert_eq!(block.rules().len(), 1);
         assert_eq!(block.rules()[0].head().name(), "reach");
+    }
+
+    #[test]
+    fn iterative_list_no_condition() {
+        let block = parse_loop_block("loop iterative { active_edge, degree } { }");
+        let itr = block.iterative_relations();
+        assert_eq!(itr.len(), 2);
+        assert_eq!(itr[0].0, "active_edge");
+        assert_eq!(itr[0].1, compute_fp("active_edge"));
+        assert_eq!(itr[1].0, "degree");
+        assert_eq!(itr[1].1, compute_fp("degree"));
+        assert!(block.condition().is_none());
+        assert!(block.rules().is_empty());
+    }
+
+    #[test]
+    fn iterative_list_single() {
+        let block = parse_loop_block("loop iterative { removed } { }");
+        let itr = block.iterative_relations();
+        assert_eq!(itr.len(), 1);
+        assert_eq!(itr[0].0, "removed");
+        assert_eq!(itr[0].1, compute_fp("removed"));
+    }
+
+    #[test]
+    fn iterative_list_with_condition() {
+        let block =
+            parse_loop_block("loop iterative { active_edge } continue { iter <= 5 } { }");
+        let itr = block.iterative_relations();
+        assert_eq!(itr.len(), 1);
+        assert_eq!(itr[0].0, "active_edge");
+        let cond = block.condition().unwrap();
+        assert_eq!(cond.continue_part().unwrap(), &[(0u16, 5u16)]);
+    }
+
+    #[test]
+    fn no_iterative_list_is_empty() {
+        let block = parse_loop_block("loop continue { iter <= 3 } { }");
+        assert!(block.iterative_relations().is_empty());
+    }
+
+    #[test]
+    fn display_iterative_list() {
+        let block = parse_loop_block("loop iterative { active_edge, degree } { }");
+        let s = block.to_string();
+        assert!(s.contains("iterative"));
+        assert!(s.contains("active_edge"));
+        assert!(s.contains("degree"));
     }
 
     #[test]

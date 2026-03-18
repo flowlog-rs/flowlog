@@ -570,6 +570,17 @@ impl Program {
                 continue;
             };
 
+            // Validate iterative relation list: every name must be declared.
+            for (name, _) in block.iterative_relations() {
+                if !declared.contains(name.as_str()) {
+                    panic!(
+                        "Parser error: `iterative` list references undeclared relation '{}'. \
+                         Declare it with .decl first.",
+                        name
+                    );
+                }
+            }
+
             let Some(cond) = block.condition() else {
                 continue;
             };
@@ -985,6 +996,25 @@ mod tests {
         ";
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "`iterative` list references undeclared relation 'active_edge'")]
+    fn loop_iterative_undeclared_panics() {
+        parse_program("loop iterative { active_edge } { }");
+    }
+
+    #[test]
+    fn loop_iterative_declared_passes() {
+        let src = "
+            .decl edge(x: number, y: number)
+            .decl active_edge(x: number, y: number)
+            .output active_edge
+            loop iterative { active_edge } { active_edge(X, Y) :- edge(X, Y). }
+        ";
+        let program = parse_program(src);
+        assert_eq!(loop_blocks(&program).len(), 1);
+        assert_eq!(loop_blocks(&program)[0].iterative_relations().len(), 1);
     }
 
     #[test]
