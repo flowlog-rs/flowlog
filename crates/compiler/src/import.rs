@@ -403,7 +403,7 @@ impl ImportTracker {
                     use prompt::Prompt;
                     use relops::*;
 
-                    use std::sync::{Arc, Barrier, RwLock};
+                    use std::sync::{Arc, RwLock};
                 }
             }
             ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => quote! {},

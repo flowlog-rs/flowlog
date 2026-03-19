@@ -1,0 +1,8 @@
+begin
+file edge Edge.csv +1
+put source 1 +1
+commit
+begin
+put edge 3,2,1 -1
+commit
+quit

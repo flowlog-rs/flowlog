@@ -2,7 +2,7 @@
 //!
 //! Provides shared structural helpers (arity-based tuple patterns, key/row
 //! construction) used by all aggregation optimisation pipelines, plus the
-//! generic reduce-based aggregation code-gen functions.
+//! generic reduce-based codegen helpers used in batch and incremental modes.
 
 use parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
@@ -122,194 +122,65 @@ pub fn aggregation_row_chop(arity: usize, agg_pos: usize) -> TokenStream {
     }
 }
 
-/// Generates the aggregation logic closure for differential dataflow's `reduce` operator.
-pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> TokenStream {
+fn aggregation_result_expr(op: &AggregationOperator, agg_type: DataType) -> TokenStream {
     match op {
         AggregationOperator::Count => match agg_type {
-            DataType::Int8 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = input.len() as i8;
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
-            DataType::Int16 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = input.len() as i16;
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
-            DataType::Int32 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = input.len() as i32;
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
-            DataType::Int64 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = input.len() as i64;
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
-            DataType::UInt8 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = input.len() as u8;
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
-            DataType::UInt16 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = input.len() as u16;
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
-            DataType::UInt32 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = input.len() as u32;
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
-            DataType::UInt64 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = input.len() as u64;
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
-            DataType::Float32 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = OrderedFloat(input.len() as f32);
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
-            DataType::Float64 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let count = OrderedFloat(input.len() as f64);
-                    updates.push((count, SEMIRING_ONE));
-                }
-            },
+            DataType::Int8 => quote! { (!input.is_empty()).then_some(input.len() as i8) },
+            DataType::Int16 => quote! { (!input.is_empty()).then_some(input.len() as i16) },
+            DataType::Int32 => quote! { (!input.is_empty()).then_some(input.len() as i32) },
+            DataType::Int64 => quote! { (!input.is_empty()).then_some(input.len() as i64) },
+            DataType::UInt8 => quote! { (!input.is_empty()).then_some(input.len() as u8) },
+            DataType::UInt16 => quote! { (!input.is_empty()).then_some(input.len() as u16) },
+            DataType::UInt32 => quote! { (!input.is_empty()).then_some(input.len() as u32) },
+            DataType::UInt64 => quote! { (!input.is_empty()).then_some(input.len() as u64) },
+            DataType::Float32 => {
+                quote! { (!input.is_empty()).then_some(OrderedFloat(input.len() as f32)) }
+            }
+            DataType::Float64 => {
+                quote! { (!input.is_empty()).then_some(OrderedFloat(input.len() as f64)) }
+            }
             _ => {
                 panic!("Compiler error: count aggregation result should be numeric type")
             }
         },
         AggregationOperator::Sum => match agg_type {
-            DataType::Int8 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<i8>();
-                    updates.push((sum, SEMIRING_ONE));
-                }
-            },
-            DataType::Int16 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<i16>();
-                    updates.push((sum, SEMIRING_ONE));
-                }
-            },
-            DataType::Int32 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<i32>();
-                    updates.push((sum, SEMIRING_ONE));
-                }
-            },
-            DataType::Int64 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<i64>();
-                    updates.push((sum, SEMIRING_ONE));
-                }
-            },
-            DataType::UInt8 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<u8>();
-                    updates.push((sum, SEMIRING_ONE));
-                }
-            },
-            DataType::UInt16 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<u16>();
-                    updates.push((sum, SEMIRING_ONE));
-                }
-            },
-            DataType::UInt32 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<u32>();
-                    updates.push((sum, SEMIRING_ONE));
-                }
-            },
-            DataType::UInt64 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum = input.iter().map(|(v, _)| *v).sum::<u64>();
-                    updates.push((sum, SEMIRING_ONE));
-                }
-            },
+            DataType::Int8 => {
+                quote! { (!input.is_empty()).then_some(input.iter().map(|(v, _)| *v).sum::<i8>()) }
+            }
+            DataType::Int16 => {
+                quote! { (!input.is_empty()).then_some(input.iter().map(|(v, _)| *v).sum::<i16>()) }
+            }
+            DataType::Int32 => {
+                quote! { (!input.is_empty()).then_some(input.iter().map(|(v, _)| *v).sum::<i32>()) }
+            }
+            DataType::Int64 => {
+                quote! { (!input.is_empty()).then_some(input.iter().map(|(v, _)| *v).sum::<i64>()) }
+            }
+            DataType::UInt8 => {
+                quote! { (!input.is_empty()).then_some(input.iter().map(|(v, _)| *v).sum::<u8>()) }
+            }
+            DataType::UInt16 => {
+                quote! { (!input.is_empty()).then_some(input.iter().map(|(v, _)| *v).sum::<u16>()) }
+            }
+            DataType::UInt32 => {
+                quote! { (!input.is_empty()).then_some(input.iter().map(|(v, _)| *v).sum::<u32>()) }
+            }
+            DataType::UInt64 => {
+                quote! { (!input.is_empty()).then_some(input.iter().map(|(v, _)| *v).sum::<u64>()) }
+            }
             DataType::Float32 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum: OrderedFloat<f32> = input.iter().map(|(v, _)| *v).fold(OrderedFloat(0.0f32), |a, b| a + b);
-                    updates.push((sum, SEMIRING_ONE));
-                }
+                (!input.is_empty()).then_some(
+                    input.iter()
+                        .map(|(v, _)| *v)
+                        .fold(OrderedFloat(0.0f32), |a, b| a + b)
+                )
             },
             DataType::Float64 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
-                    let sum: OrderedFloat<f64> = input.iter().map(|(v, _)| *v).fold(OrderedFloat(0.0f64), |a, b| a + b);
-                    updates.push((sum, SEMIRING_ONE));
-                }
+                (!input.is_empty()).then_some(
+                    input.iter()
+                        .map(|(v, _)| *v)
+                        .fold(OrderedFloat(0.0f64), |a, b| a + b)
+                )
             },
             _ => panic!("Compiler error: sum aggregation result should be numeric type"),
         },
@@ -323,13 +194,7 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
             | DataType::UInt32
             | DataType::UInt64
             | DataType::Float32
-            | DataType::Float64 => quote! {
-                |_, input, _output, updates| {
-                    if let Some(min) = input.iter().map(|(v, _)| *v).min() {
-                        updates.push((*min, SEMIRING_ONE));
-                    }
-                }
-            },
+            | DataType::Float64 => quote! { input.iter().map(|(v, _)| *v).min().copied() },
             _ => {
                 panic!("Compiler error: min aggregation is not supported on non-numeric type")
             }
@@ -344,130 +209,160 @@ pub fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> Token
             | DataType::UInt32
             | DataType::UInt64
             | DataType::Float32
-            | DataType::Float64 => quote! {
-                |_, input, _output, updates| {
-                    if let Some(max) = input.iter().map(|(v, _)| *v).max() {
-                        updates.push((*max, SEMIRING_ONE));
-                    }
-                }
-            },
+            | DataType::Float64 => quote! { input.iter().map(|(v, _)| *v).max().copied() },
             _ => {
                 panic!("Compiler error: max aggregation is not supported on non-numeric type")
             }
         },
         AggregationOperator::Avg => match agg_type {
             DataType::Int8 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum = input.iter().map(|(v, _)| *v as i64).sum::<i64>();
                     let count = input.len() as i64;
-                    let avg = sum / count;
-                    updates.push((avg as i8, SEMIRING_ONE));
+                    Some((sum / count) as i8)
                 }
             },
             DataType::Int16 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum = input.iter().map(|(v, _)| *v as i64).sum::<i64>();
                     let count = input.len() as i64;
-                    let avg = sum / count;
-                    updates.push((avg as i16, SEMIRING_ONE));
+                    Some((sum / count) as i16)
                 }
             },
             DataType::Int32 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum = input.iter().map(|(v, _)| *v as i64).sum::<i64>();
                     let count = input.len() as i64;
-                    let avg = sum / count;
-                    updates.push((avg as i32, SEMIRING_ONE));
+                    Some((sum / count) as i32)
                 }
             },
             DataType::Int64 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum = input.iter().map(|(v, _)| *v).sum::<i64>();
                     let count = input.len() as i64;
-                    let avg = sum / count;
-                    updates.push((avg, SEMIRING_ONE));
+                    Some(sum / count)
                 }
             },
             DataType::UInt8 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum = input.iter().map(|(v, _)| *v as u64).sum::<u64>();
                     let count = input.len() as u64;
-                    let avg = sum / count;
-                    updates.push((avg as u8, SEMIRING_ONE));
+                    Some((sum / count) as u8)
                 }
             },
             DataType::UInt16 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum = input.iter().map(|(v, _)| *v as u64).sum::<u64>();
                     let count = input.len() as u64;
-                    let avg = sum / count;
-                    updates.push((avg as u16, SEMIRING_ONE));
+                    Some((sum / count) as u16)
                 }
             },
             DataType::UInt32 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum = input.iter().map(|(v, _)| *v as u64).sum::<u64>();
                     let count = input.len() as u64;
-                    let avg = sum / count;
-                    updates.push((avg as u32, SEMIRING_ONE));
+                    Some((sum / count) as u32)
                 }
             },
             DataType::UInt64 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum = input.iter().map(|(v, _)| *v).sum::<u64>();
                     let count = input.len() as u64;
-                    let avg = sum / count;
-                    updates.push((avg, SEMIRING_ONE));
+                    Some(sum / count)
                 }
             },
             DataType::Float32 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum: f32 = input.iter().map(|(v, _)| v.into_inner()).sum::<f32>();
                     let count = input.len() as f32;
-                    let avg = OrderedFloat(sum / count);
-                    updates.push((avg, SEMIRING_ONE));
+                    Some(OrderedFloat(sum / count))
                 }
             },
             DataType::Float64 => quote! {
-                |_, input, _output, updates| {
-                    if input.is_empty() {
-                        return;
-                    }
+                if input.is_empty() {
+                    None
+                } else {
                     let sum: f64 = input.iter().map(|(v, _)| v.into_inner()).sum::<f64>();
                     let count = input.len() as f64;
-                    let avg = OrderedFloat(sum / count);
-                    updates.push((avg, SEMIRING_ONE));
+                    Some(OrderedFloat(sum / count))
                 }
             },
             _ => panic!("Compiler error: avg aggregation result should be numeric type"),
         },
+    }
+}
+
+/// Generates the aggregation logic closure for differential dataflow's
+/// `reduce_core` operator.
+fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> TokenStream {
+    let result_expr = aggregation_result_expr(op, agg_type);
+
+    quote! {
+        |_, input, _output, updates| {
+            if let Some(result) = { #result_expr } {
+                updates.push((result, SEMIRING_ONE));
+            }
+        }
+    }
+}
+
+/// Generates the aggregation logic closure for differential dataflow's
+/// `reduce_abelian` operator, which automatically retracts prior outputs.
+fn aggregation_reduce_abelian(op: &AggregationOperator, agg_type: DataType) -> TokenStream {
+    let result_expr = aggregation_result_expr(op, agg_type);
+
+    quote! {
+        |_, input, updates| {
+            if let Some(result) = { #result_expr } {
+                updates.push((result, SEMIRING_ONE));
+            }
+        }
+    }
+}
+
+/// Generates the reduction operator call for normal aggregation pipelines.
+///
+/// Batch mode uses `reduce_core`, while incremental mode uses `reduce_abelian`
+/// so aggregate replacements emit the needed retractions automatically.
+pub fn aggregation_reduce_stmt(
+    is_incremental: bool,
+    op: &AggregationOperator,
+    agg_type: DataType,
+) -> TokenStream {
+    if is_incremental {
+        let reduce_logic = aggregation_reduce_abelian(op, agg_type);
+        quote! {
+            .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+                "aggregation",
+                #reduce_logic
+            )
+        }
+    } else {
+        let reduce_logic = aggregation_reduce(op, agg_type);
+        quote! {
+            .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+                "aggregation",
+                #reduce_logic
+            )
+        }
     }
 }
 

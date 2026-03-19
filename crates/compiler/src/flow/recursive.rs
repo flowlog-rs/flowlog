@@ -14,7 +14,7 @@ use crate::aggregation::{
     aggregation_avg_optimize, aggregation_avg_post_leave, aggregation_avg_pre_leave,
     aggregation_count_optimize, aggregation_count_pre_leave, aggregation_max_optimize,
     aggregation_max_pre_leave, aggregation_merge_kv, aggregation_min_optimize,
-    aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce,
+    aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce_stmt,
     aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
 use crate::ident::find_local_ident;
@@ -343,18 +343,16 @@ impl Compiler {
                 } else {
                     self.imports.mark_aggregation();
                     let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-                    let reduce_logic = aggregation_reduce(agg_op, agg_type);
                     let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
                     // Aggregate after union + dedup.
+                    let reduce_stmt =
+                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type);
                     block = quote! {
                         #block
                         let #next_ident = #next_ident
                             .map(#row_chop)
                             .arrange_by_key()
-                            .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
-                                "aggregation",
-                                #reduce_logic
-                            )
+                            #reduce_stmt
                             .as_collection(#merge_kv);
                     };
 

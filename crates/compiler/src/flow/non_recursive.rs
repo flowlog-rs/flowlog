@@ -17,7 +17,7 @@ use tracing::trace;
 
 use crate::aggregation::{
     aggregation_avg_optimize, aggregation_count_optimize, aggregation_max_optimize,
-    aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce, aggregation_row_chop,
+    aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce_stmt, aggregation_row_chop,
     aggregation_sum_optimize,
 };
 use crate::udf::head_udf_map;
@@ -179,17 +179,15 @@ impl Compiler {
                 } else {
                     self.imports.mark_aggregation();
                     let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-                    let reduce_logic = aggregation_reduce(agg_op, agg_type);
                     let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
+                    let reduce_stmt =
+                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type);
                     block = quote! {
                         #block
                         let #output = #output
                             .map(#row_chop)
                             .arrange_by_key()
-                            .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
-                                "aggregation",
-                                #reduce_logic
-                            )
+                            #reduce_stmt
                             .as_collection(#merge_kv);
                     };
 

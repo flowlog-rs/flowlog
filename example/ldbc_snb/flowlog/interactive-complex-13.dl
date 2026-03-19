@@ -18,11 +18,7 @@
 .decl Found()
 
 Dist(p1, p1, 0) :- Param(p1, _).
-
-loop stop { Found } {
-    Dist(src, b, min(d + 1)) :- Dist(src, a, d), Knows(a, b, _).
-    Found() :- Param(_, p2), Dist(_, p2, _).
-}
+Dist(src, b, min(d + 1)) :- Dist(src, a, d), Knows(a, b, _).
 
 // Output: shortest path length, or -1 if unreachable.
 .decl Q13(shortestPathLength: int64)
