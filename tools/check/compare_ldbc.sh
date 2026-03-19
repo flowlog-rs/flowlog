@@ -121,7 +121,12 @@ run_per_param() {
     local qwork="${WORK_DIR}/${query}"
     local fl_proj="${qwork}/fl_proj"
     local fl_out_dir="${qwork}/fl_out"
+    local fl_mode_flags=""
     mkdir -p "$qwork"
+
+    if grep -Eq '^[[:space:]]*loop([[:space:]]|$)' "$dl_file"; then
+        fl_mode_flags="--mode extend-batch"
+    fi
 
     # Detect param filename from DL
     local param_fname
@@ -141,7 +146,7 @@ run_per_param() {
     rm -rf "$fl_proj" "$fl_out_dir"
     mkdir -p "$fl_out_dir"
     local fl_compile_log="${qwork}/fl_compile.log"
-    if ! "$FLOWLOG_BIN" "$dl_file" -F "$data_dir" -D "$fl_out_dir" -o "$fl_proj" --str-intern $EXTRA_FL_FLAGS >"$fl_compile_log" 2>&1; then
+    if ! "$FLOWLOG_BIN" "$dl_file" -F "$data_dir" -D "$fl_out_dir" -o "$fl_proj" --str-intern $fl_mode_flags $EXTRA_FL_FLAGS >"$fl_compile_log" 2>&1; then
         fail "$query: Flowlog compilation failed"
         echo "         $(tail -3 "$fl_compile_log")"
         return 1
@@ -202,7 +207,8 @@ run_per_param() {
         find "$fl_out_hardcoded" -maxdepth 1 -type f -delete 2>/dev/null || true
         printf "\r${CYAN}[CHECK]${NC} Flowlog  [%d/%d]  " "$idx" "$total" >&2
         _t0=$(date +%s%3N)
-        if timeout "$TIMEOUT_SECS" "$fl_bin" -w "$WORKERS" >/dev/null 2>&1;
+        local fl_workers="${FLOWLOG_WORKERS:-$WORKERS}"
+        if timeout "$TIMEOUT_SECS" "$fl_bin" -w "$fl_workers" >/dev/null 2>&1;
         then
             _exit_code=0
         else
