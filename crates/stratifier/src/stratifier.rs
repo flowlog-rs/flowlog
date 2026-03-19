@@ -55,7 +55,7 @@ use tracing::{debug, info, warn};
 /// |----------|---------|
 /// | *recursive* | Self-referential relations that grow monotonically each round. |
 /// | *leave* | Relations whose values must be retained after the stratum finishes, because a later stratum or an IDB output needs them. |
-/// | *available* | Relations that are already fully computed before this stratum begins (EDB + leaves from all prior strata). |
+/// | *available* | Relations that are already fully computed before this stratum begins (EDBs + leaves from all prior strata). |
 #[derive(Debug, Clone)]
 pub struct Stratifier {
     /// The original program being stratified.
@@ -98,7 +98,7 @@ pub struct Stratifier {
 
     /// Relations that are fully computed before a stratum begins.
     ///
-    /// Always includes all EDB relations.  For stratum *i*, this is the union
+    /// Always includes all EDB relations. For stratum *i*, this is the union
     /// of the leave sets of strata *0 … i-1*.  Parallel with `stratum`.
     stratum_available_relations: Vec<HashSet<u64>>,
 }
@@ -675,7 +675,7 @@ impl Stratifier {
             self.stratum_leave_relation.push(leave);
         }
 
-        // Available relations: EDB ∪ leaves from all preceding strata.
+        // Available relations: EDBs ∪ leaves from all preceding strata.
         let edb_fps = self.program.edb_fingerprints();
         let mut accumulated: HashSet<u64> = HashSet::new();
         for leave in &self.stratum_leave_relation {
@@ -1234,6 +1234,32 @@ mod tests {
                 B(x, z) :- Edge(x, y), B(y, z).\n\
             }\n";
         let _ = Stratifier::from_program(&parse_program(src), false);
+    }
+
+    /// Inline fact-only relations are EDBs and must be available to the very
+    /// first stratum just like file-backed `.input` relations.
+    #[test]
+    fn inline_fact_relations_are_available_before_first_stratum() {
+        let src = "\
+            .decl Param(x: int32)\n\
+            .decl Out(x: int32)\n\
+            Param(1).\n\
+            Out(x) :- Param(x).\n\
+            .output Out\n";
+        let program = parse_program(src);
+        let param_fp = program
+            .relations()
+            .iter()
+            .find(|r| r.name() == "param")
+            .expect("param relation missing")
+            .fingerprint();
+
+        let s = Stratifier::from_program(&program, false);
+
+        assert!(
+            s.stratum_available_relations(0).contains(&param_fp),
+            "inline fact relation should be available before the first stratum"
+        );
     }
 
     /// A `loop` block where no head relation appears as a body atom has no

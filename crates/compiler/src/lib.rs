@@ -16,7 +16,7 @@ mod import;
 mod inspect;
 mod profile;
 mod read;
-mod relation;
+mod relops;
 mod scaffold;
 mod transformation;
 mod udf;
@@ -179,14 +179,16 @@ impl Compiler {
             ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => quote! { () },
         };
 
-        // Incremental-only: generate relation registry inserts from the source list.
+        // Incremental-only: generate relation registry inserts from the EDB list.
         //
         // Assumptions (match current generated code):
         // - input handle idents are named `h{rel_name}` (e.g., `hsource`)
         // - rel ops concrete types are named `Rel{rel_name}` (e.g., `Relsource`)
+        // - only EDB relations currently get incremental handlers / registry entries;
+        //   concretely, the relation must have `.input`, inline facts, or both
         let rel_build_stmts: Vec<TokenStream> = if self.config.is_incremental() {
             self.program
-                .source_relations()
+                .edbs()
                 .iter()
                 .map(|rel| {
                     let rel_name = rel.name().to_ascii_lowercase();

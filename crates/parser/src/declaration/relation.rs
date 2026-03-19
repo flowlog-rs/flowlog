@@ -94,7 +94,7 @@ impl Relation {
             .unwrap_or_else(|| format!("{}.csv", self.name()))
     }
 
-    /// Get the input delimiter if this is an EDB relation.
+    /// Get the input delimiter for a file-backed relation.
     #[must_use]
     #[inline]
     pub fn input_delimiter(&self) -> &str {
@@ -104,7 +104,7 @@ impl Relation {
             .unwrap_or(",")
     }
 
-    /// Whether to skip the first (header) line when reading this EDB relation.
+    /// Whether to skip the first (header) line when reading this file-backed relation.
     #[must_use]
     #[inline]
     pub fn input_has_header(&self) -> bool {
@@ -129,10 +129,10 @@ impl Relation {
         self.output
     }
 
-    /// Check if this is an EDB relation (has input parameters).
+    /// Check whether this relation has a `.input` directive.
     #[must_use]
     #[inline]
-    pub fn is_edb(&self) -> bool {
+    pub fn is_file_backed(&self) -> bool {
         self.input_params.is_some()
     }
 
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(rel.arity(), 2);
         assert!(!rel.is_nullary());
         assert_eq!(rel.attributes()[0].name(), "id");
-        assert!(!rel.is_edb());
+        assert!(!rel.is_file_backed());
         assert!(!rel.output());
         assert!(!rel.printsize());
     }

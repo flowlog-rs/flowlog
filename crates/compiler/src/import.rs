@@ -397,11 +397,11 @@ impl ImportTracker {
                 quote! {
                     mod cmd;
                     mod prompt;
-                    mod relation;
+                    mod relops;
 
                     use cmd::{Cmd, TxnAction, TxnOp, TxnState};
                     use prompt::Prompt;
-                    use relation::*;
+                    use relops::*;
 
                     use std::sync::{Arc, Barrier, RwLock};
                 }

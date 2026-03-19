@@ -91,7 +91,7 @@ impl Compiler {
         if self.config.is_incremental() {
             self.write_src_cmd()?;
             self.write_src_prompt()?;
-            self.write_src_relation()?;
+            self.write_src_relops()?;
         }
 
         // Semiring modules for aggregations that require them (e.g., via `needs_semiring()`)
@@ -240,11 +240,11 @@ impl Compiler {
     }
 
     // -------------------------
-    // src/relation.rs (generated)
+    // src/relops.rs (generated)
     // -------------------------
 
-    /// Write `src/relation.rs` (incremental-only) into the generated project directory.
-    fn write_src_relation(&self) -> io::Result<()> {
+    /// Write `src/relops.rs` (incremental-only) into the generated project directory.
+    fn write_src_relops(&self) -> io::Result<()> {
         let src_dir = self.config.executable_path().join("src");
         ensure_dir(&src_dir)?;
 
@@ -252,7 +252,7 @@ impl Compiler {
 
         let rendered = self.render_relops(edbs).replace("\r\n", "\n");
 
-        write_file(&src_dir.join("relation.rs"), rendered.trim_start())
+        write_file(&src_dir.join("relops.rs"), rendered.trim_start())
     }
 
     /// Write `src/prompt.rs` (incremental-only) into the generated project directory.
