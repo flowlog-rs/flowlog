@@ -109,6 +109,34 @@ impl Compiler {
         let memory_profile_struct = self.gen_memory_profile_struct();
         let time_profile_init = self.gen_time_profile_init();
         let memory_profile_init = self.gen_memory_profile_init();
+        let worker_sync_helpers = quote! {
+            fn workers_from_args(args: &[String]) -> usize {
+                let mut i = 0;
+                while i < args.len() {
+                    if args[i] == "-w" && i + 1 < args.len() {
+                        if let Ok(n) = args[i + 1].parse::<usize>() {
+                            return n.max(1);
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    if let Some(rest) = args[i].strip_prefix("-w=") {
+                        if let Ok(n) = rest.parse::<usize>() {
+                            return n.max(1);
+                        }
+                    }
+                    i += 1;
+                }
+                1
+            }
+
+            fn worker_barrier_from_args(
+                args: &[String],
+            ) -> std::sync::Arc<std::sync::Barrier> {
+                let workers = workers_from_args(args);
+                std::sync::Arc::new(std::sync::Barrier::new(workers))
+            }
+        };
 
         // Flow generation per stratum.
         let mut flow_stmts: Vec<TokenStream> = Vec::new();
@@ -151,17 +179,17 @@ impl Compiler {
             ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => quote! { () },
         };
 
-        // Incremental-only: generate relation registry inserts from the EDB list.
+        // Incremental-only: generate relation registry inserts from the source list.
         //
         // Assumptions (match current generated code):
         // - input handle idents are named `h{rel_name}` (e.g., `hsource`)
         // - rel ops concrete types are named `Rel{rel_name}` (e.g., `Relsource`)
         let rel_build_stmts: Vec<TokenStream> = if self.config.is_incremental() {
             self.program
-                .edbs()
+                .source_relations()
                 .iter()
-                .map(|edb| {
-                    let rel_name = edb.name().to_ascii_lowercase();
+                .map(|rel| {
+                    let rel_name = rel.name().to_ascii_lowercase();
 
                     let handle_ident =
                         Ident::new(&format!("h{rel_name}"), proc_macro2::Span::call_site());
@@ -190,7 +218,13 @@ impl Compiler {
 
                 quote! {
                     fn main() {
-                        timely::execute_from_args(std::env::args(), |worker| {
+                        let args: Vec<String> = std::env::args().collect();
+                        let barrier = worker_barrier_from_args(&args);
+
+                        timely::execute_from_args(args.into_iter(), {
+                            let barrier = barrier.clone();
+
+                            move |worker| {
                             // --- Runtime setup -------------------------------------------------
                             let timer = Instant::now();
                             let peers = worker.peers();
@@ -225,6 +259,7 @@ impl Compiler {
 
                             // --- Execute to fixpoint -------------------------------------------
                             while worker.step() {}
+                            barrier.wait();
 
                             // --- Time profile writeout -----------------------------------------
                             #time_profile_write
@@ -237,7 +272,7 @@ impl Compiler {
                                 // === Merge per-worker output partitions (if any) ===
                                 #(#merge_stmts)*
                             }
-                        })
+                        }})
                         .unwrap();
                     }
                 }
@@ -248,38 +283,14 @@ impl Compiler {
                 let memory_profile_write = self.gen_memory_profile_write_incremental();
 
                 quote! {
-                    // -------------------------------
-                    // Worker sync helpers
-                    // -------------------------------
-                    fn workers_from_args(args: &[String]) -> usize {
-                        let mut i = 0;
-                        while i < args.len() {
-                            if args[i] == "-w" && i + 1 < args.len() {
-                                if let Ok(n) = args[i + 1].parse::<usize>() {
-                                    return n.max(1);
-                                }
-                                i += 2;
-                                continue;
-                            }
-                            if let Some(rest) = args[i].strip_prefix("-w=") {
-                                if let Ok(n) = rest.parse::<usize>() {
-                                    return n.max(1);
-                                }
-                            }
-                            i += 1;
-                        }
-                        1
-                    }
-
                     fn main() {
-                        let args_vec: Vec<String> = std::env::args().collect();
-                        let workers = workers_from_args(&args_vec);
+                        let args: Vec<String> = std::env::args().collect();
 
                         let shared_txn: Arc<RwLock<TxnState>> =
                             Arc::new(RwLock::new(TxnState::default()));
-                        let barrier = Arc::new(Barrier::new(workers));
+                        let barrier = worker_barrier_from_args(&args);
 
-                        timely::execute_from_args(std::env::args(), {
+                        timely::execute_from_args(args.into_iter(), {
                             let shared_txn = shared_txn.clone();
                             let barrier = barrier.clone();
 
@@ -558,6 +569,7 @@ impl Compiler {
             #memory_profile_struct
 
             #byte_range_reader
+            #worker_sync_helpers
 
             #main_fn
         };
