@@ -147,7 +147,25 @@ run_test() {
     local run_log="${BUILD_DIR}/${test_name}_run.log"
     if (( incremental )); then
         command -v script >/dev/null 2>&1 || die "Required dependency 'script' not found on PATH; needed for incremental shell tests."
-        if ! (cd "$project_dir" && script -qec "./target/release/program -w 1" /dev/null < "$test_dir/commands.txt" >"$run_log" 2>&1); then
+
+        # Feed incremental commands through a FIFO-backed pty session. This avoids
+        # CI flakiness where direct stdin redirection to `script` can deliver EOF
+        # before the REPL has consumed the transcript.
+        local cmd_fifo="${BUILD_DIR}/${test_name}.cmd.fifo"
+        rm -f "$cmd_fifo"
+        mkfifo "$cmd_fifo"
+
+        (
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                printf '%s\n' "$line"
+                sleep 0.02
+            done < "$test_dir/commands.txt"
+        ) > "$cmd_fifo" &
+        local feeder_pid=$!
+
+        if ! (cd "$project_dir" && script -qefc "./target/release/program" /dev/null < "$cmd_fifo" >"$run_log" 2>&1); then
+            rm -f "$cmd_fifo"
+            wait "$feeder_pid" || true
             log "$RED" "FAIL" "$test_name — execution failed"
             log "$YELLOW" "HINT" "Runtime log (last 20 lines):"
             tail -20 "$run_log" | sed 's/^/       /'
@@ -155,6 +173,8 @@ run_test() {
             ((failed++)) || true
             return
         fi
+        rm -f "$cmd_fifo"
+        wait "$feeder_pid" || true
     else
         if ! (cd "$project_dir" && ./target/release/program >"$run_log" 2>&1); then
             log "$RED" "FAIL" "$test_name — execution failed"
