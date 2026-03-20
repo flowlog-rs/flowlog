@@ -12,7 +12,7 @@ env:
 
 jobs:
   build_and_test:
-    runs-on: namespace-profile-flowlog
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
