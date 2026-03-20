@@ -1,0 +1,18 @@
+.decl organizer(x: int32)
+.input organizer(IO="file", filename="organizer.csv", delimiter=",")
+
+.decl friend(x: int32, y: int32)
+.input friend(IO="file", filename="friend.csv", delimiter=",")
+
+.decl attend(x: int32)
+.decl cnt(x: int32, n: int32)
+
+# Seed: organizers always attend.
+attend(x) :- organizer(x).
+
+loop iterative { cnt } {
+    cnt(y, count(x)) :- attend(x), friend(y, x).
+    attend(x) :- cnt(x, n), n >= 3.
+}
+
+.printsize attend

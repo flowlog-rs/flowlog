@@ -178,20 +178,46 @@ impl Program {
         &self.relations
     }
 
-    /// EDB relations (those with input parameters).
+    /// EDB relations available before rule evaluation starts.
+    ///
+    /// This is the union of:
+    /// - file-backed relations declared with `.input`
+    /// - relations with inline ground facts such as `rel(1, 2).`
+    ///
+    /// A relation may belong to both subsets.
+    #[must_use]
+    pub fn edbs(&self) -> Vec<&Relation> {
+        self.relations
+            .iter()
+            .filter(|rel| self.is_edb_relation(rel))
+            .collect()
+    }
+
+    /// Relations declared with `.input` and therefore backed by file ingestion.
     #[must_use]
     #[inline]
-    pub fn edbs(&self) -> Vec<&Relation> {
-        self.relations.iter().filter(|rel| rel.is_edb()).collect()
+    pub fn file_backed_relations(&self) -> Vec<&Relation> {
+        self.relations
+            .iter()
+            .filter(|rel| rel.is_file_backed())
+            .collect()
+    }
+
+    /// Relations that have at least one inline ground fact in the program source.
+    #[must_use]
+    pub fn inline_fact_relations(&self) -> Vec<&Relation> {
+        self.relations
+            .iter()
+            .filter(|rel| self.has_inline_facts(rel.name()))
+            .collect()
     }
 
     /// Ordered EDB relation names (sorted lexicographically).
     #[must_use]
     pub fn edb_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
-            .relations
+            .edbs()
             .iter()
-            .filter(|rel| rel.is_edb())
             .map(|rel| rel.name().to_string())
             .collect();
         names.sort_unstable();
@@ -201,11 +227,7 @@ impl Program {
     /// Deduplicated EDB relation fingerprints.
     #[must_use]
     pub fn edb_fingerprints(&self) -> HashSet<u64> {
-        self.relations
-            .iter()
-            .filter(|rel| rel.is_edb())
-            .map(|rel| rel.fingerprint())
-            .collect()
+        self.edbs().iter().map(|rel| rel.fingerprint()).collect()
     }
 
     /// IDB relations (those annotated with `.output` or `.printsize`).
@@ -270,11 +292,23 @@ impl Program {
         &self.facts
     }
 
+    /// Whether the named relation has any inline ground facts.
+    #[must_use]
+    #[inline]
+    pub fn has_inline_facts(&self, relation_name: &str) -> bool {
+        self.facts.contains_key(relation_name)
+    }
+
     /// External UDF declarations.
     #[must_use]
     #[inline]
     pub fn udfs(&self) -> &[ExternFn] {
         &self.udfs
+    }
+
+    #[inline]
+    fn is_edb_relation(&self, rel: &Relation) -> bool {
+        rel.is_file_backed() || self.has_inline_facts(rel.name())
     }
 }
 
@@ -570,6 +604,17 @@ impl Program {
                 continue;
             };
 
+            // Validate iterative relation list: every name must be declared.
+            for (name, _) in block.iterative_relations() {
+                if !declared.contains(name.as_str()) {
+                    panic!(
+                        "Parser error: `iterative` list references undeclared relation '{}'. \
+                         Declare it with .decl first.",
+                        name
+                    );
+                }
+            }
+
             let Some(cond) = block.condition() else {
                 continue;
             };
@@ -731,6 +776,22 @@ impl Program {
 
         // Fact relations are always needed.
         needed_preds.extend(self.facts.keys().cloned());
+
+        // Relations referenced by loop stop conditions must be retained even if
+        // they are not outputs. They are semantically live because the loop
+        // controller reads them to decide termination.
+        needed_preds.extend(
+            self.segments
+                .iter()
+                .filter_map(Segment::as_loop)
+                .flat_map(|block| {
+                    block
+                        .condition()
+                        .and_then(|cond| cond.stop_part())
+                        .into_iter()
+                        .flat_map(|stop| stop.relations().map(|rel| rel.name.clone()))
+                }),
+        );
 
         // If no outputs and no facts, keep everything.
         if needed_preds.is_empty() {
@@ -988,6 +1049,25 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "`iterative` list references undeclared relation 'active_edge'")]
+    fn loop_iterative_undeclared_panics() {
+        parse_program("loop iterative { active_edge } { }");
+    }
+
+    #[test]
+    fn loop_iterative_declared_passes() {
+        let src = "
+            .decl edge(x: number, y: number)
+            .decl active_edge(x: number, y: number)
+            .output active_edge
+            loop iterative { active_edge } { active_edge(X, Y) :- edge(X, Y). }
+        ";
+        let program = parse_program(src);
+        assert_eq!(loop_blocks(&program).len(), 1);
+        assert_eq!(loop_blocks(&program)[0].iterative_relations().len(), 1);
+    }
+
+    #[test]
     #[should_panic(expected = "loop condition references undeclared relation 'done'")]
     fn loop_bool_relation_undeclared_panics() {
         parse_program("loop stop { done } { }");
@@ -1002,5 +1082,73 @@ mod tests {
             loop stop { done } { done(1) :- done(1). }
         ";
         parse_program(src);
+    }
+
+    #[test]
+    fn dead_code_elimination_keeps_loop_stop_relations() {
+        let src = "
+            .decl edge(x: number, y: number)
+            .decl keep()
+            .decl dead()
+            .output edge
+
+            edge(1, 2).
+
+            loop stop { keep } {
+                keep() :- edge(1, 2).
+            }
+
+            dead() :- edge(2, 3).
+        ";
+        let program = parse_program(src);
+
+        assert!(program.relations().iter().any(|rel| rel.name() == "keep"));
+        assert!(!program.relations().iter().any(|rel| rel.name() == "dead"));
+    }
+
+    #[test]
+    fn edb_subsets_track_file_backed_inline_and_overlap_relations() {
+        let src = "
+            .decl file_only(x: number)
+            .decl fact_only(x: number)
+            .decl both(x: number)
+            .decl out(x: number)
+            .input file_only(IO=\"file\", filename=\"file_only.csv\", delimiter=\",\")
+            .input both(IO=\"file\", filename=\"both.csv\", delimiter=\",\")
+            .output out
+
+            fact_only(1).
+            both(2).
+
+            out(X) :- file_only(X).
+            out(X) :- fact_only(X).
+            out(X) :- both(X).
+        ";
+        let program = parse_program(src);
+
+        let mut edbs = program
+            .edbs()
+            .into_iter()
+            .map(|rel| rel.name().to_string())
+            .collect::<Vec<_>>();
+        edbs.sort_unstable();
+
+        let mut file_backed = program
+            .file_backed_relations()
+            .into_iter()
+            .map(|rel| rel.name().to_string())
+            .collect::<Vec<_>>();
+        file_backed.sort_unstable();
+
+        let mut inline_facts = program
+            .inline_fact_relations()
+            .into_iter()
+            .map(|rel| rel.name().to_string())
+            .collect::<Vec<_>>();
+        inline_facts.sort_unstable();
+
+        assert_eq!(edbs, vec!["both", "fact_only", "file_only"]);
+        assert_eq!(file_backed, vec!["both", "file_only"]);
+        assert_eq!(inline_facts, vec!["both", "fact_only"]);
     }
 }

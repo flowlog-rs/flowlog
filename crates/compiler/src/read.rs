@@ -3,7 +3,7 @@
 //! This module generates Rust code that:
 //! - Declares `(handle, collection)` pairs for each EDB relation.
 //! - Creates *mutable* bindings for handles so we can call `update(...)`.
-//! - Ingests EDB facts from CSV-like files (arity > 0).
+//! - Ingests file-backed EDB data from CSV-like files (arity > 0).
 //! - Ingests compile-time inline facts (from the parsed program).
 //! - Closes all handles to signal end-of-input.
 //!
@@ -61,7 +61,7 @@ impl Compiler {
                 let handle = format_ident!("h{}", rel.name());
                 let coll = format_ident!("{}", rel.name());
 
-                // Record input EDB operator and dedup operator in profiler if enabled
+                // Record source file input operator and dedup operator in profiler if enabled
                 with_profiler(profiler, |profiler| {
                     profiler.input_edb_operator(rel.name().to_string(), coll.to_string());
                     profiler.input_dedup_operator(
@@ -137,7 +137,7 @@ impl Compiler {
     pub(super) fn gen_ingest_stmts(&mut self) -> Vec<TokenStream> {
         let mut stmts = Vec::new();
         for rel in self.program.edbs() {
-            if rel.arity() > 0 {
+            if rel.is_file_backed() && rel.arity() > 0 {
                 self.imports.mark_std_file();
                 self.imports.mark_std_buf_io();
                 self.imports.mark_semiring_one();
@@ -157,7 +157,8 @@ impl Compiler {
         stmts
     }
 
-    /// Generate CSV ingestion for a single relation using byte-range parallel reading.
+    /// Generate CSV ingestion for a single file-backed EDB relation using
+    /// byte-range parallel reading.
     ///
     /// Each worker reads only its ~1/N byte slice of the file. Non-first workers
     /// skip the partial first line at their seek offset. All parsed rows are fed
@@ -166,6 +167,10 @@ impl Compiler {
     /// Notes:
     /// - Nullary relations do not read from CSV.
     fn gen_csv_ingest_stmt(&self, rel: &Relation) -> TokenStream {
+        if !rel.is_file_backed() {
+            return quote! {};
+        }
+
         let arity = rel.arity();
 
         // Nullary relations do not read from files; they are handled via inline facts (if any).
@@ -525,8 +530,14 @@ impl Compiler {
             return quote! {};
         }
 
-        // Only emit when there are EDB relations with arity > 0 (i.e., CSV ingestion needed).
-        if !self.program.edbs().iter().any(|rel| rel.arity() > 0) {
+        // Only emit when there are file-backed EDB relations with arity > 0
+        // (i.e., CSV ingestion needed).
+        if !self
+            .program
+            .file_backed_relations()
+            .iter()
+            .any(|rel| rel.arity() > 0)
+        {
             return quote! {};
         }
 

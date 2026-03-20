@@ -1,0 +1,12 @@
+// Pure inline-fact source relation with no `.input` backing file.
+// Verifies that fact-only sources are available to the first stratum and are
+// given input handles for code generation.
+
+.decl Param(x: int32)
+Param(1).
+Param(2).
+
+.decl Out(x: int32)
+Out(x) :- Param(x).
+
+.output Out

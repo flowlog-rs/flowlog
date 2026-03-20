@@ -42,8 +42,15 @@ pub struct StratumPlanner {
     /// Fingerprints of collections that enter recursion.
     recursion_enter_collections: Vec<u64>,
 
-    /// Fingerprints of recursive collections within recursion.
-    recursion_recursive_collections: Vec<u64>,
+    /// Fingerprints of accumulative recursive collections within recursion.
+    ///
+    /// These use `Variable::new` + concat-with-self feedback semantics (monotone growth).
+    recursion_accumulate_recursive_collections: Vec<u64>,
+
+    /// Fingerprints of iterative recursive collections within recursion.
+    ///
+    /// These use `Variable::new_from` + replace-only feedback semantics (replacement each step).
+    recursion_iterative_recursive_collections: Vec<u64>,
 
     /// Fingerprints of collections that exit recursion.
     recursion_leave_collections: Vec<u64>,
@@ -174,8 +181,11 @@ impl StratumPlanner {
             non_recursive_transformations: Vec::new(),
             recursive_transformations: Vec::new(),
             recursion_enter_collections: Vec::new(),
-            recursion_recursive_collections: stratifier
-                .stratum_recursive_relation(stratum_idx)
+            recursion_accumulate_recursive_collections: stratifier
+                .stratum_accumulate_recursive_relation(stratum_idx)
+                .to_vec(),
+            recursion_iterative_recursive_collections: stratifier
+                .stratum_iterative_recursive_relation(stratum_idx)
                 .to_vec(),
             recursion_leave_collections: stratifier.stratum_leave_relation(stratum_idx).to_vec(),
             idb_to_heads_map: HashMap::new(),
@@ -234,10 +244,16 @@ impl StratumPlanner {
         &self.recursion_enter_collections
     }
 
-    /// Get fingerprints of recursive collections within recursion.
+    /// Get fingerprints of accumulative recursive collections within recursion.
     #[inline]
-    pub fn recursion_recursive_collections(&self) -> &[u64] {
-        &self.recursion_recursive_collections
+    pub fn recursion_accumulate_recursive_collections(&self) -> &[u64] {
+        &self.recursion_accumulate_recursive_collections
+    }
+
+    /// Get fingerprints of iterative recursive collections within recursion.
+    #[inline]
+    pub fn recursion_iterative_recursive_collections(&self) -> &[u64] {
+        &self.recursion_iterative_recursive_collections
     }
 
     /// Get fingerprints of collections that leave recursion.

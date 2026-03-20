@@ -14,7 +14,7 @@ use crate::aggregation::{
     aggregation_avg_optimize, aggregation_avg_post_leave, aggregation_avg_pre_leave,
     aggregation_count_optimize, aggregation_count_pre_leave, aggregation_max_optimize,
     aggregation_max_pre_leave, aggregation_merge_kv, aggregation_min_optimize,
-    aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce,
+    aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce_stmt,
     aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
 use crate::ident::find_local_ident;
@@ -55,28 +55,60 @@ impl Compiler {
             self.build_enter_bindings(non_recursive_arranged_map, enter_fps, profiler);
 
         // --- Recursive variable bindings -------------------------
-        let recursive_fps = stratum.recursion_recursive_collections();
-        let (recursive_names, recursive_bindings) = self.build_recursive_bindings(recursive_fps);
+        let acc_fps = stratum.recursion_accumulate_recursive_collections();
+        let itr_fps = stratum.recursion_iterative_recursive_collections();
+
+        let (acc_names, acc_bindings) = self.build_recursive_bindings(acc_fps);
+        let (itr_names, itr_bindings) = self.build_recursive_bindings(itr_fps);
+
+        let mut recursive_bindings: HashMap<u64, Ident> = acc_bindings;
+        recursive_bindings.extend(itr_bindings);
 
         // Initialize recursive variables and record feedback operators.
-        let recursive_var_inits: Vec<TokenStream> = recursive_names
-            .iter()
-            .map(|name| {
-                // Profiler: feedback operator (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.recursive_feedback_operator(
-                        name.to_string(),
-                        name.to_string(),
-                        name.to_string(),
-                    );
-                });
-                let var_name = format_ident!("{}_var", name);
+        let step = quote! { timely::order::Product::new(Default::default(), 1) };
+        let mut recursive_var_inits: Vec<TokenStream> = Vec::new();
+
+        // Accumulative: always Variable::new — starts empty and grows monotonically.
+        for name in &acc_names {
+            with_profiler(profiler, |profiler| {
+                profiler.recursive_feedback_operator(
+                    name.to_string(),
+                    name.to_string(),
+                    name.to_string(),
+                );
+            });
+            let var_name = format_ident!("{}_var", name);
+            recursive_var_inits.push(quote! {
+                let (#var_name, #name) = Variable::new(inner, #step);
+            });
+        }
+
+        // Iterative: always Variable::new_from for replacement semantics.
+        // When an EDB base enters the scope, seed from it; otherwise seed from
+        // an empty collection so that old values are still retracted each iteration.
+        for (fp, name) in itr_fps.iter().zip(&itr_names) {
+            with_profiler(profiler, |profiler| {
+                profiler.recursive_feedback_operator(
+                    name.to_string(),
+                    name.to_string(),
+                    name.to_string(),
+                );
+            });
+            let var_name = format_ident!("{}_var", name);
+            let init = if let Some(base) = enter_bindings.get(fp) {
+                quote! { let (#var_name, #name) = Variable::new_from(#base.clone(), #step); }
+            } else {
                 quote! {
-                    let (#var_name, #name) =
-                        Variable::new(inner, timely::order::Product::new(Default::default(), 1));
+                    let (#var_name, #name) = Variable::new_from(
+                        ::differential_dataflow::Collection::new(
+                            ::timely::dataflow::operators::generic::operator::empty(inner)
+                        ),
+                        #step,
+                    );
                 }
-            })
-            .collect();
+            };
+            recursive_var_inits.push(init);
+        }
 
         // --- Combined environment for rule evaluation -----------------------
         let mut current: HashMap<u64, Ident> = enter_bindings.clone();
@@ -101,6 +133,7 @@ impl Compiler {
         let (next_bindings, union_stmts) = self.collect_unions(
             stratum.idb_to_heads_map(),
             &enter_bindings,
+            itr_fps,
             stratum.idb_to_aggregation_map(),
             stratum.idb_to_udf_map(),
             profiler,
@@ -111,6 +144,7 @@ impl Compiler {
             stratum.loop_condition(),
             &next_bindings,
             &recursive_bindings,
+            itr_fps,
             profiler,
         );
 
@@ -118,6 +152,8 @@ impl Compiler {
         let (leave_pattern, leave_stmt, post_leave) = self.build_leave_outputs(
             leave_fps,
             &next_bindings,
+            &recursive_bindings,
+            itr_fps,
             stratum.idb_to_aggregation_map(),
             profiler,
         );
@@ -184,6 +220,7 @@ impl Compiler {
         &mut self,
         idb_to_heads_map: &HashMap<u64, Vec<u64>>,
         enter_bindings: &HashMap<u64, Ident>,
+        iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         idb_to_udf_map: &HashMap<u64, (String, usize, usize, usize)>,
         profiler: &mut Option<Profiler>,
@@ -201,8 +238,12 @@ impl Compiler {
                 .map(|fp| format_ident!("t_{}", fp))
                 .collect();
 
-            if let Some(entered) = enter_bindings.get(idb_fp) {
-                sources.push(entered.clone());
+            // Iterative relations use replacement semantics: the EDB base is
+            // seeded via Variable::new_from, so we must not re-union it here.
+            if !iterative_fps.contains(idb_fp) {
+                if let Some(entered) = enter_bindings.get(idb_fp) {
+                    sources.push(entered.clone());
+                }
             }
 
             // Build concatenation expression for all sources.
@@ -302,18 +343,16 @@ impl Compiler {
                 } else {
                     self.imports.mark_aggregation();
                     let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-                    let reduce_logic = aggregation_reduce(agg_op, agg_type);
                     let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
                     // Aggregate after union + dedup.
+                    let reduce_stmt =
+                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type);
                     block = quote! {
                         #block
                         let #next_ident = #next_ident
                             .map(#row_chop)
                             .arrange_by_key()
-                            .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
-                                "aggregation",
-                                #reduce_logic
-                            )
+                            #reduce_stmt
                             .as_collection(#merge_kv);
                     };
 
@@ -355,6 +394,8 @@ impl Compiler {
         &self,
         leave_fps: &[u64],
         next: &HashMap<u64, Ident>,
+        recursive: &HashMap<u64, Ident>,
+        iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         profiler: &mut Option<Profiler>,
     ) -> (TokenStream, TokenStream, TokenStream) {
@@ -415,6 +456,29 @@ impl Compiler {
                         });
 
                         return quote! { #next_ident #pre_leave .leave() };
+                    }
+                }
+
+                // Mixed loop: all recursive relations leave via recursive_X, not next_X.
+                //
+                // - Iterative: var.set(derived_only) means recursive_X carries ±1 diffs
+                //   across inner iterations.  Inside the scope they can't cancel (different
+                //   inner timestamps); after leave() both project to the same outer time, so
+                //   consolidate nets them out.
+                // - Accumulative: feedback is var.set(derived ∪ self), so recursive_X is
+                //   monotone (+1 only); no consolidate needed.  next_X is unsafe here because
+                //   an iterative retraction can remove facts used in accumulative derivation,
+                //   causing next_X to shrink and emit spurious −1 diffs on leave.
+                //
+                // Pure accumulative loops (iterative_fps empty) use next_X.leave() since
+                // next_X == recursive_X at fixpoint with no retractions.
+                if !iterative_fps.is_empty() {
+                    if let Some(recursive_ident) = recursive.get(fp) {
+                        if iterative_fps.contains(fp) {
+                            return quote! { #recursive_ident.leave().consolidate() };
+                        } else {
+                            return quote! { #recursive_ident.leave() };
+                        }
                     }
                 }
 
@@ -553,16 +617,17 @@ impl Compiler {
         condition: Option<&LoopCondition>,
         next_bindings: &HashMap<u64, Ident>,
         recursive_bindings: &HashMap<u64, Ident>,
+        iterative_fps: &[u64],
         profiler: &mut Option<Profiler>,
     ) -> Vec<TokenStream> {
         let (mut stmts, plan) = self.prepare_loop_condition(condition, next_bindings);
+        let has_iterative = !iterative_fps.is_empty();
 
         for (fp, recursive_ident) in recursive_bindings {
             let next_ident = next_bindings.get(fp).unwrap_or_else(|| {
                 panic!("Compiler: recursive relation fp {fp} missing next binding")
             });
             let iter_var = find_local_ident(recursive_bindings, *fp);
-            // Profiler: results-in operator (optional)
             with_profiler(profiler, |profiler| {
                 profiler.recursive_resultsin_operator(
                     iter_var.to_string(),
@@ -573,8 +638,24 @@ impl Compiler {
             let var_name = format_ident!("{}_var", recursive_ident);
             let (pos, neg) = self.weight_concat_tokens();
             let dedup = self.dedup_collection();
-            let feedback =
-                build_feedback_expr(next_ident, recursive_ident, &plan, &pos, &neg, &dedup);
+
+            let feedback = if iterative_fps.contains(fp) {
+                // Iterative: replacement — feed back derived value only, no union with self.
+                build_feedback_expr(next_ident, recursive_ident, &plan, &pos, &neg, &dedup)
+            } else if has_iterative {
+                // Accumulative in a mixed loop: iterative relations can retract, so
+                // explicitly union with the previous self to maintain monotonicity.
+                let acc_next = format_ident!("acc_next_{}", fp);
+                stmts.push(quote! {
+                    let #acc_next = #next_ident.clone().concat(#recursive_ident.clone()) #dedup;
+                });
+                build_feedback_expr(&acc_next, recursive_ident, &plan, &pos, &neg, &dedup)
+            } else {
+                // Purely accumulative loop: no self-union needed — all rules are monotone,
+                // so every previously derived fact will be re-derived on the next iteration.
+                build_feedback_expr(next_ident, recursive_ident, &plan, &pos, &neg, &dedup)
+            };
+
             stmts.push(quote! { #var_name.set(#feedback); });
         }
 

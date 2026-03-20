@@ -397,13 +397,13 @@ impl ImportTracker {
                 quote! {
                     mod cmd;
                     mod prompt;
-                    mod relation;
+                    mod relops;
 
                     use cmd::{Cmd, TxnAction, TxnOp, TxnState};
                     use prompt::Prompt;
-                    use relation::*;
+                    use relops::*;
 
-                    use std::sync::{Arc, Barrier, RwLock};
+                    use std::sync::{Arc, RwLock};
                 }
             }
             ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => quote! {},
@@ -497,7 +497,12 @@ impl ImportTracker {
     }
 
     fn std_file_import(&self) -> TokenStream {
-        if self.std_file && matches!(self.mode, ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch) {
+        if self.std_file
+            && matches!(
+                self.mode,
+                ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch
+            )
+        {
             quote! { use std::fs::File; }
         } else {
             quote! {}
@@ -505,7 +510,12 @@ impl ImportTracker {
     }
 
     fn std_io_import(&self) -> TokenStream {
-        if self.std_buf_io && matches!(self.mode, ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch) {
+        if self.std_buf_io
+            && matches!(
+                self.mode,
+                ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch
+            )
+        {
             quote! { use std::io::{BufRead, BufReader, Read, Seek, SeekFrom}; }
         } else {
             quote! {}

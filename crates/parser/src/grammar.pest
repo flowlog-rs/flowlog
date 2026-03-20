@@ -354,7 +354,13 @@ optimize = { ".plan" }
 //   loop stop { Done } and continue { iter >= 5 and iter <= 10 } { ... }
 
 loop_block = {
-    "loop" ~ loop_condition? ~ "{" ~ rule* ~ "}"
+    "loop" ~ loop_iterative_list? ~ loop_condition? ~ "{" ~ rule* ~ "}"
+}
+
+// iterative { rel1, rel2, ... } — relations that use replacement (new_from) semantics.
+// Relations not listed default to accumulative (new) semantics.
+loop_iterative_list = {
+    "iterative" ~ "{" ~ relation_name ~ ("," ~ relation_name)* ~ "}"
 }
 
 // At most one continue clause and one stop clause, in either order,

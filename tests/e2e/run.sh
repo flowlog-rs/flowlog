@@ -7,7 +7,9 @@ set -euo pipefail
 #   tests/e2e/<test_name>/
 #     program.dl        — Datalog source (must use .output directives)
 #     data/             — CSV input files
-#     expected/         — expected output files (one per .output relation)
+#     expected/         — expected output files (one per .output relation);
+#                        incremental tests may use timestamped names like foo_t1
+#     commands.txt      — optional incremental shell commands
 #
 # Usage:
 #   tests/e2e/run.sh              # run all tests
@@ -50,7 +52,9 @@ Usage:
 Run FlowLog end-to-end tests. Each test is a directory under tests/e2e/ with:
   program.dl    Datalog source using .output directives
   data/         CSV input facts
-  expected/     Expected output files (one per relation, comma-separated)
+  expected/     Expected output files (one per relation, comma-separated);
+                incremental tests may use timestamped names like foo_t1
+  commands.txt  Optional incremental command transcript
 
 Examples:
   $(basename "$0")                # run all tests
@@ -78,6 +82,10 @@ run_test() {
     test_name="$(basename "$test_dir")"
     local project_dir="${BUILD_DIR}/${test_name}"
     local output_dir="${project_dir}/output"
+    local incremental=0
+    if [[ -f "$test_dir/commands.txt" ]]; then
+        incremental=1
+    fi
 
     log "$BLUE" "TEST" "$test_name"
 
@@ -137,17 +145,49 @@ run_test() {
     # 4. Execute the generated binary
     # ------------------------------------------------------------------
     local run_log="${BUILD_DIR}/${test_name}_run.log"
-    if ! (cd "$project_dir" && ./target/release/program >"$run_log" 2>&1); then
-        log "$RED" "FAIL" "$test_name — execution failed"
-        log "$YELLOW" "HINT" "Runtime log (last 20 lines):"
-        tail -20 "$run_log" | sed 's/^/       /'
-        errors+="  $test_name: execution failed\n"
-        ((failed++)) || true
-        return
+    if (( incremental )); then
+        command -v script >/dev/null 2>&1 || die "Required dependency 'script' not found on PATH; needed for incremental shell tests."
+
+        # Feed incremental commands through a FIFO-backed pty session. This avoids
+        # CI flakiness where direct stdin redirection to `script` can deliver EOF
+        # before the REPL has consumed the transcript.
+        local cmd_fifo="${BUILD_DIR}/${test_name}.cmd.fifo"
+        rm -f "$cmd_fifo"
+        mkfifo "$cmd_fifo"
+
+        (
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                printf '%s\n' "$line"
+                sleep 0.02
+            done < "$test_dir/commands.txt"
+        ) > "$cmd_fifo" &
+        local feeder_pid=$!
+
+        if ! (cd "$project_dir" && script -qefc "./target/release/program" /dev/null < "$cmd_fifo" >"$run_log" 2>&1); then
+            rm -f "$cmd_fifo"
+            wait "$feeder_pid" || true
+            log "$RED" "FAIL" "$test_name — execution failed"
+            log "$YELLOW" "HINT" "Runtime log (last 20 lines):"
+            tail -20 "$run_log" | sed 's/^/       /'
+            errors+="  $test_name: execution failed\n"
+            ((failed++)) || true
+            return
+        fi
+        rm -f "$cmd_fifo"
+        wait "$feeder_pid" || true
+    else
+        if ! (cd "$project_dir" && ./target/release/program >"$run_log" 2>&1); then
+            log "$RED" "FAIL" "$test_name — execution failed"
+            log "$YELLOW" "HINT" "Runtime log (last 20 lines):"
+            tail -20 "$run_log" | sed 's/^/       /'
+            errors+="  $test_name: execution failed\n"
+            ((failed++)) || true
+            return
+        fi
     fi
 
     # ------------------------------------------------------------------
-    # 5. Compare each expected output file
+    # 5. Compare expected outputs
     # ------------------------------------------------------------------
     local all_match=1
     local diff_detail=""

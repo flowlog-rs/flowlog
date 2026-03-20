@@ -6,6 +6,10 @@
 //! - print tuples or sizes to stderr
 //! - write tuple values to per-worker partition files
 //! - merge partition files into a single output (typically run by worker 0)
+//!
+//! In incremental mode, tuple inspectors consolidate per-timestamp updates first
+//! so stdout and output files show the net delta for each commit rather than the
+//! full transient recursive update stream.
 
 use crate::Compiler;
 
@@ -17,6 +21,16 @@ use quote::quote;
 use syn::{Index, LitStr};
 
 impl Compiler {
+    /// Incremental outputs are easier to consume as net deltas per commit.
+    #[inline]
+    fn maybe_consolidate_incremental_output(&self) -> TokenStream {
+        if self.config.is_incremental() {
+            quote! { .consolidate() }
+        } else {
+            quote! {}
+        }
+    }
+
     /// Generate code that prints the *cardinality* of a collection at each update.
     ///
     /// Strategy:
@@ -73,7 +87,10 @@ impl Compiler {
         }
     }
 
-    /// Generate code that prints each tuple update (data only) at stderr for debugging.
+    /// Generate code that prints tuple updates to stderr for debugging.
+    ///
+    /// In incremental mode, the printed stream is consolidated first so each
+    /// commit shows only its net delta.
     ///
     /// If `arity == 0`, print `True` instead of `()`, matching common Datalog
     /// conventions for 0-arity relations.
@@ -93,6 +110,8 @@ impl Compiler {
             quote! {}
         };
 
+        let maybe_consolidate = self.maybe_consolidate_incremental_output();
+
         // Record inspect content terminal operator in profiler if enabled
         with_profiler(profiler, |profiler| {
             profiler.inspect_content_terminal_operator(prefix.clone(), prefix.clone());
@@ -100,10 +119,12 @@ impl Compiler {
 
         if arity == 0 {
             quote! {{
-                #var.inspect(|(_data, time, _diff)| {
-                    eprintln!("[tuple][{}]  t={:?}  True", #prefix, time)
-                })
-                #maybe_probe;
+                #var
+                    #maybe_consolidate
+                    .inspect(|(_data, time, _diff)| {
+                        eprintln!("[tuple][{}]  t={:?}  True", #prefix, time)
+                    })
+                    #maybe_probe;
             }}
         } else {
             let field_displays: Vec<TokenStream> = data_types
@@ -126,20 +147,25 @@ impl Compiler {
             );
             let fmt_lit = LitStr::new(&fmt_full, Span::call_site());
             quote! {{
-                #var.inspect(|(data, time, diff)| {
-                    eprintln!(#fmt_lit, time #(, #field_displays )*, diff);
-                })
-                #maybe_probe;
+                #var
+                    #maybe_consolidate
+                    .inspect(|(data, time, diff)| {
+                        eprintln!(#fmt_lit, time #(, #field_displays )*, diff);
+                    })
+                    #maybe_probe;
             }}
         }
     }
 
-    /// Generate code that writes the data part of each update to a per-worker file.
+    /// Generate code that writes tuple updates to a per-worker file.
     ///
     /// It creates `<parent_dir>/<relation_name><index>` where `index` is the worker id.
     /// Each tuple is appended as one line:
     /// - arity 0: `True`
     /// - arity >0: comma-separated values using `{}` formatting
+    ///
+    /// In incremental mode, writes the net delta for each commit after
+    /// consolidating transient recursive updates.
     pub(crate) fn gen_write_inspector(
         &self,
         var: &Ident,
@@ -156,6 +182,8 @@ impl Compiler {
         } else {
             quote! {}
         };
+
+        let maybe_consolidate = self.maybe_consolidate_incremental_output();
 
         // Record inspect content file operator in profiler if enabled
         with_profiler(profiler, |profiler| {
@@ -228,18 +256,24 @@ impl Compiler {
                 .open(&path)
                 .unwrap_or_else(|e| panic!("failed to create {}: {}", path, e));
 
-            #var.inspect(move |#inspect_pattern| {
-                use std::io::Write as _;
-                #write_stmt
-            })
-            #maybe_probe;
+            #var
+                #maybe_consolidate
+                .inspect(move |#inspect_pattern| {
+                    use std::io::Write as _;
+                    #write_stmt
+                })
+                #maybe_probe;
         }}
     }
 
     /// Generate code that merges per-worker partition files into one output file.
     ///
     /// Reads `<base_path>/<name><wid>` for `wid in 0..peers` and writes the
-    /// concatenation into `<base_path>/<name>`, then deletes the part files.
+    /// concatenation into one merged output.
+    ///
+    /// Batch mode writes `<base_path>/<name>` and deletes the part files.
+    /// Incremental mode writes `<base_path>/<name>_t<time_stamp>` and clears the
+    /// part files for reuse on the next commit.
     ///
     /// Intended usage:
     /// - place after fixpoint
