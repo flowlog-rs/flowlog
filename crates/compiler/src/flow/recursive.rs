@@ -256,7 +256,9 @@ impl Compiler {
             });
 
             // Apply dedup to merged collection.
-            let dedup_call = self.dedup_collection();
+            // Inside a recursive scope we need a persistent trace to avoid
+            // re-emitting tuples across iterations → use dedup_recursive.
+            let dedup_call = self.dedup_recursive();
             let mut block = quote! {
                 let #next_ident = #union_expr #dedup_call;
             };
@@ -636,12 +638,31 @@ impl Compiler {
                 );
             });
             let var_name = format_ident!("{}_var", recursive_ident);
-            let (pos, neg) = self.weight_concat_tokens();
-            let dedup = self.dedup_collection();
+            let dedup = self.dedup_recursive();
+            // Only generate weight tokens and normalize when stop conditions
+            // exist — these require antijoin arithmetic (pos/neg/normalize).
+            let (pos, neg) = if plan.boolean_stop_conditions.is_some() {
+                self.weight_concat_tokens()
+            } else {
+                (quote! {}, quote! {})
+            };
+            let normalize = if plan.boolean_stop_conditions.is_some() {
+                self.normalize_antijoin()
+            } else {
+                quote! {}
+            };
 
             let feedback = if iterative_fps.contains(fp) {
                 // Iterative: replacement — feed back derived value only, no union with self.
-                build_feedback_expr(next_ident, recursive_ident, &plan, &pos, &neg, &dedup)
+                build_feedback_expr(
+                    next_ident,
+                    recursive_ident,
+                    &plan,
+                    &pos,
+                    &neg,
+                    &dedup,
+                    &normalize,
+                )
             } else if has_iterative {
                 // Accumulative in a mixed loop: iterative relations can retract, so
                 // explicitly union with the previous self to maintain monotonicity.
@@ -649,11 +670,27 @@ impl Compiler {
                 stmts.push(quote! {
                     let #acc_next = #next_ident.clone().concat(#recursive_ident.clone()) #dedup;
                 });
-                build_feedback_expr(&acc_next, recursive_ident, &plan, &pos, &neg, &dedup)
+                build_feedback_expr(
+                    &acc_next,
+                    recursive_ident,
+                    &plan,
+                    &pos,
+                    &neg,
+                    &dedup,
+                    &normalize,
+                )
             } else {
                 // Purely accumulative loop: no self-union needed — all rules are monotone,
                 // so every previously derived fact will be re-derived on the next iteration.
-                build_feedback_expr(next_ident, recursive_ident, &plan, &pos, &neg, &dedup)
+                build_feedback_expr(
+                    next_ident,
+                    recursive_ident,
+                    &plan,
+                    &pos,
+                    &neg,
+                    &dedup,
+                    &normalize,
+                )
             };
 
             stmts.push(quote! { #var_name.set(#feedback); });
@@ -685,7 +722,7 @@ impl Compiler {
             )
         });
         let first_sig = format_ident!("rel_sig_{}", first.fp);
-        let dedup = self.dedup_collection();
+        let dedup = self.dedup_recursive();
         stmts.push(quote! { let #first_sig = #first_next.clone() #dedup; });
         let mut gate = first_sig;
 
@@ -764,6 +801,9 @@ fn build_iter_conditions(ranges: &[(u16, u16)]) -> TokenStream {
 }
 
 /// Build the feedback expression for one recursive variable given a `ConditionPlan`.
+///
+/// `dedup` — pure set-dedup (consolidate for batch, threshold for inc).
+/// `normalize` — convert i32 antijoin arithmetic back to native diff type.
 fn build_feedback_expr(
     next: &Ident,
     recursive: &Ident,
@@ -771,6 +811,7 @@ fn build_feedback_expr(
     pos: &TokenStream,
     neg: &TokenStream,
     dedup: &TokenStream,
+    normalize: &TokenStream,
 ) -> TokenStream {
     match (
         plan.iter_continue_conditions.as_deref(),
@@ -778,7 +819,9 @@ fn build_feedback_expr(
     ) {
         (None, None) => quote! { #next.clone() },
         (Some(ranges), None) => continue_stmt(next, build_iter_conditions(ranges)),
-        (None, Some(arr)) => stop_stmt(quote! { #next.clone() }, recursive, arr, pos, neg, dedup),
+        (None, Some(arr)) => {
+            stop_stmt(quote! { #next.clone() }, recursive, arr, pos, neg, normalize)
+        }
         (Some(ranges), Some(arr)) => {
             let range_cond = build_iter_conditions(ranges);
             if matches!(plan.connective, Some(LoopConnective::Or)) {
@@ -791,7 +834,7 @@ fn build_feedback_expr(
                     arr,
                     pos,
                     neg,
-                    dedup,
+                    normalize,
                 );
                 quote! { { #allowed.concat(#blocked) #dedup } }
             } else {
@@ -802,7 +845,7 @@ fn build_feedback_expr(
                     arr,
                     pos,
                     neg,
-                    dedup,
+                    normalize,
                 )
             }
         }
@@ -824,13 +867,16 @@ fn continue_stmt(next: &Ident, cond_expr: TokenStream) -> TokenStream {
 
 /// Convergent stop-condition: `input - (input ⋈ gate) + (recursive ⋈ gate)`.
 /// Returns `input` when gate is empty; converges to `recursive` when gate fires.
+///
+/// `normalize` converts the `i32` antijoin result back to the native diff type
+/// (`Present` for batch, `i32` 0/1 for inc).
 fn stop_stmt(
     input: TokenStream,
     recursive: &Ident,
     gate: &Ident,
     pos: &TokenStream,
     neg: &TokenStream,
-    dedup: &TokenStream,
+    normalize: &TokenStream,
 ) -> TokenStream {
     quote! {
         {
@@ -850,7 +896,7 @@ fn stop_stmt(
                         .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
                 })
                 .map(|((), t)| t)
-                #dedup
+                #normalize
         }
     }
 }
