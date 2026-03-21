@@ -75,7 +75,7 @@ impl Compiler {
         } else {
             let dedup = Self::threshold_i32();
             quote! {{
-                #var
+                #var.clone()
                     #dedup
                     .inner
                     .flat_map(move |(_, t, d)| std::iter::once(((), t.clone(), d)))
