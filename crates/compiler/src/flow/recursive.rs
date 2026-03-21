@@ -798,7 +798,7 @@ fn build_iter_conditions(ranges: &[(u16, u16)]) -> TokenStream {
 
 /// Build the feedback expression for one recursive variable given a `ConditionPlan`.
 ///
-/// `dedup` — pure set-dedup (consolidate for batch, threshold for inc).
+/// `dedup` — recursive-safe set-dedup (threshold_semigroup for batch, threshold for inc).
 /// `normalize` — convert i32 antijoin arithmetic back to native diff type.
 fn build_feedback_expr(
     next: &Ident,
