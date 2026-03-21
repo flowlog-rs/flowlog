@@ -890,6 +890,7 @@ fn stop_stmt(
                 .concat({
                     keyed_rec_arr
                         .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
+                        #pos
                 })
                 .map(|((), t)| t)
                 #normalize
