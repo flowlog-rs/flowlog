@@ -641,15 +641,11 @@ impl Compiler {
             let dedup = self.dedup_recursive();
             // Only generate weight tokens and normalize when stop conditions
             // exist — these require antijoin arithmetic (pos/neg/normalize).
-            let (pos, neg) = if plan.boolean_stop_conditions.is_some() {
-                self.weight_concat_tokens()
+            let (pos, neg, normalize) = if plan.boolean_stop_conditions.is_some() {
+                let (p, n) = self.weight_concat_tokens();
+                (p, n, self.normalize_antijoin())
             } else {
-                (quote! {}, quote! {})
-            };
-            let normalize = if plan.boolean_stop_conditions.is_some() {
-                self.normalize_antijoin()
-            } else {
-                quote! {}
+                (quote! {}, quote! {}, quote! {})
             };
 
             let feedback = if iterative_fps.contains(fp) {
