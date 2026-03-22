@@ -116,22 +116,27 @@ $ cat <<'EOF' > reach/Arc.csv
 $ cargo run --release -- -w 4
 ```
 
-## Regression Harness
+## End-to-End Tests
 
-The regression harness in `tools/check` automates dataset downloads, code generation, execution, and result verification against stored cardinalities.
+End-to-end tests live in `tests/e2e/`. Run the full suite with:
 
 ```bash
-$ bash tools/check/check.sh
+$ bash tests/e2e/run.sh
 ```
 
-- Programs and datasets are enumerated in config files under `tools/config/` (e.g., `tools/config/config_integer.txt`).
-- Datasets are cached under `facts/` and cleaned up between runs.
-- Logs and parsed relation sizes are written to `result/logs/` and `result/parsed/`.
-- The script creates temporary Cargo projects alongside the repository (e.g., `../flowlog_reach_livejournal`) and removes them after verification.
+Or run specific tests by name:
+
+```bash
+$ bash tests/e2e/run.sh loop_fixpoint negation
+```
+
+Each test is a directory under `tests/e2e/<test_name>/` containing:
+- `program.dl` — Datalog source (must use `.output` directives).
+- `data/` — Optional CSV input facts copied into the generated project.
+- `expected/` — Expected output files (one per output relation).
+- `commands.txt` — Optional incremental transcript (enables incremental mode).
 
 ## Background Reading
-
-FlowLog builds on the FlowLog paper:
 
 > **FlowLog: Efficient and Extensible Datalog via Incrementality**  \
 > Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  \
@@ -139,7 +144,7 @@ FlowLog builds on the FlowLog paper:
 
 ## Contributing
 
-Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` (and `tools/check/check.sh` when it is relevant).
+Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` and `bash tests/e2e/run.sh`.
 
 ## Acknowledgement
 FlowLog succeeds [VLDB 2026 artifacts](https://github.com/flowlog-rs/vldb26-artifact); many thanks to [**Hangdong Zhao**](https://github.com/hdz284) for continued support throughout the transition.
