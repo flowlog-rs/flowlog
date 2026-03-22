@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <h3>Composable Datalog-to-Rust compiler for optimized and scalable Differential Dataflow programs.</h3>
+  <h3 align="center">Composable Datalog compiler that auto-generates efficient and scalable Differential Dataflow programs.</h3>
 </p>
 
 <p align="center">
