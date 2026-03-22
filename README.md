@@ -17,38 +17,24 @@
 
 ## Architecture
 
-A `.dl` program flows through the following pipeline before execution:
+A `.dl` program flows through the following pipeline:
 
 ```
- ┌───────────┐    ┌──────────────┐    ┌───────────┐    ┌──────────┐    ┌──────────┐
- │  parser   │───▶│ stratifier   │───▶│  planner  │───▶│ compiler │───▶│ scaffold │
- │           │    │              │    │           │    │          │    │          │
- │ .dl → AST │    │ dependency   │    │ join      │    │ AST →    │    │ emit     │
- │           │    │ graph + SCC  │    │ ordering, │    │ Rust     │    │ Cargo    │
- │           │    │ → strata     │    │ dataflow  │    │ code     │    │ project  │
- └───────────┘    └──────────────┘    │ plans     │    └──────────┘    └──────────┘
-                                      └───────────┘
-                                       ▲        ▲
-                                ┌──────┘        └──────┐
-                           ┌─────────┐          ┌───────────┐
-                           │ catalog │          │ optimizer │
-                           │         │          │           │
-                           │ per-rule│          │ heuristic │
-                           │ metadata│          │ cost model│
-                           └─────────┘          └───────────┘
-
-  Supporting: common (shared CLI/config utilities)  •  profiler (optional execution statistics)
+.dl source → parser → stratifier → planner → compiler → Cargo project
+                                     ▲  ▲
+                                catalog  optimizer
 ```
 
-| Stage | Crate | Input → Output |
-|-------|-------|----------------|
-| **Parse** | `parser` | `.dl` source → AST (`Program`: rules, relations, declarations) |
-| **Stratify** | `stratifier` | `Program` → dependency graph, SCC detection, topologically ordered strata |
-| **Catalog** | `catalog` | Per-rule metadata: atom signatures, filters, comparisons |
-| **Optimize** | `optimizer` | Heuristic cost model that guides join ordering in the planner |
-| **Plan** | `planner` | Strata → transformation plans (joins, projections, aggregations) |
-| **Compile** | `compiler` | Plans → generated Rust source using Timely/Differential Dataflow |
-| **Scaffold** | `compiler` | Rust source → complete Cargo project ready to `cargo run` |
+| Crate | Role |
+|-------|------|
+| `parser` | Pest grammar → AST |
+| `stratifier` | Dependency analysis and SCC-based rule scheduling |
+| `catalog` | Per-rule metadata used during planning |
+| `optimizer` | Heuristic cost model for join ordering |
+| `planner` | Lowers strata into dataflow transformation plans |
+| `compiler` | Generates a Timely / Differential Dataflow Rust project |
+| `common` | Shared CLI and utility helpers |
+| `profiler` | Optional execution statistics |
 
 ## Getting Started
 
