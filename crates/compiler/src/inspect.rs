@@ -60,8 +60,8 @@ impl Compiler {
         if self.config.is_datalog_batch() {
             quote! {{
                 #var.clone()
-                    // Ensure each distinct record has weight `SEMIRING_ONE` under our semiring.
-                    .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
+                    // Consolidate merges Present + Present = Present (pure dedup).
+                    .consolidate()
                     // Drop data; keep time, emit `diff = 1` in DD's inner representation.
                     .inner
                     .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
@@ -73,9 +73,10 @@ impl Compiler {
                     #maybe_probe;
             }}
         } else {
+            let dedup = Self::threshold_i32();
             quote! {{
-                #var
-                    .threshold(|_, w| if *w > 0 { 1i32 } else { 0 })
+                #var.clone()
+                    #dedup
                     .inner
                     .flat_map(move |(_, t, d)| std::iter::once(((), t.clone(), d)))
                     .as_collection()

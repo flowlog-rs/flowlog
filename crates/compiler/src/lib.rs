@@ -601,10 +601,6 @@ impl Compiler {
             if idb.printsize() {
                 self.imports.mark_as_collection();
                 self.imports.mark_timely_map();
-                if self.config.is_datalog_batch() {
-                    self.imports.mark_threshold_total();
-                    self.imports.mark_semiring_one();
-                }
 
                 inspect_stmts.push(self.gen_size_inspector(&var, name, profiler));
             }

@@ -541,13 +541,14 @@ impl Compiler {
                 let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
                 let out_map_value =
                     self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
-                let dedup_call = self.dedup_collection();
+                let inter_dedup = self.intermediate_antijoin_dedup();
+                let final_normalize = self.normalize_antijoin();
 
                 quote! {
                     let #out =
                         #r.clone()
                             .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
-                            #dedup_call
+                            #inter_dedup
                             #pos_weight_concat
                             .concat(
                                 {
@@ -555,12 +556,12 @@ impl Compiler {
                                     .join_core(#r.clone(), |aj_k, _, aj_rv| {
                                         Some((aj_k.clone(), aj_rv.clone()))
                                     })
-                                    #dedup_call
+                                    #inter_dedup
                                     #neg_weight_concat
                                 }
                             )
                             .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_value ))
-                            #dedup_call;
+                            #final_normalize;
                 }
             }
 
@@ -615,13 +616,14 @@ impl Compiler {
                 } else {
                     quote! { ( #out_map_key, #out_map_value ) }
                 };
-                let dedup_call = self.dedup_collection();
+                let inter_dedup = self.intermediate_antijoin_dedup();
+                let final_normalize = self.normalize_antijoin();
 
                 let transformation = quote! {
                     let #out =
                         #r.clone()
                             .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
-                            #dedup_call
+                            #inter_dedup
                             #pos_weight_concat
                             .concat(
                                 {
@@ -629,12 +631,12 @@ impl Compiler {
                                         .join_core(#r.clone(), |aj_k, _, aj_rv| {
                                             Some((aj_k.clone(), aj_rv.clone()))
                                         })
-                                        #dedup_call
+                                        #inter_dedup
                                         #neg_weight_concat
                                 }
                             )
                             .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_expr ))
-                            #dedup_call;
+                            #final_normalize;
                 };
 
                 let arrange_stmt = self.register_arrangement(
@@ -690,6 +692,33 @@ impl Compiler {
             }
         };
         (pos, neg)
+    }
+
+    /// Normalize after antijoin `pos`/`neg` arithmetic back to native diff.
+    ///
+    /// After the `R(+1) concat (L⋈R)(-1)` encoding, the collection carries
+    /// `i32` diffs.  This final step converts back to the mode's native diff:
+    ///
+    /// - `DatalogBatch`: `i32 → Present` via `threshold_semigroup`.
+    /// - Other modes: `i32 → i32` (0/1) via `threshold`.
+    pub(crate) fn normalize_antijoin(&mut self) -> TokenStream {
+        // Same operator as recursive dedup: persistent trace, normalises diffs.
+        self.dedup_recursive()
+    }
+
+    /// Intermediate dedup inside antijoin sub-expressions.
+    ///
+    /// For `i32` diffs, multiplicities from upstream joins/arrangements must
+    /// be normalised to 1 before the `pos`/`neg` weight encoding.
+    ///
+    /// For `DatalogBatch` (`Present`), arrangements already merge
+    /// `Present + Present = Present`, so an explicit dedup is unnecessary.
+    fn intermediate_antijoin_dedup(&mut self) -> TokenStream {
+        if self.config.is_datalog_batch() {
+            quote! {}
+        } else {
+            Self::threshold_i32()
+        }
     }
 
     fn register_arrangement(
