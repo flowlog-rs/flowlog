@@ -1,0 +1,121 @@
+// ============================================================
+// Equality Saturation in FlowLog — Extended Test
+//
+// Test A: (2*3) * (x + 1)  →  6*x + 6
+//   Requires 3+ rounds: const fold → congruence → congruence
+//
+// Test B: (2+3) * (4+1)  →  25
+//   Requires 2+ rounds: add const fold → congruence → mul const fold
+// ============================================================
+
+// --- Term tables ---
+.decl num(id: int32, val: int32)
+.decl var(id: int32)
+.decl add(id: int32, l: int32, r: int32)
+.decl mul(id: int32, l: int32, r: int32)
+
+// --- Shared numeric literals ---
+num(1, 1).
+num(2, 2).
+num(3, 3).
+num(4, 4).
+num(5, 5).
+num(6, 6).
+num(7, 25).
+
+// --- Variable ---
+var(10).
+
+// ===================== TEST A =====================
+// Expression: (2*3) * (x + 1)
+//
+//   id=20: Mul(2, 3)      = 2 * 3
+//   id=21: Add(10, 1)     = x + 1
+//   id=22: Mul(20, 21)    = (2*3) * (x+1)     ← root A
+//
+// Derived from distributivity of id=20 over id=21:
+//   id=24: Mul(20, 10)    = (2*3) * x
+//   id=25: Mul(20, 1)     = (2*3) * 1
+//   id=26: Add(24, 25)    = (2*3)*x + (2*3)*1
+//
+// Derived from distributivity of Num(6) over id=21:
+//   id=27: Mul(6, 10)     = 6 * x
+//   id=28: Mul(6, 1)      = 6 * 1
+//   id=29: Add(27, 28)    = 6*x + 6*1
+//
+// Derived from congruence (once 28 ≡ 6):
+//   id=23: Mul(6, 21)     = 6 * (x+1)
+//   id=30: Add(27, 6)     = 6*x + 6
+
+mul(20, 2, 3).
+add(21, 10, 1).
+mul(22, 20, 21).
+mul(23, 6, 21).
+mul(24, 20, 10).
+mul(25, 20, 1).
+add(26, 24, 25).
+mul(27, 6, 10).
+mul(28, 6, 1).
+add(29, 27, 28).
+add(30, 27, 6).
+
+// ===================== TEST B =====================
+// Expression: (2+3) * (4+1)
+//
+//   id=40: Add(2, 3)      = 2 + 3
+//   id=41: Add(4, 1)      = 4 + 1
+//   id=42: Mul(40, 41)    = (2+3) * (4+1)     ← root B
+//
+// Derived:
+//   id=43: Mul(5, 41)     = 5 * (4+1)
+//   id=44: Mul(40, 5)     = (2+3) * 5
+//   id=45: Mul(5, 5)      = 5 * 5
+
+add(40, 2, 3).
+add(41, 4, 1).
+mul(42, 40, 41).
+mul(43, 5, 41).
+mul(44, 40, 5).
+mul(45, 5, 5).
+
+// ============================================================
+// RULES
+// ============================================================
+
+// --- Canonical representative via recursive min ---
+.decl repr(id: int32, canon: int32)
+.decl eq(a: int32, b: int32)
+
+repr(X, min(X)) :- num(X, _).
+repr(X, min(X)) :- var(X).
+repr(X, min(X)) :- add(X, _, _).
+repr(X, min(X)) :- mul(X, _, _).
+repr(X, min(R)) :- eq(X, Y), repr(Y, R).
+repr(X, min(R)) :- eq(Y, X), repr(Y, R).
+
+// --- Rewrite: distributivity ---
+// mul(a, add(b,c)) = add(mul(a,b), mul(a,c))
+eq(M, R) :- mul(M, A, S), add(S, B, C),
+             mul(MB, A, B), mul(MC, A, C), add(R, MB, MC).
+
+// --- Rewrite: mul constant folding ---
+// mul(num(a), num(b)) = num(a*b)
+eq(M, N) :- mul(M, A, B), num(A, VA), num(B, VB),
+             num(N, VN), VN = VA * VB.
+
+// --- Rewrite: add constant folding ---
+// add(num(a), num(b)) = num(a+b)
+eq(A, N) :- add(A, X, Y), num(X, VX), num(Y, VY),
+             num(N, VN), VN = VX + VY.
+
+// --- Congruence closure ---
+eq(T1, T2) :- add(T1, L1, R1), add(T2, L2, R2),
+               repr(L1, RL), repr(L2, RL),
+               repr(R1, RR), repr(R2, RR), T1 != T2.
+
+eq(T1, T2) :- mul(T1, L1, R1), mul(T2, L2, R2),
+               repr(L1, RL), repr(L2, RL),
+               repr(R1, RR), repr(R2, RR), T1 != T2.
+
+.output repr
+.output eq
