@@ -140,11 +140,9 @@ Each test is a directory under `tests/e2e/<test_name>/` containing:
 
 > **FlowLog: Efficient and Extensible Datalog via Incrementality**  \
 > Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  \
-> VLDB 2026 (Boston) — [pVLDB](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf)
+> VLDB 2026 (Boston) — [pVLDB](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf) • [VLDB 2026 Artifacts](https://github.com/flowlog-rs/vldb26-artifact)
 
 ## Contributing
 
 Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` and `bash tests/e2e/run.sh`.
 
-## Acknowledgement
-FlowLog succeeds [VLDB 2026 artifacts](https://github.com/flowlog-rs/vldb26-artifact); many thanks to [**Hangdong Zhao**](https://github.com/hdz284) for continued support throughout the transition.
