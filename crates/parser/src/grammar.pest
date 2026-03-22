@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = {
     SOI ~
-    (declaration | extern_fn | include_directive | input_directive | output_directive | printsize_directive | loop_block | fact | rule)* ~
+    (declaration | extern_fn | include_directive | input_directive | output_directive | printsize_directive | fixpoint_block | loop_block | fact | rule)* ~
     EOI
 }
 
@@ -317,80 +317,92 @@ predicate = {
 optimize = { ".plan" }
 
 // =============================================================================
-// LOOP BLOCK
+// LOOP BLOCK / FIXPOINT BLOCK
 // =============================================================================
-// A loop block executes a set of rules with a bounded/conditional iteration.
-// The block is a hard evaluation barrier — the stratifier cannot move rules
-// across its boundaries.
+// A fixpoint block evaluates rules until no new tuples are derived (delta
+// becomes empty).  A loop block evaluates rules with bounded/conditional
+// iteration.  Both act as hard evaluation barriers — the stratifier cannot
+// move rules across their boundaries.
 //
-// Syntax:  loop [condition] { rules... }
+// Syntax:
+//   fixpoint { rules... }
+//   loop <condition> { rules... }
 //
-// The optional condition is composed of at most one `continue` clause and one
-// `stop` clause joined by `and` / `or`, in either order:
+// The condition is composed of at most one `while` clause and one `until`
+// clause, in either order:
 //
-//   continue { iter_expr }  — keep looping while the iteration constraint holds.
-//       iter_expr is one or more "iter op N" sub-conditions (joined by and/or)
+//   while { iter_expr }  — keep looping while the iteration constraint holds.
+//       iter_expr is one or more "@it op N" sub-conditions (joined by and/or)
 //       that describe allowed iteration windows.
-//         iter <= 6                  → run iterations 0..=6
-//         iter >= 5 and iter <= 10   → run iterations 5..=10
-//         iter < 5 or iter > 10      → run iterations 0..=4 and 11..
+//         @it <= 6                  → run iterations 0..=6
+//         @it >= 5 and @it <= 10   → run iterations 5..=10
+//         @it < 5 or @it > 10      → run iterations 0..=4 and 11..
 //
-//   stop { rel_expr }       — halt when the listed bool relation(s) become true.
+//   until { rel_expr }   — halt when the listed bool relation(s) become true.
 //       rel_expr is one or more nullary relation names joined by and/or.
-//         stop { Done }              → stop when Done holds
-//         stop { Done1 or Done2 }    → stop when either holds
+//         until { Done }            → stop when Done holds
+//         until { Done1 or Done2 }  → stop when either holds
 //
-//   Combining continue and stop:
-//     continue C and stop S  — stop as soon as EITHER condition triggers
-//     continue C or  stop S  — stop only when BOTH conditions trigger
+//   Combining while and until:
+//     while W until U          — stop as soon as EITHER condition triggers (min)
+//     while W or until U       — stop only when BOTH conditions trigger (max)
+//
+// Relations using replacement (iterative) semantics are declared inside the
+// block with `.iterative <relation_name>` directives.  This is scoped per-block:
+// the same relation can be iterative in one block and accumulative in another.
 //
 // Examples:
-//   loop { ... }
-//   loop continue { iter <= 10 } { ... }
-//   loop stop { Done } { ... }
-//   loop stop { Done1 or Done2 } { ... }
-//   loop continue { iter <= 100 } and stop { Done } { ... }
-//   loop continue { iter <= 100 } or  stop { Done } { ... }
-//   loop stop { Done } and continue { iter >= 5 and iter <= 10 } { ... }
+//   fixpoint { ... }
+//   fixpoint { .iterative X  ... }
+//   loop while { @it <= 10 } { ... }
+//   loop until { Done } { .iterative X  ... }
+//   loop while { @it <= 100 } until { Done } { ... }
+//   loop while { @it <= 100 } or until { Done } { ... }
+//   loop until { Done } while { @it >= 5 and @it <= 10 } { ... }
+
+fixpoint_block = {
+    "fixpoint" ~ "{" ~ iterative_directive* ~ rule* ~ "}"
+}
 
 loop_block = {
-    "loop" ~ loop_iterative_list? ~ loop_condition? ~ "{" ~ rule* ~ "}"
+    "loop" ~ loop_condition ~ "{" ~ iterative_directive* ~ rule* ~ "}"
 }
 
-// iterative { rel1, rel2, ... } — relations that use replacement (new_from) semantics.
-// Relations not listed default to accumulative (new) semantics.
-loop_iterative_list = {
-    "iterative" ~ "{" ~ relation_name ~ ("," ~ relation_name)* ~ "}"
-}
+// .iterative <relation_name> — marks a relation as using replacement (new_from)
+// semantics within this block.  Unlisted relations default to accumulative (new).
+// Scoped per-block: the same relation can be iterative in one block and
+// accumulative in another.
+iterative_directive = { ".iterative" ~ relation_name }
 
-// At most one continue clause and one stop clause, in either order,
-// optionally joined by a boolean connective.
+// At most one while clause and one until clause, in either order.
+// If both are present without "or", stop when EITHER fires (min / and semantics).
+// If joined by "or", stop when BOTH fire (max / or semantics).
 loop_condition = {
-    loop_continue ~ (loop_connective ~ loop_stop)?
-  | loop_stop     ~ (loop_connective ~ loop_continue)?
+    loop_while ~ (loop_or? ~ loop_until)?
+  | loop_until ~ (loop_or? ~ loop_while)?
 }
 
-// continue { iter_expr } — loop while iteration is in the specified window(s).
-loop_continue = { "continue" ~ "{" ~ loop_iter_expr ~ "}" }
+// while { iter_expr } — loop while iteration is in the specified window(s).
+loop_while = { "while" ~ "{" ~ loop_iter_expr ~ "}" }
 
-// stop { rel_expr } — stop when the listed relation(s) become true.
-loop_stop = { "stop" ~ "{" ~ loop_stop_group ~ "}" }
+// until { rel_expr } — stop when the listed relation(s) become true.
+loop_until = { "until" ~ "{" ~ loop_stop_group ~ "}" }
 
-// One or more bool relations joined by and/or inside the stop clause.
+// One or more bool relations joined by and/or inside the until clause.
 loop_stop_group = { loop_bool_relation ~ (loop_connective ~ loop_bool_relation)* }
 
-// One or more "iter op N" sub-conditions joined by and/or.
+// One or more "@it op N" sub-conditions joined by and/or.
 // Resolved at parse time into a list of allowed iteration windows Vec<(u16,u16)>.
 loop_iter_expr = {
-    "iter" ~ loop_iter_compare_op ~ integer
-    ~ (loop_connective ~ "iter" ~ loop_iter_compare_op ~ integer)*
+    "@it" ~ loop_iter_compare_op ~ integer
+    ~ (loop_connective ~ "@it" ~ loop_iter_compare_op ~ integer)*
 }
 
 // Comparison operators for iteration sub-conditions.
 // Longer tokens must come before shorter ones to avoid premature match.
 loop_iter_compare_op = { "<=" | ">=" | "==" | "<" | ">" }
 
-// A single nullary (boolean) relation name used in a stop clause.
+// A single nullary (boolean) relation name used in an until clause.
 loop_bool_relation = { relation_name }
 
 // Boolean connective joining clauses or sub-conditions.

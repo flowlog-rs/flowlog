@@ -582,18 +582,18 @@ impl Compiler {
         let (prelude, boolean_stop_conditions) = self.build_stop_conditions(cond, next_bindings);
 
         // Preserve empty window lists as Some([]) rather than collapsing them to
-        // None.  An empty list arises from contradictory bounds (e.g. `iter >= 5
-        // and iter < 3`) and means "never continue" — blocking all feedback so
+        // None.  An empty list arises from contradictory bounds (e.g. `@it >= 5
+        // and @it < 3`) and means "never continue" — blocking all feedback so
         // the loop performs zero iterations.
         //
         // This fix works in tandem with build_iter_conditions returning `false`
         // for an empty range list.  Both are required: collapsing Some([]) to
         // None here would make the empty case unreachable there, and the loop
         // would run forever instead of zero iterations.
-        let iter_continue_conditions = cond.continue_part().map(|r| r.to_vec());
-        // Mark imports whenever a `continue` clause is present, even if the
-        // resolved range list is empty (contradictory bounds like `iter >= 5
-        // and iter < 3`). The generated feedback still goes through
+        let iter_continue_conditions = cond.while_part().map(|r| r.to_vec());
+        // Mark imports whenever a `while` clause is present, even if the
+        // resolved range list is empty (contradictory bounds like `@it >= 5
+        // and @it < 3`). The generated feedback still goes through
         // `continue_stmt(...).flat_map(...).as_collection()`, which requires
         // these imports regardless of whether the range evaluates to `false`.
         if iter_continue_conditions.is_some() {
@@ -695,13 +695,13 @@ impl Compiler {
         stmts
     }
 
-    /// Build prelude stmts and the arranged gate signal for the `stop` clause.
+    /// Build prelude stmts and the arranged gate signal for the `until` clause.
     fn build_stop_conditions(
         &mut self,
         cond: &LoopCondition,
         next_bindings: &HashMap<u64, Ident>,
     ) -> (Vec<TokenStream>, Option<Ident>) {
-        let Some(stop_group) = cond.stop_part() else {
+        let Some(until_group) = cond.until_part() else {
             return (Vec::new(), None);
         };
         self.imports.mark_as_collection();
@@ -709,8 +709,8 @@ impl Compiler {
 
         let mut stmts: Vec<TokenStream> = Vec::new();
 
-        // Initialise gate from the first stop relation.
-        let first = stop_group.first();
+        // Initialise gate from the first until relation.
+        let first = until_group.first();
         let first_next = next_bindings.get(&first.fp).unwrap_or_else(|| {
             panic!(
                 "Compiler: stop relation fp {} missing from next_bindings",
@@ -722,8 +722,8 @@ impl Compiler {
         stmts.push(quote! { let #first_sig = #first_next.clone() #dedup; });
         let mut gate = first_sig;
 
-        // Fold remaining stop relations into the gate with explicit connectives.
-        for (conn, rel) in stop_group.rest() {
+        // Fold remaining until relations into the gate with explicit connectives.
+        for (conn, rel) in until_group.rest() {
             let fp = rel.fp;
             let next_ident = next_bindings.get(&fp).unwrap_or_else(|| {
                 panic!("Compiler: stop relation fp {fp} missing from next_bindings")
@@ -760,11 +760,11 @@ impl Compiler {
 /// The gate-setup prelude is returned separately so the plan stays pure data.
 #[derive(Default)]
 struct ConditionPlan {
-    /// Arranged stop-gate (`<ident>_arr`) or `None` if there is no `stop` clause.
+    /// Arranged until-gate (`<ident>_arr`) or `None` if there is no `until` clause.
     boolean_stop_conditions: Option<Ident>,
-    /// Iteration windows from the `continue` clause, or `None` if absent.
+    /// Iteration windows from the `while` clause, or `None` if absent.
     iter_continue_conditions: Option<Vec<(u16, u16)>>,
-    /// Connective joining the `stop` and `continue` clauses, if both are present.
+    /// Connective joining the `until` and `while` clauses, if both are present.
     connective: Option<LoopConnective>,
 }
 

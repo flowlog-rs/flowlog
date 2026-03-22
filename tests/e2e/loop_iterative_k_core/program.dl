@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : loop_iterative_k_core
-// Feature : loop iterative { ... } — iterative (replacement) semantics for
-//           active_edge and degree, accumulative semantics for removed.
+// Feature : iterative (replacement) semantics for active_edge and degree
+//           (declared with `iterative`), accumulative semantics for removed.
 //
 // Computes the 3-core of a directed graph (edges represented in both
 // directions).  Iteratively remove every node whose active-neighbour count
@@ -25,7 +25,7 @@
 // Evaluation trace
 //   Pre-loop: active_edge ← all 32 edges  (non-recursive stratum, EDB base)
 //
-//   DD inner steps (active_edge seeded via Variable::new_from — no bootstrap):
+//   DD inner steps (active_edge seeded via Variable::new_from — iterative on .decl):
 //   Step 0  : degree ← {1→4, 2→4, 3→3, 4→4, 5→2, 6→2, 7→4, 8→3, 9→2, 10→1, 11→1, 12→2}
 //   Step 1  : removed ← {5,6,9,10,11,12}   (degree < 3)
 //   Step 2  : active_edge ← 14 edges (core K4 + 7↔8)
@@ -49,7 +49,9 @@
 
 active_edge(x, y) :- edge(x, y).
 
-loop iterative { active_edge, degree } {
+fixpoint {
+    .iterative active_edge
+    .iterative degree
     active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).
     degree(x, count(y)) :- active_edge(x, y).
     removed(x) :- degree(x, d), d < 3.

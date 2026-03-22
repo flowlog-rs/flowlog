@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : loop_iteration
-// Feature : loop block with bounded iteration count (`loop continue { iter <= 1 }`)
+// Feature : loop block with bounded iteration count (`loop while { @it <= 1 }`)
 //
 // The base rule runs in a plain stratum first.  The loop block then extends
 // Reach for iterations 0 and 1 (2 join rounds).  On a 4-edge chain 1→2→3→4→5:
@@ -26,7 +26,7 @@
 
 Reach(X, Y) :- Edge(X, Y).
 
-loop continue { iter <= 1 } {
+loop while { @it <= 1 } {
     Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
 }
 

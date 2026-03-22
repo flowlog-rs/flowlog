@@ -7,7 +7,10 @@
 
 active_edge(x, y) :- edge(x, y).
 
-loop iterative { active_edge, degree } {
+fixpoint {
+    .iterative active_edge
+    .iterative degree
+
     active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).
     degree(x, count(y)) :- active_edge(x, y).
     removed(x) :- degree(x, d), d < 2.

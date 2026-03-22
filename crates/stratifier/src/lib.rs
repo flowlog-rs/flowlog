@@ -24,19 +24,19 @@
 //!
 //! FlowLog supports an **Extended Datalog** mode (enabled with
 //! `--mode extend-batch` or `--mode extend-inc`) where recursion
-//! must be written explicitly using `loop` blocks:
+//! must be written explicitly using `fixpoint` or `loop` blocks:
 //!
 //! ```text
-//! loop {
+//! fixpoint {
 //!     Reach(x, y) :- Edge(x, y).
 //!     Reach(x, z) :- Edge(x, y), Reach(y, z).
 //! }
 //! ```
 //!
-//! Each `loop` block maps to **exactly one recursive stratum**, regardless of
-//! its internal rule structure — all rules inside iterate together under the
-//! block's [`LoopCondition`].  In Extended Datalog mode, any recursive
-//! dependency found outside a `loop` block is a hard error.
+//! Each `fixpoint`/`loop` block maps to **exactly one recursive stratum**,
+//! regardless of its internal rule structure — all rules inside iterate
+//! together under the block's [`LoopCondition`].  In Extended Datalog mode,
+//! any recursive dependency found outside a block is a hard error.
 //!
 //! In datalog modes (`datalog-batch` / `datalog-inc`), recursion in
 //! plain rules is allowed and handled implicitly via SCC detection, matching
@@ -54,7 +54,7 @@
 //! let s = Stratifier::from_program(&program, false);
 //! println!("{}", s);
 //!
-//! // Extended Datalog mode — recursion must be inside `loop` blocks.
+//! // Extended Datalog mode — recursion must be inside `fixpoint`/`loop` blocks.
 //! let s = Stratifier::from_program(&program, true);
 //! ```
 

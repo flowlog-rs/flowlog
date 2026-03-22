@@ -3,9 +3,9 @@
 // Feature : loop block with implicit fixpoint (no stop condition)
 //
 // The base rule (Reach(X,Y) :- Edge(X,Y)) runs in a plain stratum before the
-// loop.  The loop block contains only the recursive step, which extends Reach
-// until fixpoint.  This verifies that `loop { }` (no condition) computes the
-// same transitive closure as an implicit recursive stratum.
+// loop.  The fixpoint block contains only the recursive step, which extends
+// Reach until fixpoint.  This verifies that `fixpoint { }` computes the same
+// transitive closure as an implicit recursive stratum.
 //
 // Data layout
 //   Edge (src: int32, dst: int32)  — edges (1,2) (2,3) (3,4)
@@ -22,7 +22,7 @@
 
 Reach(X, Y) :- Edge(X, Y).
 
-loop {
+fixpoint {
     Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
 }
 

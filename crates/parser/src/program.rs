@@ -21,8 +21,9 @@
 //! # Segment model
 //!
 //! Rules are grouped into [`Segment::Plain`] segments separated by
-//! [`Segment::Loop`] barriers.  The stratifier processes segments in source
-//! order and treats each loop block as a hard boundary between strata groups.
+//! [`Segment::Loop`] / [`Segment::Fixpoint`] barriers.  The stratifier
+//! processes segments in source order and treats each loop or fixpoint block
+//! as a hard boundary between strata groups.
 
 use super::{
     declaration::{ExternFn, InputDirective, OutputDirective, PrintSizeDirective, Relation},
@@ -106,7 +107,7 @@ impl fmt::Display for Program {
                             writeln!(f, "  {}", rule)?;
                         }
                     }
-                    Segment::Loop(block) => {
+                    Segment::Loop(block) | Segment::Fixpoint(block) => {
                         writeln!(f, "[Loop {}]", i)?;
                         writeln!(f, "  {}", block)?;
                     }
@@ -275,7 +276,7 @@ impl Program {
         for seg in &self.segments {
             let rules: &[FlowLogRule] = match seg {
                 Segment::Plain(rules) => rules,
-                Segment::Loop(block) => block.rules(),
+                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
             };
             if rid < offset + rules.len() {
                 return &rules[rid - offset];
@@ -463,7 +464,7 @@ impl Program {
                     printsize_directives.push(PrintSizeDirective::from_parsed_rule(node))
                 }
 
-                // ── Rules and loop blocks ─────────────────────────────────────
+                // ── Rules and loop/fixpoint blocks ───────────────────────────
                 Rule::rule => current_rules.push(FlowLogRule::from_parsed_rule(node)),
                 Rule::loop_block => {
                     if !extended {
@@ -474,6 +475,16 @@ impl Program {
                     }
                     flush_rules(&mut current_rules, &mut segments);
                     segments.push(Segment::Loop(LoopBlock::from_parsed_rule(node)));
+                }
+                Rule::fixpoint_block => {
+                    if !extended {
+                        panic!(
+                            "Parser error: `fixpoint` blocks require Extended Datalog mode. \
+                             Rerun with `--mode extend-batch` or `--mode extend-inc`."
+                        );
+                    }
+                    flush_rules(&mut current_rules, &mut segments);
+                    segments.push(Segment::Fixpoint(LoopBlock::from_parsed_rule(node)));
                 }
 
                 // ── Ground facts ──────────────────────────────────────────────
@@ -619,11 +630,11 @@ impl Program {
                 continue;
             };
 
-            let Some(stop_group) = cond.stop_part() else {
+            let Some(until_group) = cond.until_part() else {
                 continue;
             };
 
-            for rel in stop_group.relations() {
+            for rel in until_group.relations() {
                 let name = rel.name.as_str();
                 // Relation names are stored lowercase internally (Relation::new
                 // lowercases them), so compare case-insensitively.
@@ -672,7 +683,7 @@ impl Program {
         for item in items.iter_mut() {
             match item {
                 Segment::Plain(rules) => Self::reclassify_rules(rules, &udf_names),
-                Segment::Loop(block) => Self::reclassify_rules(block.rules_mut(), &udf_names),
+                Segment::Loop(block) | Segment::Fixpoint(block) => Self::reclassify_rules(block.rules_mut(), &udf_names),
             }
         }
     }
@@ -764,7 +775,7 @@ impl Program {
             .iter()
             .flat_map(|item| match item {
                 Segment::Plain(rules) => rules.as_slice(),
-                Segment::Loop(block) => block.rules(),
+                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
             })
             .collect();
 
@@ -787,7 +798,7 @@ impl Program {
                 .flat_map(|block| {
                     block
                         .condition()
-                        .and_then(|cond| cond.stop_part())
+                        .and_then(|cond| cond.until_part())
                         .into_iter()
                         .flat_map(|stop| stop.relations().map(|rel| rel.name.clone()))
                 }),
@@ -888,7 +899,7 @@ impl Program {
             .iter()
             .flat_map(|item| match item {
                 Segment::Plain(rules) => rules.as_slice(),
-                Segment::Loop(block) => block.rules(),
+                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
             })
             .enumerate()
             .filter(|(i, _)| !needed_rules.contains(i))
@@ -933,6 +944,18 @@ impl Program {
                         Some(Segment::Loop(block))
                     }
                 }
+                Segment::Fixpoint(mut block) => {
+                    block.rules_mut().retain(|_| {
+                        let keep = needed_rules.contains(&global_idx);
+                        global_idx += 1;
+                        keep
+                    });
+                    if block.rules().is_empty() {
+                        None
+                    } else {
+                        Some(Segment::Fixpoint(block))
+                    }
+                }
             })
             .collect();
         self.segments = new_items;
@@ -970,14 +993,14 @@ mod tests {
             .decl c(x: number)
             .output c
             a(X) :- b(X).
-            loop { b(X) :- a(X). }
+            fixpoint { b(X) :- a(X). }
             c(X) :- a(X).
         ";
         let program = parse_program(src);
         let items = program.segments();
         assert_eq!(items.len(), 3);
         assert!(matches!(&items[0], Segment::Plain(r) if r.len() == 1));
-        assert!(matches!(&items[1], Segment::Loop(_)));
+        assert!(matches!(&items[1], Segment::Fixpoint(_)));
         assert!(matches!(&items[2], Segment::Plain(r) if r.len() == 1));
     }
 
@@ -989,14 +1012,14 @@ mod tests {
             .output a
             a(1) :- b(1).
             a(2) :- b(2).
-            loop { a(X) :- b(X). }
+            fixpoint { a(X) :- b(X). }
         ";
         let program = parse_program(src);
         let items = program.segments();
-        // Two rules collapse into one segment, then the loop.
+        // Two rules collapse into one segment, then the fixpoint.
         assert_eq!(items.len(), 2);
         assert!(matches!(&items[0], Segment::Plain(r) if r.len() == 2));
-        assert!(matches!(&items[1], Segment::Loop(_)));
+        assert!(matches!(&items[1], Segment::Fixpoint(_)));
     }
 
     #[test]
@@ -1006,7 +1029,7 @@ mod tests {
             .decl b(x: number)
             .output a
             a(X) :- b(X).
-            loop { }
+            fixpoint { }
             a(1) :- b(1).
         ";
         let program = parse_program(src);
@@ -1020,47 +1043,41 @@ mod tests {
             .decl done()
             .decl edge(x: number, y: number)
             .output done
-            loop stop { done } { done() :- edge(1, 2). }
+            loop until { done } { done() :- edge(1, 2). }
         ";
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
     }
 
     #[test]
-    fn loop_pure_fixpoint_needs_no_declaration() {
+    fn fixpoint_needs_no_declaration() {
         let src = "
             .decl edge(x: number, y: number)
             .output edge
-            loop { edge(1, 2) :- edge(1, 2). }
+            fixpoint { edge(1, 2) :- edge(1, 2). }
         ";
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
     }
 
     #[test]
-    fn loop_iter_needs_no_declaration() {
+    fn loop_while_needs_no_declaration() {
         let src = "
             .decl edge(x: number, y: number)
             .output edge
-            loop continue { iter <= 9 } { edge(1, 2) :- edge(1, 2). }
+            loop while { @it <= 9 } { edge(1, 2) :- edge(1, 2). }
         ";
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
     }
 
     #[test]
-    #[should_panic(expected = "`iterative` list references undeclared relation 'active_edge'")]
-    fn loop_iterative_undeclared_panics() {
-        parse_program("loop iterative { active_edge } { }");
-    }
-
-    #[test]
-    fn loop_iterative_declared_passes() {
+    fn iterative_declared_passes() {
         let src = "
             .decl edge(x: number, y: number)
             .decl active_edge(x: number, y: number)
             .output active_edge
-            loop iterative { active_edge } { active_edge(X, Y) :- edge(X, Y). }
+            fixpoint { .iterative active_edge  active_edge(X, Y) :- edge(X, Y). }
         ";
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
@@ -1068,9 +1085,15 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "`iterative` list references undeclared relation 'active_edge'")]
+    fn loop_iterative_undeclared_panics() {
+        parse_program("fixpoint { .iterative active_edge }");
+    }
+
+    #[test]
     #[should_panic(expected = "loop condition references undeclared relation 'done'")]
     fn loop_bool_relation_undeclared_panics() {
-        parse_program("loop stop { done } { }");
+        parse_program("loop until { done } { }");
     }
 
     #[test]
@@ -1079,13 +1102,13 @@ mod tests {
         let src = "
             .decl done(x: number)
             .output done
-            loop stop { done } { done(1) :- done(1). }
+            loop until { done } { done(1) :- done(1). }
         ";
         parse_program(src);
     }
 
     #[test]
-    fn dead_code_elimination_keeps_loop_stop_relations() {
+    fn dead_code_elimination_keeps_loop_until_relations() {
         let src = "
             .decl edge(x: number, y: number)
             .decl keep()
@@ -1094,7 +1117,7 @@ mod tests {
 
             edge(1, 2).
 
-            loop stop { keep } {
+            loop until { keep } {
                 keep() :- edge(1, 2).
             }
 

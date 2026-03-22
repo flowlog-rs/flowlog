@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : loop_stop_relation
-// Feature : loop block with BoolRelation stop condition (`loop stop { Done }`)
+// Feature : loop block with BoolRelation stop condition (`loop until { Done }`)
 //           with TWO rules contributing to Reach — exercises the multi-head
 //           union path: next_Reach = t_{head1_fp}.concat(t_{head2_fp}).concat(in_reach)
 //
@@ -43,7 +43,7 @@
 
 Reach(X, Y) :- Edge(X, Y).
 
-loop stop { Done } {
+loop until { Done } {
     Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
     Reach(X, Z) :- Reach(X, Y), Shortcut(Y, Z).
     Done()      :- Reach(1, Y), Target(Y).

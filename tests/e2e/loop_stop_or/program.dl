@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : loop_stop_or
 // Feature : loop block with `or` connective — relation OR iteration cap
-//           (`loop continue { iter <= 0 } or stop { Done }`)
+//           (`loop while { @it <= 0 } or until { Done }`)
 //
 // OR = max semantics: stop when BOTH conditions fire simultaneously.
 // The iteration cap (iter <= 0) blocks from round 2 onward (time.inner >= 1).
@@ -44,7 +44,9 @@
 
 Reach(X, Y) :- Edge(X, Y).
 
-loop continue { iter <= 0 } or stop { Done } {
+loop while { @it <= 0 }
+     or until { Done }
+{
     Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
     Done()      :- Reach(1, Y), Target(Y).
 }

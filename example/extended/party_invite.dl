@@ -10,7 +10,8 @@
 # Seed: organizers always attend.
 attend(x) :- organizer(x).
 
-loop iterative { cnt } {
+fixpoint {
+    .iterative cnt
     cnt(y, count(x)) :- attend(x), friend(y, x).
     attend(x) :- cnt(x, n), n >= 3.
 }

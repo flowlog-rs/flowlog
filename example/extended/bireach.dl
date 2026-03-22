@@ -14,7 +14,7 @@
 FwdReach(x) :- Source(x).
 BwdReach(x) :- Sink(x).
 
-loop stop { Connected } {
+loop until { Connected } {
     FwdReach(y)  :- FwdReach(x), Arc(x, y).
     BwdReach(x)  :- BwdReach(y), Arc(x, y).
     Connected()  :- FwdReach(x), BwdReach(x).

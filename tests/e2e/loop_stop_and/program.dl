@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : loop_stop_and
-// Feature : loop block with `and` connective — relation AND iteration cap
-//           (`loop stop { Done } and continue { iter <= 3 }`)
+// Feature : loop block with iteration cap and relation stop condition
+//           (`loop while { @it <= 3 } until { Done }`)
 //
 // The relation condition is the binding constraint: Done() fires at round 3
 // (when (1,4) enters the iteration delta), well before the cap of 4.
@@ -39,7 +39,9 @@
 
 Reach(X, Y) :- Edge(X, Y).
 
-loop stop { Done } and continue { iter <= 3 } {
+loop while { @it <= 3 }
+     until { Done }
+{
     Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
     Done()      :- Reach(1, Y), Target(Y).
 }

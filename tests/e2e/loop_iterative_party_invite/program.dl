@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : loop_iterative_party_invite
-// Feature : loop iterative { ... } — iterative (replacement) semantics for
-//           cnt, accumulative semantics for attend.
+// Feature : iterative (replacement) semantics for cnt (declared with
+//           `iterative`), accumulative semantics for attend.
 //
 // Models a party invitation cascade: organizers always attend; anyone with
 // at least 3 attending friends also attends.  cnt is recomputed each
@@ -47,7 +47,8 @@
 
 attend(x) :- organizer(x).
 
-loop iterative { cnt } {
+fixpoint {
+    .iterative cnt
     cnt(y, count(x)) :- attend(x), friend(y, x).
     attend(x) :- cnt(x, n), n >= 3.
 }

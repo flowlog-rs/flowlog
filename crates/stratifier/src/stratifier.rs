@@ -76,14 +76,14 @@ pub struct Stratifier {
 
     /// Accumulative recursive relations per stratum.
     ///
-    /// Recursive relations (head ∩ body) that are NOT in the `iterative { ... }` list.
+    /// Recursive relations (head ∩ body) that are NOT marked `.iterative`.
     /// Use `Variable::new` + concat-with-self feedback semantics.
     /// Non-empty only for recursive strata.  Parallel with `stratum`.
     stratum_accumulate_recursive_relation: Vec<Vec<u64>>,
 
     /// Iterative recursive relations per stratum.
     ///
-    /// Recursive relations (head ∩ body) that ARE in the `iterative { ... }` list.
+    /// Recursive relations (head ∩ body) that ARE marked `.iterative`.
     /// Use `Variable::new_from` + replace-only feedback semantics.
     /// Non-empty only for loop-derived strata with an `iterative` annotation.
     /// Parallel with `stratum`.
@@ -150,7 +150,7 @@ impl Stratifier {
 
     /// Accumulative recursive relations for stratum `idx`.
     ///
-    /// Recursive relations (head ∩ body) not in the `iterative { ... }` list.
+    /// Recursive relations (head ∩ body) not marked `.iterative`.
     /// Empty for non-recursive strata.
     #[must_use]
     pub fn stratum_accumulate_recursive_relation(&self, idx: usize) -> &[u64] {
@@ -159,7 +159,7 @@ impl Stratifier {
 
     /// Iterative recursive relations for stratum `idx`.
     ///
-    /// Recursive relations (head ∩ body) explicitly listed in `iterative { ... }`.
+    /// Recursive relations (head ∩ body) explicitly marked `.iterative`.
     /// Empty for non-loop strata or loops without an `iterative` annotation.
     #[must_use]
     pub fn stratum_iterative_recursive_relation(&self, idx: usize) -> &[u64] {
@@ -223,8 +223,8 @@ impl Stratifier {
                     iterative_fps.extend(std::iter::repeat_with(HashSet::new).take(n));
                     id_offset += rules.len();
                 }
-                Segment::Loop(block) => {
-                    // A loop block is always exactly one recursive stratum.
+                Segment::Loop(block) | Segment::Fixpoint(block) => {
+                    // A loop/fixpoint block is always exactly one recursive stratum.
                     // No SCC analysis is performed inside: all rules iterate
                     // together under the block's stop condition.
                     let rules = block.rules();
@@ -319,7 +319,7 @@ impl Stratifier {
                     panic!(
                         "Extended Datalog error: recursive rules must be inside an explicit \
                          `loop` block, but recursion was found in plain rules: [{}]\n  \
-                         Hint: wrap these rules in `loop {{ ... }}` or another loop form.",
+                         Hint: wrap these rules in `fixpoint {{ ... }}` or another loop form.",
                         rule_ids.join(", ")
                     );
                 }
@@ -624,7 +624,7 @@ impl Stratifier {
             if self.is_recursive_stratum(i) {
                 let iterative_fps = &iterative_fps_per_stratum[i];
 
-                // Validate every listed iterative relation before the split.
+                // Validate every declared-iterative relation before the split.
                 let recursive_fps: HashSet<u64> = heads.intersection(body_atoms).copied().collect();
                 for fp in iterative_fps {
                     let rel_name = fp_to_name.get(fp).copied().unwrap_or("<unknown>");
@@ -632,8 +632,8 @@ impl Stratifier {
                         panic!(
                             "Stratifier error: `iterative` relation `{}` in stratum #{} has no \
                              rule inside the loop body that derives it.\n  \
-                             Hint: every relation in `iterative {{ ... }}` must appear as the head \
-                             of at least one rule inside the loop block.",
+                             Hint: every relation declared `iterative` must appear as the head \
+                             of at least one rule inside a fixpoint/loop block.",
                             rel_name,
                             i + 1
                         );
@@ -783,7 +783,7 @@ impl Stratifier {
             let Some(cond) = cond_opt else {
                 continue;
             };
-            let Some(stop_group) = cond.stop_part() else {
+            let Some(until_group) = cond.until_part() else {
                 continue;
             };
 
@@ -820,15 +820,15 @@ impl Stratifier {
                 .map(|(i, _)| i)
                 .collect();
 
-            for rel in stop_group.relations() {
+            for rel in until_group.relations() {
                 let (rel_name, fp) = (rel.name.as_str(), rel.fp);
 
                 if !heads.contains(&fp) {
                     panic!(
-                        "Stratifier error: loop stop condition in stratum #{} references \
+                        "Stratifier error: loop until condition in stratum #{} references \
                          relation `{}`, which has no rule inside the loop body that \
                          derives it.\n  \
-                         Hint: the stop-condition relation must appear as the head of \
+                         Hint: the until-condition relation must appear as the head of \
                          at least one rule inside the loop block.",
                         idx + 1,
                         rel_name
@@ -845,10 +845,10 @@ impl Stratifier {
                     .collect();
                 if !self.reaches_recursive(&dep_graph, &seed, &recursive_rule_ids) {
                     panic!(
-                        "Stratifier error: loop stop condition in stratum #{} references \
+                        "Stratifier error: loop until condition in stratum #{} references \
                          relation `{}`, which does not depend on any recursive relation \
                          in this loop.\n  \
-                         Hint: a stop-condition relation must be derived from the loop's \
+                         Hint: an until-condition relation must be derived from the loop's \
                          recursive computation to be a meaningful termination signal.",
                         idx + 1,
                         rel_name
@@ -1128,7 +1128,7 @@ mod tests {
             .decl Reach(x: int32, y: int32)\n\
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .output Reach\n\
-            loop {\n\
+            fixpoint {\n\
                 Reach(x, y) :- Edge(x, y).\n\
                 Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             }\n";
@@ -1152,7 +1152,7 @@ mod tests {
             .output Out\n\
             .output Reach\n\
             A(x) :- Edge(x, y).\n\
-            loop {\n\
+            fixpoint {\n\
                 Reach(x, y) :- Edge(x, y).\n\
                 Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             }\n\
@@ -1178,7 +1178,7 @@ mod tests {
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .output A\n\
             .output B\n\
-            loop {\n\
+            fixpoint {\n\
                 A(x, y) :- Edge(x, y), !B(x, y).\n\
                 B(x, y) :- A(x, y).\n\
             }\n";
@@ -1194,7 +1194,7 @@ mod tests {
             .decl Reach(x: int32, y: int32)\n\
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .output Reach\n\
-            loop {\n\
+            fixpoint {\n\
                 Reach(x, y) :- Edge(x, y).\n\
                 Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             }\n";
@@ -1229,7 +1229,7 @@ mod tests {
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .output A\n\
             A(x, y) :- B(x, y).\n\
-            loop {\n\
+            fixpoint {\n\
                 B(x, y) :- Edge(x, y).\n\
                 B(x, z) :- Edge(x, y), B(y, z).\n\
             }\n";
@@ -1272,18 +1272,17 @@ mod tests {
             .decl A(x: int32, y: int32)\n\
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             .output A\n\
-            loop {\n\
+            fixpoint {\n\
                 A(x, y) :- Edge(x, y).\n\
             }\n";
         let _ = Stratifier::from_program(&parse_program(src), false);
     }
 
-    /// k-core-like loop: `active_edge` and `degree` are iterative, `removed` is
-    /// accumulative.  After stratification the two sets must be split correctly.
+    /// k-core-like loop: `active_edge` and `degree` are iterative (declared),
+    /// `removed` is accumulative.  After stratification the two sets must be
+    /// split correctly.
     #[test]
     fn loop_iterative_split_correctly() {
-        // Simplified k-core: active_edge and degree use iterative semantics;
-        // removed uses accumulative semantics (union with previous).
         let src = "\
             .decl edge(x: int32, y: int32)\n\
             .decl active_edge(x: int32, y: int32)\n\
@@ -1291,14 +1290,16 @@ mod tests {
             .decl removed(x: int32)\n\
             .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
             .output removed\n\
-            loop iterative { active_edge, degree } {\n\
+            fixpoint {\n\
+                .iterative active_edge\n\
+                .iterative degree\n\
                 active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
                 degree(x, count(y)) :- active_edge(x, y).\n\
                 removed(x) :- degree(x, d), d < 2.\n\
             }\n";
         let s = Stratifier::from_program(&parse_program(src), true);
 
-        // Should be exactly one stratum (the loop block).
+        // Should be exactly one stratum (the fixpoint block).
         assert_eq!(s.stratum.len(), 1);
         assert!(s.is_recursive_stratum(0));
 
@@ -1308,7 +1309,7 @@ mod tests {
         // active_edge and degree are explicitly iterative.
         assert_eq!(itr.len(), 2, "active_edge and degree should be iterative");
         // removed feeds back (it appears in active_edge's body) → recursive,
-        // but not in the iterative list → accumulative.
+        // but not declared iterative → accumulative.
         assert_eq!(acc.len(), 1, "removed should be accumulative");
         // Iterative and accumulative sets must be disjoint.
         let itr_set: HashSet<u64> = itr.iter().copied().collect();
@@ -1319,34 +1320,35 @@ mod tests {
         );
     }
 
-    /// An `iterative` list entry that has no deriving rule in the loop body
-    /// (not in HEAD) → stratifier hard error.
+    /// An `iterative` declaration for a relation that has no deriving rule in
+    /// the loop body (not in HEAD) → stratifier hard error.
     #[test]
     #[should_panic(expected = "iterative` relation")]
     fn loop_iterative_relation_not_derived_errors() {
-        // `ghost` is listed in `iterative { ... }` but has no rule inside the loop.
+        // `ghost` is listed in iterative but has no rule inside the loop.
         let src = "\
             .decl edge(x: int32, y: int32)\n\
             .decl reach(x: int32, y: int32)\n\
             .decl ghost(x: int32)\n\
             .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
             .output reach\n\
-            loop iterative { ghost } {\n\
+            fixpoint {\n\
+                .iterative ghost\n\
                 reach(x, y) :- edge(x, y).\n\
                 reach(x, z) :- edge(x, y), reach(y, z).\n\
             }\n";
         let _ = Stratifier::from_program(&parse_program(src), true);
     }
 
-    /// An `iterative` list entry that is derived (appears in HEAD) but is
-    /// never used in any body atom (not recursive) → stratifier hard error.
+    /// An `iterative` declaration for a relation that is derived (appears in
+    /// HEAD) but is never used in any body atom (not recursive) → stratifier
+    /// hard error.
     #[test]
     #[should_panic(expected = "iterative` relation")]
     fn loop_iterative_relation_not_recursive_errors() {
         // `sink` is derived inside the loop (from reach) but never referenced in
         // any body atom, so it has no recursive dependency and cannot use
-        // iterative semantics.  Both reach and sink are `.output` so neither
-        // is pruned from the program before stratification.
+        // iterative semantics.
         let src = "\
             .decl edge(x: int32, y: int32)\n\
             .decl reach(x: int32, y: int32)\n\
@@ -1354,7 +1356,8 @@ mod tests {
             .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
             .output reach\n\
             .output sink\n\
-            loop iterative { sink } {\n\
+            fixpoint {\n\
+                .iterative sink\n\
                 reach(x, y) :- edge(x, y).\n\
                 reach(x, z) :- edge(x, y), reach(y, z).\n\
                 sink(x) :- reach(x, y).\n\
@@ -1362,11 +1365,11 @@ mod tests {
         let _ = Stratifier::from_program(&parse_program(src), true);
     }
 
-    /// A stop condition that references a relation present in HEAD but never in
+    /// An until condition that references a relation present in HEAD but never in
     /// any body atom (non-recursive) → stratifier hard error.
     #[test]
-    #[should_panic(expected = "loop stop condition")]
-    fn loop_stop_condition_relation_not_recursive_errors() {
+    #[should_panic(expected = "loop until condition")]
+    fn loop_until_condition_relation_not_recursive_errors() {
         // `done` is derived from EDB only (edge), which is not recursive.
         // It has no dependency on any recursive relation in the loop, so
         // it cannot act as a meaningful termination signal.
@@ -1377,7 +1380,7 @@ mod tests {
             .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
             .output reach\n\
             .output done\n\
-            loop stop { done } {\n\
+            loop until { done } {\n\
                 reach(x, y) :- edge(x, y).\n\
                 reach(x, z) :- edge(x, y), reach(y, z).\n\
                 done() :- edge(x, y).\n\

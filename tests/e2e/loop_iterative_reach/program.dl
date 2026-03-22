@@ -28,10 +28,8 @@
 
 Reach(y) :- Source(y).
 
-loop
-iterative { Reach }
-continue { iter <= 2 }
-{
+loop while { @it <= 2 } {
+    .iterative Reach
     Reach(y) :- Reach(x), Arc(x, y).
 }
 
