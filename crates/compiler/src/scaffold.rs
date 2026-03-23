@@ -135,7 +135,7 @@ impl Compiler {
         doc["package"] = Item::Table(toml_edit::Table::new());
         {
             let pkg = doc["package"].as_table_mut().unwrap();
-            pkg["name"] = self.config.executable_name().into();
+            pkg["name"] = self.config.crate_name().into();
             pkg["version"] = "0.1.0".into();
             pkg["edition"] = "2024".into();
         }

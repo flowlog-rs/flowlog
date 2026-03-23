@@ -123,6 +123,25 @@ impl Config {
             .to_string()
     }
 
+    /// Sanitized name suitable for use as a Cargo package/binary name.
+    /// Replaces characters that Cargo rejects (dots, spaces, etc.) with
+    /// underscores and ensures the result doesn't start with a digit.
+    pub fn crate_name(&self) -> String {
+        let raw = self.executable_name();
+        let mut s: String = raw
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect();
+        // Cargo rejects names starting with a digit.
+        if s.starts_with(|c: char| c.is_ascii_digit()) {
+            s.insert_str(0, "fl_");
+        }
+        if s.is_empty() {
+            s = "out".to_string();
+        }
+        s
+    }
+
     pub fn output_dir(&self) -> Option<&str> {
         self.output_dir.as_deref()
     }

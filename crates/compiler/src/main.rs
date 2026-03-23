@@ -87,6 +87,7 @@ fn generate_program(
 
     if let Err(e) = build_and_collect(
         &config.build_dir(),
+        &config.crate_name(),
         &config.executable_path(),
         config.save_temps(),
     ) {

@@ -10,15 +10,16 @@ use std::{env, fs, io, process};
 use tracing::info;
 
 /// Build the generated crate, copy the binary out, and optionally clean up.
+///
+/// `crate_name` is the sanitized Cargo package/binary name used to locate the
+/// artifact under `target/release/`.  `executable_path` is the user-requested
+/// output path — the built binary is copied there regardless of its internal name.
 pub fn build_and_collect(
     build_dir: &Path,
+    crate_name: &str,
     executable_path: &Path,
     save_temps: bool,
 ) -> io::Result<()> {
-    let executable_name = executable_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("out");
     let output = process::Command::new("cargo")
         .args(["build", "--release"])
         .current_dir(build_dir)
@@ -41,15 +42,24 @@ pub fn build_and_collect(
         )));
     }
 
+    // Cargo produces the binary under the crate name, not the user's output name.
+    let built_binary = build_dir
+        .join("target")
+        .join("release")
+        .join(format!("{crate_name}{}", env::consts::EXE_SUFFIX));
+
+    // Copy to the user-requested destination, appending platform suffix if needed.
     let suffix = env::consts::EXE_SUFFIX;
-    let binary_name = if !suffix.is_empty() && !executable_name.ends_with(suffix) {
+    let executable_name = executable_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("out");
+    let dest_name = if !suffix.is_empty() && !executable_name.ends_with(suffix) {
         format!("{executable_name}{suffix}")
     } else {
         executable_name.to_string()
     };
-    let built_binary = build_dir.join("target").join("release").join(&binary_name);
-
-    let dest = executable_path.with_file_name(&binary_name);
+    let dest = executable_path.with_file_name(&dest_name);
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
