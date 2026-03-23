@@ -14,7 +14,7 @@
 //   Iter 0             : Reach = {2}            (distance 1)
 //   Iter 1             : Reach = {3, 6}         (distance 2)
 //   Iter 2             : Reach = {4, 7}         (distance 3)
-//        (iter 3 > 2 → stop)
+//        (@it 3 > 2 → stop)
 //
 // Final Reach = nodes at exactly distance 3 from the source = {4, 7}.
 // ════════════════════════════════════════════════════════════════════════════

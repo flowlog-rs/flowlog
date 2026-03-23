@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <h3 align="center">Composable Datalog compiler that auto-generates efficient and scalable Differential Dataflow programs.</h3>
+  <h3 align="center">Composable Datalog engine that compiles programs into efficient and scalable Differential Dataflow executables.</h3>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 A `.dl` program flows through the following pipeline:
 
 ```
-.dl source → parser → stratifier → planner → compiler → Cargo project
+.dl source → parser → stratifier → planner → compiler → executable
                                      ▲  ▲
                                 catalog  optimizer
 ```
@@ -32,7 +32,7 @@ A `.dl` program flows through the following pipeline:
 | `catalog` | Per-rule metadata used during planning |
 | `optimizer` | Heuristic cost model for join ordering |
 | `planner` | Lowers strata into dataflow transformation plans |
-| `compiler` | Generates a Timely / Differential Dataflow Rust project |
+| `compiler` | Generates and builds a Timely / Differential Dataflow executable |
 | `common` | Shared CLI and utility helpers |
 | `profiler` | Optional execution statistics |
 
@@ -54,20 +54,20 @@ $ cargo build --release
 
 ## Compiler CLI
 
-Use the compiler to lower a FlowLog program into a Timely/Differential Cargo project.
+Compile a FlowLog program into a Timely/Differential Dataflow executable.
 
 ```bash
-$ cargo run -p compiler -- <PROGRAM> [OPTIONS]
+$ flowlog <PROGRAM> [OPTIONS]
 ```
 
 | Flag | Description | Required | Notes |
 |------|-------------|----------|-------|
 | `PROGRAM` | Path to a `.dl` file. Accepts `all` or `--all` to iterate over every program in `example/`. | Yes | Parsed relative to the workspace unless absolute. |
 | `-F, --fact-dir <DIR>` | Directory containing input CSVs referenced by `.input` directives. | When `.input` uses relative filenames | Prepends `<DIR>` to each `filename=` parameter; omit to use paths embedded in the program. |
-| `-o, --output <NAME>` | Override the generated Cargo package name. | No | Default derives from `<PROGRAM>`; project is written to `../<NAME>`. |
+| `-o <PATH>` | Path for the generated executable. | No | Defaults to the program stem (e.g., `reach.dl` → `./reach`). |
 | `-D, --output-dir <DIR>` | Location for materializing `.output` relations. | Required when any relation uses `.output` | Pass `-` to print tuples to stderr instead of writing files. |
 | `--mode <MODE>` | Choose execution semantics: `datalog-batch` (default), `datalog-inc`, `extend-batch`, or `extend-inc`. | No | `datalog-batch` uses `Present` diff; all other modes use `i32`. Extended modes enable explicit `loop` blocks. |
-| `-P, --profile` | Enable profiling (collect execution statistics). | No | Writes profiler logs into the generated project. |
+| `-P, --profile` | Enable profiling (collect execution statistics). | No | Writes profiler logs into the build directory. |
 | `-h, --help` | Show full Clap help text. | No | Includes additional examples and environment variables. |
 
 ## End-to-End Example
@@ -90,38 +90,36 @@ Reach(y) :- Source(y).
 Reach(y) :- Reach(x), Arc(x, y).
 ```
 
-### 1. Generate the Executable
+### 1. Prepare a Tiny Dataset
 
 ```bash
-$ cargo run -p compiler -- example/reach.dl -F reach -o reach_flowlog -D -
+$ mkdir -p reach
+$ cat <<'EOF' > reach/Source.csv
+1
+EOF
+
+$ cat <<'EOF' > reach/Arc.csv
+1,2
+2,3
+EOF
+```
+
+### 2. Compile and Run
+
+```bash
+# Compile the .dl program into a binary executable
+$ flowlog example/reach.dl -F reach -o reach_bin -D -
+
+# Run the generated executable
+$ ./reach_bin -w 4
 ```
 
 Key flags:
 
 - `-F reach` points the compiler at the directory holding `Source.csv` and `Arc.csv`.
-- `-o reach_flowlog` names the generated Cargo project (written to `../reach_flowlog`).
+- `-o reach_bin` names the output executable.
 - `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
-
-### 2. Prepare a Tiny Dataset
-
-```bash
-$ cd reach_flowlog
-$ mkdir -p reach
-$ cat <<'EOF' > reach/Source.csv
-  1
-  EOF
-
-$ cat <<'EOF' > reach/Arc.csv
-  1,2
-  2,3
-  EOF
-```
-
-### 3. Build and Run the Generated Project
-
-```bash
-$ cargo run --release -- -w 4
-```
+- `-w 4` tells the generated executable to use 4 worker threads.
 
 ## End-to-End Tests
 
@@ -139,7 +137,7 @@ $ bash tests/e2e/run.sh loop_fixpoint negation
 
 Each test is a directory under `tests/e2e/<test_name>/` containing:
 - `program.dl` — Datalog source (must use `.output` directives).
-- `data/` — Optional CSV input facts copied into the generated project.
+- `data/` — Optional CSV input facts copied into the test working directory.
 - `expected/` — Expected output files (one per output relation).
 - `commands.txt` — Optional incremental transcript (enables incremental mode).
 
