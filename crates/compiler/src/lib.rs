@@ -7,6 +7,7 @@
 // =========================================================================
 mod aggregation;
 mod arg;
+mod build;
 mod comm;
 mod data_type;
 mod flow;
@@ -20,6 +21,8 @@ mod relops;
 mod scaffold;
 mod transformation;
 mod udf;
+
+pub use build::build_and_collect;
 
 // =========================================================================
 // Imports

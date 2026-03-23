@@ -4,10 +4,10 @@
 //           (`loop while { @it <= 0 } or until { Done }`)
 //
 // OR = max semantics: stop when BOTH conditions fire simultaneously.
-// The iteration cap (iter <= 0) blocks from round 2 onward (time.inner >= 1).
+// The iteration cap (@it <= 0) blocks from round 2 onward (time.inner >= 1).
 // Done() fires at round 3 (when (1,4) enters the delta).
 // With OR (max): the loop continues until BOTH fire — i.e., until Done fires
-// at round 3. The iter-blocked portion is still fed back as long as the
+// at round 3. The @it-blocked portion is still fed back as long as the
 // relation gate has not fired; once Done fires, both gates are active → stop.
 //
 // Same chain and target as loop_stop_and. OR (max) produces the SAME 14 pairs
@@ -20,12 +20,12 @@
 //
 // Evaluation trace:
 //   Before loop : Reach = {(1,2),(2,3),(3,4),(4,5),(5,6)}
-//   Round 1     : delta = entered; iter=0 ≤ 0 → iter passes; Done? No → passes.
+//   Round 1     : delta = entered; @it=0 ≤ 0 → @it passes; Done? No → passes.
 //                 OR: either passes → continue.  new = {(1,3),(2,4),(3,5),(4,6)}
-//   Round 2     : delta = round-1 new; iter=1 > 0 → iter blocks; Done? No → passes.
-//                 OR: Done passes → continue (iter_blocked + antijoin(no Done yet)).
+//   Round 2     : delta = round-1 new; @it=1 > 0 → @it blocks; Done? No → passes.
+//                 OR: Done passes → continue (@it_blocked + antijoin(no Done yet)).
 //                 new = {(1,4),(2,5),(3,6)}
-//   Round 3     : delta = round-2 new; iter=2 > 0 → iter blocks; Done: (1,4)∈delta → fires!
+//   Round 3     : delta = round-2 new; @it=2 > 0 → @it blocks; Done: (1,4)∈delta → fires!
 //                 OR: BOTH fire → stop.  new = {(1,5),(2,6)} (computed, then gate stops).
 //
 // Expected

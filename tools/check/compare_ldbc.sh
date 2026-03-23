@@ -119,7 +119,6 @@ run_per_param() {
     local dl_file="${DL_DIR}/${query}.dl"
     local sql_file="${SQL_DIR}/${query}.sql"
     local qwork="${WORK_DIR}/${query}"
-    local fl_proj="${qwork}/fl_proj"
     local fl_out_dir="${qwork}/fl_out"
     local fl_mode_flags=""
     mkdir -p "$qwork"
@@ -143,34 +142,20 @@ run_per_param() {
 
     # ── Compile Flowlog once ──
     log "$query: compiling Flowlog..."
-    rm -rf "$fl_proj" "$fl_out_dir"
+    local fl_bin="${qwork}/program"
+    rm -f "$fl_bin"
+    rm -rf "$fl_out_dir"
     mkdir -p "$fl_out_dir"
     local fl_compile_log="${qwork}/fl_compile.log"
-    if ! "$FLOWLOG_BIN" "$dl_file" -F "$data_dir" -D "$fl_out_dir" -o "$fl_proj" --str-intern $fl_mode_flags $EXTRA_FL_FLAGS >"$fl_compile_log" 2>&1; then
+    if ! "$FLOWLOG_BIN" "$dl_file" -F "$data_dir" -D "$fl_out_dir" -o "$fl_bin" --str-intern $fl_mode_flags $EXTRA_FL_FLAGS >"$fl_compile_log" 2>&1; then
         fail "$query: Flowlog compilation failed"
         echo "         $(tail -3 "$fl_compile_log")"
         return 1
     fi
-    local cargo_log="${qwork}/cargo_build.log"
-    if ! (cd "$fl_proj" && cargo build --release >"$cargo_log" 2>&1); then
-        fail "$query: Flowlog cargo build failed"
-        echo "         $(tail -3 "$cargo_log")"
+    if [[ ! -x "$fl_bin" ]]; then
+        fail "$query: Flowlog binary not found after compilation"
         return 1
     fi
-    local fl_bin
-    fl_bin=$(find "$fl_proj/target/release" -maxdepth 1 -type f -executable | grep -v '\.d$' | head -1 || true)
-    if [[ -z "$fl_bin" ]]; then
-        fail "$query: Flowlog binary not found after build"
-        return 1
-    fi
-    local fl_out_hardcoded
-    fl_out_hardcoded=$(grep 'base_dir = ' "$fl_proj/src/main.rs" | grep -v '//' | head -1 \
-                       | sed 's/.*"\(.*\)".*/\1/' || true)
-    if [[ -z "$fl_out_hardcoded" ]]; then
-        fail "$query: could not detect Flowlog base_dir from main.rs"
-        return 1
-    fi
-    mkdir -p "$fl_out_hardcoded"
 
     # ── Load params ──
     local header
@@ -204,7 +189,7 @@ run_per_param() {
         local _t0 _t1 _exit_code
 
         # Flowlog
-        find "$fl_out_hardcoded" -maxdepth 1 -type f -delete 2>/dev/null || true
+        find "$fl_out_dir" -maxdepth 1 -type f -delete 2>/dev/null || true
         printf "\r${CYAN}[CHECK]${NC} Flowlog  [%d/%d]  " "$idx" "$total" >&2
         _t0=$(date +%s%3N)
         local fl_workers="${FLOWLOG_WORKERS:-$WORKERS}"
@@ -217,7 +202,7 @@ run_per_param() {
         _t1=$(date +%s%3N)
         fl_ms=$(( _t1 - _t0 ))
         if [[ $_exit_code -eq 0 ]]; then
-            for f in "$fl_out_hardcoded"/*; do
+            for f in "$fl_out_dir"/*; do
                 [[ -f "$f" ]] && grep -v '^$' "$f" >> "$fl_param_out" || true
             done
         elif [[ $_exit_code -eq 124 ]]; then

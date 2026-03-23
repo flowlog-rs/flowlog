@@ -4,7 +4,7 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use common::{get_example_files, Config};
-use compiler::Compiler;
+use compiler::{build_and_collect, Compiler};
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
@@ -52,6 +52,24 @@ fn main() {
     );
 }
 
+/// Plan each stratum into a list of `StratumPlanner`s.
+fn plan_strata(
+    config: &Config,
+    optimizer: &mut Optimizer,
+    profiler: &mut Option<Profiler>,
+    stratifier: &Stratifier,
+) -> Vec<StratumPlanner> {
+    stratifier
+        .stratum()
+        .iter()
+        .enumerate()
+        .map(|(stratum_idx, rule_refs)| {
+            let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
+            StratumPlanner::from_rules(config, &rules, optimizer, profiler, stratifier, stratum_idx)
+        })
+        .collect()
+}
+
 fn generate_program(
     config: &Config,
     optimizer: &mut Optimizer,
@@ -59,39 +77,29 @@ fn generate_program(
     stratifier: &Stratifier,
     program: &Program,
 ) {
-    let mut strata = Vec::new();
-    for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-        // Clone rules into a local Vec to satisfy StratumPlanner signature
-        let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
-        let sp = StratumPlanner::from_rules(
-            config,
-            &rules,
-            optimizer,
-            profiler,
-            stratifier,
-            stratum_idx,
-        );
-        strata.push(sp);
-    }
+    let strata = plan_strata(config, optimizer, profiler, stratifier);
 
     let mut compiler = Compiler::new(config.clone(), program.clone());
-
-    // Generate code for the deduplicated transformation list for this stratum
     if let Err(e) = compiler.generate_executable_at(&strata, profiler) {
         error!("Failed to generate project: {}", e);
         process::exit(1);
     }
-    info!(
-        "Compile project at '{}'",
-        config.executable_path().to_string_lossy()
-    );
+
+    if let Err(e) = build_and_collect(
+        &config.build_dir(),
+        &config.crate_name(),
+        &config.executable_path(),
+        config.save_temps(),
+    ) {
+        error!("{}", e);
+        process::exit(1);
+    }
 }
 
 /// Run compiler on all example files in the example directory
 fn run_all_examples(config: &Config) {
     let files = get_example_files();
 
-    // Process all files
     info!("Running compiler on {} example files...", files.len());
     let mut success_count = 0;
     let mut failure_count = 0;
@@ -108,21 +116,8 @@ fn run_all_examples(config: &Config) {
             } else {
                 None
             };
-
-            for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-                let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
-                let _sp = StratumPlanner::from_rules(
-                    config,
-                    &rules,
-                    &mut optimizer,
-                    &mut profiler,
-                    &stratifier,
-                    stratum_idx,
-                );
-                // Skip code generation; just validate compilation of each example.
-            }
-
-            (program.rules().len(), stratifier.stratum().len())
+            let strata = plan_strata(config, &mut optimizer, &mut profiler, &stratifier);
+            (program.rules().len(), strata.len())
         }) {
             Ok((rule_count, strata_count)) => {
                 success_count += 1;
@@ -138,7 +133,6 @@ fn run_all_examples(config: &Config) {
         }
     }
 
-    // Print summary
     println!("\n{}", "=".repeat(80));
     println!("SUMMARY:");
     println!("  Total files: {}", files.len());

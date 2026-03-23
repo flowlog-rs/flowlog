@@ -59,9 +59,6 @@ const AVG_FLOAT_TMPL: &str = include_str!(concat!(
     "/templates/semiring/avg_float.tpl"
 ));
 
-// =========================================================================
-// Project File Generation
-// =========================================================================
 impl Compiler {
     /// Create the project layout and write Cargo.toml + .cargo/config.toml + src/main.rs.
     ///
@@ -71,50 +68,64 @@ impl Compiler {
         main_rs: &str,
         profiler: &Option<Profiler>,
     ) -> io::Result<()> {
-        let root = self.config.executable_path();
+        let root = self.config.build_dir();
         let src_dir = root.join("src");
-
         ensure_dir(&src_dir)?;
 
         // Project metadata + dependencies
         let cargo_toml = self.render_cargo_toml();
-        self.write_cargo_toml(&cargo_toml)?;
+        write_file(&root.join("Cargo.toml"), cargo_toml.trim_start())?;
 
-        // Optional build flags (e.g., -Dwarnings)
+        // Build flags (e.g., -Dwarnings)
         let cargo_cfg = self.render_cargo_config();
-        self.write_cargo_config(&cargo_cfg)?;
+        let cargo_dir = root.join(".cargo");
+        ensure_dir(&cargo_dir)?;
+        write_file(&cargo_dir.join("config.toml"), cargo_cfg.trim_start())?;
 
         // Compiler-generated entrypoint
-        self.write_src_main(main_rs)?;
+        write_file(&src_dir.join("main.rs"), main_rs)?;
 
-        // Optional incremental interactive command parser
+        // Incremental mode: interactive command parser + prompt + relation ops
         if self.config.is_incremental() {
-            self.write_src_cmd()?;
-            self.write_src_prompt()?;
-            self.write_src_relops()?;
+            write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
+            write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
+
+            let relops = self.render_relops(self.program.edbs());
+            write_file(&src_dir.join("relops.rs"), relops.trim_start())?;
         }
 
-        // Semiring modules for aggregations that require them (e.g., via `needs_semiring()`)
+        // Semiring modules for aggregations
         if self.imports.needs_semiring() {
-            self.write_src_semiring()?;
+            self.write_src_semiring(&src_dir)?;
         }
 
         // UDF module if a --udf-file was provided
-        if self.config.udf_file().is_some() {
-            self.write_src_udf()?;
+        if let Some(udf_path) = self.config.udf_file() {
+            let content = std::fs::read_to_string(udf_path).map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!("Failed to read UDF file '{udf_path}': {e}"),
+                )
+            })?;
+            write_file(&src_dir.join("udf.rs"), content.trim_start())?;
         }
 
-        // Profiler logs if enabled
+        // Profiler logs — write alongside the final executable so they
+        // survive build-directory cleanup when --save-temps is not set.
         with_profiler_ref(profiler, |profiler| {
-            self.write_profiler_logs(profiler, &self.config.executable_name())
+            let exe = self.config.executable_path();
+            let ops_path = exe.with_file_name(format!(
+                "{}_ops.json",
+                self.config.executable_name()
+            ));
+            if let Some(parent) = ops_path.parent() {
+                ensure_dir(parent)?;
+            }
+            profiler.write_json(&ops_path)
         })?;
 
         Ok(())
     }
-
-    // -------------------------
-    // Cargo.toml
-    // -------------------------
 
     /// Render a minimal Cargo.toml for the generated crate.
     fn render_cargo_toml(&self) -> String {
@@ -124,7 +135,7 @@ impl Compiler {
         doc["package"] = Item::Table(toml_edit::Table::new());
         {
             let pkg = doc["package"].as_table_mut().unwrap();
-            pkg["name"] = self.config.executable_name().into();
+            pkg["name"] = self.config.crate_name().into();
             pkg["version"] = "0.1.0".into();
             pkg["edition"] = "2024".into();
         }
@@ -185,27 +196,6 @@ impl Compiler {
         s
     }
 
-    /// Write Cargo.toml into the generated project directory.
-    fn write_cargo_toml(&self, cargo_toml: &str) -> io::Result<()> {
-        let path = self.config.executable_path().join("Cargo.toml");
-        write_file(&path, cargo_toml.trim_start())
-    }
-
-    // -------------------------
-    // src/main.rs
-    // -------------------------
-
-    /// Write src/main.rs into the generated project directory.
-    fn write_src_main(&self, main_rs: &str) -> io::Result<()> {
-        let src_dir = self.config.executable_path().join("src");
-        ensure_dir(&src_dir)?;
-        write_file(&src_dir.join("main.rs"), main_rs)
-    }
-
-    // -------------------------
-    // .cargo/config.toml
-    // -------------------------
-
     /// Render `.cargo/config.toml` with build rustflags.
     fn render_cargo_config(&self) -> String {
         let mut doc = DocumentMut::new();
@@ -217,98 +207,10 @@ impl Compiler {
         doc.to_string()
     }
 
-    /// Write `.cargo/config.toml` to the generated project directory.
-    fn write_cargo_config(&self, cargo_config: &str) -> io::Result<()> {
-        let cargo_dir = self.config.executable_path().join(".cargo");
-        ensure_dir(&cargo_dir)?;
-        write_file(&cargo_dir.join("config.toml"), cargo_config.trim_start())
-    }
-
-    // -------------------------
-    // src/cmd.rs (template)
-    // -------------------------
-
-    /// Write `src/cmd.rs` (incremental-only) into the generated project directory.
-    fn write_src_cmd(&self) -> io::Result<()> {
-        let src_dir = self.config.executable_path().join("src");
-        ensure_dir(&src_dir)?;
-
-        // Optional: normalize CRLF to LF for stable diffs across platforms.
-        let rendered = CMD_RS_TMPL.replace("\r\n", "\n");
-
-        write_file(&src_dir.join("cmd.rs"), rendered.trim_start())
-    }
-
-    // -------------------------
-    // src/relops.rs (generated)
-    // -------------------------
-
-    /// Write `src/relops.rs` (incremental-only) into the generated project directory.
-    fn write_src_relops(&self) -> io::Result<()> {
-        let src_dir = self.config.executable_path().join("src");
-        ensure_dir(&src_dir)?;
-
-        let edbs = self.program.edbs();
-
-        let rendered = self.render_relops(edbs).replace("\r\n", "\n");
-
-        write_file(&src_dir.join("relops.rs"), rendered.trim_start())
-    }
-
-    /// Write `src/prompt.rs` (incremental-only) into the generated project directory.
-    fn write_src_prompt(&self) -> io::Result<()> {
-        let src_dir = self.config.executable_path().join("src");
-        ensure_dir(&src_dir)?;
-
-        let rendered = PROMPT_RS_TMPL.replace("\r\n", "\n");
-        write_file(&src_dir.join("prompt.rs"), rendered.trim_start())
-    }
-
-    // -------------------------
-    // src/udf.rs (user-supplied)
-    // -------------------------
-
-    /// Copy the user-supplied UDF file into `src/udf.rs` of the generated project.
-    /// Runs `rustc` to verify the file compiles before copying.
-    fn write_src_udf(&self) -> io::Result<()> {
-        let udf_path = self.config.udf_file().expect("udf_file must be set");
-        let content = std::fs::read_to_string(udf_path).map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!("Failed to read UDF file '{udf_path}': {e}"),
-            )
-        })?;
-
-        // Quick compile check before copying into the generated project.
-        let output = std::process::Command::new("rustc")
-            .args(["--edition", "2024", "--crate-type", "lib", udf_path])
-            .arg("--out-dir")
-            .arg(std::env::temp_dir())
-            .output()
-            .map_err(|e| {
-                io::Error::new(
-                    e.kind(),
-                    format!("Failed to run rustc on '{udf_path}': {e}"),
-                )
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("UDF file '{udf_path}' failed to compile:\n{stderr}"),
-            ));
-        }
-
-        let src_dir = self.config.executable_path().join("src");
-        ensure_dir(&src_dir)?;
-        write_file(&src_dir.join("udf.rs"), content.trim_start())
-    }
-
     /// Write semiring modules into `src/semiring/` of the generated project,
     /// splitting integer and float types into separate files.
-    fn write_src_semiring(&self) -> io::Result<()> {
-        let semiring_dir = self.config.executable_path().join("src").join("semiring");
+    fn write_src_semiring(&self, src_dir: &std::path::Path) -> io::Result<()> {
+        let semiring_dir = src_dir.join("semiring");
         ensure_dir(&semiring_dir)?;
 
         let s = self.imports.semirings();
@@ -387,7 +289,7 @@ impl Compiler {
         ] {
             // Int/uint file
             if int_needs.iter().any(|n| *n) {
-                let mut rendered = int_tmpl.replace("\r\n", "\n");
+                let mut rendered = int_tmpl.to_string();
                 for (i, (suffix, ty)) in INT_TYPES.iter().enumerate() {
                     if int_needs[i] {
                         match bound_kw {
@@ -404,7 +306,7 @@ impl Compiler {
 
             // Float file
             if float_needs.iter().any(|n| *n) {
-                let mut rendered = float_tmpl.replace("\r\n", "\n");
+                let mut rendered = float_tmpl.to_string();
                 for (i, (suffix, inner)) in FLOAT_TYPES.iter().enumerate() {
                     if float_needs[i] {
                         match bound_kw {
@@ -443,20 +345,4 @@ impl Compiler {
         Ok(())
     }
 
-    // -------------------------
-    // log/log.tsv & log/ops.json
-    // -------------------------
-
-    /// Write profiler output files into the generated project directory.
-    pub(crate) fn write_profiler_logs(
-        &self,
-        profiler: &Profiler,
-        program_name: &str,
-    ) -> io::Result<()> {
-        let log_dir = self.config.executable_path().join("log");
-        ensure_dir(&log_dir)?;
-
-        let ops_path = log_dir.join(format!("{}_ops.json", program_name));
-        profiler.write_json(&ops_path)
-    }
 }

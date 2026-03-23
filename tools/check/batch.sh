@@ -222,14 +222,14 @@ compute_flag_combo() {
 
 # Invoke the FlowLog compiler. Handles the extra_flags word-splitting safely.
 invoke_compiler() {
-    local prog_path="$1" facts_dir="$2" project_dir="$3" mode="$4" extra_flags="$5"
+    local prog_path="$1" facts_dir="$2" executable="$3" mode="$4" extra_flags="$5"
 
-    log "$YELLOW" "GENERATE" "$COMPILER_BIN $prog_path -F $facts_dir -o $project_dir --mode $mode ${extra_flags}"
+    log "$YELLOW" "COMPILE" "$COMPILER_BIN $prog_path -F $facts_dir -o $executable --mode $mode ${extra_flags}"
     if [[ -n "$extra_flags" ]]; then
         # shellcheck disable=SC2086
-        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$project_dir" --mode "$mode" $extra_flags
+        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$executable" --mode "$mode" $extra_flags
     else
-        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$project_dir" --mode "$mode"
+        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -o "$executable" --mode "$mode"
     fi
 }
 
@@ -292,24 +292,18 @@ run_compile_check() {
             compute_flag_combo "$oi" "$pi"
             local suffix="$COMBO_LABEL_SUFFIX" flags="$COMBO_EXTRA_FLAGS"
 
-            local package_name project_dir log_file
+            local package_name executable log_file
             package_name="$(sanitize_package_name "${program_stem}_${dataset_id}_${mode}${suffix}")"
-            project_dir="${ROOT_DIR}/${package_name}"
+            executable="${ROOT_DIR}/${package_name}"
             log_file="${LOG_DIR}/${program_stem}_${dataset_id}_${mode}${suffix}_compile.log"
 
             log "$BLUE" "CHECK" "$prog_file (id=$dataset_id, mode=$mode${suffix})"
 
-            rm -rf "$project_dir"
-            invoke_compiler "$prog_path" "$EMPTY_FACTS_DIR" "$project_dir" "$mode" "$flags"
-            [[ -d "$project_dir" ]] || die "Generated project not found (mode=$mode${suffix}): $project_dir"
+            rm -f "$executable"
+            invoke_compiler "$prog_path" "$EMPTY_FACTS_DIR" "$executable" "$mode" "$flags" 2>&1 | tee "$log_file"
 
-            pushd "$project_dir" >/dev/null
-            log "$YELLOW" "RUN" "cargo check --release (mode=$mode${suffix})"
-            cargo check --release 2>&1 | tee "$log_file"
-            popd >/dev/null
-
-            log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
-            rm -rf "$project_dir"
+            log "$YELLOW" "CLEANUP" "Removing generated executable $executable"
+            rm -f "$executable"
         done
     done
 }
@@ -433,22 +427,20 @@ run_test() {
             compute_flag_combo "$oi" "$pi"
             local suffix="$COMBO_LABEL_SUFFIX" flags="$COMBO_EXTRA_FLAGS"
 
-            local package_name project_dir log_file parsed_file
+            local package_name executable log_file parsed_file
             package_name="$(sanitize_package_name "${program_stem}_${dataset_name}_${mode}${suffix}")"
-            project_dir="${ROOT_DIR}/${package_name}"
+            executable="${ROOT_DIR}/${package_name}"
             log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${mode}${suffix}.log"
             parsed_file="${PARSED_DIR}/${program_stem}_${dataset_name}_${mode}${suffix}_size.txt"
 
             log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=$mode${suffix})"
 
-            rm -rf "$project_dir"
-            invoke_compiler "$prog_path" "$dataset_path" "$project_dir" "$mode" "$flags"
-            [[ -d "$project_dir" ]] || die "Generated project not found (mode=$mode${suffix}): $project_dir"
+            rm -f "$executable"
+            invoke_compiler "$prog_path" "$dataset_path" "$executable" "$mode" "$flags"
+            [[ -x "$executable" ]] || die "Executable not found (mode=$mode${suffix}): $executable"
 
-            pushd "$project_dir" >/dev/null
-            log "$YELLOW" "RUN" "cargo run --release -- -w $WORKERS (mode=$mode${suffix})"
-            cargo run --release -- -w "$WORKERS" 2>&1 | tee "$log_file"
-            popd >/dev/null
+            log "$YELLOW" "RUN" "$executable -w $WORKERS (mode=$mode${suffix})"
+            "$executable" -w "$WORKERS" 2>&1 | tee "$log_file"
 
             [[ -f "$log_file" ]] || die "Run log missing (mode=$mode${suffix}): $log_file"
 
@@ -457,8 +449,8 @@ run_test() {
             verify_results_against_truth "$program_stem" "$dataset_name" "$parsed_file" \
                 || die "Reference verification failed for $prog_file (mode=$mode${suffix})"
 
-            log "$YELLOW" "CLEANUP" "Removing generated project $project_dir"
-            rm -rf "$project_dir"
+            log "$YELLOW" "CLEANUP" "Removing generated executable $executable"
+            rm -f "$executable"
         done
     done
 
