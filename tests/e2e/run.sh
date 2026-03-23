@@ -115,11 +115,11 @@ ensure_compiler_built() {
 
 copy_test_data() {
     local test_dir="$1"
-    local project_dir="$2"
+    local work_dir="$2"
 
     [[ -d "$test_dir/data" ]] || return 0
     compgen -G "$test_dir/data/*" > /dev/null || return 0
-    cp "$test_dir"/data/* "$project_dir/"
+    cp "$test_dir"/data/* "$work_dir/"
 }
 
 ###############################################################################
@@ -127,7 +127,7 @@ copy_test_data() {
 ###############################################################################
 
 run_incremental_session() {
-    local project_dir="$1"
+    local work_dir="$1"
     local commands_file="$2"
     local run_log="$3"
     local fifo_path="$4"
@@ -148,7 +148,7 @@ run_incremental_session() {
     ) > "$fifo_path" &
     feeder_pid=$!
 
-    (cd "$project_dir" && script -qefc "./target/release/program" /dev/null < "$fifo_path" >"$run_log" 2>&1) || status=$?
+    (cd "$work_dir" && script -qefc "./program" /dev/null < "$fifo_path" >"$run_log" 2>&1) || status=$?
 
     rm -f "$fifo_path"
     wait "$feeder_pid" || true
@@ -156,7 +156,7 @@ run_incremental_session() {
 }
 
 run_generated_binary() {
-    local project_dir="$1"
+    local work_dir="$1"
     local test_dir="$2"
     local test_name="$3"
     local run_log="$4"
@@ -164,11 +164,11 @@ run_generated_binary() {
 
     if (( incremental )); then
         command -v script >/dev/null 2>&1 || die "Required dependency 'script' not found on PATH; needed for incremental shell tests."
-        run_incremental_session "$project_dir" "$test_dir/commands.txt" "$run_log" "${BUILD_DIR}/${test_name}.cmd.fifo"
+        run_incremental_session "$work_dir" "$test_dir/commands.txt" "$run_log" "${BUILD_DIR}/${test_name}.cmd.fifo"
         return $?
     fi
 
-    (cd "$project_dir" && ./target/release/program >"$run_log" 2>&1)
+    (cd "$work_dir" && ./program >"$run_log" 2>&1)
 }
 
 ###############################################################################
@@ -234,10 +234,9 @@ run_test() {
     local test_name
     test_name="$(basename "$test_dir")"
 
-    local project_dir="${BUILD_DIR}/${test_name}"
-    local output_dir="${project_dir}/output"
+    local work_dir="${BUILD_DIR}/${test_name}"
+    local output_dir="${work_dir}/output"
     local compile_log="${BUILD_DIR}/${test_name}_compile.log"
-    local build_log="${BUILD_DIR}/${test_name}_build.log"
     local run_log="${BUILD_DIR}/${test_name}_run.log"
 
     local incremental=0
@@ -245,44 +244,29 @@ run_test() {
 
     log "$BLUE" "TEST" "$test_name"
 
-    # 1) Compile .dl -> generated Rust project.
-    rm -rf "$project_dir"
+    # 1) Set up working directory and compile .dl -> standalone executable.
+    rm -rf "$work_dir"
+    mkdir -p "$work_dir"
     local extra_flags=()
     if [[ -f "$test_dir/flags" ]]; then
         mapfile -t extra_flags < "$test_dir/flags"
     fi
-    if ! "$COMPILER_BIN" -D output "${extra_flags[@]}" "$test_dir/program.dl" >"$compile_log" 2>&1; then
+    if ! "$COMPILER_BIN" -D output "${extra_flags[@]}" "$test_dir/program.dl" -o "$work_dir/program" >"$compile_log" 2>&1; then
         fail_with_log "$test_name" "FlowLog compilation failed" "Compiler output:" "$compile_log" "full"
         return
     fi
 
-    # Compiler emits a folder named after the .dl stem in CWD (here: program).
-    local generated="${BUILD_DIR}/program"
-    if [[ ! -d "$generated" ]]; then
-        log "$RED" "FAIL" "$test_name — generated project not found"
-        log "$YELLOW" "HINT" "Expected directory: $generated"
-        record_failure "$test_name" "generated project dir not found"
-        return
-    fi
-    mv "$generated" "$project_dir"
-
     # 2) Stage test inputs.
-    copy_test_data "$test_dir" "$project_dir"
+    copy_test_data "$test_dir" "$work_dir"
     mkdir -p "$output_dir"
 
-    # 3) Build generated Rust project.
-    if ! (cd "$project_dir" && cargo build --release >"$build_log" 2>&1); then
-        fail_with_log "$test_name" "cargo build failed" "Build log (last 20 lines):" "$build_log" "tail"
-        return
-    fi
-
-    # 4) Execute generated binary.
-    if ! run_generated_binary "$project_dir" "$test_dir" "$test_name" "$run_log" "$incremental"; then
+    # 3) Execute generated binary.
+    if ! run_generated_binary "$work_dir" "$test_dir" "$test_name" "$run_log" "$incremental"; then
         fail_with_log "$test_name" "execution failed" "Runtime log (last 20 lines):" "$run_log" "tail"
         return
     fi
 
-    # 5) Compare outputs.
+    # 4) Compare outputs.
     if compare_expected_outputs "$test_dir" "$output_dir"; then
         log "$GREEN" "PASS" "$test_name"
         ((passed++)) || true
@@ -292,8 +276,8 @@ run_test() {
     fi
 
     # Cleanup generated artifacts to keep disk usage low.
-    rm -rf "$project_dir"
-    rm -f "$compile_log" "$build_log" "$run_log"
+    rm -rf "$work_dir"
+    rm -f "$compile_log" "$run_log"
 }
 
 ###############################################################################

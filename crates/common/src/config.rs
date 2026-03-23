@@ -71,6 +71,11 @@ pub struct Config {
     /// program must be defined in this file.
     #[arg(long, value_name = "PATH")]
     pub udf_file: Option<String>,
+
+    /// Keep the intermediate generated Rust crate instead of cleaning it up
+    /// after building the executable.
+    #[arg(long)]
+    pub save_temps: bool,
 }
 
 impl Config {
@@ -101,12 +106,21 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from(self.program_name()))
     }
 
+    /// Intermediate build directory for the generated Rust crate.
+    /// Uses a hidden dotfile name (e.g., `.galen.build/`) so it won't collide
+    /// with the final executable or any user files.
+    pub fn build_dir(&self) -> PathBuf {
+        let exe = self.executable_path();
+        let name = exe.file_name().and_then(|n| n.to_str()).unwrap_or("out");
+        exe.with_file_name(format!(".{name}.build"))
+    }
+
     pub fn executable_name(&self) -> String {
         self.executable_path()
             .file_name()
             .and_then(|name| name.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "Compiler error: invalid executable name".into())
+            .unwrap_or("out")
+            .to_string()
     }
 
     pub fn output_dir(&self) -> Option<&str> {
@@ -184,6 +198,11 @@ impl Config {
     /// Path to the user-supplied UDF implementation file, if any.
     pub fn udf_file(&self) -> Option<&str> {
         self.udf_file.as_deref()
+    }
+
+    /// Whether to keep the intermediate generated Rust crate.
+    pub fn save_temps(&self) -> bool {
+        self.save_temps
     }
 }
 

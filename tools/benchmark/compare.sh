@@ -77,18 +77,6 @@ trim() {
     printf '%s' "$s"
 }
 
-# Turn an arbitrary string into a valid Cargo package name
-# (lowercase, no special chars, does not start with a digit).
-sanitize_package_name() {
-    local s
-    s="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-    s="$(printf '%s' "$s" | tr -c 'a-z0-9_-' '_')"
-    s="$(printf '%s' "$s" | sed 's/_\{2,\}/_/g; s/-\{2,\}/-/g; s/^[-_]//; s/[-_]$//')"
-    [[ -z "$s" ]]         && s="flowlog_bench"
-    [[ "$s" =~ ^[0-9] ]] && s="flowlog_${s}"
-    printf '%s' "$s"
-}
-
 # Parse a config line "prog = dataset" and set PROG_NAME / DATASET_NAME.
 # Returns 1 when the line should be skipped (blank, comment, test.dl).
 parse_config_line() {
@@ -396,35 +384,29 @@ run_compiler() {
     local dataset_path
     dataset_path="$(realpath "${FACT_DIR}/${dataset_name}")"
 
-    local package_name
-    package_name="$(sanitize_package_name "bench_${stem}_${dataset_name}")"
-    local project_dir="${ROOT_DIR}/${package_name}"
+    local binary="${ROOT_DIR}/bench_${stem}_${dataset_name}"
     local best_log="${LOG_DIR}/${stem}_${dataset_name}_compiler.log"
 
     log "$BLUE" "RUN" \
         "Compiler:  $prog_file + $dataset_name (batch, w=$WORKERS, runs=$NUM_RUNS)"
     mkdir -p "$LOG_DIR"
 
-    # Generate the Cargo project (once).
-    rm -rf "$project_dir"
+    # Compile .dl -> standalone executable (once).
+    rm -f "$binary"
     "$COMPILER_BIN" "$prog_path" \
         -F "$dataset_path" \
-        -o "$project_dir" \
+        -o "$binary" \
         --mode datalog-batch \
-        || die "Code generation failed for $prog_file"
-    [[ -d "$project_dir" ]] || die "Generated project not found: $project_dir"
+        || die "Compilation failed for $prog_file"
+    [[ -x "$binary" ]] || die "Binary not found: $binary"
 
-    # Build once, then run N times.
-    pushd "$project_dir" >/dev/null
-    log "$YELLOW" "BUILD" "  Building generated project"
-    cargo build --release 2>&1 | tail -3
-
+    # Run N times.
     local entries=""
     for run in $(seq 1 "$NUM_RUNS"); do
         local run_log="${LOG_DIR}/${stem}_${dataset_name}_compiler_run${run}.log"
 
         log "$YELLOW" "RUN" "  Compiler attempt $run/$NUM_RUNS"
-        cargo run --release -- -w "$WORKERS" > "$run_log" 2>&1 || {
+        "$binary" -w "$WORKERS" > "$run_log" 2>&1 || {
             log "$RED" "WARN" \
                 "Compiler run $run failed for $prog_file + $dataset_name (see $run_log)"
             continue
@@ -436,10 +418,9 @@ run_compiler() {
 
         [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries }${t}:${run_log}"
     done
-    popd >/dev/null
 
-    # Clean up the generated Cargo project.
-    rm -rf "$project_dir"
+    # Clean up the binary.
+    rm -f "$binary"
 
     if [[ -n "$entries" ]]; then
         local median_entry median_time median_log
