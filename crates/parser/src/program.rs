@@ -788,7 +788,7 @@ impl Program {
         // Fact relations are always needed.
         needed_preds.extend(self.facts.keys().cloned());
 
-        // Relations referenced by loop stop conditions must be retained even if
+        // Relations referenced by loop until conditions must be retained even if
         // they are not outputs. They are semantically live because the loop
         // controller reads them to decide termination.
         needed_preds.extend(

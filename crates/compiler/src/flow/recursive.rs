@@ -579,7 +579,7 @@ impl Compiler {
             return (Vec::new(), ConditionPlan::default());
         };
 
-        let (prelude, boolean_stop_conditions) = self.build_stop_conditions(cond, next_bindings);
+        let (prelude, boolean_until_conditions) = self.build_until_conditions(cond, next_bindings);
 
         // Preserve empty window lists as Some([]) rather than collapsing them to
         // None.  An empty list arises from contradictory bounds (e.g. `@it >= 5
@@ -590,13 +590,13 @@ impl Compiler {
         // for an empty range list.  Both are required: collapsing Some([]) to
         // None here would make the empty case unreachable there, and the loop
         // would run forever instead of zero iterations.
-        let iter_continue_conditions = cond.while_part().map(|r| r.to_vec());
+        let iter_while_conditions = cond.while_part().map(|r| r.to_vec());
         // Mark imports whenever a `while` clause is present, even if the
         // resolved range list is empty (contradictory bounds like `@it >= 5
         // and @it < 3`). The generated feedback still goes through
         // `continue_stmt(...).flat_map(...).as_collection()`, which requires
         // these imports regardless of whether the range evaluates to `false`.
-        if iter_continue_conditions.is_some() {
+        if iter_while_conditions.is_some() {
             self.imports.mark_timely_map();
             self.imports.mark_as_collection();
         }
@@ -605,8 +605,8 @@ impl Compiler {
         (
             prelude,
             ConditionPlan {
-                boolean_stop_conditions,
-                iter_continue_conditions,
+                boolean_until_conditions,
+                iter_while_conditions,
                 connective,
             },
         )
@@ -639,9 +639,9 @@ impl Compiler {
             });
             let var_name = format_ident!("{}_var", recursive_ident);
             let dedup = self.dedup_recursive();
-            // Only generate weight tokens and normalize when stop conditions
+            // Only generate weight tokens and normalize when until conditions
             // exist — these require antijoin arithmetic (pos/neg/normalize).
-            let (pos, neg, normalize) = if plan.boolean_stop_conditions.is_some() {
+            let (pos, neg, normalize) = if plan.boolean_until_conditions.is_some() {
                 let (p, n) = self.weight_concat_tokens();
                 (p, n, self.normalize_antijoin())
             } else {
@@ -696,7 +696,7 @@ impl Compiler {
     }
 
     /// Build prelude stmts and the arranged gate signal for the `until` clause.
-    fn build_stop_conditions(
+    fn build_until_conditions(
         &mut self,
         cond: &LoopCondition,
         next_bindings: &HashMap<u64, Ident>,
@@ -713,7 +713,7 @@ impl Compiler {
         let first = until_group.first();
         let first_next = next_bindings.get(&first.fp).unwrap_or_else(|| {
             panic!(
-                "Compiler: stop relation fp {} missing from next_bindings",
+                "Compiler: until relation fp {} missing from next_bindings",
                 first.fp
             )
         });
@@ -726,7 +726,7 @@ impl Compiler {
         for (conn, rel) in until_group.rest() {
             let fp = rel.fp;
             let next_ident = next_bindings.get(&fp).unwrap_or_else(|| {
-                panic!("Compiler: stop relation fp {fp} missing from next_bindings")
+                panic!("Compiler: until relation fp {fp} missing from next_bindings")
             });
             let sig = format_ident!("rel_sig_{}", fp);
             stmts.push(quote! { let #sig = #next_ident.clone() #dedup; });
@@ -761,9 +761,9 @@ impl Compiler {
 #[derive(Default)]
 struct ConditionPlan {
     /// Arranged until-gate (`<ident>_arr`) or `None` if there is no `until` clause.
-    boolean_stop_conditions: Option<Ident>,
+    boolean_until_conditions: Option<Ident>,
     /// Iteration windows from the `while` clause, or `None` if absent.
-    iter_continue_conditions: Option<Vec<(u16, u16)>>,
+    iter_while_conditions: Option<Vec<(u16, u16)>>,
     /// Connective joining the `until` and `while` clauses, if both are present.
     connective: Option<LoopConnective>,
 }
@@ -810,8 +810,8 @@ fn build_feedback_expr(
     normalize: &TokenStream,
 ) -> TokenStream {
     match (
-        plan.iter_continue_conditions.as_deref(),
-        plan.boolean_stop_conditions.as_ref(),
+        plan.iter_while_conditions.as_deref(),
+        plan.boolean_until_conditions.as_ref(),
     ) {
         (None, None) => quote! { #next.clone() },
         (Some(ranges), None) => continue_stmt(next, build_iter_conditions(ranges)),
@@ -822,7 +822,7 @@ fn build_feedback_expr(
             let range_cond = build_iter_conditions(ranges);
             if matches!(plan.connective, Some(LoopConnective::Or)) {
                 // OR: rows in-range pass unconditionally; rows out-of-range are
-                // still allowed unless the stop gate fires.
+                // still allowed unless the until gate fires.
                 let allowed = continue_stmt(next, range_cond.clone());
                 let blocked = stop_stmt(
                     continue_stmt(next, quote! { !(#range_cond) }),

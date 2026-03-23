@@ -26,7 +26,7 @@ use tracing::{debug, info, warn};
 ///   single pass.
 /// - **Recursive** — rules forming a strongly-connected component (SCC), or a
 ///   single rule that references its own head; evaluated recursively until a
-///   fixpoint or stop condition is reached.
+///   fixpoint or until condition is reached.
 ///
 /// ## Loop blocks
 ///
@@ -68,7 +68,7 @@ pub struct Stratifier {
     /// `true` iff the corresponding stratum is recursive (parallel with `stratum`).
     is_recursive_stratum_bitmap: Vec<bool>,
 
-    /// The stop condition for each stratum.
+    /// The loop condition for each stratum.
     ///
     /// `Some` only for loop-derived strata; `None` for SCC-derived plain strata.
     /// Parallel with `stratum`.
@@ -129,7 +129,7 @@ impl Stratifier {
         self.is_recursive_stratum_bitmap[idx]
     }
 
-    /// Returns the stop condition for a loop-derived stratum, or `None` for a
+    /// Returns the loop condition for a loop-derived stratum, or `None` for a
     /// plain SCC-derived stratum.
     #[must_use]
     pub fn loop_condition(&self, idx: usize) -> Option<&LoopCondition> {
@@ -226,7 +226,7 @@ impl Stratifier {
                 Segment::Loop(block) | Segment::Fixpoint(block) => {
                     // A loop/fixpoint block is always exactly one recursive stratum.
                     // No SCC analysis is performed inside: all rules iterate
-                    // together under the block's stop condition.
+                    // together under the block's loop condition.
                     let rules = block.rules();
                     let rule_count = rules.len();
 
@@ -772,11 +772,11 @@ impl Stratifier {
         }
     }
 
-    /// Validate that every relation in a loop stop condition:
+    /// Validate that every relation in a loop until condition:
     ///   1. is derived by at least one rule inside the loop body, and
     ///   2. transitively depends on a recursive relation in the same stratum.
     ///
-    /// A stop relation that is never derived or is independent of the recursive
+    /// An until relation that is never derived or is independent of the recursive
     /// computation can never change across iterations and is rejected.
     fn validate_loop_conditions(&self) {
         for (idx, cond_opt) in self.stratum_loop_condition.iter().enumerate() {
@@ -835,7 +835,7 @@ impl Stratifier {
                     );
                 }
 
-                // BFS from the stop relation's rules through the dependency graph
+                // BFS from the until relation's rules through the dependency graph
                 // to verify it transitively reaches a recursive relation.
                 let seed: Vec<usize> = local_head_fp
                     .iter()
@@ -1135,7 +1135,7 @@ mod tests {
         let s = Stratifier::from_program(&parse_program(src), true);
         assert_eq!(s.stratum.len(), 1);
         // A `loop {}` block always becomes one recursive stratum; the condition
-        // is None because fixpoint is implicit (no explicit stop condition).
+        // is None because fixpoint is implicit (no explicit loop condition).
         assert!(s.is_recursive_stratum(0));
     }
 

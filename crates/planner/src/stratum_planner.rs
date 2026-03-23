@@ -74,7 +74,7 @@ pub struct StratumPlanner {
     /// where start..end is the range of flattened arg positions in the output layout.
     idb_to_udf_map: HashMap<u64, (String, usize, usize, usize)>,
 
-    /// Loop stop condition for this stratum, if it was declared as a loop block.
+    /// Loop condition for this stratum, if it was declared as a loop block.
     /// `None` for plain strata (which run to fixpoint implicitly).
     loop_condition: Option<LoopCondition>,
 }
@@ -294,7 +294,7 @@ impl StratumPlanner {
         &self.idb_to_udf_map
     }
 
-    /// Get the loop stop condition for this stratum, if it is a loop block.
+    /// Get the loop condition for this stratum, if it is a loop block.
     #[inline]
     pub fn loop_condition(&self) -> Option<&LoopCondition> {
         self.loop_condition.as_ref()
