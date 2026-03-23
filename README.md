@@ -67,7 +67,7 @@ $ flowlog <PROGRAM> [OPTIONS]
 | `-o <PATH>` | Path for the generated executable. | No | Defaults to the program stem (e.g., `reach.dl` → `./reach`). |
 | `-D, --output-dir <DIR>` | Location for materializing `.output` relations. | Required when any relation uses `.output` | Pass `-` to print tuples to stderr instead of writing files. |
 | `--mode <MODE>` | Choose execution semantics: `datalog-batch` (default), `datalog-inc`, `extend-batch`, or `extend-inc`. | No | `datalog-batch` uses `Present` diff; all other modes use `i32`. Extended modes enable explicit `loop` blocks. |
-| `-P, --profile` | Enable profiling (collect execution statistics). | No | Writes profiler logs into the build directory. |
+| `-P, --profile` | Enable profiling (collect execution statistics). | No | Writes profiler logs. |
 | `-h, --help` | Show full Clap help text. | No | Includes additional examples and environment variables. |
 
 ## End-to-End Example
