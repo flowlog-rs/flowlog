@@ -304,6 +304,8 @@ run_compile_check() {
 
             log "$YELLOW" "CLEANUP" "Removing generated executable $executable"
             rm -f "$executable"
+            rm -f "${executable}_ops.json"
+            rm -rf "${ROOT_DIR}/.${package_name}.build"
         done
     done
 }
@@ -451,6 +453,8 @@ run_test() {
 
             log "$YELLOW" "CLEANUP" "Removing generated executable $executable"
             rm -f "$executable"
+            rm -f "${executable}_ops.json"
+            rm -rf "${ROOT_DIR}/.${package_name}.build"
         done
     done
 
