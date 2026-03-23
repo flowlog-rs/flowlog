@@ -110,11 +110,17 @@ impl Compiler {
             write_file(&src_dir.join("udf.rs"), content.trim_start())?;
         }
 
-        // Profiler logs if enabled
+        // Profiler logs — write alongside the final executable so they
+        // survive build-directory cleanup when --save-temps is not set.
         with_profiler_ref(profiler, |profiler| {
-            let log_dir = root.join("log");
-            ensure_dir(&log_dir)?;
-            let ops_path = log_dir.join(format!("{}_ops.json", self.config.executable_name()));
+            let exe = self.config.executable_path();
+            let ops_path = exe.with_file_name(format!(
+                "{}_ops.json",
+                self.config.executable_name()
+            ));
+            if let Some(parent) = ops_path.parent() {
+                ensure_dir(parent)?;
+            }
             profiler.write_json(&ops_path)
         })?;
 

@@ -41,10 +41,18 @@ pub fn build_and_collect(
         )));
     }
 
-    let binary_name = format!("{executable_name}{}", env::consts::EXE_SUFFIX);
+    let suffix = env::consts::EXE_SUFFIX;
+    let binary_name = if !suffix.is_empty() && !executable_name.ends_with(suffix) {
+        format!("{executable_name}{suffix}")
+    } else {
+        executable_name.to_string()
+    };
     let built_binary = build_dir.join("target").join("release").join(&binary_name);
 
     let dest = executable_path.with_file_name(&binary_name);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::copy(&built_binary, &dest)?;
 
     #[cfg(unix)]
