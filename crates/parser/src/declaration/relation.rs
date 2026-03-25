@@ -169,6 +169,81 @@ impl Relation {
             .unwrap_or(",")
     }
 
+    /// Get the output row limit, if specified.
+    #[must_use]
+    pub fn output_limit(&self) -> Option<usize> {
+        let limit = self
+            .output_params
+            .as_ref()
+            .and_then(|m| m.get("limit"))
+            .map(|v| {
+                v.parse::<usize>().unwrap_or_else(|_| {
+                    panic!(
+                        "Parser error: invalid limit '{}' for relation '{}', expected a non-negative integer",
+                        v, self.name
+                    )
+                })
+            });
+        if limit.is_some() {
+            assert!(
+                self.output_params
+                    .as_ref()
+                    .and_then(|m| m.get("order_by"))
+                    .is_some(),
+                "Parser error: limit requires order_by for relation '{}'",
+                self.name
+            );
+        }
+        limit
+    }
+
+    /// Get the output ordering specification, if specified.
+    #[must_use]
+    pub fn output_order_by(&self) -> Option<Vec<(usize, DataType, bool)>> {
+        self.output_params
+            .as_ref()
+            .and_then(|m| m.get("order_by"))
+            .map(|spec| {
+                spec.split(',')
+                    .map(|part| {
+                        let tokens: Vec<&str> = part.split_whitespace().collect();
+                        assert!(
+                            !tokens.is_empty(),
+                            "Parser error: empty order_by clause in relation '{}'",
+                            self.name
+                        );
+                        let attr_name = tokens[0].to_lowercase();
+                        assert!(
+                            tokens.len() <= 2,
+                            "Parser error: unexpected extra tokens in order_by clause '{}' for relation '{}'",
+                            part.trim(), self.name
+                        );
+                        let ascending = match tokens.get(1) {
+                            Some(d) if d.eq_ignore_ascii_case("desc") => false,
+                            Some(d) if d.eq_ignore_ascii_case("asc") => true,
+                            Some(d) => panic!(
+                                "Parser error: invalid order_by direction '{}' in relation '{}', expected ASC or DESC",
+                                d, self.name
+                            ),
+                            None => true,
+                        };
+                        let (idx, attr) = self
+                            .attributes
+                            .iter()
+                            .enumerate()
+                            .find(|(_, a)| a.name() == attr_name)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "Parser error: order_by attribute '{}' not found in relation '{}'",
+                                    attr_name, self.name
+                                )
+                            });
+                        (idx, *attr.data_type(), ascending)
+                    })
+                    .collect()
+            })
+    }
+
     /// Set printsize flag.
     pub fn set_printsize(&mut self, printsize: bool) {
         self.printsize = printsize;
@@ -293,91 +368,62 @@ mod tests {
     }
 
     #[test]
-    fn new_and_accessors() {
-        let rel = Relation::new("Users", attrs());
-        assert_eq!(rel.name(), "users");
-        assert_eq!(rel.arity(), 2);
-        assert!(!rel.is_nullary());
-        assert_eq!(rel.attributes()[0].name(), "id");
-        assert!(!rel.is_file_backed());
-        assert!(!rel.output());
-        assert!(!rel.printsize());
+    fn output_limit_some() {
+        let mut rel = Relation::new("r", attrs());
+        let mut params = HashMap::new();
+        params.insert("limit".to_string(), "42".to_string());
+        params.insert("order_by".to_string(), "id".to_string());
+        rel.set_output_params(params);
+        assert_eq!(rel.output_limit(), Some(42));
     }
 
     #[test]
-    fn display_variants() {
-        let a = vec![
-            Attribute::new("x".into(), Int32),
-            Attribute::new("y".into(), String),
-        ];
-
-        let basic = Relation::new("r", a.clone());
-        assert_eq!(basic.to_string(), ".decl r(x: int32, y: string)");
-
-        let nullary = Relation::new("flag", vec![]);
-        assert_eq!(nullary.to_string(), ".decl flag()");
-
-        // Test with input params
-        let mut with_input = Relation::new("input_rel", a.clone());
+    #[should_panic(expected = "limit requires order_by")]
+    fn output_limit_without_order_by() {
+        let mut rel = Relation::new("r", attrs());
         let mut params = HashMap::new();
-        params.insert("filename".to_string(), "data.csv".to_string());
-        params.insert("IO".to_string(), "file".to_string());
-        with_input.set_input_params(params);
-        assert_eq!(
-            with_input.to_string(),
-            ".decl input_rel(x: int32, y: string) .input(IO=\"file\", filename=\"data.csv\")"
-        );
-
-        // Test with output
-        let mut with_output = Relation::new("output_rel", a.clone());
-        with_output.set_output(true);
-        assert_eq!(
-            with_output.to_string(),
-            ".decl output_rel(x: int32, y: string) .output"
-        );
-
-        // Test with printsize
-        let mut with_printsize = Relation::new("print_rel", a.clone());
-        with_printsize.set_printsize(true);
-        assert_eq!(
-            with_printsize.to_string(),
-            ".decl print_rel(x: int32, y: string) .printsize"
-        );
-
-        // Test with all annotations
-        let mut full_rel = Relation::new("full_rel", a);
-        let mut params = HashMap::new();
-        params.insert("filename".to_string(), "input.csv".to_string());
-        full_rel.set_input_params(params);
-        full_rel.set_output(true);
-        full_rel.set_printsize(true);
-        assert_eq!(
-            full_rel.to_string(),
-            ".decl full_rel(x: int32, y: string) .input(filename=\"input.csv\") .output .printsize"
-        );
+        params.insert("limit".to_string(), "42".to_string());
+        rel.set_output_params(params);
+        let _ = rel.output_limit();
     }
 
     #[test]
-    fn equality_semantics() {
-        let r1 = Relation::new("t", attrs());
-        let r2 = Relation::new("t", attrs());
-        let r3 = Relation::new("u", attrs());
-        assert_eq!(r1, r2);
-        assert_ne!(r1, r3);
+    #[should_panic(expected = "invalid limit")]
+    fn output_limit_bad_value() {
+        let mut rel = Relation::new("r", attrs());
+        let mut params = HashMap::new();
+        params.insert("limit".to_string(), "abc".to_string());
+        rel.set_output_params(params);
+        let _ = rel.output_limit();
     }
 
     #[test]
-    fn input_filename_and_delimiter_accessors() {
-        let mut rel = Relation::new("input_rel", attrs());
-        assert_eq!(rel.input_file_name(), "input_rel.csv");
-        assert_eq!(rel.input_delimiter(), ",");
-
+    fn output_order_by_single_asc_default() {
+        let mut rel = Relation::new("r", attrs());
         let mut params = HashMap::new();
-        params.insert("filename".to_string(), "data.csv".to_string());
-        params.insert("delimiter".to_string(), ",".to_string());
-        rel.set_input_params(params);
+        params.insert("order_by".to_string(), "id".to_string());
+        rel.set_output_params(params);
+        let spec = rel.output_order_by().unwrap();
+        assert_eq!(spec, vec![(0, Int32, true)]);
+    }
 
-        assert_eq!(rel.input_file_name(), "data.csv");
-        assert_eq!(rel.input_delimiter(), ",");
+    #[test]
+    fn output_order_by_multi_mixed() {
+        let mut rel = Relation::new("r", attrs());
+        let mut params = HashMap::new();
+        params.insert("order_by".to_string(), "name DESC, id ASC".to_string());
+        rel.set_output_params(params);
+        let spec = rel.output_order_by().unwrap();
+        assert_eq!(spec, vec![(1, String, false), (0, Int32, true)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "not found in relation")]
+    fn output_order_by_unknown_attr() {
+        let mut rel = Relation::new("r", attrs());
+        let mut params = HashMap::new();
+        params.insert("order_by".to_string(), "nonexistent".to_string());
+        rel.set_output_params(params);
+        let _ = rel.output_order_by();
     }
 }

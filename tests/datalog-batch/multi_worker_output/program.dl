@@ -1,0 +1,27 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : multi_worker_output
+// Feature : in-memory buffer merge with multiple workers (4 workers)
+// Covers  : per-worker thread-local buffers are correctly merged by worker 0
+//
+// Uses reachability on a small graph to generate output from multiple workers.
+// Also tests ORDER BY + LIMIT with multi-worker to verify merge correctness.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Source(id: int32)
+.input Source(IO="file", filename="Source.csv", delimiter=",")
+
+// All reachable nodes from source.
+.decl Reach(src: int32, dst: int32, dist: int32)
+Reach(s, s, 0) :- Source(s).
+Reach(s, y, min(d + 1)) :- Reach(s, x, d), Edge(x, y).
+
+// Full output — verify all rows from all workers merged correctly.
+.output Reach(delimiter=",")
+
+// Top 3 closest nodes — ORDER BY + LIMIT with multi-worker.
+.decl Closest(src: int32, dst: int32, dist: int32)
+Closest(s, d, dist) :- Reach(s, d, dist).
+.output Closest(delimiter=",", order_by="dist, dst", limit="3")
