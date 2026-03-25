@@ -213,10 +213,15 @@ impl Relation {
                             self.name
                         );
                         let attr_name = tokens[0].to_lowercase();
-                        let ascending = tokens
-                            .get(1)
-                            .map(|d| !d.eq_ignore_ascii_case("desc"))
-                            .unwrap_or(true);
+                        let ascending = match tokens.get(1) {
+                            Some(d) if d.eq_ignore_ascii_case("desc") => false,
+                            Some(d) if d.eq_ignore_ascii_case("asc") => true,
+                            Some(d) => panic!(
+                                "Parser error: invalid order_by direction '{}' in relation '{}', expected ASC or DESC",
+                                d, self.name
+                            ),
+                            None => true,
+                        };
                         let (idx, attr) = self
                             .attributes
                             .iter()
