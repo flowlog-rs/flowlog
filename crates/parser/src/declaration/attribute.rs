@@ -15,7 +15,10 @@ impl Attribute {
     #[must_use]
     #[inline]
     pub fn new(name: String, data_type: DataType) -> Self {
-        Self { name, data_type }
+        Self {
+            name: name.to_lowercase(),
+            data_type,
+        }
     }
 
     /// Attribute (column) name.
