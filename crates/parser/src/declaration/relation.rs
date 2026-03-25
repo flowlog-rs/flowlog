@@ -206,7 +206,7 @@ impl Relation {
             .map(|spec| {
                 spec.split(',')
                     .map(|part| {
-                        let tokens: Vec<&str> = part.trim().split_whitespace().collect();
+                        let tokens: Vec<&str> = part.split_whitespace().collect();
                         assert!(
                             !tokens.is_empty(),
                             "Parser error: empty order_by clause in relation '{}'",
