@@ -38,7 +38,7 @@ use planner::StratumPlanner;
 use profiler::{with_profiler, Profiler};
 
 use import::ImportTracker;
-use inspect::gen_delete_partitions;
+use inspect::InspectorCodegen;
 
 // =========================================================================
 // Compiler
@@ -175,12 +175,16 @@ impl Compiler {
             calculated_output_fps.extend(stratum.output_relations());
         }
 
-        let (inspect_stmts, merge_stmts, delete_stmts) = self.collect_inspectors(profiler);
+        let InspectorCodegen {
+            buf_declarations,
+            buf_clones,
+            local_decls,
+            inspect_stmts,
+            flush_stmts,
+            merge_stmts,
+        } = self.collect_inspectors(profiler);
 
-        let timestamp_type = match self.config.mode() {
-            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => quote! { u32 },
-            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => quote! { () },
-        };
+        let timestamp_type = self.timestamp_type();
 
         // Incremental-only: generate relation registry inserts from the EDB list.
         //
@@ -221,24 +225,39 @@ impl Compiler {
                 let time_profile_write = self.gen_time_profile_write_batch();
                 let memory_profile_write = self.gen_memory_profile_write_batch();
 
+                // `peers` is only needed when there are file-based inputs
+                // (used by `__byte_range_reader` for byte-range sharding).
+                let maybe_peers = if self.program.edbs().iter().any(|r| r.is_file_backed()) {
+                    quote! { let peers = worker.peers(); }
+                } else {
+                    quote! {}
+                };
+
                 quote! {
                     fn main() {
                         let args: Vec<String> = std::env::args().collect();
                         let barrier = worker_barrier_from_args(&args);
 
+                        // In-memory output buffers (one per-worker vec per output relation).
+                        #(#buf_declarations)*
+
                         timely::execute_from_args(args.into_iter(), {
                             let barrier = barrier.clone();
+                            #(#buf_clones)*
 
                             move |worker| {
                             // --- Runtime setup -------------------------------------------------
                             let timer = Instant::now();
-                            let peers = worker.peers();
                             let index = worker.index();
+                            #maybe_peers
 
                             // --- Time profile init ---------------------------------------------
                             #time_profile_init
                             // --- Memory profile init -------------------------------------------
                             #memory_profile_init
+
+                            // Per-worker local output buffers.
+                            #(#local_decls)*
 
                             // --- Build dataflow graph -----------------------------------------
                             let #lhs_binding =
@@ -264,6 +283,10 @@ impl Compiler {
 
                             // --- Execute to fixpoint -------------------------------------------
                             while worker.step() {}
+
+                            // Flush thread-local buffers into shared buffers (lock-free writes → one lock).
+                            #(#flush_stmts)*
+
                             barrier.wait();
 
                             // --- Time profile writeout -----------------------------------------
@@ -274,7 +297,7 @@ impl Compiler {
                             if index == 0 {
                                 println!("{:?}:\tDataflow executed", timer.elapsed());
 
-                                // === Merge per-worker output partitions (if any) ===
+                                // === Merge output buffers (sort, limit, write) ===
                                 #(#merge_stmts)*
                             }
                         }})
@@ -295,9 +318,13 @@ impl Compiler {
                             Arc::new(RwLock::new(TxnState::default()));
                         let barrier = worker_barrier_from_args(&args);
 
+                        // In-memory output buffers (one per-worker vec per output relation).
+                        #(#buf_declarations)*
+
                         timely::execute_from_args(args.into_iter(), {
                             let shared_txn = shared_txn.clone();
                             let barrier = barrier.clone();
+                            #(#buf_clones)*
 
                             move |worker| {
                                 // --- Runtime setup -------------------------------------------------
@@ -309,6 +336,9 @@ impl Compiler {
                                 #time_profile_init
                                 // --- Memory profile init -------------------------------------------
                                 #memory_profile_init
+
+                                // Per-worker local output buffers (Rc<RefCell> — no sync overhead).
+                                #(#local_decls)*
 
                                 // --- Build dataflow graph -----------------------------------------
                                 let #lhs_binding =
@@ -384,8 +414,6 @@ impl Compiler {
                                         );
                                         last_epoch_seen = snap.epoch;
 
-                                        let mut should_quit = false;
-
                                         match snap.action {
                                             TxnAction::Commit => {
                                                 apply_ops(&mut rels, snap.pending.as_slice(), peers, index);
@@ -402,6 +430,9 @@ impl Compiler {
                                                 #time_profile_write
                                                 #memory_profile_write
 
+                                                // Flush thread-local buffers into shared buffers.
+                                                #(#flush_stmts)*
+
                                                 barrier.wait();
                                             }
 
@@ -417,19 +448,15 @@ impl Compiler {
                                                 #memory_profile_write
 
                                                 barrier.wait();
-                                                should_quit = true;
+                                                break;
                                             }
 
                                             TxnAction::None => {
-                                                barrier.wait();
+                                                unreachable!("worker 0 only publishes Commit or Quit");
                                             }
                                         }
 
                                         barrier.wait();
-
-                                        if should_quit {
-                                            break;
-                                        }
                                     }
                                     return;
                                 }
@@ -506,12 +533,17 @@ impl Compiler {
                                             #time_profile_write
                                             #memory_profile_write
 
+                                            // Flush thread-local buffers into shared buffers.
+                                            #(#flush_stmts)*
+
                                             barrier.wait();
 
-                                            // === Merge per-worker output partitions (if any) ===
-                                            #(#merge_stmts)*
+                                            if index == 0 {
+                                                // === Merge output buffers (sort, limit, write) ===
+                                                #(#merge_stmts)*
 
-                                            println!("{:?}:\tCommitted & executed", round_timer.elapsed());
+                                                println!("{:?}:\tCommitted & executed", round_timer.elapsed());
+                                            }
 
                                             local_txn.abort();
 
@@ -545,11 +577,6 @@ impl Compiler {
                                             #memory_profile_write
 
                                             barrier.wait();
-
-                                            // === incremental quit: clean up tmp per-worker partition files ===
-                                            #(#delete_stmts)*
-
-                                            barrier.wait();
                                             break;
                                         }
                                     }
@@ -581,70 +608,5 @@ impl Compiler {
 
         let ast = parse2(file_ts).expect("valid token stream");
         prettyplease::unparse(&ast)
-    }
-
-    /// Assemble inspection and partition-merge statements for IDB relations based on CLI args.
-    fn collect_inspectors(
-        &mut self,
-        profiler: &mut Option<Profiler>,
-    ) -> (Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>) {
-        let mut inspect_stmts = Vec::new();
-        let mut merge_stmts = Vec::new();
-        let mut delete_stmts = Vec::new();
-
-        // Record enter inspect block in profiler if enabled
-        with_profiler(profiler, |profiler| {
-            profiler.update_inspect_block();
-        });
-
-        for idb in self.program.idbs() {
-            let var = self.find_global_ident(idb.fingerprint());
-            let name = idb.name();
-
-            if idb.printsize() {
-                self.imports.mark_as_collection();
-                self.imports.mark_timely_map();
-
-                inspect_stmts.push(self.gen_size_inspector(&var, name, profiler));
-            }
-
-            // Mark ordered-float needed if any IDB has float columns.
-            if idb.data_type().contains(&DataType::Float32)
-                || idb.data_type().contains(&DataType::Float64)
-            {
-                self.imports.mark_ordered_float();
-            }
-
-            if idb.output() {
-                // Mark resolve needed if this output IDB has string columns.
-                if idb.data_type().contains(&DataType::String) {
-                    self.imports.mark_string_resolve();
-                }
-
-                if self.config.output_to_stdout() {
-                    inspect_stmts.push(self.gen_print_inspector(
-                        &var,
-                        name,
-                        idb.arity(),
-                        &idb.data_type(),
-                        profiler,
-                    ));
-                } else {
-                    let parent_dir = self.config.output_dir().expect(
-                        "output directory must be provided when writing IDB output to files",
-                    );
-
-                    inspect_stmts
-                        .push(self.gen_write_inspector(&var, name, parent_dir, idb, profiler));
-                    merge_stmts.push(self.gen_merge_partitions(name, parent_dir));
-
-                    if self.config.is_incremental() {
-                        delete_stmts.push(gen_delete_partitions(name, parent_dir));
-                    }
-                }
-            }
-        }
-
-        (inspect_stmts, merge_stmts, delete_stmts)
     }
 }

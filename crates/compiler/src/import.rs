@@ -147,6 +147,9 @@ pub(crate) struct ImportTracker {
 
     /// Whether a user-defined function module is needed.
     udf: bool,
+
+    /// Whether in-memory output buffers are used (needs Arc + Mutex).
+    output_buffers: bool,
 }
 
 impl ImportTracker {
@@ -383,6 +386,11 @@ impl ImportTracker {
         self.udf = true;
     }
 
+    /// Marks that in-memory output buffers are used (needs Arc + Mutex).
+    pub(crate) fn mark_output_buffers(&mut self) {
+        self.output_buffers = true;
+    }
+
     // ---------------------------------------------------------------------
     // Render helpers: grouping + ordering
     // ---------------------------------------------------------------------
@@ -429,10 +437,30 @@ impl ImportTracker {
             };
         }
 
+        let output_buf = if self.output_buffers {
+            // Incremental already imports Arc via prelude; batch needs it explicitly.
+            let sync_imports = match self.mode {
+                ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
+                    quote! { use std::sync::Mutex; }
+                }
+                ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => {
+                    quote! { use std::sync::{Arc, Mutex}; }
+                }
+            };
+            quote! {
+                #sync_imports
+                use std::rc::Rc;
+                use std::cell::RefCell;
+            }
+        } else {
+            quote! {}
+        };
+
         quote! {
             #file
             #io
             #hashmap
+            #output_buf
             use std::time::Instant;
         }
     }
