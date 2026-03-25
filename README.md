@@ -123,23 +123,33 @@ Key flags:
 
 ## End-to-End Tests
 
-End-to-end tests live in `tests/e2e/`. Run the full suite with:
+End-to-end tests live in `tests/`, organized by evaluation semantics:
+
+| Directory | Mode |
+|---|---|
+| `tests/datalog-batch/` | Standard batch Datalog (default) |
+| `tests/datalog-inc/` | Incremental Datalog |
+| `tests/extend-batch/` | Extended batch (loops) |
+| `tests/extend-inc/` | Extended incremental |
+
+Run the full suite with:
 
 ```bash
-$ bash tests/e2e/run.sh
+$ bash tests/run.sh
 ```
 
 Or run specific tests by name:
 
 ```bash
-$ bash tests/e2e/run.sh loop_fixpoint negation
+$ bash tests/run.sh loop_fixpoint negation
 ```
 
-Each test is a directory under `tests/e2e/<test_name>/` containing:
+Each test is a directory containing:
 - `program.dl` — Datalog source (must use `.output` directives).
 - `data/` — Optional CSV input facts copied into the test working directory.
 - `expected/` — Expected output files (one per output relation).
 - `commands.txt` — Optional incremental transcript (enables incremental mode).
+- `runtime_flags` — Optional runtime flags (e.g. `-w 4` for multi-worker).
 
 ## Background Reading
 
@@ -149,5 +159,5 @@ Each test is a directory under `tests/e2e/<test_name>/` containing:
 
 ## Contributing
 
-Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` and `bash tests/e2e/run.sh`.
+Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` and `bash tests/run.sh`.
 

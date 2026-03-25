@@ -1,16 +1,12 @@
-//! Inspector codegen helpers for FlowLog compiler.
+//! Inspector codegen — buffer, merge, and write IDB output.
 //!
-//! This module generates `TokenStream`s that attach lightweight “inspectors” to
-//! collections produced by the FlowLog compiler/runtime. The inspectors are
-//! intended for debugging and evaluation:
-//! - print tuples or sizes to stderr
-//! - write tuple values to per-worker partition files
-//! - merge partition files into a single output (typically run by worker 0)
+//! Both stdout and file output use the same pipeline:
+//!   inspect → per-worker buffer → flush → merge (ORDER BY / LIMIT) → write
 //!
-//! In incremental mode, tuple inspectors consolidate per-timestamp updates first
-//! so stdout and output files show the net delta for each commit rather than the
-//! full transient recursive update stream.
+//! Buffers store `(data, time, diff)` triples. Batch mode hardcodes
+//! `diff = 1` (DD uses `Present`, not `i32`). Sort operates on data only.
 
+use crate::data_type::type_tokens;
 use crate::Compiler;
 
 use parser::{DataType, Relation};
@@ -20,52 +16,142 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{Index, LitStr};
 
-impl Compiler {
-    /// Incremental outputs are easier to consume as net deltas per commit.
-    #[inline]
-    fn maybe_consolidate_incremental_output(&self) -> TokenStream {
-        if self.config.is_incremental() {
-            quote! { .consolidate() }
-        } else {
-            quote! {}
-        }
-    }
+// =========================================================================
+// Output struct
+// =========================================================================
 
-    /// Generate code that prints the *cardinality* of a collection at each update.
+/// Code fragments spliced into the generated `main()`.
+pub(super) struct InspectorCodegen {
+    pub buf_declarations: Vec<TokenStream>, // before timely::execute
+    pub buf_clones: Vec<TokenStream>,       // closure capture
+    pub local_decls: Vec<TokenStream>,      // worker body, before dataflow
+    pub inspect_stmts: Vec<TokenStream>,    // inside dataflow
+    pub flush_stmts: Vec<TokenStream>,      // before barrier (all workers)
+    pub merge_stmts: Vec<TokenStream>,      // after barrier (worker 0 only)
+}
+
+// =========================================================================
+// Orchestration
+// =========================================================================
+
+impl Compiler {
+    /// Walk IDB relations → fill [`InspectorCodegen`].
+    pub(super) fn collect_inspectors(
+        &mut self,
+        profiler: &mut Option<Profiler>,
+    ) -> InspectorCodegen {
+        let mut cg = InspectorCodegen {
+            buf_declarations: Vec::new(),
+            buf_clones: Vec::new(),
+            local_decls: Vec::new(),
+            inspect_stmts: Vec::new(),
+            flush_stmts: Vec::new(),
+            merge_stmts: Vec::new(),
+        };
+
+        with_profiler(profiler, |p| p.update_inspect_block());
+
+        for idb in self.program.idbs() {
+            let var = self.find_global_ident(idb.fingerprint());
+            let name = idb.name();
+
+            if idb.printsize() {
+                self.imports.mark_as_collection();
+                self.imports.mark_timely_map();
+                cg.inspect_stmts
+                    .push(self.gen_size_inspector(&var, name, profiler));
+            }
+
+            if idb.data_type().contains(&DataType::Float32)
+                || idb.data_type().contains(&DataType::Float64)
+            {
+                self.imports.mark_ordered_float();
+            }
+
+            if idb.output() {
+                if idb.data_type().contains(&DataType::String) {
+                    self.imports.mark_string_resolve();
+                }
+
+                self.imports.mark_output_buffers();
+
+                let to_stdout = self.config.output_to_stdout();
+
+                if to_stdout {
+                    with_profiler(profiler, |p| {
+                        p.inspect_content_terminal_operator(name.to_string(), name.to_string());
+                    });
+                } else {
+                    with_profiler(profiler, |p| {
+                        p.inspect_content_file_operator(name.to_string(), name.to_string());
+                    });
+                }
+
+                let (buf_decl, buf_clone, buf_ident) = self.gen_buf_declaration(name, idb);
+                cg.buf_declarations.push(buf_decl);
+                cg.buf_clones.push(buf_clone);
+
+                let (local_decl, inspect, flush) =
+                    self.gen_write_inspector_mem(&var, &buf_ident, idb);
+                cg.local_decls.push(local_decl);
+                cg.inspect_stmts.push(inspect);
+                cg.flush_stmts.push(flush);
+
+                let (sink_preamble, write_row) = if to_stdout {
+                    (
+                        self.gen_stderr_preamble(),
+                        self.gen_write_row_stderr(name, idb),
+                    )
+                } else {
+                    let parent_dir = self.config.output_dir().expect(
+                        "Compiler error: output directory must be provided when writing IDB output to files",
+                    );
+                    (
+                        self.gen_file_preamble(name, parent_dir),
+                        self.gen_write_row_file(idb),
+                    )
+                };
+
+                cg.merge_stmts.push(self.gen_merge_from_memory(
+                    &buf_ident,
+                    idb,
+                    sink_preamble,
+                    write_row,
+                ));
+            }
+        }
+
+        cg
+    }
+}
+
+// =========================================================================
+// Printsize
+// =========================================================================
+
+impl Compiler {
+    /// `.printsize` — consolidate into a single key, inspect the multiplicity.
     ///
-    /// Strategy:
-    /// - normalize the collection so each logical record contributes `SEMIRING_ONE`
-    /// - convert to the underlying `(data, time, diff)` stream
-    /// - map everything to the single key `()` so all updates consolidate into one
-    /// - consolidate and inspect the resulting multiplicity (the size)
-    pub(crate) fn gen_size_inspector(
+    /// Datalog-batch: `.consolidate()` dedup.  Others: `threshold_i32()` first.
+    fn gen_size_inspector(
         &self,
         var: &Ident,
         name: &str,
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let prefix = name.to_string();
+        let maybe_probe = self.maybe_probe_incremental();
 
-        let maybe_probe = if self.config.is_incremental() {
-            quote! { .probe_with(&mut probe) }
-        } else {
-            quote! {}
-        };
-
-        // Record inspect size operator in profiler if enabled
-        with_profiler(profiler, |profiler| {
-            profiler.inspect_size_operator(prefix.clone(), prefix.clone());
+        with_profiler(profiler, |p| {
+            p.inspect_size_operator(prefix.clone(), prefix.clone());
         });
 
         if self.config.is_datalog_batch() {
             quote! {{
                 #var.clone()
-                    // Consolidate merges Present + Present = Present (pure dedup).
                     .consolidate()
-                    // Drop data; keep time, emit `diff = 1` in DD's inner representation.
                     .inner
                     .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
-                    // Back to a collection so we can consolidate.
                     .as_collection()
                     .map(|_| ())
                     .consolidate()
@@ -87,257 +173,370 @@ impl Compiler {
             }}
         }
     }
+}
 
-    /// Generate code that prints tuple updates to stderr for debugging.
-    ///
-    /// In incremental mode, the printed stream is consolidated first so each
-    /// commit shows only its net delta.
-    ///
-    /// If `arity == 0`, print `True` instead of `()`, matching common Datalog
-    /// conventions for 0-arity relations.
-    pub(crate) fn gen_print_inspector(
-        &self,
-        var: &Ident,
-        name: &str,
-        arity: usize,
-        data_types: &[DataType],
-        profiler: &mut Option<Profiler>,
-    ) -> TokenStream {
-        let prefix = name.to_string();
+// =========================================================================
+// Buffer lifecycle
+// =========================================================================
 
-        let maybe_probe = if self.config.is_incremental() {
-            quote! { .probe_with(&mut probe) }
-        } else {
-            quote! {}
+impl Compiler {
+    /// Shared buffer: `Arc<Mutex<Vec<Vec<T>>>>`.
+    /// Worker 0 drains after barrier.
+    fn gen_buf_declaration(&self, name: &str, idb: &Relation) -> (TokenStream, TokenStream, Ident) {
+        let buf_ident = Ident::new(&format!("buf_{}", name), Span::call_site());
+        let inner_ty = self.buf_element_type(idb);
+
+        let declaration = quote! {
+            let #buf_ident: Arc<Mutex<Vec<Vec<#inner_ty>>>> =
+                Arc::new(Mutex::new(Vec::new()));
         };
 
-        let maybe_consolidate = self.maybe_consolidate_incremental_output();
+        let clone_stmt = quote! {
+            let #buf_ident = #buf_ident.clone();
+        };
 
-        // Record inspect content terminal operator in profiler if enabled
-        with_profiler(profiler, |profiler| {
-            profiler.inspect_content_terminal_operator(prefix.clone(), prefix.clone());
-        });
-
-        if arity == 0 {
-            quote! {{
-                #var
-                    #maybe_consolidate
-                    .inspect(|(_data, time, _diff)| {
-                        eprintln!("[tuple][{}]  t={:?}  True", #prefix, time)
-                    })
-                    #maybe_probe;
-            }}
-        } else {
-            let field_displays: Vec<TokenStream> = data_types
-                .iter()
-                .enumerate()
-                .map(|(i, dt)| {
-                    let idx = Index::from(i);
-                    match dt {
-                        DataType::String if self.imports.needs_string_intern() => {
-                            quote! { resolve(data.#idx) }
-                        }
-                        _ => quote! { data.#idx },
-                    }
-                })
-                .collect();
-            let fmt_str = (0..arity).map(|_| "{:?}").collect::<Vec<_>>().join(", ");
-            let fmt_full = format!(
-                "[tuple][{}]  t={{:?}}  data=({})  diff={{:+?}}",
-                prefix, fmt_str
-            );
-            let fmt_lit = LitStr::new(&fmt_full, Span::call_site());
-            quote! {{
-                #var
-                    #maybe_consolidate
-                    .inspect(|(data, time, diff)| {
-                        eprintln!(#fmt_lit, time #(, #field_displays )*, diff);
-                    })
-                    #maybe_probe;
-            }}
-        }
+        (declaration, clone_stmt, buf_ident)
     }
 
-    /// Generate code that writes tuple updates to a per-worker file.
+    /// Local buffer: `Rc<RefCell<Vec<T>>>` — lock-free hot-path writes.
     ///
-    /// It creates `<parent_dir>/<relation_name><index>` where `index` is the worker id.
-    /// Each tuple is appended as one line:
-    /// - arity 0: `True`
-    /// - arity >0: comma-separated values using `{}` formatting
-    ///
-    /// In incremental mode, writes the net delta for each commit after
-    /// consolidating transient recursive updates.
-    pub(crate) fn gen_write_inspector(
+    /// Flushed into the shared buffer once at barrier via `std::mem::take`.
+    /// Returns `(local_decl, inspect_stmt, flush_stmt)`.
+    fn gen_write_inspector_mem(
         &self,
         var: &Ident,
-        name: &str,
-        parent_dir: &str,
+        buf_ident: &Ident,
         idb: &Relation,
-        profiler: &mut Option<Profiler>,
-    ) -> TokenStream {
-        let base_dir = parent_dir.to_string();
-        let rel_name = name.to_string();
-
-        let maybe_probe = if self.config.is_incremental() {
-            quote! { .probe_with(&mut probe) }
-        } else {
-            quote! {}
-        };
-
+    ) -> (TokenStream, TokenStream, TokenStream) {
+        let maybe_probe = self.maybe_probe_incremental();
         let maybe_consolidate = self.maybe_consolidate_incremental_output();
+        let local_ident = Ident::new(&format!("local_{}", idb.name()), Span::call_site());
 
-        // Record inspect content file operator in profiler if enabled
-        with_profiler(profiler, |profiler| {
-            profiler.inspect_content_file_operator(rel_name.clone(), rel_name.clone());
-        });
-
-        let data_accessors: Vec<TokenStream> = (0..idb.arity())
-            .map(|i| {
-                let idx = Index::from(i);
-                match idb.data_type().get(i) {
-                    Some(DataType::String) if self.imports.needs_string_intern() => {
-                        quote! { resolve(data.#idx) }
-                    }
-                    _ => quote! { data.#idx },
-                }
-            })
-            .collect();
-
-        // Generate the inspect pattern and write statement based on mode and arity.
-        //
-        // Batch modes (Standard and Extended) output only positive facts — the diff
-        // column is omitted. Incremental modes include the diff column for change
-        // tracking.
-        let (inspect_pattern, write_stmt) = if self.config.is_batch() {
-            if idb.arity() == 0 {
-                (
-                    quote! { (_data, _time, _diff) },
-                    quote! { writeln!(&mut file, "True").expect("write failed"); },
-                )
-            } else {
-                let fmt = vec!["{}"; idb.arity()].join(idb.output_delimiter());
-                let fmt = LitStr::new(&fmt, Span::call_site());
-                (
-                    quote! { (data, _time, _diff) },
-                    quote! {
-                        writeln!(&mut file, #fmt #(, #data_accessors )*).expect("write failed");
-                    },
-                )
-            }
-        } else {
-            // Incremental: include diff column for change tracking.
-            if idb.arity() == 0 {
-                (
-                    quote! { (_data, _time, _diff) },
-                    quote! { writeln!(&mut file, "True").expect("write failed"); },
-                )
-            } else {
-                let mut parts = vec!["{}"; idb.arity()];
-                parts.push("{:+}");
-                let fmt = parts.join(idb.output_delimiter());
-                let fmt = LitStr::new(&fmt, Span::call_site());
-                (
-                    quote! { (data, _time, diff) },
-                    quote! {
-                        writeln!(&mut file, #fmt #(, #data_accessors )*, diff)
-                            .expect("write failed");
-                    },
-                )
-            }
+        // Batch DD uses `Present` for diff — hardcode 1_i32.
+        let (inspect_pattern, push_stmt) = match (idb.arity() == 0, self.config.is_batch()) {
+            (true, true) => (
+                quote! { (_data, time, _diff) },
+                quote! { #local_ident.borrow_mut().push(((), time.clone(), 1_i32)); },
+            ),
+            (true, false) => (
+                quote! { (_data, time, diff) },
+                quote! { #local_ident.borrow_mut().push(((), time.clone(), *diff)); },
+            ),
+            (false, true) => (
+                quote! { (data, time, _diff) },
+                quote! { #local_ident.borrow_mut().push((data.clone(), time.clone(), 1_i32)); },
+            ),
+            (false, false) => (
+                quote! { (data, time, diff) },
+                quote! { #local_ident.borrow_mut().push((data.clone(), time.clone(), *diff)); },
+            ),
         };
 
-        quote! {{
-            let base_dir = #base_dir;
-            let rel_name = #rel_name;
-            let path = format!("{}/{}{}", base_dir, rel_name, index);
+        let inner_ty = self.buf_element_type(idb);
 
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-                .unwrap_or_else(|e| panic!("failed to create {}: {}", path, e));
+        let local_decl = quote! {
+            let #local_ident: Rc<RefCell<Vec<#inner_ty>>> =
+                Rc::new(RefCell::new(Vec::new()));
+        };
 
+        let inspect_stmt = quote! {{
+            let #local_ident = #local_ident.clone();
             #var
                 #maybe_consolidate
                 .inspect(move |#inspect_pattern| {
-                    use std::io::Write as _;
-                    #write_stmt
+                    #push_stmt
                 })
                 #maybe_probe;
-        }}
-    }
+        }};
 
-    /// Generate code that merges per-worker partition files into one output file.
-    ///
-    /// Reads `<base_path>/<name><wid>` for `wid in 0..peers` and writes the
-    /// concatenation into one merged output.
-    ///
-    /// Batch mode writes `<base_path>/<name>` and deletes the part files.
-    /// Incremental mode writes `<base_path>/<name>_t<time_stamp>` and clears the
-    /// part files for reuse on the next commit.
-    ///
-    /// Intended usage:
-    /// - place after fixpoint
-    /// - guard it so only worker 0 performs the merge (e.g., `if index == 0 { ... }`)
-    pub(crate) fn gen_merge_partitions(&self, name: &str, base_path: &str) -> TokenStream {
-        let base_dir = base_path.to_string();
-        let rel_name = name.to_string();
-
-        let write_merged_file = if self.config.is_incremental() {
-            quote! {
-                let out_path = format!("{}/{}_t{}", base_dir, rel_name, time_stamp);
-                if let Err(e) = std::fs::write(&out_path, &merged) {
-                    eprintln!("[merge] failed to write {}: {}", out_path, e);
-                }
-            }
-        } else {
-            quote! {
-                let out_path = format!("{}/{}", base_dir, rel_name);
-                if let Err(e) = std::fs::write(&out_path, &merged) {
-                    eprintln!("[merge] failed to write {}: {}", out_path, e);
-                }
-            }
+        let flush_stmt = quote! {
+            #buf_ident.lock().unwrap().push(std::mem::take(&mut *#local_ident.borrow_mut()));
         };
 
-        let cleanup_partitions = if self.config.is_incremental() {
-            quote! {
-                // Keep partition files but clear contents (truncate) for next epoch.
-                for wid in 0..peers {
-                    let p = format!("{}/{}{}", base_dir, rel_name, wid);
-                    if let Err(e) = std::fs::write(&p, "") {
-                        eprintln!("[merge] failed to clear {}: {}", p, e);
-                    }
-                }
-            }
-        } else {
-            gen_delete_partitions(name, base_path)
-        };
-
-        quote! {{
-            let base_dir = #base_dir;
-            let rel_name = #rel_name;
-
-            // Merge `<base_dir>/<rel_name><wid>` into one output.
-            let merged = (0..peers)
-                .filter_map(|wid| {
-                    std::fs::read_to_string(format!("{}/{}{}", base_dir, rel_name, wid)).ok()
-                })
-                .collect::<String>();
-
-            #write_merged_file
-            #cleanup_partitions
-        }}
+        (local_decl, inspect_stmt, flush_stmt)
     }
 }
 
-/// Generate code that deletes per-worker partition files `<base>/<name><wid>`.
-pub(crate) fn gen_delete_partitions(name: &str, base_path: &str) -> TokenStream {
-    let base_dir = base_path.to_string();
-    let rel_name = name.to_string();
+// =========================================================================
+// Merge & sort
+// =========================================================================
 
-    quote! {{
-        for wid in 0..peers {
-            let _ = std::fs::remove_file(format!("{}/{}{}", #base_dir, #rel_name, wid));
+impl Compiler {
+    /// Drain worker buffers → optional ORDER BY / LIMIT → write to sink.
+    ///
+    /// - No ORDER BY: stream buffers directly.
+    /// - ORDER BY: sort per-worker, k-way merge (k = workers, linear scan).
+    /// - ORDER BY + LIMIT: flatten, `select_nth_unstable_by` O(n), sort top-k.
+    fn gen_merge_from_memory(
+        &self,
+        buf_ident: &Ident,
+        idb: &Relation,
+        sink_preamble: TokenStream,
+        write_row: TokenStream,
+    ) -> TokenStream {
+        let order_by = idb.output_order_by();
+        let limit = idb.output_limit();
+
+        match (order_by.as_ref(), limit) {
+            (None, _) => {
+                quote! {{
+                    #sink_preamble
+                    {
+                        use std::io::Write as _;
+                        for worker_buf in #buf_ident.lock().unwrap().drain(..) {
+                            for row in &worker_buf {
+                                #write_row
+                            }
+                        }
+                    }
+                }}
+            }
+
+            (Some(spec), None) => {
+                let comparators = self.gen_order_comparators(spec);
+                let elem_ty = self.buf_element_type(idb);
+                quote! {{
+                    let mut bufs = #buf_ident.lock().unwrap();
+                    for buf in bufs.iter_mut() {
+                        buf.sort_by(|a, b| {
+                            #(#comparators)*
+                            std::cmp::Ordering::Equal
+                        });
+                    }
+                    #sink_preamble
+                    {
+                        use std::io::Write as _;
+                        let cmp_fn = |a: &#elem_ty, b: &#elem_ty| -> std::cmp::Ordering {
+                            #(#comparators)*
+                            std::cmp::Ordering::Equal
+                        };
+                        let k = bufs.len();
+                        let mut pos = vec![0usize; k];
+                        loop {
+                            let mut best: Option<usize> = None;
+                            for i in 0..k {
+                                if pos[i] < bufs[i].len() {
+                                    if let Some(bi) = best {
+                                        if cmp_fn(&bufs[i][pos[i]], &bufs[bi][pos[bi]]).is_lt() {
+                                            best = Some(i);
+                                        }
+                                    } else {
+                                        best = Some(i);
+                                    }
+                                }
+                            }
+                            match best {
+                                Some(i) => {
+                                    let row = &bufs[i][pos[i]];
+                                    #write_row
+                                    pos[i] += 1;
+                                }
+                                None => break,
+                            }
+                        }
+                    // Clear inner per-worker buffers for reuse in incremental mode.
+                    // The outer `bufs` Vec is fixed-size (one slot per worker) and does not grow.
+                    for buf in bufs.iter_mut() { buf.clear(); }
+                    }
+                }}
+            }
+
+            (Some(spec), Some(n)) => {
+                let comparators = self.gen_order_comparators(spec);
+                let comparators2 = comparators.clone();
+                quote! {{
+                    let mut all: Vec<_> = #buf_ident.lock().unwrap()
+                        .drain(..).flatten().collect();
+                    if all.len() > #n {
+                        all.select_nth_unstable_by(#n, |a, b| {
+                            #(#comparators)*
+                            std::cmp::Ordering::Equal
+                        });
+                        all.truncate(#n);
+                    }
+                    all.sort_by(|a, b| {
+                        #(#comparators2)*
+                        std::cmp::Ordering::Equal
+                    });
+                    #sink_preamble
+                    {
+                        use std::io::Write as _;
+                        for row in &all {
+                            #write_row
+                        }
+                    }
+                }}
+            }
         }
-    }}
+    }
+
+    /// Comparator chain for ORDER BY — compares data fields only (not time/diff).
+    fn gen_order_comparators(&self, spec: &[(usize, DataType, bool)]) -> Vec<TokenStream> {
+        spec.iter()
+            .map(|(col_idx, data_type, ascending)| {
+                let idx = Index::from(*col_idx);
+                let a_expr = self.field_accessor(&idx, data_type, quote! { a });
+                let b_expr = self.field_accessor(&idx, data_type, quote! { b });
+                let cmp_expr = if *ascending {
+                    quote! { #a_expr.cmp(&#b_expr) }
+                } else {
+                    quote! { #b_expr.cmp(&#a_expr) }
+                };
+                quote! {
+                    let cmp = #cmp_expr;
+                    if cmp != std::cmp::Ordering::Equal { return cmp; }
+                }
+            })
+            .collect()
+    }
+}
+
+// =========================================================================
+// Row formatters & sink preambles
+// =========================================================================
+
+impl Compiler {
+    /// File sink: `BufWriter<File>`. Incremental filenames include `_t{timestamp}`.
+    fn gen_file_preamble(&self, name: &str, base_path: &str) -> TokenStream {
+        let base_dir = base_path.to_string();
+        let rel_name = name.to_string();
+
+        let out_path = if self.config.is_incremental() {
+            quote! { let out_path = format!("{}/{}_t{}", #base_dir, #rel_name, time_stamp); }
+        } else {
+            quote! { let out_path = format!("{}/{}", #base_dir, #rel_name); }
+        };
+
+        quote! {
+            #out_path
+            let mut out = std::io::BufWriter::new(
+                std::fs::File::create(&out_path)
+                    .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e))
+            );
+        }
+    }
+
+    /// Stderr sink.
+    fn gen_stderr_preamble(&self) -> TokenStream {
+        quote! {
+            let mut out = std::io::stderr();
+        }
+    }
+
+    /// File format — batch: data only. Incremental: data + diff.
+    fn gen_write_row_file(&self, idb: &Relation) -> TokenStream {
+        if idb.arity() == 0 {
+            return quote! {
+                let _ = &row;
+                writeln!(out, "True").expect("write failed");
+            };
+        }
+
+        let data_accessors: Vec<TokenStream> = idb
+            .data_type()
+            .iter()
+            .enumerate()
+            .map(|(i, dt)| self.field_accessor(&Index::from(i), dt, quote! { row }))
+            .collect();
+
+        if self.config.is_incremental() {
+            let mut parts = vec!["{}"; idb.arity()];
+            parts.push("{:+}");
+            let fmt = parts.join(idb.output_delimiter());
+            let fmt = LitStr::new(&fmt, Span::call_site());
+            quote! {
+                writeln!(out, #fmt #(, #data_accessors )*, row.2).expect("write failed");
+            }
+        } else {
+            let fmt = vec!["{}"; idb.arity()].join(idb.output_delimiter());
+            let fmt = LitStr::new(&fmt, Span::call_site());
+            quote! {
+                writeln!(out, #fmt #(, #data_accessors )*).expect("write failed");
+            }
+        }
+    }
+
+    /// Stderr format — always includes time and diff.
+    fn gen_write_row_stderr(&self, name: &str, idb: &Relation) -> TokenStream {
+        let prefix = name.to_string();
+
+        if idb.arity() == 0 {
+            return quote! {
+                writeln!(out, "[tuple][{}]  t={:?}  True  diff={:+}",
+                    #prefix, row.1, row.2)
+                    .expect("write failed");
+            };
+        }
+
+        let field_displays: Vec<TokenStream> = idb
+            .data_type()
+            .iter()
+            .enumerate()
+            .map(|(i, dt)| self.field_accessor(&Index::from(i), dt, quote! { row }))
+            .collect();
+        let fmt_str = (0..idb.arity())
+            .map(|_| "{:?}")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let fmt_full = format!(
+            "[tuple][{}]  t={{:?}}  data=({})  diff={{:+}}",
+            prefix, fmt_str
+        );
+        let fmt_lit = LitStr::new(&fmt_full, Span::call_site());
+        quote! {
+            writeln!(out, #fmt_lit, row.1 #(, #field_displays )*, row.2)
+                .expect("write failed");
+        }
+    }
+}
+
+// =========================================================================
+// Type helpers
+// =========================================================================
+
+impl Compiler {
+    /// Incremental: `.consolidate()` before inspect to show net delta.
+    fn maybe_consolidate_incremental_output(&self) -> TokenStream {
+        if self.config.is_incremental() {
+            quote! { .consolidate() }
+        } else {
+            quote! {}
+        }
+    }
+
+    /// Incremental: `.probe_with(&mut probe)` for progress tracking.
+    fn maybe_probe_incremental(&self) -> TokenStream {
+        if self.config.is_incremental() {
+            quote! { .probe_with(&mut probe) }
+        } else {
+            quote! {}
+        }
+    }
+
+    /// Buffer element: `(data_tuple, timestamp, diff)`.
+    fn buf_element_type(&self, idb: &Relation) -> TokenStream {
+        let tuple_ty = type_tokens(&idb.data_type(), self.imports.needs_string_intern());
+        let time_ty = self.timestamp_type();
+        quote! { (#tuple_ty, #time_ty, i32) }
+    }
+
+    /// Outer dataflow timestamp: `u32` (incremental) or `()` (batch).
+    pub(crate) fn timestamp_type(&self) -> TokenStream {
+        if self.config.is_incremental() {
+            quote! { u32 }
+        } else {
+            quote! { () }
+        }
+    }
+
+    /// Access column `idx` from buffer row's data tuple at `var.0`.
+    /// String-interned columns are wrapped in `resolve()`.
+    fn field_accessor(&self, idx: &Index, data_type: &DataType, var: TokenStream) -> TokenStream {
+        let base = quote! { #var.0.#idx };
+        if matches!(data_type, DataType::String) && self.imports.needs_string_intern() {
+            quote! { resolve(#base) }
+        } else {
+            base
+        }
+    }
 }

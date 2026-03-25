@@ -147,6 +147,9 @@ pub(crate) struct ImportTracker {
 
     /// Whether a user-defined function module is needed.
     udf: bool,
+
+    /// Whether in-memory output buffers are used (needs Arc + Mutex).
+    output_buffers: bool,
 }
 
 impl ImportTracker {
@@ -383,6 +386,11 @@ impl ImportTracker {
         self.udf = true;
     }
 
+    /// Marks that in-memory output buffers are used (needs Arc + Mutex).
+    pub(crate) fn mark_output_buffers(&mut self) {
+        self.output_buffers = true;
+    }
+
     // ---------------------------------------------------------------------
     // Render helpers: grouping + ordering
     // ---------------------------------------------------------------------
@@ -410,21 +418,51 @@ impl ImportTracker {
         }
     }
 
+    /// Imports needed for in-memory output buffers (Arc/Mutex, Rc/RefCell).
+    fn output_buffer_imports(&self) -> TokenStream {
+        if !self.output_buffers {
+            return quote! {};
+        }
+        // Incremental already imports Arc via prelude; batch needs it explicitly.
+        let sync_imports = match self.mode {
+            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
+                quote! { use std::sync::Mutex; }
+            }
+            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => {
+                quote! { use std::sync::{Arc, Mutex}; }
+            }
+        };
+        quote! {
+            #sync_imports
+            use std::rc::Rc;
+            use std::cell::RefCell;
+        }
+    }
+
     /// All std imports in a consistent order, with minimal duplication.
     fn std_imports(&mut self) -> TokenStream {
         let file = self.std_file_import();
         let io = self.std_io_import();
         let hashmap = self.std_hashmap_import();
+        let output_buf = self.output_buffer_imports();
 
-        // Profiling implies a set of std imports.
         if self.profiling {
+            // output_buffer_imports() already provides Rc + RefCell when active.
+            let rc_refcell = if self.output_buffers {
+                quote! {}
+            } else {
+                quote! {
+                    use std::cell::RefCell;
+                    use std::rc::Rc;
+                }
+            };
             return quote! {
-                use std::cell::RefCell;
+                #rc_refcell
                 use std::collections::HashMap;
                 use std::fs::File;
                 #io
                 use std::io::{BufWriter, Write};
-                use std::rc::Rc;
+                #output_buf
                 use std::time::{Duration, Instant};
             };
         }
@@ -433,6 +471,7 @@ impl ImportTracker {
             #file
             #io
             #hashmap
+            #output_buf
             use std::time::Instant;
         }
     }
