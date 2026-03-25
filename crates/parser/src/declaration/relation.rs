@@ -213,6 +213,11 @@ impl Relation {
                             self.name
                         );
                         let attr_name = tokens[0].to_lowercase();
+                        assert!(
+                            tokens.len() <= 2,
+                            "Parser error: unexpected extra tokens in order_by clause '{}' for relation '{}'",
+                            part.trim(), self.name
+                        );
                         let ascending = match tokens.get(1) {
                             Some(d) if d.eq_ignore_ascii_case("desc") => false,
                             Some(d) if d.eq_ignore_ascii_case("asc") => true,

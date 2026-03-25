@@ -334,7 +334,8 @@ impl Compiler {
                                 None => break,
                             }
                         }
-                    // Clear for reuse in incremental mode.
+                    // Clear inner per-worker buffers for reuse in incremental mode.
+                    // The outer `bufs` Vec is fixed-size (one slot per worker) and does not grow.
                     for buf in bufs.iter_mut() { buf.clear(); }
                     }
                 }}
