@@ -1,0 +1,6 @@
+report,1,false
+review,1,true
+cleanup,2,false
+deploy,3,false
+testing,3,false
+docs,5,true

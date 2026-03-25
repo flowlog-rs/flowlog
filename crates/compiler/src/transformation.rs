@@ -20,6 +20,7 @@ use super::data_type::type_tokens;
 use super::ident::find_local_ident;
 use super::Compiler;
 
+use parser::AggregationOperator;
 use planner::Transformation;
 
 /// Generate differential dataflow pipelines for a single transformation.
@@ -34,6 +35,7 @@ impl Compiler {
         transformation: &Transformation,
         arranged_map: &mut HashMap<u64, Ident>,
         head_to_idb_map: &HashMap<u64, u64>,
+        idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let transformation_name = format!("{transformation}");
@@ -81,6 +83,7 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                     head_to_idb_map,
+                    idb_to_aggregation_map,
                 );
                 let input_type = self.find_global_type(input.fingerprint()).clone();
                 let itype = input_type.1.clone();
@@ -150,6 +153,7 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                     head_to_idb_map,
+                    idb_to_aggregation_map,
                 );
                 let input_type = self.find_global_type(input.fingerprint()).clone();
                 let itype = input_type.1.clone();
@@ -231,6 +235,7 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                     head_to_idb_map,
+                    idb_to_aggregation_map,
                 );
 
                 // Output value + predicates
@@ -290,6 +295,7 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                     head_to_idb_map,
+                    idb_to_aggregation_map,
                 );
 
                 // Output expression + predicates
@@ -389,6 +395,7 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                     head_to_idb_map,
+                    idb_to_aggregation_map,
                 );
 
                 // Output expression + predicates
@@ -450,6 +457,7 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                     head_to_idb_map,
+                    idb_to_aggregation_map,
                 );
 
                 // Output expression + predicates
@@ -531,6 +539,7 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                     head_to_idb_map,
+                    idb_to_aggregation_map,
                 );
 
                 let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();
@@ -600,6 +609,7 @@ impl Compiler {
                     output.fingerprint(),
                     flow,
                     head_to_idb_map,
+                    idb_to_aggregation_map,
                 );
 
                 let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();

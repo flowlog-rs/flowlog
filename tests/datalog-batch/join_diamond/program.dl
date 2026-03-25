@@ -1,0 +1,84 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : join_diamond
+// Feature : diamond-shaped IDB dependency pattern
+// Covers  : two independent IDBs (Outgoing, Incoming) computed from the
+//           same EDB (Edge), then merged in a third IDB (NodeStats) that
+//           joins both branches plus a separate EDB (Score).
+//           Also tests: comparison and arithmetic over diamond-merged IDB,
+//           negation over diamond-filtered IDB, second independent diamond
+//           with max/min aggregations merging into WeightSpread.
+//
+//           Edge ──┬── Outgoing ──┐
+//                  │              ├── NodeStats ── HighDegree
+//                  └── Incoming ──┘       │           │
+//           Score ────────────────┘       └──── NotHighDeg
+//
+//           Weight ─┬── MaxOutWeight ──┐
+//                   │                  ├── WeightSpread
+//                   └── MinInWeight  ──┘
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Score(node: int32, val: int32)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+.decl Weight(src: int32, dst: int32, w: int32)
+.input Weight(IO="file", filename="Weight.csv", delimiter=",")
+
+// ── TEST Outgoing: count aggregation (out-degree) ────────────────────────────
+
+.decl Outgoing(node: int32, cnt: int32)
+Outgoing(s, count(d)) :- Edge(s, d).
+.output Outgoing
+
+// ── TEST Incoming: count aggregation (in-degree) ─────────────────────────────
+
+.decl Incoming(node: int32, cnt: int32)
+Incoming(d, count(s)) :- Edge(s, d).
+.output Incoming
+
+// ── TEST NodeStats: diamond merge — join two IDBs + one EDB ──────────────────
+// Verifies : only nodes present in ALL three relations appear.
+// Node 1 has outgoing but no incoming → excluded.
+
+.decl NodeStats(node: int32, out_deg: int32, in_deg: int32, score: int32)
+NodeStats(n, o, i, s) :- Outgoing(n, o), Incoming(n, i), Score(n, s).
+.output NodeStats
+
+// ── TEST HighDegree: filter over diamond-merged IDB ──────────────────────────
+// Verifies : comparison filter on a column produced by diamond merge.
+//            Nodes with total degree (out+in) >= 3.
+
+.decl HighDegree(node: int32, total: int32)
+HighDegree(n, o + i) :- NodeStats(n, o, i, _), o + i >= 3.
+.output HighDegree
+
+// ── TEST NotHighDeg: negation over diamond-filtered IDB ──────────────────────
+// Verifies : negation works over a multi-layered IDB chain.
+
+.decl NotHighDeg(node: int32)
+NotHighDeg(n) :- NodeStats(n, _, _, _), !HighDegree(n, _).
+.output NotHighDeg
+
+// ── TEST MaxOutWeight / MinInWeight: second diamond with different aggs ──────
+// Verifies : two different aggregation functions (max, min) on the same EDB
+//            feed into a single merge point.
+
+.decl MaxOutWeight(node: int32, mw: int32)
+MaxOutWeight(s, max(w)) :- Weight(s, _, w).
+.output MaxOutWeight
+
+.decl MinInWeight(node: int32, mw: int32)
+MinInWeight(d, min(w)) :- Weight(_, d, w).
+.output MinInWeight
+
+// ── TEST WeightSpread: second diamond merge ──────────────────────────────────
+// Verifies : joining two different-aggregation IDBs on the same key.
+
+.decl WeightSpread(node: int32, max_out: int32, min_in: int32)
+WeightSpread(n, mo, mi) :- MaxOutWeight(n, mo), MinInWeight(n, mi).
+.output WeightSpread

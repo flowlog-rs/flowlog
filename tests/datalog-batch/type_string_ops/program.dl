@@ -1,0 +1,69 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : type_string_ops
+// Feature : string constants in rule heads/bodies, `cat` concatenation
+// Covers  : string literal in head (cat with constant prefix), multi-cat
+//           chain (variable cat literal cat variable), string constant
+//           filter in body atom, count aggregation with string group key,
+//           negation over atom containing string constant
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl FirstName(id: int32, name: string)
+.input FirstName(IO="file", filename="FirstName.csv", delimiter=",")
+
+.decl LastName(id: int32, name: string)
+.input LastName(IO="file", filename="LastName.csv", delimiter=",")
+
+.decl Tag(id: int32, label: string)
+.input Tag(IO="file", filename="Tag.csv", delimiter=",")
+
+.decl Dept(id: int32, dept: string)
+.input Dept(IO="file", filename="Dept.csv", delimiter=",")
+
+// ── TEST FullName: two-variable concatenation with literal separator ─────────
+// Verifies : `cat` operator joins two string variables with a literal " ".
+// Sample   : FirstName(1,"Alice"), LastName(1,"Smith") → FullName(1,"Alice Smith")
+
+.decl FullName(id: int32, full: string)
+FullName(id, first cat " " cat last) :- FirstName(id, first), LastName(id, last).
+.output FullName
+
+// ── TEST Greeting: string literal prefix concatenated with variable ──────────
+// Verifies : string literal as first operand of `cat`.
+// Sample   : FirstName(1,"Alice") → Greeting(1,"Hello Alice")
+
+.decl Greeting(id: int32, msg: string)
+Greeting(id, "Hello " cat name) :- FirstName(id, name).
+.output Greeting
+
+// ── TEST ConstFilter: string constant used as filter in rule body ────────────
+// Verifies : matching a string column against a constant value.
+// Sample   : Tag(1,"vip") matches, Tag(2,"normal") does not.
+
+.decl VipPerson(id: int32, name: string)
+VipPerson(id, name) :- FirstName(id, name), Tag(id, "vip").
+.output VipPerson
+
+// ── TEST DeptLabel: three-way join + cat with constant suffix ────────────────
+// Verifies : multi-relation join with string concat and constant.
+// Sample   : id=1 → "Alice (Engineering)"
+
+.decl DeptLabel(id: int32, label: string)
+DeptLabel(id, name cat " (" cat dept cat ")") :- FirstName(id, name), Dept(id, dept).
+.output DeptLabel
+
+// ── TEST DeptCount: aggregation over string-keyed group ──────────────────────
+// Verifies : count aggregation with string grouping key.
+
+.decl DeptCount(dept: string, cnt: int32)
+DeptCount(dept, count(id)) :- Dept(id, dept).
+.output DeptCount
+
+// ── TEST NonVip: negation with string constant filter ────────────────────────
+// Verifies : negation over a string-constant-filtered relation.
+//            Persons whose tag is NOT "vip".
+
+.decl NonVip(id: int32, name: string)
+NonVip(id, name) :- FirstName(id, name), !Tag(id, "vip").
+.output NonVip

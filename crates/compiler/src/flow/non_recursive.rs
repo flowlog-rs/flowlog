@@ -37,6 +37,7 @@ impl Compiler {
         &mut self,
         transformations: &[Transformation],
         head_to_idb_map: &HashMap<u64, u64>,
+        idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         profiler: &mut Option<Profiler>,
     ) -> (Vec<TokenStream>, HashMap<u64, Ident>) {
         let mut flows = Vec::new();
@@ -50,6 +51,7 @@ impl Compiler {
                 transformation,
                 &mut non_recursive_arranged_map,
                 head_to_idb_map,
+                idb_to_aggregation_map,
                 profiler,
             ));
         }

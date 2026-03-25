@@ -1,0 +1,66 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : compare_lte_gte
+// Feature : >= and <= comparison operators
+// Covers  : greater-equal-than (>=), less-equal-than (<=) filters,
+//           boundary-inclusive behaviour (value = threshold must pass),
+//           combined >= and <= in one rule (closed range filter),
+//           >= applied to arithmetic expression (v + e >= 95),
+//           count aggregation over a comparison-filtered IDB,
+//           negation over a comparison-filtered IDB
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl Score(id: int32, name: string, val: int32)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+.decl Bonus(id: int32, extra: int32)
+.input Bonus(IO="file", filename="Bonus.csv", delimiter=",")
+
+// ── TEST HighScore: >= filter (boundary-inclusive) ───────────────────────────
+// Verifies : val >= 80 includes the boundary value 80 itself.
+// Sample   : alice=90 (pass), bob=50 (fail), charlie=80 (pass, boundary)
+
+.decl HighScore(id: int32, name: string, val: int32)
+HighScore(id, n, v) :- Score(id, n, v), v >= 80.
+.output HighScore
+
+// ── TEST LowScore: <= filter (boundary-inclusive) ────────────────────────────
+// Verifies : val <= 50 includes the boundary value 50 itself.
+// Sample   : bob=50 (pass, boundary), dave=30 (pass), eve=75 (fail)
+
+.decl LowScore(id: int32, name: string, val: int32)
+LowScore(id, n, v) :- Score(id, n, v), v <= 50.
+.output LowScore
+
+// ── TEST MidRange: combined >= and <= in same rule (range filter) ────────────
+// Verifies : both operators work together to express a closed range.
+// Sample   : val >= 60 AND val <= 80 → charlie=80, eve=75
+
+.decl MidRange(id: int32, name: string, val: int32)
+MidRange(id, n, v) :- Score(id, n, v), v >= 60, v <= 80.
+.output MidRange
+
+// ── TEST BonusHighScore: >= with arithmetic expression in comparison ─────────
+// Verifies : comparison operates on an arithmetic expression (val + extra).
+//            Tests that >= works with computed values, not just raw columns.
+// Sample   : alice: 90+5=95 >= 95 (pass, boundary), bob: 50+20=70 (fail)
+
+.decl BonusHighScore(id: int32, total: int32)
+BonusHighScore(id, v + e) :- Score(id, _, v), Bonus(id, e), v + e >= 95.
+.output BonusHighScore
+
+// ── TEST HighCount: aggregation over >= filtered result ──────────────────────
+// Verifies : count aggregation applied to IDB produced by >= filter.
+//            Uses int column for aggregation expression.
+
+.decl HighCount(cnt: int32)
+HighCount(count(id)) :- HighScore(id, _, _).
+.output HighCount
+
+// ── TEST NotHigh: negation over >= filtered IDB ──────────────────────────────
+// Verifies : negation correctly identifies persons NOT in HighScore.
+
+.decl NotHigh(id: int32, name: string)
+NotHigh(id, n) :- Score(id, n, _), !HighScore(id, _, _).
+.output NotHigh

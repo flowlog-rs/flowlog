@@ -48,6 +48,13 @@ pub enum DataType {
     Bool,
 }
 
+impl DataType {
+    /// Returns `true` for all integer and floating-point types.
+    pub fn is_numeric(&self) -> bool {
+        !matches!(self, Self::String | Self::Bool)
+    }
+}
+
 impl FromStr for DataType {
     type Err = String;
 

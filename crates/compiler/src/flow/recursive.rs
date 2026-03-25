@@ -124,6 +124,7 @@ impl Compiler {
                     tx,
                     &mut recursive_arranged,
                     stratum.head_to_idb_map(),
+                    stratum.idb_to_aggregation_map(),
                     profiler,
                 )
             })

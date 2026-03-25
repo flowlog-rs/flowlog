@@ -1,0 +1,75 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : rule_multi_union
+// Feature : multiple rules defining the same IDB (union semantics)
+// Covers  : two rules feeding one relation, four rules feeding one relation,
+//           deduplication across rules (same tuple derived by different rules
+//           should appear only once), recursive union (base + step),
+//           union from three independent EDB sources, aggregation over
+//           union IDB (using int keys), negation over union IDB
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl Parent(child: int32, parent: int32)
+.input Parent(IO="file", filename="Parent.csv", delimiter=",")
+
+.decl Sibling(a: int32, b: int32)
+.input Sibling(IO="file", filename="Sibling.csv", delimiter=",")
+
+.decl Friend(a: int32, b: int32)
+.input Friend(IO="file", filename="Friend.csv", delimiter=",")
+
+// ── TEST Related: union of four rules + deduplication ────────────────────────
+// Verifies : four rules all contribute to the same IDB;
+//            duplicate tuples are eliminated.
+
+.decl Related(a: int32, b: int32)
+Related(c, p) :- Parent(c, p).
+Related(a, b) :- Sibling(a, b).
+Related(p, c) :- Parent(c, p).
+Related(b, a) :- Sibling(a, b).
+.output Related
+
+// ── TEST Ancestor: union of base case + recursive case ───────────────────────
+// Verifies : recursive rule combined with base rule correctly accumulates
+//            transitive closure through the parent chain.
+
+.decl Ancestor(desc: int32, anc: int32)
+Ancestor(c, p) :- Parent(c, p).
+Ancestor(c, a) :- Ancestor(c, p), Parent(p, a).
+.output Ancestor
+
+// ── TEST Connected: union of three independent edge sources ──────────────────
+// Verifies : three separate rules defining the same IDB from different EDBs.
+
+.decl Connected(a: int32, b: int32)
+Connected(c, p) :- Parent(c, p).
+Connected(a, b) :- Sibling(a, b).
+Connected(a, b) :- Friend(a, b).
+.output Connected
+
+// ── TEST ConnectedCount: aggregation over a union IDB ────────────────────────
+// Verifies : count() correctly counts all tuples produced by the union.
+
+.decl ConnectedCount(a: int32, cnt: int32)
+ConnectedCount(a, count(b)) :- Connected(a, b).
+.output ConnectedCount
+
+// ── TEST AllPersons: union of many rules from different EDB columns ──────────
+// Verifies : union collects values from BOTH columns of multiple EDBs.
+
+.decl AllPersons(id: int32)
+AllPersons(c) :- Parent(c, _).
+AllPersons(p) :- Parent(_, p).
+AllPersons(a) :- Sibling(a, _).
+AllPersons(b) :- Sibling(_, b).
+AllPersons(a) :- Friend(a, _).
+AllPersons(b) :- Friend(_, b).
+.output AllPersons
+
+// ── TEST Isolated: negation over union IDB ───────────────────────────────────
+// Verifies : persons not appearing as the first element of any Connected pair.
+
+.decl Isolated(id: int32)
+Isolated(n) :- AllPersons(n), !Connected(n, _).
+.output Isolated

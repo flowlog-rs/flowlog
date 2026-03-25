@@ -1,0 +1,92 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : strata_negation_agg
+// Feature : interaction between aggregation and negation across strata
+// Covers  : aggregation result used in a later stratum, negation over an
+//           IDB that itself depends on aggregation, wildcard in negated atom,
+//           four-stratum chain: aggregate → filter → negate → join,
+//           min/max aggregation feeding into equality comparison,
+//           double negation (NotAboveAvg ∩ !IsBottom), count over
+//           negation-produced IDB, join of agg-filtered IDB with EDB
+//
+//   Stratum 1: AvgGrade, TopGrade, BottomGrade  (average, max, min)
+//   Stratum 2: AboveAvg, IsTop, IsBottom  (comparison with agg results)
+//   Stratum 3: NotAboveAvg, NotAboveAvgCount, MidTier  (negation)
+//   Stratum 4: AboveAvgCourses  (join agg-filtered IDB with EDB)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EDB ──────────────────────────────────────────────────────────────────────
+
+.decl Student(id: int32, name: string, grade: int32)
+.input Student(IO="file", filename="Student.csv", delimiter=",")
+
+.decl Course(student_id: int32, course: string)
+.input Course(IO="file", filename="Course.csv", delimiter=",")
+
+// ── TEST AvgGrade: global average via aggregation ────────────────────────────
+// Verifies : average() over all students produces a single aggregate row.
+// Data     : (90+70+80+60+100+50)/6 = 450/6 = 75
+
+.decl AvgGrade(avg: int32)
+AvgGrade(average(g)) :- Student(_, _, g).
+.output AvgGrade
+
+// ── TEST TopGrade: max aggregation ───────────────────────────────────────────
+
+.decl TopGrade(val: int32)
+TopGrade(max(g)) :- Student(_, _, g).
+.output TopGrade
+
+// ── TEST BottomGrade: min aggregation ────────────────────────────────────────
+
+.decl BottomGrade(val: int32)
+BottomGrade(min(g)) :- Student(_, _, g).
+.output BottomGrade
+
+// ── TEST AboveAvg: filter using aggregation result from prior stratum ────────
+// Verifies : the aggregate IDB (AvgGrade) is available as a join partner.
+// Expected : alice(90), eve(100), charlie(80) — all strictly above 75
+
+.decl AboveAvg(id: int32, grade: int32)
+AboveAvg(id, g) :- Student(id, _, g), AvgGrade(a), g > a.
+.output AboveAvg
+
+// ── TEST IsTop: equality comparison with aggregation result ──────────────────
+
+.decl IsTop(id: int32)
+IsTop(id) :- Student(id, _, g), TopGrade(g).
+.output IsTop
+
+// ── TEST IsBottom: equality with min aggregate ───────────────────────────────
+
+.decl IsBottom(id: int32)
+IsBottom(id) :- Student(id, _, g), BottomGrade(g).
+.output IsBottom
+
+// ── TEST NotAboveAvg: negation over a stratum that uses aggregation ──────────
+// Expected : bob(70), dave(60), frank(50)
+
+.decl NotAboveAvg(id: int32)
+NotAboveAvg(id) :- Student(id, _, _), !AboveAvg(id, _).
+.output NotAboveAvg
+
+// ── TEST NotAboveAvgCount: aggregation over negation-produced IDB ────────────
+// Verifies : count() works over an IDB produced by negation.
+
+.decl NotAboveAvgCount(cnt: int32)
+NotAboveAvgCount(count(id)) :- NotAboveAvg(id).
+.output NotAboveAvgCount
+
+// ── TEST MidTier: not above avg AND not bottom (double negation chain) ───────
+// Verifies : combining two negation-derived IDBs.
+// Expected : bob(2) and dave(4) — neither above avg nor the bottom
+
+.decl MidTier(id: int32)
+MidTier(id) :- NotAboveAvg(id), !IsBottom(id).
+.output MidTier
+
+// ── TEST AboveAvgCourses: join agg-filtered IDB with separate EDB ────────────
+// Verifies : AboveAvg IDB can be joined with an unrelated EDB (Course).
+
+.decl AboveAvgCourses(student_id: int32, course: string)
+AboveAvgCourses(id, c) :- AboveAvg(id, _), Course(id, c).
+.output AboveAvgCourses
