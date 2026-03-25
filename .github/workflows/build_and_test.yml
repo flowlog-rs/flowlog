@@ -36,4 +36,4 @@ jobs:
           command: test
       - name: 🏁 Run end-to-end test
         run: |
-          bash tests/e2e/run.sh
+          bash tests/run.sh
