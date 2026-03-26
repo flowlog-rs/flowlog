@@ -1,5 +1,3 @@
-# Integer-only benchmarks (no --str-intern needed)
-
 # Graph analysis
 graph_analysis/tc.dl=G5K-0.001
 graph_analysis/tc.dl=G10K-0.001

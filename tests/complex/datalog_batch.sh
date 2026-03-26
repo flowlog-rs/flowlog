@@ -192,15 +192,7 @@ download_souffle_ref() {
     tar xzf "$ref_tar" -C "$ref_dir" || die "Failed to extract Souffle reference: $ref_name"
     rm -f "$ref_tar"
 
-    # Export for verify_output to use
-    CURRENT_REF_DIR="$ref_dir"
-}
-
-cleanup_souffle_ref() {
-    if [[ -n "${CURRENT_REF_DIR:-}" ]]; then
-        rm -rf "$CURRENT_REF_DIR"
-        CURRENT_REF_DIR=""
-    fi
+    echo "$ref_dir"
 }
 
 ###############################################################################
@@ -242,8 +234,7 @@ invoke_compiler() {
 ###############################################################################
 
 verify_output() {
-    local program_stem="$1" dataset_name="$2" flowlog_out_dir="$3"
-    local ref_dir="$CURRENT_REF_DIR"
+    local flowlog_out_dir="$1" ref_dir="$2"
     local failed=0
 
     # Compare each reference CSV against FlowLog output.
@@ -275,17 +266,24 @@ verify_output() {
             continue
         fi
 
-        # Sort FlowLog output (numeric sort per column, comma-delimited).
-        # Determine number of columns from the first line, then sort each column numerically.
+        # Sort FlowLog output (comma-delimited).
+        # Detect whether columns are numeric from the first line; use numeric
+        # sort keys for numeric data, plain lexicographic otherwise.
         local sorted_fl="/tmp/flowlog_sorted_$$_${ref_stem}"
-        local ncols
-        ncols="$(head -1 "$fl_file" | awk -F',' '{print NF}')"
-        local sort_keys=""
-        for (( c=1; c<=ncols; c++ )); do
-            sort_keys="$sort_keys -k${c},${c}n"
-        done
-        # shellcheck disable=SC2086
-        sort -t',' $sort_keys "$fl_file" > "$sorted_fl"
+        local first_line
+        first_line="$(head -1 "$fl_file")"
+        if [[ "$first_line" =~ ^[-0-9,]+$ ]]; then
+            local ncols
+            ncols="$(echo "$first_line" | awk -F',' '{print NF}')"
+            local sort_keys=""
+            for (( c=1; c<=ncols; c++ )); do
+                sort_keys="$sort_keys -k${c},${c}n"
+            done
+            # shellcheck disable=SC2086
+            sort -t',' $sort_keys "$fl_file" > "$sorted_fl"
+        else
+            sort -t',' "$fl_file" > "$sorted_fl"
+        fi
 
         # Reference is already sorted; fast byte-compare first, diff on failure
         if cmp -s "$ref_file" "$sorted_fl"; then
@@ -349,7 +347,8 @@ run_test() {
 
     # Download dataset and Souffle reference
     setup_dataset "$dataset_name"
-    download_souffle_ref "$program_stem" "$dataset_name"
+    local ref_dir
+    ref_dir="$(download_souffle_ref "$program_stem" "$dataset_name")"
 
     local dataset_path
     dataset_path="$(realpath "${FACT_DIR}/${dataset_name}")"
@@ -382,7 +381,7 @@ run_test() {
         "$executable" -w "$WORKERS" 2>&1 | tee "$log_file"
 
         # Verify
-        verify_output "$program_stem" "$dataset_name" "$output_dir" \
+        verify_output "$output_dir" "$ref_dir" \
             || die "Verification failed: $prog_file with $dataset_name${suffix}"
 
         # Cleanup generated artifacts
@@ -391,7 +390,7 @@ run_test() {
         rm -rf "$output_dir"
     done
 
-    cleanup_souffle_ref
+    rm -rf "$ref_dir"
     cleanup_dataset "$dataset_name"
 }
 
@@ -413,7 +412,6 @@ main() {
     log "$BLUE" "START" "FlowLog datalog-batch correctness test"
 
     compile_release_workspace
-    ensure_compiler_built
 
     if [[ -n "$SINGLE_CONFIG" ]]; then
         # Single config mode (e.g., passed via CLI)
