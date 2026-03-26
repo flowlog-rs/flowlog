@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : udf_predicate
+// Feature : UDF as boolean predicate in rule body (filter and negated filter)
+// ════════════════════════════════════════════════════════════════════════════
+
+.extern fn is_prime(n: int32) -> bool
+
+.decl Data(id: int32, val: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl PrimeVal(id: int32, val: int32)
+PrimeVal(id, val) :- Data(id, val), is_prime(val).
+.output PrimeVal
+
+.decl CompositeVal(id: int32, val: int32)
+CompositeVal(id, val) :- Data(id, val), !is_prime(val).
+.output CompositeVal

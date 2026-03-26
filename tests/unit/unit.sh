@@ -33,7 +33,7 @@ readonly DIM='\033[2m'
 readonly NC='\033[0m'
 readonly CLEAR_LINE='\033[2K'
 
-readonly ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+readonly ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 readonly TESTS_DIR="${ROOT_DIR}/tests/unit"
 readonly COMPILER_BIN="${ROOT_DIR}/target/release/flowlog"
 readonly BUILD_DIR="${ROOT_DIR}/target/e2e"
@@ -316,6 +316,11 @@ run_test() {
     local compile_flags=()
     if [[ -n "$mode_flag" ]]; then
         read -ra compile_flags <<< "$mode_flag"
+    fi
+
+    # UDF support: pass --udf-file if present
+    if [[ -f "$test_dir/udf.rs" ]]; then
+        compile_flags+=(--udf-file "$test_dir/udf.rs")
     fi
 
     if ! "$COMPILER_BIN" -D output "${compile_flags[@]}" "$test_dir/program.dl" -o "$work_dir/program" >"$compile_log" 2>&1; then
