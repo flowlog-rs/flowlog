@@ -83,6 +83,114 @@ pub(super) fn result_from_key(arity: usize, agg_pos: usize) -> TokenStream {
 }
 
 // =============================================================================
+// Shared semiring-optimised pipeline helpers
+// =============================================================================
+
+/// Threshold comparison strategy for the semiring optimisation pipeline.
+///
+/// Determines when a consolidated semiring value is re-emitted.
+pub(super) enum ThresholdCmp {
+    /// Emit when the new value is strictly less than the current (`min`).
+    Lt,
+    /// Emit when the new value is strictly greater than the current (`max`).
+    Gt,
+    /// Emit when the new value differs from the current (`sum`, `count`, `avg`).
+    Ne,
+}
+
+/// Generates the 3-phase semiring-optimised aggregation pipeline.
+///
+/// 1. **Phase 1** – Rewrite each `(row, time, _diff)` into `(key, time, Semiring::new(value))`
+/// 2. **Phase 2** – `threshold_semigroup` with the semiring; emits only when the
+///    consolidated value satisfies the comparison predicate.
+/// 3. **Phase 3** – Convert back: `(key, time, SemiringVal)` → `(full_row, time, SEMIRING_ONE)`
+///
+/// `phase3_result` controls how the aggregated value is extracted:
+/// use `result_from_key` (`.value`) for min/max/sum/count, or
+/// `avg_result_from_key` (`.avg()`) for avg.
+pub(super) fn aggregation_optimize_pipeline(
+    arity: usize,
+    agg_pos: usize,
+    row_pat: TokenStream,
+    semiring_expr: TokenStream,
+    cmp: ThresholdCmp,
+    phase3_result: TokenStream,
+) -> TokenStream {
+    let key_expr = key_from_row(arity, agg_pos);
+    let key_pat = key_pattern(arity);
+
+    let threshold = match cmp {
+        ThresholdCmp::Lt => quote! {
+            .threshold_semigroup(|_k, &new_val, current_val| {
+                match current_val {
+                    Some(current) if new_val < *current => Some(new_val),
+                    Some(_) => None,
+                    None if !new_val.is_zero() => Some(new_val),
+                    None => None,
+                }
+            })
+        },
+        ThresholdCmp::Gt => quote! {
+            .threshold_semigroup(|_k, &new_val, current_val| {
+                match current_val {
+                    Some(current) if new_val > *current => Some(new_val),
+                    Some(_) => None,
+                    None if !new_val.is_zero() => Some(new_val),
+                    None => None,
+                }
+            })
+        },
+        ThresholdCmp::Ne => quote! {
+            .threshold_semigroup(|_k, &new_val, current_val| {
+                match current_val {
+                    Some(current) if new_val != *current => Some(new_val),
+                    Some(_) => None,
+                    None if !new_val.is_zero() => Some(new_val),
+                    None => None,
+                }
+            })
+        },
+    };
+
+    quote! {
+        .inner
+        .map(move |(#row_pat, t, _)| {
+            let key = #key_expr;
+            (key, t, #semiring_expr)
+        })
+        .as_collection()
+
+        #threshold
+
+        .inner
+        .map(move |(#key_pat, t, agg_val)| {
+            let row = #phase3_result;
+            (row, t, SEMIRING_ONE)
+        })
+        .as_collection()
+    }
+}
+
+/// Generates the pre-leave conversion for semiring-optimised recursive relations.
+///
+/// Converts `(row, time, Present)` → `((key,), time, Semiring::new(value))` so
+/// that `leave()` carries semiring diffs across iterations.
+pub(super) fn aggregation_pre_leave_pipeline(
+    arity: usize,
+    agg_pos: usize,
+    row_pat: TokenStream,
+    semiring_expr: TokenStream,
+) -> TokenStream {
+    let key_expr = key_from_row(arity, agg_pos);
+
+    quote! {
+        .inner
+        .map(move |(#row_pat, t, _)| ((#key_expr), t, #semiring_expr))
+        .as_collection()
+    }
+}
+
+// =============================================================================
 // Semiring-optimised post-leave (shared by min / max / sum / avg)
 // =============================================================================
 
