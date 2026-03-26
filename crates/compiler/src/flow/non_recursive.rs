@@ -20,6 +20,7 @@ use crate::aggregation::{
     aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce_stmt, aggregation_row_chop,
     aggregation_sum_optimize,
 };
+use crate::import::SemiringKind;
 use crate::udf::head_udf_map;
 use crate::Compiler;
 
@@ -134,14 +135,13 @@ impl Compiler {
                 // using the appropriate semigroup, avoiding a second arrangement.
                 if self.config.is_datalog_batch() {
                     self.imports.mark_as_collection();
-                    match agg_op {
-                        AggregationOperator::Min => self.imports.mark_min_semiring(agg_type),
-                        AggregationOperator::Max => self.imports.mark_max_semiring(agg_type),
-                        AggregationOperator::Sum | AggregationOperator::Count => {
-                            self.imports.mark_sum_semiring(agg_type)
-                        }
-                        AggregationOperator::Avg => self.imports.mark_avg_semiring(agg_type),
-                    }
+                    let kind = match agg_op {
+                        AggregationOperator::Min => SemiringKind::Min,
+                        AggregationOperator::Max => SemiringKind::Max,
+                        AggregationOperator::Sum | AggregationOperator::Count => SemiringKind::Sum,
+                        AggregationOperator::Avg => SemiringKind::Avg,
+                    };
+                    self.imports.mark_semiring(kind, agg_type);
                     self.imports.mark_threshold_total();
                     self.imports.mark_timely_map();
                     let pipeline = match agg_op {
