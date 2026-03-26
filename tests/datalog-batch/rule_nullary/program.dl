@@ -1,0 +1,26 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : rule_nullary
+// Feature : nullary (boolean) relation used as a switch to gate downstream rules
+// Covers  : derive nullary from condition, use nullary as positive guard,
+//           results differ depending on whether the nullary holds
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Score(id: int32, val: int32)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+// Nullary: true if any score exceeds threshold
+.decl HasOutlier()
+HasOutlier() :- Score(_, v), v > 500.
+
+// When HasOutlier is true, cap all scores at 100
+.decl Capped(id: int32, val: int32)
+Capped(id, 100) :- Score(id, v), HasOutlier(), v > 100.
+Capped(id, v) :- Score(id, v), HasOutlier(), v <= 100.
+
+// When HasOutlier is false, pass through unchanged
+.decl PassThrough(id: int32, val: int32)
+PassThrough(id, v) :- Score(id, v), !HasOutlier().
+
+.output HasOutlier
+.output Capped
+.output PassThrough

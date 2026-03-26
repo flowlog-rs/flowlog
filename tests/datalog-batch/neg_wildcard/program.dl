@@ -1,0 +1,14 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_wildcard
+// Feature : negation with wildcard placeholder !R(x, _)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Person(id: int32)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+
+.decl HasTask(person: int32, task: int32)
+.input HasTask(IO="file", filename="HasTask.csv", delimiter=",")
+
+.decl Idle(id: int32)
+Idle(id) :- Person(id), !HasTask(id, _).
+.output Idle

@@ -1,0 +1,14 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_antijoin
+// Feature : negation as anti-join with shared multi-variable binding
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Assign(person: int32, task: int32)
+.input Assign(IO="file", filename="Assign.csv", delimiter=",")
+
+.decl Done(person: int32, task: int32)
+.input Done(IO="file", filename="Done.csv", delimiter=",")
+
+.decl Pending(person: int32, task: int32)
+Pending(p, t) :- Assign(p, t), !Done(p, t).
+.output Pending

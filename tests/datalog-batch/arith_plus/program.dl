@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : arith_plus
+// Feature : addition operator (+) in rule head
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: int32, b: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(a: int32, b: int32, c: int32)
+Out(a, b, a + b) :- Data(a, b).
+.output Out

@@ -1,0 +1,22 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : agg_negative
+// Feature : aggregation (min, max, sum) with negative input values
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(grp: int32, val: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Derived(grp: int32, val: int32)
+Derived(g, v) :- Data(g, v).
+
+.decl MinVal(grp: int32, m: int32)
+MinVal(g, min(v)) :- Derived(g, v).
+.output MinVal
+
+.decl MaxVal(grp: int32, m: int32)
+MaxVal(g, max(v)) :- Derived(g, v).
+.output MaxVal
+
+.decl SumVal(grp: int32, s: int32)
+SumVal(g, sum(v)) :- Derived(g, v).
+.output SumVal

@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : agg_sum
+// Feature : sum aggregation with grouping over joined IDB
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Sale(dept: int32, item: int32, amount: int32)
+.input Sale(IO="file", filename="Sale.csv", delimiter=",")
+
+.decl Dept(id: int32, name: string)
+.input Dept(IO="file", filename="Dept.csv", delimiter=",")
+
+.decl DeptSale(dept: int32, amount: int32)
+DeptSale(d, a) :- Sale(d, _, a), Dept(d, _).
+
+.decl DeptTotal(dept: int32, total: int32)
+DeptTotal(d, sum(a)) :- DeptSale(d, a).
+.output DeptTotal

@@ -1,0 +1,19 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : join_wide
+// Feature : join involving wide (8-column) relation
+// Covers  : wide ⋈ narrow, wide self-join with inequality filter
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Wide(a: int32, b: int32, c: int32, d: int32, e: int32, f: int32, g: int32, h: int32)
+.input Wide(IO="file", filename="Wide.csv", delimiter=",")
+
+.decl Label(id: int32, tag: int32)
+.input Label(IO="file", filename="Label.csv", delimiter=",")
+
+.decl WideNarrow(a: int32, d: int32, h: int32, tag: int32)
+WideNarrow(a, d, h, t) :- Wide(a, _, _, d, _, _, _, h), Label(a, t).
+.output WideNarrow
+
+.decl WideSelf(a: int32, b1: int32, b2: int32)
+WideSelf(a, b1, b2) :- Wide(a, b1, _, _, _, _, _, _), Wide(a, b2, _, _, _, _, _, _), b1 < b2.
+.output WideSelf

@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : agg_avg
+// Feature : average aggregation with grouping (integer truncating division)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Student(id: int32, class: int32)
+.input Student(IO="file", filename="Student.csv", delimiter=",")
+
+.decl Score(student: int32, score: int32)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+.decl ClassScore(class: int32, student: int32, score: int32)
+ClassScore(c, s, sc) :- Student(s, c), Score(s, sc).
+
+.decl ClassAvg(class: int32, avg: int32)
+ClassAvg(c, average(sc)) :- ClassScore(c, _, sc).
+.output ClassAvg

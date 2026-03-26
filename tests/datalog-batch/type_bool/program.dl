@@ -1,71 +1,17 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : type_bool
 // Feature : bool data type with True / False literals
-// Covers  : bool declaration, True / False constant filtering in rule body,
-//           cross-relation bool filtering (Person.active + Task.done),
-//           aggregation over a bool-derived IDB, negation over a
-//           bool-derived IDB with wildcard, two-EDB join with bool filter
+// Covers  : bool column declaration, True constant filter, False constant
+//           filter, bool values loaded from CSV (lowercase true/false)
 // ════════════════════════════════════════════════════════════════════════════
-
-// ── EDB ──────────────────────────────────────────────────────────────────────
 
 .decl Person(id: int32, name: string, active: bool)
 .input Person(IO="file", filename="Person.csv", delimiter=",")
-
-.decl Task(name: string, owner: int32, done: bool)
-.input Task(IO="file", filename="Task.csv", delimiter=",")
-
-.decl Skill(person: int32, skill: string)
-.input Skill(IO="file", filename="Skill.csv", delimiter=",")
-
-// ── TEST ActivePerson: filter on True literal ────────────────────────────────
-// Verifies : boolean constant True correctly matches bool column.
 
 .decl ActivePerson(id: int32, name: string)
 ActivePerson(id, n) :- Person(id, n, True).
 .output ActivePerson
 
-// ── TEST InactivePerson: filter on False literal ─────────────────────────────
-// Verifies : boolean constant False correctly matches bool column.
-
 .decl InactivePerson(id: int32, name: string)
 InactivePerson(id, n) :- Person(id, n, False).
 .output InactivePerson
-
-// ── TEST PendingTask: join + two boolean filters across relations ─────────────
-// Verifies : bool column participates in join and filter simultaneously.
-//            Only active persons with incomplete tasks appear.
-
-.decl PendingTask(person_id: int32, task: string)
-PendingTask(id, t) :- Person(id, _, True), Task(t, id, False).
-.output PendingTask
-
-// ── TEST CompletedByActive: two True filters across two relations ────────────
-// Verifies : True filter on both Person.active and Task.done.
-
-.decl CompletedByActive(person_id: int32, task: string)
-CompletedByActive(id, t) :- Person(id, _, True), Task(t, id, True).
-.output CompletedByActive
-
-// ── TEST PendingCount: aggregation over bool-derived IDB ─────────────────────
-// Verifies : count() can be applied to an IDB derived through bool filters.
-//            Note: count(id) where id is the group key is trivially 1 per group.
-
-.decl PendingCount(person_id: int32, cnt: int32)
-PendingCount(id, count(id)) :- PendingTask(id, _).
-.output PendingCount
-
-// ── TEST IdleActive: negation over a bool-filtered IDB ───────────────────────
-// Verifies : negation (!PendingTask) correctly identifies active persons
-//            with no pending tasks. Uses wildcard in negated atom.
-
-.decl IdleActive(id: int32, name: string)
-IdleActive(id, n) :- ActivePerson(id, n), !PendingTask(id, _).
-.output IdleActive
-
-// ── TEST SkilledAndActive: 3-way join with bool filter ───────────────────────
-// Verifies : bool filter + two EDB joins produce correct intersection.
-
-.decl SkilledAndActive(id: int32, name: string, skill: string)
-SkilledAndActive(id, n, s) :- Person(id, n, True), Skill(id, s).
-.output SkilledAndActive

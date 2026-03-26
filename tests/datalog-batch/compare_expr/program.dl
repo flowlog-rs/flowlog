@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : compare_expr
+// Feature : comparison on arithmetic expression (a + b >= threshold)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(id: int32, a: int32, b: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(id: int32, total: int32)
+Out(id, a + b) :- Data(id, a, b), a + b >= 100.
+.output Out

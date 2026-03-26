@@ -28,7 +28,10 @@ readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[0;33m'
 readonly BLUE='\033[0;34m'
+readonly BOLD='\033[1m'
+readonly DIM='\033[2m'
 readonly NC='\033[0m'
+readonly CLEAR_LINE='\033[2K'
 
 readonly ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 readonly TESTS_DIR="${ROOT_DIR}/tests"
@@ -39,13 +42,26 @@ readonly -a CATEGORIES=(datalog-batch datalog-inc extend-batch extend-inc)
 
 passed=0
 failed=0
-errors=""
+total=0
+current=0
+
+# Failure details: each entry is "test_name\treason\tdetail"
+declare -a failure_names=()
+declare -a failure_reasons=()
+declare -a failure_details=()
 
 export RUST_LOG=error
 
 ###############################################################################
 # Logging / presentation helpers
 ###############################################################################
+
+# Whether stdout is a terminal (enables progress bar)
+if [[ -t 1 ]]; then
+    IS_TTY=1
+else
+    IS_TTY=0
+fi
 
 log() {
     local color="$1"
@@ -55,8 +71,33 @@ log() {
 }
 
 die() {
-    log "$RED" "ERROR" "$*"
+    echo -e "${RED}[ERROR]${NC} $*" >&2
     exit 1
+}
+
+# Print progress bar on a single line (overwritten each call)
+show_progress() {
+    local test_label="$1"
+    if (( IS_TTY )); then
+        local pct=0
+        (( total > 0 )) && pct=$(( current * 100 / total ))
+        # Build bar: [████████░░░░░░░░░░░░] 45% (23/51) running: test_name
+        local bar_width=20
+        local filled=$(( pct * bar_width / 100 ))
+        local empty=$(( bar_width - filled ))
+        local bar=""
+        for ((i=0; i<filled; i++)); do bar+="█"; done
+        for ((i=0; i<empty; i++)); do bar+="░"; done
+        printf "${CLEAR_LINE}\r  ${DIM}[${bar}]${NC} ${BOLD}%3d%%${NC} ${DIM}(%d/%d)${NC} %s" \
+            "$pct" "$current" "$total" "$test_label"
+    fi
+}
+
+# Clear the progress line
+clear_progress() {
+    if (( IS_TTY )); then
+        printf "${CLEAR_LINE}\r"
+    fi
 }
 
 usage() {
@@ -79,43 +120,29 @@ Each test directory contains:
 
 Examples:
   $(basename "$0")                     # run all tests
-  $(basename "$0") recursive_max_batch # run one test
+  $(basename "$0") recursive_max       # run one test
 EOF
 }
 
 indent_file() {
     local file="$1"
-    sed 's/^/       /' "$file"
+    sed 's/^/         /' "$file"
 }
 
 tail_and_indent() {
     local file="$1"
     local lines="${2:-20}"
-    tail -"${lines}" "$file" | sed 's/^/       /'
+    tail -"${lines}" "$file" | sed 's/^/         /'
 }
 
 record_failure() {
     local test_name="$1"
     local reason="$2"
-    errors+="  ${test_name}: ${reason}\n"
+    local detail="${3:-}"
+    failure_names+=("$test_name")
+    failure_reasons+=("$reason")
+    failure_details+=("$detail")
     ((failed++)) || true
-}
-
-fail_with_log() {
-    local test_name="$1"
-    local reason="$2"
-    local hint="$3"
-    local log_file="$4"
-    local view="${5:-tail}" # tail | full
-
-    log "$RED" "FAIL" "$test_name — $reason"
-    log "$YELLOW" "HINT" "$hint"
-    if [[ "$view" == "full" ]]; then
-        indent_file "$log_file"
-    else
-        tail_and_indent "$log_file" 20
-    fi
-    record_failure "$test_name" "$reason"
 }
 
 ###############################################################################
@@ -138,7 +165,7 @@ mode_flag_for_category() {
 ###############################################################################
 
 ensure_compiler_built() {
-    log "$YELLOW" "BUILD" "Building compiler (release)"
+    echo -e "  ${YELLOW}Building compiler (release)...${NC}"
     (cd "$ROOT_DIR" && cargo build --release -p compiler 2>&1 | tail -1)
     [[ -x "$COMPILER_BIN" ]] || die "Compiler binary not found: $COMPILER_BIN"
 }
@@ -168,8 +195,6 @@ run_incremental_session() {
     rm -f "$fifo_path"
     mkfifo "$fifo_path"
 
-    # Feed commands through FIFO with a tiny pacing delay to keep scripted PTY
-    # sessions stable across local and CI environments.
     (
         while IFS= read -r line || [[ -n "$line" ]]; do
             printf '%s\n' "$line"
@@ -212,7 +237,7 @@ run_generated_binary() {
 compare_expected_outputs() {
     local test_dir="$1"
     local output_dir="$2"
-    local use_sort="${3:-0}"  # 1 = sort before comparing (multi-worker)
+    local use_sort="${3:-0}"
 
     local all_match=1
     local diff_detail=""
@@ -226,20 +251,16 @@ compare_expected_outputs() {
 
         if [[ ! -f "$actual_file" ]]; then
             all_match=0
-            diff_detail+="    Relation '${rel_name}': output file missing\n"
-            diff_detail+="      Expected file: ${expected_file}\n"
-            diff_detail+="      Actual file:   ${actual_file} (not found)\n"
+            diff_detail+="      Relation '${rel_name}': output file missing\n"
             continue
         fi
 
         local diff_out
         if (( use_sort )); then
-            # Multi-worker: sort both sides since output order is nondeterministic.
             diff_out=$(diff \
                 --label "expected/${rel_name}" <(sort "$expected_file") \
                 --label "actual/${rel_name}"   <(sort "$actual_file") 2>&1) || true
         else
-            # Single-worker: exact line-by-line comparison.
             diff_out=$(diff \
                 --label "expected/${rel_name}" "$expected_file" \
                 --label "actual/${rel_name}"   "$actual_file" 2>&1) || true
@@ -247,17 +268,11 @@ compare_expected_outputs() {
 
         if [[ -n "$diff_out" ]]; then
             all_match=0
-            local exp_count
-            local act_count
+            local exp_count act_count
             exp_count=$(wc -l < "$expected_file")
             act_count=$(wc -l < "$actual_file")
-            diff_detail+="    Relation '${rel_name}': MISMATCH (expected ${exp_count} rows, got ${act_count} rows)\n"
-            diff_detail+="      Expected:\n"
-            diff_detail+="$(sed 's/^/        /' "$expected_file")\n"
-            diff_detail+="      Actual:\n"
-            diff_detail+="$(sed 's/^/        /' "$actual_file")\n"
-            diff_detail+="      Diff:\n"
-            diff_detail+="$(echo "$diff_out" | head -30 | sed 's/^/        /')\n"
+            diff_detail+="      Relation '${rel_name}': expected ${exp_count} rows, got ${act_count}\n"
+            diff_detail+="$(echo "$diff_out" | head -20 | sed 's/^/         /')\n"
         fi
     done
 
@@ -278,6 +293,10 @@ run_test() {
     local category="$2"
     local test_name
     test_name="$(basename "$test_dir")"
+    local full_name="${category}/${test_name}"
+
+    ((current++)) || true
+    show_progress "$full_name"
 
     local work_dir="${BUILD_DIR}/${test_name}"
     local output_dir="${work_dir}/output"
@@ -287,13 +306,10 @@ run_test() {
     local incremental=0
     [[ -f "$test_dir/commands.txt" ]] && incremental=1
 
-    log "$BLUE" "TEST" "${category}/${test_name}"
-
-    # 1) Set up working directory and compile .dl -> standalone executable.
+    # 1) Compile
     rm -rf "$work_dir"
     mkdir -p "$work_dir"
 
-    # Mode flag derived from category directory.
     local mode_flag
     mode_flag="$(mode_flag_for_category "$category")"
 
@@ -303,33 +319,37 @@ run_test() {
     fi
 
     if ! "$COMPILER_BIN" -D output "${compile_flags[@]}" "$test_dir/program.dl" -o "$work_dir/program" >"$compile_log" 2>&1; then
-        fail_with_log "$test_name" "FlowLog compilation failed" "Compiler output:" "$compile_log" "full"
+        local detail
+        detail="$(cat "$compile_log" 2>/dev/null | tail -20 | sed 's/^/         /')"
+        record_failure "$full_name" "compilation failed" "$detail"
+        rm -rf "$work_dir" "$compile_log" "$run_log"
         return
     fi
 
-    # 2) Stage test inputs.
+    # 2) Stage inputs
     copy_test_data "$test_dir" "$work_dir"
     mkdir -p "$output_dir"
 
-    # 3) Execute generated binary.
+    # 3) Execute
     if ! run_generated_binary "$work_dir" "$test_dir" "$test_name" "$run_log" "$incremental"; then
-        fail_with_log "$test_name" "execution failed" "Runtime log (last 20 lines):" "$run_log" "tail"
+        local detail
+        detail="$(tail -20 "$run_log" 2>/dev/null | sed 's/^/         /')"
+        record_failure "$full_name" "execution failed" "$detail"
+        rm -rf "$work_dir" "$compile_log" "$run_log"
         return
     fi
 
-    # 4) Compare outputs.
-    # Multi-worker tests sort before comparing since output order is nondeterministic.
+    # 4) Compare
     local use_sort=0
     [[ -f "$test_dir/runtime_flags" ]] && grep -q -- '-w' "$test_dir/runtime_flags" && use_sort=1
-    if compare_expected_outputs "$test_dir" "$output_dir" "$use_sort"; then
-        log "$GREEN" "PASS" "${category}/${test_name}"
+
+    local mismatch_detail
+    if mismatch_detail=$(compare_expected_outputs "$test_dir" "$output_dir" "$use_sort"); then
         ((passed++)) || true
     else
-        log "$RED" "FAIL" "${category}/${test_name} — output mismatch"
-        record_failure "${category}/${test_name}" "output mismatch"
+        record_failure "$full_name" "output mismatch" "$mismatch_detail"
     fi
 
-    # Cleanup generated artifacts to keep disk usage low.
     rm -rf "$work_dir"
     rm -f "$compile_log" "$run_log"
 }
@@ -351,6 +371,27 @@ find_test() {
 }
 
 ###############################################################################
+# Count tests
+###############################################################################
+
+count_tests() {
+    local count=0
+    if [[ $# -gt 0 ]]; then
+        count=$#
+    else
+        for cat in "${CATEGORIES[@]}"; do
+            local cat_dir="${TESTS_DIR}/${cat}"
+            [[ -d "$cat_dir" ]] || continue
+            for test_dir in "$cat_dir"/*/; do
+                [[ -f "$test_dir/program.dl" ]] || continue
+                ((count++)) || true
+            done
+        done
+    fi
+    echo "$count"
+}
+
+###############################################################################
 # Entry point
 ###############################################################################
 
@@ -360,11 +401,18 @@ main() {
         exit 0
     fi
 
-    log "$BLUE" "START" "FlowLog end-to-end tests"
+    echo ""
+    echo -e "  ${BOLD}FlowLog End-to-End Tests${NC}"
+    echo ""
 
     ensure_compiler_built
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
+
+    # Count total tests first
+    total=$(count_tests "$@")
+    echo -e "  ${DIM}Running ${total} tests...${NC}"
+    echo ""
 
     if [[ $# -gt 0 ]]; then
         local name
@@ -374,28 +422,38 @@ main() {
             run_test "${TESTS_DIR}/${cat}/${name}" "$cat"
         done
     else
-        local found=0
         for cat in "${CATEGORIES[@]}"; do
             local cat_dir="${TESTS_DIR}/${cat}"
             [[ -d "$cat_dir" ]] || continue
             for test_dir in "$cat_dir"/*/; do
                 [[ -f "$test_dir/program.dl" ]] || continue
                 run_test "$test_dir" "$cat"
-                ((found++)) || true
             done
         done
-        (( found > 0 )) || die "No test cases found in $TESTS_DIR"
+    fi
+
+    clear_progress
+    echo ""
+
+    # Summary
+    if (( failed == 0 )); then
+        echo -e "  ${GREEN}${BOLD}✓ All ${passed} tests passed${NC}"
+    else
+        echo -e "  ${GREEN}${passed} passed${NC}  ${RED}${BOLD}${failed} failed${NC}  ${DIM}(${total} total)${NC}"
+        echo ""
+        echo -e "  ${RED}${BOLD}Failures:${NC}"
+        echo ""
+        for ((i=0; i<${#failure_names[@]}; i++)); do
+            echo -e "  ${RED}✗${NC} ${BOLD}${failure_names[$i]}${NC} — ${failure_reasons[$i]}"
+            if [[ -n "${failure_details[$i]}" ]]; then
+                echo -e "${failure_details[$i]}"
+            fi
+            echo ""
+        done
     fi
 
     echo ""
-    log "$BLUE" "RESULT" "${passed} passed, ${failed} failed"
-    if (( failed > 0 )); then
-        echo ""
-        log "$RED" "FAILURES" ""
-        echo -e "$errors"
-        exit 1
-    fi
-    log "$GREEN" "FINISH" "All end-to-end tests passed"
+    (( failed == 0 ))
 }
 
 main "$@"

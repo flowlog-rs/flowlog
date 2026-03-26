@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : output_limit
+// Feature : LIMIT directive on output
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(name: string, score: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Top3(name: string, score: int32)
+Top3(n, s) :- Data(n, s).
+.output Top3(order_by="score DESC", limit="3")

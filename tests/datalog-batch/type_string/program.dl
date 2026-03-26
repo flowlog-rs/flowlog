@@ -1,0 +1,12 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : type_string
+// Feature : string type load, pass-through, and output
+// Covers  : CSV load with string values, rule pass-through, string in output
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(id: int32, name: string)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(id: int32, name: string)
+Out(id, n) :- Data(id, n).
+.output Out

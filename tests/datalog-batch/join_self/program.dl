@@ -1,0 +1,16 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : join_self
+// Feature : self-join — same relation joined with itself
+// Covers  : two-hop path via self-join, triangle detection via 3-way self-join
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl TwoHop(src: int32, dst: int32)
+TwoHop(a, c) :- Edge(a, b), Edge(b, c).
+.output TwoHop
+
+.decl Triangle(a: int32, b: int32, c: int32)
+Triangle(a, b, c) :- Edge(a, b), Edge(b, c), Edge(c, a), a < b, b < c.
+.output Triangle
