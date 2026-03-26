@@ -1,0 +1,30 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : loop_iterative
+// Feature : .iterative directive — replacement semantics per iteration
+// Covers  : relation marked .iterative replaces its contents each round
+//           instead of accumulating. After 3 rounds, Val should contain
+//           only the result of the last iteration, not the union of all.
+//
+// Each round: Val(x + 1) :- Val(x). With .iterative, only the latest
+// generation survives. Starting from Val(1):
+//   Round 0: Val = {1} (entered)
+//   Round 1: Val = {2} (replaces {1})
+//   Round 2: Val = {3} (replaces {2})
+//
+// Without .iterative, Val would accumulate: {1, 2, 3}.
+// With .iterative, Val should be just {3}.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Seed(x: int32)
+.input Seed(IO="file", filename="Seed.csv", delimiter=",")
+
+.decl Val(x: int32)
+
+Val(x) :- Seed(x).
+
+loop while { @it <= 1 } {
+    .iterative Val
+    Val(x + 1) :- Val(x).
+}
+
+.output Val

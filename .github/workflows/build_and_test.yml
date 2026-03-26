@@ -34,6 +34,6 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-      - name: 🏁 Run end-to-end test
+      - name: 🏁 Run end-to-end unit tests
         run: |
-          bash tests/run.sh
+          bash tests/unit.sh

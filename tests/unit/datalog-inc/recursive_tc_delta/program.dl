@@ -1,0 +1,12 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : recursive_tc_delta
+// Feature : recursive transitive closure recomputes under edge insert/delete
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+.output Reach

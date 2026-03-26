@@ -1,0 +1,15 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : empty_delta
+// Feature : commit changes EDB but output is unaffected (empty delta)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl A(x: int32)
+.input A(IO="file", filename="A.csv", delimiter=",")
+
+.decl B(x: int32)
+.input B(IO="file", filename="B.csv", delimiter=",")
+
+// Only outputs intersection of A and B
+.decl Out(x: int32)
+Out(x) :- A(x), B(x).
+.output Out

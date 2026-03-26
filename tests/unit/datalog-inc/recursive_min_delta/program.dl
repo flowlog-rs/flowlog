@@ -1,0 +1,29 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : recursive_min_delta
+// Feature : recursive min aggregation in datalog-inc mode
+// Focus   : after deleting an edge, the maintained minimum must increase
+//
+// Initial shortest distances from source 1:
+//   1 -> 1 : 0
+//   1 -> 3 : 1
+//   1 -> 2 : 2   via 1 -> 3 -> 2
+//   1 -> 4 : 4   via 1 -> 3 -> 2 -> 4
+//   1 -> 5 : 5   via 1 -> 3 -> 2 -> 4 -> 5
+//
+// After deleting edge (3,2,1):
+//   1 -> 2 : 5
+//   1 -> 4 : 7
+//   1 -> 5 : 8
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Source(node: int32)
+.input Source(IO="file", filename="Source.csv", delimiter=",")
+
+.decl Edge(src: int32, dst: int32, weight: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl MinDist(node: int32, dist: int32)
+MinDist(s, min(0)) :- Source(s).
+MinDist(y, min(d + w)) :- MinDist(x, d), Edge(x, y, w).
+
+.output MinDist
