@@ -36,4 +36,4 @@ jobs:
           command: test
       - name: 🏁 Run end-to-end unit tests
         run: |
-          bash tests/unit.sh
+          bash tests/unit/unit.sh
