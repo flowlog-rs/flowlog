@@ -8,5 +8,5 @@
 .input Data(IO="file", filename="Data.csv", delimiter=",")
 
 .decl Out(id: int32, name: string)
-Out(id, n) :- Data(id, n).
+Out(id, name) :- Data(id, name).
 .output Out

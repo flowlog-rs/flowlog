@@ -187,7 +187,7 @@ download_souffle_ref() {
     local ref_url="${SOUFFLE_BASE_URL}/${ref_name}.tar.gz"
 
     mkdir -p "$ref_dir"
-    log "$CYAN" "DOWNLOAD" "Souffle reference: $ref_name"
+    log "$CYAN" "DOWNLOAD" "Souffle reference: $ref_name" >&2
     wget -q -O "$ref_tar" "$ref_url" || die "Failed to download Souffle reference: $ref_url"
     tar xzf "$ref_tar" -C "$ref_dir" || die "Failed to extract Souffle reference: $ref_name"
     rm -f "$ref_tar"
@@ -266,9 +266,8 @@ verify_output() {
             continue
         fi
 
-        # Sort FlowLog output (comma-delimited).
-        # Detect whether columns are numeric from the first line; use numeric
-        # sort keys for numeric data, plain lexicographic otherwise.
+        # Sort FlowLog output to match the pre-sorted reference (LC_ALL=C).
+        # Detect whether columns are numeric from the first line.
         local sorted_fl="/tmp/flowlog_sorted_$$_${ref_stem}"
         local first_line
         first_line="$(head -1 "$fl_file")"
@@ -285,7 +284,7 @@ verify_output() {
             LC_ALL=C sort -t',' "$fl_file" > "$sorted_fl"
         fi
 
-        # Reference is already sorted; fast byte-compare first, diff on failure
+        # Fast byte-compare, then comm on failure
         if cmp -s "$ref_file" "$sorted_fl"; then
             local lines
             lines="$(wc -l < "$ref_file")"
@@ -295,7 +294,6 @@ verify_output() {
             ref_lines="$(wc -l < "$ref_file")"
             fl_lines="$(wc -l < "$sorted_fl")"
             log "$RED" "FAIL" "Mismatch in $ref_stem (reference: $ref_lines, flowlog: $fl_lines)"
-            # Use comm for fast set-difference instead of slow diff on large files
             local only_ref only_fl
             only_ref="$(comm -23 "$ref_file" "$sorted_fl" | head -10)"
             only_fl="$(comm -13 "$ref_file" "$sorted_fl" | head -10)"
@@ -414,8 +412,9 @@ main() {
     compile_release_workspace
 
     if [[ -n "$SINGLE_CONFIG" ]]; then
-        # Single config mode (e.g., passed via CLI)
-        run_config "$SINGLE_CONFIG" "custom"
+        local extra=""
+        [[ "$(basename "$SINGLE_CONFIG")" == config_string* ]] && extra="--str-intern"
+        run_config "$SINGLE_CONFIG" "custom" "$extra"
     else
         # Default: run both integer and string configs
         run_config "$CONFIG_INTEGER" "integer"
