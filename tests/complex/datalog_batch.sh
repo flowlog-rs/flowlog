@@ -280,9 +280,9 @@ verify_output() {
                 sort_keys="$sort_keys -k${c},${c}n"
             done
             # shellcheck disable=SC2086
-            sort -t',' $sort_keys "$fl_file" > "$sorted_fl"
+            LC_ALL=C sort -t',' $sort_keys "$fl_file" > "$sorted_fl"
         else
-            sort -t',' "$fl_file" > "$sorted_fl"
+            LC_ALL=C sort -t',' "$fl_file" > "$sorted_fl"
         fi
 
         # Reference is already sorted; fast byte-compare first, diff on failure

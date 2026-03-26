@@ -102,8 +102,8 @@ impl Compiler {
                         return false;
                     }
                     match op {
-                        // count(T) → any input type; output must be numeric
-                        AggregationOperator::Count => decl.is_numeric(),
+                        // count(T) → any input type; output must be integer
+                        AggregationOperator::Count => decl.is_integer(),
                         // sum(T), avg(T), min(T), max(T) → input and output must
                         // match and both be numeric
                         AggregationOperator::Sum

@@ -53,6 +53,15 @@ impl DataType {
     pub fn is_numeric(&self) -> bool {
         !matches!(self, Self::String | Self::Bool)
     }
+
+    /// Returns `true` for integer types only (excludes floats, strings, bools).
+    pub fn is_integer(&self) -> bool {
+        matches!(
+            self,
+            Self::Int8 | Self::Int16 | Self::Int32 | Self::Int64
+                | Self::UInt8 | Self::UInt16 | Self::UInt32 | Self::UInt64
+        )
+    }
 }
 
 impl FromStr for DataType {
