@@ -1,0 +1,14 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : agg_over_expr
+// Feature : aggregation over arithmetic expression sum(a + b)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(grp: int32, a: int32, b: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Derived(grp: int32, a: int32, b: int32)
+Derived(g, a, b) :- Data(g, a, b).
+
+.decl Out(grp: int32, total: int32)
+Out(g, sum(a + b)) :- Derived(g, a, b).
+.output Out

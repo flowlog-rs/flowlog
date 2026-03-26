@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : join_const_body
+// Feature : integer constant in body atom R(x, 5)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(id: int32, category: int32, val: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl CategoryTwo(id: int32, val: int32)
+CategoryTwo(id, v) :- Data(id, 2, v).
+.output CategoryTwo

@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : rule_union
+// Feature : multiple rules defining the same IDB (union + deduplication)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Parent(child: int32, parent: int32)
+.input Parent(IO="file", filename="Parent.csv", delimiter=",")
+
+.decl Sibling(a: int32, b: int32)
+.input Sibling(IO="file", filename="Sibling.csv", delimiter=",")
+
+.decl Related(a: int32, b: int32)
+Related(c, p) :- Parent(c, p).
+Related(p, c) :- Parent(c, p).
+Related(a, b) :- Sibling(a, b).
+Related(b, a) :- Sibling(a, b).
+.output Related

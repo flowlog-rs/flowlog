@@ -1,0 +1,16 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : recursive_join_delta
+// Feature : recursive rule with EDB join — changing the EDB affects fixpoint
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Allowed(node: int32)
+.input Allowed(IO="file", filename="Allowed.csv", delimiter=",")
+
+// Reachability restricted to allowed nodes
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d), Allowed(s), Allowed(d).
+Reach(s, d) :- Reach(s, m), Edge(m, d), Allowed(d).
+.output Reach

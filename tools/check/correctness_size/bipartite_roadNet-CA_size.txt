@@ -1,3 +1,0 @@
-one: 1957027
-zero: 1957027
-bipartiteviolation: 1957027

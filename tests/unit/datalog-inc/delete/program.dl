@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : delete
+// Feature : put -1 deletes a tuple, verify _t2 contains correct diff
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Out(src: int32, dst: int32)
+Out(s, d) :- Edge(s, d).
+.output Out

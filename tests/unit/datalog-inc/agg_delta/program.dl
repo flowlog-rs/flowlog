@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : agg_delta
+// Feature : non-recursive aggregation — EDB change updates agg result
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Sale(dept: int32, amount: int32)
+.input Sale(IO="file", filename="Sale.csv", delimiter=",")
+
+.decl DeptTotal(dept: int32, total: int32)
+DeptTotal(d, sum(a)) :- Sale(d, a).
+.output DeptTotal

@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : agg_min
+// Feature : min aggregation with grouping over joined IDB
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32, w: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Node(id: int32)
+.input Node(IO="file", filename="Node.csv", delimiter=",")
+
+.decl ValidEdge(src: int32, dst: int32, w: int32)
+ValidEdge(s, d, w) :- Edge(s, d, w), Node(s), Node(d).
+
+.decl MinWeight(src: int32, mw: int32)
+MinWeight(s, min(w)) :- ValidEdge(s, _, w).
+.output MinWeight

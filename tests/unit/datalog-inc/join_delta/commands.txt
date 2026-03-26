@@ -1,0 +1,15 @@
+begin
+put employee 1,10 +1
+put employee 2,10 +1
+put employee 3,20 +1
+put employee 4,20 +1
+put dept 10,5000 +1
+put dept 20,8000 +1
+commit
+begin
+put employee 5,10 +1
+put employee 3,20 -1
+put dept 20,8000 -1
+put dept 20,9000 +1
+commit
+quit

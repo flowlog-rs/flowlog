@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : abort
+// Feature : abort discards staged changes, only committed data appears
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(id: int32, val: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(id: int32, val: int32)
+Out(id, v) :- Data(id, v).
+.output Out

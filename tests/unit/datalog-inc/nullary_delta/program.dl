@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : nullary_delta
+// Feature : non-recursive nullary relation flips true→false incrementally
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Score(id: int32, val: int32)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+.decl HasPerfect()
+HasPerfect() :- Score(_, v), v = 100.
+.output HasPerfect

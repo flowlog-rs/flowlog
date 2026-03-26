@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : join_three_way
+// Feature : three-way join across three relations
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Employee(id: int32, dept: int32)
+.input Employee(IO="file", filename="Employee.csv", delimiter=",")
+
+.decl Dept(id: int32, name: string)
+.input Dept(IO="file", filename="Dept.csv", delimiter=",")
+
+.decl Salary(emp: int32, amount: int32)
+.input Salary(IO="file", filename="Salary.csv", delimiter=",")
+
+.decl Out(emp: int32, dept_name: string, salary: int32)
+Out(e, dn, s) :- Employee(e, d), Dept(d, dn), Salary(e, s).
+.output Out

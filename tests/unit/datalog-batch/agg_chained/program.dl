@@ -1,0 +1,16 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : agg_chained
+// Feature : aggregation result fed into another aggregation in later stratum
+// Covers  : sum per group (stratum 1) → max over groups (stratum 2)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Sale(dept: int32, amount: int32)
+.input Sale(IO="file", filename="Sale.csv", delimiter=",")
+
+.decl DeptTotal(dept: int32, total: int32)
+DeptTotal(d, sum(a)) :- Sale(d, a).
+.output DeptTotal
+
+.decl MaxDeptTotal(val: int32)
+MaxDeptTotal(max(total)) :- DeptTotal(_, total).
+.output MaxDeptTotal

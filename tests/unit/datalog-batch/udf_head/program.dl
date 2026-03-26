@@ -1,0 +1,13 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : udf_head
+// Feature : scalar UDF with multiple args applied in rule head
+// ════════════════════════════════════════════════════════════════════════════
+
+.extern fn transform(x: int32, y: int32) -> int32
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Hashed(src: int32, h: int32)
+Hashed(src, transform(src, dst)) :- Edge(src, dst).
+.output Hashed

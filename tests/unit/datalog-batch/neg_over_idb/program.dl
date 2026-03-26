@@ -1,0 +1,14 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_over_idb
+// Feature : negation over a derived IDB (not a raw EDB)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Person(id: int32, score: int32)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+
+.decl HighScorer(id: int32)
+HighScorer(id) :- Person(id, s), s > 80.
+
+.decl NotHighScorer(id: int32)
+NotHighScorer(id) :- Person(id, _), !HighScorer(id).
+.output NotHighScorer

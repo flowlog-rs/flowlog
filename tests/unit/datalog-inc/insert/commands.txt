@@ -1,0 +1,8 @@
+begin
+put edge 1,2 +1
+put edge 2,3 +1
+put edge 3,4 +1
+put edge 4,5 +1
+put edge 1,5 +1
+commit
+quit

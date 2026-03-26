@@ -1,0 +1,24 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_stratified
+// Feature : negation chain across multiple strata
+// Covers  : stratum 1 computes IDB, stratum 2 negates it, stratum 3 negates that
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Person(id: int32, score: int32)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+
+// Stratum 1: derive high scorers
+.decl High(id: int32)
+High(id) :- Person(id, s), s >= 80.
+
+// Stratum 2: negate high → get low scorers
+.decl Low(id: int32)
+Low(id) :- Person(id, _), !High(id).
+
+// Stratum 3: negate low → confirm high (should match High)
+.decl ConfirmedHigh(id: int32)
+ConfirmedHigh(id) :- Person(id, _), !Low(id).
+
+.output High
+.output Low
+.output ConfirmedHigh

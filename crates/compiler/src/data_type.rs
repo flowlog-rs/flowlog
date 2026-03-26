@@ -5,13 +5,13 @@
 //! data types of expressions used in transformations, and to generate Rust type
 //! tokens corresponding to FlowLog data types.
 
+use super::Compiler;
+use parser::{AggregationOperator, ArithmeticOperator, ConstType, DataType};
+use planner::{
+    ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
+};
 use proc_macro2::TokenStream;
 use quote::quote;
-use std::collections::HashMap;
-
-use super::Compiler;
-use parser::{ArithmeticOperator, ConstType, DataType};
-use planner::{ArithmeticArgument, FactorArgument, TransformationArgument, TransformationFlow};
 
 // ============================================================================
 // Global type inference (fingerprint -> (key_types, value_types))
@@ -41,8 +41,12 @@ impl Compiler {
         right_fingerprint: Option<u64>,
         output_fingerprint: u64,
         flow: &TransformationFlow,
-        head_to_idb_map: &HashMap<u64, u64>,
+        stratum: &StratumPlanner,
     ) {
+        let head_to_idb_map = stratum.head_to_idb_map();
+        let idb_to_aggregation_map = stratum.idb_to_aggregation_map();
+        let idb_to_udf_map = stratum.idb_to_udf_map();
+
         let left_type = self.find_global_type(left_fingerprint);
         let right_type = right_fingerprint.map(|rf| self.find_global_type(rf));
 
@@ -67,28 +71,61 @@ impl Compiler {
 
         // If this head feeds into a declared IDB, resolve to the IDB fingerprint
         // so we verify/insert against the IDB's declared types directly.
-        let output_fingerprint = head_to_idb_map
-            .get(&output_fingerprint)
-            .copied()
-            .unwrap_or(output_fingerprint);
+        // However, if the IDB has a UDF, the pre-UDF (flattened) arity differs from
+        // the declared arity. In that case, do NOT resolve — let the intermediate
+        // get its own type entry. The UDF flat_map and verify_udf_types handle the rest.
+        let resolved_idb_fp = head_to_idb_map.get(&output_fingerprint).copied();
+        let output_fingerprint = match resolved_idb_fp {
+            Some(idb_fp) if idb_to_udf_map.contains_key(&idb_fp) => output_fingerprint,
+            Some(idb_fp) => idb_fp,
+            None => output_fingerprint,
+        };
+
+        // If the resolved IDB has an aggregation, validate the aggregation
+        // position according to the operator's type contract instead of requiring
+        // an exact match between the pre-aggregation expression type and the
+        // post-aggregation declared type.
+        let agg_info = idb_to_aggregation_map.get(&output_fingerprint);
 
         self.global_fp_to_type
             .entry(output_fingerprint)
             .and_modify(|existing| {
-                let keys_ok = existing.0.len() == key_types.len()
-                    && existing
-                        .0
-                        .iter()
-                        .zip(&key_types)
-                        .all(|(decl, inf)| inf.as_ref().is_none_or(|t| t == decl));
-                let vals_ok = existing.1.len() == value_types.len()
-                    && existing
-                        .1
-                        .iter()
-                        .zip(&value_types)
-                        .all(|(decl, inf)| inf.as_ref().is_none_or(|t| t == decl));
+                let key_len = existing.0.len();
+
+                // Check whether position `flat_i` (in key++value space) satisfies
+                // the aggregation operator's type contract.
+                let agg_type_ok = |flat_i: usize, decl: &DataType, inf: &DataType| -> bool {
+                    let Some((op, pos, _)) = agg_info else {
+                        return false;
+                    };
+                    if flat_i != *pos {
+                        return false;
+                    }
+                    match op {
+                        // count(T) → any input type; output must be integer
+                        AggregationOperator::Count => decl.is_integer(),
+                        // sum(T), avg(T), min(T), max(T) → input and output must
+                        // match and both be numeric
+                        AggregationOperator::Sum
+                        | AggregationOperator::Avg
+                        | AggregationOperator::Min
+                        | AggregationOperator::Max => inf == decl && decl.is_numeric(),
+                    }
+                };
+
+                let types_match =
+                    |declared: &[DataType], inferred: &[Option<DataType>], offset: usize| {
+                        declared.len() == inferred.len()
+                            && declared.iter().zip(inferred).enumerate().all(
+                                |(i, (decl, inf))| {
+                                    inf.as_ref()
+                                        .is_none_or(|t| t == decl || agg_type_ok(offset + i, decl, t))
+                                },
+                            )
+                    };
                 assert!(
-                    keys_ok && vals_ok,
+                    types_match(&existing.0, &key_types, 0)
+                        && types_match(&existing.1, &value_types, key_len),
                     "Compiler error: type mismatch for fingerprint 0x{:016x}",
                     output_fingerprint
                 );
@@ -188,22 +225,20 @@ impl Compiler {
             // Validate operator-type compatibility.
             // For now we only have one string operator (`cat`), so we can just check if the inferred type is string or not.
             if let Some(dt) = inferred {
-                match dt {
-                    DataType::String => assert!(
+                if dt == DataType::Bool {
+                    panic!("Compiler error: arithmetic operations are not supported on Bool type");
+                } else if dt == DataType::String {
+                    assert!(
                         matches!(op, ArithmeticOperator::Cat),
                         "Compiler error: arithmetic operator {:?} is not allowed on string type, use 'cat'",
                         op
-                    ),
-                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
-                    | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
-                    | DataType::Float32 | DataType::Float64 => assert!(
+                    );
+                } else {
+                    assert!(
                         !matches!(op, ArithmeticOperator::Cat),
                         "Compiler error: 'cat' operator is not allowed on numeric type {:?}",
                         dt
-                    ),
-                    DataType::Bool => panic!(
-                        "Compiler error: arithmetic operations are not supported on Bool type"
-                    ),
+                    );
                 }
             }
         }

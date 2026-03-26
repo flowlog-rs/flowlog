@@ -1,0 +1,18 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : agg_count_string
+// Feature : count aggregation over string-typed expression from an IDB
+// Covers  : regression test for compiler panic on count(string_var) over IDB
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Person(id: int32, name: string, dept: int32)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+
+.decl DeptInfo(id: int32)
+.input DeptInfo(IO="file", filename="DeptInfo.csv", delimiter=",")
+
+.decl DeptPerson(dept: int32, name: string)
+DeptPerson(d, n) :- Person(_, n, d), DeptInfo(d).
+
+.decl DeptHeadcount(dept: int32, cnt: int32)
+DeptHeadcount(d, count(n)) :- DeptPerson(d, n).
+.output DeptHeadcount

@@ -1,0 +1,18 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : recursive_nullary_delta
+// Feature : recursive nullary relation flips when cycle is broken
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, m), Edge(m, d).
+
+// True when any node can reach itself (cycle exists)
+.decl HasCycle()
+HasCycle() :- Reach(x, x).
+
+.output Reach
+.output HasCycle

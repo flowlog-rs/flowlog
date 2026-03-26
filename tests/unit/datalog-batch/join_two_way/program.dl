@@ -1,0 +1,14 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : join_two_way
+// Feature : two-way join on a shared key
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Employee(id: int32, name: string)
+.input Employee(IO="file", filename="Employee.csv", delimiter=",")
+
+.decl Salary(id: int32, amount: int32)
+.input Salary(IO="file", filename="Salary.csv", delimiter=",")
+
+.decl Out(id: int32, name: string, amount: int32)
+Out(id, n, a) :- Employee(id, n), Salary(id, a).
+.output Out

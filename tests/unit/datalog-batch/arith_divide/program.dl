@@ -1,0 +1,12 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : arith_divide
+// Feature : integer division operator (/) in rule head
+// Covers  : truncation toward zero on positive values
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: int32, b: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(a: int32, b: int32, q: int32)
+Out(a, b, a / b) :- Data(a, b).
+.output Out
