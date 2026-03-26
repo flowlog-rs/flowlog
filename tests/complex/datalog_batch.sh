@@ -34,6 +34,13 @@ CONFIG_STRING="${SCRIPT_DIR}/config_string.txt"
 # When a single config is passed via CLI, only that config is run.
 SINGLE_CONFIG=""
 
+# Staging directory: prefer /dev/shm (tmpfs) for speed, fall back to $TMPDIR or /tmp
+if [[ -d /dev/shm && -w /dev/shm ]]; then
+    STAGE_DIR="/dev/shm"
+else
+    STAGE_DIR="${TMPDIR:-/tmp}"
+fi
+
 SOUFFLE_BASE_URL="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/test/datalog-batch"
 
 ###############################################################################
@@ -136,20 +143,13 @@ compile_release_workspace() {
     popd >/dev/null
 }
 
-ensure_compiler_built() {
-    if [[ ! -x "$COMPILER_BIN" ]]; then
-        log "$YELLOW" "BUILD" "Building compiler (flowlog)"
-        cargo build --release --bin flowlog >/dev/null
-    fi
-}
-
 ###############################################################################
 # Dataset management
 ###############################################################################
 
 setup_dataset() {
     local dataset_name="$1"
-    local dataset_zip="/dev/shm/${dataset_name}.zip"
+    local dataset_zip="${STAGE_DIR}/${dataset_name}.zip"
     local extract_path="${FACT_DIR}/${dataset_name}"
     local dataset_url="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/dataset/csv/${dataset_name}.zip"
 
@@ -159,7 +159,7 @@ setup_dataset() {
     fi
 
     mkdir -p "$FACT_DIR"
-    log "$CYAN" "DOWNLOAD" "$dataset_name.zip -> /dev/shm (tmpfs)"
+    log "$CYAN" "DOWNLOAD" "$dataset_name.zip -> $STAGE_DIR"
     command -v wget >/dev/null 2>&1 || die "wget not found"
     wget -q -O "$dataset_zip" "$dataset_url" || die "Download failed: $dataset_name"
 
@@ -182,8 +182,8 @@ cleanup_dataset() {
 download_souffle_ref() {
     local program_stem="$1" dataset_name="$2"
     local ref_name="${program_stem}_${dataset_name}"
-    local ref_dir="/dev/shm/souffle_ref_$$_${ref_name}"
-    local ref_tar="/dev/shm/souffle_ref_$$_${ref_name}.tar.gz"
+    local ref_dir="${STAGE_DIR}/souffle_ref_$$_${ref_name}"
+    local ref_tar="${STAGE_DIR}/souffle_ref_$$_${ref_name}.tar.gz"
     local ref_url="${SOUFFLE_BASE_URL}/${ref_name}.tar.gz"
 
     mkdir -p "$ref_dir"
