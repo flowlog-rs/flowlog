@@ -1,0 +1,14 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : rule_empty_result
+// Feature : query that correctly produces zero output rows
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl A(x: int32)
+.input A(IO="file", filename="A.csv", delimiter=",")
+
+.decl B(x: int32)
+.input B(IO="file", filename="B.csv", delimiter=",")
+
+.decl EmptyJoin(x: int32)
+EmptyJoin(x) :- A(x), B(x).
+.output EmptyJoin

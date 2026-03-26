@@ -1,0 +1,10 @@
+begin
+put data 1,100 +1
+put data 2,200 +1
+put data 3,300 +1
+abort
+begin
+put data 4,400 +1
+put data 5,500 +1
+commit
+quit

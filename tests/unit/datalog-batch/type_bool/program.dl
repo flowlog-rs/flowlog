@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : type_bool
+// Feature : bool data type with True / False literals
+// Covers  : bool column declaration, True constant filter, False constant
+//           filter, bool values loaded from CSV (lowercase true/false)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Person(id: int32, name: string, active: bool)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+
+.decl ActivePerson(id: int32, name: string)
+ActivePerson(id, n) :- Person(id, n, True).
+.output ActivePerson
+
+.decl InactivePerson(id: int32, name: string)
+InactivePerson(id, n) :- Person(id, n, False).
+.output InactivePerson

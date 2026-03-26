@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : output_order_by
+// Feature : ORDER BY directive on output
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(name: string, score: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(name: string, score: int32)
+Out(n, s) :- Data(n, s).
+.output Out(order_by="score DESC")

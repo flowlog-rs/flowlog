@@ -1,0 +1,18 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_nullary
+// Feature : negation over a nullary (boolean) relation
+// Covers  : derive nullary relation, negate it as a guard
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(id: int32, val: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl HasBig()
+HasBig() :- Data(_, v), v > 1000.
+
+// If there are no big values, output all data
+.decl SafeData(id: int32, val: int32)
+SafeData(id, v) :- Data(id, v), !HasBig().
+.output SafeData
+
+.output HasBig

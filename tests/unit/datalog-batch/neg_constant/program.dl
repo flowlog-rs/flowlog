@@ -1,0 +1,15 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_constant
+// Feature : negation with constant in negated atom !R(x, 5)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Person(id: int32)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+
+.decl Tag(person: int32, tag: int32)
+.input Tag(IO="file", filename="Tag.csv", delimiter=",")
+
+// Persons who do NOT have tag=1
+.decl NotTagged1(id: int32)
+NotTagged1(id) :- Person(id), !Tag(id, 1).
+.output NotTagged1

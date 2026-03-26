@@ -1,0 +1,13 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : arith_chained
+// Feature : chained arithmetic operators in head (left-to-right evaluation)
+// Covers  : a + b * c is parsed as (a + b) * c, not a + (b * c)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: int32, b: int32, c: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+// (a + b) * c, not a + (b * c)
+.decl Out(a: int32, b: int32, c: int32, result: int32)
+Out(a, b, c, a + b * c) :- Data(a, b, c).
+.output Out

@@ -1,0 +1,12 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : type_float
+// Feature : floating point types (f32, f64) load and output
+// Covers  : CSV load and rule pass-through for both float widths
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: f32, b: f64)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(a: f32, b: f64)
+Out(a, b) :- Data(a, b).
+.output Out

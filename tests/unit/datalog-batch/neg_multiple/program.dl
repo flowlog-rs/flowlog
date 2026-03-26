@@ -1,0 +1,20 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_multiple
+// Feature : multiple negated atoms in a single rule body
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Person(id: int32)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+
+.decl Manager(id: int32)
+.input Manager(IO="file", filename="Manager.csv", delimiter=",")
+
+.decl Intern(id: int32)
+.input Intern(IO="file", filename="Intern.csv", delimiter=",")
+
+.decl OnLeave(id: int32)
+.input OnLeave(IO="file", filename="OnLeave.csv", delimiter=",")
+
+.decl ActiveRegular(id: int32)
+ActiveRegular(id) :- Person(id), !Manager(id), !Intern(id), !OnLeave(id).
+.output ActiveRegular

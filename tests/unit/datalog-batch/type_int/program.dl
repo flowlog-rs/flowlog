@@ -1,0 +1,12 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : type_int
+// Feature : signed integer types (int8, int16, int32, int64) load and output
+// Covers  : CSV load and rule pass-through for all signed integer widths
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: int8, b: int16, c: int32, d: int64)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(a: int8, b: int16, c: int32, d: int64)
+Out(a, b, c, d) :- Data(a, b, c, d).
+.output Out

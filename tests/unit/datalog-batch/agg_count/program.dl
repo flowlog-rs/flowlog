@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : agg_count
+// Feature : count aggregation with grouping over joined IDB
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Weight(src: int32, dst: int32, w: int32)
+.input Weight(IO="file", filename="Weight.csv", delimiter=",")
+
+.decl Weighted(src: int32, dst: int32)
+Weighted(s, d) :- Edge(s, d), Weight(s, d, _).
+
+.decl OutDeg(src: int32, cnt: int32)
+OutDeg(s, count(d)) :- Weighted(s, d).
+.output OutDeg

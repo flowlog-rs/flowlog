@@ -1,0 +1,12 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : type_uint
+// Feature : unsigned integer types (uint8, uint16, uint32, uint64) load and output
+// Covers  : CSV load and rule pass-through for all unsigned integer widths
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: uint8, b: uint16, c: uint32, d: uint64)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(a: uint8, b: uint16, c: uint32, d: uint64)
+Out(a, b, c, d) :- Data(a, b, c, d).
+.output Out

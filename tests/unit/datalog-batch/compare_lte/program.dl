@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : compare_lte
+// Feature : less-or-equal (<=) comparison filter, boundary-inclusive
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(id: int32, val: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(id: int32, val: int32)
+Out(id, v) :- Data(id, v), v <= 50.
+.output Out

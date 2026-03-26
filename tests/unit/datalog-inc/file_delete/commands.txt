@@ -1,0 +1,7 @@
+begin
+file data Data.csv +1
+commit
+begin
+file data Delete.csv -1
+commit
+quit

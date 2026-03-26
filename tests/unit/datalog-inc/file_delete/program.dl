@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : file_delete
+// Feature : file command with -1 bulk-deletes CSV contents
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(id: int32, val: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(id: int32, val: int32)
+Out(id, v) :- Data(id, v).
+.output Out

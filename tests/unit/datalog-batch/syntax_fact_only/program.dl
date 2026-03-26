@@ -1,0 +1,15 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : syntax_fact_only
+// Feature : pure inline-fact source relation with no `.input` backing file
+// Covers  : fact-only sources available to the first stratum, input handles
+//           for code generation without a CSV file
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Param(x: int32)
+Param(1).
+Param(2).
+
+.decl Out(x: int32)
+Out(x) :- Param(x).
+
+.output Out

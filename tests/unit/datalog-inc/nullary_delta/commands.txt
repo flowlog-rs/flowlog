@@ -1,0 +1,9 @@
+begin
+put score 1,80 +1
+put score 2,90 +1
+put score 3,100 +1
+commit
+begin
+put score 3,100 -1
+commit
+quit

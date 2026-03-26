@@ -1,0 +1,12 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : arith_const_head
+// Feature : literal constant in rule head
+// Covers  : integer constant, string constant in head position
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(x: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl WithTag(x: int32, tag: int32)
+WithTag(x, 42) :- Data(x).
+.output WithTag

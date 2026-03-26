@@ -1,0 +1,15 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : rule_projection
+// Feature : projection — select subset of columns, multiple wildcards
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: int32, b: int32, c: int32, d: int32, e: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl FirstLast(a: int32, e: int32)
+FirstLast(a, e) :- Data(a, _, _, _, e).
+.output FirstLast
+
+.decl Middle(c: int32)
+Middle(c) :- Data(_, _, c, _, _).
+.output Middle

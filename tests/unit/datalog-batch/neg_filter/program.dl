@@ -1,0 +1,14 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_filter
+// Feature : basic negation — filter out a set using !EDB(x)
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Person(id: int32)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+
+.decl Blocked(id: int32)
+.input Blocked(IO="file", filename="Blocked.csv", delimiter=",")
+
+.decl Active(id: int32)
+Active(id) :- Person(id), !Blocked(id).
+.output Active

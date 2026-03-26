@@ -1,0 +1,19 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : arith_cat
+// Feature : string concatenation operator (cat) in rule head
+// Covers  : var cat var, literal cat var, multi-cat chain
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl First(id: int32, name: string)
+.input First(IO="file", filename="First.csv", delimiter=",")
+
+.decl Last(id: int32, name: string)
+.input Last(IO="file", filename="Last.csv", delimiter=",")
+
+.decl Full(id: int32, name: string)
+Full(id, f cat " " cat l) :- First(id, f), Last(id, l).
+.output Full
+
+.decl Greeting(id: int32, msg: string)
+Greeting(id, "Hello " cat n) :- First(id, n).
+.output Greeting

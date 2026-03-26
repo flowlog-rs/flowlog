@@ -1,0 +1,15 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : arith_float
+// Feature : arithmetic operators (+, -, *, /) on floating point types
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: f64, b: f64)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Added(a: f64, b: f64, c: f64)
+Added(a, b, a + b) :- Data(a, b).
+.output Added
+
+.decl Multiplied(a: f64, b: f64, c: f64)
+Multiplied(a, b, a * b) :- Data(a, b).
+.output Multiplied

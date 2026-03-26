@@ -1,3 +1,0 @@
-# String-typed benchmarks (use with --str-intern)
-
-program_analysis/polonius.dl=clap
