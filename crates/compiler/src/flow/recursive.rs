@@ -119,14 +119,7 @@ impl Compiler {
             .recursive_transformations()
             .iter()
             .map(|tx| {
-                self.gen_transformation(
-                    &current,
-                    tx,
-                    &mut recursive_arranged,
-                    stratum.head_to_idb_map(),
-                    stratum.idb_to_aggregation_map(),
-                    profiler,
-                )
+                self.gen_transformation(&current, tx, &mut recursive_arranged, stratum, profiler)
             })
             .collect();
 
@@ -816,9 +809,14 @@ fn build_feedback_expr(
     ) {
         (None, None) => quote! { #next.clone() },
         (Some(ranges), None) => continue_stmt(next, build_iter_conditions(ranges)),
-        (None, Some(arr)) => {
-            stop_stmt(quote! { #next.clone() }, recursive, arr, pos, neg, normalize)
-        }
+        (None, Some(arr)) => stop_stmt(
+            quote! { #next.clone() },
+            recursive,
+            arr,
+            pos,
+            neg,
+            normalize,
+        ),
         (Some(ranges), Some(arr)) => {
             let range_cond = build_iter_conditions(ranges);
             if matches!(plan.connective, Some(LoopConnective::Or)) {

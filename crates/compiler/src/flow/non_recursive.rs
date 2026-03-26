@@ -24,7 +24,7 @@ use crate::udf::head_udf_map;
 use crate::Compiler;
 
 use parser::AggregationOperator;
-use planner::{StratumPlanner, Transformation};
+use planner::StratumPlanner;
 use profiler::{with_profiler, Profiler};
 
 // =========================================================================
@@ -35,23 +35,20 @@ impl Compiler {
     /// statements along with the arrangement map populated while building them.
     pub(crate) fn gen_non_recursive_core_flows(
         &mut self,
-        transformations: &[Transformation],
-        head_to_idb_map: &HashMap<u64, u64>,
-        idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
+        stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
     ) -> (Vec<TokenStream>, HashMap<u64, Ident>) {
         let mut flows = Vec::new();
         // Stratum-scoped cache of arrangements; emit arrange_by_key just before first use.
         let mut non_recursive_arranged_map: HashMap<u64, Ident> = HashMap::new();
 
-        for transformation in transformations {
+        for transformation in stratum.non_recursive_transformations() {
             let global_fp_to_ident = self.global_fp_to_ident.clone();
             flows.push(self.gen_transformation(
                 &global_fp_to_ident,
                 transformation,
                 &mut non_recursive_arranged_map,
-                head_to_idb_map,
-                idb_to_aggregation_map,
+                stratum,
                 profiler,
             ));
         }

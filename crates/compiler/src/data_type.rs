@@ -5,13 +5,13 @@
 //! data types of expressions used in transformations, and to generate Rust type
 //! tokens corresponding to FlowLog data types.
 
-use proc_macro2::TokenStream;
-use quote::quote;
-use std::collections::HashMap;
-
 use super::Compiler;
 use parser::{AggregationOperator, ArithmeticOperator, ConstType, DataType};
-use planner::{ArithmeticArgument, FactorArgument, TransformationArgument, TransformationFlow};
+use planner::{
+    ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
+};
+use proc_macro2::TokenStream;
+use quote::quote;
 
 // ============================================================================
 // Global type inference (fingerprint -> (key_types, value_types))
@@ -41,9 +41,12 @@ impl Compiler {
         right_fingerprint: Option<u64>,
         output_fingerprint: u64,
         flow: &TransformationFlow,
-        head_to_idb_map: &HashMap<u64, u64>,
-        idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
+        stratum: &StratumPlanner,
     ) {
+        let head_to_idb_map = stratum.head_to_idb_map();
+        let idb_to_aggregation_map = stratum.idb_to_aggregation_map();
+        let idb_to_udf_map = stratum.idb_to_udf_map();
+
         let left_type = self.find_global_type(left_fingerprint);
         let right_type = right_fingerprint.map(|rf| self.find_global_type(rf));
 
@@ -68,10 +71,15 @@ impl Compiler {
 
         // If this head feeds into a declared IDB, resolve to the IDB fingerprint
         // so we verify/insert against the IDB's declared types directly.
-        let output_fingerprint = head_to_idb_map
-            .get(&output_fingerprint)
-            .copied()
-            .unwrap_or(output_fingerprint);
+        // However, if the IDB has a UDF, the pre-UDF (flattened) arity differs from
+        // the declared arity. In that case, do NOT resolve — let the intermediate
+        // get its own type entry. The UDF flat_map and verify_udf_types handle the rest.
+        let resolved_idb_fp = head_to_idb_map.get(&output_fingerprint).copied();
+        let output_fingerprint = match resolved_idb_fp {
+            Some(idb_fp) if idb_to_udf_map.contains_key(&idb_fp) => output_fingerprint,
+            Some(idb_fp) => idb_fp,
+            None => output_fingerprint,
+        };
 
         // If the resolved IDB has an aggregation, validate the aggregation
         // position according to the operator's type contract instead of requiring
