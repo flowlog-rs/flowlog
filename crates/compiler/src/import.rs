@@ -4,7 +4,7 @@
 //! based on the transformations being generated within a stratum.
 
 use common::{ExecutionMode, INTERN_MAX_RETRIES};
-use parser::DataType;
+use parser::{AggregationOperator, DataType};
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -42,14 +42,14 @@ impl SemiringKind {
     }
 }
 
-impl From<parser::AggregationOperator> for SemiringKind {
+impl From<AggregationOperator> for SemiringKind {
     /// Count reuses the Sum semiring.
-    fn from(op: parser::AggregationOperator) -> Self {
+    fn from(op: AggregationOperator) -> Self {
         match op {
-            parser::AggregationOperator::Min => Self::Min,
-            parser::AggregationOperator::Max => Self::Max,
-            parser::AggregationOperator::Sum | parser::AggregationOperator::Count => Self::Sum,
-            parser::AggregationOperator::Avg => Self::Avg,
+            AggregationOperator::Min => Self::Min,
+            AggregationOperator::Max => Self::Max,
+            AggregationOperator::Sum | AggregationOperator::Count => Self::Sum,
+            AggregationOperator::Avg => Self::Avg,
         }
     }
 }
