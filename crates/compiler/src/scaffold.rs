@@ -13,6 +13,7 @@ use toml_edit::{value, Array, DocumentMut, Item};
 
 use super::Compiler;
 use crate::fs_utils::{ensure_dir, write_file};
+use crate::import::SemiringKind;
 use profiler::{with_profiler_ref, Profiler};
 
 /// Embedded template for the incremental interactive command parser.
@@ -210,8 +211,6 @@ impl Compiler {
     /// Write semiring modules into `src/semiring/` of the generated project,
     /// splitting integer and float types into separate files.
     fn write_src_semiring(&self, src_dir: &std::path::Path) -> io::Result<()> {
-        use crate::import::SemiringKind;
-
         let semiring_dir = src_dir.join("semiring");
         ensure_dir(&semiring_dir)?;
 
