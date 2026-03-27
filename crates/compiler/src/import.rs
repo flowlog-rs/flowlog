@@ -20,6 +20,40 @@ pub(crate) enum SemiringKind {
     Avg,
 }
 
+impl SemiringKind {
+    /// Lowercase name used for module paths (e.g. `"min"`, `"sum"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Sum => "sum",
+            Self::Avg => "avg",
+        }
+    }
+
+    /// Title-case prefix used for type names (e.g. `"Min"`, `"Sum"`).
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::Min => "Min",
+            Self::Max => "Max",
+            Self::Sum => "Sum",
+            Self::Avg => "Avg",
+        }
+    }
+}
+
+impl From<parser::AggregationOperator> for SemiringKind {
+    /// Count reuses the Sum semiring.
+    fn from(op: parser::AggregationOperator) -> Self {
+        match op {
+            parser::AggregationOperator::Min => Self::Min,
+            parser::AggregationOperator::Max => Self::Max,
+            parser::AggregationOperator::Sum | parser::AggregationOperator::Count => Self::Sum,
+            parser::AggregationOperator::Avg => Self::Avg,
+        }
+    }
+}
+
 /// All numeric DataTypes in the canonical order used for semiring code generation.
 ///
 /// Integer types come first (for `*_int.rs` files), then floats (for `*_float.rs` files).
@@ -529,10 +563,10 @@ impl ImportTracker {
         }
 
         let s = &self.semirings;
-        let min = semiring_uses("min", "Min", s);
-        let max = semiring_uses("max", "Max", s);
-        let sum = semiring_uses("sum", "Sum", s);
-        let avg = semiring_uses("avg", "Avg", s);
+        let min = semiring_uses(SemiringKind::Min, s);
+        let max = semiring_uses(SemiringKind::Max, s);
+        let sum = semiring_uses(SemiringKind::Sum, s);
+        let avg = semiring_uses(SemiringKind::Avg, s);
 
         quote! {
             mod semiring;
@@ -685,21 +719,16 @@ impl ImportTracker {
 
 /// Emit `use` statements for a single semiring kind (e.g., min, max, sum, avg),
 /// referencing submodules under `semiring::`.
-fn semiring_uses(kind: &str, prefix: &str, needs: &SemiringNeeds) -> TokenStream {
-    let kind_enum = match kind {
-        "min" => SemiringKind::Min,
-        "max" => SemiringKind::Max,
-        "sum" => SemiringKind::Sum,
-        "avg" => SemiringKind::Avg,
-        _ => unreachable!(),
-    };
+fn semiring_uses(kind: SemiringKind, needs: &SemiringNeeds) -> TokenStream {
+    let kind_str = kind.as_str();
+    let prefix = kind.prefix();
 
     let mut uses = Vec::new();
 
-    let int_needs = needs.int_needs(kind_enum);
+    let int_needs = needs.int_needs(kind);
     if int_needs.iter().any(|n| *n) {
         let mod_ident =
-            proc_macro2::Ident::new(&format!("{kind}_int"), proc_macro2::Span::call_site());
+            proc_macro2::Ident::new(&format!("{kind_str}_int"), proc_macro2::Span::call_site());
         for (needed, dt) in int_needs.iter().zip(INT_DATA_TYPES.iter()) {
             if *needed {
                 let ty = proc_macro2::Ident::new(
@@ -711,10 +740,10 @@ fn semiring_uses(kind: &str, prefix: &str, needs: &SemiringNeeds) -> TokenStream
         }
     }
 
-    let float_needs = needs.float_needs(kind_enum);
+    let float_needs = needs.float_needs(kind);
     if float_needs.iter().any(|n| *n) {
         let mod_ident =
-            proc_macro2::Ident::new(&format!("{kind}_float"), proc_macro2::Span::call_site());
+            proc_macro2::Ident::new(&format!("{kind_str}_float"), proc_macro2::Span::call_site());
         for (needed, dt) in float_needs.iter().zip(FLOAT_DATA_TYPES.iter()) {
             if *needed {
                 let ty = proc_macro2::Ident::new(

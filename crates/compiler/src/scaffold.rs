@@ -233,19 +233,15 @@ impl Compiler {
 
         let mut modules: Vec<String> = Vec::new();
 
-        // (int_tmpl, float_tmpl, kind, macro_name, type_prefix, bound_keyword)
-        for (int_tmpl, float_tmpl, kind, mac, pfx, bound_kw) in [
-            (MIN_INT_TMPL, MIN_FLOAT_TMPL, SemiringKind::Min, "define_min", "Min", Some("MAX")),
-            (MAX_INT_TMPL, MAX_FLOAT_TMPL, SemiringKind::Max, "define_max", "Max", Some("MIN")),
-            (SUM_INT_TMPL, SUM_FLOAT_TMPL, SemiringKind::Sum, "define_sum", "Sum", None),
-            (AVG_INT_TMPL, AVG_FLOAT_TMPL, SemiringKind::Avg, "define_avg", "Avg", None),
+        // (int_tmpl, float_tmpl, kind, macro_name, bound_keyword)
+        for (int_tmpl, float_tmpl, kind, mac, bound_kw) in [
+            (MIN_INT_TMPL, MIN_FLOAT_TMPL, SemiringKind::Min, "define_min", Some("MAX")),
+            (MAX_INT_TMPL, MAX_FLOAT_TMPL, SemiringKind::Max, "define_max", Some("MIN")),
+            (SUM_INT_TMPL, SUM_FLOAT_TMPL, SemiringKind::Sum, "define_sum", None),
+            (AVG_INT_TMPL, AVG_FLOAT_TMPL, SemiringKind::Avg, "define_avg", None),
         ] {
-            let kind_str = match kind {
-                SemiringKind::Min => "min",
-                SemiringKind::Max => "max",
-                SemiringKind::Sum => "sum",
-                SemiringKind::Avg => "avg",
-            };
+            let kind_str = kind.as_str();
+            let pfx = kind.prefix();
 
             let int_needs = s.int_needs(kind);
             let float_needs = s.float_needs(kind);

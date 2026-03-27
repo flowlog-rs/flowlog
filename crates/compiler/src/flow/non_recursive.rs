@@ -135,12 +135,7 @@ impl Compiler {
                 // using the appropriate semigroup, avoiding a second arrangement.
                 if self.config.is_datalog_batch() {
                     self.imports.mark_as_collection();
-                    let kind = match agg_op {
-                        AggregationOperator::Min => SemiringKind::Min,
-                        AggregationOperator::Max => SemiringKind::Max,
-                        AggregationOperator::Sum | AggregationOperator::Count => SemiringKind::Sum,
-                        AggregationOperator::Avg => SemiringKind::Avg,
-                    };
+                    let kind = SemiringKind::from(*agg_op);
                     self.imports.mark_semiring(kind, agg_type);
                     self.imports.mark_threshold_total();
                     self.imports.mark_timely_map();
