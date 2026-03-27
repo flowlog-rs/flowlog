@@ -9,7 +9,10 @@ use parser::DataType;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use super::common::{key_from_row, key_pattern, row_pattern, tuple};
+use super::common::{
+    aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, key_pattern, row_pattern, tuple,
+    ThresholdCmp,
+};
 
 /// `Avg{I32,I64}::new(x<agg_pos>)` expression.
 fn avg_new(agg_pos: usize, agg_type: DataType) -> TokenStream {
@@ -50,52 +53,19 @@ fn avg_result_from_key(arity: usize, agg_pos: usize) -> TokenStream {
 
 /// Generates the Avg-semiring optimized aggregation pipeline.
 pub fn aggregation_avg_optimize(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
-    let row_pat = row_pattern(arity);
-    let key_expr = key_from_row(arity, agg_pos);
-    let avg_expr = avg_new(agg_pos, agg_type);
-    let key_pat = key_pattern(arity);
-    let result = avg_result_from_key(arity, agg_pos);
-
-    quote! {
-        // Phase 1: (row, time, _) → (key, time, Avg::new(value))
-        .inner
-        .map(move |(#row_pat, t, _)| {
-            let key = #key_expr;
-            (key, t, #avg_expr)
-        })
-        .as_collection()
-
-        // Phase 2: threshold_semigroup with Avg semiring
-        .threshold_semigroup(|_k, &new_avg, current_avg| {
-            match current_avg {
-                Some(current) if new_avg != *current => Some(new_avg),
-                Some(_) => None,
-                None if !new_avg.is_zero() => Some(new_avg),
-                None => None,
-            }
-        })
-
-        // Phase 3: (key, time, Avg{sum, count}) → (full_row, time, SEMIRING_ONE)
-        .inner
-        .map(move |(#key_pat, t, agg_val)| {
-            let row = #result;
-            (row, t, SEMIRING_ONE)
-        })
-        .as_collection()
-    }
+    aggregation_optimize_pipeline(
+        arity,
+        agg_pos,
+        row_pattern(arity),
+        avg_new(agg_pos, agg_type),
+        ThresholdCmp::Ne,
+        avg_result_from_key(arity, agg_pos),
+    )
 }
 
 /// Generates the pre-leave conversion for avg-aggregated recursive relations.
 pub fn aggregation_avg_pre_leave(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
-    let row_pat = row_pattern(arity);
-    let key_expr = key_from_row(arity, agg_pos);
-    let avg_expr = avg_new(agg_pos, agg_type);
-
-    quote! {
-        .inner
-        .map(move |(#row_pat, t, _)| ((#key_expr), t, #avg_expr))
-        .as_collection()
-    }
+    aggregation_pre_leave_pipeline(arity, agg_pos, row_pattern(arity), avg_new(agg_pos, agg_type))
 }
 
 /// Post-leave conversion for avg-aggregated recursive relations.

@@ -9,7 +9,9 @@ use parser::DataType;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use super::common::{key_from_row, key_pattern, result_from_key};
+use super::common::{
+    aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, result_from_key, ThresholdCmp,
+};
 
 /// Row destructuring pattern with `_` at the aggregated position (count ignores the value).
 fn count_row_pattern(arity: usize, agg_pos: usize) -> TokenStream {
@@ -49,61 +51,27 @@ fn count_one(agg_type: DataType) -> TokenStream {
 }
 
 /// Generates the Count-semiring optimized aggregation pipeline.
-///
-/// Same structure as sum, but Phase 1 maps every tuple to `Sum::new(1)` instead
-/// of extracting a field value.
 pub fn aggregation_count_optimize(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
-    let row_pat = count_row_pattern(arity, agg_pos);
-    let key_expr = key_from_row(arity, agg_pos);
-    let one_expr = count_one(agg_type);
-    let key_pat = key_pattern(arity);
-    let result = result_from_key(arity, agg_pos);
-
-    quote! {
-        // Phase 1: (row, time, _) → (key, time, Sum::new(1))
-        .inner
-        .map(move |(#row_pat, t, _)| {
-            let key = #key_expr;
-            (key, t, #one_expr)
-        })
-        .as_collection()
-
-        // Phase 2: threshold_semigroup — emits when count changes
-        .threshold_semigroup(|_k, &new_count, current_count| {
-            match current_count {
-                Some(current) if new_count != *current => Some(new_count),
-                Some(_) => None,
-                None if !new_count.is_zero() => Some(new_count),
-                None => None,
-            }
-        })
-
-        // Phase 3: (key, time, Sum{value}) → (full_row, time, SEMIRING_ONE)
-        .inner
-        .map(move |(#key_pat, t, agg_val)| {
-            let row = #result;
-            (row, t, SEMIRING_ONE)
-        })
-        .as_collection()
-    }
+    aggregation_optimize_pipeline(
+        arity,
+        agg_pos,
+        count_row_pattern(arity, agg_pos),
+        count_one(agg_type),
+        ThresholdCmp::Ne,
+        result_from_key(arity, agg_pos),
+    )
 }
 
 /// Generates the pre-leave conversion for count-aggregated recursive relations.
-///
-/// Converts `(row, time, Present)` → `((key,), time, Sum::new(1))` so that
-/// `leave()` carries count diffs, enabling cross-iteration count via consolidation.
 pub fn aggregation_count_pre_leave(
     arity: usize,
     agg_pos: usize,
     agg_type: DataType,
 ) -> TokenStream {
-    let row_pat = count_row_pattern(arity, agg_pos);
-    let key_expr = key_from_row(arity, agg_pos);
-    let one_expr = count_one(agg_type);
-
-    quote! {
-        .inner
-        .map(move |(#row_pat, t, _)| ((#key_expr), t, #one_expr))
-        .as_collection()
-    }
+    aggregation_pre_leave_pipeline(
+        arity,
+        agg_pos,
+        count_row_pattern(arity, agg_pos),
+        count_one(agg_type),
+    )
 }
