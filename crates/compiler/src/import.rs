@@ -4,99 +4,103 @@
 //! based on the transformations being generated within a stratum.
 
 use common::{ExecutionMode, INTERN_MAX_RETRIES};
-use parser::DataType;
+use parser::{AggregationOperator, DataType};
 
 use proc_macro2::TokenStream;
 use quote::quote;
 
-/// Tracks which semiring modules (min/max/sum/avg) are needed.
-#[derive(Default, Clone)]
-pub(crate) struct SemiringNeeds {
-    pub min_i8: bool,
-    pub min_i16: bool,
-    pub min_i32: bool,
-    pub min_i64: bool,
-    pub min_u8: bool,
-    pub min_u16: bool,
-    pub min_u32: bool,
-    pub min_u64: bool,
-    pub min_f32: bool,
-    pub min_f64: bool,
-    pub max_i8: bool,
-    pub max_i16: bool,
-    pub max_i32: bool,
-    pub max_i64: bool,
-    pub max_u8: bool,
-    pub max_u16: bool,
-    pub max_u32: bool,
-    pub max_u64: bool,
-    pub max_f32: bool,
-    pub max_f64: bool,
-    pub sum_i8: bool,
-    pub sum_i16: bool,
-    pub sum_i32: bool,
-    pub sum_i64: bool,
-    pub sum_u8: bool,
-    pub sum_u16: bool,
-    pub sum_u32: bool,
-    pub sum_u64: bool,
-    pub sum_f32: bool,
-    pub sum_f64: bool,
-    pub avg_i8: bool,
-    pub avg_i16: bool,
-    pub avg_i32: bool,
-    pub avg_i64: bool,
-    pub avg_u8: bool,
-    pub avg_u16: bool,
-    pub avg_u32: bool,
-    pub avg_u64: bool,
-    pub avg_f32: bool,
-    pub avg_f64: bool,
+use std::collections::HashSet;
+
+/// Identifies which semiring family is needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SemiringKind {
+    Min,
+    Max,
+    Sum,
+    Avg,
 }
+
+impl SemiringKind {
+    /// Lowercase name used for module paths (e.g. `"min"`, `"sum"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Sum => "sum",
+            Self::Avg => "avg",
+        }
+    }
+
+    /// Title-case prefix used for type names (e.g. `"Min"`, `"Sum"`).
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::Min => "Min",
+            Self::Max => "Max",
+            Self::Sum => "Sum",
+            Self::Avg => "Avg",
+        }
+    }
+}
+
+impl From<AggregationOperator> for SemiringKind {
+    /// Count reuses the Sum semiring.
+    fn from(op: AggregationOperator) -> Self {
+        match op {
+            AggregationOperator::Min => Self::Min,
+            AggregationOperator::Max => Self::Max,
+            AggregationOperator::Sum | AggregationOperator::Count => Self::Sum,
+            AggregationOperator::Avg => Self::Avg,
+        }
+    }
+}
+
+/// All numeric DataTypes in the canonical order used for semiring code generation.
+///
+/// Integer types come first (for `*_int.rs` files), then floats (for `*_float.rs` files).
+const INT_DATA_TYPES: [DataType; 8] = [
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+];
+const FLOAT_DATA_TYPES: [DataType; 2] = [DataType::Float32, DataType::Float64];
+
+/// Tracks which semiring modules (min/max/sum/avg × numeric types) are needed.
+#[derive(Default, Clone)]
+pub(crate) struct SemiringNeeds(HashSet<(SemiringKind, DataType)>);
 
 impl SemiringNeeds {
     /// Returns whether any semiring module is needed.
     pub fn any(&self) -> bool {
-        self.min_i8
-            || self.min_i16
-            || self.min_i32
-            || self.min_i64
-            || self.min_u8
-            || self.min_u16
-            || self.min_u32
-            || self.min_u64
-            || self.min_f32
-            || self.min_f64
-            || self.max_i8
-            || self.max_i16
-            || self.max_i32
-            || self.max_i64
-            || self.max_u8
-            || self.max_u16
-            || self.max_u32
-            || self.max_u64
-            || self.max_f32
-            || self.max_f64
-            || self.sum_i8
-            || self.sum_i16
-            || self.sum_i32
-            || self.sum_i64
-            || self.sum_u8
-            || self.sum_u16
-            || self.sum_u32
-            || self.sum_u64
-            || self.sum_f32
-            || self.sum_f64
-            || self.avg_i8
-            || self.avg_i16
-            || self.avg_i32
-            || self.avg_i64
-            || self.avg_u8
-            || self.avg_u16
-            || self.avg_u32
-            || self.avg_u64
-            || self.avg_f32
-            || self.avg_f64
+        !self.0.is_empty()
+    }
+
+    /// Mark that a specific semiring kind is needed for a specific numeric type.
+    pub fn insert(&mut self, kind: SemiringKind, dt: DataType) {
+        assert!(
+            dt.is_numeric(),
+            "Compiler error: semiring only supports numeric types, got {dt}"
+        );
+        self.0.insert((kind, dt));
+    }
+
+    /// Check whether a specific (kind, type) pair is needed.
+    pub fn needs(&self, kind: SemiringKind, dt: DataType) -> bool {
+        self.0.contains(&(kind, dt))
+    }
+
+    /// Returns which integer DataTypes are needed for a given kind, in canonical order.
+    pub fn int_needs(&self, kind: SemiringKind) -> [bool; 8] {
+        INT_DATA_TYPES.map(|dt| self.needs(kind, dt))
+    }
+
+    /// Returns which float DataTypes are needed for a given kind.
+    pub fn float_needs(&self, kind: SemiringKind) -> [bool; 2] {
+        FLOAT_DATA_TYPES.map(|dt| self.needs(kind, dt))
     }
 }
 
@@ -267,73 +271,12 @@ impl ImportTracker {
         self.semiring_one = true;
     }
 
-    /// Marks that the Min semiring module is required for a specific numeric type.
-    pub(crate) fn mark_min_semiring(&mut self, dt: DataType) {
-        match dt {
-            DataType::Int8 => self.semirings.min_i8 = true,
-            DataType::Int16 => self.semirings.min_i16 = true,
-            DataType::Int32 => self.semirings.min_i32 = true,
-            DataType::Int64 => self.semirings.min_i64 = true,
-            DataType::UInt8 => self.semirings.min_u8 = true,
-            DataType::UInt16 => self.semirings.min_u16 = true,
-            DataType::UInt32 => self.semirings.min_u32 = true,
-            DataType::UInt64 => self.semirings.min_u64 = true,
-            DataType::Float32 => self.semirings.min_f32 = true,
-            DataType::Float64 => self.semirings.min_f64 = true,
-            _ => unreachable!("Compiler error: min semiring only supports numeric types"),
-        }
-    }
-
-    /// Marks that the Max semiring module is required for a specific numeric type.
-    pub(crate) fn mark_max_semiring(&mut self, dt: DataType) {
-        match dt {
-            DataType::Int8 => self.semirings.max_i8 = true,
-            DataType::Int16 => self.semirings.max_i16 = true,
-            DataType::Int32 => self.semirings.max_i32 = true,
-            DataType::Int64 => self.semirings.max_i64 = true,
-            DataType::UInt8 => self.semirings.max_u8 = true,
-            DataType::UInt16 => self.semirings.max_u16 = true,
-            DataType::UInt32 => self.semirings.max_u32 = true,
-            DataType::UInt64 => self.semirings.max_u64 = true,
-            DataType::Float32 => self.semirings.max_f32 = true,
-            DataType::Float64 => self.semirings.max_f64 = true,
-            _ => unreachable!("Compiler error: max semiring only supports numeric types"),
-        }
-    }
-
-    /// Marks that the Sum semiring module is required for a specific numeric type.
-    /// Sum semiring is used for both COUNT and SUM aggregations.
-    pub(crate) fn mark_sum_semiring(&mut self, dt: DataType) {
-        match dt {
-            DataType::Int8 => self.semirings.sum_i8 = true,
-            DataType::Int16 => self.semirings.sum_i16 = true,
-            DataType::Int32 => self.semirings.sum_i32 = true,
-            DataType::Int64 => self.semirings.sum_i64 = true,
-            DataType::UInt8 => self.semirings.sum_u8 = true,
-            DataType::UInt16 => self.semirings.sum_u16 = true,
-            DataType::UInt32 => self.semirings.sum_u32 = true,
-            DataType::UInt64 => self.semirings.sum_u64 = true,
-            DataType::Float32 => self.semirings.sum_f32 = true,
-            DataType::Float64 => self.semirings.sum_f64 = true,
-            _ => unreachable!("Compiler error: sum semiring only supports numeric types"),
-        }
-    }
-
-    /// Marks that the Avg semiring module is required for a specific numeric type.
-    pub(crate) fn mark_avg_semiring(&mut self, dt: DataType) {
-        match dt {
-            DataType::Int8 => self.semirings.avg_i8 = true,
-            DataType::Int16 => self.semirings.avg_i16 = true,
-            DataType::Int32 => self.semirings.avg_i32 = true,
-            DataType::Int64 => self.semirings.avg_i64 = true,
-            DataType::UInt8 => self.semirings.avg_u8 = true,
-            DataType::UInt16 => self.semirings.avg_u16 = true,
-            DataType::UInt32 => self.semirings.avg_u32 = true,
-            DataType::UInt64 => self.semirings.avg_u64 = true,
-            DataType::Float32 => self.semirings.avg_f32 = true,
-            DataType::Float64 => self.semirings.avg_f64 = true,
-            _ => unreachable!("Compiler error: avg semiring only supports numeric types"),
-        }
+    /// Marks that a semiring module is required for a specific kind and numeric type.
+    ///
+    /// `kind` identifies the aggregation family (Min, Max, Sum, Avg).
+    /// Count aggregation reuses the Sum semiring.
+    pub(crate) fn mark_semiring(&mut self, kind: SemiringKind, dt: DataType) {
+        self.semirings.insert(kind, dt);
     }
 
     /// Returns whether any semiring module (min, max, sum, or avg) should be written.
@@ -620,22 +563,10 @@ impl ImportTracker {
         }
 
         let s = &self.semirings;
-        let min = semiring_uses(
-            "min", "Min", s.min_i8, s.min_i16, s.min_i32, s.min_i64, s.min_u8, s.min_u16,
-            s.min_u32, s.min_u64, s.min_f32, s.min_f64,
-        );
-        let max = semiring_uses(
-            "max", "Max", s.max_i8, s.max_i16, s.max_i32, s.max_i64, s.max_u8, s.max_u16,
-            s.max_u32, s.max_u64, s.max_f32, s.max_f64,
-        );
-        let sum = semiring_uses(
-            "sum", "Sum", s.sum_i8, s.sum_i16, s.sum_i32, s.sum_i64, s.sum_u8, s.sum_u16,
-            s.sum_u32, s.sum_u64, s.sum_f32, s.sum_f64,
-        );
-        let avg = semiring_uses(
-            "avg", "Avg", s.avg_i8, s.avg_i16, s.avg_i32, s.avg_i64, s.avg_u8, s.avg_u16,
-            s.avg_u32, s.avg_u64, s.avg_f32, s.avg_f64,
-        );
+        let min = semiring_uses(SemiringKind::Min, s);
+        let max = semiring_uses(SemiringKind::Max, s);
+        let sum = semiring_uses(SemiringKind::Sum, s);
+        let avg = semiring_uses(SemiringKind::Avg, s);
 
         quote! {
             mod semiring;
@@ -788,42 +719,20 @@ impl ImportTracker {
 
 /// Emit `use` statements for a single semiring kind (e.g., min, max, sum, avg),
 /// referencing submodules under `semiring::`.
-#[allow(clippy::too_many_arguments)]
-fn semiring_uses(
-    kind: &str,
-    prefix: &str,
-    i8: bool,
-    i16: bool,
-    i32: bool,
-    i64: bool,
-    u8: bool,
-    u16: bool,
-    u32: bool,
-    u64: bool,
-    f32: bool,
-    f64: bool,
-) -> TokenStream {
-    let int_all = [
-        (i8, "I8"),
-        (i16, "I16"),
-        (i32, "I32"),
-        (i64, "I64"),
-        (u8, "U8"),
-        (u16, "U16"),
-        (u32, "U32"),
-        (u64, "U64"),
-    ];
-    let float_all = [(f32, "F32"), (f64, "F64")];
+fn semiring_uses(kind: SemiringKind, needs: &SemiringNeeds) -> TokenStream {
+    let kind_str = kind.as_str();
+    let prefix = kind.prefix();
 
     let mut uses = Vec::new();
 
-    if int_all.iter().any(|(needed, _)| *needed) {
+    let int_needs = needs.int_needs(kind);
+    if int_needs.iter().any(|n| *n) {
         let mod_ident =
-            proc_macro2::Ident::new(&format!("{kind}_int"), proc_macro2::Span::call_site());
-        for (needed, suffix) in &int_all {
+            proc_macro2::Ident::new(&format!("{kind_str}_int"), proc_macro2::Span::call_site());
+        for (needed, dt) in int_needs.iter().zip(INT_DATA_TYPES.iter()) {
             if *needed {
                 let ty = proc_macro2::Ident::new(
-                    &format!("{prefix}{suffix}"),
+                    &format!("{prefix}{}", dt.semiring_suffix()),
                     proc_macro2::Span::call_site(),
                 );
                 uses.push(quote! { use semiring::#mod_ident::#ty; });
@@ -831,13 +740,14 @@ fn semiring_uses(
         }
     }
 
-    if float_all.iter().any(|(needed, _)| *needed) {
+    let float_needs = needs.float_needs(kind);
+    if float_needs.iter().any(|n| *n) {
         let mod_ident =
-            proc_macro2::Ident::new(&format!("{kind}_float"), proc_macro2::Span::call_site());
-        for (needed, suffix) in &float_all {
+            proc_macro2::Ident::new(&format!("{kind_str}_float"), proc_macro2::Span::call_site());
+        for (needed, dt) in float_needs.iter().zip(FLOAT_DATA_TYPES.iter()) {
             if *needed {
                 let ty = proc_macro2::Ident::new(
-                    &format!("{prefix}{suffix}"),
+                    &format!("{prefix}{}", dt.semiring_suffix()),
                     proc_macro2::Span::call_site(),
                 );
                 uses.push(quote! { use semiring::#mod_ident::#ty; });

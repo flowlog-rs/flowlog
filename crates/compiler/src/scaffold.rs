@@ -13,6 +13,7 @@ use toml_edit::{value, Array, DocumentMut, Item};
 
 use super::Compiler;
 use crate::fs_utils::{ensure_dir, write_file};
+use crate::import::SemiringKind;
 use profiler::{with_profiler_ref, Profiler};
 
 /// Embedded template for the incremental interactive command parser.
@@ -231,62 +232,19 @@ impl Compiler {
 
         let mut modules: Vec<String> = Vec::new();
 
-        // (int_tmpl, float_tmpl, kind, macro_name, type_prefix, bound_keyword,
-        //  int_needs[8], float_needs[2])
-        for (int_tmpl, float_tmpl, kind, mac, pfx, bound_kw, int_needs, float_needs) in [
-            (
-                MIN_INT_TMPL,
-                MIN_FLOAT_TMPL,
-                "min",
-                "define_min",
-                "Min",
-                Some("MAX"),
-                [
-                    s.min_i8, s.min_i16, s.min_i32, s.min_i64, s.min_u8, s.min_u16, s.min_u32,
-                    s.min_u64,
-                ],
-                [s.min_f32, s.min_f64],
-            ),
-            (
-                MAX_INT_TMPL,
-                MAX_FLOAT_TMPL,
-                "max",
-                "define_max",
-                "Max",
-                Some("MIN"),
-                [
-                    s.max_i8, s.max_i16, s.max_i32, s.max_i64, s.max_u8, s.max_u16, s.max_u32,
-                    s.max_u64,
-                ],
-                [s.max_f32, s.max_f64],
-            ),
-            (
-                SUM_INT_TMPL,
-                SUM_FLOAT_TMPL,
-                "sum",
-                "define_sum",
-                "Sum",
-                None,
-                [
-                    s.sum_i8, s.sum_i16, s.sum_i32, s.sum_i64, s.sum_u8, s.sum_u16, s.sum_u32,
-                    s.sum_u64,
-                ],
-                [s.sum_f32, s.sum_f64],
-            ),
-            (
-                AVG_INT_TMPL,
-                AVG_FLOAT_TMPL,
-                "avg",
-                "define_avg",
-                "Avg",
-                None,
-                [
-                    s.avg_i8, s.avg_i16, s.avg_i32, s.avg_i64, s.avg_u8, s.avg_u16, s.avg_u32,
-                    s.avg_u64,
-                ],
-                [s.avg_f32, s.avg_f64],
-            ),
+        // (int_tmpl, float_tmpl, kind, macro_name, bound_keyword)
+        for (int_tmpl, float_tmpl, kind, mac, bound_kw) in [
+            (MIN_INT_TMPL, MIN_FLOAT_TMPL, SemiringKind::Min, "define_min", Some("MAX")),
+            (MAX_INT_TMPL, MAX_FLOAT_TMPL, SemiringKind::Max, "define_max", Some("MIN")),
+            (SUM_INT_TMPL, SUM_FLOAT_TMPL, SemiringKind::Sum, "define_sum", None),
+            (AVG_INT_TMPL, AVG_FLOAT_TMPL, SemiringKind::Avg, "define_avg", None),
         ] {
+            let kind_str = kind.as_str();
+            let pfx = kind.prefix();
+
+            let int_needs = s.int_needs(kind);
+            let float_needs = s.float_needs(kind);
+
             // Int/uint file
             if int_needs.iter().any(|n| *n) {
                 let mut rendered = int_tmpl.to_string();
@@ -299,9 +257,9 @@ impl Compiler {
                         }
                     }
                 }
-                let file_name = format!("{kind}_int.rs");
+                let file_name = format!("{kind_str}_int.rs");
                 write_file(&semiring_dir.join(&file_name), rendered.trim_start())?;
-                modules.push(format!("{kind}_int"));
+                modules.push(format!("{kind_str}_int"));
             }
 
             // Float file
@@ -311,9 +269,6 @@ impl Compiler {
                     if float_needs[i] {
                         match bound_kw {
                             Some(bk) => {
-                                // For floating-point semirings, use infinities rather than
-                                // finite MAX/MIN bounds so that sentinel values are outside
-                                // the representable finite domain.
                                 let float_bound_kw = match bk {
                                     "MAX" => "INFINITY",
                                     "MIN" => "NEG_INFINITY",
@@ -329,9 +284,9 @@ impl Compiler {
                         }
                     }
                 }
-                let file_name = format!("{kind}_float.rs");
+                let file_name = format!("{kind_str}_float.rs");
                 write_file(&semiring_dir.join(&file_name), rendered.trim_start())?;
-                modules.push(format!("{kind}_float"));
+                modules.push(format!("{kind_str}_float"));
             }
         }
 

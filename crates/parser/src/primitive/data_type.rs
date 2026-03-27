@@ -67,6 +67,30 @@ impl DataType {
                 | Self::UInt8 | Self::UInt16 | Self::UInt32 | Self::UInt64
         )
     }
+
+    /// Returns `true` for floating-point types (`Float32`, `Float64`).
+    pub fn is_float(&self) -> bool {
+        matches!(self, Self::Float32 | Self::Float64)
+    }
+
+    /// Returns the semiring type suffix, e.g. `"I32"`, `"U64"`, `"F32"`.
+    ///
+    /// Panics for non-numeric types (String, Bool).
+    pub fn semiring_suffix(&self) -> &'static str {
+        match self {
+            Self::Int8 => "I8",
+            Self::Int16 => "I16",
+            Self::Int32 => "I32",
+            Self::Int64 => "I64",
+            Self::UInt8 => "U8",
+            Self::UInt16 => "U16",
+            Self::UInt32 => "U32",
+            Self::UInt64 => "U64",
+            Self::Float32 => "F32",
+            Self::Float64 => "F64",
+            _ => panic!("DataType::semiring_suffix() called on non-numeric type: {self}"),
+        }
+    }
 }
 
 impl FromStr for DataType {
@@ -178,5 +202,40 @@ mod tests {
     fn from_str_invalid_returns_err() {
         let err = DataType::from_str("invalid").unwrap_err();
         assert!(err.contains("Invalid data type"));
+    }
+
+    #[test]
+    fn is_numeric_returns_true_for_numeric_types() {
+        for dt in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float32,
+            DataType::Float64,
+        ] {
+            assert!(dt.is_numeric(), "{dt} should be numeric");
+        }
+        assert!(!DataType::String.is_numeric());
+        assert!(!DataType::Bool.is_numeric());
+    }
+
+    #[test]
+    fn is_float_returns_true_only_for_floats() {
+        assert!(DataType::Float32.is_float());
+        assert!(DataType::Float64.is_float());
+        assert!(!DataType::Int32.is_float());
+        assert!(!DataType::String.is_float());
+    }
+
+    #[test]
+    fn semiring_suffix_matches_expected() {
+        assert_eq!(DataType::Int32.semiring_suffix(), "I32");
+        assert_eq!(DataType::UInt64.semiring_suffix(), "U64");
+        assert_eq!(DataType::Float32.semiring_suffix(), "F32");
     }
 }
