@@ -506,7 +506,9 @@ impl Lexeme for LoopCondition {
                                 .expect("Parser error: loop_until missing loop_stop_group");
                             until_group = Some(parse_stop_group(stop_group_pair));
                         }
-                        r => panic!("Parser error: loop_condition unexpected rule after loop_while: {r:?}"),
+                        r => panic!(
+                            "Parser error: loop_condition unexpected rule after loop_while: {r:?}"
+                        ),
                     }
                 }
                 // Default to And when both clauses present but no explicit "or"
@@ -536,7 +538,9 @@ impl Lexeme for LoopCondition {
                                 .expect("Parser error: loop_while missing loop_iter_expr");
                             while_windows = Some(parse_iter_expr(iter_expr));
                         }
-                        r => panic!("Parser error: loop_condition unexpected rule after loop_until: {r:?}"),
+                        r => panic!(
+                            "Parser error: loop_condition unexpected rule after loop_until: {r:?}"
+                        ),
                     }
                 }
                 // Default to And when both clauses present but no explicit "or"
@@ -756,9 +760,7 @@ mod tests {
 
     #[test]
     fn iterative_directive_multiple() {
-        let block = parse_loop_block(
-            "fixpoint { .iterative active_edge .iterative degree }",
-        );
+        let block = parse_loop_block("fixpoint { .iterative active_edge .iterative degree }");
         let itr = block.iterative_relations();
         assert_eq!(itr.len(), 2);
         assert_eq!(itr[0].0, "active_edge");
@@ -794,9 +796,7 @@ mod tests {
 
     #[test]
     fn display_iterative_directive() {
-        let block = parse_loop_block(
-            "fixpoint { .iterative active_edge .iterative degree }",
-        );
+        let block = parse_loop_block("fixpoint { .iterative active_edge .iterative degree }");
         let s = block.to_string();
         assert!(s.contains(".iterative active_edge"));
         assert!(s.contains(".iterative degree"));

@@ -683,7 +683,9 @@ impl Program {
         for item in items.iter_mut() {
             match item {
                 Segment::Plain(rules) => Self::reclassify_rules(rules, &udf_names),
-                Segment::Loop(block) | Segment::Fixpoint(block) => Self::reclassify_rules(block.rules_mut(), &udf_names),
+                Segment::Loop(block) | Segment::Fixpoint(block) => {
+                    Self::reclassify_rules(block.rules_mut(), &udf_names)
+                }
             }
         }
     }

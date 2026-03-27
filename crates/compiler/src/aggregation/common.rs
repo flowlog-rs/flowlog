@@ -8,6 +8,34 @@ use parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::import::SemiringKind;
+
+// =============================================================================
+// Semiring constructor helpers
+// =============================================================================
+
+/// `Kind{Suffix}::new(x<agg_pos>)` expression for a given semiring kind.
+///
+/// Used by min, max, sum, and avg aggregation pipelines to construct the
+/// initial semiring value from the aggregated column.
+pub(super) fn semiring_new(kind: SemiringKind, agg_pos: usize, agg_type: DataType) -> TokenStream {
+    let field = format_ident!("x{}", agg_pos);
+    let ty = format_ident!("{}{}", kind.prefix(), agg_type.semiring_suffix());
+    quote! { #ty::new(#field) }
+}
+
+/// `Kind{Suffix}::new(1)` expression — every tuple contributes 1 to the count.
+///
+/// Float types use `OrderedFloat(1.0)` as the argument.
+pub(super) fn semiring_one(kind: SemiringKind, agg_type: DataType) -> TokenStream {
+    let ty = format_ident!("{}{}", kind.prefix(), agg_type.semiring_suffix());
+    if agg_type.is_float() {
+        quote! { #ty::new(OrderedFloat(1.0)) }
+    } else {
+        quote! { #ty::new(1) }
+    }
+}
+
 // =============================================================================
 // Structural helpers
 // =============================================================================

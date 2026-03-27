@@ -130,7 +130,13 @@ impl Config {
         let raw = self.executable_name();
         let mut s: String = raw
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         // Cargo rejects names starting with a digit.
         if s.starts_with(|c: char| c.is_ascii_digit()) {
