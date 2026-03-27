@@ -41,7 +41,7 @@ pub fn aggregation_avg_optimize(arity: usize, agg_pos: usize, agg_type: DataType
         arity,
         agg_pos,
         row_pattern(arity),
-        semiring_new(SemiringKind::Avg,agg_pos, agg_type),
+        semiring_new(SemiringKind::Avg, agg_pos, agg_type),
         ThresholdCmp::Ne,
         avg_result_from_key(arity, agg_pos),
     )
@@ -49,7 +49,12 @@ pub fn aggregation_avg_optimize(arity: usize, agg_pos: usize, agg_type: DataType
 
 /// Generates the pre-leave conversion for avg-aggregated recursive relations.
 pub fn aggregation_avg_pre_leave(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
-    aggregation_pre_leave_pipeline(arity, agg_pos, row_pattern(arity), semiring_new(SemiringKind::Avg,agg_pos, agg_type))
+    aggregation_pre_leave_pipeline(
+        arity,
+        agg_pos,
+        row_pattern(arity),
+        semiring_new(SemiringKind::Avg, agg_pos, agg_type),
+    )
 }
 
 /// Post-leave conversion for avg-aggregated recursive relations.
