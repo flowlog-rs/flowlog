@@ -115,10 +115,8 @@ impl Compiler {
         // survive build-directory cleanup when --save-temps is not set.
         with_profiler_ref(profiler, |profiler| {
             let exe = self.config.executable_path();
-            let ops_path = exe.with_file_name(format!(
-                "{}_ops.json",
-                self.config.executable_name()
-            ));
+            let ops_path =
+                exe.with_file_name(format!("{}_ops.json", self.config.executable_name()));
             if let Some(parent) = ops_path.parent() {
                 ensure_dir(parent)?;
             }
@@ -234,10 +232,34 @@ impl Compiler {
 
         // (int_tmpl, float_tmpl, kind, macro_name, bound_keyword)
         for (int_tmpl, float_tmpl, kind, mac, bound_kw) in [
-            (MIN_INT_TMPL, MIN_FLOAT_TMPL, SemiringKind::Min, "define_min", Some("MAX")),
-            (MAX_INT_TMPL, MAX_FLOAT_TMPL, SemiringKind::Max, "define_max", Some("MIN")),
-            (SUM_INT_TMPL, SUM_FLOAT_TMPL, SemiringKind::Sum, "define_sum", None),
-            (AVG_INT_TMPL, AVG_FLOAT_TMPL, SemiringKind::Avg, "define_avg", None),
+            (
+                MIN_INT_TMPL,
+                MIN_FLOAT_TMPL,
+                SemiringKind::Min,
+                "define_min",
+                Some("MAX"),
+            ),
+            (
+                MAX_INT_TMPL,
+                MAX_FLOAT_TMPL,
+                SemiringKind::Max,
+                "define_max",
+                Some("MIN"),
+            ),
+            (
+                SUM_INT_TMPL,
+                SUM_FLOAT_TMPL,
+                SemiringKind::Sum,
+                "define_sum",
+                None,
+            ),
+            (
+                AVG_INT_TMPL,
+                AVG_FLOAT_TMPL,
+                SemiringKind::Avg,
+                "define_avg",
+                None,
+            ),
         ] {
             let kind_str = kind.as_str();
             let pfx = kind.prefix();
@@ -299,5 +321,4 @@ impl Compiler {
 
         Ok(())
     }
-
 }

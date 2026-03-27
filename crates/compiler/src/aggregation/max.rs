@@ -8,30 +8,12 @@
 
 use parser::DataType;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
 
 use super::common::{
     aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, result_from_key, row_pattern,
-    ThresholdCmp,
+    semiring_new, ThresholdCmp,
 };
-
-/// `Max{I32,I64}::new(x<agg_pos>)` expression.
-fn max_new(agg_pos: usize, agg_type: DataType) -> TokenStream {
-    let field = format_ident!("x{}", agg_pos);
-    match agg_type {
-        DataType::Int8 => quote! { MaxI8::new(#field) },
-        DataType::Int16 => quote! { MaxI16::new(#field) },
-        DataType::Int32 => quote! { MaxI32::new(#field) },
-        DataType::Int64 => quote! { MaxI64::new(#field) },
-        DataType::UInt8 => quote! { MaxU8::new(#field) },
-        DataType::UInt16 => quote! { MaxU16::new(#field) },
-        DataType::UInt32 => quote! { MaxU32::new(#field) },
-        DataType::UInt64 => quote! { MaxU64::new(#field) },
-        DataType::Float32 => quote! { MaxF32::new(#field) },
-        DataType::Float64 => quote! { MaxF64::new(#field) },
-        _ => unreachable!("Compiler error: max aggregation on non-numeric type"),
-    }
-}
+use crate::import::SemiringKind;
 
 /// Generates the Max-semiring optimized aggregation pipeline.
 pub fn aggregation_max_optimize(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
@@ -39,7 +21,7 @@ pub fn aggregation_max_optimize(arity: usize, agg_pos: usize, agg_type: DataType
         arity,
         agg_pos,
         row_pattern(arity),
-        max_new(agg_pos, agg_type),
+        semiring_new(SemiringKind::Max, agg_pos, agg_type),
         ThresholdCmp::Gt,
         result_from_key(arity, agg_pos),
     )
@@ -47,5 +29,10 @@ pub fn aggregation_max_optimize(arity: usize, agg_pos: usize, agg_type: DataType
 
 /// Generates the pre-leave conversion for max-aggregated recursive relations.
 pub fn aggregation_max_pre_leave(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
-    aggregation_pre_leave_pipeline(arity, agg_pos, row_pattern(arity), max_new(agg_pos, agg_type))
+    aggregation_pre_leave_pipeline(
+        arity,
+        agg_pos,
+        row_pattern(arity),
+        semiring_new(SemiringKind::Max, agg_pos, agg_type),
+    )
 }
