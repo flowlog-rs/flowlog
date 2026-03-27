@@ -9,6 +9,8 @@ use parser::DataType;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::import::SemiringKind;
+
 use super::common::{
     aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, key_pattern, row_pattern,
     semiring_new, tuple, ThresholdCmp,
@@ -39,7 +41,7 @@ pub fn aggregation_avg_optimize(arity: usize, agg_pos: usize, agg_type: DataType
         arity,
         agg_pos,
         row_pattern(arity),
-        semiring_new("Avg", agg_pos, agg_type),
+        semiring_new(SemiringKind::Avg,agg_pos, agg_type),
         ThresholdCmp::Ne,
         avg_result_from_key(arity, agg_pos),
     )
@@ -47,7 +49,7 @@ pub fn aggregation_avg_optimize(arity: usize, agg_pos: usize, agg_type: DataType
 
 /// Generates the pre-leave conversion for avg-aggregated recursive relations.
 pub fn aggregation_avg_pre_leave(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
-    aggregation_pre_leave_pipeline(arity, agg_pos, row_pattern(arity), semiring_new("Avg", agg_pos, agg_type))
+    aggregation_pre_leave_pipeline(arity, agg_pos, row_pattern(arity), semiring_new(SemiringKind::Avg,agg_pos, agg_type))
 }
 
 /// Post-leave conversion for avg-aggregated recursive relations.

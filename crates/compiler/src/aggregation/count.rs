@@ -13,6 +13,7 @@ use super::common::{
     aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, result_from_key, semiring_one,
     ThresholdCmp,
 };
+use crate::import::SemiringKind;
 
 /// Row destructuring pattern with `_` at the aggregated position (count ignores the value).
 fn count_row_pattern(arity: usize, agg_pos: usize) -> TokenStream {
@@ -40,7 +41,7 @@ pub fn aggregation_count_optimize(arity: usize, agg_pos: usize, agg_type: DataTy
         arity,
         agg_pos,
         count_row_pattern(arity, agg_pos),
-        semiring_one("Sum", agg_type),
+        semiring_one(SemiringKind::Sum, agg_type),
         ThresholdCmp::Ne,
         result_from_key(arity, agg_pos),
     )
@@ -56,6 +57,6 @@ pub fn aggregation_count_pre_leave(
         arity,
         agg_pos,
         count_row_pattern(arity, agg_pos),
-        semiring_one("Sum", agg_type),
+        semiring_one(SemiringKind::Sum, agg_type),
     )
 }
