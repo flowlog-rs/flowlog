@@ -1,19 +1,30 @@
 //! Profiling utilities for FlowLog compilation and execution.
+//!
+//! The profiler records the logical operator plan graph during compilation,
+//! mapping each operator to its predicted timely dataflow address range.
+//! At runtime, this is cross-referenced with timely's actual operator logs.
+//!
+//! # Module structure
+//!
+//! - [`operators`] — Operator registration methods (input, stage, runtime, inspect)
+//! - [`steps`] — Mode-dependent operator step counts (how many timely ops each DD call creates)
+//! - [`node`] — Node profile data structures
+//! - [`addr`] — Address tracking for timely operator indices
+//! - [`rule`] — Rule profile data structures
 
 mod addr;
 mod node;
+mod operators;
 mod rule;
+mod steps;
 
 use crate::node::{NodeManager, NodeProfile};
 use crate::rule::RuleProfile;
+use common::ExecutionMode;
 use serde::{Deserialize, Serialize};
 use std::io;
 
-const TAG_INPUT: &str = "Input";
-const TAG_STAGE: &str = "Stage";
-const TAG_RUNTIME: &str = "Runtime";
-const TAG_INSPECT: &str = "Inspect";
-
+/// Profiler that records the operator plan graph during compilation.
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Profiler {
     rules: Vec<RuleProfile>,
@@ -21,6 +32,9 @@ pub struct Profiler {
 
     #[serde(skip)]
     node_manager: NodeManager,
+
+    #[serde(skip)]
+    mode: ExecutionMode,
 }
 
 /// Run a closure if a profiler instance is present.
@@ -46,6 +60,14 @@ where
 }
 
 impl Profiler {
+    /// Create a new profiler with the given execution mode.
+    pub fn new(mode: ExecutionMode) -> Self {
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
+
     /// Serialize profiler data to a pretty JSON file.
     pub fn write_json<P: AsRef<std::path::Path>>(&self, path: P) -> io::Result<()> {
         let json = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
@@ -61,32 +83,35 @@ impl Profiler {
         self.rules.push(RuleProfile::new(rule_text, plan_tree_info));
     }
 
-    /// Update the node manager to the input block.
+    // =================================================================
+    // Node manager delegation (scope & block tracking)
+    // =================================================================
+
     pub fn update_input_block(&mut self) {
         self.node_manager.update_input_block();
     }
 
-    /// Update the node manager to a stratum block.
     pub fn update_stratum_block(&mut self, stratum_id: usize) {
         self.node_manager.update_stratum_block(stratum_id);
     }
 
-    /// Update the node manager to the inspect block.
     pub fn update_inspect_block(&mut self) {
         self.node_manager.update_inspect_block();
     }
 
-    /// Enter a nested scope for operator addresses.
     pub fn enter_scope(&mut self) {
         self.node_manager.enter_scope();
     }
 
-    /// Leave the current scope for operator addresses.
     pub fn leave_scope(&mut self) {
         self.node_manager.leave_scope();
     }
 
-    fn push_node(
+    // =================================================================
+    // Internal node builder
+    // =================================================================
+
+    pub(crate) fn push_node(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,
@@ -104,285 +129,5 @@ impl Profiler {
             fingerprint,
         );
         self.nodes.push(node);
-    }
-
-    // Input block operators.
-    pub fn input_edb_operator(&mut self, edb_name: String, output_variable_name: String) {
-        self.push_node(
-            format!("{}: input", edb_name),
-            vec![],
-            Some(output_variable_name),
-            TAG_INPUT,
-            1,
-            None,
-        );
-    }
-
-    pub fn input_dedup_operator(
-        &mut self,
-        edb_name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            format!("{}: dedup", edb_name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_INPUT,
-            3,
-            None,
-        );
-    }
-
-    // Stage block operators.
-    pub fn map_join_operator(
-        &mut self,
-        name: String,
-        input_variable_names: Vec<String>,
-        output_variable_name: String,
-        fingerprint: u64,
-    ) {
-        self.push_node(
-            name,
-            input_variable_names,
-            Some(output_variable_name),
-            TAG_STAGE,
-            1,
-            Some(fingerprint),
-        );
-    }
-
-    pub fn map_join_arrange_operator(
-        &mut self,
-        name: String,
-        input_variable_names: Vec<String>,
-        output_variable_name: String,
-        fingerprint: u64,
-        is_key_only: bool,
-    ) {
-        let operator_steps = if is_key_only { 3 } else { 2 };
-        self.push_node(
-            name,
-            input_variable_names,
-            Some(output_variable_name),
-            TAG_STAGE,
-            operator_steps,
-            Some(fingerprint),
-        );
-    }
-
-    pub fn anti_join_operator(
-        &mut self,
-        name: String,
-        input_variable_names: Vec<String>,
-        output_variable_name: String,
-        fingerprint: u64,
-    ) {
-        self.push_node(
-            name,
-            input_variable_names,
-            Some(output_variable_name),
-            TAG_STAGE,
-            15,
-            Some(fingerprint),
-        );
-    }
-
-    pub fn anti_join_arrange_operator(
-        &mut self,
-        name: String,
-        input_variable_names: Vec<String>,
-        output_variable_name: String,
-        fingerprint: u64,
-        is_key_only: bool,
-    ) {
-        let operator_steps = if is_key_only { 17 } else { 16 };
-        self.push_node(
-            name,
-            input_variable_names,
-            Some(output_variable_name),
-            TAG_STAGE,
-            operator_steps,
-            Some(fingerprint),
-        );
-    }
-
-    pub fn general_aggregate_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            format!("{}: aggregate", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_STAGE,
-            4,
-            None,
-        );
-    }
-
-    pub fn opt_aggregate_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            format!("{}: opt aggregate", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_STAGE,
-            5,
-            None,
-        );
-    }
-
-    // Runtime block operators.
-    pub fn concat_operator(
-        &mut self,
-        name: String,
-        input_variable_names: Vec<String>,
-        output_variable_name: String,
-        concat_number: u32,
-    ) {
-        self.push_node(
-            format!("{}: concat & dedup", name),
-            input_variable_names,
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            concat_number + 3,
-            None,
-        );
-    }
-
-    pub fn recursive_enter_operator(
-        &mut self,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            "enter".to_string(),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
-        );
-    }
-
-    pub fn recursive_feedback_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            format!("{}: feedback", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
-        );
-    }
-
-    pub fn recursive_resultsin_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            format!("{}: resultsin", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
-        );
-    }
-
-    pub fn recursive_pre_leave_opt_aggregate_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            format!("{}: pre-leave opt aggregate", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
-        );
-    }
-
-    pub fn recursive_leave_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            format!("{}: leave", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
-        );
-    }
-
-    pub fn recursive_post_leave_opt_aggregate_operator(
-        &mut self,
-        name: String,
-        input_variable_name: String,
-        output_variable_name: String,
-    ) {
-        self.push_node(
-            format!("{}: post-leave opt aggregate", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            4,
-            None,
-        );
-    }
-
-    // Inspect block operators.
-    pub fn inspect_size_operator(&mut self, input_variable_name: String, name: String) {
-        self.push_node(
-            format!("{}: inspect size", name),
-            vec![input_variable_name],
-            None,
-            TAG_INSPECT,
-            9,
-            None,
-        );
-    }
-
-    pub fn inspect_content_terminal_operator(&mut self, input_variable_name: String, name: String) {
-        self.push_node(
-            format!("{}: inspect terminal", name),
-            vec![input_variable_name],
-            None,
-            TAG_INSPECT,
-            1,
-            None,
-        );
-    }
-
-    pub fn inspect_content_file_operator(&mut self, input_variable_name: String, name: String) {
-        self.push_node(
-            format!("{}: inspect file", name),
-            vec![input_variable_name],
-            None,
-            TAG_INSPECT,
-            1,
-            None,
-        );
     }
 }

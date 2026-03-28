@@ -441,9 +441,6 @@ impl Compiler {
                                                     worker.step();
                                                 }
 
-                                                #time_profile_write
-                                                #memory_profile_write
-
                                                 barrier.wait();
                                                 break;
                                             }
@@ -569,9 +566,6 @@ impl Compiler {
                                             while probe.less_than(&time_stamp) {
                                                 worker.step();
                                             }
-
-                                            #time_profile_write
-                                            #memory_profile_write
 
                                             barrier.wait();
                                             break;

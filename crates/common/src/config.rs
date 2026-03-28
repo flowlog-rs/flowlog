@@ -207,6 +207,9 @@ impl Config {
 
     /// Whether profiling instrumentation is enabled.
     pub fn profiling_enabled(&self) -> bool {
+        if self.profile && self.is_extended() {
+            unimplemented!("-P (profiling) is not yet supported with extended modes");
+        }
         self.profile
     }
 
