@@ -11,12 +11,12 @@
 //! merge, drop, and batcher events per operator (arrangement memory usage).
 //!
 //! Generated artifacts (time profiling):
-//! - Batch mode: `log/time_worker_{index}.log`
-//! - Incremental mode: `log/time_worker_t{time_stamp}_{index}.log`
+//! - Batch mode: `log/time/time_worker_t0_{index}.log`
+//! - Incremental mode: `log/time/time_worker_t{time_stamp}_{index}.log`
 //!
 //! Generated artifacts (memory profiling):
-//! - Batch mode: `log/memory_worker_{index}.log`
-//! - Incremental mode: `log/memory_worker_t{time_stamp}_{index}.log`
+//! - Batch mode: `log/memory/memory_worker_t0_{index}.log`
+//! - Incremental mode: `log/memory/memory_worker_t{time_stamp}_{index}.log`
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -127,30 +127,45 @@ impl Compiler {
 
     /// Emits time profiling write-out logic for **batch** mode.
     ///
-    /// Writes one file per worker under `log/`:
-    /// `log/time_worker_{index}.log`
+    /// Writes one file per worker under `log/time/`:
+    /// `log/time/time_worker_t0_{index}.log`
     pub(crate) fn gen_time_profile_write_batch(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
         gen_time_profile_write_core(quote! {
-            format!("log/time_worker_{}.log", index)
+            format!("log/time/time_worker_t0_{}.log", index)
         })
     }
 
     /// Emits time profiling write-out logic for **incremental** mode.
     ///
     /// Writes one file per worker per committed transaction time:
-    /// `log/time_worker_t{time_stamp}_{index}.log`
+    /// `log/time/time_worker_t{time_stamp}_{index}.log`
     pub(crate) fn gen_time_profile_write_incremental(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
-        gen_time_profile_write_core(quote! {
-            format!("log/time_worker_t{}_{}.log", time_stamp, index)
-        })
+        let write = gen_time_profile_write_core(quote! {
+            format!("log/time/time_worker_t{}_{}.log", time_stamp - 1, index)
+        });
+
+        // Reset timing counters after each write so stats are per-transaction,
+        // but keep operator metadata (name, addr) for the next round.
+        // Note: { #write } scopes the op_stats.borrow() inside gen_time_profile_write_core
+        // so it drops before the borrow_mut() below. The memory path doesn't need this
+        // because gen_memory_profile_write_core already wraps its body in a block.
+        quote! {
+            { #write }
+
+            for (_id, st) in op_stats.borrow_mut().iter_mut() {
+                st.total_active = Duration::ZERO;
+                st.activations = 0;
+                st.current_start = None;
+            }
+        }
     }
 
     // =================================================================
@@ -255,28 +270,37 @@ impl Compiler {
 
     /// Emits memory profiling write-out logic for **batch** mode.
     ///
-    /// Writes `log/memory_worker_{index}.log` per worker.
+    /// Writes `log/memory/memory_worker_t0_{index}.log` per worker.
     pub(crate) fn gen_memory_profile_write_batch(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
         gen_memory_profile_write_core(quote! {
-            format!("log/memory_worker_{}.log", index)
+            format!("log/memory/memory_worker_t0_{}.log", index)
         })
     }
 
     /// Emits memory profiling write-out logic for **incremental** mode.
     ///
-    /// Writes `log/memory_worker_t{time_stamp}_{index}.log` per worker per txn.
+    /// Writes `log/memory/memory_worker_t{time_stamp}_{index}.log` per worker per txn.
     pub(crate) fn gen_memory_profile_write_incremental(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
-        gen_memory_profile_write_core(quote! {
-            format!("log/memory_worker_t{}_{}.log", time_stamp, index)
-        })
+        let write = gen_memory_profile_write_core(quote! {
+            format!("log/memory/memory_worker_t{}_{}.log", time_stamp - 1, index)
+        });
+
+        // Reset memory counters after each write so stats are per-transaction.
+        quote! {
+            #write
+
+            for (_id, st) in dd_stats.borrow_mut().iter_mut() {
+                *st = DdArrangeStats::default();
+            }
+        }
     }
 }
 
@@ -293,7 +317,7 @@ fn gen_time_profile_write_core(file_path_expr: TokenStream) -> TokenStream {
             map.iter().map(|(id, st)| (*id, st.clone())).collect();
         rows.sort_by_key(|(id, _st)| *id);
 
-        std::fs::create_dir_all("log").expect("failed to create log directory");
+        std::fs::create_dir_all("log/time").expect("failed to create log/time directory");
 
         let stats_file = File::create(#file_path_expr)
             .expect("failed to create operator stats log file");
@@ -353,7 +377,7 @@ fn gen_memory_profile_write_core(file_path_expr: TokenStream) -> TokenStream {
             // Sort numerically by address components
             rows.sort_by(|a, b| a.0.cmp(&b.0));
 
-            std::fs::create_dir_all("log").expect("failed to create log directory");
+            std::fs::create_dir_all("log/memory").expect("failed to create log/memory directory");
 
             let dd_file = File::create(#file_path_expr)
                 .expect("failed to create DD arrange stats log file");
