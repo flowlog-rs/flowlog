@@ -262,17 +262,20 @@ impl Compiler {
             with_profiler(profiler, |profiler| {
                 let output_name = self.find_global_ident(*idb_fp).to_string();
                 if sources.len() > 1 {
-                    profiler.concat_operator(
+                    profiler.concat_dedup_operator(
                         output_name,
                         sources.iter().map(|id| id.to_string()).collect(),
                         next_ident.to_string(),
                         sources.len() as u32 - 1,
+                        true,
                     );
                 } else {
-                    profiler.input_dedup_operator(
+                    profiler.concat_dedup_operator(
                         output_name,
-                        sources[0].to_string(),
+                        vec![sources[0].to_string()],
                         next_ident.to_string(),
+                        0,
+                        true,
                     );
                 }
             });

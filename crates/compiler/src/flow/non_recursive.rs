@@ -90,11 +90,12 @@ impl Compiler {
             let mut block = if calculated_output_fps.contains(idb_fp) {
                 // Profiler: concat for repeated output (optional)
                 with_profiler(profiler, |profiler| {
-                    profiler.concat_operator(
+                    profiler.concat_dedup_operator(
                         output.to_string(),
                         outs.iter().map(|id| id.to_string()).collect(),
                         output.to_string(),
                         outs.len() as u32,
+                        false,
                     );
                 });
                 quote! {
@@ -105,11 +106,12 @@ impl Compiler {
             } else {
                 // Profiler: concat for new output (optional)
                 with_profiler(profiler, |profiler| {
-                    profiler.concat_operator(
+                    profiler.concat_dedup_operator(
                         output.to_string(),
                         outs.iter().map(|id| id.to_string()).collect(),
                         output.to_string(),
                         outs.len() as u32 - 1,
+                        false,
                     );
                 });
                 quote! {

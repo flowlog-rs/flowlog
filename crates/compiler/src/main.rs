@@ -36,7 +36,7 @@ fn main() {
 
     // Profiler to collect profiling data
     let mut profiler = if config.profiling_enabled() {
-        Some(Profiler::default())
+        Some(Profiler::new(config.mode()))
     } else {
         None
     };
@@ -112,7 +112,7 @@ fn run_all_examples(config: &Config) {
             let stratifier = Stratifier::from_program(&program, config.is_extended());
             let mut optimizer = Optimizer::new();
             let mut profiler = if config.profiling_enabled() {
-                Some(Profiler::default())
+                Some(Profiler::new(config.mode()))
             } else {
                 None
             };
