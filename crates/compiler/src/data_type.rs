@@ -203,12 +203,14 @@ impl Compiler {
                 for (i, (arg, param)) in args.iter().zip(ext.params()).enumerate() {
                     let arg_type = self.infer_expr_type(arg, left_type, right_type);
                     match arg_type {
-                        Some(at) => assert_eq!(
+                        Some(at) => {
+                            assert_eq!(
                             at,
                             *param.data_type(),
                             "Compiler error: UDF '{}' param {} ('{}') expects {:?} but got {:?}",
                             name, i, param.name(), param.data_type(), at,
-                        ),
+                        )
+                        }
                         None => {
                             // Numeric constants infer as None (polymorphic).
                             // Still reject if the param expects a non-numeric type.
