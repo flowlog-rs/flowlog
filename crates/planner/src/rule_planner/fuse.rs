@@ -354,34 +354,8 @@ impl RulePlanner {
     ) -> Vec<ComparisonExprPos> {
         cmps.iter()
             .map(|c| {
-                let remap_factor = |factor: &FactorPos| -> FactorPos {
-                    match factor {
-                        FactorPos::Var(sig) => {
-                            let id = sig.argument_id();
-                            positions
-                                .get(id)
-                                .unwrap_or_else(|| {
-                                    panic!("Planner error: missing argument id {} in positions", id)
-                                })
-                                .init()
-                                .clone()
-                        }
-                        FactorPos::Const(c) => FactorPos::Const(c.clone()),
-                    }
-                };
-
-                let remap_expr = |expr: &ArithmeticPos| -> ArithmeticPos {
-                    let init = remap_factor(expr.init());
-                    let rest = expr
-                        .rest()
-                        .iter()
-                        .map(|(op, f)| (op.clone(), remap_factor(f)))
-                        .collect();
-                    ArithmeticPos::new(init, rest)
-                };
-
-                let left = remap_expr(c.left());
-                let right = remap_expr(c.right());
+                let left = Self::remap_arithmetic(positions, c.left());
+                let right = Self::remap_arithmetic(positions, c.right());
                 ComparisonExprPos::from_parts(left, c.operator().clone(), right)
             })
             .collect()
@@ -396,36 +370,31 @@ impl RulePlanner {
         fn_calls
             .iter()
             .map(|fc| {
-                let remap_factor = |factor: &FactorPos| -> FactorPos {
-                    match factor {
-                        FactorPos::Var(sig) => {
-                            let id = sig.argument_id();
-                            positions
-                                .get(id)
-                                .unwrap_or_else(|| {
-                                    panic!("Planner error: missing argument id {} in positions", id)
-                                })
-                                .init()
-                                .clone()
-                        }
-                        FactorPos::Const(c) => FactorPos::Const(c.clone()),
-                    }
-                };
-
-                let remap_expr = |expr: &ArithmeticPos| -> ArithmeticPos {
-                    let init = remap_factor(expr.init());
-                    let rest = expr
-                        .rest()
-                        .iter()
-                        .map(|(op, f)| (op.clone(), remap_factor(f)))
-                        .collect();
-                    ArithmeticPos::new(init, rest)
-                };
-
-                let new_args = fc.args().iter().map(remap_expr).collect();
+                let new_args = fc
+                    .args()
+                    .iter()
+                    .map(|a| Self::remap_arithmetic(positions, a))
+                    .collect();
                 FnCallPredicatePos::new(fc.name().to_string(), new_args, fc.is_negated())
             })
             .collect()
+    }
+
+    /// Remap an ArithmeticPos by resolving each variable signature through `positions`.
+    fn remap_arithmetic(positions: &[ArithmeticPos], expr: &ArithmeticPos) -> ArithmeticPos {
+        expr.map_vars(&|sig| {
+            let id = sig.argument_id();
+            let pos = positions
+                .get(id)
+                .unwrap_or_else(|| {
+                    panic!("Planner error: missing argument id {} in positions", id)
+                });
+            assert!(
+                pos.rest().is_empty(),
+                "Planner error: expected single-factor position for argument id {id}, got compound expression"
+            );
+            pos.init().clone()
+        })
     }
 
     fn remap_const_eq_constraints(
@@ -459,27 +428,13 @@ impl RulePlanner {
     /// Remap a key-value layout so every variable signature uses the given `atom_id`,
     /// preserving argument ids and constants.
     fn remap_atom_kv_layout(layout: &KeyValueLayout, atom_id: usize) -> KeyValueLayout {
-        let remap_factor = |factor: &FactorPos| -> FactorPos {
-            match factor {
-                FactorPos::Var(sig) => {
-                    let atom_sig = AtomSignature::new(sig.is_positive(), atom_id);
-                    FactorPos::Var(AtomArgumentSignature::new(atom_sig, sig.argument_id()))
-                }
-                FactorPos::Const(c) => FactorPos::Const(c.clone()),
-            }
-        };
-        let remap_pos = |pos: &ArithmeticPos| -> ArithmeticPos {
-            let init = remap_factor(pos.init());
-            let rest = pos
-                .rest()
-                .iter()
-                .map(|(op, f)| (op.clone(), remap_factor(f)))
-                .collect();
-            ArithmeticPos::new(init, rest)
+        let remap = &|sig: &AtomArgumentSignature| {
+            let atom_sig = AtomSignature::new(sig.is_positive(), atom_id);
+            FactorPos::Var(AtomArgumentSignature::new(atom_sig, sig.argument_id()))
         };
         KeyValueLayout::new(
-            layout.key().iter().map(&remap_pos).collect(),
-            layout.value().iter().map(&remap_pos).collect(),
+            layout.key().iter().map(|p| p.map_vars(remap)).collect(),
+            layout.value().iter().map(|p| p.map_vars(remap)).collect(),
         )
     }
 

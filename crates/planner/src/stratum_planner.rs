@@ -68,12 +68,6 @@ pub struct StratumPlanner {
     /// Values are `(AggregationOperator, output_position, output_arity)` tuples.
     idb_to_aggregation_map: HashMap<u64, (AggregationOperator, usize, usize)>,
 
-    /// UDF metadata keyed by IDB fingerprint.
-    /// Only populated for rules whose heads contain a UDF call.
-    /// Values are `(fn_name, start_position, end_position, output_arity)` tuples,
-    /// where start..end is the range of flattened arg positions in the output layout.
-    idb_to_udf_map: HashMap<u64, (String, usize, usize, usize)>,
-
     /// Loop condition for this stratum, if it was declared as a loop block.
     /// `None` for plain strata (which run to fixpoint implicitly).
     loop_condition: Option<LoopCondition>,
@@ -191,7 +185,6 @@ impl StratumPlanner {
             idb_to_heads_map: HashMap::new(),
             head_to_idb_map: HashMap::new(),
             idb_to_aggregation_map: HashMap::new(),
-            idb_to_udf_map: HashMap::new(),
             loop_condition: stratifier.loop_condition(stratum_idx).cloned(),
         };
         stratum_planner.materialize_transformations();
@@ -203,7 +196,6 @@ impl StratumPlanner {
         stratum_planner
             .build_recursion_enter_collections(stratifier.stratum_available_relations(stratum_idx));
         stratum_planner.build_idb_to_aggregation_map(&catalogs);
-        stratum_planner.build_idb_to_udf_map(&catalogs);
 
         // Debug info for non-recursive vs recursive transformations.
         debug!("\n{}", stratum_planner);
@@ -287,13 +279,6 @@ impl StratumPlanner {
         &self.idb_to_aggregation_map
     }
 
-    /// Get the mapping from IDB fingerprint to corresponding UDF call.
-    /// Returns tuples of (fn_name, start position, end position, output arity).
-    #[inline]
-    pub fn idb_to_udf_map(&self) -> &HashMap<u64, (String, usize, usize, usize)> {
-        &self.idb_to_udf_map
-    }
-
     /// Get the loop condition for this stratum, if it is a loop block.
     #[inline]
     pub fn loop_condition(&self) -> Option<&LoopCondition> {
@@ -356,17 +341,6 @@ impl fmt::Display for StratumPlanner {
                     f,
                     "  fp={:#018x},\n  op={:?},\n  pos={},\n  arity={}",
                     fp, op, pos, arity
-                )?;
-            }
-        }
-
-        if !self.idb_to_udf_map.is_empty() {
-            writeln!(f, "\n{}", "-".repeat(40))?;
-            writeln!(f, "IDB to UDF Map:")?;
-            for (fp, (name, start, end, arity)) in &self.idb_to_udf_map {
-                writeln!(
-                    f,
-                    "  fp={fp:#018x}, fn={name}, range={start}..{end}, arity={arity}",
                 )?;
             }
         }
@@ -581,77 +555,6 @@ impl StratumPlanner {
                     self.idb_to_aggregation_map.insert(head_idb_fp, entry);
                 }
                 _ => {} // consistent duplicate — skip
-            }
-        }
-    }
-
-    /// Build the mapping from each final output collection fingerprint to its UDF requirement.
-    ///
-    /// FnCall args are flattened into separate columns in the output layout;
-    /// this records (fn_name, start..end, output_arity) so the compiler can collapse them.
-    fn build_idb_to_udf_map(&mut self, catalogs: &[Catalog]) {
-        for catalog in catalogs {
-            let head_args = catalog.head_arguments();
-            let head_idb_fp = catalog.head_idb_fingerprint();
-
-            // At most one UDF per rule head.
-            assert!(
-                head_args
-                    .iter()
-                    .filter(|a| matches!(a, HeadArg::FnCall(_)))
-                    .count()
-                    <= 1,
-                "Planner error: rule head contains multiple UDF calls, but at most one is allowed",
-            );
-
-            // A head cannot have both an aggregation and a UDF.
-            let has_agg = self.idb_to_aggregation_map.contains_key(&head_idb_fp);
-            let has_udf = head_args.iter().any(|a| matches!(a, HeadArg::FnCall(_)));
-            assert!(
-                !(has_agg && has_udf),
-                "Planner error: rule head cannot have both aggregation and UDF for output {:#018x}",
-                head_idb_fp,
-            );
-
-            if !has_udf {
-                continue;
-            }
-
-            // Compute flattened output arity once.
-            let output_arity: usize = head_args
-                .iter()
-                .map(|a| match a {
-                    HeadArg::FnCall(fc) => fc.args().len(),
-                    _ => 1,
-                })
-                .sum();
-
-            // Walk head args, tracking the flattened position.
-            let mut flat_pos = 0usize;
-            for arg in head_args {
-                let HeadArg::FnCall(fc) = arg else {
-                    flat_pos += 1;
-                    continue;
-                };
-
-                let start = flat_pos;
-                let end = start + fc.args().len();
-                let entry = (fc.name().to_string(), start, end, output_arity);
-
-                match self.idb_to_udf_map.get(&head_idb_fp) {
-                    Some(existing) if *existing != entry => {
-                        panic!(
-                            "Planner error: inconsistent UDF for output {:#018x}",
-                            head_idb_fp
-                        );
-                    }
-                    None => {
-                        self.idb_to_udf_map.insert(head_idb_fp, entry);
-                    }
-                    _ => {} // consistent duplicate — skip
-                }
-
-                flat_pos = end;
             }
         }
     }

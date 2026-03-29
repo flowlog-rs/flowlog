@@ -193,13 +193,8 @@ fn compute_row_params_tokens(
     };
 
     let mut inspect_expr = |expr: &ArithmeticArgument| {
-        if let FactorArgument::Var(trans_arg) = expr.init() {
+        for trans_arg in expr.transformation_arguments() {
             mark(trans_arg);
-        }
-        for (_op, factor) in expr.rest() {
-            if let FactorArgument::Var(trans_arg) = factor {
-                mark(trans_arg);
-            }
         }
     };
 
@@ -256,13 +251,8 @@ pub(super) fn compute_join_param_tokens(
     };
 
     let mut inspect_expr = |expr: &ArithmeticArgument| {
-        if let FactorArgument::Var(trans_arg) = expr.init() {
+        for trans_arg in expr.transformation_arguments() {
             mark_usage(trans_arg);
-        }
-        for (_op, factor) in expr.rest() {
-            if let FactorArgument::Var(trans_arg) = factor {
-                mark_usage(trans_arg);
-            }
         }
     };
 
@@ -332,13 +322,8 @@ pub(super) fn compute_kv_param_tokens(
     };
 
     let mut inspect_expr = |expr: &ArithmeticArgument| {
-        if let FactorArgument::Var(trans_arg) = expr.init() {
+        for trans_arg in expr.transformation_arguments() {
             mark_usage(trans_arg);
-        }
-        for (_op, factor) in expr.rest() {
-            if let FactorArgument::Var(trans_arg) = factor {
-                mark_usage(trans_arg);
-            }
         }
     };
 
@@ -416,8 +401,8 @@ impl Compiler {
                 let op = comparison_op_tokens(c.operator());
                 if string_intern
                     && c.operator().is_inequality()
-                    && Self::infer_expr_type(c.left(), input_type, None) == Some(DataType::String)
-                    && Self::infer_expr_type(c.right(), input_type, None) == Some(DataType::String)
+                    && self.infer_expr_type(c.left(), input_type, None) == Some(DataType::String)
+                    && self.infer_expr_type(c.right(), input_type, None) == Some(DataType::String)
                 {
                     self.imports.mark_string_resolve();
                     quote! { resolve(#l) #op resolve(#r) }
@@ -450,9 +435,9 @@ impl Compiler {
                 let op = comparison_op_tokens(c.operator());
                 if string_intern
                     && c.operator().is_inequality()
-                    && Self::infer_expr_type(c.left(), left_type, Some(right_type))
+                    && self.infer_expr_type(c.left(), left_type, Some(right_type))
                         == Some(DataType::String)
-                    && Self::infer_expr_type(c.right(), left_type, Some(right_type))
+                    && self.infer_expr_type(c.right(), left_type, Some(right_type))
                         == Some(DataType::String)
                 {
                     self.imports.mark_string_resolve();
@@ -488,8 +473,8 @@ impl Compiler {
                 let op = comparison_op_tokens(c.operator());
                 if string_intern
                     && c.operator().is_inequality()
-                    && Self::infer_expr_type(c.left(), input_type, None) == Some(DataType::String)
-                    && Self::infer_expr_type(c.right(), input_type, None) == Some(DataType::String)
+                    && self.infer_expr_type(c.left(), input_type, None) == Some(DataType::String)
+                    && self.infer_expr_type(c.right(), input_type, None) == Some(DataType::String)
                 {
                     self.imports.mark_string_resolve();
                     quote! { resolve(#l) #op resolve(#r) }
@@ -782,19 +767,12 @@ fn build_cat_batch(factors: Vec<TokenStream>, string_intern: bool) -> TokenStrea
 /// The only thing that varies across row / kv / join contexts is how a
 /// `TransformationArgument` is lowered to a `TokenStream`.
 impl Compiler {
-    fn build_arithmetic_expr(
+    fn build_arithmetic_expr<F: Fn(&TransformationArgument) -> TokenStream>(
         &mut self,
         expr: &ArithmeticArgument,
         string_intern: bool,
-        resolve_var: impl Fn(&TransformationArgument) -> TokenStream,
+        resolve_var: &F,
     ) -> TokenStream {
-        let to_token = |factor: &FactorArgument| -> TokenStream {
-            match factor {
-                FactorArgument::Var(arg) => resolve_var(arg),
-                FactorArgument::Const(c) => const_to_token(c, string_intern),
-            }
-        };
-
         // Type system guarantees: if any op is Cat, all ops are Cat (string expr).
         // Batch all factors into a single format! call.
         if expr
@@ -802,44 +780,106 @@ impl Compiler {
             .first()
             .is_some_and(|(op, _)| matches!(op, ArithmeticOperator::Cat))
         {
-            // For cat we need display-ready tokens.  Variable references that are
-            // `Spur` values must be resolved first; string literal constants are
-            // used as-is (no pointless intern-then-resolve round-trip).
-            let mut to_display = |factor: &FactorArgument| -> TokenStream {
-                match factor {
-                    FactorArgument::Var(arg) => {
-                        let var_token = resolve_var(arg);
-                        if string_intern {
-                            self.imports.mark_string_resolve();
-                            quote! { resolve(#var_token) }
-                        } else {
-                            var_token
-                        }
-                    }
-                    FactorArgument::Const(c) => match c {
-                        // String literals are already displayable – emit them
-                        // directly without interning first.
-                        ConstType::Text(s) => quote! { #s },
-                        _ => const_to_token(c, string_intern),
-                    },
-                }
-            };
-
-            let mut factors = vec![to_display(expr.init())];
+            let mut factors =
+                vec![self.factor_to_display_token(expr.init(), string_intern, resolve_var)];
             for (_, factor) in expr.rest() {
-                factors.push(to_display(factor));
+                factors.push(self.factor_to_display_token(factor, string_intern, resolve_var));
             }
             return build_cat_batch(factors, string_intern);
         }
 
-        // Numeric fold: left-to-right with parentheses.
-        expr.rest()
+        // Numeric fold: left-to-right with parentheses for precedence.
+        // Only intermediate steps are wrapped — the outermost expression is
+        // left bare so it can appear as a function argument without triggering
+        // Rust's `unused_parens` lint.
+        let rest = expr.rest();
+        let mut result = self.factor_to_token(expr.init(), string_intern, resolve_var);
+        for (i, (op, factor)) in rest.iter().enumerate() {
+            let op_token = numeric_arithmetic_op_tokens(op);
+            let factor_token = self.factor_to_token(factor, string_intern, resolve_var);
+            if i < rest.len() - 1 {
+                result = quote! { ( #result #op_token #factor_token ) };
+            } else {
+                result = quote! { #result #op_token #factor_token };
+            }
+        }
+        result
+    }
+
+    /// Generate a UDF call token stream: `udf::fn_name(arg1.clone(), arg2.clone(), ...)`.
+    ///
+    /// UDFs take ownership of their arguments. We clone each arg to avoid
+    /// invalidating variables that may be used elsewhere in the same closure
+    /// (e.g., in the output tuple or another predicate). Clone on Copy types is free.
+    fn fncall_to_token<F: Fn(&TransformationArgument) -> TokenStream>(
+        &mut self,
+        name: &str,
+        args: &[ArithmeticArgument],
+        string_intern: bool,
+        resolve_var: &F,
+    ) -> TokenStream {
+        let fn_ident = format_ident!("{}", name);
+        let arg_tokens: Vec<TokenStream> = args
             .iter()
-            .fold(to_token(expr.init()), |ts, (op, factor)| {
-                let op_token = numeric_arithmetic_op_tokens(op);
-                let factor_token = to_token(factor);
-                quote! { ( #ts #op_token #factor_token ) }
+            .map(|a| {
+                let token = self.build_arithmetic_expr(a, string_intern, resolve_var);
+                quote! { (#token).clone() }
             })
+            .collect();
+        self.imports.mark_udf();
+        quote! { udf::#fn_ident(#(#arg_tokens),*) }
+    }
+
+    /// Convert a factor to a token stream for numeric/general expressions.
+    fn factor_to_token<F: Fn(&TransformationArgument) -> TokenStream>(
+        &mut self,
+        factor: &FactorArgument,
+        string_intern: bool,
+        resolve_var: &F,
+    ) -> TokenStream {
+        match factor {
+            FactorArgument::Var(arg) => resolve_var(arg),
+            FactorArgument::Const(c) => const_to_token(c, string_intern),
+            FactorArgument::FnCall { name, args } => {
+                self.fncall_to_token(name, args, string_intern, resolve_var)
+            }
+        }
+    }
+
+    /// Convert a factor to a display-ready token stream for cat (string concatenation).
+    fn factor_to_display_token<F: Fn(&TransformationArgument) -> TokenStream>(
+        &mut self,
+        factor: &FactorArgument,
+        string_intern: bool,
+        resolve_var: &F,
+    ) -> TokenStream {
+        match factor {
+            FactorArgument::Var(arg) => {
+                let var_token = resolve_var(arg);
+                if string_intern {
+                    self.imports.mark_string_resolve();
+                    quote! { resolve(#var_token) }
+                } else {
+                    var_token
+                }
+            }
+            FactorArgument::Const(c) => match c {
+                // String literals are already displayable – emit them
+                // directly without interning first.
+                ConstType::Text(s) => quote! { #s },
+                _ => const_to_token(c, string_intern),
+            },
+            FactorArgument::FnCall { name, args } => {
+                // UDF returns Spur when string_intern is on — resolve for display.
+                let call = self.fncall_to_token(name, args, string_intern, resolve_var);
+                if string_intern {
+                    self.imports.mark_string_resolve();
+                    quote! { resolve(#call) }
+                } else {
+                    call
+                }
+            }
+        }
     }
 
     fn build_row_args_arithmetic_expr(
@@ -849,7 +889,7 @@ impl Compiler {
         string_intern: bool,
         remaining: Option<&RefCell<HashMap<usize, usize>>>,
     ) -> TokenStream {
-        self.build_arithmetic_expr(expr, string_intern, |arg| match arg {
+        self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
             TransformationArgument::KV((_, idx)) => {
                 let ident = fields
                     .get(*idx)
@@ -878,7 +918,7 @@ impl Compiler {
         string_intern: bool,
         remaining: Option<&RefCell<HashMap<(bool, usize), usize>>>,
     ) -> TokenStream {
-        self.build_arithmetic_expr(expr, string_intern, |arg| match arg {
+        self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
             TransformationArgument::KV((is_key, idx))
             | TransformationArgument::Jn((_, is_key, idx)) => {
                 let i = Index::from(*idx);
@@ -917,7 +957,7 @@ impl Compiler {
         expr: &ArithmeticArgument,
         string_intern: bool,
     ) -> TokenStream {
-        self.build_arithmetic_expr(expr, string_intern, |arg| match arg {
+        self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
             TransformationArgument::Jn((is_left, is_key, idx)) => {
                 let i = Index::from(*idx);
                 // `k`, `lv`, `rv` are references in join_core; clone to get owned values.

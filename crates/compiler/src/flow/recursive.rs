@@ -19,7 +19,6 @@ use crate::aggregation::{
 };
 use crate::ident::find_local_ident;
 use crate::import::SemiringKind;
-use crate::udf::head_udf_map;
 use crate::Compiler;
 
 use parser::{AggregationOperator, LoopCondition, LoopConnective};
@@ -130,7 +129,6 @@ impl Compiler {
             &enter_bindings,
             itr_fps,
             stratum.idb_to_aggregation_map(),
-            stratum.idb_to_udf_map(),
             profiler,
         );
 
@@ -217,7 +215,6 @@ impl Compiler {
         enter_bindings: &HashMap<u64, Ident>,
         iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
-        idb_to_udf_map: &HashMap<u64, (String, usize, usize, usize)>,
         profiler: &mut Option<Profiler>,
     ) -> (HashMap<u64, Ident>, Vec<TokenStream>) {
         let mut next_bindings: HashMap<u64, Ident> = HashMap::new();
@@ -359,22 +356,6 @@ impl Compiler {
                         );
                     });
                 }
-            }
-
-            // ----------------------------------------------------------------
-            // UDF (mutually exclusive with aggregation)
-            // ----------------------------------------------------------------
-            if let Some((fn_name, start, end, output_arity)) = idb_to_udf_map.get(idb_fp) {
-                for head_fp in head_fps {
-                    self.verify_udf_types(*idb_fp, *head_fp, fn_name, *start);
-                }
-                self.imports.mark_udf();
-                let udf_pipeline = head_udf_map(fn_name, *start, *end, *output_arity);
-                block = quote! {
-                    #block
-                    let #next_ident = #next_ident
-                        #udf_pipeline;
-                };
             }
 
             union_stmts.push(block);

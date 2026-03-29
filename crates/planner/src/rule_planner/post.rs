@@ -109,12 +109,12 @@ impl RulePlanner {
         let all_positions = output_layout
             .key()
             .iter()
-            .map(|pos| *pos.init().signature().unwrap())
+            .map(|pos| *pos.init().as_var_signature().unwrap())
             .chain(
                 output_layout
                     .value()
                     .iter()
-                    .map(|pos| *pos.init().signature().unwrap()),
+                    .map(|pos| *pos.init().as_var_signature().unwrap()),
             );
         let atom_sigs = catalog.positive_atom_argument_signature(0);
 
@@ -167,17 +167,6 @@ impl RulePlanner {
                     let var_sigs: Vec<_> = agg.vars().iter().map(|v| sig_of(v.as_str())).collect();
                     vec![ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs)]
                 }
-                // Flatten fn_call args into separate ArithmeticPos columns.
-                // The compiler will later collapse them back with the actual UDF call.
-                HeadArg::FnCall(fc) => fc
-                    .args()
-                    .iter()
-                    .map(|a| {
-                        let var_sigs: Vec<_> =
-                            a.vars().iter().map(|v| sig_of(v.as_str())).collect();
-                        ArithmeticPos::from_arithmetic(a, &var_sigs)
-                    })
-                    .collect(),
             })
             .collect()
     }

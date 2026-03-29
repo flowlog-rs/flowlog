@@ -21,7 +21,6 @@ use crate::aggregation::{
     aggregation_sum_optimize,
 };
 use crate::import::SemiringKind;
-use crate::udf::head_udf_map;
 use crate::Compiler;
 
 use parser::AggregationOperator;
@@ -196,21 +195,6 @@ impl Compiler {
                         );
                     });
                 }
-            }
-
-            // UDF logic (optional, mutually exclusive with aggregation)
-            if let Some((fn_name, start, end, output_arity)) = stratum.idb_to_udf_map().get(idb_fp)
-            {
-                for head_fp in head_fps {
-                    self.verify_udf_types(*idb_fp, *head_fp, fn_name, *start);
-                }
-                self.imports.mark_udf();
-                let udf_pipeline = head_udf_map(fn_name, *start, *end, *output_arity);
-                block = quote! {
-                    #block
-                    let #output = #output
-                        #udf_pipeline;
-                };
             }
 
             flows.push(block);
