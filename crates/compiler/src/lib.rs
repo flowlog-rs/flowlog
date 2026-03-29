@@ -20,7 +20,6 @@ mod read;
 mod relops;
 mod scaffold;
 mod transformation;
-mod udf;
 
 pub use build::build_and_collect;
 

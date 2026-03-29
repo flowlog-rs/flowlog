@@ -15,7 +15,7 @@
 //! assert_eq!(head.to_string(), "result(X, Y + 10)");
 //! ```
 
-use super::{Aggregation, Arithmetic, FnCall};
+use super::{Aggregation, Arithmetic};
 use crate::{Lexeme, Rule};
 use common::compute_fp;
 use pest::iterators::Pair;
@@ -26,12 +26,10 @@ use std::fmt;
 pub enum HeadArg {
     /// Pass-through variable.
     Var(String),
-    /// Arithmetic expression.
+    /// Arithmetic expression (includes UDF calls).
     Arith(Arithmetic),
     /// Aggregation (e.g., `count(X)`).
     Aggregation(Aggregation),
-    /// User-defined function call (e.g., `my_hash(x, y)`).
-    FnCall(FnCall),
 }
 
 impl HeadArg {
@@ -42,7 +40,6 @@ impl HeadArg {
             Self::Var(v) => vec![v],
             Self::Arith(a) => a.vars(),
             Self::Aggregation(agg) => agg.vars(),
-            Self::FnCall(fc) => fc.vars(),
         }
     }
 }
@@ -53,7 +50,6 @@ impl fmt::Display for HeadArg {
             Self::Var(v) => write!(f, "{v}"),
             Self::Arith(a) => write!(f, "{a}"),
             Self::Aggregation(agg) => write!(f, "{agg}"),
-            Self::FnCall(fc) => write!(f, "{fc}"),
         }
     }
 }
@@ -89,7 +85,6 @@ impl Lexeme for HeadArg {
                 }
             }
             Rule::aggregate_expr => Self::Aggregation(Aggregation::from_parsed_rule(inner)),
-            Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner)),
             other => panic!("Parser error: unexpected rule for HeadArg: {:?}", other),
         }
     }

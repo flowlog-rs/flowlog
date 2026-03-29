@@ -16,8 +16,10 @@
 //! assert_eq!(expr.to_string(), "x + 5");
 //! ```
 
+use super::FnCall;
 use crate::primitive::ConstType;
 use crate::{Lexeme, Rule};
+
 use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
@@ -69,11 +71,13 @@ impl Lexeme for ArithmeticOperator {
     }
 }
 
-/// Atomic operand for arithmetic: variable or constant.
+/// Atomic operand for arithmetic: variable, constant, or function call.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Factor {
     Var(String),
     Const(ConstType),
+    /// User-defined function call (e.g., `transform(x, y + 1)`).
+    FnCall(FnCall),
 }
 
 impl Factor {
@@ -87,12 +91,13 @@ impl Factor {
         matches!(self, Self::Const(_))
     }
 
-    /// Variables appearing in this factor (0 or 1).
+    /// Variables appearing in this factor.
     #[must_use]
     pub fn vars(&self) -> Vec<&String> {
         match self {
             Self::Var(v) => vec![v],
-            _ => vec![],
+            Self::Const(_) => vec![],
+            Self::FnCall(fc) => fc.vars(),
         }
     }
 
@@ -108,21 +113,23 @@ impl fmt::Display for Factor {
         match self {
             Self::Var(v) => write!(f, "{v}"),
             Self::Const(c) => write!(f, "{c}"),
+            Self::FnCall(fc) => write!(f, "{fc}"),
         }
     }
 }
 
 impl Lexeme for Factor {
-    /// Parse a factor (variable or constant).
+    /// Parse a factor (variable, constant, or function call).
     ///
     /// # Panics
-    /// Panics if the inner token is neither `variable` nor `constant`.
+    /// Panics if the inner token is not `variable`, `constant`, or `fn_call_expr`.
     fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
         let inner = parsed_rule
             .into_inner()
             .next()
             .expect("Parser error: factor missing inner token");
         match inner.as_rule() {
+            Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner)),
             Rule::variable => Self::Var(inner.as_str().to_string()),
             Rule::constant => Self::Const(ConstType::from_parsed_rule(inner)),
             other => panic!("Parser error: invalid factor rule: {:?}", other),

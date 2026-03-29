@@ -1,0 +1,41 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : udf_arithmetic
+// Feature : UDF calls mixed with arithmetic operators (+, -, *) in rule
+//           heads — UDF on left/right, multi-op chains, multiple UDFs
+// ════════════════════════════════════════════════════════════════════════════
+
+.extern fn penalty(days_overdue: int32) -> int32
+.extern fn tax(price: int32) -> int32
+
+.decl Order(id: int32, price: int32, days_late: int32, qty: int32)
+.input Order(IO="file", filename="Order.csv", delimiter=",")
+
+// R1: var + UDF — UDF on right side of addition
+.decl TotalCost(id: int32, total: int32)
+TotalCost(id, price + penalty(days)) :- Order(id, price, days, _).
+.output TotalCost
+
+// R2: UDF - var — UDF on left side of subtraction (non-commutative)
+.decl UdfMinusVar(id: int32, diff: int32)
+UdfMinusVar(id, penalty(days) - price) :- Order(id, price, days, _).
+.output UdfMinusVar
+
+// R3: var + UDF - UDF — chain with two different UDFs
+.decl NetCost(id: int32, net: int32)
+NetCost(id, price + penalty(days) - tax(price)) :- Order(id, price, days, _).
+.output NetCost
+
+// R4: UDF * var — multiplication with UDF
+.decl PenaltyQty(id: int32, scaled: int32)
+PenaltyQty(id, penalty(days) * qty) :- Order(id, _, days, qty).
+.output PenaltyQty
+
+// R5: multiple head args each with UDF
+.decl Both(id: int32, pen: int32, tx: int32)
+Both(id, penalty(days), tax(price)) :- Order(id, price, days, _).
+.output Both
+
+// R6: same UDF called twice with different args in one expression
+.decl DoublePen(id: int32, combined: int32)
+DoublePen(id, penalty(days) + penalty(qty)) :- Order(id, _, days, qty).
+.output DoublePen

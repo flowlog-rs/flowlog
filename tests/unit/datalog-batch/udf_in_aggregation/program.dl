@@ -1,0 +1,41 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : udf_in_aggregation
+// Feature : UDF calls inside aggregation expressions — sum, max, min, count;
+//           UDF in grouping key; UDF in both key and value
+// ════════════════════════════════════════════════════════════════════════════
+
+.extern fn bw_cost(weight: int32) -> int32
+.extern fn tier(weight: int32) -> int32
+
+.decl Edge(src: int32, dst: int32, weight: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+// R1: sum(UDF) — sum of bandwidth costs per source
+.decl TotalBW(src: int32, total: int32)
+TotalBW(s, sum(bw_cost(w))) :- Edge(s, _, w).
+.output TotalBW
+
+// R2: max(UDF) — peak bandwidth cost per source
+.decl MaxBW(src: int32, peak: int32)
+MaxBW(s, max(bw_cost(w))) :- Edge(s, _, w).
+.output MaxBW
+
+// R3: min(UDF) — minimum bandwidth cost per source
+.decl MinBW(src: int32, lowest: int32)
+MinBW(s, min(bw_cost(w))) :- Edge(s, _, w).
+.output MinBW
+
+// R4: count with UDF present — count of edges per source
+.decl CountBW(src: int32, cnt: int32)
+CountBW(s, count(bw_cost(w))) :- Edge(s, _, w).
+.output CountBW
+
+// R5: UDF in grouping key — max weight grouped by tier
+.decl ByTier(t: int32, peak_weight: int32)
+ByTier(tier(w), max(w)) :- Edge(_, _, w).
+.output ByTier
+
+// R6: UDF in both grouping key and aggregation value
+.decl TierCost(t: int32, total: int32)
+TierCost(tier(w), sum(bw_cost(w))) :- Edge(_, _, w).
+.output TierCost

@@ -296,11 +296,7 @@ impl Profiler {
         );
     }
 
-    pub fn inspect_content_terminal_operator(
-        &mut self,
-        input_variable_name: String,
-        name: String,
-    ) {
+    pub fn inspect_content_terminal_operator(&mut self, input_variable_name: String, name: String) {
         let steps = self.inspect_content_steps();
         self.push_node(
             format!("{}: inspect terminal", name),

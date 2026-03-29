@@ -1,0 +1,42 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : udf_comparison
+// Feature : UDF calls inside comparison predicates (all operators, both
+//           sides, UDF-vs-UDF, multiple comparisons in one rule)
+// ════════════════════════════════════════════════════════════════════════════
+
+.extern fn cost(base: int32, duration: int32) -> int32
+.extern fn risk(a: int32, b: int32) -> int32
+
+.decl Flight(src: int32, dst: int32, fare: int32, dur: int32)
+.input Flight(IO="file", filename="Flight.csv", delimiter=",")
+
+// R1: UDF on LHS, > operator
+.decl Gt700(src: int32, dst: int32)
+Gt700(s, d) :- Flight(s, d, f, h), cost(f, h) > 700.
+.output Gt700
+
+// R2: UDF on RHS (constant on LHS), >= operator
+.decl RhsLte150(src: int32, dst: int32)
+RhsLte150(s, d) :- Flight(s, d, _, _), 150 >= risk(s, d).
+.output RhsLte150
+
+// R3: UDF vs UDF — both sides are UDF calls, < operator
+.decl UdfLtUdf(src: int32, dst: int32)
+UdfLtUdf(s, d) :- Flight(s, d, _, _), risk(s, d) < risk(d, s).
+.output UdfLtUdf
+
+// R4: UDF = constant (equality)
+.decl Eq590(src: int32, dst: int32)
+Eq590(s, d) :- Flight(s, d, f, h), cost(f, h) = 590.
+.output Eq590
+
+// R5: UDF != constant (inequality)
+.decl Neq590(src: int32, dst: int32)
+Neq590(s, d) :- Flight(s, d, f, h), cost(f, h) != 590.
+.output Neq590
+
+// R6: multiple UDF comparisons in one rule body
+.decl Multi(src: int32, dst: int32)
+Multi(s, d) :- Flight(s, d, f, h), cost(f, h) > 700, risk(s, d) >= 150.
+.output Multi
+
