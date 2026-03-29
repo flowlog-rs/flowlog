@@ -45,7 +45,6 @@ impl Compiler {
     ) {
         let head_to_idb_map = stratum.head_to_idb_map();
         let idb_to_aggregation_map = stratum.idb_to_aggregation_map();
-        let idb_to_udf_map = stratum.idb_to_udf_map();
 
         let left_type = self.find_global_type(left_fingerprint);
         let right_type = right_fingerprint.map(|rf| self.find_global_type(rf));
@@ -60,26 +59,19 @@ impl Compiler {
         let key_types: Vec<Option<DataType>> = flow
             .key()
             .iter()
-            .map(|expr| Self::infer_expr_type(expr, left_type, right_type))
+            .map(|expr| self.infer_expr_type(expr, left_type, right_type))
             .collect();
 
         let value_types: Vec<Option<DataType>> = flow
             .value()
             .iter()
-            .map(|expr| Self::infer_expr_type(expr, left_type, right_type))
+            .map(|expr| self.infer_expr_type(expr, left_type, right_type))
             .collect();
 
         // If this head feeds into a declared IDB, resolve to the IDB fingerprint
         // so we verify/insert against the IDB's declared types directly.
-        // However, if the IDB has a UDF, the pre-UDF (flattened) arity differs from
-        // the declared arity. In that case, do NOT resolve — let the intermediate
-        // get its own type entry. The UDF flat_map and verify_udf_types handle the rest.
         let resolved_idb_fp = head_to_idb_map.get(&output_fingerprint).copied();
-        let output_fingerprint = match resolved_idb_fp {
-            Some(idb_fp) if idb_to_udf_map.contains_key(&idb_fp) => output_fingerprint,
-            Some(idb_fp) => idb_fp,
-            None => output_fingerprint,
-        };
+        let output_fingerprint = resolved_idb_fp.unwrap_or(output_fingerprint);
 
         // If the resolved IDB has an aggregation, validate the aggregation
         // position according to the operator's type contract instead of requiring
@@ -161,56 +153,101 @@ impl Compiler {
         }
     }
 
+    /// Infer the `DataType` of a single factor.
+    fn infer_factor_type(
+        &self,
+        factor: &FactorArgument,
+        left_type: &(Vec<DataType>, Vec<DataType>),
+        right_type: Option<&(Vec<DataType>, Vec<DataType>)>,
+    ) -> Option<DataType> {
+        match factor {
+            // KV variables always refer to the left input's key/value slots.
+            FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => {
+                let src = if *is_key { &left_type.0 } else { &left_type.1 };
+                src.get(*idx).cloned()
+            }
+            // Join variables can reference either side; right side must exist.
+            FactorArgument::Var(TransformationArgument::Jn((is_left, is_key, idx))) => {
+                let base = if *is_left {
+                    left_type
+                } else {
+                    right_type
+                        .expect("Compiler error: right input type missing for join transformation")
+                };
+                let src = if *is_key { &base.0 } else { &base.1 };
+                src.get(*idx).cloned()
+            }
+            FactorArgument::Const(ConstType::Int(_)) => None,
+            FactorArgument::Const(ConstType::Float(_)) => None,
+            FactorArgument::Const(ConstType::Text(_)) => Some(DataType::String),
+            FactorArgument::Const(ConstType::Bool(_)) => Some(DataType::Bool),
+            FactorArgument::FnCall { name, args } => {
+                let ext = self
+                    .program
+                    .udfs()
+                    .iter()
+                    .find(|e| e.name() == name)
+                    .unwrap_or_else(|| panic!("Compiler error: UDF '{}' not declared", name));
+
+                // 1. Assert argument count.
+                assert_eq!(
+                    args.len(),
+                    ext.params().len(),
+                    "Compiler error: UDF '{}' expects {} args but got {}",
+                    name,
+                    ext.params().len(),
+                    args.len(),
+                );
+
+                // 2. Assert each argument type matches the parameter type.
+                for (i, (arg, param)) in args.iter().zip(ext.params()).enumerate() {
+                    let arg_type = self.infer_expr_type(arg, left_type, right_type);
+                    match arg_type {
+                        Some(at) => {
+                            assert_eq!(
+                            at,
+                            *param.data_type(),
+                            "Compiler error: UDF '{}' param {} ('{}') expects {:?} but got {:?}",
+                            name, i, param.name(), param.data_type(), at,
+                        )
+                        }
+                        None => {
+                            // Numeric constants infer as None (polymorphic).
+                            // Still reject if the param expects a non-numeric type.
+                            assert!(
+                                param.data_type().is_numeric(),
+                                "Compiler error: UDF '{}' param {} ('{}') expects {:?} but got a numeric literal",
+                                name, i, param.name(), param.data_type(),
+                            );
+                        }
+                    }
+                }
+
+                // 3. Return type.
+                Some(ext.ret_type())
+            }
+        }
+    }
+
     /// Infer the `DataType` of a single arithmetic expression.
     ///
     /// All factors (init + rest) must agree on the same data type.
     pub(super) fn infer_expr_type(
+        &self,
         expr: &ArithmeticArgument,
         left_type: &(Vec<DataType>, Vec<DataType>),
         right_type: Option<&(Vec<DataType>, Vec<DataType>)>,
     ) -> Option<DataType> {
-        fn type_of_factor(
-            factor: &FactorArgument,
-            left_type: &(Vec<DataType>, Vec<DataType>),
-            right_type: Option<&(Vec<DataType>, Vec<DataType>)>,
-        ) -> Option<DataType> {
-            match factor {
-                // KV variables always refer to the left input’s key/value slots.
-                FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => {
-                    let src = if *is_key { &left_type.0 } else { &left_type.1 };
-                    src.get(*idx).cloned()
-                }
-
-                // Join variables can reference either side; right side must exist.
-                FactorArgument::Var(TransformationArgument::Jn((is_left, is_key, idx))) => {
-                    let base = if *is_left {
-                        left_type
-                    } else {
-                        right_type.expect(
-                            "Compiler error: right input type missing for join transformation",
-                        )
-                    };
-                    let src = if *is_key { &base.0 } else { &base.1 };
-                    src.get(*idx).cloned()
-                }
-
-                FactorArgument::Const(ConstType::Int(_)) => None,
-                FactorArgument::Const(ConstType::Float(_)) => None,
-                FactorArgument::Const(ConstType::Text(_)) => Some(DataType::String),
-                FactorArgument::Const(ConstType::Bool(_)) => Some(DataType::Bool),
-            }
-        }
-
         let mut inferred: Option<DataType> = None;
 
         // Init factor.
-        if let Some(dt) = type_of_factor(&expr.init, left_type, right_type) {
+        if let Some(dt) = self.infer_factor_type(&expr.init, left_type, right_type) {
             inferred = Some(dt);
         }
 
         // Remaining factors must match.
         for (op, factor) in &expr.rest {
-            if let Some(dt) = type_of_factor(factor, left_type, right_type) {
+            if let Some(dt) = self.infer_factor_type(factor, left_type, right_type) {
                 match inferred {
                     None => inferred = Some(dt),
                     Some(existing) => assert!(
@@ -223,7 +260,6 @@ impl Compiler {
             }
 
             // Validate operator-type compatibility.
-            // For now we only have one string operator (`cat`), so we can just check if the inferred type is string or not.
             if let Some(dt) = inferred {
                 if dt == DataType::Bool {
                     panic!("Compiler error: arithmetic operations are not supported on Bool type");
@@ -254,52 +290,6 @@ impl Compiler {
                 fingerprint
             )
         })
-    }
-
-    /// Validate that a scalar UDF's parameter types match the flattened input columns
-    /// and that its return type matches the output relation's column type.
-    pub(crate) fn verify_udf_types(
-        &self,
-        output_fp: u64,
-        idb_fp: u64,
-        fn_name: &str,
-        start: usize,
-    ) {
-        let ext = self
-            .program
-            .udfs()
-            .iter()
-            .find(|e| e.name() == fn_name)
-            .unwrap_or_else(|| panic!("Compiler error: UDF '{fn_name}' not found"));
-
-        let flat = |fp| {
-            let (k, v) = self.find_global_type(fp);
-            k.iter().chain(v).copied().collect::<Vec<_>>()
-        };
-
-        // Return type must match the output column at `start`.
-        let out = flat(output_fp);
-        assert_eq!(
-            out[start],
-            ext.ret_type(),
-            "Compiler error: UDF '{fn_name}' returns {:?} but output column {start} expects {:?}",
-            ext.ret_type(),
-            out[start],
-        );
-
-        // Each input parameter type must match the pre-UDF flattened column.
-        let idb = flat(idb_fp);
-        for (i, param) in ext.params().iter().enumerate() {
-            let col = start + i;
-            assert_eq!(
-                idb[col],
-                *param.data_type(),
-                "Compiler error: UDF '{fn_name}' param {i} ('{}') expects {:?} but column {col} has {:?}",
-                param.name(),
-                param.data_type(),
-                idb[col],
-            );
-        }
     }
 }
 

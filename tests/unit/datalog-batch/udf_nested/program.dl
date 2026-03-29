@@ -1,0 +1,41 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : udf_nested
+// Feature : pure UDF nesting — 2-deep, 3-deep, wide (multi-arg), mixed depth
+// ════════════════════════════════════════════════════════════════════════════
+
+.extern fn normalize(value: int32, scale_factor: int32) -> int32
+.extern fn classify(normalized_value: int32) -> int32
+.extern fn blend(a: int32, b: int32, weight: int32) -> int32
+.extern fn clamp(value: int32, lo: int32, hi: int32) -> int32
+.extern fn abs_diff(a: int32, b: int32) -> int32
+
+.decl Sensor(id: int32, r1: int32, scale: int32, weight: int32, r2: int32)
+.input Sensor(IO="file", filename="Sensor.csv", delimiter=",")
+
+// R1: 2-deep — classify(normalize(r1, scale))
+.decl Depth2(id: int32, severity: int32)
+Depth2(id, classify(normalize(r1, s))) :- Sensor(id, r1, s, _, _).
+.output Depth2
+
+// R2: 3-deep — classify(normalize(clamp(r1, 50, 250), scale))
+.decl Depth3(id: int32, severity: int32)
+Depth3(id, classify(normalize(clamp(r1, 50, 250), s))) :- Sensor(id, r1, s, _, _).
+.output Depth3
+
+// R3: wide — blend(normalize(r1, s), normalize(r2, s), w)
+// UDF taking multiple UDF results as separate args
+.decl Wide(id: int32, val: int32)
+Wide(id, blend(normalize(r1, s), normalize(r2, s), w)) :- Sensor(id, r1, s, w, r2).
+.output Wide
+
+// R4: mixed depth — abs_diff(normalize(r1, s), classify(normalize(r2, s)))
+// one arg is 1-deep, other is 2-deep
+.decl Mixed(id: int32, diff: int32)
+Mixed(id, abs_diff(normalize(r1, s), classify(normalize(r2, s)))) :- Sensor(id, r1, s, _, r2).
+.output Mixed
+
+// R5: 3-deep wide — classify(blend(normalize(r1,s), normalize(r2,s), w))
+// nested UDF wrapping a wide UDF wrapping two nested UDFs
+.decl DeepWide(id: int32, bucket: int32)
+DeepWide(id, classify(blend(normalize(r1, s), normalize(r2, s), w))) :- Sensor(id, r1, s, w, r2).
+.output DeepWide

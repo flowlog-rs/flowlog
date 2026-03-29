@@ -151,7 +151,7 @@ impl RulePlanner {
             .iter()
             .enumerate()
             .map(|(idx, pos)| {
-                let sig = pos.init().signature().unwrap();
+                let sig = pos.init().as_var_signature().unwrap();
                 let new_sig = AtomArgumentSignature::new(*sig.atom_signature(), idx);
                 ArithmeticPos::from_var_signature(new_sig)
             })
@@ -178,7 +178,7 @@ impl RulePlanner {
         let new_arguments_list = rhs_keys
             .iter()
             .chain(rhs_vals.iter())
-            .map(|pos| pos.init().signature().unwrap())
+            .map(|pos| pos.init().as_var_signature().unwrap())
             .cloned()
             .collect();
 
@@ -202,7 +202,7 @@ impl RulePlanner {
         let fmt = |pos: &ArithmeticPos| {
             (
                 pos.clone(),
-                catalog.signature_to_argument_str(pos.init().signature().unwrap()),
+                catalog.signature_to_argument_str(pos.init().as_var_signature().unwrap()),
             )
         };
 

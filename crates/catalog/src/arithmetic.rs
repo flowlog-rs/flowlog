@@ -12,14 +12,40 @@ pub enum FactorPos {
     Var(AtomArgumentSignature),
     /// A constant value (integer, string, etc.)
     Const(ConstType),
+    /// A user-defined function call.
+    FnCall {
+        name: String,
+        args: Vec<ArithmeticPos>,
+    },
 }
 
 impl FactorPos {
-    /// Returns a vector of argument signatures contained in this factor.
-    pub fn signature(&self) -> Option<&AtomArgumentSignature> {
+    /// Returns the argument signature if this factor is a single variable.
+    pub fn as_var_signature(&self) -> Option<&AtomArgumentSignature> {
         match self {
             FactorPos::Var(atom_arg_signature) => Some(atom_arg_signature),
-            FactorPos::Const(_) => None,
+            FactorPos::Const(_) | FactorPos::FnCall { .. } => None,
+        }
+    }
+
+    /// Returns all argument signatures referenced in this factor (including nested in FnCall args).
+    pub fn signatures(&self) -> Vec<&AtomArgumentSignature> {
+        match self {
+            FactorPos::Var(sig) => vec![sig],
+            FactorPos::Const(_) => vec![],
+            FactorPos::FnCall { args, .. } => args.iter().flat_map(|a| a.signatures()).collect(),
+        }
+    }
+
+    /// Transform every variable in this factor using `f`, recursing into FnCall args.
+    pub fn map_vars(&self, f: &impl Fn(&AtomArgumentSignature) -> FactorPos) -> FactorPos {
+        match self {
+            FactorPos::Var(sig) => f(sig),
+            FactorPos::Const(c) => FactorPos::Const(c.clone()),
+            FactorPos::FnCall { name, args } => FactorPos::FnCall {
+                name: name.clone(),
+                args: args.iter().map(|a| a.map_vars(f)).collect(),
+            },
         }
     }
 }
@@ -29,6 +55,14 @@ impl fmt::Display for FactorPos {
         match self {
             FactorPos::Var(sig) => write!(f, "{}", sig),
             FactorPos::Const(c) => write!(f, "{}", c),
+            FactorPos::FnCall { name, args } => {
+                let args_str = args
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{name}({args_str})")
+            }
         }
     }
 }
@@ -59,26 +93,44 @@ impl ArithmeticPos {
 
     /// Constructs a positional arithmetic expression from a parsed arithmetic expression.
     pub fn from_arithmetic(arith: &Arithmetic, var_signatures: &[AtomArgumentSignature]) -> Self {
-        let mut var_id = 0usize;
-
-        // Helper to map a factor from parsed to positional form
-        let map_factor = |factor: &Factor, var_id: &mut usize| -> FactorPos {
+        fn map_factor(
+            factor: &Factor,
+            var_signatures: &[AtomArgumentSignature],
+            var_id: &mut usize,
+        ) -> FactorPos {
             match factor {
                 Factor::Var(_) => {
-                    // Consume the next variable signature in order
                     let sig = var_signatures[*var_id];
                     *var_id += 1;
                     FactorPos::Var(sig)
                 }
                 Factor::Const(c) => FactorPos::Const(c.clone()),
+                Factor::FnCall(fc) => {
+                    let args = fc
+                        .args()
+                        .iter()
+                        .map(|arg| {
+                            let num_vars = arg.vars().len();
+                            let sigs = &var_signatures[*var_id..*var_id + num_vars];
+                            *var_id += num_vars;
+                            ArithmeticPos::from_arithmetic(arg, sigs)
+                        })
+                        .collect();
+                    FactorPos::FnCall {
+                        name: fc.name().to_string(),
+                        args,
+                    }
+                }
             }
-        };
+        }
 
-        let init = map_factor(arith.init(), &mut var_id);
+        let mut var_id = 0usize;
+
+        let init = map_factor(arith.init(), var_signatures, &mut var_id);
         let rest = arith
             .rest()
             .iter()
-            .map(|(op, factor)| (op.clone(), map_factor(factor, &mut var_id)))
+            .map(|(op, factor)| (op.clone(), map_factor(factor, var_signatures, &mut var_id)))
             .collect();
 
         ArithmeticPos { init, rest }
@@ -98,11 +150,22 @@ impl ArithmeticPos {
 
     /// Returns a vector of all variable signatures referenced in this expression, in order.
     pub fn signatures(&self) -> Vec<&AtomArgumentSignature> {
-        self.init
-            .signature()
-            .into_iter()
-            .chain(self.rest.iter().filter_map(|(_, f)| f.signature()))
-            .collect()
+        let mut sigs = self.init.signatures();
+        for (_, factor) in &self.rest {
+            sigs.extend(factor.signatures());
+        }
+        sigs
+    }
+
+    /// Transform every variable in this expression using `f`, recursing into FnCall args.
+    pub fn map_vars(&self, f: &impl Fn(&AtomArgumentSignature) -> FactorPos) -> ArithmeticPos {
+        let init = self.init.map_vars(f);
+        let rest = self
+            .rest
+            .iter()
+            .map(|(op, factor)| (op.clone(), factor.map_vars(f)))
+            .collect();
+        ArithmeticPos::new(init, rest)
     }
 }
 

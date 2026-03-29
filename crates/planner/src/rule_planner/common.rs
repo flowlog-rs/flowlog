@@ -200,7 +200,7 @@ impl RulePlanner {
                 .iter()
                 .map(|pos| (
                     pos,
-                    catalog.signature_to_argument_str(pos.init().signature().unwrap())
+                    catalog.signature_to_argument_str(pos.init().as_var_signature().unwrap())
                 ))
                 .collect::<Vec<_>>()
         );
@@ -246,7 +246,7 @@ impl RulePlanner {
                     .iter()
                     .map(|arg| (
                         arg,
-                        catalog.signature_to_argument_str(arg.init().signature().unwrap())
+                        catalog.signature_to_argument_str(arg.init().as_var_signature().unwrap())
                     ))
                     .collect::<Vec<_>>()
             );
@@ -353,7 +353,7 @@ impl RulePlanner {
                 .iter()
                 .map(|pos| (
                     pos,
-                    catalog.signature_to_argument_str(pos.init().signature().unwrap())
+                    catalog.signature_to_argument_str(pos.init().as_var_signature().unwrap())
                 ))
                 .collect::<Vec<_>>()
         );
@@ -394,7 +394,7 @@ impl RulePlanner {
                     .iter()
                     .map(|arg| (
                         arg,
-                        catalog.signature_to_argument_str(arg.init().signature().unwrap())
+                        catalog.signature_to_argument_str(arg.init().as_var_signature().unwrap())
                     ))
                     .collect::<Vec<_>>()
             );

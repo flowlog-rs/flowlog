@@ -13,14 +13,24 @@ pub enum FactorArgument {
 
     /// Constant/literal value
     Const(ConstType),
+
+    /// User-defined function call.
+    FnCall {
+        name: String,
+        args: Vec<ArithmeticArgument>,
+    },
 }
 
 impl FactorArgument {
-    /// Returns the transformation argument referenced by this factor, if it exists.
-    pub fn transformation_argument(&self) -> Option<&TransformationArgument> {
+    /// Returns all transformation arguments referenced in this factor (including nested in FnCall args).
+    pub fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
         match self {
-            Self::Var(transformation_arg) => Some(transformation_arg),
-            Self::Const(_) => None,
+            Self::Var(arg) => vec![arg],
+            Self::Const(_) => vec![],
+            Self::FnCall { args, .. } => args
+                .iter()
+                .flat_map(|a| a.transformation_arguments())
+                .collect(),
         }
     }
 }
@@ -30,6 +40,14 @@ impl fmt::Display for FactorArgument {
         match self {
             Self::Var(transformation_arg) => write!(f, "{}", transformation_arg),
             Self::Const(constant) => write!(f, "{}", constant),
+            Self::FnCall { name, args } => {
+                let args_str = args
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{name}({args_str})")
+            }
         }
     }
 }
@@ -50,33 +68,43 @@ impl ArithmeticArgument {
         arithmetic: &ArithmeticPos,
         var_arguments: &[TransformationArgument],
     ) -> Self {
+        fn map_factor(
+            factor: &FactorPos,
+            var_arguments: &[TransformationArgument],
+            var_id: &mut usize,
+        ) -> FactorArgument {
+            match factor {
+                FactorPos::Var(_) => {
+                    let var_signature = &var_arguments[*var_id];
+                    *var_id += 1;
+                    FactorArgument::Var(*var_signature)
+                }
+                FactorPos::Const(constant) => FactorArgument::Const(constant.clone()),
+                FactorPos::FnCall { name, args } => {
+                    let fn_args = args
+                        .iter()
+                        .map(|arg| {
+                            let num_vars = arg.signatures().len();
+                            let sub_args = &var_arguments[*var_id..*var_id + num_vars];
+                            *var_id += num_vars;
+                            ArithmeticArgument::from_arithmeticpos(arg, sub_args)
+                        })
+                        .collect();
+                    FactorArgument::FnCall {
+                        name: name.clone(),
+                        args: fn_args,
+                    }
+                }
+            }
+        }
+
         let mut var_id = 0;
 
-        // Convert the initial factor
-        let init = match arithmetic.init() {
-            FactorPos::Var(_) => {
-                let var_signature = &var_arguments[var_id];
-                var_id += 1;
-                FactorArgument::Var(*var_signature)
-            }
-            FactorPos::Const(constant) => FactorArgument::Const(constant.clone()),
-        };
-
-        // Convert the rest of the factors
+        let init = map_factor(arithmetic.init(), var_arguments, &mut var_id);
         let rest = arithmetic
             .rest()
             .iter()
-            .map(|(op, factor)| {
-                let factor = match factor {
-                    FactorPos::Var(_) => {
-                        let var_signature = &var_arguments[var_id];
-                        var_id += 1;
-                        FactorArgument::Var(*var_signature)
-                    }
-                    FactorPos::Const(constant) => FactorArgument::Const(constant.clone()),
-                };
-                (op.clone(), factor)
-            })
+            .map(|(op, factor)| (op.clone(), map_factor(factor, var_arguments, &mut var_id)))
             .collect();
 
         Self { init, rest }
@@ -99,20 +127,10 @@ impl ArithmeticArgument {
 
     /// Returns all transformation arguments referenced in this arithmetic expression.
     pub fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
-        let mut args = Vec::new();
-
-        // Add transformation argument from the initial factor if it exists
-        if let Some(arg) = self.init.transformation_argument() {
-            args.push(arg);
-        }
-
-        // Add transformation arguments from all remaining factors
+        let mut args = self.init.transformation_arguments();
         for (_, factor) in &self.rest {
-            if let Some(arg) = factor.transformation_argument() {
-                args.push(arg);
-            }
+            args.extend(factor.transformation_arguments());
         }
-
         args
     }
 }

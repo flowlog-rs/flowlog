@@ -315,44 +315,53 @@ impl TransformationFlow {
                         rest: vec![],
                     }
                 } else {
-                    // Not found as complete expression - build factor by factor
-                    // Find the init factor
-                    let init_factor = match expr.init() {
-                        FactorPos::Var(sig) => {
-                            // Look up the single-var expression directly
-                            let key = ArithmeticPos::from_var_signature(*sig);
-                            let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
-                                panic!(
-                                    "Planner error: missing init variable signature {:?} in input expression map",
-                                    sig
-                                )
-                            });
-                            FactorArgument::Var(trans_arg)
+                    // Not found as complete expression — resolve factor by factor.
+                    let resolve_factor = |factor: &FactorPos| -> FactorArgument {
+                        match factor {
+                            FactorPos::Var(sig) => {
+                                let key = ArithmeticPos::from_var_signature(*sig);
+                                let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
+                                    panic!(
+                                        "Planner error: missing variable signature {:?} in input expression map",
+                                        sig
+                                    )
+                                });
+                                FactorArgument::Var(trans_arg)
+                            }
+                            FactorPos::Const(c) => FactorArgument::Const(c.clone()),
+                            FactorPos::FnCall { name, args } => {
+                                let fn_args = args
+                                    .iter()
+                                    .map(|a| {
+                                        let sigs = a.signatures();
+                                        let var_args: Vec<_> = sigs
+                                            .iter()
+                                            .map(|sig| {
+                                                let key = ArithmeticPos::from_var_signature(**sig);
+                                                *input_exprs_map.get(&key).unwrap_or_else(|| {
+                                                    panic!(
+                                                        "Planner error: missing FnCall arg signature {:?}",
+                                                        sig
+                                                    )
+                                                })
+                                            })
+                                            .collect();
+                                        ArithmeticArgument::from_arithmeticpos(a, &var_args)
+                                    })
+                                    .collect();
+                                FactorArgument::FnCall {
+                                    name: name.clone(),
+                                    args: fn_args,
+                                }
+                            }
                         }
-                        FactorPos::Const(c) => FactorArgument::Const(c.clone()),
                     };
 
-                    // Find the rest factors
+                    let init_factor = resolve_factor(expr.init());
                     let rest_factors: Vec<(ArithmeticOperator, FactorArgument)> = expr
                         .rest()
                         .iter()
-                        .map(|(op, factor)| {
-                            let factor_arg = match factor {
-                                FactorPos::Var(sig) => {
-                                    // Look up the single-var expression directly
-                                    let key = ArithmeticPos::from_var_signature(*sig);
-                                    let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
-                                        panic!(
-                                            "Planner error: missing rest variable signature {:?} in input expression map",
-                                            sig
-                                        )
-                                    });
-                                    FactorArgument::Var(trans_arg)
-                                }
-                                FactorPos::Const(c) => FactorArgument::Const(c.clone()),
-                            };
-                            (op.clone(), factor_arg)
-                        })
+                        .map(|(op, factor)| (op.clone(), resolve_factor(factor)))
                         .collect();
 
                     // Create ArithmeticArgument using the operators and factors

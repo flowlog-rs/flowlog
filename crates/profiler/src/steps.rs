@@ -27,7 +27,11 @@ impl Profiler {
     /// - DatalogBatch `.consolidate()` → 3 (FlatMap + Consolidate + AsCollection)
     /// - Others `.threshold(...)` → 4 (FlatMap + Arrange + Threshold + AsCollection)
     pub(crate) fn dedup_collection_steps(&self) -> u32 {
-        if self.mode == ExecutionMode::DatalogBatch { 3 } else { 4 }
+        if self.mode == ExecutionMode::DatalogBatch {
+            3
+        } else {
+            4
+        }
     }
 
     /// Operators created by `dedup_recursive()`.
@@ -35,7 +39,11 @@ impl Profiler {
     /// - DatalogBatch `.threshold_semigroup(...)` → 3 (FlatMap + Arrange + ThresholdTotal)
     /// - Others `.threshold(...)` → 4 (FlatMap + Arrange + Threshold + AsCollection)
     pub(crate) fn dedup_recursive_steps(&self) -> u32 {
-        if self.mode == ExecutionMode::DatalogBatch { 3 } else { 4 }
+        if self.mode == ExecutionMode::DatalogBatch {
+            3
+        } else {
+            4
+        }
     }
 
     /// Operators in the anti-join pipeline (excluding arrangement).
@@ -45,7 +53,11 @@ impl Profiler {
     /// - Others (17): flat_map_ref(1) + inter_dedup(4) + join(1)
     ///     + inter_dedup(4) + neg_weight(1) + concat(1) + flat_map(1) + dedup_recursive(4)
     pub(crate) fn anti_join_steps(&self) -> u32 {
-        if self.mode == ExecutionMode::DatalogBatch { 9 } else { 17 }
+        if self.mode == ExecutionMode::DatalogBatch {
+            9
+        } else {
+            17
+        }
     }
 
     /// Operators in `gen_size_inspector`.
@@ -53,7 +65,11 @@ impl Profiler {
     /// - Batch (9): consolidate(3) + flat_map(1) + map(1) + consolidate(3) + inspect(1)
     /// - Inc (11): threshold(4) + flat_map(1) + map(1) + consolidate(3) + inspect(1) + probe(1)
     pub(crate) fn inspect_size_steps(&self) -> u32 {
-        if self.mode == ExecutionMode::DatalogBatch { 9 } else { 11 }
+        if self.mode == ExecutionMode::DatalogBatch {
+            9
+        } else {
+            11
+        }
     }
 
     /// Operators in content inspectors (terminal/file).

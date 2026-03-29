@@ -176,7 +176,7 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
 // Basic elements in arithmetic expressions
-factor = { constant | variable }
+factor = { fn_call_expr | constant | variable }
 
 // Arithmetic operators
 arithmetic_op = { 
@@ -290,8 +290,8 @@ head = {
     ")" 
 }
 
-// Can be aggregate functions, UDF calls, or arithmetic expressions
-head_arg = { aggregate_expr | fn_call_expr | arithmetic_expr }
+// Can be aggregate functions or arithmetic expressions (UDF calls are parsed as factors within arithmetic)
+head_arg = { aggregate_expr | arithmetic_expr }
 
 // User-defined function call in rule head
 // Example: my_udf(x, y + 1)
@@ -306,10 +306,12 @@ fn_call_expr = {
 predicates = { predicate ~ ("," ~ predicate)* }
 
 // Types of predicates allowed in rule bodies
-predicate = { 
+// Note: compare_expr must come before atom because compare_expr can start with
+// fn_call_expr (e.g., "cost(x) > 5") which atom would greedily consume.
+predicate = {
+    compare_expr |  // Comparison: x > y, cost(x) > 5
     atom |          // Positive atom: edge(x, y)
-    negative_atom | // Negative atom: !edge(x, y)  
-    compare_expr |  // Comparison: x > y
+    negative_atom | // Negative atom: !edge(x, y)
     fn_call_expr    // UDF predicate: is_valid(x + 1, y)
 }
 

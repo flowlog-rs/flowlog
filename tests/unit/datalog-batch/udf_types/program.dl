@@ -1,0 +1,53 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : udf_types
+// Feature : UDFs with different param/return types — string→int, int→string,
+//           mixed params, nested type changes, type validation
+// ════════════════════════════════════════════════════════════════════════════
+
+.extern fn strlen(s: string) -> int32
+.extern fn to_label(n: int32) -> string
+.extern fn tag(id: int32, name: string) -> string
+.extern fn score(name: string, price: int32) -> int32
+
+.decl Item(id: int32, name: string, price: int32, qty: int32)
+.input Item(IO="file", filename="Item.csv", delimiter=",")
+
+// R1: string → int (UDF consuming string, producing int)
+.decl NameLen(id: int32, len: int32)
+NameLen(id, strlen(name)) :- Item(id, name, _, _).
+.output NameLen
+
+// R2: int → string (UDF consuming int, producing string)
+.decl Labeled(id: int32, label: string)
+Labeled(id, to_label(price)) :- Item(id, _, price, _).
+.output Labeled
+
+// R3: (int, string) → string (mixed param types)
+.decl Tagged(id: int32, t: string)
+Tagged(id, tag(id, name)) :- Item(id, name, _, _).
+.output Tagged
+
+// R4: (string, int) → int (mixed param types, reversed)
+.decl Scored(id: int32, s: int32)
+Scored(id, score(name, price)) :- Item(id, name, price, _).
+.output Scored
+
+// R5: nested type change — strlen(to_label(price)): int → string → int
+.decl LabelLen(id: int32, len: int32)
+LabelLen(id, strlen(to_label(price))) :- Item(id, _, price, _).
+.output LabelLen
+
+// R6: UDF(string→int) + arithmetic: strlen(name) + price
+.decl Combined(id: int32, total: int32)
+Combined(id, strlen(name) + price) :- Item(id, name, price, _).
+.output Combined
+
+// R7: UDF(string→int) in comparison: strlen(name) > 5
+.decl LongName(id: int32, name: string)
+LongName(id, name) :- Item(id, name, _, _), strlen(name) > 5.
+.output LongName
+
+// R8: nested mixed types — score(to_label(price), qty): int→string then (string,int)→int
+.decl NestedMixed(id: int32, s: int32)
+NestedMixed(id, score(to_label(price), qty)) :- Item(id, _, price, qty).
+.output NestedMixed
