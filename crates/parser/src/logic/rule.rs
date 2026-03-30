@@ -3,7 +3,6 @@
 //! A rule is `head :- p1, p2, ..., pn.`
 //! - Head: a single derived relation
 //! - Body: predicates that must all be satisfied
-//! - Optional planning flag (via `.plan`) for optimization
 
 use super::{Factor, Head, HeadArg, Predicate};
 use crate::primitive::ConstType;
@@ -16,7 +15,6 @@ use std::fmt;
 pub struct FlowLogRule {
     head: Head,
     rhs: Vec<Predicate>,
-    is_planning: bool,
 }
 
 impl fmt::Display for FlowLogRule {
@@ -52,12 +50,8 @@ impl fmt::Debug for FlowLogRule {
 impl FlowLogRule {
     /// Construct a rule.
     #[must_use]
-    pub fn new(head: Head, rhs: Vec<Predicate>, is_planning: bool) -> Self {
-        Self {
-            head,
-            rhs,
-            is_planning,
-        }
+    pub fn new(head: Head, rhs: Vec<Predicate>) -> Self {
+        Self { head, rhs }
     }
 
     /// Rule head.
@@ -72,13 +66,6 @@ impl FlowLogRule {
     #[inline]
     pub fn rhs(&self) -> &[Predicate] {
         &self.rhs
-    }
-
-    /// Whether planning optimization is enabled.
-    #[must_use]
-    #[inline]
-    pub fn is_planning(&self) -> bool {
-        self.is_planning
     }
 
     /// Indexed access to a body predicate (panics if out of bounds).
@@ -114,26 +101,39 @@ impl FlowLogRule {
         }
         out
     }
-}
 
-impl Lexeme for FlowLogRule {
-    /// Parse `head ~ ":-" ~ predicates ~ optimize? ~ "."`
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    /// Parse a (possibly multi-head / multi-body) rule and expand into
+    /// one `FlowLogRule` per (head, body) pair.
+    ///
+    /// Souffle-style semicolons separate alternative heads and bodies:
+    ///   `h1; h2 :- b1; b2.` → `h1:-b1. h1:-b2. h2:-b1. h2:-b2.`
+    pub fn expand_from_parsed_rule(parsed_rule: Pair<Rule>) -> Vec<Self> {
         let mut inner = parsed_rule.into_inner();
 
-        let head = Head::from_parsed_rule(inner.next().expect("Missing rule head"));
-
-        // predicates
-        let predicates_rule = inner.next().expect("Missing rule predicates");
-        let rhs: Vec<Predicate> = predicates_rule
+        let rule_heads_node = inner.next().expect("Parser error: rule missing heads");
+        let heads: Vec<Head> = rule_heads_node
             .into_inner()
-            .map(Predicate::from_parsed_rule)
+            .map(Head::from_parsed_rule)
             .collect();
 
-        // optional optimize marker
-        let is_planning = inner.next().is_some();
+        let rule_bodies_node = inner.next().expect("Parser error: rule missing bodies");
+        let bodies: Vec<Vec<Predicate>> = rule_bodies_node
+            .into_inner()
+            .map(|predicates_node| {
+                predicates_node
+                    .into_inner()
+                    .map(Predicate::from_parsed_rule)
+                    .collect()
+            })
+            .collect();
 
-        Self::new(head, rhs, is_planning)
+        let mut out = Vec::with_capacity(heads.len() * bodies.len());
+        for head in &heads {
+            for body in &bodies {
+                out.push(Self::new(head.clone(), body.clone()));
+            }
+        }
+        out
     }
 }
 
@@ -179,39 +179,30 @@ mod tests {
     fn create_and_access() {
         let head = head_named("result", vec![head_var("X")]);
         let body = vec![pos_pred("input", vec![var_arg("X")])];
-        let r = FlowLogRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body);
 
-        assert!(!r.is_planning());
         assert_eq!(r.head().name(), "result");
         assert_eq!(r.rhs().len(), 1);
-    }
-
-    #[test]
-    fn planning_flag() {
-        let head = head_named("optimized", vec![head_var("Y")]);
-        let body = vec![pos_pred("source", vec![var_arg("Y")])];
-        let r = FlowLogRule::new(head, body, true);
-        assert!(r.is_planning());
     }
 
     #[test]
     fn get_by_index() {
         let head = head_named("multi", vec![head_var("X")]);
         let body = vec![pos_pred("first", vec![var_arg("X")]), cmp_pred()];
-        let r = FlowLogRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body);
 
         match r.get(0) {
             Predicate::PositiveAtomPredicate(a) => assert_eq!(a.name(), "first"),
             _ => panic!("expected positive atom"),
         }
-        matches!(r.get(1), Predicate::ComparePredicate(_));
+        assert!(matches!(r.get(1), Predicate::ComparePredicate(_)));
     }
 
     #[test]
     fn display_formats() {
         let head = head_named("result", vec![head_var("X")]);
         let body = vec![pos_pred("input", vec![var_arg("X")])];
-        let r = FlowLogRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body);
         assert!(r.to_string().starts_with("result(X) :- input(X)"));
 
         let head2 = head_named("complex", vec![head_var("A"), head_var("B")]);
@@ -219,7 +210,7 @@ mod tests {
             pos_pred("rel1", vec![var_arg("A")]),
             neg_pred("rel2", vec![var_arg("B")]),
         ];
-        let r2 = FlowLogRule::new(head2, body2, false);
+        let r2 = FlowLogRule::new(head2, body2);
         let s2 = r2.to_string();
         assert!(s2.starts_with("complex(A, B) :- rel1(A)"));
         assert!(s2.contains("!rel2(B)"));
@@ -231,7 +222,7 @@ mod tests {
             let r = Arithmetic::new(Factor::Const(ConstType::Int(5)), vec![]);
             Predicate::ComparePredicate(ComparisonExpr::new(l, ComparisonOperator::GreaterThan, r))
         }];
-        let r3 = FlowLogRule::new(head3, body3, false);
+        let r3 = FlowLogRule::new(head3, body3);
         let s3 = r3.to_string();
         assert!(s3.starts_with("filtered(X) :- data(X)"));
         assert!(s3.contains(", X > 5"));
@@ -247,7 +238,7 @@ mod tests {
                 head_const(ConstType::Text("hello".into())),
             ],
         );
-        let r = FlowLogRule::new(head, vec![], false);
+        let r = FlowLogRule::new(head, vec![]);
 
         let c = r.extract_constants_from_head();
         assert_eq!(c.len(), 2);
@@ -262,7 +253,7 @@ mod tests {
             "invalid",
             vec![head_const(ConstType::Int(1)), head_var("X")],
         );
-        let r = FlowLogRule::new(head, vec![], false);
+        let r = FlowLogRule::new(head, vec![]);
         let _ = r.extract_constants_from_head();
     }
 
@@ -276,7 +267,7 @@ mod tests {
             "invalid",
             vec![head_const(ConstType::Int(1)), HeadArg::Aggregation(agg)],
         );
-        let r = FlowLogRule::new(head, vec![], false);
+        let r = FlowLogRule::new(head, vec![]);
         let _ = r.extract_constants_from_head();
     }
 
@@ -288,7 +279,7 @@ mod tests {
             vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(1)))],
         );
         let head = head_named("invalid", vec![HeadArg::Arith(complex)]);
-        let r = FlowLogRule::new(head, vec![], false);
+        let r = FlowLogRule::new(head, vec![]);
         let _ = r.extract_constants_from_head();
     }
 
@@ -296,7 +287,7 @@ mod tests {
     fn clone_hash_eq() {
         let head = head_named("test", vec![head_var("X")]);
         let body = vec![pos_pred("input", vec![var_arg("X")])];
-        let r = FlowLogRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body);
         let c = r.clone();
         assert_eq!(r, c);
 
@@ -319,12 +310,11 @@ mod tests {
             Predicate::ComparePredicate(age_gt),
             neg_pred("blocked", vec![var_arg("Person")]),
         ];
-        let r = FlowLogRule::new(head, body, false);
+        let r = FlowLogRule::new(head, body);
 
         assert_eq!(r.head().name(), "derived");
         assert_eq!(r.head().arity(), 2);
         assert_eq!(r.rhs().len(), 3);
-        assert!(!r.is_planning());
         let sr = r.to_string();
         assert!(sr.starts_with("derived(Person, Age) :- person(Person, Age)"));
         assert!(sr.contains("Age > 18"));

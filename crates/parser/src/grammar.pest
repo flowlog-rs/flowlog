@@ -277,9 +277,16 @@ atom_arg = { constant | variable | placeholder }
 // Example: edge(1, 2).
 fact = { head ~ "." }
 
-// Single rule with head, body predicates, and optional optimization directive
-// Format: head :- predicate1, predicate2, ... .
-rule = { head ~ ":-" ~ predicates ~ "." ~ optimize? }
+// Rule with optional multi-head and multi-body (Souffle-style).
+// Semicolons separate alternative heads and alternative bodies:
+//   h1; h2 :- b1; b2.  →  h1:-b1. h1:-b2. h2:-b1. h2:-b2.
+rule = { rule_heads ~ ":-" ~ rule_bodies ~ "." }
+
+// One or more semicolon-separated heads
+rule_heads = { head ~ (";" ~ head)* }
+
+// One or more semicolon-separated bodies (disjunction)
+rule_bodies = { predicates ~ (";" ~ predicates)* }
 
 // Left side of rule (before :-)
 // Example: reachable(x, z), stats(count(x))
@@ -315,8 +322,6 @@ predicate = {
     fn_call_expr    // UDF predicate: is_valid(x + 1, y)
 }
 
-// Optimization hint directives for query planning
-optimize = { ".plan" }
 
 // =============================================================================
 // LOOP BLOCK / FIXPOINT BLOCK
