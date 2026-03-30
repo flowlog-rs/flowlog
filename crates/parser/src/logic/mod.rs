@@ -18,7 +18,7 @@
 //! let body = vec![Predicate::PositiveAtomPredicate(
 //!     Atom::new("input", vec![AtomArg::Var("X".to_string())], 0),
 //! )];
-//! let rule = FlowLogRule::new(head, body, false);
+//! let rule = FlowLogRule::new(head, body);
 //! ```
 
 pub mod aggregation;
