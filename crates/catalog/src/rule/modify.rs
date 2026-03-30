@@ -371,7 +371,7 @@ impl Catalog {
 
         // Update the rule
         new_rhs[global_rhs_idx] = new_predicate;
-        let new_rule = FlowLogRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
+        let new_rule = FlowLogRule::new(self.rule.head().clone(), new_rhs);
         self.update_rule(&new_rule);
     }
 
@@ -396,7 +396,7 @@ impl Catalog {
         new_rhs.remove(global_rhs_index_to_remove);
 
         // Add new predicates and update the rule
-        let new_rule = FlowLogRule::new(self.rule.head().clone(), new_rhs, self.rule.is_planning());
+        let new_rule = FlowLogRule::new(self.rule.head().clone(), new_rhs);
         self.update_rule(&new_rule);
     }
 }

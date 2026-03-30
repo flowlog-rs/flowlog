@@ -465,7 +465,9 @@ impl Program {
                 }
 
                 // ── Rules and loop/fixpoint blocks ───────────────────────────
-                Rule::rule => current_rules.push(FlowLogRule::from_parsed_rule(node)),
+                Rule::rule => {
+                    current_rules.extend(FlowLogRule::expand_from_parsed_rule(node));
+                }
                 Rule::loop_block => {
                     if !extended {
                         panic!(
@@ -496,7 +498,6 @@ impl Program {
                     raw_facts.push(FlowLogRule::new(
                         Head::from_parsed_rule(head_node),
                         vec![],
-                        false,
                     ));
                 }
 
@@ -738,7 +739,7 @@ impl Program {
                 })
                 .collect();
 
-            *rule = FlowLogRule::new(rule.head().clone(), new_rhs, rule.is_planning());
+            *rule = FlowLogRule::new(rule.head().clone(), new_rhs);
         }
     }
 
@@ -1175,5 +1176,86 @@ mod tests {
         assert_eq!(edbs, vec!["both", "fact_only", "file_only"]);
         assert_eq!(file_backed, vec!["both", "file_only"]);
         assert_eq!(inline_facts, vec!["both", "fact_only"]);
+    }
+
+    #[test]
+    fn multi_head_rule_expands() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl c(x: number)
+            .output b
+            .output c
+            b(X); c(X) :- a(X).
+        ";
+        let program = parse_program(src);
+        let rules = program.rules();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].head().name(), "b");
+        assert_eq!(rules[1].head().name(), "c");
+        // Both share the same body
+        assert_eq!(rules[0].rhs().len(), 1);
+        assert_eq!(rules[1].rhs().len(), 1);
+    }
+
+    #[test]
+    fn multi_head_rule_in_fixpoint() {
+        let src = "
+            .decl a(x: number, y: number)
+            .decl b(x: number, y: number)
+            .decl c(x: number, y: number)
+            .output b
+            .output c
+            fixpoint { b(X, Y); c(X, Y) :- a(X, Y). }
+        ";
+        let program = parse_program(src);
+        let blocks = loop_blocks(&program);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].rules().len(), 2);
+        assert_eq!(blocks[0].rules()[0].head().name(), "b");
+        assert_eq!(blocks[0].rules()[1].head().name(), "c");
+    }
+
+    #[test]
+    fn multi_body_rule_expands() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl c(x: number)
+            .output c
+            c(X) :- a(X); b(X).
+        ";
+        let program = parse_program(src);
+        let rules = program.rules();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].head().name(), "c");
+        assert_eq!(rules[1].head().name(), "c");
+        assert_eq!(rules[0].rhs()[0].name(), "a");
+        assert_eq!(rules[1].rhs()[0].name(), "b");
+    }
+
+    #[test]
+    fn multi_head_multi_body_expands() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl c(x: number)
+            .decl d(x: number)
+            .output c
+            .output d
+            c(X); d(X) :- a(X); b(X).
+        ";
+        let program = parse_program(src);
+        let rules = program.rules();
+        // 2 heads × 2 bodies = 4 rules
+        assert_eq!(rules.len(), 4);
+        assert_eq!(rules[0].head().name(), "c");
+        assert_eq!(rules[0].rhs()[0].name(), "a");
+        assert_eq!(rules[1].head().name(), "c");
+        assert_eq!(rules[1].rhs()[0].name(), "b");
+        assert_eq!(rules[2].head().name(), "d");
+        assert_eq!(rules[2].rhs()[0].name(), "a");
+        assert_eq!(rules[3].head().name(), "d");
+        assert_eq!(rules[3].rhs()[0].name(), "b");
     }
 }

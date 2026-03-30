@@ -581,7 +581,7 @@ impl Lexeme for LoopBlock {
                     iterative_relations.push((name, fp));
                 }
                 Rule::rule => {
-                    rules.push(FlowLogRule::from_parsed_rule(item));
+                    rules.extend(FlowLogRule::expand_from_parsed_rule(item));
                 }
                 r => panic!("Parser error: unexpected rule in loop/fixpoint block: {r:?}"),
             }
