@@ -495,10 +495,7 @@ impl Program {
                         .into_inner()
                         .next()
                         .expect("Parser error: fact missing head");
-                    raw_facts.push(FlowLogRule::new(
-                        Head::from_parsed_rule(head_node),
-                        vec![],
-                    ));
+                    raw_facts.push(FlowLogRule::new(Head::from_parsed_rule(head_node), vec![]));
                 }
 
                 // include_directive nodes should never appear here — all
