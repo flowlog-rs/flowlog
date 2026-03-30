@@ -145,8 +145,8 @@ impl Compiler {
         doc["dependencies"] = Item::Table(toml_edit::Table::new());
         {
             let deps = doc["dependencies"].as_table_mut().unwrap();
-            deps["timely"] = "0.27".into();
-            deps["differential-dataflow"] = "0.20".into();
+            deps["timely"] = "0.28".into();
+            deps["differential-dataflow"] = "0.21".into();
             deps["mimalloc"] = "0.1".into();
 
             if self.imports.needs_memchr() {
