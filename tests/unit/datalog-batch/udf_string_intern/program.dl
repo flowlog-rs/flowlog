@@ -1,0 +1,71 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : udf_string_intern
+// Feature : UDFs with string params/returns — exercises Spur↔String bridging
+//           when --str-intern is enabled. Each rule covers a distinct edge case.
+// ════════════════════════════════════════════════════════════════════════════
+
+.extern fn upper(s: string) -> string
+.extern fn reverse(s: string) -> string
+.extern fn join_str(a: string, sep: string, b: string) -> string
+.extern fn strlen(s: string) -> int32
+.extern fn take_n(s: string, n: int32) -> string
+.extern fn starts_with(s: string, prefix: string) -> int32
+.extern fn replace_str(s: string, from: string, to: string) -> string
+
+.decl Person(id: int32, name: string, dept: string, level: string)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+
+// string→string (single string param, string return)
+.decl UpperName(id: int32, uname: string)
+UpperName(id, upper(name)) :- Person(id, name, _, _).
+.output UpperName
+
+// nested string→string→string (Spur→String→String→Spur chain)
+.decl ReverseUpper(id: int32, ru: string)
+ReverseUpper(id, reverse(upper(name))) :- Person(id, name, _, _).
+.output ReverseUpper
+
+// multi-string-param (3 string args, 2 from variables)
+.decl NameAtDept(id: int32, nad: string)
+NameAtDept(id, join_str(name, " @ ", dept)) :- Person(id, name, dept, _).
+.output NameAtDept
+
+// string→int with comparison filter (Spur arg, int return in predicate)
+.decl LongName(id: int32, name: string)
+LongName(id, name) :- Person(id, name, _, _), strlen(name) > 4.
+.output LongName
+
+// arithmetic on string→int results (two UDF calls in one expression)
+.decl NameDeptLen(id: int32, total: int32)
+NameDeptLen(id, strlen(name) + strlen(dept)) :- Person(id, name, dept, _).
+.output NameDeptLen
+
+// mixed param types: string + int (Spur for string, plain int)
+.decl ShortName(id: int32, sn: string)
+ShortName(id, take_n(name, 3)) :- Person(id, name, _, _).
+.output ShortName
+
+// deep nesting 3 levels: string→string→string→string
+.decl DeepNested(id: int32, dn: string)
+DeepNested(id, reverse(upper(take_n(name, 3)))) :- Person(id, name, _, _).
+.output DeepNested
+
+// UDF predicate with string constant arg (intern constant, pass to UDF)
+.decl StartsWithE(id: int32, name: string)
+StartsWithE(id, name) :- Person(id, name, _, _), starts_with(name, "e") = 1.
+.output StartsWithE
+
+// cat concatenation with string-returning UDF (display context, skip intern)
+.decl Greeting(id: int32, msg: string)
+Greeting(id, "Hello, " cat upper(name) cat "!") :- Person(id, name, _, _).
+.output Greeting
+
+// 3 string params with string constants (tests resolve on both var and const args)
+.decl DeptFixed(id: int32, fixed: string)
+DeptFixed(id, replace_str(dept, "engineering", "eng")) :- Person(id, _, dept, _).
+.output DeptFixed
+
+// nested UDFs as args to multi-param UDF (complex Spur↔String nesting)
+.decl Fancy(id: int32, f: string)
+Fancy(id, join_str(upper(name), "-", reverse(dept))) :- Person(id, name, dept, _).
+.output Fancy

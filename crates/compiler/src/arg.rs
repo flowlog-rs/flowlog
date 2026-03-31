@@ -506,12 +506,18 @@ impl Compiler {
         let parts: Vec<TokenStream> = fn_calls
             .iter()
             .map(|fc| {
+                let (param_types, _) = self.lookup_udf_sig(fc.name());
                 let fn_name = format_ident!("{}", fc.name());
                 let args: Vec<TokenStream> = fc
                     .args()
                     .iter()
-                    .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern, None))
+                    .zip(param_types.iter())
+                    .map(|(a, pt)| {
+                        let token = self.build_kv_args_arithmetic_expr(a, string_intern, None);
+                        self.wrap_udf_arg(token, pt, string_intern)
+                    })
                     .collect();
+                self.imports.mark_udf();
                 if fc.is_negated() {
                     quote! { !udf::#fn_name(#( #args ),*) }
                 } else {
@@ -536,12 +542,18 @@ impl Compiler {
         let parts: Vec<TokenStream> = fn_calls
             .iter()
             .map(|fc| {
+                let (param_types, _) = self.lookup_udf_sig(fc.name());
                 let fn_name = format_ident!("{}", fc.name());
                 let args: Vec<TokenStream> = fc
                     .args()
                     .iter()
-                    .map(|a| self.build_join_args_arithmetic_expr(a, string_intern))
+                    .zip(param_types.iter())
+                    .map(|(a, pt)| {
+                        let token = self.build_join_args_arithmetic_expr(a, string_intern);
+                        self.wrap_udf_arg(token, pt, string_intern)
+                    })
                     .collect();
+                self.imports.mark_udf();
                 if fc.is_negated() {
                     quote! { !udf::#fn_name(#( #args ),*) }
                 } else {
@@ -567,14 +579,19 @@ impl Compiler {
         let parts: Vec<TokenStream> = fn_calls
             .iter()
             .map(|fc| {
+                let (param_types, _) = self.lookup_udf_sig(fc.name());
                 let fn_name = format_ident!("{}", fc.name());
                 let args: Vec<TokenStream> = fc
                     .args()
                     .iter()
-                    .map(|a| {
-                        self.build_row_args_arithmetic_expr(a, row_fields, string_intern, None)
+                    .zip(param_types.iter())
+                    .map(|(a, pt)| {
+                        let token =
+                            self.build_row_args_arithmetic_expr(a, row_fields, string_intern, None);
+                        self.wrap_udf_arg(token, pt, string_intern)
                     })
                     .collect();
+                self.imports.mark_udf();
                 if fc.is_negated() {
                     quote! { !udf::#fn_name(#( #args ),*) }
                 } else {
@@ -806,28 +823,67 @@ impl Compiler {
         result
     }
 
+    /// Look up the parameter types and return type for an extern function by name.
+    /// Returns owned data to avoid holding a borrow on `self.program`.
+    fn lookup_udf_sig(&self, name: &str) -> (Vec<DataType>, DataType) {
+        let ext = self
+            .program
+            .udfs()
+            .iter()
+            .find(|e| e.name() == name)
+            .unwrap_or_else(|| panic!("Compiler error: UDF '{}' not declared", name));
+        let param_types: Vec<DataType> = ext.params().iter().map(|p| *p.data_type()).collect();
+        (param_types, ext.ret_type())
+    }
+
+    /// Wrap a UDF argument token for string interning: Spur → `resolve(...).to_string()`.
+    /// For non-string params, clones the token (UDFs take ownership).
+    fn wrap_udf_arg(
+        &mut self,
+        token: TokenStream,
+        pt: &DataType,
+        string_intern: bool,
+    ) -> TokenStream {
+        if string_intern && *pt == DataType::String {
+            self.imports.mark_string_resolve();
+            quote! { resolve(#token).to_string() }
+        } else {
+            quote! { (#token).clone() }
+        }
+    }
+
     /// Generate a UDF call token stream: `udf::fn_name(arg1.clone(), arg2.clone(), ...)`.
     ///
-    /// UDFs take ownership of their arguments. We clone each arg to avoid
-    /// invalidating variables that may be used elsewhere in the same closure
-    /// (e.g., in the output tuple or another predicate). Clone on Copy types is free.
+    /// When `string_intern` is true, Spur↔String bridging is inserted at the
+    /// call boundary so that user-written UDFs always work with plain `String`:
+    /// - String parameters: `resolve(spur).to_string()` before passing
+    /// - String return (when `intern_return` is true): `intern(result)` after the call
     fn fncall_to_token<F: Fn(&TransformationArgument) -> TokenStream>(
         &mut self,
         name: &str,
         args: &[ArithmeticArgument],
         string_intern: bool,
         resolve_var: &F,
+        intern_return: bool,
     ) -> TokenStream {
+        let (param_types, ret_type) = self.lookup_udf_sig(name);
         let fn_ident = format_ident!("{}", name);
         let arg_tokens: Vec<TokenStream> = args
             .iter()
-            .map(|a| {
+            .zip(param_types.iter())
+            .map(|(a, pt)| {
                 let token = self.build_arithmetic_expr(a, string_intern, resolve_var);
-                quote! { (#token).clone() }
+                self.wrap_udf_arg(token, pt, string_intern)
             })
             .collect();
         self.imports.mark_udf();
-        quote! { udf::#fn_ident(#(#arg_tokens),*) }
+        let call = quote! { udf::#fn_ident(#(#arg_tokens),*) };
+        if intern_return && string_intern && ret_type == DataType::String {
+            self.imports.mark_string_intern();
+            quote! { intern(&#call) }
+        } else {
+            call
+        }
     }
 
     /// Convert a factor to a token stream for numeric/general expressions.
@@ -841,7 +897,7 @@ impl Compiler {
             FactorArgument::Var(arg) => resolve_var(arg),
             FactorArgument::Const(c) => const_to_token(c, string_intern),
             FactorArgument::FnCall { name, args } => {
-                self.fncall_to_token(name, args, string_intern, resolve_var)
+                self.fncall_to_token(name, args, string_intern, resolve_var, true)
             }
         }
     }
@@ -870,14 +926,9 @@ impl Compiler {
                 _ => const_to_token(c, string_intern),
             },
             FactorArgument::FnCall { name, args } => {
-                // UDF returns Spur when string_intern is on — resolve for display.
-                let call = self.fncall_to_token(name, args, string_intern, resolve_var);
-                if string_intern {
-                    self.imports.mark_string_resolve();
-                    quote! { resolve(#call) }
-                } else {
-                    call
-                }
+                // Skip intern wrapping — use the String directly for display
+                // instead of a wasteful intern→resolve round-trip.
+                self.fncall_to_token(name, args, string_intern, resolve_var, false)
             }
         }
     }

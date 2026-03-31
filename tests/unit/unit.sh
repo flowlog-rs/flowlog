@@ -323,6 +323,12 @@ run_test() {
         compile_flags+=(--udf-file "$test_dir/udf.rs")
     fi
 
+    # Per-test compiler flags (e.g. --str-intern)
+    if [[ -f "$test_dir/compile_flags" ]]; then
+        mapfile -t extra_compile_flags < "$test_dir/compile_flags"
+        compile_flags+=("${extra_compile_flags[@]}")
+    fi
+
     if ! "$COMPILER_BIN" -D output "${compile_flags[@]}" "$test_dir/program.dl" -o "$work_dir/program" >"$compile_log" 2>&1; then
         local detail
         detail="$(cat "$compile_log" 2>/dev/null | tail -20 | sed 's/^/         /')"
