@@ -495,10 +495,7 @@ impl Program {
                         .into_inner()
                         .next()
                         .expect("Parser error: fact missing head");
-                    raw_facts.push(FlowLogRule::new(
-                        Head::from_parsed_rule(head_node),
-                        vec![],
-                    ));
+                    raw_facts.push(FlowLogRule::new(Head::from_parsed_rule(head_node), vec![]));
                 }
 
                 // include_directive nodes should never appear here — all
@@ -768,10 +765,9 @@ impl Program {
     /// Operates on all rules across all segments (plain and loop-internal),
     /// flattened in source order.
     ///
-    /// Returns `(needed_rule_indices, needed_predicate_names)` where indices are
-    /// into the unified flat rule list.
+    /// Returns `((needed_rule_indices, needed_predicate_names), underived_idb_names)`.
     #[must_use]
-    fn identify_needed_components(&self) -> (HashSet<usize>, HashSet<String>) {
+    fn identify_needed_components(&self) -> ((HashSet<usize>, HashSet<String>), HashSet<String>) {
         // Flatten all rules (plain and loop-internal) in source order.
         let all_rules: Vec<&FlowLogRule> = self
             .segments
@@ -815,7 +811,7 @@ impl Program {
                 .iter()
                 .map(|d| d.name().to_string())
                 .collect();
-            return (all_indices, all_preds);
+            return ((all_indices, all_preds), HashSet::new());
         }
 
         // Map: head name -> rule indices that derive it.
@@ -825,6 +821,28 @@ impl Program {
                 .entry(r.head().name().to_string())
                 .or_default()
                 .push(i);
+        }
+
+        // Remove IDB relations that are declared (with .output/.printsize) but
+        // never derived by any rule and have no facts.  They will always be
+        // empty, so keeping them only causes downstream codegen errors.
+        let file_backed: HashSet<String> = self
+            .relations
+            .iter()
+            .filter(|r| r.is_file_backed())
+            .map(|r| r.name().to_string())
+            .collect();
+        let underived: Vec<String> = needed_preds
+            .iter()
+            .filter(|p| {
+                !head_to_rules.contains_key(p.as_str())
+                    && !self.facts.contains_key(p.as_str())
+                    && !file_backed.contains(p.as_str())
+            })
+            .cloned()
+            .collect();
+        for name in &underived {
+            needed_preds.remove(name);
         }
 
         // Seed: rules that define already-needed predicates.
@@ -879,24 +897,23 @@ impl Program {
             }
         }
 
-        (needed_rules, needed_preds)
+        let underived: HashSet<String> = underived.into_iter().collect();
+        ((needed_rules, needed_preds), underived)
     }
 
     /// Remove dead rules and relations in place, logging what was dropped.
     fn prune_dead_components(&mut self) {
-        let (needed_rules, needed_preds) = self.identify_needed_components();
+        let ((needed_rules, needed_preds), underived) = self.identify_needed_components();
 
+        // Collect dead relations (unreachable) and dead rules for a single
+        // structured warning so the output is easy to scan.
         let dead_relations: Vec<_> = self
             .relations
             .iter()
-            .filter(|d| !needed_preds.contains(d.name()))
+            .filter(|d| !needed_preds.contains(d.name()) && !underived.contains(d.name()))
             .map(|d| d.name().to_string())
             .collect();
-        if !dead_relations.is_empty() {
-            warn!("Dead relations: {}", dead_relations.join(", "));
-        }
 
-        // Log dead rules across all segments.
         let dead_rules: Vec<_> = self
             .segments
             .iter()
@@ -908,8 +925,31 @@ impl Program {
             .filter(|(i, _)| !needed_rules.contains(i))
             .map(|(i, r)| format!("#{}: {}", i, r))
             .collect();
-        if !dead_rules.is_empty() {
-            warn!("Dead rules: {}", dead_rules.join(", "));
+
+        if !underived.is_empty() || !dead_relations.is_empty() || !dead_rules.is_empty() {
+            let mut parts = Vec::new();
+            if !underived.is_empty() {
+                let mut sorted: Vec<_> = underived.iter().collect();
+                sorted.sort();
+                parts.push(format!(
+                    "  underived IDBs (declared but no rules): {}",
+                    sorted
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !dead_relations.is_empty() {
+                parts.push(format!(
+                    "  unreachable relations: {}",
+                    dead_relations.join(", ")
+                ));
+            }
+            if !dead_rules.is_empty() {
+                parts.push(format!("  unreachable rules: {}", dead_rules.join(", ")));
+            }
+            warn!("Pruned dead components:\n{}", parts.join("\n"));
         }
 
         self.relations.retain(|d| needed_preds.contains(d.name()));
