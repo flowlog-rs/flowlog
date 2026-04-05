@@ -11,14 +11,14 @@ use std::collections::HashMap;
 
 use profiler::{with_profiler, Profiler};
 
-use super::arg::{
+use crate::arg::{
     build_kv_constraints_predicate, build_row_constraints_predicate, combine_predicates,
     compute_join_param_tokens, compute_kv_param_tokens, kv_use_counts, row_pattern_and_fields,
     row_use_counts,
 };
-use super::data_type::type_tokens;
-use super::ident::find_local_ident;
-use super::Compiler;
+use crate::data_type::type_tokens;
+use crate::ident::find_local_ident;
+use crate::Compiler;
 
 use planner::{StratumPlanner, Transformation};
 
@@ -324,7 +324,7 @@ impl Compiler {
                 // Ideally, in system design, projection (to key) in SIP optimization may introduce duplicates,
                 // we have to apply deduplication to avoid incorrect Yannakakis computation bounds.
                 // Dedup only applies when there is no predicate (predicate paths already filter).
-                let dedup_call = self.dedup_collection();
+                let dedup_call = self.dedup_nonrecursive();
                 let out_dedup_expr = if pred.is_none() && output.is_k_only() {
                     quote! { let #out = #out #dedup_call; }
                 } else {
@@ -541,8 +541,8 @@ impl Compiler {
                 let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
                 let out_map_value =
                     self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
-                let inter_dedup = self.intermediate_antijoin_dedup();
-                let final_normalize = self.normalize_antijoin();
+                let inter_dedup = self.dedup_antijoin();
+                let final_normalize = self.dedup_recursive();
 
                 quote! {
                     let #out =
@@ -616,8 +616,8 @@ impl Compiler {
                 } else {
                     quote! { ( #out_map_key, #out_map_value ) }
                 };
-                let inter_dedup = self.intermediate_antijoin_dedup();
-                let final_normalize = self.normalize_antijoin();
+                let inter_dedup = self.dedup_antijoin();
+                let final_normalize = self.dedup_recursive();
 
                 let transformation = quote! {
                     let #out =
@@ -692,33 +692,6 @@ impl Compiler {
             }
         };
         (pos, neg)
-    }
-
-    /// Normalize after antijoin `pos`/`neg` arithmetic back to native diff.
-    ///
-    /// After the `R(+1) concat (L⋈R)(-1)` encoding, the collection carries
-    /// `i32` diffs.  This final step converts back to the mode's native diff:
-    ///
-    /// - `DatalogBatch`: `i32 → Present` via `threshold_semigroup`.
-    /// - Other modes: `i32 → i32` (0/1) via `threshold`.
-    pub(crate) fn normalize_antijoin(&mut self) -> TokenStream {
-        // Same operator as recursive dedup: persistent trace, normalises diffs.
-        self.dedup_recursive()
-    }
-
-    /// Intermediate dedup inside antijoin sub-expressions.
-    ///
-    /// For `i32` diffs, multiplicities from upstream joins/arrangements must
-    /// be normalised to 1 before the `pos`/`neg` weight encoding.
-    ///
-    /// For `DatalogBatch` (`Present`), arrangements already merge
-    /// `Present + Present = Present`, so an explicit dedup is unnecessary.
-    fn intermediate_antijoin_dedup(&mut self) -> TokenStream {
-        if self.config.is_datalog_batch() {
-            quote! {}
-        } else {
-            Self::threshold_i32()
-        }
     }
 
     fn register_arrangement(

@@ -8,8 +8,8 @@
 mod aggregation;
 mod arg;
 mod build;
-mod comm;
 mod data_type;
+mod dedup;
 mod flow;
 mod fs_utils;
 mod ident;
@@ -19,7 +19,6 @@ mod profile;
 mod read;
 mod relops;
 mod scaffold;
-mod transformation;
 
 pub use build::build_and_collect;
 

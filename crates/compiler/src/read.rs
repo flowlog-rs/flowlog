@@ -27,7 +27,7 @@ impl Compiler {
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
     pub(super) fn gen_input_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
-        let normalize = self.dedup_collection();
+        let normalize = self.dedup_nonrecursive();
 
         let edbs = self.program.edbs();
         if edbs.is_empty() {

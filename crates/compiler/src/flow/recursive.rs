@@ -616,7 +616,7 @@ impl Compiler {
             // exist — these require antijoin arithmetic (pos/neg/normalize).
             let (pos, neg, normalize) = if plan.boolean_until_conditions.is_some() {
                 let (p, n) = self.weight_concat_tokens();
-                (p, n, self.normalize_antijoin())
+                (p, n, self.dedup_recursive())
             } else {
                 (quote! {}, quote! {}, quote! {})
             };

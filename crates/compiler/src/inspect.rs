@@ -159,10 +159,9 @@ impl Compiler {
                     #maybe_probe;
             }}
         } else {
-            let dedup = Self::threshold_i32();
             quote! {{
                 #var.clone()
-                    #dedup
+                    .threshold(|_, w| if *w > 0 { 1i32 } else { 0 })
                     .inner
                     .flat_map(move |(_, t, d)| std::iter::once(((), t.clone(), d)))
                     .as_collection()

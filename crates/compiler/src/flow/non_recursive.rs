@@ -65,7 +65,7 @@ impl Compiler {
         profiler: &mut Option<Profiler>,
     ) -> Vec<TokenStream> {
         let mut flows = Vec::new();
-        let dedup_stats = self.dedup_collection();
+        let dedup_stats = self.dedup_nonrecursive();
 
         for (idb_fp, head_fps) in stratum.idb_to_heads_map() {
             // Rule outputs
