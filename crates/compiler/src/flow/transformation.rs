@@ -16,8 +16,8 @@ use crate::arg::{
     compute_join_param_tokens, compute_kv_param_tokens, kv_use_counts, row_pattern_and_fields,
     row_use_counts,
 };
-use crate::data_type::type_tokens;
 use crate::ident::find_local_ident;
+use crate::ty::data::data_type_tokens;
 use crate::Compiler;
 
 use planner::{StratumPlanner, Transformation};
@@ -75,18 +75,18 @@ impl Compiler {
                     flow.fn_call_preds(),
                     flow.constraints(),
                 );
-                self.verify_and_infer_global_type(
+                self.verify_and_infer_global_data_type(
                     input.fingerprint(),
                     None,
                     output.fingerprint(),
                     flow,
                     stratum,
                 );
-                let input_type = self.find_global_type(input.fingerprint()).clone();
+                let input_type = self.find_global_data_type(input.fingerprint()).clone();
                 let itype = input_type.1.clone();
 
                 // Output expression + predicates
-                let row_ty = type_tokens(&itype, si);
+                let row_ty = data_type_tokens(&itype, si);
                 let remaining = RefCell::new(row_use_counts(&[flow.value()]));
                 let out_val = self.build_key_val_from_row_args(
                     flow.value(),
@@ -144,18 +144,18 @@ impl Compiler {
                     flow.fn_call_preds(),
                     flow.constraints(),
                 );
-                self.verify_and_infer_global_type(
+                self.verify_and_infer_global_data_type(
                     input.fingerprint(),
                     None,
                     output.fingerprint(),
                     flow,
                     stratum,
                 );
-                let input_type = self.find_global_type(input.fingerprint()).clone();
+                let input_type = self.find_global_data_type(input.fingerprint()).clone();
                 let itype = input_type.1.clone();
 
                 // Output expression + predicates
-                let row_ty = type_tokens(&itype, si);
+                let row_ty = data_type_tokens(&itype, si);
                 let remaining = RefCell::new(row_use_counts(&[flow.key(), flow.value()]));
                 let out_key =
                     self.build_key_val_from_row_args(flow.key(), &row_fields, si, Some(&remaining));
@@ -225,7 +225,7 @@ impl Compiler {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_type(
+                self.verify_and_infer_global_data_type(
                     input.fingerprint(),
                     None,
                     output.fingerprint(),
@@ -234,7 +234,7 @@ impl Compiler {
                 );
 
                 // Output value + predicates
-                let input_type = self.find_global_type(input.fingerprint()).clone();
+                let input_type = self.find_global_data_type(input.fingerprint()).clone();
                 let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
                 let out_val = self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type);
@@ -284,7 +284,7 @@ impl Compiler {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_type(
+                self.verify_and_infer_global_data_type(
                     input.fingerprint(),
                     None,
                     output.fingerprint(),
@@ -293,7 +293,7 @@ impl Compiler {
                 );
 
                 // Output expression + predicates
-                let input_type = self.find_global_type(input.fingerprint()).clone();
+                let input_type = self.find_global_data_type(input.fingerprint()).clone();
                 let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
                 let out_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining));
                 let out_val = self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
@@ -383,7 +383,7 @@ impl Compiler {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_type(
+                self.verify_and_infer_global_data_type(
                     left.fingerprint(),
                     Some(right.fingerprint()),
                     output.fingerprint(),
@@ -400,8 +400,8 @@ impl Compiler {
                 );
                 let out_val = self.build_key_val_from_join_args(flow.value(), si);
 
-                let left_type = self.find_global_type(left.fingerprint()).clone();
-                let right_type = self.find_global_type(right.fingerprint()).clone();
+                let left_type = self.find_global_data_type(left.fingerprint()).clone();
+                let right_type = self.find_global_data_type(right.fingerprint()).clone();
                 let cmp_pred =
                     self.build_join_compare_predicate(flow.compares(), si, &left_type, &right_type);
                 let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si);
@@ -444,7 +444,7 @@ impl Compiler {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_type(
+                self.verify_and_infer_global_data_type(
                     left.fingerprint(),
                     Some(right.fingerprint()),
                     output.fingerprint(),
@@ -467,8 +467,8 @@ impl Compiler {
                     quote! { ( #out_key, #out_val ) }
                 };
 
-                let left_type = self.find_global_type(left.fingerprint()).clone();
-                let right_type = self.find_global_type(right.fingerprint()).clone();
+                let left_type = self.find_global_data_type(left.fingerprint()).clone();
+                let right_type = self.find_global_data_type(right.fingerprint()).clone();
                 let cmp_pred =
                     self.build_join_compare_predicate(flow.compares(), si, &left_type, &right_type);
                 let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si);
@@ -525,7 +525,7 @@ impl Compiler {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_type(
+                self.verify_and_infer_global_data_type(
                     left.fingerprint(),
                     Some(right.fingerprint()),
                     output.fingerprint(),
@@ -594,7 +594,7 @@ impl Compiler {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_type(
+                self.verify_and_infer_global_data_type(
                     left.fingerprint(),
                     Some(right.fingerprint()),
                     output.fingerprint(),

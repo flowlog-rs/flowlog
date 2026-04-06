@@ -8,7 +8,6 @@
 mod aggregation;
 mod arg;
 mod build;
-mod data_type;
 mod dedup;
 mod flow;
 mod fs_utils;
@@ -19,6 +18,7 @@ mod profile;
 mod read;
 mod relops;
 mod scaffold;
+mod ty;
 
 pub use build::build_and_collect;
 
@@ -69,7 +69,7 @@ impl Compiler {
         };
 
         compiler.make_global_ident_map();
-        compiler.make_global_type_map();
+        compiler.make_global_data_type_map();
         compiler
     }
 
@@ -179,7 +179,7 @@ impl Compiler {
             merge_stmts,
         } = self.collect_inspectors(profiler);
 
-        let timestamp_type = self.timestamp_type();
+        let outer_time_type = self.outer_time_type();
 
         // Incremental-only: generate relation registry inserts from the EDB list.
         //
@@ -256,7 +256,7 @@ impl Compiler {
 
                             // --- Build dataflow graph -----------------------------------------
                             let #lhs_binding =
-                                worker.dataflow::<#timestamp_type, _, _>(|scope| {
+                                worker.dataflow::<#outer_time_type, _, _>(|scope| {
                                     #(#input_decls)*
 
                                     // === Transformation flows ===
@@ -337,7 +337,7 @@ impl Compiler {
 
                                 // --- Build dataflow graph -----------------------------------------
                                 let #lhs_binding =
-                                    worker.dataflow::<#timestamp_type, _, _>(|scope| {
+                                    worker.dataflow::<#outer_time_type, _, _>(|scope| {
                                         #(#input_decls)*
 
                                         // === Transformation flows ===
@@ -581,10 +581,14 @@ impl Compiler {
         // Imports block (conditional on mode/recursion/etc).
         let imports = self.imports.render();
 
+        let type_decls = self.gen_type_declarations();
+
         let byte_range_reader = self.gen_byte_range_reader();
 
         let file_ts: TokenStream = quote! {
             #imports
+
+            #type_decls
 
             #time_profile_struct
             #memory_profile_struct

@@ -6,7 +6,7 @@
 //! Buffers store `(data, time, diff)` triples. Batch mode hardcodes
 //! `diff = 1` (DD uses `Present`, not `i32`). Sort operates on data only.
 
-use crate::data_type::type_tokens;
+use crate::ty::data::data_type_tokens;
 use crate::Compiler;
 
 use parser::{DataType, Relation};
@@ -514,18 +514,9 @@ impl Compiler {
 
     /// Buffer element: `(data_tuple, timestamp, diff)`.
     fn buf_element_type(&self, idb: &Relation) -> TokenStream {
-        let tuple_ty = type_tokens(&idb.data_type(), self.imports.needs_string_intern());
-        let time_ty = self.timestamp_type();
+        let tuple_ty = data_type_tokens(&idb.data_type(), self.imports.needs_string_intern());
+        let time_ty = self.outer_time_type();
         quote! { (#tuple_ty, #time_ty, i32) }
-    }
-
-    /// Outer dataflow timestamp: `u32` (incremental) or `()` (batch).
-    pub(crate) fn timestamp_type(&self) -> TokenStream {
-        if self.config.is_incremental() {
-            quote! { u32 }
-        } else {
-            quote! { () }
-        }
     }
 
     /// Access column `idx` from buffer row's data tuple at `var.0`.

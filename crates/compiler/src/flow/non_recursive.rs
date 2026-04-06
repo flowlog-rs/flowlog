@@ -125,7 +125,7 @@ impl Compiler {
                 self.imports.mark_semiring_one();
 
                 // Look up the aggregated column's data type.
-                let (key_types, val_types) = self.find_global_type(*idb_fp);
+                let (key_types, val_types) = self.find_global_data_type(*idb_fp);
                 let agg_type = *key_types
                     .iter()
                     .chain(val_types)

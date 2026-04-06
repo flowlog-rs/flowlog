@@ -1,11 +1,10 @@
-//! Type inference system for FlowLog compiler.
+//! Data type codegen for the `(Data, Diff, Time)` triple.
 //!
-//! This module builds and maintains a global mapping from relation fingerprints
-//! to their key and value data types. It also provides utilities to infer the
-//! data types of expressions used in transformations, and to generate Rust type
-//! tokens corresponding to FlowLog data types.
+//! Maintains a global mapping from relation fingerprints to their key and value
+//! data types. Provides type inference for expressions used in transformations
+//! and generates Rust type tokens corresponding to FlowLog data types.
 
-use super::Compiler;
+use crate::Compiler;
 use parser::{AggregationOperator, ArithmeticOperator, ConstType, DataType};
 use planner::{
     ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
@@ -17,11 +16,11 @@ use quote::quote;
 // Global type inference (fingerprint -> (key_types, value_types))
 // ============================================================================
 impl Compiler {
-    /// Build the global fingerprint-to-type map for *all* relations (EDBs + IDBs).
+    /// Build the global fingerprint-to-type map for all relations (EDBs + IDBs).
     ///
-    /// "Global" means the types are stable across strata. (Local recursion strata
-    /// may introduce new identifiers, but those refer back to these global types.)
-    pub(super) fn make_global_type_map(&mut self) {
+    /// "Global" means the types are stable across strata. Local recursion strata
+    /// may introduce new identifiers, but those refer back to these global types.
+    pub(crate) fn make_global_data_type_map(&mut self) {
         self.global_fp_to_type = self
             .program
             .relations()
@@ -35,7 +34,7 @@ impl Compiler {
     /// - `left_fingerprint` is always present.
     /// - `right_fingerprint` is present only for binary transformations (e.g., join, njoin).
     /// - `output_fingerprint` is the fingerprint of the produced collection.
-    pub(super) fn verify_and_infer_global_type(
+    pub(crate) fn verify_and_infer_global_data_type(
         &mut self,
         left_fingerprint: u64,
         right_fingerprint: Option<u64>,
@@ -46,8 +45,8 @@ impl Compiler {
         let head_to_idb_map = stratum.head_to_idb_map();
         let idb_to_aggregation_map = stratum.idb_to_aggregation_map();
 
-        let left_type = self.find_global_type(left_fingerprint);
-        let right_type = right_fingerprint.map(|rf| self.find_global_type(rf));
+        let left_type = self.find_global_data_type(left_fingerprint);
+        let right_type = right_fingerprint.map(|rf| self.find_global_data_type(rf));
 
         self.assert_join_key_type_compat(
             left_fingerprint,
@@ -232,7 +231,7 @@ impl Compiler {
     /// Infer the `DataType` of a single arithmetic expression.
     ///
     /// All factors (init + rest) must agree on the same data type.
-    pub(super) fn infer_expr_type(
+    pub(crate) fn infer_expr_type(
         &self,
         expr: &ArithmeticArgument,
         left_type: &(Vec<DataType>, Vec<DataType>),
@@ -283,7 +282,10 @@ impl Compiler {
     }
 
     /// Look up the `(key_types, value_types)` for a fingerprint.
-    pub(crate) fn find_global_type(&self, fingerprint: u64) -> &(Vec<DataType>, Vec<DataType>) {
+    pub(crate) fn find_global_data_type(
+        &self,
+        fingerprint: u64,
+    ) -> &(Vec<DataType>, Vec<DataType>) {
         self.global_fp_to_type.get(&fingerprint).unwrap_or_else(|| {
             panic!(
                 "Compiler error: input type missing for fingerprint 0x{:016x}",
@@ -297,14 +299,14 @@ impl Compiler {
 // Token helpers: DataType -> Rust type tokens
 // ============================================================================
 
-/// Construct the Rust type token for a row with the given input types:
+/// Map a list of FlowLog `DataType`s to a Rust tuple type token:
 /// - `[]` => `()`
 /// - `[T]` => `(T,)`
 /// - `[T1, T2, ...]` => `(T1, T2, ...)`
 ///
 /// When `string_intern` is true, `DataType::String` maps to `Spur`;
 /// otherwise it maps to `String`.
-pub(super) fn type_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
+pub(crate) fn data_type_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
     let tys: Vec<TokenStream> = input_types
         .iter()
         .map(|dt| match dt {

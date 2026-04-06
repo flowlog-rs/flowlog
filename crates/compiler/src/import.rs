@@ -164,13 +164,21 @@ impl ImportTracker {
         self.profiling = profiling;
     }
 
+    pub(crate) fn needs_semiring_one(&self) -> bool {
+        self.semiring_one
+    }
+
+    pub(crate) fn is_recursive(&self) -> bool {
+        self.recursive
+    }
+
     /// Materializes the required import statements as a single token stream.
     ///
     /// Ordering goal:
     /// 1) module prelude (only for incremental)
     /// 2) std imports
     /// 3) external crate imports (dd + timely)
-    /// 4) project-level types/constants
+    /// 4) global allocator and library imports
     pub(crate) fn render(&mut self) -> TokenStream {
         let prelude = self.prelude_imports();
 
@@ -180,11 +188,6 @@ impl ImportTracker {
         // External crates
         let dd = self.dd_imports();
         let timely = self.timely_imports();
-
-        // Local aliases/constants
-        let diff_type = self.diff_type();
-        let semiring_one = self.semiring_one_value();
-        let iter_type = self.iter_type();
 
         // Global allocator (mimalloc for better multi-threaded allocation performance).
         let allocator = self.allocator();
@@ -215,10 +218,6 @@ impl ImportTracker {
             #ordered_float
             #memchr
             #udf
-
-            #diff_type
-            #semiring_one
-            #iter_type
         }
     }
 
@@ -673,36 +672,6 @@ impl ImportTracker {
         quote! {
             #base
             #resolve_fn
-        }
-    }
-
-    fn diff_type(&self) -> TokenStream {
-        match self.mode {
-            ExecutionMode::DatalogBatch => {
-                quote! { type Diff = differential_dataflow::difference::Present; }
-            }
-            _ => quote! { type Diff = i32; },
-        }
-    }
-
-    fn semiring_one_value(&self) -> TokenStream {
-        if !self.semiring_one {
-            return quote! {};
-        }
-
-        match self.mode {
-            ExecutionMode::DatalogBatch => {
-                quote! { const SEMIRING_ONE: Diff = differential_dataflow::difference::Present; }
-            }
-            _ => quote! { const SEMIRING_ONE: Diff = 1; },
-        }
-    }
-
-    fn iter_type(&self) -> TokenStream {
-        if self.recursive {
-            quote! { type Iter = u16; }
-        } else {
-            quote! {}
         }
     }
 
