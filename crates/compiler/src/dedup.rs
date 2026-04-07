@@ -17,6 +17,7 @@ use quote::quote;
 /// Inside recursive scopes an operator with a *persistent trace* is required so
 /// that tuples emitted in earlier iterations are not re-emitted. `consolidate`
 /// drops its trace after each batch, making it unsuitable for recursion.
+
 impl Compiler {
     /// Non-recursive dedup.
     ///
@@ -26,27 +27,26 @@ impl Compiler {
         if self.config.is_datalog_batch() {
             quote! { .consolidate() }
         } else {
-            quote! { .threshold(|_, w| if *w > 0 { 1i32 } else { 0 }) }
+            quote! { .threshold(|_, w| if *w > 0 { SEMIRING_ONE } else { 0 }) }
         }
     }
 
-    /// Recursive dedup.
+    /// Recursive dedup — trace-retaining for cross-iteration stability.
     ///
     /// Uses a trace-retaining operator so deduplication is maintained across
     /// iterations within a recursive / iterative scope.
     pub(crate) fn dedup_recursive(&mut self) -> TokenStream {
         if self.config.is_datalog_batch() {
-            self.features.mark_semiring_one();
             self.features.mark_threshold_total();
             quote! {
                 .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
             }
         } else {
-            quote! { .threshold(|_, w| if *w > 0 { 1i32 } else { 0 }) }
+            quote! { .threshold(|_, w| if *w > 0 { SEMIRING_ONE } else { 0 }) }
         }
     }
 
-    /// Antijoin intermediate dedup.
+    /// Antijoin intermediate dedup — no-op for DatalogBatch (Present is idempotent).
     ///
     /// Normalises multiplicities from upstream joins before the pos/neg weight
     /// encoding used in antijoin sub-expressions. For `DatalogBatch` this is a
@@ -55,7 +55,7 @@ impl Compiler {
         if self.config.is_datalog_batch() {
             quote! {}
         } else {
-            quote! { .threshold(|_, w| if *w > 0 { 1i32 } else { 0 }) }
+            quote! { .threshold(|_, w| if *w > 0 { SEMIRING_ONE } else { 0 }) }
         }
     }
 }

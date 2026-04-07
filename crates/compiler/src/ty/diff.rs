@@ -25,15 +25,8 @@ impl Compiler {
         }
     }
 
-    /// Emit `const SEMIRING_ONE: Diff = ...` when `threshold_semigroup` is used.
-    ///
-    /// Only emitted when at least one dedup operator requires a semiring unit
-    /// value (e.g. recursive dedup in `DatalogBatch` mode).
+    /// Emit `const SEMIRING_ONE: Diff = ...`.
     pub(crate) fn semiring_one_value(&self) -> TokenStream {
-        if !self.features.semiring_one() {
-            return quote! {};
-        }
-
         match self.config.mode() {
             ExecutionMode::DatalogBatch => {
                 quote! { const SEMIRING_ONE: Diff = differential_dataflow::difference::Present; }

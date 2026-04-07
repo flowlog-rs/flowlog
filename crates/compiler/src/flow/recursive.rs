@@ -281,7 +281,6 @@ impl Compiler {
             // ----------------------------------------------------------------
             if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(idb_fp) {
                 let output_name = self.find_global_ident(*idb_fp).to_string();
-                self.features.mark_semiring_one();
 
                 // Look up the aggregated column's data type.
                 let (key_types, val_types) = self.find_global_data_type(*idb_fp);

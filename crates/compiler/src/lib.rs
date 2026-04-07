@@ -16,7 +16,6 @@ mod ident;
 mod import;
 mod io;
 mod profile;
-mod relops;
 mod scaffold;
 mod ty;
 
@@ -178,54 +177,99 @@ impl Compiler {
             merge_stmts,
         } = self.collect_inspectors(profiler);
 
-        let outer_time_type = self.outer_time_type();
+        // Generate relation registry inserts from the EDB list.
+        // Both batch and incremental use the relops registry for data ingestion.
+        let rel_build_stmts: Vec<TokenStream> = self
+            .program
+            .edbs()
+            .iter()
+            .map(|rel| {
+                let rel_name = rel.name().to_ascii_lowercase();
+                let handle_ident =
+                    Ident::new(&format!("h{rel_name}"), proc_macro2::Span::call_site());
+                let ops_ty_ident =
+                    Ident::new(&format!("Rel{rel_name}"), proc_macro2::Span::call_site());
+                quote! {
+                    rels.insert(
+                        #rel_name.to_string(),
+                        Box::new(#ops_ty_ident::new(#handle_ident)),
+                    );
+                }
+            })
+            .collect();
 
-        // Incremental-only: generate relation registry inserts from the EDB list.
-        //
-        // Assumptions (match current generated code):
-        // - input handle idents are named `h{rel_name}` (e.g., `hsource`)
-        // - rel ops concrete types are named `Rel{rel_name}` (e.g., `Relsource`)
-        // - only EDB relations currently get incremental handlers / registry entries;
-        //   concretely, the relation must have `.input`, inline facts, or both
-        let rel_build_stmts: Vec<TokenStream> = if self.config.is_incremental() {
-            self.program
-                .edbs()
-                .iter()
-                .map(|rel| {
-                    let rel_name = rel.name().to_ascii_lowercase();
+        let has_file_backed_edbs = self
+            .program
+            .edbs()
+            .iter()
+            .any(|rel| rel.is_file_backed() && rel.arity() > 0);
 
-                    let handle_ident =
-                        Ident::new(&format!("h{rel_name}"), proc_macro2::Span::call_site());
+        let has_inline_facts = !self.program.facts().is_empty();
+        let needs_preload = has_file_backed_edbs || has_inline_facts;
 
-                    let ops_ty_ident =
-                        Ident::new(&format!("Rel{rel_name}"), proc_macro2::Span::call_site());
-
-                    quote! {
-                        rels.insert(
-                            #rel_name.to_string(),
-                            Box::new(#ops_ty_ident::new(#handle_ident)),
-                        );
-                    }
-                })
-                .collect()
+        let maybe_peers = if has_file_backed_edbs {
+            quote! { let peers = worker.peers(); }
         } else {
-            Vec::new()
+            quote! {}
+        };
+
+        // Generate per-relation apply_file calls for file-backed EDBs.
+        let file_ingest_stmts: Vec<TokenStream> = self
+            .program
+            .edbs()
+            .iter()
+            .filter(|rel| rel.is_file_backed() && rel.arity() > 0)
+            .map(|rel| {
+                let rel_name = rel.name().to_ascii_lowercase();
+                let file_name = rel.input_file_name();
+                let path = self
+                    .config
+                    .fact_dir()
+                    .map(|dir| {
+                        std::path::Path::new(dir)
+                            .join(&file_name)
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .unwrap_or_else(|| file_name);
+                quote! {
+                    rels.get_mut(#rel_name).unwrap()
+                        .apply_file(std::path::Path::new(#path), SEMIRING_ONE, peers, index);
+                }
+            })
+            .collect();
+
+        // Preload epoch: only emitted when there's data to preload.
+        let preload_block = if needs_preload {
+            quote! {
+                // Preload file-backed EDBs and inline facts (epoch 0 → _t0).
+                #(#file_ingest_stmts)*
+                for (_, r) in rels.iter_mut() {
+                    r.apply_inline(index);
+                }
+                time_stamp += 1;
+                for (_, r) in rels.iter_mut() {
+                    r.advance_to(time_stamp);
+                    r.flush();
+                }
+                while probe.less_than(&time_stamp) {
+                    worker.step();
+                }
+                #(#flush_stmts)*
+                barrier.wait();
+                if index == 0 {
+                    #(#merge_stmts)*
+                }
+                barrier.wait();
+            }
+        } else {
+            quote! {}
         };
 
         let main_fn = match self.config.mode() {
             ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => {
-                let ingest_stmts = self.gen_ingest_stmts();
-                let close_stmts = self.gen_close_stmts();
                 let time_profile_write = self.gen_time_profile_write_batch();
                 let memory_profile_write = self.gen_memory_profile_write_batch();
-
-                // `peers` is only needed when there are file-based inputs
-                // (used by `__byte_range_reader` for byte-range sharding).
-                let maybe_peers = if self.program.edbs().iter().any(|r| r.is_file_backed()) {
-                    quote! { let peers = worker.peers(); }
-                } else {
-                    quote! {}
-                };
 
                 quote! {
                     fn main() {
@@ -255,7 +299,7 @@ impl Compiler {
 
                             // --- Build dataflow graph -----------------------------------------
                             let #lhs_binding =
-                                worker.dataflow::<#outer_time_type, _, _>(|scope| {
+                                worker.dataflow::<Ts, _, _>(|scope| {
                                     #(#input_decls)*
 
                                     // === Transformation flows ===
@@ -271,14 +315,22 @@ impl Compiler {
                                 println!("{:?}:\tDataflow assembled", timer.elapsed());
                             }
 
-                            // --- Data ingestion -----------------------------------------------
-                            #(#ingest_stmts)*
-                            #(#close_stmts)*
+                            // --- Build relation registry & ingest data ------------------------
+                            let mut rels: HashMap<String, Box<dyn RelOps>> = HashMap::new();
+                            #(#rel_build_stmts)*
+
+                            #(#file_ingest_stmts)*
+                            for (_, r) in rels.iter_mut() {
+                                r.apply_inline(index);
+                            }
+                            for (_, r) in rels.iter_mut() {
+                                r.close();
+                            }
 
                             // --- Execute to fixpoint -------------------------------------------
                             while worker.step() {}
 
-                            // Flush thread-local buffers into shared buffers (lock-free writes → one lock).
+                            // Flush thread-local buffers into shared buffers.
                             #(#flush_stmts)*
 
                             barrier.wait();
@@ -336,7 +388,7 @@ impl Compiler {
 
                                 // --- Build dataflow graph -----------------------------------------
                                 let #lhs_binding =
-                                    worker.dataflow::<#outer_time_type, _, _>(|scope| {
+                                    worker.dataflow::<Ts, _, _>(|scope| {
                                         #(#input_decls)*
 
                                         // === Transformation flows ===
@@ -354,6 +406,10 @@ impl Compiler {
                                 // --- Build rel registry (EDBs) ------------------------------------
                                 let mut rels: HashMap<String, Box<dyn RelOps>> = HashMap::new();
                                 #(#rel_build_stmts)*
+
+                                let mut time_stamp: u32 = 0;
+
+                                #preload_block
 
                                 // Helper: apply a list of txn ops to this worker's input handles.
                                 fn apply_ops(
@@ -391,7 +447,6 @@ impl Compiler {
                                     );
                                 }
 
-                                let mut time_stamp: u32 = 0;
                                 let mut last_epoch_seen: u32 = 0;
 
                                 // -------------------------------
@@ -582,8 +637,6 @@ impl Compiler {
 
         let type_decls = self.gen_type_declarations();
 
-        let byte_range_reader = self.gen_byte_range_reader();
-
         let file_ts: TokenStream = quote! {
             #imports
 
@@ -592,7 +645,6 @@ impl Compiler {
             #time_profile_struct
             #memory_profile_struct
 
-            #byte_range_reader
             #worker_sync_helpers
 
             #main_fn

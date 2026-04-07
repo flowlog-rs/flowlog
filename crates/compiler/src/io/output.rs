@@ -515,8 +515,7 @@ impl Compiler {
     /// Buffer element: `(data_tuple, timestamp, diff)`.
     fn buf_element_type(&self, idb: &Relation) -> TokenStream {
         let tuple_ty = data_type_tokens(&idb.data_type(), self.features.string_intern());
-        let time_ty = self.outer_time_type();
-        quote! { (#tuple_ty, #time_ty, i32) }
+        quote! { (#tuple_ty, Ts, i32) }
     }
 
     /// Access column `idx` from buffer row's data tuple at `var.0`.

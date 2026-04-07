@@ -2,12 +2,12 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse2;
 
-use parser::{DataType, Relation};
+use parser::{ConstType, DataType, Relation};
 
-use super::Compiler;
+use crate::Compiler;
 
 impl Compiler {
-    /// Render `src/relops.rs` for incremental mode.
+    /// Render `src/relops.rs` for both batch and incremental modes.
     ///
     /// - Nullary relations handled by a dedicated generator (no parsing; worker0 only).
     /// - Non-nullary relations:
@@ -16,6 +16,8 @@ impl Compiler {
     ///   - Delimiter is `rel.input_delimiter()` (1 byte, default comma).
     pub(crate) fn render_relops(&self, edbs: Vec<&Relation>) -> String {
         let str_intern = self.features.string_intern();
+        let facts = self.program.facts();
+        let has_any_inline = edbs.iter().any(|rel| facts.contains_key(rel.name()));
 
         let needs_shard_str = edbs.iter().any(|rel| {
             rel.arity() > 0 && matches!(rel.data_type().first(), Some(&DataType::String))
@@ -38,6 +40,10 @@ impl Compiler {
                 )
         });
 
+        let needs_ordered_float = edbs
+            .iter()
+            .any(|rel| rel.data_type().iter().any(|dt| dt.is_float()));
+
         let intern_import = if str_intern && needs_shard_str {
             quote! {
                 use super::intern;
@@ -47,13 +53,26 @@ impl Compiler {
             quote! {}
         };
 
+        let ordered_float_import = if needs_ordered_float {
+            quote! { use ordered_float::OrderedFloat; }
+        } else {
+            quote! {}
+        };
+
+        let semiring_one_import = if has_any_inline {
+            quote! { use super::SEMIRING_ONE; }
+        } else {
+            quote! {}
+        };
+
         let rel_impls: Vec<TokenStream> = edbs
             .iter()
             .map(|rel| {
+                let rel_facts = facts.get(rel.name());
                 if rel.arity() == 0 {
-                    gen_one_rel_nullary(rel)
+                    gen_one_rel_nullary(rel, rel_facts)
                 } else {
-                    gen_one_rel_nonnullary(rel, str_intern)
+                    gen_one_rel_nonnullary(rel, rel_facts, str_intern)
                 }
             })
             .collect();
@@ -61,7 +80,7 @@ impl Compiler {
         // Shard functions: only emit each one when actually needed.
         let shard_int_fn = if needs_shard_int {
             quote! {
-                /// Shard on an integer first column by `first % peers`.
+                #[allow(dead_code)]
                 #[inline]
                 fn shard_int(first: i64, peers: usize, index: usize) -> bool {
                     first.rem_euclid(peers as i64) as usize == index
@@ -74,7 +93,7 @@ impl Compiler {
         let shard_string_fn = if needs_shard_str {
             if str_intern {
                 quote! {
-                    /// Shard on a `Spur` (interned string) first column by its inner key.
+                    #[allow(dead_code)]
                     #[inline]
                     fn shard_spur(first: Spur, peers: usize, index: usize) -> bool {
                         (first.into_inner().get() as usize) % peers == index
@@ -82,7 +101,7 @@ impl Compiler {
                 }
             } else {
                 quote! {
-                    /// Shard on a string first column using 32-bit FNV-1a.
+                    #[allow(dead_code)]
                     #[inline]
                     fn shard_str(first: &str, peers: usize, index: usize) -> bool {
                         // 32-bit FNV-1a
@@ -131,10 +150,11 @@ impl Compiler {
             use std::path::Path;
             use std::time::Instant;
 
-            #intern_import
+            use super::{Diff, Ts};
+            #semiring_one_import
 
-            /// Diff type used by incremental input sessions.
-            type Diff = i32;
+            #intern_import
+            #ordered_float_import
 
             /// Operations supported by a dynamic relation handler.
             ///
@@ -147,6 +167,7 @@ impl Compiler {
                 /// `tuple` is a delimited string whose delimiter is relation-specific.
                 /// Implementations should shard by the first column and apply the update
                 /// only on the matching worker.
+                #[allow(dead_code)]
                 fn apply_tuple(&mut self, tuple: &str, diff: Diff, peers: usize, index: usize);
 
                 /// Apply updates from a file.
@@ -154,12 +175,19 @@ impl Compiler {
                 /// Implementations use byte-range parallel reading: each worker reads
                 /// only its ~1/N byte slice of the file, parsing and applying `diff`
                 /// to each row within its range.
+                #[allow(dead_code)]
                 fn apply_file(&mut self, path: &Path, diff: Diff, peers: usize, index: usize);
 
-                /// Advance the input session to logical time `t`.
-                fn advance_to(&mut self, t: u32);
+                /// Apply inline facts directly from program.
+                #[allow(dead_code)]
+                fn apply_inline(&mut self, index: usize);
+
+                /// Advance the input session to logical time.
+                #[allow(dead_code)]
+                fn advance_to(&mut self, t: Ts);
 
                 /// Flush buffered updates into the dataflow.
+                #[allow(dead_code)]
                 fn flush(&mut self);
 
                 /// Close the input session.
@@ -245,9 +273,19 @@ impl Compiler {
 // Per-relation generators
 // ------------------------------------------------------------
 
-fn gen_one_rel_nullary(rel: &Relation) -> TokenStream {
+fn gen_one_rel_nullary(rel: &Relation, facts: Option<&Vec<Vec<ConstType>>>) -> TokenStream {
     let name = rel.name();
     let struct_name = format_ident!("Rel{}", name);
+
+    let nullary_apply_inline = match facts {
+        Some(rows) if !rows.is_empty() => quote! {
+            fn apply_inline(&mut self, index: usize) {
+                if index != 0 { return; }
+                self.h_mut().update((), SEMIRING_ONE);
+            }
+        },
+        _ => quote! { fn apply_inline(&mut self, _index: usize) {} },
+    };
 
     quote! {
         /// Input handler for the nullary relation.
@@ -255,18 +293,18 @@ fn gen_one_rel_nullary(rel: &Relation) -> TokenStream {
         /// Nullary relations store a single boolean-like fact (`True`/`False`) and are
         /// updated only by worker 0 to avoid multiplying diffs across workers.
         pub(crate) struct #struct_name {
-            h: Option<InputSession<u32, (), Diff>>,
+            h: Option<InputSession<Ts, (), Diff>>,
         }
 
         impl #struct_name {
             /// Create a new nullary handler.
-            pub fn new(h: InputSession<u32, (), Diff>) -> Self {
+            pub fn new(h: InputSession<Ts, (), Diff>) -> Self {
                 Self { h: Some(h) }
             }
 
             /// Borrow the underlying input session.
             #[inline]
-            fn h_mut(&mut self) -> &mut InputSession<u32, (), Diff> {
+            fn h_mut(&mut self) -> &mut InputSession<Ts, (), Diff> {
                 self.h.as_mut().unwrap()
             }
         }
@@ -296,7 +334,7 @@ fn gen_one_rel_nullary(rel: &Relation) -> TokenStream {
             fn apply_file(&mut self, path: &Path, _diff: Diff, _peers: usize, index: usize) {
                 if index != 0 { return; }
 
-                // Per request: nullary relations only allow tuple interaction.
+                // Nullary relations only allow tuple interaction.
                 eprintln!(
                     "[relops][{}] nullary relation does not support file ingestion. Use: put {} True|False",
                     #name,
@@ -304,7 +342,9 @@ fn gen_one_rel_nullary(rel: &Relation) -> TokenStream {
                 );
             }
 
-            fn advance_to(&mut self, t: u32) {
+            #nullary_apply_inline
+
+            fn advance_to(&mut self, t: Ts) {
                 self.h_mut().advance_to(t);
             }
 
@@ -321,7 +361,11 @@ fn gen_one_rel_nullary(rel: &Relation) -> TokenStream {
     }
 }
 
-fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
+fn gen_one_rel_nonnullary(
+    rel: &Relation,
+    facts: Option<&Vec<Vec<ConstType>>>,
+    string_intern: bool,
+) -> TokenStream {
     let name = rel.name();
     let struct_name = format_ident!("Rel{}", name);
 
@@ -375,6 +419,17 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
     let tuple_parse_stmts = gen_parse_from_str(name, &dts, string_intern);
     let file_parse_stmts = gen_parse_from_bytes(name, &dts, string_intern);
     let has_header = rel.input_has_header();
+    let inline_body = gen_inline_facts(facts, string_intern);
+    let apply_inline_impl = if inline_body.is_empty() {
+        quote! { fn apply_inline(&mut self, _index: usize) {} }
+    } else {
+        quote! {
+            fn apply_inline(&mut self, index: usize) {
+                if index != 0 { return; }
+                #inline_body
+            }
+        }
+    };
 
     let update_expr = match arity {
         1 => quote! { (f0,) },
@@ -390,17 +445,16 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
         /// - Parses tuples using the relation delimiter.
         /// - Shards updates by the first column across `peers`.
         /// - Reports parse / I/O errors to stderr and skips malformed rows.
+        #[allow(dead_code)]
         pub(crate) struct #struct_name {
-            h: Option<InputSession<u32, #tuple_ty, Diff>>,
-            /// Delimiter byte used for parsing tuple strings / file rows.
+            h: Option<InputSession<Ts, #tuple_ty, Diff>>,
             delim: u8,
-            /// Whether file ingestion should skip a header row.
             has_header: bool,
         }
 
         impl #struct_name {
             /// Create a new handler.
-            pub fn new(h: InputSession<u32, #tuple_ty, Diff>) -> Self {
+            pub fn new(h: InputSession<Ts, #tuple_ty, Diff>) -> Self {
                 Self {
                     h: Some(h),
                     delim: #delim_byte,
@@ -410,7 +464,7 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
 
             /// Borrow the underlying input session.
             #[inline]
-            fn h_mut(&mut self) -> &mut InputSession<u32, #tuple_ty, Diff> {
+            fn h_mut(&mut self) -> &mut InputSession<Ts, #tuple_ty, Diff> {
                 self.h.as_mut().unwrap()
             }
         }
@@ -482,7 +536,9 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
                 }
             }
 
-            fn advance_to(&mut self, t: u32) {
+            #apply_inline_impl
+
+            fn advance_to(&mut self, t: Ts) {
                 self.h_mut().advance_to(t);
             }
 
@@ -495,6 +551,62 @@ fn gen_one_rel_nonnullary(rel: &Relation, string_intern: bool) -> TokenStream {
                     h.close();
                 }
             }
+        }
+    }
+}
+
+// ------------------------------------------------------------
+// Inline fact code generation
+// ------------------------------------------------------------
+
+/// Generate the body of `apply_inline` for a non-nullary relation.
+///
+/// Each inline fact becomes a literal tuple update with shard checking.
+fn gen_inline_facts(facts: Option<&Vec<Vec<ConstType>>>, string_intern: bool) -> TokenStream {
+    let Some(rows) = facts else {
+        return quote! {};
+    };
+    if rows.is_empty() {
+        return quote! {};
+    }
+
+    let tuples: Vec<TokenStream> = rows
+        .iter()
+        .map(|vals| {
+            let elems: Vec<TokenStream> = vals
+                .iter()
+                .map(|c| match c {
+                    ConstType::Int(i) => {
+                        let lit = proc_macro2::Literal::i64_unsuffixed(*i);
+                        quote! { #lit }
+                    }
+                    ConstType::Float(v) => {
+                        let lit = proc_macro2::Literal::f64_unsuffixed(v.into_inner());
+                        quote! { OrderedFloat(#lit) }
+                    }
+                    ConstType::Text(s) => {
+                        if string_intern {
+                            quote! { intern(#s) }
+                        } else {
+                            quote! { #s.to_string() }
+                        }
+                    }
+                    ConstType::Bool(b) => quote! { #b },
+                })
+                .collect();
+
+            if elems.len() == 1 {
+                let e0 = &elems[0];
+                quote! { ( #e0, ) }
+            } else {
+                quote! { ( #(#elems),* ) }
+            }
+        })
+        .collect();
+
+    quote! {
+        for row in [ #(#tuples),* ] {
+            self.h_mut().update(row, SEMIRING_ONE);
         }
     }
 }

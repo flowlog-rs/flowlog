@@ -14,29 +14,33 @@ impl Compiler {
     /// Emit all required imports as a single token stream.
     pub(crate) fn gen_imports(&self) -> TokenStream {
         let inc = self.config.is_incremental();
-        let batch = self.config.is_batch();
         let prof = self.config.profiling_enabled();
         let f = &self.features;
 
         let mut out = Vec::<TokenStream>::new();
+
+        // -- relops (both modes) --
+        out.push(quote! {
+            mod relops;
+            use relops::*;
+            use std::collections::HashMap;
+        });
 
         // -- incremental-only modules --
         if inc {
             out.push(quote! {
                 mod cmd;
                 mod prompt;
-                mod relops;
 
                 use cmd::{Cmd, TxnAction, TxnOp, TxnState};
                 use prompt::Prompt;
-                use relops::*;
 
                 use std::sync::{Arc, RwLock};
             });
         }
 
         // -- std --
-        out.push(std_imports(inc, batch, prof, f));
+        out.push(std_imports(inc, prof, f));
 
         // -- differential-dataflow --
         out.push(dd_imports(f));
@@ -68,9 +72,6 @@ impl Compiler {
         if f.ordered_float() {
             out.push(quote! { use ordered_float::OrderedFloat; });
         }
-        if f.memchr() {
-            out.push(quote! { use memchr::memchr_iter; });
-        }
         if f.udf() {
             out.push(quote! {
                 #[allow(dead_code)]
@@ -86,9 +87,8 @@ impl Compiler {
 // Grouped helpers
 // =========================================================================
 
-/// Standard library imports. Profiling mode is a superset that always
-/// includes File, HashMap, BufWriter, Write, Duration, and timing.
-fn std_imports(inc: bool, batch: bool, prof: bool, f: &Features) -> TokenStream {
+/// Standard library imports.
+fn std_imports(inc: bool, prof: bool, f: &Features) -> TokenStream {
     if prof {
         let rc_refcell = if f.output_buffers() {
             quote! {}
@@ -98,36 +98,18 @@ fn std_imports(inc: bool, batch: bool, prof: bool, f: &Features) -> TokenStream 
                 use std::rc::Rc;
             }
         };
-        let io = if f.std_buf_io() && batch {
-            quote! { use std::io::{BufRead, BufReader, Read, Seek, SeekFrom}; }
-        } else {
-            quote! {}
-        };
         let output_buf = output_buffer_imports(inc, f.output_buffers());
 
         return quote! {
             #rc_refcell
-            use std::collections::HashMap;
             use std::fs::File;
-            #io
             use std::io::{BufWriter, Write};
             #output_buf
             use std::time::{Duration, Instant};
         };
     }
 
-    // Non-profiling path: only emit what's actually needed.
     let mut out = Vec::new();
-
-    if f.std_file() && batch {
-        out.push(quote! { use std::fs::File; });
-    }
-    if f.std_buf_io() && batch {
-        out.push(quote! { use std::io::{BufRead, BufReader, Read, Seek, SeekFrom}; });
-    }
-    if inc {
-        out.push(quote! { use std::collections::HashMap; });
-    }
     out.push(output_buffer_imports(inc, f.output_buffers()));
     out.push(quote! { use std::time::Instant; });
 

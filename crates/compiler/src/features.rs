@@ -81,9 +81,6 @@ macro_rules! bool_features {
 #[must_use]
 #[derive(Default)]
 pub(crate) struct Features {
-    // -- std --
-    std_file: bool,
-    std_buf_io: bool,
     // -- differential-dataflow / timely --
     dd_input: bool,
     as_collection: bool,
@@ -92,13 +89,11 @@ pub(crate) struct Features {
     // -- dataflow features --
     recursive: bool,
     aggregation: bool,
-    semiring_one: bool,
     agg_semirings: AggSemiringNeeds,
     // -- library support --
     string_intern: bool,
     string_resolve: bool,
     ordered_float: bool,
-    memchr: bool,
     udf: bool,
     output_buffers: bool,
 }
@@ -112,9 +107,6 @@ impl Features {
     // -- boolean features ---------------------------------------------
 
     bool_features! {
-        // std
-        (std_file,       mark_std_file),
-        (std_buf_io,     mark_std_buf_io),
         // dd / timely
         (dd_input,       mark_dd_input),
         (as_collection,  mark_as_collection),
@@ -123,11 +115,9 @@ impl Features {
         // dataflow
         (recursive,      mark_recursive),
         (aggregation,    mark_aggregation),
-        (semiring_one,   mark_semiring_one),
         (string_intern,  mark_string_intern),
         (string_resolve, mark_string_resolve),
         (ordered_float,  mark_ordered_float),
-        (memchr,         mark_memchr),
         (udf,            mark_udf),
         (output_buffers, mark_output_buffers),
     }

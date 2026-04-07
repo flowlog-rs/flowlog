@@ -18,11 +18,13 @@ impl Compiler {
     pub(crate) fn gen_type_declarations(&self) -> TokenStream {
         let diff_type = self.diff_type();
         let semiring_one = self.semiring_one_value();
+        let ts_alias = self.timestamp_alias();
         let inner_time_type = self.inner_time_type();
 
         quote! {
             #diff_type
             #semiring_one
+            #ts_alias
             #inner_time_type
         }
     }

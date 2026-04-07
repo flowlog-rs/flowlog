@@ -17,10 +17,10 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Source(node: int32)
-.input Source(IO="file", filename="Source.csv", delimiter=",")
+.input Source(IO="command", delimiter=",")
 
 .decl Edge(src: int32, dst: int32, weight: int32)
-.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.input Edge(IO="command", delimiter=",")
 
 .decl MinDist(node: int32, dist: int32)
 MinDist(s, min(0)) :- Source(s).

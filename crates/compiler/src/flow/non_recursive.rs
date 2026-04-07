@@ -121,8 +121,6 @@ impl Compiler {
             // Aggregation logic (optional)
             if let Some((agg_op, agg_pos, agg_arity)) = stratum.idb_to_aggregation_map().get(idb_fp)
             {
-                self.features.mark_semiring_one();
-
                 // Look up the aggregated column's data type.
                 let (key_types, val_types) = self.find_global_data_type(*idb_fp);
                 let agg_type = *key_types

@@ -214,6 +214,16 @@ _extract_time_for_pattern() {
         fi
     fi
 
+    # Fall back to microseconds (e.g. "17.804µs") and convert.
+    if [[ -z "$extracted" ]]; then
+        local us_val
+        us_val=$(echo "$time_line" \
+            | grep -oE '[0-9]+\.[0-9]+µs' | head -1 | sed 's/µs$//' 2>/dev/null) || true
+        if [[ -n "$us_val" ]]; then
+            extracted=$(python3 -c "print(f'{${us_val}/1000000:.9f}')" 2>/dev/null) || true
+        fi
+    fi
+
     echo "${extracted:-N/A}"
 }
 

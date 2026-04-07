@@ -132,8 +132,19 @@ impl Relation {
     /// Check whether this relation has a `.input` directive.
     #[must_use]
     #[inline]
-    pub fn is_file_backed(&self) -> bool {
+    pub fn has_input(&self) -> bool {
         self.input_params.is_some()
+    }
+
+    /// Check whether this relation is file-backed (`IO="file"`).
+    /// Returns false for `IO="command"` (interactive-only).
+    #[must_use]
+    #[inline]
+    pub fn is_file_backed(&self) -> bool {
+        self.input_params
+            .as_ref()
+            .and_then(|m| m.get("IO"))
+            .is_some_and(|io| io.eq_ignore_ascii_case("file"))
     }
 
     /// Check if this is an output/printsize relation.

@@ -86,13 +86,14 @@ impl Compiler {
         // Compiler-generated entrypoint
         write_file(&src_dir.join("main.rs"), main_rs)?;
 
-        // Incremental mode: interactive command parser + prompt + relation ops
+        // Relation handlers (used by both batch and incremental for data ingestion)
+        let relops = self.render_relops(self.program.edbs());
+        write_file(&src_dir.join("relops.rs"), relops.trim_start())?;
+
+        // Incremental mode: interactive command parser + prompt
         if self.config.is_incremental() {
             write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
             write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
-
-            let relops = self.render_relops(self.program.edbs());
-            write_file(&src_dir.join("relops.rs"), relops.trim_start())?;
         }
 
         // Semiring modules for aggregations
@@ -148,10 +149,6 @@ impl Compiler {
             deps["timely"] = "0.28".into();
             deps["differential-dataflow"] = "0.21".into();
             deps["mimalloc"] = "0.1".into();
-
-            if self.features.memchr() {
-                deps["memchr"] = "2".into();
-            }
 
             if self.features.string_intern() {
                 let mut lasso_tbl = toml_edit::InlineTable::new();

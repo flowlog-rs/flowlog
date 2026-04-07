@@ -2,5 +2,6 @@
 
 pub(crate) mod input;
 pub(crate) mod output;
+pub(crate) mod relops;
 
 pub(crate) use output::InspectorCodegen;

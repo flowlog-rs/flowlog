@@ -10,15 +10,15 @@ use quote::quote;
 use crate::Compiler;
 
 impl Compiler {
-    /// Outer dataflow timestamp used as the `dataflow::<T, _, _>` parameter.
+    /// Emit `type Ts = ...;` alias for the outer dataflow timestamp.
     ///
-    /// - Incremental mode: `u32` (monotonically advancing epoch).
-    /// - Batch mode: `()` (single-shot execution).
-    pub(crate) fn outer_time_type(&self) -> TokenStream {
+    /// - Incremental: `u32` (monotonically advancing epoch).
+    /// - Batch: `()` (single-shot execution).
+    pub(crate) fn timestamp_alias(&self) -> TokenStream {
         if self.config.is_incremental() {
-            quote! { u32 }
+            quote! { type Ts = u32; }
         } else {
-            quote! { () }
+            quote! { type Ts = (); }
         }
     }
 

@@ -309,7 +309,7 @@ impl Program {
 
     #[inline]
     fn is_edb_relation(&self, rel: &Relation) -> bool {
-        rel.is_file_backed() || self.has_inline_facts(rel.name())
+        rel.has_input() || self.has_inline_facts(rel.name())
     }
 }
 
@@ -826,10 +826,10 @@ impl Program {
         // Remove IDB relations that are declared (with .output/.printsize) but
         // never derived by any rule and have no facts.  They will always be
         // empty, so keeping them only causes downstream codegen errors.
-        let file_backed: HashSet<String> = self
+        let input_relations: HashSet<String> = self
             .relations
             .iter()
-            .filter(|r| r.is_file_backed())
+            .filter(|r| r.has_input())
             .map(|r| r.name().to_string())
             .collect();
         let underived: Vec<String> = needed_preds
@@ -837,7 +837,7 @@ impl Program {
             .filter(|p| {
                 !head_to_rules.contains_key(p.as_str())
                     && !self.facts.contains_key(p.as_str())
-                    && !file_backed.contains(p.as_str())
+                    && !input_relations.contains(p.as_str())
             })
             .cloned()
             .collect();
