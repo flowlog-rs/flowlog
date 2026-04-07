@@ -34,21 +34,21 @@ impl Compiler {
             return Vec::new();
         }
 
-        self.imports.mark_input();
+        self.features.mark_dd_input();
 
         if self.config.str_intern_enabled()
             && edbs
                 .iter()
                 .any(|rel| rel.data_type().contains(&DataType::String))
         {
-            self.imports.mark_string_intern();
+            self.features.mark_string_intern();
         }
 
         if edbs.iter().any(|rel| {
             rel.data_type().contains(&DataType::Float32)
                 || rel.data_type().contains(&DataType::Float64)
         }) {
-            self.imports.mark_ordered_float();
+            self.features.mark_ordered_float();
         }
 
         // Record enter inputs block if profiler is enabled
@@ -138,13 +138,13 @@ impl Compiler {
         let mut stmts = Vec::new();
         for rel in self.program.edbs() {
             if rel.is_file_backed() && rel.arity() > 0 {
-                self.imports.mark_std_file();
-                self.imports.mark_std_buf_io();
-                self.imports.mark_semiring_one();
-                self.imports.mark_memchr();
+                self.features.mark_std_file();
+                self.features.mark_std_buf_io();
+                self.features.mark_semiring_one();
+                self.features.mark_memchr();
             }
 
-            self.imports.mark_semiring_one();
+            self.features.mark_semiring_one();
 
             let csv_ingest = self.gen_csv_ingest_stmt(rel);
             let fact_ingest = self.gen_fact_ingest_stmt(rel);
@@ -282,7 +282,7 @@ impl Compiler {
                             let mut __start = __first_end + 1;
                         },
                         DataType::String => {
-                            if self.imports.needs_string_intern() {
+                            if self.features.string_intern() {
                                 quote! {
                                     let mut __delims = memchr_iter(delim, &buf);
                                     let __first_end = __delims.next().unwrap_or(buf.len());
@@ -359,7 +359,7 @@ impl Compiler {
                             __start = __end + 1;
                         },
                         DataType::String => {
-                            if self.imports.needs_string_intern() {
+                            if self.features.string_intern() {
                                 quote! {
                                     let __end = __delims.next().unwrap_or(buf.len());
                                     let #ident: Spur = intern(std::str::from_utf8(&buf[__start..__end]).ok()?);
@@ -469,7 +469,7 @@ impl Compiler {
                             quote! { OrderedFloat(#lit) }
                         }
                         ConstType::Text(s) => {
-                            if self.imports.needs_string_intern() {
+                            if self.features.string_intern() {
                                 quote! { intern(#s) }
                             } else {
                                 quote! { #s.to_string() }

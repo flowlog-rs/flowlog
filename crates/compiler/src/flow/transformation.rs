@@ -37,11 +37,11 @@ impl Compiler {
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
         let transformation_name = format!("{transformation}");
-        let si = self.imports.needs_string_intern();
+        let si = self.features.string_intern();
 
         // Mark UDF import needed if any fn_call predicate is present
         if !transformation.flow().fn_call_preds().is_empty() {
-            self.imports.mark_udf();
+            self.features.mark_udf();
         }
 
         match transformation {
@@ -503,8 +503,8 @@ impl Compiler {
                 output,
                 flow,
             } => {
-                self.imports.mark_as_collection();
-                self.imports.mark_timely_map();
+                self.features.mark_as_collection();
+                self.features.mark_timely_map();
 
                 // Inputs / outputs
                 let (left, right) = input;
@@ -571,8 +571,8 @@ impl Compiler {
                 output,
                 flow,
             } => {
-                self.imports.mark_as_collection();
-                self.imports.mark_timely_map();
+                self.features.mark_as_collection();
+                self.features.mark_timely_map();
 
                 // Inputs / outputs
                 let (left, right) = input;

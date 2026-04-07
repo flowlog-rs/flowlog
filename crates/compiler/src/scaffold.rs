@@ -13,7 +13,7 @@ use toml_edit::{value, Array, DocumentMut, Item};
 
 use super::Compiler;
 use crate::fs_utils::{ensure_dir, write_file};
-use crate::import::SemiringKind;
+use parser::AggregationOperator;
 use profiler::{with_profiler_ref, Profiler};
 
 /// Embedded template for the incremental interactive command parser.
@@ -96,8 +96,8 @@ impl Compiler {
         }
 
         // Semiring modules for aggregations
-        if self.imports.needs_semiring() {
-            self.write_src_semiring(&src_dir)?;
+        if self.features.agg_semiring() {
+            self.write_agg_semiring_modules(&src_dir)?;
         }
 
         // UDF module if a --udf-file was provided
@@ -149,11 +149,11 @@ impl Compiler {
             deps["differential-dataflow"] = "0.21".into();
             deps["mimalloc"] = "0.1".into();
 
-            if self.imports.needs_memchr() {
+            if self.features.memchr() {
                 deps["memchr"] = "2".into();
             }
 
-            if self.imports.needs_string_intern() {
+            if self.features.string_intern() {
                 let mut lasso_tbl = toml_edit::InlineTable::new();
                 lasso_tbl.insert("version", "0.7".into());
                 let mut lasso_features = Array::new();
@@ -163,7 +163,7 @@ impl Compiler {
                 deps["lasso"] = toml_edit::value(lasso_tbl);
             }
 
-            if self.imports.needs_ordered_float() {
+            if self.features.ordered_float() {
                 let mut of_tbl = toml_edit::InlineTable::new();
                 of_tbl.insert("version", "5".into());
                 let mut of_features = Array::new();
@@ -172,7 +172,7 @@ impl Compiler {
                 deps["ordered-float"] = toml_edit::value(of_tbl);
             }
 
-            if self.imports.needs_semiring() || self.imports.needs_string_intern() {
+            if self.features.agg_semiring() || self.features.string_intern() {
                 let mut serde_tbl = toml_edit::InlineTable::new();
                 serde_tbl.insert("version", "1".into());
                 let mut features = Array::new();
@@ -207,11 +207,11 @@ impl Compiler {
 
     /// Write semiring modules into `src/semiring/` of the generated project,
     /// splitting integer and float types into separate files.
-    fn write_src_semiring(&self, src_dir: &std::path::Path) -> io::Result<()> {
+    fn write_agg_semiring_modules(&self, src_dir: &std::path::Path) -> io::Result<()> {
         let semiring_dir = src_dir.join("semiring");
         ensure_dir(&semiring_dir)?;
 
-        let s = self.imports.semirings();
+        let s = self.features.agg_semirings();
 
         // Int/uint type table: (suffix, rust_type)
         const INT_TYPES: [(&str, &str); 8] = [
@@ -230,41 +230,18 @@ impl Compiler {
         let mut modules: Vec<String> = Vec::new();
 
         // (int_tmpl, float_tmpl, kind, macro_name, bound_keyword)
-        for (int_tmpl, float_tmpl, kind, mac, bound_kw) in [
-            (
-                MIN_INT_TMPL,
-                MIN_FLOAT_TMPL,
-                SemiringKind::Min,
-                "define_min",
-                Some("MAX"),
-            ),
-            (
-                MAX_INT_TMPL,
-                MAX_FLOAT_TMPL,
-                SemiringKind::Max,
-                "define_max",
-                Some("MIN"),
-            ),
-            (
-                SUM_INT_TMPL,
-                SUM_FLOAT_TMPL,
-                SemiringKind::Sum,
-                "define_sum",
-                None,
-            ),
-            (
-                AVG_INT_TMPL,
-                AVG_FLOAT_TMPL,
-                SemiringKind::Avg,
-                "define_avg",
-                None,
-            ),
+        use AggregationOperator::*;
+        for (int_tmpl, float_tmpl, op, mac, bound_kw) in [
+            (MIN_INT_TMPL, MIN_FLOAT_TMPL, Min, "define_min", Some("MAX")),
+            (MAX_INT_TMPL, MAX_FLOAT_TMPL, Max, "define_max", Some("MIN")),
+            (SUM_INT_TMPL, SUM_FLOAT_TMPL, Sum, "define_sum", None),
+            (AVG_INT_TMPL, AVG_FLOAT_TMPL, Avg, "define_avg", None),
         ] {
-            let kind_str = kind.as_str();
-            let pfx = kind.prefix();
+            let kind_str = op.semiring_mod();
+            let pfx = op.semiring_prefix();
 
-            let int_needs = s.int_needs(kind);
-            let float_needs = s.float_needs(kind);
+            let int_needs = s.int_needs(op);
+            let float_needs = s.float_needs(op);
 
             // Int/uint file
             if int_needs.iter().any(|n| *n) {

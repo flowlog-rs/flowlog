@@ -56,8 +56,8 @@ impl Compiler {
             let name = idb.name();
 
             if idb.printsize() {
-                self.imports.mark_as_collection();
-                self.imports.mark_timely_map();
+                self.features.mark_as_collection();
+                self.features.mark_timely_map();
                 cg.inspect_stmts
                     .push(self.gen_size_inspector(&var, name, profiler));
             }
@@ -65,15 +65,15 @@ impl Compiler {
             if idb.data_type().contains(&DataType::Float32)
                 || idb.data_type().contains(&DataType::Float64)
             {
-                self.imports.mark_ordered_float();
+                self.features.mark_ordered_float();
             }
 
             if idb.output() {
                 if idb.data_type().contains(&DataType::String) {
-                    self.imports.mark_string_resolve();
+                    self.features.mark_string_resolve();
                 }
 
-                self.imports.mark_output_buffers();
+                self.features.mark_output_buffers();
 
                 let to_stdout = self.config.output_to_stdout();
 
@@ -514,7 +514,7 @@ impl Compiler {
 
     /// Buffer element: `(data_tuple, timestamp, diff)`.
     fn buf_element_type(&self, idb: &Relation) -> TokenStream {
-        let tuple_ty = data_type_tokens(&idb.data_type(), self.imports.needs_string_intern());
+        let tuple_ty = data_type_tokens(&idb.data_type(), self.features.string_intern());
         let time_ty = self.outer_time_type();
         quote! { (#tuple_ty, #time_ty, i32) }
     }
@@ -523,7 +523,7 @@ impl Compiler {
     /// String-interned columns are wrapped in `resolve()`.
     fn field_accessor(&self, idx: &Index, data_type: &DataType, var: TokenStream) -> TokenStream {
         let base = quote! { #var.0.#idx };
-        if matches!(data_type, DataType::String) && self.imports.needs_string_intern() {
+        if matches!(data_type, DataType::String) && self.features.string_intern() {
             quote! { resolve(#base) }
         } else {
             base

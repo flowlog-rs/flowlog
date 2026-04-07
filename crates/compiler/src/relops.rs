@@ -15,7 +15,7 @@ impl Compiler {
     ///   - Shard by first column (int mod peers; string FNV-1a).
     ///   - Delimiter is `rel.input_delimiter()` (1 byte, default comma).
     pub(crate) fn render_relops(&self, edbs: Vec<&Relation>) -> String {
-        let str_intern = self.imports.needs_string_intern();
+        let str_intern = self.features.string_intern();
 
         let needs_shard_str = edbs.iter().any(|rel| {
             rel.arity() > 0 && matches!(rel.data_type().first(), Some(&DataType::String))

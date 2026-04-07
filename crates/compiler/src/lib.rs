@@ -9,6 +9,7 @@ mod aggregation;
 mod arg;
 mod build;
 mod dedup;
+mod features;
 mod flow;
 mod fs_utils;
 mod ident;
@@ -35,7 +36,7 @@ use parser::{DataType, Program};
 use planner::StratumPlanner;
 use profiler::{with_profiler, Profiler};
 
-use import::ImportTracker;
+use features::Features;
 use inspect::InspectorCodegen;
 
 // =========================================================================
@@ -53,8 +54,8 @@ pub struct Compiler {
     /// Global map from relation fingerprint to its key-value data type.
     global_fp_to_type: HashMap<u64, (Vec<DataType>, Vec<DataType>)>,
 
-    /// Tracker for imports needed.
-    imports: ImportTracker,
+    /// Codegen feature flags for the current compilation unit.
+    features: Features,
 }
 
 impl Compiler {
@@ -65,7 +66,7 @@ impl Compiler {
             program,
             global_fp_to_ident: HashMap::new(),
             global_fp_to_type: HashMap::new(),
-            imports: ImportTracker::default(),
+            features: Features::default(),
         };
 
         compiler.make_global_ident_map();
@@ -100,8 +101,7 @@ impl Compiler {
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
     ) -> String {
-        self.imports
-            .reset(self.config.mode(), self.config.profiling_enabled());
+        self.features.reset();
 
         // Static sections of the generated program.
         let input_decls = self.gen_input_decls(profiler);
@@ -579,7 +579,7 @@ impl Compiler {
         };
 
         // Imports block (conditional on mode/recursion/etc).
-        let imports = self.imports.render();
+        let imports = self.gen_imports();
 
         let type_decls = self.gen_type_declarations();
 

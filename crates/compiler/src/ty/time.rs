@@ -28,7 +28,7 @@ impl Compiler {
     /// The generated type alias is referenced by `Product<Outer, Iter>` inside
     /// recursive `iterate` scopes.
     pub(crate) fn inner_time_type(&self) -> TokenStream {
-        if self.imports.is_recursive() {
+        if self.features.recursive() {
             quote! { type Iter = u16; }
         } else {
             quote! {}

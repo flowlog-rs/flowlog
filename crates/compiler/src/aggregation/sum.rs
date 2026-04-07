@@ -7,14 +7,13 @@
 //! Unlike min/max, sum uses real `Multiply` (`value * rhs`) because sum is not
 //! idempotent.  The threshold emits whenever the accumulated sum changes.
 
-use parser::DataType;
+use parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 
 use super::common::{
     aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, result_from_key, row_pattern,
-    semiring_new, ThresholdCmp,
+    agg_semiring_new, ThresholdCmp,
 };
-use crate::import::SemiringKind;
 
 /// Generates the Sum-semiring optimized aggregation pipeline.
 pub fn aggregation_sum_optimize(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
@@ -22,7 +21,7 @@ pub fn aggregation_sum_optimize(arity: usize, agg_pos: usize, agg_type: DataType
         arity,
         agg_pos,
         row_pattern(arity),
-        semiring_new(SemiringKind::Sum, agg_pos, agg_type),
+        agg_semiring_new(AggregationOperator::Sum, agg_pos, agg_type),
         ThresholdCmp::Ne,
         result_from_key(arity, agg_pos),
     )
@@ -34,6 +33,6 @@ pub fn aggregation_sum_pre_leave(arity: usize, agg_pos: usize, agg_type: DataTyp
         arity,
         agg_pos,
         row_pattern(arity),
-        semiring_new(SemiringKind::Sum, agg_pos, agg_type),
+        agg_semiring_new(AggregationOperator::Sum, agg_pos, agg_type),
     )
 }

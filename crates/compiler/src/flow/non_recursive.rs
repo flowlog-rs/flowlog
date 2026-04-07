@@ -20,7 +20,6 @@ use crate::aggregation::{
     aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce_stmt, aggregation_row_chop,
     aggregation_sum_optimize,
 };
-use crate::import::SemiringKind;
 use crate::Compiler;
 
 use parser::AggregationOperator;
@@ -122,7 +121,7 @@ impl Compiler {
             // Aggregation logic (optional)
             if let Some((agg_op, agg_pos, agg_arity)) = stratum.idb_to_aggregation_map().get(idb_fp)
             {
-                self.imports.mark_semiring_one();
+                self.features.mark_semiring_one();
 
                 // Look up the aggregated column's data type.
                 let (key_types, val_types) = self.find_global_data_type(*idb_fp);
@@ -135,11 +134,10 @@ impl Compiler {
                 // Semiring fast path: replace reduce_core with threshold_semigroup
                 // using the appropriate semigroup, avoiding a second arrangement.
                 if self.config.is_datalog_batch() {
-                    self.imports.mark_as_collection();
-                    let kind = SemiringKind::from(*agg_op);
-                    self.imports.mark_semiring(kind, agg_type);
-                    self.imports.mark_threshold_total();
-                    self.imports.mark_timely_map();
+                    self.features.mark_as_collection();
+                    self.features.mark_agg_semiring(*agg_op, agg_type);
+                    self.features.mark_threshold_total();
+                    self.features.mark_timely_map();
                     let pipeline = match agg_op {
                         AggregationOperator::Min => {
                             aggregation_min_optimize(*agg_arity, *agg_pos, agg_type)
@@ -172,7 +170,7 @@ impl Compiler {
                         );
                     });
                 } else {
-                    self.imports.mark_aggregation();
+                    self.features.mark_aggregation();
                     let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
                     let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
                     let reduce_stmt =

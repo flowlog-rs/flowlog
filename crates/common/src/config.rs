@@ -25,6 +25,16 @@ pub enum ExecutionMode {
     ExtendInc,
 }
 
+impl ExecutionMode {
+    pub(crate) fn is_incremental(self) -> bool {
+        matches!(self, Self::DatalogInc | Self::ExtendInc)
+    }
+
+    pub(crate) fn is_batch(self) -> bool {
+        matches!(self, Self::DatalogBatch | Self::ExtendBatch)
+    }
+}
+
 /// Command line arguments for FlowLog tools
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
@@ -160,20 +170,12 @@ impl Config {
         self.mode
     }
 
-    /// Whether the mode is an incremental mode (`DatalogInc` or `ExtendInc`).
     pub fn is_incremental(&self) -> bool {
-        matches!(
-            self.mode,
-            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc
-        )
+        self.mode.is_incremental()
     }
 
-    /// Whether the mode is a batch mode (`DatalogBatch` or `ExtendBatch`).
     pub fn is_batch(&self) -> bool {
-        matches!(
-            self.mode,
-            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch
-        )
+        self.mode.is_batch()
     }
 
     /// Whether the mode is `DatalogBatch`. This is the only mode that uses

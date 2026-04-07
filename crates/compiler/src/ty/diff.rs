@@ -30,7 +30,7 @@ impl Compiler {
     /// Only emitted when at least one dedup operator requires a semiring unit
     /// value (e.g. recursive dedup in `DatalogBatch` mode).
     pub(crate) fn semiring_one_value(&self) -> TokenStream {
-        if !self.imports.needs_semiring_one() {
+        if !self.features.semiring_one() {
             return quote! {};
         }
 

@@ -5,15 +5,14 @@
 //! `(sum: value, count: 1)`.  Consolidation accumulates both components,
 //! and the final average is computed as `sum / count` in Phase 3.
 
-use parser::DataType;
+use parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::import::SemiringKind;
 
 use super::common::{
     aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, key_pattern, row_pattern,
-    semiring_new, tuple, ThresholdCmp,
+    agg_semiring_new, tuple, ThresholdCmp,
 };
 
 /// Full row reconstruction from `(key, agg_val)` where the averaged value is
@@ -41,7 +40,7 @@ pub fn aggregation_avg_optimize(arity: usize, agg_pos: usize, agg_type: DataType
         arity,
         agg_pos,
         row_pattern(arity),
-        semiring_new(SemiringKind::Avg, agg_pos, agg_type),
+        agg_semiring_new(AggregationOperator::Avg, agg_pos, agg_type),
         ThresholdCmp::Ne,
         avg_result_from_key(arity, agg_pos),
     )
@@ -53,7 +52,7 @@ pub fn aggregation_avg_pre_leave(arity: usize, agg_pos: usize, agg_type: DataTyp
         arity,
         agg_pos,
         row_pattern(arity),
-        semiring_new(SemiringKind::Avg, agg_pos, agg_type),
+        agg_semiring_new(AggregationOperator::Avg, agg_pos, agg_type),
     )
 }
 

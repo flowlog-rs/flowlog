@@ -36,8 +36,8 @@ impl Compiler {
     /// iterations within a recursive / iterative scope.
     pub(crate) fn dedup_recursive(&mut self) -> TokenStream {
         if self.config.is_datalog_batch() {
-            self.imports.mark_semiring_one();
-            self.imports.mark_threshold_total();
+            self.features.mark_semiring_one();
+            self.features.mark_threshold_total();
             quote! {
                 .threshold_semigroup(move |_, _, old| old.is_none().then_some(SEMIRING_ONE))
             }

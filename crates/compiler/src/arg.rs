@@ -404,7 +404,7 @@ impl Compiler {
                     && self.infer_expr_type(c.left(), input_type, None) == Some(DataType::String)
                     && self.infer_expr_type(c.right(), input_type, None) == Some(DataType::String)
                 {
-                    self.imports.mark_string_resolve();
+                    self.features.mark_string_resolve();
                     quote! { resolve(#l) #op resolve(#r) }
                 } else {
                     quote! { (#l) #op (#r) }
@@ -440,7 +440,7 @@ impl Compiler {
                     && self.infer_expr_type(c.right(), left_type, Some(right_type))
                         == Some(DataType::String)
                 {
-                    self.imports.mark_string_resolve();
+                    self.features.mark_string_resolve();
                     quote! { resolve(#l) #op resolve(#r) }
                 } else {
                     quote! { (#l) #op (#r) }
@@ -476,7 +476,7 @@ impl Compiler {
                     && self.infer_expr_type(c.left(), input_type, None) == Some(DataType::String)
                     && self.infer_expr_type(c.right(), input_type, None) == Some(DataType::String)
                 {
-                    self.imports.mark_string_resolve();
+                    self.features.mark_string_resolve();
                     quote! { resolve(#l) #op resolve(#r) }
                 } else {
                     quote! { #l #op #r }
@@ -876,10 +876,10 @@ impl Compiler {
                 self.wrap_udf_arg(token, pt, string_intern)
             })
             .collect();
-        self.imports.mark_udf();
+        self.features.mark_udf();
         let call = quote! { udf::#fn_ident(#(#arg_tokens),*) };
         if intern_return && string_intern && ret_type == DataType::String {
-            self.imports.mark_string_intern();
+            self.features.mark_string_intern();
             quote! { intern(&#call) }
         } else {
             call
@@ -913,7 +913,7 @@ impl Compiler {
             FactorArgument::Var(arg) => {
                 let var_token = resolve_var(arg);
                 if string_intern {
-                    self.imports.mark_string_resolve();
+                    self.features.mark_string_resolve();
                     quote! { resolve(#var_token) }
                 } else {
                     var_token
