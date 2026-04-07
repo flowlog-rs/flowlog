@@ -21,7 +21,7 @@ use syn::{Index, LitStr};
 // =========================================================================
 
 /// Code fragments spliced into the generated `main()`.
-pub(super) struct InspectorCodegen {
+pub(crate) struct InspectorCodegen {
     pub buf_declarations: Vec<TokenStream>, // before timely::execute
     pub buf_clones: Vec<TokenStream>,       // closure capture
     pub local_decls: Vec<TokenStream>,      // worker body, before dataflow
@@ -36,7 +36,7 @@ pub(super) struct InspectorCodegen {
 
 impl Compiler {
     /// Walk IDB relations → fill [`InspectorCodegen`].
-    pub(super) fn collect_inspectors(
+    pub(crate) fn collect_inspectors(
         &mut self,
         profiler: &mut Option<Profiler>,
     ) -> InspectorCodegen {

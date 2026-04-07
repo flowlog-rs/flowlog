@@ -14,9 +14,8 @@ mod flow;
 mod fs_utils;
 mod ident;
 mod import;
-mod inspect;
+mod io;
 mod profile;
-mod read;
 mod relops;
 mod scaffold;
 mod ty;
@@ -37,7 +36,7 @@ use planner::StratumPlanner;
 use profiler::{with_profiler, Profiler};
 
 use features::Features;
-use inspect::InspectorCodegen;
+use io::InspectorCodegen;
 
 // =========================================================================
 // Compiler
@@ -105,7 +104,7 @@ impl Compiler {
 
         // Static sections of the generated program.
         let input_decls = self.gen_input_decls(profiler);
-        let (lhs_binding, ret_expr) = self.build_handle_binding();
+        let (lhs_binding, ret_expr) = self.gen_handle_binding();
         let time_profile_struct = self.gen_time_profile_struct();
         let memory_profile_struct = self.gen_memory_profile_struct();
         let time_profile_init = self.gen_time_profile_init();

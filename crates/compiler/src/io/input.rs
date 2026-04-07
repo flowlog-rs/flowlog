@@ -15,7 +15,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use std::path::Path;
 
-use super::Compiler;
+use crate::Compiler;
 use common::ExecutionMode;
 use parser::{ConstType, DataType, Relation};
 use profiler::{with_profiler, Profiler};
@@ -26,7 +26,7 @@ impl Compiler {
     /// ```ignore
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
-    pub(super) fn gen_input_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
+    pub(crate) fn gen_input_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
         let normalize = self.dedup_nonrecursive();
 
         let edbs = self.program.edbs();
@@ -79,7 +79,7 @@ impl Compiler {
             .collect()
     }
 
-    /// Build a *single* mutable handle binding pattern for one or more handles.
+    /// Generate a *single* mutable handle binding pattern for one or more handles.
     ///
     /// We intentionally shadow the original handles returned from `new_collection(...)`
     /// so downstream code can uniformly work with mutable handles:
@@ -88,7 +88,7 @@ impl Compiler {
     /// - N inputs: `let (mut hA, mut hB, ...) = worker.dataflow(...);` and returns `(hA, hB, ...)`.
     ///
     /// In **incremental** mode, we additionally bind/return a `probe` handle as the last element.
-    pub(super) fn build_handle_binding(&self) -> (TokenStream, TokenStream) {
+    pub(crate) fn gen_handle_binding(&self) -> (TokenStream, TokenStream) {
         let edb_names = self.program.edb_names();
 
         match self.config.mode() {
@@ -134,7 +134,7 @@ impl Compiler {
     /// Generate ingestion code for every EDB relation:
     /// - CSV ingestion for arity > 0
     /// - fact ingestion (if present)
-    pub(super) fn gen_ingest_stmts(&mut self) -> Vec<TokenStream> {
+    pub(crate) fn gen_ingest_stmts(&mut self) -> Vec<TokenStream> {
         let mut stmts = Vec::new();
         for rel in self.program.edbs() {
             if rel.is_file_backed() && rel.arity() > 0 {
@@ -502,7 +502,7 @@ impl Compiler {
     /// Generate code to close all input handles (signals end-of-input to the dataflow).
     ///
     /// We also print a per-relation "loaded" message on worker 0.
-    pub fn gen_close_stmts(&self) -> Vec<TokenStream> {
+    pub(crate) fn gen_close_stmts(&self) -> Vec<TokenStream> {
         self.program
             .edb_names()
             .iter()
