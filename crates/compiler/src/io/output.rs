@@ -21,6 +21,7 @@ use syn::{Index, LitStr};
 // =========================================================================
 
 /// Code fragments spliced into the generated `main()`.
+#[derive(Default)]
 pub(crate) struct InspectorCodegen {
     pub buf_declarations: Vec<TokenStream>, // before timely::execute
     pub buf_clones: Vec<TokenStream>,       // closure capture
@@ -40,14 +41,7 @@ impl Compiler {
         &mut self,
         profiler: &mut Option<Profiler>,
     ) -> InspectorCodegen {
-        let mut cg = InspectorCodegen {
-            buf_declarations: Vec::new(),
-            buf_clones: Vec::new(),
-            local_decls: Vec::new(),
-            inspect_stmts: Vec::new(),
-            flush_stmts: Vec::new(),
-            merge_stmts: Vec::new(),
-        };
+        let mut cg = InspectorCodegen::default();
 
         with_profiler(profiler, |p| p.update_inspect_block());
 
