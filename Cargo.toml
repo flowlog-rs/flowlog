@@ -2,7 +2,8 @@
 members = [
     "crates/catalog",
     "crates/common",
-    "crates/compiler",
+    "crates/flowlog-compiler",
+    "crates/generator",
     "crates/optimizer",
     "crates/parser",
     "crates/planner",

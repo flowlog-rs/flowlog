@@ -35,7 +35,7 @@ readonly CLEAR_LINE='\033[2K'
 
 readonly ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 readonly TESTS_DIR="${ROOT_DIR}/tests/unit"
-readonly COMPILER_BIN="${ROOT_DIR}/target/release/flowlog"
+readonly COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
 readonly BUILD_DIR="${ROOT_DIR}/target/e2e"
 
 readonly -a CATEGORIES=(datalog-batch datalog-inc extend-batch extend-inc)
@@ -166,7 +166,7 @@ mode_flag_for_category() {
 
 ensure_compiler_built() {
     echo -e "  ${YELLOW}Building compiler (release)...${NC}"
-    (cd "$ROOT_DIR" && cargo build --release -p compiler 2>&1 | tail -1)
+    (cd "$ROOT_DIR" && cargo build --release -p flowlog-compiler 2>&1 | tail -1)
     [[ -x "$COMPILER_BIN" ]] || die "Compiler binary not found: $COMPILER_BIN"
 }
 

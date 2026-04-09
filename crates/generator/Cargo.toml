@@ -1,0 +1,18 @@
+[package]
+name = "generator"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
+toml_edit = { workspace = true }
+tracing.workspace = true
+
+common = { path = "../common" }
+parser = { path = "../parser" }
+planner = { path = "../planner" }
+profiler = { path = "../profiler" }

@@ -1,0 +1,205 @@
+//! Non-recursive flow generation for FlowLog compiler.
+//!
+//! This module handles the generation of non-recursive differential dataflow
+//! pipelines based on the planned transformations.
+//! - Core flow means the main non-recursive transformations within a stratum.
+//!   It is worth notice that due to factoring optimization, even recursive stratum
+//!   may contain non-recursive core flows.
+//! - Post flow means the final output processing after core flows, such as
+//!   unioning multiple IDBs into an output relation and applying aggregation.
+//!   Post flows are only generated for non-recursive strata.
+
+use std::collections::{HashMap, HashSet};
+
+use proc_macro2::{Ident, TokenStream};
+use quote::{format_ident, quote};
+use tracing::trace;
+
+use crate::aggregation::{
+    aggregation_avg_optimize, aggregation_count_optimize, aggregation_max_optimize,
+    aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce_stmt, aggregation_row_chop,
+    aggregation_sum_optimize,
+};
+use crate::Generator;
+
+use parser::AggregationOperator;
+use planner::StratumPlanner;
+use profiler::{with_profiler, Profiler};
+
+// =========================================================================
+// Non-Recursive Flow Generation
+// =========================================================================
+impl Generator {
+    /// Generate the non-recursive core differential dataflow pipelines, returning the assembled
+    /// statements along with the arrangement map populated while building them.
+    pub(crate) fn gen_non_recursive_core_flows(
+        &mut self,
+        stratum: &StratumPlanner,
+        profiler: &mut Option<Profiler>,
+    ) -> (Vec<TokenStream>, HashMap<u64, Ident>) {
+        let mut flows = Vec::new();
+        // Stratum-scoped cache of arrangements; emit arrange_by_key just before first use.
+        let mut non_recursive_arranged_map: HashMap<u64, Ident> = HashMap::new();
+
+        for transformation in stratum.non_recursive_transformations() {
+            let global_fp_to_ident = self.global_fp_to_ident.clone();
+            flows.push(self.gen_transformation(
+                &global_fp_to_ident,
+                transformation,
+                &mut non_recursive_arranged_map,
+                stratum,
+                profiler,
+            ));
+        }
+
+        trace!("Generated static flows:\n{}\n", quote! { #(#flows)* });
+        (flows, non_recursive_arranged_map)
+    }
+
+    /// Generate non recursive post-processing flows
+    pub(crate) fn gen_non_recursive_post_flows(
+        &mut self,
+        calculated_output_fps: &HashSet<u64>,
+        stratum: &StratumPlanner,
+        profiler: &mut Option<Profiler>,
+    ) -> Vec<TokenStream> {
+        let mut flows = Vec::new();
+        let dedup_stats = self.dedup_nonrecursive();
+
+        for (idb_fp, head_fps) in stratum.idb_to_heads_map() {
+            // Rule outputs
+            let output = self.find_global_ident(*idb_fp);
+            let mut outs: Vec<Ident> = Vec::new();
+
+            for head_fp in head_fps {
+                outs.push(format_ident!("t_{}", head_fp));
+            }
+
+            // Build union expression from IDB sources.
+            let head = outs[0].clone();
+            let tail = &outs[1..];
+            let mut expr: TokenStream = quote! { #head.clone() };
+            for t in tail {
+                expr = quote! { #expr.concat(#t.clone()) };
+            }
+
+            // If this output was already computed in a previous stratum, union the previous
+            // collection with the newly produced tuples before applying distinct.
+            let mut block = if calculated_output_fps.contains(idb_fp) {
+                // Profiler: concat for repeated output (optional)
+                with_profiler(profiler, |profiler| {
+                    profiler.concat_dedup_operator(
+                        output.to_string(),
+                        outs.iter().map(|id| id.to_string()).collect(),
+                        output.to_string(),
+                        outs.len() as u32,
+                        false,
+                    );
+                });
+                quote! {
+                    let #output = #output
+                        .concat(#expr)
+                        #dedup_stats;
+                }
+            } else {
+                // Profiler: concat for new output (optional)
+                with_profiler(profiler, |profiler| {
+                    profiler.concat_dedup_operator(
+                        output.to_string(),
+                        outs.iter().map(|id| id.to_string()).collect(),
+                        output.to_string(),
+                        outs.len() as u32 - 1,
+                        false,
+                    );
+                });
+                quote! {
+                    let #output = #expr
+                        #dedup_stats;
+                }
+            };
+
+            // Aggregation logic (optional)
+            if let Some((agg_op, agg_pos, agg_arity)) = stratum.idb_to_aggregation_map().get(idb_fp)
+            {
+                // Look up the aggregated column's data type.
+                let (key_types, val_types) = self.find_global_data_type(*idb_fp);
+                let agg_type = *key_types
+                    .iter()
+                    .chain(val_types)
+                    .nth(*agg_pos)
+                    .expect("Generator error: aggregation position out of bounds");
+
+                // Semiring fast path: replace reduce_core with threshold_semigroup
+                // using the appropriate semigroup, avoiding a second arrangement.
+                if self.config.is_datalog_batch() {
+                    self.features.mark_as_collection();
+                    self.features.mark_agg_semiring(*agg_op, agg_type);
+                    self.features.mark_threshold_total();
+                    self.features.mark_timely_map();
+                    let pipeline = match agg_op {
+                        AggregationOperator::Min => {
+                            aggregation_min_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Max => {
+                            aggregation_max_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Sum => {
+                            aggregation_sum_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Count => {
+                            aggregation_count_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Avg => {
+                            aggregation_avg_optimize(*agg_arity, *agg_pos, agg_type)
+                        }
+                    };
+                    block = quote! {
+                        #block
+                        let #output = #output
+                            #pipeline;
+                    };
+
+                    // Profiler: aggregation operator (optional)
+                    with_profiler(profiler, |profiler| {
+                        profiler.opt_aggregate_operator(
+                            output.to_string(),
+                            output.to_string(),
+                            output.to_string(),
+                        );
+                    });
+                } else {
+                    self.features.mark_aggregation();
+                    let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
+                    let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
+                    let reduce_stmt =
+                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type);
+                    block = quote! {
+                        #block
+                        let #output = #output
+                            .map(#row_chop)
+                            .arrange_by_key()
+                            #reduce_stmt
+                            .as_collection(#merge_kv);
+                    };
+
+                    // Profiler: aggregation operator (optional)
+                    with_profiler(profiler, |profiler| {
+                        profiler.general_aggregate_operator(
+                            output.to_string(),
+                            output.to_string(),
+                            output.to_string(),
+                        );
+                    });
+                }
+            }
+
+            flows.push(block);
+        }
+
+        trace!(
+            "Generated post-processing flows:\n{}\n",
+            quote! { #(#flows)* }
+        );
+        flows
+    }
+}

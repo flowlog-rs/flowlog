@@ -156,28 +156,10 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "clap",
- "tracing",
-]
-
-[[package]]
-name = "compiler"
-version = "0.1.0"
-dependencies = [
- "catalog",
- "clap",
- "common",
- "optimizer",
- "parser",
- "planner",
  "prettyplease",
  "proc-macro2",
- "profiler",
- "quote",
- "stratifier",
  "syn",
- "toml_edit",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -238,10 +220,43 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
+name = "flowlog-compiler"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "common",
+ "generator",
+ "optimizer",
+ "parser",
+ "planner",
+ "proc-macro2",
+ "profiler",
+ "quote",
+ "stratifier",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
+
+[[package]]
+name = "generator"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "parser",
+ "planner",
+ "proc-macro2",
+ "profiler",
+ "quote",
+ "syn",
+ "toml_edit",
+ "tracing",
+]
 
 [[package]]
 name = "generic-array"

@@ -117,7 +117,7 @@ init_paths() {
     RESULT_DIR="${ROOT_DIR}/result"
     LOG_DIR="${RESULT_DIR}/logs"
     FLOWLOG_OUT_DIR="${RESULT_DIR}/flowlog_out"
-    COMPILER_BIN="${ROOT_DIR}/target/release/flowlog"
+    COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
     WORKERS="${WORKERS:-64}"
 
     mkdir -p "$LOG_DIR" "$FLOWLOG_OUT_DIR"

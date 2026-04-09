@@ -51,7 +51,7 @@ done
 HF_BASE="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main"
 FACT_DIR="${ROOT_DIR}/facts/ldbc"
 
-FLOWLOG_BIN="${ROOT_DIR}/target/release/flowlog"
+FLOWLOG_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
 DUCKDB_BIN="${DUCKDB_BIN:-$(command -v duckdb 2>/dev/null || die "duckdb not found in PATH; set DUCKDB_BIN or install duckdb")}"
 
 DL_DIR="${ROOT_DIR}/example/ldbc_snb/flowlog"
@@ -80,7 +80,7 @@ trim() {
 
 [[ -f "$CONFIG" ]]     || die "Config not found: $CONFIG"
 [[ -x "$DUCKDB_BIN" ]] || die "duckdb not found: $DUCKDB_BIN"
-[[ -x "$FLOWLOG_BIN" ]] || die "flowlog not built: $FLOWLOG_BIN"
+[[ -x "$FLOWLOG_BIN" ]] || die "flowlog-compiler not built: $FLOWLOG_BIN"
 
 WORKERS="${WORKERS:-64}"
 
