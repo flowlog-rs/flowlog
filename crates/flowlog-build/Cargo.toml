@@ -1,0 +1,19 @@
+[package]
+name = "flowlog-build"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Build-time FlowLog compiler — emits a typed DatalogBatchEngine to OUT_DIR."
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+
+common = { path = "../common" }
+generator = { path = "../generator" }
+optimizer = { path = "../optimizer" }
+parser = { path = "../parser" }
+planner = { path = "../planner" }
+stratifier = { path = "../stratifier" }
+profiler = { path = "../profiler" }

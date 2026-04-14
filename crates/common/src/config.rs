@@ -86,6 +86,12 @@ pub struct Config {
     /// after building the executable.
     #[arg(long)]
     pub save_temps: bool,
+
+    /// Extra search directory for `.include` directives. May be specified
+    /// multiple times. Includes are resolved by trying the parent file's
+    /// directory first, then each `-I` directory in order.
+    #[arg(short = 'I', long = "include-dir", value_name = "DIR")]
+    pub include_dirs: Vec<String>,
 }
 
 impl Config {
@@ -228,6 +234,11 @@ impl Config {
     /// Path to the user-supplied UDF implementation file, if any.
     pub fn udf_file(&self) -> Option<&str> {
         self.udf_file.as_deref()
+    }
+
+    /// Extra `.include` search directories collected from `-I` flags.
+    pub fn include_dirs(&self) -> Vec<&Path> {
+        self.include_dirs.iter().map(Path::new).collect()
     }
 
     /// Whether to keep the intermediate generated Rust crate.

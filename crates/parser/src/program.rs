@@ -148,8 +148,24 @@ impl Program {
     /// If `extended` is `false`, panics when the program contains any `loop`
     /// blocks — those require Extended Datalog mode (`--mode extend-batch`
     /// or `--mode extend-inc`).
+    ///
+    /// `.include` directives resolve relative to the parent file's directory.
+    /// For an include search path use [`Self::parse_with_includes`].
     #[must_use]
     pub fn parse(path: &str, extended: bool) -> Self {
+        Self::parse_with_includes(path, extended, &[])
+    }
+
+    /// Parse a Datalog program with extra include search directories.
+    ///
+    /// `.include "name.dl"` is resolved by trying:
+    /// 1. The parent file's directory (always tried first).
+    /// 2. Each entry in `include_dirs`, in order.
+    ///
+    /// `parse(path, extended)` is equivalent to
+    /// `parse_with_includes(path, extended, &[])`.
+    #[must_use]
+    pub fn parse_with_includes(path: &str, extended: bool, include_dirs: &[&Path]) -> Self {
         let file_path = Path::new(path);
         let source = fs::read_to_string(file_path)
             .unwrap_or_else(|_| panic!("Parser error: failed to read '{}'", path));
@@ -157,7 +173,13 @@ impl Program {
 
         let mut in_progress = HashSet::new();
         let mut completed = HashSet::new();
-        let combined = resolve_includes(&source, base_dir, &mut in_progress, &mut completed);
+        let combined = resolve_includes(
+            &source,
+            base_dir,
+            include_dirs,
+            &mut in_progress,
+            &mut completed,
+        );
 
         let mut pairs = FlowLogParser::parse(Rule::main_grammar, &combined)
             .unwrap_or_else(|e| panic!("Parser error in '{}': {}", path, e));
@@ -335,6 +357,7 @@ impl Program {
 fn resolve_includes(
     source: &str,
     base_dir: &Path,
+    include_dirs: &[&Path],
     in_progress: &mut HashSet<PathBuf>,
     completed: &mut HashSet<PathBuf>,
 ) -> String {
@@ -362,7 +385,8 @@ fn resolve_includes(
             .next()
             .expect("Parser error: include directive missing path");
         let raw = path_node.as_str().trim_matches('"');
-        let full_path = base_dir.join(raw);
+
+        let full_path = resolve_one_include(raw, base_dir, include_dirs);
         let canonical = fs::canonicalize(&full_path).unwrap_or_else(|_| {
             panic!(
                 "Parser error: cannot resolve include path '{}'",
@@ -387,7 +411,13 @@ fn resolve_includes(
         let included_base = full_path.parent().unwrap_or(Path::new("."));
 
         in_progress.insert(canonical.clone());
-        let inlined = resolve_includes(&included_source, included_base, in_progress, completed);
+        let inlined = resolve_includes(
+            &included_source,
+            included_base,
+            include_dirs,
+            in_progress,
+            completed,
+        );
         in_progress.remove(&canonical);
         completed.insert(canonical);
 
@@ -403,6 +433,25 @@ fn resolve_includes(
     // Append any remaining source after the last include directive.
     out.push_str(&source[cursor..]);
     out
+}
+
+/// Resolve `raw` (the include path string) by checking the parent directory
+/// first, then each entry in `include_dirs` in order. Returns the first
+/// existing file. Falls back to `base_dir.join(raw)` (the original behavior)
+/// if nothing matches — `resolve_includes` will then surface the I/O error
+/// with the resolved path so error messages stay informative.
+fn resolve_one_include(raw: &str, base_dir: &Path, include_dirs: &[&Path]) -> PathBuf {
+    let parent_relative = base_dir.join(raw);
+    if parent_relative.exists() {
+        return parent_relative;
+    }
+    for dir in include_dirs {
+        let candidate = dir.join(raw);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    parent_relative
 }
 
 // =============================================================================
