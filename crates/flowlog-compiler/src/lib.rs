@@ -1,58 +1,67 @@
-//! FlowLog Compiler
+//! FlowLog compiler — generate a standalone Rust executable from a FlowLog
+//! program.
 //!
-//! Generates an executable Rust crate from a FlowLog program by
-//! delegating code generation to the `generator` crate and then
-//! scaffolding, building, and collecting the final binary.
+//! The caller is responsible for running the upstream pipeline
+//! (parse → stratify → plan). This crate accepts the resulting
+//! [`StratumPlanner`] list and drives code generation, scaffolding, and
+//! the final `cargo build --release` invocation.
+//!
+//! Typical use:
+//!
+//! ```ignore
+//! let mut compiler = Compiler::new(config, program);
+//! compiler.compile(&strata, &mut profiler)?;
+//! ```
+//!
+//! Internal layout:
+//!
+//! - [`build`] — the two-stage pipeline behind [`Compiler::compile`]
+//!   (`emit_sources`, then shell out to cargo).
+//! - [`scaffold`] — write the emitted crate to disk + render Cargo metadata.
+//! - [`assembly`], [`io`], [`relation`], [`imports`] — codegen modules that
+//!   produce the token streams spliced into the emitted `main.rs` and
+//!   `relation.rs`.
 
-// =========================================================================
-// Module Declarations
-// =========================================================================
 mod assembly;
 mod build;
-mod fs_utils;
+mod imports;
+mod io;
+mod relation;
 mod scaffold;
 
-pub use build::build_and_collect;
-
-// =========================================================================
-// Imports
-// =========================================================================
+use common::Config;
 use generator::Generator;
+use parser::Program;
 use planner::StratumPlanner;
 use profiler::Profiler;
 
-use common::Config;
-use parser::Program;
-
-// =========================================================================
-// Compiler
-// =========================================================================
-
+/// Drives code generation + build for a single FlowLog program.
 pub struct Compiler {
     config: Config,
+    program: Program,
     generator: Generator,
 }
 
 impl Compiler {
-    /// Create a new `Compiler` instance from `Config` and `Program`.
+    /// Create a compiler bound to `config` + `program`. The [`Generator`] is
+    /// constructed eagerly; call [`Self::compile`] to actually produce code.
     pub fn new(config: Config, program: Program) -> Self {
         Self {
-            generator: Generator::new(config.clone(), program),
+            generator: Generator::new(config.clone(), program.clone()),
+            program,
             config,
         }
     }
 
-    /// Generate the executable: codegen → assemble → scaffold → build-ready.
-    ///
-    /// After this returns, call [`build_and_collect`] to compile the
-    /// generated crate into a binary.
-    pub fn generate_executable_at(
+    /// Emit the scaffolded Rust crate, run `cargo build --release`, copy the
+    /// binary to [`Config::executable_path`], and clean up build artifacts
+    /// unless [`Config::save_temps`] is set.
+    pub fn compile(
         &mut self,
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
     ) -> std::io::Result<()> {
-        let parts = self.generator.generate(strata, profiler);
-        let main_rs = self.assemble_main(&parts);
-        self.write_project(&parts, &main_rs, profiler)
+        self.emit_sources(strata, profiler)?;
+        self.build()
     }
 }

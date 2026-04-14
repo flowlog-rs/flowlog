@@ -265,6 +265,23 @@ impl Program {
             .collect()
     }
 
+    /// IDB relations annotated with `.output`, in declaration order.
+    #[must_use]
+    #[inline]
+    pub fn output_idbs(&self) -> Vec<&Relation> {
+        self.relations.iter().filter(|rel| rel.output()).collect()
+    }
+
+    /// IDB relations annotated with `.printsize`, in declaration order.
+    #[must_use]
+    #[inline]
+    pub fn printsize_idbs(&self) -> Vec<&Relation> {
+        self.relations
+            .iter()
+            .filter(|rel| rel.printsize())
+            .collect()
+    }
+
     /// Ordered program items (rule segments and loop blocks in source order).
     ///
     /// This is the primary representation for the stratifier.  It processes

@@ -1,20 +1,28 @@
-//! Batch mode (`DatalogBatch` / `ExtendBatch`) main function generation.
+//! Batch-mode `fn main()` generator.
 //!
-//! Generates a `fn main()` that:
-//! 1. Constructs the timely dataflow graph.
-//! 2. Builds the relation registry and ingests all data (files + inline facts).
-//! 3. Closes input handles and runs the dataflow to fixpoint.
-//! 4. Flushes output buffers and writes results.
+//! Runs the dataflow once, to fixpoint, then writes outputs:
+//!
+//! 1. Construct the timely dataflow graph from generator fragments.
+//! 2. Build the EDB registry and ingest all data (files + inline facts).
+//! 3. Close input handles and step the worker until idle.
+//! 4. Flush worker-local output buffers into the shared buffers.
+//! 5. Worker 0 drains the shared buffers (sort / limit / write).
 
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use generator::AssemblyParts;
 
+use crate::io::input::Input;
+
 /// Emit the complete batch-mode `fn main() { ... }` token stream.
-pub(crate) fn gen_batch_main(p: &AssemblyParts) -> TokenStream {
+pub(crate) fn gen_batch_main(
+    parts: &AssemblyParts,
+    input: &Input,
+    merge_blocks: &[TokenStream],
+) -> TokenStream {
     let AssemblyParts {
-        edb_inputs,
+        edb_decls,
         handle_binding,
         dataflow_return,
         flows,
@@ -23,73 +31,82 @@ pub(crate) fn gen_batch_main(p: &AssemblyParts) -> TokenStream {
         local_bufs,
         inspectors,
         flush,
-        merge,
-        registry_inserts,
-        file_ingests,
-        maybe_peers,
+        size_cell_decls,
+        size_cell_clones,
         profile_init,
         time_profile_write_batch: time_profile_write,
         memory_profile_write_batch: memory_profile_write,
         ..
-    } = p;
+    } = parts;
+    let Input {
+        registry_inserts,
+        file_ingests,
+        maybe_peers,
+        ..
+    } = input;
 
     quote! {
         fn main() {
             let args: Vec<String> = std::env::args().collect();
             let barrier = worker_barrier_from_args(&args);
 
+            // Shared output machinery constructed before workers spawn.
             #(#output_bufs)*
+            #(#size_cell_decls)*
 
             timely::execute_from_args(args.into_iter(), {
                 let barrier = barrier.clone();
                 #(#output_buf_clones)*
+                #(#size_cell_clones)*
 
                 move |worker| {
-                let timer = Instant::now();
-                let index = worker.index();
-                #maybe_peers
+                    let timer = Instant::now();
+                    let index = worker.index();
+                    #maybe_peers
 
-                #profile_init
+                    #profile_init
+                    #(#local_bufs)*
 
-                #(#local_bufs)*
+                    let #handle_binding =
+                        worker.dataflow::<Ts, _, _>(|scope| {
+                            #(#edb_decls)*
+                            #(#flows)*
+                            #(#inspectors)*
+                            #dataflow_return
+                        });
 
-                let #handle_binding =
-                    worker.dataflow::<Ts, _, _>(|scope| {
-                        #(#edb_inputs)*
-                        #(#flows)*
-                        #(#inspectors)*
-                        #dataflow_return
-                    });
+                    if index == 0 {
+                        println!("{:?}:\tDataflow assembled", timer.elapsed());
+                    }
 
-                if index == 0 {
-                    println!("{:?}:\tDataflow assembled", timer.elapsed());
+                    // Register input handlers, ingest data, then close inputs
+                    // so the dataflow can drain to fixpoint.
+                    let mut rels: HashMap<String, Box<dyn Relation>> = HashMap::new();
+                    #(#registry_inserts)*
+                    #(#file_ingests)*
+                    for (_, r) in rels.iter_mut() {
+                        r.apply_inline(index);
+                    }
+                    for (_, r) in rels.iter_mut() {
+                        r.close();
+                    }
+
+                    while worker.step() {}
+
+                    // Flush per-worker output buffers into the shared ones,
+                    // then worker 0 merges and writes results.
+                    #(#flush)*
+                    barrier.wait();
+
+                    #time_profile_write
+                    #memory_profile_write
+
+                    if index == 0 {
+                        println!("{:?}:\tDataflow executed", timer.elapsed());
+                        #(#merge_blocks)*
+                    }
                 }
-
-                let mut rels: HashMap<String, Box<dyn RelOps>> = HashMap::new();
-                #(#registry_inserts)*
-
-                #(#file_ingests)*
-                for (_, r) in rels.iter_mut() {
-                    r.apply_inline(index);
-                }
-                for (_, r) in rels.iter_mut() {
-                    r.close();
-                }
-
-                while worker.step() {}
-
-                #(#flush)*
-
-                barrier.wait();
-
-                #time_profile_write
-                #memory_profile_write
-
-                if index == 0 {
-                    println!("{:?}:\tDataflow executed", timer.elapsed());
-                    #(#merge)*
-                }
-            }})
+            })
             .unwrap();
         }
     }

@@ -25,6 +25,7 @@
 
 pub mod intern;
 pub mod io;
+pub mod sort;
 
 /// Trait implemented by every generated input relation struct.
 ///

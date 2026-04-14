@@ -1,7 +1,4 @@
-//! Input dataflow setup for the FlowLog compiler.
-//!
-//! Generates `(handle, collection)` declarations and handle bindings.
-//! Data ingestion (file reading, inline facts) is handled by the `relops` module.
+//! Per-EDB `(handle, collection)` declarations for the dataflow scope.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -17,7 +14,7 @@ impl Generator {
     /// ```ignore
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
-    pub(crate) fn gen_input_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
+    pub(crate) fn gen_edb_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
         let normalize = self.dedup_nonrecursive();
 
         let edbs = self.program.edbs();
@@ -108,5 +105,4 @@ impl Generator {
             }
         }
     }
-
 }

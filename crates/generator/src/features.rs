@@ -13,7 +13,7 @@ use std::collections::HashSet;
 // =========================================================================
 
 /// Numeric DataTypes in canonical order for semiring code generation.
-pub(crate) const INT_DATA_TYPES: [DataType; 8] = [
+const INT_DATA_TYPES: [DataType; 8] = [
     DataType::Int8,
     DataType::Int16,
     DataType::Int32,
@@ -23,20 +23,20 @@ pub(crate) const INT_DATA_TYPES: [DataType; 8] = [
     DataType::UInt32,
     DataType::UInt64,
 ];
-pub(crate) const FLOAT_DATA_TYPES: [DataType; 2] = [DataType::Float32, DataType::Float64];
+const FLOAT_DATA_TYPES: [DataType; 2] = [DataType::Float32, DataType::Float64];
 
 /// Tracks which semiring modules (operator × numeric type) are needed.
 /// Count is normalized to Sum on insert.
 #[derive(Default, Clone)]
-pub(crate) struct AggSemiringNeeds(HashSet<(AggregationOperator, DataType)>);
+pub struct AggSemiringNeeds(HashSet<(AggregationOperator, DataType)>);
 
 impl AggSemiringNeeds {
     #[inline]
-    pub fn any(&self) -> bool {
+    pub(crate) fn any(&self) -> bool {
         !self.0.is_empty()
     }
 
-    pub fn insert(&mut self, op: AggregationOperator, dt: DataType) {
+    pub(crate) fn insert(&mut self, op: AggregationOperator, dt: DataType) {
         assert!(
             dt.is_numeric(),
             "Generator error: semiring only supports numeric types, got {dt}"
@@ -70,7 +70,7 @@ macro_rules! bool_features {
     ($(($field:ident, $marker:ident)),* $(,)?) => {
         $(
             #[inline]
-            pub(crate) fn $field(&self) -> bool { self.$field }
+            pub fn $field(&self) -> bool { self.$field }
             #[inline]
             pub(crate) fn $marker(&mut self) { self.$field = true; }
         )*
@@ -79,8 +79,8 @@ macro_rules! bool_features {
 
 /// Tracks which codegen features are active for the current compilation unit.
 #[must_use]
-#[derive(Default)]
-pub(crate) struct Features {
+#[derive(Default, Clone)]
+pub struct Features {
     // -- differential-dataflow / timely --
     dd_input: bool,
     as_collection: bool,
@@ -130,12 +130,12 @@ impl Features {
     }
 
     #[inline]
-    pub(crate) fn agg_semiring(&self) -> bool {
+    pub fn agg_semiring(&self) -> bool {
         self.agg_semirings.any()
     }
 
     #[inline]
-    pub(crate) fn agg_semirings(&self) -> &AggSemiringNeeds {
+    pub fn agg_semirings(&self) -> &AggSemiringNeeds {
         &self.agg_semirings
     }
 }

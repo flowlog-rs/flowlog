@@ -1,7 +1,6 @@
-//! Input ingestion and output writing for the FlowLog compiler.
+//! Dataflow I/O boundaries: EDB input handles and IDB output buffers.
 
-pub(crate) mod input;
-pub(crate) mod output;
-pub(crate) mod relops;
+pub(crate) mod edb_handles;
+pub(crate) mod idb_buffers;
 
-pub(crate) use output::InspectorCodegen;
+pub(crate) use idb_buffers::InspectorCodegen;

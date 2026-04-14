@@ -7,11 +7,20 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::Generator;
+use parser::Relation;
 
-pub(super) mod data;
+use crate::Generator;
+use data::data_type_tokens;
+
+pub(crate) mod data;
 pub(super) mod diff;
 pub(super) mod time;
+
+/// Tuple element type: `(data, timestamp, difference)`.
+pub(crate) fn tuple_type(idb: &Relation, string_intern: bool) -> TokenStream {
+    let tuple_ty = data_type_tokens(&idb.data_type(), string_intern);
+    quote! { (#tuple_ty, Ts, i32) }
+}
 
 impl Generator {
     /// Emit all type aliases and constants for the `(Data, Diff, Time)` triple.

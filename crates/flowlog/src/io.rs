@@ -76,14 +76,17 @@ pub fn byte_range_reader(
         return Some((BufReader::new(file), 0));
     }
 
-    // Worker 0 always starts at byte 0 — no alignment needed.
-    if index == 0 {
+    // Any worker whose range begins at byte 0 reads from the start with no
+    // alignment skip — there's no previous byte to peek at. Worker 0 always
+    // hits this; others hit it when `chunk == 0` (peers > file_size), which
+    // puts the whole file on the last worker.
+    if start == 0 {
         return Some((BufReader::new(file), end));
     }
 
-    // Non-zero workers: seek to `start - 1` and peek the byte just
-    // before our range. If it's a newline we're on a line boundary;
-    // otherwise skip the rest of the partial line.
+    // Non-zero start: seek to `start - 1` and peek the byte just before our
+    // range. If it's a newline we're on a line boundary; otherwise skip the
+    // rest of the partial line.
     if file.seek(SeekFrom::Start(start - 1)).is_err() {
         return Some((BufReader::new(file), 0));
     }

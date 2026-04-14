@@ -18,38 +18,32 @@ use generator::AssemblyParts;
 use crate::Compiler;
 
 impl Compiler {
-    /// Assemble a complete `main.rs` source file from [`AssemblyParts`].
-    ///
-    /// 1. Delegates to [`batch::gen_batch_main`] or [`inc::gen_incremental_main`].
-    /// 2. Prepends imports, type declarations, and helper functions.
-    /// 3. Pretty-prints via [`common::pretty_print`].
-    pub(crate) fn assemble_main(&self, parts: &AssemblyParts) -> String {
+    pub(crate) fn assemble_main(
+        &self,
+        parts: &AssemblyParts,
+        imports: &proc_macro2::TokenStream,
+        worker_helpers: &proc_macro2::TokenStream,
+    ) -> String {
+        let merge_blocks = self.gen_merge_blocks();
+        let input = self.gen_input(parts, &merge_blocks);
+
         let main_fn = match self.config.mode() {
             ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => {
-                batch::gen_batch_main(parts)
+                batch::gen_batch_main(parts, &input, &merge_blocks)
             }
             ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
-                inc::gen_incremental_main(parts)
+                inc::gen_incremental_main(parts, &input, &merge_blocks)
             }
         };
 
-        let AssemblyParts {
-            imports,
-            type_declarations,
-            profile_structs,
-            worker_helpers,
-            ..
-        } = parts;
+        let type_declarations = &parts.type_declarations;
+        let profile_structs = &parts.profile_structs;
 
         let file_ts = quote! {
             #imports
-
             #type_declarations
-
             #profile_structs
-
             #worker_helpers
-
             #main_fn
         };
 

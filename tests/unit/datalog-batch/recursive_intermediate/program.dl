@@ -17,10 +17,10 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl zero(x: int32)
-.input zero(IO="file", filename="zero", delimiter=",")
+.input zero(IO="file", filename="zero.csv", delimiter=",")
 
 .decl succ(x: int32, y: int32)
-.input succ(IO="file", filename="succ", delimiter=",")
+.input succ(IO="file", filename="succ.csv", delimiter=",")
 
 .decl even(x: int32)
 .decl odd(x: int32)

@@ -2,6 +2,8 @@
 members = [
     "crates/catalog",
     "crates/common",
+    "crates/flowlog",
+    "crates/flowlog-build",
     "crates/flowlog-compiler",
     "crates/generator",
     "crates/optimizer",

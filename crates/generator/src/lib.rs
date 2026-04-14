@@ -1,10 +1,9 @@
-//! FlowLog Code Generator
+//! FlowLog code generator.
 //!
-//! Produces reusable code fragments from a parsed FlowLog program and
-//! stratified execution plan.  The output is an [`AssemblyParts`] struct
-//! that contains every token stream and rendered source file needed by a
-//! downstream compiler (e.g. `flowlog-compiler`) or build tool
-//! (e.g. the future `flowlog-build`).
+//! Turns a parsed program + stratified execution plan into an
+//! [`AssemblyParts`] bundle of token-stream fragments. Downstream crates
+//! assemble them into their own Rust source (binary via `flowlog-compiler`,
+//! library via `flowlog-build`).
 
 // =========================================================================
 // Module Declarations
@@ -13,17 +12,16 @@ mod aggregation;
 mod arg;
 mod assembly;
 mod dedup;
-mod features;
+pub mod features;
 mod flow;
 mod ident;
-mod import;
 mod io;
 mod profile;
-mod scaffold;
 mod semiring;
 mod ty;
 
 pub use assembly::AssemblyParts;
+pub use io::idb_buffers::{field_accessor, gen_drain_block};
 
 // =========================================================================
 // Imports
@@ -71,6 +69,11 @@ impl Generator {
         gen.make_global_ident_map();
         gen.make_global_data_type_map();
         gen
+    }
+
+    /// Feature flags populated during [`Self::generate`].
+    pub fn features(&self) -> &features::Features {
+        &self.features
     }
 
     /// Run all code-generation passes and return the complete

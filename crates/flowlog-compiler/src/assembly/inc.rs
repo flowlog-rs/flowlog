@@ -12,10 +12,16 @@ use quote::quote;
 
 use generator::AssemblyParts;
 
+use crate::io::input::Input;
+
 /// Emit the complete incremental-mode `fn main() { ... }` token stream.
-pub(crate) fn gen_incremental_main(p: &AssemblyParts) -> TokenStream {
+pub(crate) fn gen_incremental_main(
+    p: &AssemblyParts,
+    rp: &Input,
+    merge_blocks: &[TokenStream],
+) -> TokenStream {
     let AssemblyParts {
-        edb_inputs,
+        edb_decls,
         handle_binding,
         dataflow_return,
         flows,
@@ -24,14 +30,19 @@ pub(crate) fn gen_incremental_main(p: &AssemblyParts) -> TokenStream {
         local_bufs,
         inspectors,
         flush,
-        merge,
-        registry_inserts,
-        preload,
+        size_cell_decls,
+        size_cell_clones,
         profile_init,
         time_profile_write_incremental: time_profile_write,
         memory_profile_write_incremental: memory_profile_write,
         ..
     } = p;
+    let Input {
+        registry_inserts,
+        preload,
+        ..
+    } = rp;
+    let merge = merge_blocks;
 
     quote! {
         fn main() {
@@ -42,11 +53,13 @@ pub(crate) fn gen_incremental_main(p: &AssemblyParts) -> TokenStream {
             let barrier = worker_barrier_from_args(&args);
 
             #(#output_bufs)*
+            #(#size_cell_decls)*
 
             timely::execute_from_args(args.into_iter(), {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
                 #(#output_buf_clones)*
+                #(#size_cell_clones)*
 
                 move |worker| {
                     let timer = Instant::now();
@@ -59,7 +72,7 @@ pub(crate) fn gen_incremental_main(p: &AssemblyParts) -> TokenStream {
 
                     let #handle_binding =
                         worker.dataflow::<Ts, _, _>(|scope| {
-                            #(#edb_inputs)*
+                            #(#edb_decls)*
                             #(#flows)*
 
                             let mut probe = ProbeHandle::new();
@@ -69,7 +82,7 @@ pub(crate) fn gen_incremental_main(p: &AssemblyParts) -> TokenStream {
                             #dataflow_return
                         });
 
-                    let mut rels: HashMap<String, Box<dyn RelOps>> = HashMap::new();
+                    let mut rels: HashMap<String, Box<dyn Relation>> = HashMap::new();
                     #(#registry_inserts)*
 
                     let mut time_stamp: u32 = 0;
@@ -78,7 +91,7 @@ pub(crate) fn gen_incremental_main(p: &AssemblyParts) -> TokenStream {
 
                     // Helper: apply a list of txn ops to this worker's input handles.
                     fn apply_ops(
-                        rels: &mut HashMap<String, Box<dyn RelOps>>,
+                        rels: &mut HashMap<String, Box<dyn Relation>>,
                         ops: &[TxnOp],
                         peers: usize,
                         index: usize,
