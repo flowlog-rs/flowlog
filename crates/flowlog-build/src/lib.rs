@@ -61,6 +61,8 @@ pub use codegen::idb_buffers::{field_accessor, gen_drain_block};
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub use common::ExecutionMode;
+
 /// Return Cargo's `$OUT_DIR` — set automatically when a `build.rs` runs.
 fn cargo_out_dir() -> io::Result<PathBuf> {
     std::env::var("OUT_DIR").map(PathBuf::from).map_err(|_| {
@@ -92,6 +94,10 @@ pub struct Builder {
     pub(crate) sip: bool,
     /// Enable transparent string interning. See [`Self::string_intern`].
     pub(crate) string_intern: bool,
+    /// Execution mode — defaults to [`ExecutionMode::DatalogBatch`]; set
+    /// to `ExtendBatch` to accept `loop` / `fixpoint` blocks. See
+    /// [`Self::extended`].
+    pub(crate) mode: ExecutionMode,
     /// Extra search path for `.include` directives. Populated from
     /// [`Self::compile`]'s second argument.
     pub(crate) include_dirs: Vec<PathBuf>,
@@ -112,6 +118,7 @@ impl Builder {
         Self {
             sip: false,
             string_intern: false,
+            mode: ExecutionMode::DatalogBatch,
             include_dirs: Vec::new(),
             udf_file: None,
         }
@@ -127,6 +134,17 @@ impl Builder {
     /// interning is applied transparently at `insert_<rel>` / drain.
     pub fn string_intern(mut self, enabled: bool) -> Self {
         self.string_intern = enabled;
+        self
+    }
+
+    /// Select the execution mode. Defaults to [`ExecutionMode::DatalogBatch`].
+    ///
+    /// - `DatalogBatch` — plain Datalog, `Present` diffs, fast path.
+    /// - `ExtendBatch` — adds `loop` / `fixpoint` blocks; uses `i32` diffs.
+    /// - `DatalogInc` / `ExtendInc` — not yet supported by the library-mode
+    ///   engine; selecting them fails at [`compile`](Self::compile) time.
+    pub fn mode(mut self, mode: ExecutionMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -168,6 +186,20 @@ impl Builder {
     }
 
     fn compile_one(&self, program_path: &Path, out_dir: &Path) -> io::Result<()> {
+        if matches!(
+            self.mode,
+            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc
+        ) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "library mode does not yet support {:?}; only \
+                     DatalogBatch and ExtendBatch are wired into the engine",
+                    self.mode
+                ),
+            ));
+        }
+
         let stem = program_path
             .file_stem()
             .and_then(|s| s.to_str())

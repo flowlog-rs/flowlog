@@ -15,7 +15,7 @@ use std::path::Path;
 
 use proc_macro2::TokenStream;
 
-use common::{Config, ExecutionMode};
+use common::Config;
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
@@ -106,7 +106,7 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         fact_dir: None,
         executable_path: None,
         output_dir: Some("-".to_string()),
-        mode: ExecutionMode::DatalogBatch,
+        mode: builder.mode,
         profile: false,
         sip: builder.sip,
         str_intern: builder.string_intern,

@@ -17,7 +17,7 @@ toml_edit = { workspace = true }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
-generator = { path = "../generator" }
+flowlog-build = { path = "../flowlog-build" }
 common = { path = "../common" }
 optimizer = { path = "../optimizer" }
 parser = { path = "../parser" }

@@ -10,17 +10,17 @@ set -euo pipefail
 #   1. Copies the fixture's `program.dl` and `data/*.csv` into a persistent
 #      runner crate at `target/e2e-lib/runner/`.
 #   2. Synthesizes a `src/main.rs` that reads each input CSV, calls
-#      `engine.insert_batch_<rel>(..)`, runs the engine, and writes
+#      `engine.insert_<rel>(..)`, runs the engine, and writes
 #      `output/<rel>` files matching the binary-mode convention.
 #   3. Runs `cargo run --release` on the runner crate.
 #   4. Reuses `compare_expected_outputs` from `common.sh` to diff against
 #      `expected/`.
 #
-# Phase 1 supports `datalog-batch` only. Tests with `commands.txt`
-# (incremental) are skipped.
+# Batch-mode categories only — incremental fixtures (with `commands.txt`)
+# are skipped. Extended syntax (loop / fixpoint blocks) is auto-detected
+# by the pipeline, so `datalog-batch` and `extend-batch` share one entry.
 
-# Override CATEGORIES BEFORE sourcing common.sh — lib mode is batch-only.
-CATEGORIES=(datalog-batch)
+CATEGORIES=(datalog-batch extend-batch)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -66,6 +66,14 @@ run_test() {
     if [[ -f "$test_dir/commands.txt" ]]; then
         ((skipped++)) || true
         return
+    fi
+
+    # extend-batch fixtures need `Builder::extended(true)`; plain datalog
+    # fixtures must keep the fast-path `DatalogBatch` mode.
+    if [[ "$category" == "extend-batch" ]]; then
+        LIB_RUNNER_EXTENDED=1
+    else
+        LIB_RUNNER_EXTENDED=0
     fi
 
     # Stage fixture files into the runner crate. Wipe everything except
@@ -170,7 +178,7 @@ EOF
         local name
         for name in "$@"; do
             local cat
-            cat="$(find_test "$name")" || die "Test not found: $name (searched datalog-batch only)"
+            cat="$(find_test "$name")" || die "Test not found: $name"
             run_test "${TESTS_DIR}/${cat}/${name}" "$cat"
         done
     else

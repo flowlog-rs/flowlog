@@ -184,6 +184,7 @@ EOF
 # Honors optional globals:
 #   LIB_RUNNER_SIP=1         → Builder::sip(true)
 #   LIB_RUNNER_STR_INTERN=1  → Builder::string_intern(true)
+#   LIB_RUNNER_EXTENDED=1    → Builder::mode(ExecutionMode::ExtendBatch)
 #
 # `test_dir` may be empty when called for a warm-up build.
 write_build_rs() {
@@ -204,6 +205,7 @@ write_build_rs() {
     local knob_setters=""
     (( ${LIB_RUNNER_SIP:-0} ))        && knob_setters+=$'        .sip(true)\n'
     (( ${LIB_RUNNER_STR_INTERN:-0} )) && knob_setters+=$'        .string_intern(true)\n'
+    (( ${LIB_RUNNER_EXTENDED:-0} ))   && knob_setters+=$'        .mode(flowlog_build::ExecutionMode::ExtendBatch)\n'
 
     local udf_setter=""
     (( has_udf )) && udf_setter=$'        .udf_file("udf.rs")\n'
