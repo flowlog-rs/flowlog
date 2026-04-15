@@ -1,30 +1,25 @@
 #!/usr/bin/env bash
 #
-# Shared helpers for FlowLog test runners.
+# Shared helpers for FlowLog unit test runners.
 #
 # Sourced by:
 #   tests/unit/unit_compiler.sh — binary mode runner
 #   tests/unit/unit_lib.sh      — library mode runner
 #
+# Pulls generic helpers (colors, log, die, trim) from tests/shared.sh,
+# and layers unit-fixture-specific bits on top: progress bar, test
+# discovery across `tests/unit/<category>/<name>/`, output comparison
+# against `expected/`, and a failure-list summary printer.
+#
 # Not executable on its own — defines functions and globals; the runner
 # script is responsible for invoking `main`.
 
+source "$(dirname "${BASH_SOURCE[0]}")/../shared.sh"
+
 ###############################################################################
-# Constants & globals
+# Unit-test globals
 ###############################################################################
 
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[0;33m'
-readonly BLUE='\033[0;34m'
-readonly BOLD='\033[1m'
-readonly DIM='\033[2m'
-readonly NC='\033[0m'
-readonly CLEAR_LINE='\033[2K'
-
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" \
-    || { echo "error: failed to resolve ROOT_DIR" >&2; exit 1; }
-readonly ROOT_DIR
 readonly TESTS_DIR="${ROOT_DIR}/tests/unit"
 
 # Default category list — runner can override before sourcing if needed.
@@ -45,7 +40,7 @@ declare -a failure_details=()
 export RUST_LOG=error
 
 ###############################################################################
-# Logging / presentation helpers
+# Presentation helpers
 ###############################################################################
 
 # Whether stdout is a terminal (enables progress bar)
@@ -55,25 +50,12 @@ else
     IS_TTY=0
 fi
 
-log() {
-    local color="$1"
-    local tag="$2"
-    shift 2
-    echo -e "${color}[${tag}]${NC} $*"
-}
-
-die() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
-    exit 1
-}
-
 # Print progress bar on a single line (overwritten each call)
 show_progress() {
     local test_label="$1"
     if (( IS_TTY )); then
         local pct=0
         (( total > 0 )) && pct=$(( current * 100 / total ))
-        # Build bar: [████████░░░░░░░░░░░░] 45% (23/51) running: test_name
         local bar_width=20
         local filled=$(( pct * bar_width / 100 ))
         local empty=$(( bar_width - filled ))
@@ -85,7 +67,6 @@ show_progress() {
     fi
 }
 
-# Clear the progress line
 clear_progress() {
     if (( IS_TTY )); then
         printf "${CLEAR_LINE}\r"

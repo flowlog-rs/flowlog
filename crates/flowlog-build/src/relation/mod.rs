@@ -12,7 +12,7 @@
 mod handler;
 pub(crate) mod user;
 
-use proc_macro2::{Ident, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 
 use generator::features::Features;
@@ -57,6 +57,29 @@ pub(crate) fn pascal_case(name: &str) -> String {
         }
     }
     out
+}
+
+/// Turn a user-supplied name (attribute or relation field) into a Rust
+/// `Ident`, using raw-identifier syntax (`r#ref`, `r#type`) when the name
+/// collides with a Rust keyword. All call sites that embed a user name as a
+/// Rust ident must route through this.
+pub(crate) fn rust_ident(name: &str) -> Ident {
+    let is_keyword = matches!(
+        name,
+        "as" | "break" | "const" | "continue" | "crate" | "else" | "enum"
+        | "extern" | "false" | "fn" | "for" | "if" | "impl" | "in" | "let"
+        | "loop" | "match" | "mod" | "move" | "mut" | "pub" | "ref" | "return"
+        | "self" | "Self" | "static" | "struct" | "super" | "trait" | "true"
+        | "type" | "unsafe" | "use" | "where" | "while"
+        | "async" | "await" | "dyn"
+        | "abstract" | "become" | "box" | "do" | "final" | "macro" | "override"
+        | "priv" | "typeof" | "unsized" | "virtual" | "yield" | "try"
+    );
+    if is_keyword {
+        Ident::new_raw(name, Span::call_site())
+    } else {
+        Ident::new(name, Span::call_site())
+    }
 }
 
 /// Ident for the user-facing struct generated from a relation (e.g. `Edge`).
@@ -122,7 +145,7 @@ fn gen_inputs_container(edbs: &[&Relation]) -> TokenStream {
     let fields: Vec<TokenStream> = edbs
         .iter()
         .map(|rel| {
-            let f = format_ident!("{}", rel.name());
+            let f = rust_ident(rel.name());
             let ty = input_struct_ident(rel);
             quote! { pub #f: #ty }
         })
@@ -143,7 +166,7 @@ fn gen_inputs_container(edbs: &[&Relation]) -> TokenStream {
     let inits: Vec<TokenStream> = edbs
         .iter()
         .map(|rel| {
-            let f = format_ident!("{}", rel.name());
+            let f = rust_ident(rel.name());
             let p = format_ident!("h_{}", rel.name());
             quote! { #f: #p }
         })
@@ -152,7 +175,7 @@ fn gen_inputs_container(edbs: &[&Relation]) -> TokenStream {
     let per_field = |method: TokenStream| -> Vec<TokenStream> {
         edbs.iter()
             .map(|rel| {
-                let f = format_ident!("{}", rel.name());
+                let f = rust_ident(rel.name());
                 quote! { self.#f.#method; }
             })
             .collect()

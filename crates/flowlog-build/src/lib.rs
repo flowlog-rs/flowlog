@@ -6,8 +6,7 @@
 //!
 //! - [`compile`] — single-file shortcut with defaults.
 //! - [`configure`] — chained [`Builder`] for advanced options (multiple
-//!   inputs, custom attributes on generated structs, UDFs, string interning,
-//!   optimizations).
+//!   inputs, UDFs, string interning, optimizations).
 //!
 //! # Example: minimal
 //!
@@ -22,23 +21,22 @@
 //! // src/lib.rs
 //! pub mod policy { include!(concat!(env!("OUT_DIR"), "/policy.rs")); }
 //!
-//! use policy::{DatalogBatchEngine, BatchResults};
-//! use policy::rel::Edge;
+//! use policy::DatalogBatchEngine;
 //!
-//! let mut engine = DatalogBatchEngine::new();
-//! engine.insert_edge(Edge { x: 1, y: 2 });
-//! let results: BatchResults = engine.run();
+//! let mut engine = DatalogBatchEngine::new(4); // 4 timely workers
+//! engine.insert_edge(vec![(1, 2), (2, 3)]); // rel::Edge = (i32, i32)
+//! let results = engine.run();
+//! for (src, dst) in &results.reach { println!("{src} -> {dst}"); }
 //! ```
 //!
-//! # Example: multi-file with custom derives
+//! # Example: multi-file with options
 //!
 //! ```no_run
 //! // build.rs
 //! fn main() -> std::io::Result<()> {
 //!     flowlog_build::configure()
 //!         .sip(true)
-//!         .type_attribute("*", "#[derive(serde::Serialize, serde::Deserialize)]")
-//!         .field_attribute("Edge.weight", "#[serde(rename = \"w\")]")
+//!         .string_intern(true)
 //!         .compile(&["policy.dl", "auth.dl"], &[] as &[&std::path::Path])
 //! }
 //! ```
@@ -77,13 +75,6 @@ pub fn configure() -> Builder {
     Builder::new()
 }
 
-/// Pair of `(matcher, attribute)` strings that selects where a user-supplied
-/// Rust attribute gets injected on generated structs or fields.
-///
-/// See [`Builder::type_attribute`] / [`Builder::field_attribute`] for the
-/// matcher syntax (`"*"`, `"Edge"`, `"Edge.weight"`, …).
-type AttributeRule = (String, String);
-
 /// Builder for advanced compilation options. For default settings prefer
 /// the free [`compile`] function.
 pub struct Builder {
@@ -94,10 +85,6 @@ pub struct Builder {
     /// Extra search path for `.include` directives. Populated from
     /// [`Self::compile`]'s second argument.
     pub(crate) include_dirs: Vec<PathBuf>,
-    /// Rust attributes to inject on matching generated structs.
-    pub(crate) type_attribute_rules: Vec<AttributeRule>,
-    /// Rust attributes to inject on matching generated struct fields.
-    pub(crate) field_attribute_rules: Vec<AttributeRule>,
     /// Rust source file implementing the program's `.extern fn` UDFs.
     pub(crate) udf_file: Option<PathBuf>,
 }
@@ -116,8 +103,6 @@ impl Builder {
             sip: false,
             string_intern: false,
             include_dirs: Vec::new(),
-            type_attribute_rules: Vec::new(),
-            field_attribute_rules: Vec::new(),
             udf_file: None,
         }
     }
@@ -128,8 +113,8 @@ impl Builder {
         self
     }
 
-    /// Enable string interning. User-facing struct fields remain `String`;
-    /// interning is applied transparently at `to_tuple()` / `from_tuple()`.
+    /// Enable string interning. User-facing tuple slots remain `String`;
+    /// interning is applied transparently at `insert_<rel>` / drain.
     pub fn string_intern(mut self, enabled: bool) -> Self {
         self.string_intern = enabled;
         self
@@ -141,43 +126,6 @@ impl Builder {
     /// `udf::<fn_name>(…)`.
     pub fn udf_file(mut self, path: impl AsRef<Path>) -> Self {
         self.udf_file = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    /// Inject a Rust attribute on every generated user struct whose
-    /// PascalCase name matches `matcher`.
-    ///
-    /// `matcher` accepts:
-    /// - `"*"` — every user struct (input and output).
-    /// - `"Edge"` — only the struct generated for relation `edge`.
-    ///
-    /// `attribute` is literal Rust attribute syntax, e.g.
-    /// `"#[derive(serde::Serialize)]"`. It is parsed at codegen time;
-    /// invalid syntax fails the build with a clear error.
-    pub fn type_attribute(
-        mut self,
-        matcher: impl Into<String>,
-        attribute: impl Into<String>,
-    ) -> Self {
-        self.type_attribute_rules
-            .push((matcher.into(), attribute.into()));
-        self
-    }
-
-    /// Inject a Rust attribute on individual generated struct fields.
-    ///
-    /// `matcher` accepts:
-    /// - `"*.*"` — every field of every struct.
-    /// - `"Edge.*"` — every field of `Edge`.
-    /// - `"*.weight"` — every field named `weight` across all structs.
-    /// - `"Edge.weight"` — the `weight` field of `Edge`.
-    pub fn field_attribute(
-        mut self,
-        matcher: impl Into<String>,
-        attribute: impl Into<String>,
-    ) -> Self {
-        self.field_attribute_rules
-            .push((matcher.into(), attribute.into()));
         self
     }
 
@@ -221,13 +169,7 @@ impl Builder {
             })?;
 
         let output = pipeline::run(self, program_path)?;
-        let source = assembly::assemble(
-            &output,
-            out_dir,
-            &self.type_attribute_rules,
-            &self.field_attribute_rules,
-            self.udf_file.as_deref(),
-        )?;
+        let source = assembly::assemble(&output, out_dir, self.udf_file.as_deref())?;
 
         self.emit_semiring_modules(&output, out_dir)?;
         std::fs::write(out_dir.join(format!("{stem}.rs")), source)?;

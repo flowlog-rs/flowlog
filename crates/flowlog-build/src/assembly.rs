@@ -19,8 +19,6 @@ use crate::pipeline::Pipeline;
 pub(crate) fn assemble(
     pipeline: &Pipeline,
     out_dir: &Path,
-    type_attrs: &[(String, String)],
-    field_attrs: &[(String, String)],
     udf_file: Option<&Path>,
 ) -> io::Result<String> {
     let string_intern = pipeline.features.string_intern();
@@ -28,12 +26,7 @@ pub(crate) fn assemble(
     let semiring_mod = gen_semiring_mod(pipeline, out_dir);
     let lib_imports = crate::imports::gen_lib_imports(&pipeline.relations, &pipeline.features);
     let type_declarations = &pipeline.parts.type_declarations;
-    let rel_module = crate::relation::user::gen_public_rel_module(
-        &pipeline.program,
-        string_intern,
-        type_attrs,
-        field_attrs,
-    );
+    let rel_module = crate::relation::user::gen_public_rel_module(&pipeline.program);
     let batch_results = crate::results::gen_batch_results(&pipeline.program);
     let lib_engine =
         crate::engine::gen_lib_engine(&pipeline.program, string_intern, &pipeline.parts);
@@ -53,6 +46,7 @@ pub(crate) fn assemble(
             unused_variables,
             unused_mut,
             non_camel_case_types,
+            non_snake_case,
             clippy::all,
         )]
         mod __flowlog_gen {
