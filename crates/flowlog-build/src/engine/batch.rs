@@ -12,16 +12,17 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use generator::{data_type_tokens, gen_drain_block, AssemblyParts};
 use parser::{DataType, Program, Relation};
 
+use crate::codegen::ty::data::tuple_tokens;
 use crate::relation::user::{tuple_to_user_expr, user_to_tuple_expr};
 use crate::relation::{input_struct_ident, rust_ident, user_struct_ident};
+use crate::{data_type_tokens, gen_drain_block, CodeParts};
 
 pub(crate) fn gen_lib_engine(
     program: &Program,
     string_intern: bool,
-    parts: &AssemblyParts,
+    parts: &CodeParts,
 ) -> TokenStream {
     let edbs = program.edbs();
 
@@ -116,11 +117,12 @@ fn gen_one_rel_methods(rel: &Relation, string_intern: bool) -> TokenStream {
     let data = data_field_ident(rel);
 
     if rel.arity() == 0 {
-        // Nullary: presence. `set_foo()` stages the singleton in bucket 0
-        // (worker 0 ingests it). Omit the call entirely if the fact should
-        // not hold.
+        // Nullary relations encode presence: call `set_foo()` to assert
+        // the fact, or don't call it at all. Bucket 0 → worker 0 ingests
+        // the singleton.
         let set = format_ident!("set_{}", name);
         return quote! {
+            /// Assert the nullary fact. Omit the call if it should not hold.
             pub fn #set(&mut self) {
                 self.#data[0].push(());
             }
@@ -141,11 +143,8 @@ fn gen_one_rel_methods(rel: &Relation, string_intern: bool) -> TokenStream {
     };
 
     quote! {
-        /// Stage a batch of tuples. Items are chunk-distributed across
-        /// worker buckets in one pass — each bucket is pre-reserved, no
-        /// reallocations, no per-item modulo — so `run()` has no host-side
-        /// partition step. Remainder is spread across the first
-        /// `len % workers` buckets so every chunk differs by at most one.
+        /// Stage a batch of tuples, evenly distributed across worker
+        /// buckets. Callable multiple times; each call just appends.
         pub fn #insert(&mut self, items: Vec<rel::#struct_ident>) {
             let total = items.len();
             if total == 0 { return; }
@@ -171,7 +170,7 @@ fn gen_one_rel_methods(rel: &Relation, string_intern: bool) -> TokenStream {
 fn gen_run_body(
     program: &Program,
     edbs: &[&Relation],
-    parts: &AssemblyParts,
+    parts: &CodeParts,
     string_intern: bool,
 ) -> TokenStream {
     let edb_decls = &parts.edb_decls;
@@ -318,6 +317,8 @@ fn gen_result_fields(program: &Program) -> Vec<TokenStream> {
     fields
 }
 
+/// Per-output block that produces the typed local (`reach`, `tc_size`, …)
+/// `BatchResults` then names in its struct literal.
 fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> {
     let mut blocks = Vec::new();
 
@@ -399,17 +400,12 @@ fn per_position_tuple(
     if !needs_conversion(rel, string_intern) {
         return identity;
     }
-    let elems: Vec<TokenStream> = rel
-        .data_type()
-        .iter()
-        .enumerate()
-        .map(|(i, dt)| elem(dt, src(i)))
-        .collect();
-    if let [only] = elems.as_slice() {
-        quote! { ( #only, ) }
-    } else {
-        quote! { ( #(#elems),* ) }
-    }
+    tuple_tokens(
+        rel.data_type()
+            .iter()
+            .enumerate()
+            .map(|(i, dt)| elem(dt, src(i))),
+    )
 }
 
 /// User-tuple `item` → internal `Tuple`. Used at insert time.

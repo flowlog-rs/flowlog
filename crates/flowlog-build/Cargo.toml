@@ -9,9 +9,10 @@ description = "Build-time FlowLog compiler — emits a typed DatalogBatchEngine 
 [dependencies]
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
+tracing.workspace = true
 
 common = { path = "../common" }
-generator = { path = "../generator" }
 optimizer = { path = "../optimizer" }
 parser = { path = "../parser" }
 planner = { path = "../planner" }

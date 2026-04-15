@@ -5,9 +5,9 @@
 //! - Per-EDB `{Name}Input` structs with inherent methods (no `RelOps` trait,
 //!   no dynamic dispatch) — see [`handler`].
 //! - A concrete `Inputs` container the library engine holds directly.
-//! - User-facing `rel::Foo` structs — see [`user`].
+//! - User-facing `rel::Foo` tuple aliases — see [`user`].
 //!
-//! Binary mode has its own relation codegen in `flowlog-compiler::relation`.
+//! Binary mode has its own relation codegen in `flowlog-compiler`.
 
 mod handler;
 pub(crate) mod user;
@@ -15,10 +15,12 @@ pub(crate) mod user;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 
-use generator::features::Features;
 use parser::{Program, Relation};
 
-/// Emit the library-mode relation module body (`mod relation { … }` contents).
+use crate::codegen::features::Features;
+
+/// Emit the body of the library-mode `relops` module — EDB input handlers
+/// + the `Inputs` container — plus the `use` lines they depend on.
 pub(crate) fn gen_input_module(program: &Program, features: &Features) -> TokenStream {
     let edbs = program.edbs();
     let string_intern = features.string_intern();
@@ -96,6 +98,9 @@ pub(crate) fn input_struct_ident(rel: &Relation) -> Ident {
 // Preamble
 // ------------------------------------------------------------
 
+/// `use` lines the emitted input-handler code needs — only pulls in
+/// interning / `OrderedFloat` / `SEMIRING_ONE` when at least one EDB
+/// actually needs them.
 fn gen_preamble(program: &Program, features: &Features) -> TokenStream {
     let facts = program.facts();
     let edbs = program.edbs();

@@ -7,11 +7,14 @@
 //!
 //! There is no `apply_file` — library mode is a pure typed API.
 
-use proc_macro2::{Literal, TokenStream};
+use proc_macro2::TokenStream;
 use quote::quote;
 
-use generator::data_type_tokens;
 use parser::{ConstType, Relation};
+
+use crate::codegen::arg::const_to_token;
+use crate::codegen::ty::data::tuple_tokens;
+use crate::data_type_tokens;
 
 use super::input_struct_ident;
 
@@ -99,27 +102,5 @@ fn gen_apply_inline(
 }
 
 fn fact_tuple(row: &[ConstType], string_intern: bool) -> TokenStream {
-    let elems: Vec<TokenStream> = row.iter().map(|c| fact_const(c, string_intern)).collect();
-    // One-element tuples need the trailing comma to parse as a tuple.
-    if let [only] = elems.as_slice() {
-        quote! { ( #only, ) }
-    } else {
-        quote! { ( #(#elems),* ) }
-    }
-}
-
-fn fact_const(c: &ConstType, string_intern: bool) -> TokenStream {
-    match c {
-        ConstType::Int(i) => {
-            let lit = Literal::i64_unsuffixed(*i);
-            quote! { #lit }
-        }
-        ConstType::Float(v) => {
-            let lit = Literal::f64_unsuffixed(v.into_inner());
-            quote! { OrderedFloat(#lit) }
-        }
-        ConstType::Text(s) if string_intern => quote! { intern(#s) },
-        ConstType::Text(s) => quote! { #s.to_string() },
-        ConstType::Bool(b) => quote! { #b },
-    }
+    tuple_tokens(row.iter().map(|c| const_to_token(c, string_intern)))
 }

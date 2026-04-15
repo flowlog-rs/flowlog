@@ -48,6 +48,16 @@ mod pipeline;
 mod relation;
 mod results;
 
+// `codegen` is the shared codegen core — used by this crate's library mode
+// and, via the re-exports below, by `flowlog-compiler`'s binary mode.
+mod codegen;
+
+pub use codegen::CodeGen;
+pub use codegen::code_parts::CodeParts;
+pub use codegen::features::Features;
+pub use codegen::ty::data::data_type_tokens;
+pub use codegen::idb_buffers::{field_accessor, gen_drain_block};
+
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -131,15 +141,15 @@ impl Builder {
 
     /// Compile one or more FlowLog `.dl` programs.
     ///
-    /// `program_paths` are the inputs; each produces a separate `<stem>.rs`
-    /// file in the output directory (`policy.dl` → `policy.rs`).
+    /// Each entry in `program_paths` produces a separate `<stem>.rs` file
+    /// in the output directory (`policy.dl` → `policy.rs`).
     ///
     /// `include_dirs` is an extra search path for `.include` directives.
     /// Includes resolve relative to the parent file's directory first, then
     /// each entry in `include_dirs` in order. Pass `&[]` if not needed.
     ///
-    /// Builder configuration (optimizations, attribute rules, UDFs)
-    /// applies to every input.
+    /// Builder settings (optimizations, interning, UDF file) apply to
+    /// every input.
     pub fn compile<P, I>(mut self, program_paths: &[P], include_dirs: &[I]) -> io::Result<()>
     where
         P: AsRef<Path>,
@@ -168,7 +178,7 @@ impl Builder {
                 )
             })?;
 
-        let output = pipeline::run(self, program_path)?;
+        let output = pipeline::Pipeline::build(self, program_path)?;
         let source = assembly::assemble(&output, out_dir, self.udf_file.as_deref())?;
 
         self.emit_semiring_modules(&output, out_dir)?;
@@ -183,7 +193,7 @@ impl Builder {
     /// `serde`, `ordered_float`, and `differential_dataflow` as direct deps.
     /// Library mode only has `flowlog-runtime` in its `[dependencies]`, so we
     /// prepend aliases that route the bare paths through `::flowlog_runtime::`
-    /// — keeping the generator output mode-agnostic.
+    /// — keeping the emitted semiring code mode-agnostic.
     fn emit_semiring_modules(
         &self,
         output: &pipeline::Pipeline,
@@ -205,12 +215,12 @@ use ::flowlog_runtime::differential_dataflow;
             let fname = Path::new(rel_path)
                 .file_name()
                 .expect("semiring module path has no file name");
-            let patched = if fname != "mod.rs" {
-                format!("{LIB_ALIASES}{content}")
+            let dst = semiring_dir.join(fname);
+            if fname == "mod.rs" {
+                std::fs::write(dst, content)?;
             } else {
-                content.clone()
-            };
-            std::fs::write(semiring_dir.join(fname), patched)?;
+                std::fs::write(dst, format!("{LIB_ALIASES}{content}"))?;
+            }
         }
         Ok(())
     }

@@ -6,27 +6,29 @@
 //! parse → stratify → plan → generate (+ library-mode relation module)
 //! ```
 //!
-//! [`run`] executes each stage and returns a [`Pipeline`] bundling the
-//! artifacts library-mode assembly consumes in [`crate::assembly`].
+//! [`Pipeline::build`] executes each stage and returns a [`Pipeline`]
+//! bundling the artifacts library-mode assembly consumes in
+//! [`crate::assembly`].
 
 use std::io;
 use std::path::Path;
 
+use proc_macro2::TokenStream;
+
 use common::{Config, ExecutionMode};
-use generator::features::Features;
-use generator::{AssemblyParts, Generator};
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
-use proc_macro2::TokenStream;
 use stratifier::Stratifier;
 
-use crate::Builder;
+use crate::codegen::features::Features;
+use crate::relation::gen_input_module;
+use crate::{Builder, CodeGen, CodeParts};
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
 pub(crate) struct Pipeline {
     /// Mode-agnostic codegen fragments (type decls, dataflow, drain, …).
-    pub parts: AssemblyParts,
+    pub parts: CodeParts,
     /// Parsed program — used by assembly for per-relation codegen.
     pub program: Program,
     /// Library-mode relation module: `{Name}Input` handlers + `Inputs` container.
@@ -35,33 +37,36 @@ pub(crate) struct Pipeline {
     pub features: Features,
 }
 
-/// Compile `program_path` through every pipeline stage.
-pub(crate) fn run(builder: &Builder, program_path: &Path) -> io::Result<Pipeline> {
-    let program_str = program_path.to_str().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("non-UTF-8 program path: {}", program_path.display()),
-        )
-    })?;
+impl Pipeline {
+    /// Compile `program_path` through every pipeline stage.
+    pub(crate) fn build(builder: &Builder, program_path: &Path) -> io::Result<Self> {
+        let program_str = program_path.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("non-UTF-8 program path: {}", program_path.display()),
+            )
+        })?;
 
-    let config = build_config(builder, program_str);
-    let program = parse(&config, &builder.include_dirs);
-    let strata = plan(&config, &program);
+        let config = build_config(builder, program_str);
+        let program = parse(&config, &builder.include_dirs);
+        let strata = plan(&config, &program);
 
-    let mut profiler = None;
-    let mut generator = Generator::new(config, program.clone());
-    let parts = generator.generate(&strata, &mut profiler);
-    let features = generator.features().clone();
-    let relations = crate::relation::gen_input_module(&program, &features);
+        let mut profiler = None;
+        let mut cg = CodeGen::new(config, program.clone());
+        let parts = cg.generate(&strata, &mut profiler);
+        let features = cg.features().clone();
+        let relations = gen_input_module(&program, &features);
 
-    Ok(Pipeline {
-        parts,
-        program,
-        relations,
-        features,
-    })
+        Ok(Self {
+            parts,
+            program,
+            relations,
+            features,
+        })
+    }
 }
 
+/// Parse the program, resolving `.include` directives against `include_dirs`.
 fn parse(config: &Config, include_dirs: &[std::path::PathBuf]) -> Program {
     let include_refs: Vec<&Path> = include_dirs.iter().map(|p| p.as_path()).collect();
     Program::parse_with_includes(config.program(), config.is_extended(), &include_refs)

@@ -11,9 +11,14 @@ use std::path::Path;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use generator::features::Features;
+use common::pretty_print;
 
+use crate::codegen::features::Features;
+use crate::engine::gen_lib_engine;
+use crate::imports::gen_lib_imports;
 use crate::pipeline::Pipeline;
+use crate::relation::user::gen_public_rel_module;
+use crate::results::gen_batch_results;
 
 /// Render the library-mode source file for one compiled program.
 pub(crate) fn assemble(
@@ -24,12 +29,11 @@ pub(crate) fn assemble(
     let string_intern = pipeline.features.string_intern();
 
     let semiring_mod = gen_semiring_mod(pipeline, out_dir);
-    let lib_imports = crate::imports::gen_lib_imports(&pipeline.relations, &pipeline.features);
+    let lib_imports = gen_lib_imports(&pipeline.relations, &pipeline.features);
     let type_declarations = &pipeline.parts.type_declarations;
-    let rel_module = crate::relation::user::gen_public_rel_module(&pipeline.program);
-    let batch_results = crate::results::gen_batch_results(&pipeline.program);
-    let lib_engine =
-        crate::engine::gen_lib_engine(&pipeline.program, string_intern, &pipeline.parts);
+    let rel_module = gen_public_rel_module(&pipeline.program);
+    let batch_results = gen_batch_results(&pipeline.program);
+    let lib_engine = gen_lib_engine(&pipeline.program, string_intern, &pipeline.parts);
     let udf_mod = gen_udf_mod(&pipeline.features, udf_file)?;
 
     // `include!()` forbids inner attributes at the call site, so the whole
@@ -37,7 +41,7 @@ pub(crate) fn assemble(
     // a top-level `pub use` re-exports the user-visible API. This keeps
     // warnings on unused generated items from leaking into the consumer
     // crate.
-    Ok(common::pretty_print(quote! {
+    Ok(pretty_print(quote! {
         pub use __flowlog_gen::*;
 
         #[allow(

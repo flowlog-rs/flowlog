@@ -1,13 +1,19 @@
-//! Library-mode import generation.
+//! `use` statements emitted into the library-mode generated file.
+//!
+//! Every external crate reference is funneled through `::flowlog_runtime::`
+//! so the consumer only needs `flowlog-runtime` in `[dependencies]` — DD,
+//! timely, `lasso`, `ordered_float`, `serde` are all re-exported from
+//! there.
 
-use generator::features::Features;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-/// Emit library-mode imports. All external crate references go through
-/// `::flowlog_runtime::` so the user only needs `flowlog-runtime` in
-/// `[dependencies]`.
-pub(crate) fn gen_lib_imports(lib_relops: &TokenStream, features: &Features) -> TokenStream {
+use crate::codegen::features::Features;
+
+/// Emit every import the generated library-mode module needs, including the
+/// private `mod relops { … }` wrapper that encapsulates the input-handler
+/// types.
+pub(crate) fn gen_lib_imports(relops_body: &TokenStream, features: &Features) -> TokenStream {
     let ordered_float_import = if features.ordered_float() {
         quote! { use ::flowlog_runtime::ordered_float; }
     } else {
@@ -24,7 +30,7 @@ pub(crate) fn gen_lib_imports(lib_relops: &TokenStream, features: &Features) -> 
             use ::flowlog_runtime::differential_dataflow;
             #ordered_float_import
             #lasso_import
-            #lib_relops
+            #relops_body
         }
         use relops::*;
         use std::sync::{Arc, Mutex};
@@ -32,14 +38,13 @@ pub(crate) fn gen_lib_imports(lib_relops: &TokenStream, features: &Features) -> 
         use std::cell::RefCell;
     }];
 
-    // DD/timely imports — all prefixed with ::flowlog_runtime::
-    out.push(lib_dd_imports(features));
+    out.push(dd_imports(features));
 
     if features.timely_map() {
         out.push(quote! { use ::flowlog_runtime::timely::dataflow::operators::vec::Map; });
     }
 
-    out.push(lib_string_intern_imports(features));
+    out.push(string_intern_imports(features));
     if features.ordered_float() {
         out.push(quote! { use ::flowlog_runtime::ordered_float::OrderedFloat; });
     }
@@ -47,7 +52,9 @@ pub(crate) fn gen_lib_imports(lib_relops: &TokenStream, features: &Features) -> 
     quote! { #(#out)* }
 }
 
-fn lib_dd_imports(f: &Features) -> TokenStream {
+/// DD + timely `use` lines, conditioned on which features the generated
+/// code actually exercised.
+fn dd_imports(f: &Features) -> TokenStream {
     let mut out = Vec::new();
 
     if f.dd_input() {
@@ -105,7 +112,8 @@ fn lib_dd_imports(f: &Features) -> TokenStream {
     quote! { #(#out)* }
 }
 
-fn lib_string_intern_imports(f: &Features) -> TokenStream {
+/// `intern` / `resolve` / `Spur` imports; empty when interning is off.
+fn string_intern_imports(f: &Features) -> TokenStream {
     if !f.string_intern() {
         return quote! {};
     }
