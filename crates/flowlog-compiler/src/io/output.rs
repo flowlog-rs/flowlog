@@ -5,7 +5,7 @@
 //!
 //! - **`.output`**: drain the shared buffer, apply `ORDER BY` / `LIMIT` via
 //!   [`generator::gen_drain_block`] (shared with library mode through
-//!   `::flowlog::sort::*`), then write each row to a file (default) or
+//!   `::flowlog_runtime::sort::*`), then write each row to a file (default) or
 //!   stderr (`-D -`).
 //! - **`.printsize`**: read the shared size cell and report it to stderr.
 

@@ -306,7 +306,7 @@ impl Generator {
 ///
 /// When `string_intern` is true, `DataType::String` maps to `Spur`;
 /// otherwise it maps to `String`.
-pub(crate) fn data_type_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
+pub fn data_type_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
     let tys: Vec<TokenStream> = input_types
         .iter()
         .map(|dt| match dt {

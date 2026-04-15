@@ -104,6 +104,22 @@ parse_output_relations() {
 parse_decl_fields() {
     local dl_file="$1"
     local rel="$2"
+    _parse_decl "$dl_file" "$rel" name
+}
+
+# Same as parse_decl_fields but echoes `name:dltype` pairs (for synthesizing
+# per-column CSV parsing in the lib-mode runner's main.rs).
+parse_decl_typed_fields() {
+    local dl_file="$1"
+    local rel="$2"
+    _parse_decl "$dl_file" "$rel" both
+}
+
+# Shared implementation. $3 is "name" or "both".
+_parse_decl() {
+    local dl_file="$1"
+    local rel="$2"
+    local mode="$3"
     local line=""
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
@@ -111,18 +127,48 @@ parse_decl_fields() {
         [[ -n "$line" ]] && break
     done < <(all_dl_files "$dl_file")
     [[ -n "$line" ]] || return 1
-    # Strip everything outside the parens, then split on commas.
     local inside
     inside=$(echo "$line" | sed -E 's/^[^(]*\(([^)]*)\).*$/\1/')
     [[ -n "$inside" ]] || { echo ""; return 0; }  # nullary
-    echo "$inside" \
-        | tr ',' '\n' \
-        | awk -F: '{
-            name = $1
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-            print name
-          }' \
-        | tr '\n' ' '
+    if [[ "$mode" == "both" ]]; then
+        echo "$inside" \
+            | tr ',' '\n' \
+            | awk -F: '{
+                name = $1; ty = $2
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", ty)
+                print name ":" ty
+              }' \
+            | tr '\n' ' '
+    else
+        echo "$inside" \
+            | tr ',' '\n' \
+            | awk -F: '{
+                name = $1
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+                print name
+              }' \
+            | tr '\n' ' '
+    fi
+}
+
+# Map a Datalog type to its Rust equivalent.
+dl_type_to_rust() {
+    case "$1" in
+        int8)              echo "i8" ;;
+        int16)             echo "i16" ;;
+        int32 | signed)    echo "i32" ;;
+        int64)             echo "i64" ;;
+        uint8)             echo "u8" ;;
+        uint16)            echo "u16" ;;
+        uint32 | unsigned) echo "u32" ;;
+        uint64)            echo "u64" ;;
+        float32)           echo "f32" ;;
+        float64)           echo "f64" ;;
+        string)            echo "String" ;;
+        bool)              echo "bool" ;;
+        *)                 echo "$1" ;;
+    esac
 }
 
 # Note: binary mode normalizes relation names to lowercase at parse time
@@ -146,7 +192,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-flowlog = { path = "${ROOT_DIR}/crates/flowlog" }
+flowlog-runtime = { path = "${ROOT_DIR}/crates/flowlog-runtime" }
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
@@ -162,6 +208,63 @@ EOF
 ###############################################################################
 # main.rs synthesis
 ###############################################################################
+
+# Emit a block that reads `data/<csv>`, parses each line into the relation's
+# user struct, and pushes the resulting Vec through `insert_batch_<rel>`.
+gen_csv_loader() {
+    local dl_file="$1"
+    local lower_name="$2"
+    local csv="$3"
+
+    local typed_fields
+    typed_fields=$(parse_decl_typed_fields "$dl_file" "$lower_name") || {
+        echo "// no decl for $lower_name" >&2
+        return 1
+    }
+
+    # Uppercase first letter for the PascalCase struct name.
+    local pascal
+    pascal=$(echo "$lower_name" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
+
+    # Build per-column parse expressions: `cols.next().unwrap().trim().parse::<T>().unwrap()`
+    # (or `.to_string()` for String columns).
+    local fields_parse=""
+    local first=1
+    for pair in $typed_fields; do
+        local name="${pair%%:*}"
+        local dltype="${pair#*:}"
+        local rust_ty
+        rust_ty=$(dl_type_to_rust "$dltype")
+        local expr
+        if [[ "$rust_ty" == "String" ]]; then
+            expr="cols.next().unwrap().trim().to_string()"
+        else
+            expr="cols.next().unwrap().trim().parse::<${rust_ty}>().unwrap()"
+        fi
+        if (( first )); then
+            fields_parse="${name}: ${expr}"
+            first=0
+        else
+            fields_parse+=", ${name}: ${expr}"
+        fi
+    done
+
+    cat <<EOF
+    {
+        let __src = std::fs::read_to_string("data/${csv}")
+            .expect("read data/${csv}");
+        let __items: Vec<${pascal}> = __src
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let mut cols = l.split(',');
+                ${pascal} { ${fields_parse} }
+            })
+            .collect();
+        engine.insert_batch_${lower_name}(__items);
+    }
+EOF
+}
 
 # Build the writer block for one output relation:
 #   - Fetches the field list via parse_decl_fields
@@ -236,37 +339,29 @@ write_main_rs() {
     local dl_file="$1"
     local main_rs="${RUNNER_DIR}/src/main.rs"
 
-    # Inputs: one load_file_<lower>("data/<File>") per .input declaration
-    # whose data file actually exists. Skip relations with no data file.
-    #
-    # Match resolution (in order):
-    #   1. data/<rel>.csv
-    #   2. case-insensitive scan of data/*.csv
-    #   3. data/<rel>           (no extension — some fixtures store raw files)
-    #   4. case-insensitive scan of data/* (no extension)
+    # Inputs: for each .input relation with a matching CSV, parse lines
+    # into the user struct and insert via `engine.insert_batch_<rel>(...)`.
+    # Library mode deliberately exposes no file-loading API, so the runner
+    # does its own CSV parsing — same as a real library consumer would.
+    # Fixture convention: `data/<rel>.csv` (case-insensitive filename scan).
     local load_calls=""
     while IFS= read -r rel; do
         [[ -n "$rel" ]] || continue
+        # Fixture CSV filenames vary in case (e.g. `Edge.csv` for relation
+        # `edge`). Case-insensitive scan of `data/*.csv`.
         local csv=""
-        if [[ -f "${RUNNER_DIR}/data/${rel}.csv" ]]; then
-            csv="${rel}.csv"
-        elif [[ -f "${RUNNER_DIR}/data/${rel}" ]]; then
-            csv="${rel}"
-        else
-            # Try case-insensitive scan over everything in data/.
-            local f base
-            for f in "${RUNNER_DIR}/data/"*; do
-                [[ -f "$f" ]] || continue
-                base="$(basename "$f")"
-                local stem="${base%.csv}"
-                if [[ "${stem,,}" == "$rel" || "${base,,}" == "$rel" ]]; then
-                    csv="$base"
-                    break
-                fi
-            done
-        fi
+        local f base stem
+        for f in "${RUNNER_DIR}/data/"*.csv; do
+            [[ -f "$f" ]] || continue
+            base="$(basename "$f")"
+            stem="${base%.csv}"
+            if [[ "${stem,,}" == "${rel,,}" ]]; then
+                csv="$base"
+                break
+            fi
+        done
         [[ -n "$csv" ]] || continue
-        load_calls+="    engine.load_file_${rel}(\"data/${csv}\");"$'\n'
+        load_calls+=$(gen_csv_loader "$dl_file" "$rel" "$csv")$'\n'
     done < <(parse_input_relations "$dl_file")
 
     # Output writers — one block per .output relation. Binary mode writes
@@ -315,22 +410,32 @@ write_build_rs() {
         done < "$test_dir/include_dirs"
     fi
 
-    if [[ -n "$include_lines" ]]; then
-        cat > "${RUNNER_DIR}/build.rs" <<EOF
-fn main() -> std::io::Result<()> {
-    let include_dirs: Vec<std::path::PathBuf> = vec![
-${include_lines}    ];
-    flowlog_build::configure()
-        .compile(&["program.dl"], &include_dirs)
-}
-EOF
-    else
-        cat > "${RUNNER_DIR}/build.rs" <<'EOF'
-fn main() -> std::io::Result<()> {
-    flowlog_build::compile("program.dl")
-}
-EOF
+    local has_udf=0
+    if [[ -n "$test_dir" && -f "$test_dir/udf.rs" ]]; then
+        has_udf=1
     fi
+
+    local builder_chain=""
+    if [[ -n "$include_lines" ]]; then
+        builder_chain+=$'        .compile(&["program.dl"], &include_dirs)'
+    else
+        builder_chain+=$'        .compile(&["program.dl"] as &[&str], &[] as &[&std::path::Path])'
+    fi
+
+    local udf_setter=""
+    (( has_udf )) && udf_setter=$'        .udf_file("udf.rs")\n'
+
+    local include_decl=""
+    if [[ -n "$include_lines" ]]; then
+        include_decl=$'    let include_dirs: Vec<std::path::PathBuf> = vec![\n'"${include_lines}"$'    ];\n'
+    fi
+
+    cat > "${RUNNER_DIR}/build.rs" <<EOF
+fn main() -> std::io::Result<()> {
+${include_decl}    flowlog_build::configure()
+${udf_setter}${builder_chain}
+}
+EOF
 }
 
 ###############################################################################
@@ -352,10 +457,6 @@ run_test() {
         ((skipped++)) || true
         return
     fi
-    if [[ -f "$test_dir/udf.rs" ]]; then
-        ((skipped++)) || true
-        return
-    fi
 
     # Stage fixture files into the runner crate.
     #
@@ -364,6 +465,10 @@ run_test() {
     rm -rf "${RUNNER_DIR}/data" "${RUNNER_DIR}/output" "${RUNNER_DIR}/program.dl" "${RUNNER_DIR}/lib"
     mkdir -p "${RUNNER_DIR}/data"
     cp "$test_dir/program.dl" "${RUNNER_DIR}/program.dl"
+    rm -f "${RUNNER_DIR}/udf.rs"
+    if [[ -f "$test_dir/udf.rs" ]]; then
+        cp "$test_dir/udf.rs" "${RUNNER_DIR}/udf.rs"
+    fi
     if [[ -d "$test_dir/data" ]]; then
         if compgen -G "$test_dir/data/*" > /dev/null; then
             cp "$test_dir/data/"* "${RUNNER_DIR}/data/"

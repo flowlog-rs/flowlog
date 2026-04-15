@@ -299,7 +299,7 @@ pub fn gen_drain_block(
                     });
                 }
                 #sink_preamble
-                ::flowlog::sort::k_way_merge(
+                ::flowlog_runtime::sort::k_way_merge(
                     per_worker,
                     |a: &#elem_ty, b: &#elem_ty| {
                         #(#cmp_body_merge)*
@@ -318,7 +318,7 @@ pub fn gen_drain_block(
             quote! {{
                 let all: Vec<#elem_ty> = #buf_ident.lock().unwrap()
                     .drain(..).flatten().collect();
-                let all = ::flowlog::sort::topk(all, #n, |a: &#elem_ty, b: &#elem_ty| {
+                let all = ::flowlog_runtime::sort::topk(all, #n, |a: &#elem_ty, b: &#elem_ty| {
                     #(#cmp_body)*
                     std::cmp::Ordering::Equal
                 });

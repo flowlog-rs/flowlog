@@ -136,11 +136,11 @@ pub(crate) fn gen_binary_relation_extras(
     let shard_imports = if idents.is_empty() {
         quote! {}
     } else {
-        quote! { use ::flowlog::io::{#(#idents),*}; }
+        quote! { use ::flowlog_runtime::io::{#(#idents),*}; }
     };
 
     let byte_range_import = if needs_byte_range {
-        quote! { use ::flowlog::io::byte_range_reader as __byte_range_reader; }
+        quote! { use ::flowlog_runtime::io::byte_range_reader as __byte_range_reader; }
     } else {
         quote! {}
     };

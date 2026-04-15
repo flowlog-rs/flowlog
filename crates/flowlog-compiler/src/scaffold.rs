@@ -129,16 +129,7 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
         deps["timely"] = "0.28".into();
         deps["differential-dataflow"] = "0.22".into();
         deps["mimalloc"] = "0.1".into();
-
-        // Path dep until `flowlog` is published on crates.io. Resolved
-        // relative to this compiler's manifest dir at compilation time,
-        // so the emitted Cargo.toml embeds an absolute path that works
-        // wherever the build dir happens to live.
-        let flowlog_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("flowlog-compiler manifest has no parent directory")
-            .join("flowlog");
-        deps["flowlog"] = value(inline_path_dep(&flowlog_path));
+        deps["flowlog-runtime"] = "0.1".into();
 
         if features.string_intern() {
             deps["lasso"] = value(inline_versioned_dep(
@@ -178,12 +169,6 @@ pub(crate) fn render_cargo_config() -> String {
 // =========================================================================
 // TOML helpers
 // =========================================================================
-
-fn inline_path_dep(path: &Path) -> InlineTable {
-    let mut tbl = InlineTable::new();
-    tbl.insert("path", path.to_string_lossy().into_owned().into());
-    tbl
-}
 
 fn inline_versioned_dep(version: &str, features: &[&str]) -> InlineTable {
     let mut tbl = InlineTable::new();
