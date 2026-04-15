@@ -7,7 +7,7 @@ license.workspace = true
 description = "Runtime support crate for FlowLog — re-exports timely/differential-dataflow and provides helpers used by flowlog-build-generated code."
 repository = "https://github.com/flowlog-rs/flowlog"
 readme = "README.md"
-keywords = ["datalog", "dataflow", "differential-dataflow", "timely"]
+keywords = ["datalog", "dataflow", "differential", "timely"]
 categories = ["database", "compilers"]
 
 [dependencies]
