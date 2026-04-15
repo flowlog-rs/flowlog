@@ -1,11 +1,11 @@
-//! FlowLog — runtime types and re-exports for library mode.
+//! FlowLog runtime — types and re-exports consumed by generated code.
 //!
 //! This crate is the runtime half of the FlowLog library-mode toolchain.
 //! Pair it with [`flowlog-build`] in your `[build-dependencies]`:
 //!
 //! ```toml
 //! [dependencies]
-//! flowlog = "0.1"
+//! flowlog-runtime = "0.1"
 //!
 //! [build-dependencies]
 //! flowlog-build = "0.1"
@@ -45,8 +45,8 @@ pub trait Relation: Sized {
 }
 
 // Re-exports for generated code. The `include!()`'d code references these
-// via `::flowlog::timely::*`, `::flowlog::differential_dataflow::*`, etc.
-// Users should not need to use them directly.
+// via `::flowlog_runtime::timely::*`, `::flowlog_runtime::differential_dataflow::*`,
+// etc. Users should not need to use them directly.
 #[doc(hidden)]
 pub use differential_dataflow;
 #[doc(hidden)]

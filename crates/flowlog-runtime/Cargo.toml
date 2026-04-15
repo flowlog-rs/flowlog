@@ -1,0 +1,18 @@
+[package]
+name = "flowlog-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Runtime support crate for FlowLog — re-exports timely/differential-dataflow and provides helpers used by flowlog-build-generated code."
+repository = "https://github.com/flowlog-rs/flowlog"
+readme = "README.md"
+keywords = ["datalog", "dataflow", "differential-dataflow", "timely"]
+categories = ["database", "compilers"]
+
+[dependencies]
+timely = "0.28"
+differential-dataflow = "0.22"
+ordered-float = { version = "5", features = ["serde"] }
+lasso = { version = "0.7", features = ["multi-threaded", "serialize"] }
+serde = { workspace = true }

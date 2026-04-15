@@ -1,13 +1,11 @@
-//! I/O utilities for parallel data ingestion.
+//! I/O and partition helpers used by the generated engine code.
 //!
-//! Provides two categories of helpers used by the generated
-//! `DatalogBatchEngine`:
-//!
-//! - **Byte-range file reader** ([`byte_range_reader`]) — splits a CSV
-//!   file across timely workers so each reads its own byte slice.
-//! - **First-column sharding** ([`shard_int`], [`shard_str`],
-//!   [`shard_spur`]) — determines which worker owns a given tuple based
-//!   on the first column's value.
+//! - [`partition`] — split an owned `Vec` into per-worker slices for the
+//!   library-mode batch engine's ingest path.
+//! - [`byte_range_reader`] — split a CSV file across timely workers so each
+//!   reads its own byte slice (binary mode).
+//! - [`shard_int`] / [`shard_str`] / [`shard_spur`] — pick the owning
+//!   worker for a tuple based on its first column (binary mode).
 //!
 //! # Byte-range reader example
 //!
@@ -30,6 +28,32 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 // =========================================================================
+// Per-worker partitioning
+// =========================================================================
+
+/// Split `v` into `n` roughly-equal owned partitions, in order.
+///
+/// Used by the generated library-mode engine to hand each timely worker its
+/// own slice by value — no `Arc` sharing, no per-tuple clone, each tuple
+/// moves directly into the worker's `InputSession`.
+///
+/// `n.max(1)` partitions are produced; if `v.len() < n` some partitions
+/// are empty. The last partition absorbs any remainder when the division
+/// doesn't come out evenly.
+pub fn partition<T>(v: Vec<T>, n: usize) -> Vec<Vec<T>> {
+    let n = n.max(1);
+    let total = v.len();
+    let chunk = total / n;
+    let mut iter = v.into_iter();
+    (0..n)
+        .map(|i| {
+            let take = if i + 1 == n { iter.len() } else { chunk };
+            iter.by_ref().take(take).collect()
+        })
+        .collect()
+}
+
+// =========================================================================
 // Byte-range file reader
 // =========================================================================
 
@@ -50,7 +74,7 @@ pub fn byte_range_reader(
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("[flowlog::io] failed to open {}: {e}", path.display());
+            eprintln!("[flowlog-runtime::io] failed to open {}: {e}", path.display());
             return None;
         }
     };
@@ -58,7 +82,7 @@ pub fn byte_range_reader(
     let file_size = match file.metadata() {
         Ok(m) => m.len(),
         Err(e) => {
-            eprintln!("[flowlog::io] failed to stat {}: {e}", path.display());
+            eprintln!("[flowlog-runtime::io] failed to stat {}: {e}", path.display());
             return None;
         }
     };
