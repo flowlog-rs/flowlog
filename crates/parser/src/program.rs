@@ -505,6 +505,8 @@ impl Program {
     /// - Trailing rules after the last loop are sealed at the end.
     fn collect_program(parsed_rule: Pair<Rule>, extended: bool) -> Self {
         let mut relations: Vec<Relation> = Vec::new();
+        // Local to the parse loop; not threaded into the returned `Program`.
+        let mut decl_raw_names: HashMap<String, String> = HashMap::new();
         let mut input_directives: Vec<InputDirective> = Vec::new();
         let mut output_directives: Vec<OutputDirective> = Vec::new();
         let mut printsize_directives: Vec<PrintSizeDirective> = Vec::new();
@@ -516,7 +518,24 @@ impl Program {
         for node in parsed_rule.into_inner() {
             match node.as_rule() {
                 // ── Schema ────────────────────────────────────────────────────
-                Rule::declaration => relations.push(Relation::from_parsed_rule(node)),
+                Rule::declaration => {
+                    let rel = Relation::from_parsed_rule(node);
+                    // Hard-error on duplicate or case-collision — flowlog
+                    // identifiers are case-insensitive, and silent collapse
+                    // would merge two user-intended-distinct relations.
+                    if let Some(prev_raw) = decl_raw_names.get(rel.name()) {
+                        let raw = rel.raw_name();
+                        if prev_raw == raw {
+                            panic!("Parser error: duplicate .decl for relation '{raw}'");
+                        }
+                        panic!(
+                            "Parser error: .decl '{raw}' collides with earlier .decl '{prev_raw}' \
+                             — flowlog identifiers are case-insensitive"
+                        );
+                    }
+                    decl_raw_names.insert(rel.name().to_string(), rel.raw_name().to_string());
+                    relations.push(rel);
+                }
                 Rule::extern_fn => udfs.push(ExternFn::from_parsed_rule(node)),
 
                 // ── I/O directives ────────────────────────────────────────────
@@ -1092,6 +1111,40 @@ mod tests {
         tmp.write_all(src.as_bytes())
             .expect("failed to write temp file");
         Program::parse(&tmp.path().to_string_lossy(), true)
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate .decl for relation 'edge'")]
+    fn decl_exact_duplicate_rejected() {
+        parse_program(
+            "
+            .decl edge(x: number)
+            .decl edge(y: number)
+            ",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "collides with earlier .decl 'edge'")]
+    fn decl_case_collision_rejected() {
+        parse_program(
+            "
+            .decl edge(x: number)
+            .decl Edge(y: number)
+            ",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate attribute 'x' in relation 'edge'")]
+    fn attr_exact_duplicate_rejected() {
+        parse_program(".decl edge(x: number, x: number)");
+    }
+
+    #[test]
+    #[should_panic(expected = "collides with earlier attribute 'x'")]
+    fn attr_case_collision_rejected() {
+        parse_program(".decl edge(x: number, X: number)");
     }
 
     #[test]
