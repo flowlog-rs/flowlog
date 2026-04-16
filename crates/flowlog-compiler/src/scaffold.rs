@@ -92,7 +92,7 @@ impl Compiler {
         with_profiler_ref(profiler, |profiler| {
             let log_dir = config.executable_path().with_file_name("log");
             ensure_dir(&log_dir)?;
-            profiler.write_json(&log_dir.join("ops.json"))
+            profiler.write_json(log_dir.join("ops.json"))
         })?;
 
         Ok(())
