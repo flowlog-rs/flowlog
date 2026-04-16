@@ -33,8 +33,8 @@ impl Compiler {
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
     ) -> io::Result<()> {
-        let parts = self.generator.generate(strata, profiler);
-        let features = self.generator.features();
+        let parts = self.codegen.generate(strata, profiler);
+        let features = self.codegen.features();
 
         // `src/relation.rs` — Relation trait + per-EDB `Rel{name}` input handlers.
         let relation_body = relation::gen_relation(&self.program, features, self.config.is_batch());

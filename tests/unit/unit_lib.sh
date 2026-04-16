@@ -113,10 +113,20 @@ run_test() {
 
     local build_log="${LIB_RUNNER_DIR}/build.log"
     local run_log="${LIB_RUNNER_DIR}/run.log"
+    local lib_bin="${LIB_RUNNER_DIR}/target/release/flowlog_lib_runner"
 
-    # `cargo run` re-checks the build graph, so a separate `cargo build` is
-    # unnecessary. Build errors land in `build_log`.
-    if ! (cd "${LIB_RUNNER_DIR}" || exit; cargo run --release --quiet 2>"$build_log" >"$run_log"); then
+    # Two-step: build (incremental) then launch the bare binary, so `cargo
+    # run`'s ~300-500ms per-invocation graph-check overhead doesn't dominate
+    # wall-clock for small fixtures.
+    if ! (cd "${LIB_RUNNER_DIR}" && cargo build --release --quiet 2>"$build_log"); then
+        local detail
+        detail="$(tail -25 "$build_log" 2>/dev/null | sed 's/^/         /')"
+        record_failure "$full_name" "lib build failed" "$detail"
+        return
+    fi
+    # The synthesized main reads `data/<csv>` and writes `output/<rel>`
+    # using paths relative to the runner crate dir.
+    if ! (cd "${LIB_RUNNER_DIR}" && "$lib_bin" >"$run_log" 2>>"$build_log"); then
         local detail
         detail="$(tail -25 "$build_log" 2>/dev/null | sed 's/^/         /')"
         record_failure "$full_name" "lib run failed" "$detail"

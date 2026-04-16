@@ -21,11 +21,11 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use common::Config;
-use generator::features::Features;
-use generator::AssemblyParts;
-use profiler::{with_profiler_ref, Profiler};
 use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Value};
+
+use common::Config;
+use flowlog_build::{CodeParts, Features};
+use profiler::{with_profiler_ref, Profiler};
 
 use crate::Compiler;
 
@@ -42,7 +42,7 @@ impl Compiler {
     /// are written only when the program needs them.
     pub(crate) fn write_project(
         &self,
-        parts: &AssemblyParts,
+        parts: &CodeParts,
         main_rs: &str,
         relation_rs: &str,
         cargo_toml: &str,

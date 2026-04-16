@@ -1,8 +1,8 @@
 //! Final assembly of the generated Rust program.
 //!
-//! Takes [`AssemblyParts`] produced by the `generator` crate and
-//! assembles a complete `main.rs` source file by delegating to a
-//! mode-specific generator:
+//! Takes the [`CodeParts`] bundle produced by [`flowlog_build::CodeGen`]
+//! and assembles a complete `main.rs` source by delegating to a
+//! mode-specific assembler:
 //!
 //! - [`batch`] — single-pass run-to-completion execution.
 //! - [`inc`] — interactive incremental shell with epoch-based updates.
@@ -13,14 +13,14 @@ pub(crate) mod inc;
 use quote::quote;
 
 use common::ExecutionMode;
-use generator::AssemblyParts;
+use flowlog_build::CodeParts;
 
 use crate::Compiler;
 
 impl Compiler {
     pub(crate) fn assemble_main(
         &self,
-        parts: &AssemblyParts,
+        parts: &CodeParts,
         imports: &proc_macro2::TokenStream,
         worker_helpers: &proc_macro2::TokenStream,
     ) -> String {

@@ -2,9 +2,9 @@
 #
 # Library-mode runner crate synthesis for the benchmark comparison.
 #
-# Self-contained under tools/benchmark/ — intentionally does not share code
-# with tests/lib_runner_synth.sh. The benchmark has different needs than the
-# unit/complex test runners:
+# Shares the small leaf helpers in `tests/lib_synth_common.sh` with the
+# unit / complex test synthesizer, but keeps its own crate-management +
+# main.rs synthesis because the benchmark has different needs:
 #
 #   - No output-file writes (nothing to diff against).
 #   - Fast, bulk CSV loading — parsed per-column into the typed Tuple
@@ -32,6 +32,10 @@
 
 [[ -n "${FLOWLOG_BENCH_LIB_RUNNER_LOADED:-}" ]] && return 0
 FLOWLOG_BENCH_LIB_RUNNER_LOADED=1
+
+# Shared lib-mode synth helpers (`.input` filename resolver, CSV finder,
+# DL → Rust type, PascalCase) — also used by `tests/lib_runner_synth.sh`.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib_synth_common.sh"
 
 ###############################################################################
 # .dl parsing — minimal, local to this file. Handles a single self-contained
@@ -71,50 +75,6 @@ _bench_lib_parse_decl_typed() {
             print tolower(name) ":" ty
           }' \
         | tr '\n' ' '
-}
-
-_bench_lib_dl_to_rust() {
-    # Aliases mirror crates/parser/src/grammar.pest:
-    #   number  → int32   unsigned → uint32
-    #   float   → f32     symbol   → string
-    case "$1" in
-        int8)                       echo "i8" ;;
-        int16)                      echo "i16" ;;
-        int32 | signed | number)    echo "i32" ;;
-        int64)                      echo "i64" ;;
-        uint8)                      echo "u8" ;;
-        uint16)                     echo "u16" ;;
-        uint32 | unsigned)          echo "u32" ;;
-        uint64)                     echo "u64" ;;
-        float32 | float)            echo "f32" ;;
-        float64 | f64)              echo "f64" ;;
-        string | symbol)            echo "String" ;;
-        bool)                       echo "bool" ;;
-        *)                          echo "$1" ;;
-    esac
-}
-
-_bench_lib_pascal() {
-    # Mirrors crates/flowlog-build/src/relation/mod.rs::pascal_case —
-    # capitalize first letter after each `_`/`-`, then drop the separator.
-    # A single-segment uppercase-first shortcut would miss e.g. `insert_input`
-    # and produce `Insert_input` instead of the Rust-side `InsertInput`.
-    local input="$1"
-    local out=""
-    local capitalize=1
-    local i c
-    for (( i=0; i<${#input}; i++ )); do
-        c="${input:$i:1}"
-        if [[ "$c" == "_" || "$c" == "-" ]]; then
-            capitalize=1
-        elif (( capitalize )); then
-            out+="${c^^}"
-            capitalize=0
-        else
-            out+="$c"
-        fi
-    done
-    printf '%s' "$out"
 }
 
 ###############################################################################
@@ -187,7 +147,7 @@ _bench_lib_gen_loader() {
     typed_fields=$(_bench_lib_parse_decl_typed "$dl_file" "$rel") || return 1
 
     local pascal
-    pascal=$(_bench_lib_pascal "$rel")
+    pascal=$(pascal_case "$rel")
 
     # Build a positional tuple literal: `(parse_col_0, parse_col_1, ...)`.
     # Attribute names no longer surface as Rust idents — the user-facing type
@@ -198,7 +158,7 @@ _bench_lib_gen_loader() {
     for pair in $typed_fields; do
         local dltype="${pair#*:}"
         local rust_ty
-        rust_ty=$(_bench_lib_dl_to_rust "$dltype")
+        rust_ty=$(dl_to_rust_type "$dltype")
         local expr
         if [[ "$rust_ty" == "String" ]]; then
             expr="cols.next().unwrap().trim().to_string()"
@@ -299,24 +259,17 @@ EOF
 # Build + list discovery helpers
 ###############################################################################
 
-# Emit the `rel=abspath` pairs for every .input relation whose CSV exists
-# in $dataset_path (case-insensitive match on `<rel>.csv`).
+# Emit `rel=abspath` pairs for every .input relation whose CSV exists in
+# $dataset_path. Honours `.input <Rel>(filename="X.csv")` overrides via
+# the shared resolver; case-insensitive match on the on-disk filename.
 bench_lib_discover_csvs() {
     local dl_file="$1" dataset_path="$2"
     local rel
     while IFS= read -r rel; do
         [[ -n "$rel" ]] || continue
-        local found=""
-        local f base stem
-        for f in "${dataset_path}"/*.csv; do
-            [[ -f "$f" ]] || continue
-            base="$(basename "$f")"
-            stem="${base%.csv}"
-            if [[ "${stem,,}" == "${rel,,}" ]]; then
-                found="$f"
-                break
-            fi
-        done
+        local declared found
+        declared=$(input_filename_for "$dl_file" "$rel")
+        found=$(find_csv_case_insensitive "$dataset_path" "$declared")
         [[ -n "$found" ]] && printf '%s=%s\n' "$rel" "$found"
     done < <(_bench_lib_parse_inputs "$dl_file")
 }

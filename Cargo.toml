@@ -5,7 +5,6 @@ members = [
     "crates/flowlog-runtime",
     "crates/flowlog-build",
     "crates/flowlog-compiler",
-    "crates/generator",
     "crates/optimizer",
     "crates/parser",
     "crates/planner",

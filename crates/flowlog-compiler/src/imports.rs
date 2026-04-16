@@ -1,9 +1,13 @@
-//! Binary-mode import generation.
+//! `use` statements emitted into the generated binary's `main.rs`.
+//!
+//! All non-stdlib references must resolve against the dependencies declared
+//! in [`crate::scaffold::render_cargo_toml`] — keep the two in sync.
 
-use common::{Config, INTERN_MAX_RETRIES};
-use generator::features::Features;
 use proc_macro2::TokenStream;
 use quote::quote;
+
+use common::{Config, INTERN_MAX_RETRIES};
+use flowlog_build::Features;
 
 pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     let inc = config.is_incremental();

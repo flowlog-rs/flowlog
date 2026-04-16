@@ -30,7 +30,7 @@ mod relation;
 mod scaffold;
 
 use common::Config;
-use generator::Generator;
+use flowlog_build::CodeGen;
 use parser::Program;
 use planner::StratumPlanner;
 use profiler::Profiler;
@@ -39,15 +39,15 @@ use profiler::Profiler;
 pub struct Compiler {
     config: Config,
     program: Program,
-    generator: Generator,
+    codegen: CodeGen,
 }
 
 impl Compiler {
-    /// Create a compiler bound to `config` + `program`. The [`Generator`] is
+    /// Create a compiler bound to `config` + `program`. The [`CodeGen`] is
     /// constructed eagerly; call [`Self::compile`] to actually produce code.
     pub fn new(config: Config, program: Program) -> Self {
         Self {
-            generator: Generator::new(config.clone(), program.clone()),
+            codegen: CodeGen::new(config.clone(), program.clone()),
             program,
             config,
         }

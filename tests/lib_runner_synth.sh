@@ -28,6 +28,7 @@
 FLOWLOG_LIB_RUNNER_SYNTH_SH_LOADED=1
 
 source "$(dirname "${BASH_SOURCE[0]}")/shared.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib_synth_common.sh"
 
 ###############################################################################
 # .dl parsing helpers
@@ -55,6 +56,21 @@ parse_input_relations() {
             | awk '{ print tolower($2) }'
     done < <(all_dl_files "$dl_file") \
         | sort -u
+}
+
+# Resolve the data filename for `.input <rel>` across the .dl + every
+# sibling include file. Wraps [`input_filename_for`] from `tests/shared.sh`
+# with the include-walk; falls back to `<rel>.csv` if no .input is found.
+parse_input_filename() {
+    local dl_file="$1" rel="$2"
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        if grep -qiE "^[[:space:]]*\.input[[:space:]]+${rel}([[:space:]]|\\()" "$f" 2>/dev/null; then
+            input_filename_for "$f" "$rel"
+            return 0
+        fi
+    done < <(all_dl_files "$dl_file")
+    echo "${rel}.csv"
 }
 
 # Extract output relation names (lowercase, one per line) from a .dl file
@@ -124,28 +140,6 @@ _parse_decl() {
               }' \
             | tr '\n' ' '
     fi
-}
-
-# Map a Datalog type to its Rust equivalent.
-dl_type_to_rust() {
-    # Aliases mirror crates/parser/src/grammar.pest:
-    #   number  → int32   unsigned → uint32
-    #   float   → f32     symbol   → string
-    case "$1" in
-        int8)                       echo "i8" ;;
-        int16)                      echo "i16" ;;
-        int32 | signed | number)    echo "i32" ;;
-        int64)                      echo "i64" ;;
-        uint8)                      echo "u8" ;;
-        uint16)                     echo "u16" ;;
-        uint32 | unsigned)          echo "u32" ;;
-        uint64)                     echo "u64" ;;
-        float32 | float)            echo "f32" ;;
-        float64 | f64)              echo "f64" ;;
-        string | symbol)            echo "String" ;;
-        bool)                       echo "bool" ;;
-        *)                          echo "$1" ;;
-    esac
 }
 
 ###############################################################################
@@ -247,24 +241,8 @@ gen_csv_loader() {
         return 1
     }
 
-    # Full PascalCase, mirroring Rust-side `pascal_case` in
-    # crates/flowlog-build/src/relation/mod.rs — capitalize first char
-    # after every `_`/`-`, drop separators. Single-first-char shortcut
-    # mishandles multi-segment names like `insert_input` (needs
-    # `InsertInput`, not `Insert_input`).
-    local pascal=""
-    local _cap=1 i c
-    for (( i=0; i<${#lower_name}; i++ )); do
-        c="${lower_name:$i:1}"
-        if [[ "$c" == "_" || "$c" == "-" ]]; then
-            _cap=1
-        elif (( _cap )); then
-            pascal+="${c^^}"
-            _cap=0
-        else
-            pascal+="$c"
-        fi
-    done
+    local pascal
+    pascal=$(pascal_case "$lower_name")
 
     # Build a positional tuple literal: `(parse_col_0, parse_col_1, ...)`.
     # The user-facing type `rel::<Pascal>` is a tuple alias now — no named
@@ -275,7 +253,7 @@ gen_csv_loader() {
     for pair in $typed_fields; do
         local dltype="${pair#*:}"
         local rust_ty
-        rust_ty=$(dl_type_to_rust "$dltype")
+        rust_ty=$(dl_to_rust_type "$dltype")
         local expr
         if [[ "$rust_ty" == "String" ]]; then
             expr="cols.next().unwrap().trim().to_string()"
@@ -332,11 +310,13 @@ gen_writer_block() {
     if [[ -z "$fields" ]]; then
         cat <<EOF
     {
-        let mut f = std::fs::File::create("output/${output_basename}")
+        let f = std::fs::File::create("output/${output_basename}")
             .expect("create output/${output_basename}");
+        let mut w = std::io::BufWriter::new(f);
         if results.${lower_name} {
-            writeln!(f, "True").expect("write");
+            writeln!(w, "True").expect("write");
         }
+        w.flush().expect("flush");
     }
 EOF
         return 0
@@ -368,11 +348,13 @@ EOF
 
     cat <<EOF
     {
-        let mut f = std::fs::File::create("output/${output_basename}")
+        let f = std::fs::File::create("output/${output_basename}")
             .expect("create output/${output_basename}");
+        let mut w = std::io::BufWriter::new(f);
         for r in &results.${lower_name} {
-            writeln!(f, "${fmt}", ${accessors}).expect("write");
+            writeln!(w, "${fmt}", ${accessors}).expect("write");
         }
+        w.flush().expect("flush");
     }
 EOF
 }
@@ -385,24 +367,16 @@ write_main_rs() {
     local dl_file="$1"
     local main_rs="${LIB_RUNNER_DIR}/src/main.rs"
 
-    # Inputs: for each .input relation with a matching CSV in data/,
-    # parse lines and insert via engine.insert_batch_<rel>.
+    # Inputs: for each .input relation, find its data file (honouring any
+    # `filename="..."` override on the .input directive) and emit a loader.
     local load_calls=""
     while IFS= read -r rel; do
         [[ -n "$rel" ]] || continue
-        local csv=""
-        local f base stem
-        for f in "${LIB_RUNNER_DIR}/data/"*.csv; do
-            [[ -f "$f" ]] || continue
-            base="$(basename "$f")"
-            stem="${base%.csv}"
-            if [[ "${stem,,}" == "${rel,,}" ]]; then
-                csv="$base"
-                break
-            fi
-        done
-        [[ -n "$csv" ]] || continue
-        load_calls+=$(gen_csv_loader "$dl_file" "$rel" "$csv")$'\n'
+        local declared_csv csv_path
+        declared_csv=$(parse_input_filename "$dl_file" "$rel")
+        csv_path=$(find_csv_case_insensitive "${LIB_RUNNER_DIR}/data" "$declared_csv")
+        [[ -n "$csv_path" ]] || continue
+        load_calls+=$(gen_csv_loader "$dl_file" "$rel" "$(basename "$csv_path")")$'\n'
     done < <(parse_input_relations "$dl_file")
 
     # Output writers — one block per .output/.printsize relation. File name

@@ -8,7 +8,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use generator::features::Features;
+use flowlog_build::Features;
 use parser::{ConstType, DataType, Program, Relation};
 
 /// Emit the shared relation-handler module body for binary mode.

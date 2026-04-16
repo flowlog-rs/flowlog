@@ -4,7 +4,7 @@
 //! code that runs on worker 0:
 //!
 //! - **`.output`**: drain the shared buffer, apply `ORDER BY` / `LIMIT` via
-//!   [`generator::gen_drain_block`] (shared with library mode through
+//!   [`flowlog_build::gen_drain_block`] (shared with library mode through
 //!   `::flowlog_runtime::sort::*`), then write each row to a file (default) or
 //!   stderr (`-D -`).
 //! - **`.printsize`**: read the shared size cell and report it to stderr.
@@ -12,7 +12,7 @@
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 
-use generator::{field_accessor, gen_drain_block};
+use flowlog_build::{field_accessor, gen_drain_block};
 use parser::Relation;
 
 use crate::Compiler;
@@ -34,7 +34,7 @@ impl Compiler {
     /// Drain one `.output` relation's shared buffer through its sink.
     fn gen_output_drain(&self, idb: &Relation) -> TokenStream {
         let buf_ident = Ident::new(&format!("buf_{}", idb.name()), Span::call_site());
-        let string_intern = self.generator.features().string_intern();
+        let string_intern = self.codegen.features().string_intern();
         let is_incremental = self.config.is_incremental();
 
         let (sink_preamble, write_row) = if self.config.output_to_stdout() {

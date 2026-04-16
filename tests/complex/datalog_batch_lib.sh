@@ -196,9 +196,17 @@ run_test() {
         write_build_rs_with_knobs "$knobs" "$str_intern_config"
         write_main_rs "${LIB_RUNNER_DIR}/program.dl"
 
-        log "$YELLOW" "RUN" "cargo run --release  (WORKERS=$WORKERS)"
         local run_log="${LIB_RUNNER_DIR}/run.log"
-        (cd "${LIB_RUNNER_DIR}" && cargo run --release --quiet 2>&1 | tee "$run_log") \
+        local lib_bin="${LIB_RUNNER_DIR}/target/release/flowlog_lib_runner"
+
+        log "$YELLOW" "BUILD" "cargo build --release  (lib runner)"
+        (cd "${LIB_RUNNER_DIR}" && cargo build --release --quiet) \
+            || die "lib build failed: $prog_file with $dataset_name${suffix}"
+
+        log "$YELLOW" "RUN" "$lib_bin  (WORKERS=$WORKERS)"
+        # Synthesized main reads `data/*.csv` / writes `output/*` relative
+        # to the runner crate dir.
+        (cd "${LIB_RUNNER_DIR}" && "$lib_bin" 2>&1 | tee "$run_log") \
             || die "lib run failed: $prog_file with $dataset_name${suffix}"
 
         verify_output "${LIB_RUNNER_DIR}/output" "$ref_dir" \

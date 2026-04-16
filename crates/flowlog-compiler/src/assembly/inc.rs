@@ -10,17 +10,17 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use generator::AssemblyParts;
+use flowlog_build::CodeParts;
 
 use crate::io::input::Input;
 
 /// Emit the complete incremental-mode `fn main() { ... }` token stream.
 pub(crate) fn gen_incremental_main(
-    p: &AssemblyParts,
+    p: &CodeParts,
     rp: &Input,
     merge_blocks: &[TokenStream],
 ) -> TokenStream {
-    let AssemblyParts {
+    let CodeParts {
         edb_decls,
         handle_binding,
         dataflow_return,
