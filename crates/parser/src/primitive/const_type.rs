@@ -1,6 +1,8 @@
 //! Constant value types for FlowLog Datalog programs.
 
+use crate::error::{grammar_bug, ParseError};
 use crate::{Lexeme, Rule};
+use common::source::FileId;
 use ordered_float::OrderedFloat;
 use pest::iterators::Pair;
 use std::fmt;
@@ -49,41 +51,40 @@ impl Lexeme for ConstType {
     /// Parses a constant from the grammar.
     ///
     /// Integer literals are parsed directly as `i64`.
-    ///
-    /// Panics if:
-    /// - no inner rule exists
-    /// - number literal fails to parse as `i64`
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, _file: FileId) -> Result<Self, ParseError> {
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: constant rule had no inner value");
-        match inner.as_rule() {
+            .ok_or_else(|| grammar_bug("constant rule had no inner value"))?;
+        Ok(match inner.as_rule() {
             Rule::float => {
                 let s = inner.as_str();
-                Self::Float(OrderedFloat(
-                    s.parse::<f64>()
-                        .expect("Parser error: failed to parse float literal as f64"),
-                ))
+                let v = s
+                    .parse::<f64>()
+                    .map_err(|e| grammar_bug(format!("failed to parse float literal: {e}")))?;
+                Self::Float(OrderedFloat(v))
             }
             Rule::integer => {
                 let s = inner.as_str();
-                Self::Int(
-                    s.parse::<i64>()
-                        .expect("Parser error: failed to parse number literal as i64"),
-                )
+                let v = s
+                    .parse::<i64>()
+                    .map_err(|e| grammar_bug(format!("failed to parse integer literal: {e}")))?;
+                Self::Int(v)
             }
             Rule::string => Self::Text(inner.as_str().trim_matches('"').to_string()),
             Rule::boolean => match inner.as_str() {
                 "True" => Self::Bool(true),
                 "False" => Self::Bool(false),
-                other => unreachable!("Parser error: invalid boolean constant: {other}"),
+                other => {
+                    return Err(grammar_bug(format!("invalid boolean constant: {other}")));
+                }
             },
-            _ => unreachable!(
-                "Parser error: unexpected constant rule variant {:?}",
-                inner.as_rule()
-            ),
-        }
+            other => {
+                return Err(grammar_bug(format!(
+                    "unexpected constant rule variant: {other:?}"
+                )));
+            }
+        })
     }
 }
 

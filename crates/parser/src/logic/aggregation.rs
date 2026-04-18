@@ -12,7 +12,9 @@
 //! ```
 
 use super::Arithmetic;
-use crate::{Lexeme, Rule};
+use crate::error::{grammar_bug, ParseError};
+use crate::{span_of, Lexeme, Rule};
+use common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -75,26 +77,24 @@ impl fmt::Display for AggregationOperator {
 
 impl Lexeme for AggregationOperator {
     /// Parse an aggregation operator from the grammar.
-    ///
-    /// # Panics
-    /// Panics if the rule is not one of `min|max|count|sum|average`.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, _file: FileId) -> Result<Self, ParseError> {
         let op = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: aggregation operator missing inner token");
+            .ok_or_else(|| grammar_bug("aggregation operator missing inner token"))?;
 
-        match op.as_rule() {
+        Ok(match op.as_rule() {
             Rule::min => Self::Min,
             Rule::max => Self::Max,
             Rule::count => Self::Count,
             Rule::sum => Self::Sum,
             Rule::average => Self::Avg,
-            other => panic!(
-                "Parser error: unexpected aggregation operator rule: {:?}",
-                other
-            ),
-        }
+            other => {
+                return Err(grammar_bug(format!(
+                    "unexpected aggregation operator rule: {other:?}"
+                )));
+            }
+        })
     }
 }
 
@@ -103,6 +103,7 @@ impl Lexeme for AggregationOperator {
 pub struct Aggregation {
     operator: AggregationOperator,
     arithmetic: Arithmetic,
+    span: Ignored<Span>,
 }
 
 impl Aggregation {
@@ -113,7 +114,15 @@ impl Aggregation {
         Self {
             operator,
             arithmetic,
+            span: Ignored(Span::DUMMY),
         }
+    }
+
+    /// Source location this aggregation was parsed from.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// Variables referenced by the arithmetic expression.
@@ -145,23 +154,25 @@ impl fmt::Display for Aggregation {
 
 impl Lexeme for Aggregation {
     /// Parse an aggregation from the grammar.
-    ///
-    /// # Panics
-    /// Panics if the inner structure is malformed (missing operator or expression).
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
 
         let op_pair = inner
             .next()
-            .expect("Parser error: aggregation missing operator");
-        let operator = AggregationOperator::from_parsed_rule(op_pair);
+            .ok_or_else(|| grammar_bug("aggregation missing operator"))?;
+        let operator = AggregationOperator::from_parsed_rule(op_pair, file)?;
 
         let expr_pair = inner
             .next()
-            .expect("Parser error: aggregation missing arithmetic expression");
-        let arithmetic = Arithmetic::from_parsed_rule(expr_pair);
+            .ok_or_else(|| grammar_bug("aggregation missing arithmetic expression"))?;
+        let arithmetic = Arithmetic::from_parsed_rule(expr_pair, file)?;
 
-        Self::new(operator, arithmetic)
+        Ok(Self {
+            operator,
+            arithmetic,
+            span: Ignored(span),
+        })
     }
 }
 

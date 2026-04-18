@@ -7,7 +7,9 @@
 //! Predicates form the antecedent of rules: `head(...) :- p1, !p2, X > Y.`
 
 use super::{Atom, AtomArg, ComparisonExpr, FnCall};
+use crate::error::{grammar_bug, ParseError};
 use crate::{Lexeme, Rule};
+use common::source::{FileId, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -67,6 +69,18 @@ impl Predicate {
     pub fn is_fn_call(&self) -> bool {
         matches!(self, Self::FnCallPredicate(_))
     }
+
+    /// Source location this predicate was parsed from. Delegates to the
+    /// inner node; `FnCallPredicate` does not carry a span today and
+    /// returns [`Span::DUMMY`].
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::PositiveAtomPredicate(a) | Self::NegativeAtomPredicate(a) => a.span(),
+            Self::ComparePredicate(c) => c.span(),
+            Self::FnCallPredicate(fc) => fc.span(),
+        }
+    }
 }
 
 impl fmt::Display for Predicate {
@@ -97,25 +111,27 @@ impl Lexeme for Predicate {
     /// - `negative_atom` → `!atom`
     /// - `compare_expr` → comparison
     /// - `boolean` → `True` | `False`
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: expected inner rule for predicate");
+            .ok_or_else(|| grammar_bug("expected inner rule for predicate"))?;
 
-        match inner.as_rule() {
-            Rule::atom => Self::PositiveAtomPredicate(Atom::from_parsed_rule(inner)),
+        Ok(match inner.as_rule() {
+            Rule::atom => Self::PositiveAtomPredicate(Atom::from_parsed_rule(inner, file)?),
             Rule::negative_atom => {
                 let atom_rule = inner
                     .into_inner()
                     .next()
-                    .expect("Parser error: negative_atom missing inner atom");
-                Self::NegativeAtomPredicate(Atom::from_parsed_rule(atom_rule))
+                    .ok_or_else(|| grammar_bug("negative_atom missing inner atom"))?;
+                Self::NegativeAtomPredicate(Atom::from_parsed_rule(atom_rule, file)?)
             }
-            Rule::compare_expr => Self::ComparePredicate(ComparisonExpr::from_parsed_rule(inner)),
-            Rule::fn_call_expr => Self::FnCallPredicate(FnCall::from_parsed_rule(inner)),
-            other => unreachable!("Parser error: invalid predicate type: {:?}", other),
-        }
+            Rule::compare_expr => {
+                Self::ComparePredicate(ComparisonExpr::from_parsed_rule(inner, file)?)
+            }
+            Rule::fn_call_expr => Self::FnCallPredicate(FnCall::from_parsed_rule(inner, file)?),
+            other => return Err(grammar_bug(format!("invalid predicate type: {other:?}"))),
+        })
     }
 }
 

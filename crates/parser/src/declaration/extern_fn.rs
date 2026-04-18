@@ -4,10 +4,12 @@
 
 use std::fmt;
 
+use common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 
+use crate::error::{grammar_bug, ParseError};
 use crate::primitive::DataType;
-use crate::{Lexeme, Rule};
+use crate::{span_of, Lexeme, Rule};
 
 use super::Attribute;
 
@@ -20,6 +22,8 @@ pub struct ExternFn {
     params: Vec<Attribute>,
     /// Return type.
     ret_type: DataType,
+    /// Span of the `.extern fn` declaration.
+    span: Ignored<Span>,
 }
 
 impl ExternFn {
@@ -30,7 +34,15 @@ impl ExternFn {
             name,
             params,
             ret_type,
+            span: Ignored(Span::DUMMY),
         }
+    }
+
+    /// Source location of this `.extern fn` declaration.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// Function name.
@@ -80,19 +92,20 @@ impl fmt::Display for ExternFn {
 
 impl Lexeme for ExternFn {
     /// Parse an `extern_fn` grammar node into an [`ExternFn`].
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
-        assert_eq!(
-            parsed_rule.as_rule(),
-            Rule::extern_fn,
-            "Parser error: expected extern_fn, got {:?}",
-            parsed_rule.as_rule()
-        );
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        if parsed_rule.as_rule() != Rule::extern_fn {
+            return Err(grammar_bug(format!(
+                "expected extern_fn, got {:?}",
+                parsed_rule.as_rule()
+            )));
+        }
 
+        let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
 
         let name = inner
             .next()
-            .expect("Parser error: extern fn missing name")
+            .ok_or_else(|| grammar_bug("extern fn missing name"))?
             .as_str()
             .to_string();
 
@@ -106,31 +119,36 @@ impl Lexeme for ExternFn {
                         let mut pi = param_node.into_inner();
                         let pname = pi
                             .next()
-                            .expect("Parser error: extern fn param missing name")
+                            .ok_or_else(|| grammar_bug("extern fn param missing name"))?
                             .as_str()
                             .to_string();
                         let ptype = pi
                             .next()
-                            .expect("Parser error: extern fn param missing type")
+                            .ok_or_else(|| grammar_bug("extern fn param missing type"))?
                             .as_str()
                             .parse::<DataType>()
-                            .expect("Parser error: invalid type in extern fn param");
+                            .map_err(|e| {
+                                grammar_bug(format!("invalid type in extern fn param: {e}"))
+                            })?;
                         params.push(Attribute::new(pname, ptype));
                     }
                 }
                 Rule::data_type => {
-                    ret_type = Some(
-                        node.as_str()
-                            .parse::<DataType>()
-                            .expect("Parser error: invalid return type in extern fn"),
-                    );
+                    ret_type = Some(node.as_str().parse::<DataType>().map_err(|e| {
+                        grammar_bug(format!("invalid return type in extern fn: {e}"))
+                    })?);
                 }
                 _ => {}
             }
         }
 
-        let ret_type = ret_type.expect("Parser error: extern fn missing return type");
-        ExternFn::new(name, params, ret_type)
+        let ret_type = ret_type.ok_or_else(|| grammar_bug("extern fn missing return type"))?;
+        Ok(Self {
+            name,
+            params,
+            ret_type,
+            span: Ignored(span),
+        })
     }
 }
 
@@ -138,13 +156,14 @@ impl Lexeme for ExternFn {
 mod tests {
     use super::*;
     use crate::FlowLogParser;
+    use common::source::FileId;
     use pest::Parser;
 
     #[test]
     fn parse_scalar_no_params() {
         let input = ".extern fn get_time() -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, input).unwrap();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap());
+        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
         assert_eq!(ext.name(), "get_time");
         assert!(ext.params().is_empty());
         assert_eq!(ext.ret_type(), DataType::Int64);
@@ -154,7 +173,7 @@ mod tests {
     fn parse_scalar_with_params() {
         let input = ".extern fn my_hash(x: int64, y: int32) -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, input).unwrap();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap());
+        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
         assert_eq!(ext.name(), "my_hash");
         assert_eq!(ext.arity(), 2);
         assert_eq!(ext.params()[0].name(), "x");

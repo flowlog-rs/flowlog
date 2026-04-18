@@ -30,7 +30,11 @@ fn count_row_pattern(arity: usize, agg_pos: usize) -> TokenStream {
 }
 
 /// Generates the Count-semiring optimized aggregation pipeline.
-pub(crate) fn aggregation_count_optimize(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
+pub(crate) fn aggregation_count_optimize(
+    arity: usize,
+    agg_pos: usize,
+    agg_type: DataType,
+) -> TokenStream {
     aggregation_optimize_pipeline(
         arity,
         agg_pos,
