@@ -15,7 +15,7 @@ use std::path::Path;
 
 use proc_macro2::TokenStream;
 
-use common::Config;
+use common::{Config, SourceMap};
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
@@ -48,7 +48,7 @@ impl Pipeline {
         })?;
 
         let config = build_config(builder, program_str);
-        let program = parse(&config, &builder.include_dirs);
+        let program = parse(&config, &builder.include_dirs)?;
         let strata = plan(&config, &program);
 
         let mut profiler = None;
@@ -67,9 +67,16 @@ impl Pipeline {
 }
 
 /// Parse the program, resolving `.include` directives against `include_dirs`.
-fn parse(config: &Config, include_dirs: &[std::path::PathBuf]) -> Program {
+fn parse(config: &Config, include_dirs: &[std::path::PathBuf]) -> io::Result<Program> {
     let include_refs: Vec<&Path> = include_dirs.iter().map(|p| p.as_path()).collect();
-    Program::parse_with_includes(config.program(), config.is_extended(), &include_refs)
+    let mut sm = SourceMap::new();
+    Program::parse_with_includes(
+        config.program(),
+        config.is_extended(),
+        &include_refs,
+        &mut sm,
+    )
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
 
 /// Stratify the program and plan each stratum independently.

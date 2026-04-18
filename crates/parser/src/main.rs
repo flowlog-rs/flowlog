@@ -1,25 +1,25 @@
 use clap::Parser;
-use common::{get_example_files, Config, TestResult};
+use common::{emit_and_exit, get_example_files, Config, SourceMap, TestResult};
 use parser::program::Program;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Parse command line arguments
     let config = Config::parse();
 
     if config.should_process_all() {
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::new("info"))
             .init();
-        // Run parser on all example files
         run_all_examples(&config);
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new("debug"))
-            .init();
-        // Parse single program file
-        let _program = Program::parse(config.program(), config.is_extended());
+        return;
     }
+
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("debug"))
+        .init();
+    let mut sm = SourceMap::new();
+    let _ = Program::parse(config.program(), config.is_extended(), &mut sm)
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
 }
 
 fn run_all_examples(config: &Config) {
@@ -29,9 +29,8 @@ fn run_all_examples(config: &Config) {
     for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
-        match std::panic::catch_unwind(|| {
-            Program::parse(file_path.to_str().unwrap(), config.is_extended())
-        }) {
+        let mut sm = SourceMap::new();
+        match Program::parse(file_path.to_str().unwrap(), config.is_extended(), &mut sm) {
             Ok(program) => {
                 let stats = format!(
                     "rules={}, relations={}",
@@ -40,15 +39,8 @@ fn run_all_examples(config: &Config) {
                 );
                 formatter.report_success(file_name, Some(&stats));
             }
-            Err(panic_info) => {
-                let error_msg = if let Some(s) = panic_info.downcast_ref::<String>() {
-                    s.clone()
-                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    s.to_string()
-                } else {
-                    "Unknown panic occurred".to_string()
-                };
-                formatter.report_failure(file_name, Some(&error_msg));
+            Err(err) => {
+                formatter.report_failure(file_name, Some(&err.to_string()));
             }
         }
     }

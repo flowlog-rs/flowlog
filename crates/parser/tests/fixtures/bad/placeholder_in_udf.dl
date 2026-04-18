@@ -1,0 +1,7 @@
+.extern fn my_udf(x: int32, y: int32) -> int32
+
+.decl edge(a: int32, b: int32)
+.decl result(a: int32)
+.output result
+
+result(A) :- edge(A, B), my_udf(A, _).

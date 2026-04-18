@@ -9,6 +9,38 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Opts a field out of derived `PartialEq` / `Eq` / `Hash` while leaving
+/// every other trait behaviour intact.
+///
+/// Wrap a field that carries metadata — source locations, profiling
+/// counters, debug-only state — whose value should not affect whether two
+/// enclosing values are considered "the same logical value". `Ignored<T>`
+/// always compares equal to itself and hashes to nothing; `Debug`,
+/// `Clone`, `Copy`, `Default` continue to delegate to `T`.
+///
+/// # Example
+/// ```
+/// # use common::source::Ignored;
+/// #[derive(PartialEq, Eq, Hash, Debug, Clone)]
+/// struct Rule { name: String, span: Ignored<(u32, u32)> }
+///
+/// let a = Rule { name: "r".into(), span: Ignored((0, 10)) };
+/// let b = Rule { name: "r".into(), span: Ignored((100, 110)) };
+/// assert_eq!(a, b); // spans differ but the rules are equal
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ignored<T>(pub T);
+
+impl<T> PartialEq for Ignored<T> {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+impl<T> Eq for Ignored<T> {}
+impl<T> std::hash::Hash for Ignored<T> {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
 /// Identifier for a source file registered with a [`SourceMap`].
 ///
 /// `FileId::DUMMY` marks synthesized nodes that have no real source location.
@@ -243,6 +275,31 @@ mod tests {
     fn snippet_dummy_is_empty() {
         let sm = SourceMap::new();
         assert_eq!(sm.snippet(Span::DUMMY), "");
+    }
+
+    #[test]
+    fn ignored_collapses_eq_and_hash_but_preserves_debug_clone() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let a = Ignored(42i32);
+        let b = Ignored(99i32);
+        assert_eq!(a, b); // values differ, but Ignored says equal
+        assert_eq!(a, a);
+
+        let hash_of = |x: &Ignored<i32>| {
+            let mut h = DefaultHasher::new();
+            x.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash_of(&a), hash_of(&b)); // hashes nothing → same hash
+
+        // Debug / Clone / Copy still delegate
+        assert_eq!(format!("{a:?}"), "Ignored(42)");
+        let c = a;
+        let d = a.clone();
+        assert_eq!(c.0, 42);
+        assert_eq!(d.0, 42);
     }
 
     #[test]

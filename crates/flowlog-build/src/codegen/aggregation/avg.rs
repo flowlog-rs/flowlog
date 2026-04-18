@@ -9,10 +9,9 @@ use parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-
 use super::common::{
-    aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, key_pattern, row_pattern,
-    agg_semiring_new, tuple, ThresholdCmp,
+    agg_semiring_new, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, key_pattern,
+    row_pattern, tuple, ThresholdCmp,
 };
 
 /// Full row reconstruction from `(key, agg_val)` where the averaged value is
@@ -35,7 +34,11 @@ fn avg_result_from_key(arity: usize, agg_pos: usize) -> TokenStream {
 }
 
 /// Generates the Avg-semiring optimized aggregation pipeline.
-pub(crate) fn aggregation_avg_optimize(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
+pub(crate) fn aggregation_avg_optimize(
+    arity: usize,
+    agg_pos: usize,
+    agg_type: DataType,
+) -> TokenStream {
     aggregation_optimize_pipeline(
         arity,
         agg_pos,
@@ -47,7 +50,11 @@ pub(crate) fn aggregation_avg_optimize(arity: usize, agg_pos: usize, agg_type: D
 }
 
 /// Generates the pre-leave conversion for avg-aggregated recursive relations.
-pub(crate) fn aggregation_avg_pre_leave(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
+pub(crate) fn aggregation_avg_pre_leave(
+    arity: usize,
+    agg_pos: usize,
+    agg_type: DataType,
+) -> TokenStream {
     aggregation_pre_leave_pipeline(
         arity,
         agg_pos,

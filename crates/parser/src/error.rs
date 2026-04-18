@@ -17,7 +17,6 @@ use common::diag::{Diagnostic, InternalError};
 use common::source::{FileId, Span};
 use thiserror::Error;
 
-#[allow(dead_code)]
 const BUG_URL: &str = "https://github.com/flowlog-rs/flowlog/issues/new";
 
 /// Which `.decl`-style directive is being reported.
@@ -38,12 +37,25 @@ impl std::fmt::Display for DirectiveKind {
     }
 }
 
-fn primary(span: Span) -> Label<FileId> {
-    Label::primary(span.file, span.range())
+fn primary(span: Span) -> Option<Label<FileId>> {
+    (!span.is_dummy()).then(|| Label::primary(span.file, span.range()))
 }
 
-fn secondary(span: Span) -> Label<FileId> {
-    Label::secondary(span.file, span.range())
+fn secondary(span: Span) -> Option<Label<FileId>> {
+    (!span.is_dummy()).then(|| Label::secondary(span.file, span.range()))
+}
+
+/// Build the `[primary, secondary]` label pair for a "duplicate X, first
+/// declared at Y" style diagnostic. Dummy spans (no source position) drop
+/// out instead of pointing at a bogus file.
+fn dup_labels(span: Span, prior: Span, here: &str, first: &str) -> Vec<Label<FileId>> {
+    [
+        primary(span).map(|l| l.with_message(here)),
+        secondary(prior).map(|l| l.with_message(first)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Errors raised while parsing a FlowLog program.
@@ -59,6 +71,15 @@ pub enum ParseError {
     DuplicateDecl {
         span: Span,
         prior: Span,
+        name: String,
+    },
+
+    /// Two attributes in one `.decl` share a name (or case-colliding raw names).
+    #[error("duplicate attribute `{name}` in relation `{relation}`")]
+    DuplicateAttribute {
+        span: Span,
+        prior: Span,
+        relation: String,
         name: String,
     },
 
@@ -129,6 +150,22 @@ pub enum ParseError {
     Internal(#[from] InternalError),
 }
 
+impl ParseError {
+    /// Construct a [`ParseError::Syntax`] from a Pest error, anchoring the
+    /// span to `file`.
+    pub(crate) fn syntax_from_pest(err: &pest::error::Error<crate::Rule>, file: FileId) -> Self {
+        use pest::error::InputLocation;
+        let (start, end) = match err.location {
+            InputLocation::Pos(p) => (p as u32, p as u32),
+            InputLocation::Span((s, e)) => (s as u32, e as u32),
+        };
+        ParseError::Syntax {
+            span: Span::new(file, start, end),
+            message: err.variant.message().into_owned(),
+        }
+    }
+}
+
 impl Diagnostic for ParseError {
     fn to_diagnostic(&self) -> CsDiagnostic<FileId> {
         if let ParseError::Internal(e) = self {
@@ -136,36 +173,44 @@ impl Diagnostic for ParseError {
         }
         let base = CsDiagnostic::error().with_message(self.to_string());
         match self {
-            ParseError::DuplicateDecl { span, prior, .. } => base.with_labels(vec![
-                primary(*span).with_message("redeclared here"),
-                secondary(*prior).with_message("first declared here"),
-            ]),
+            ParseError::DuplicateDecl { span, prior, .. } => {
+                base.with_labels(dup_labels(*span, *prior, "redeclared here", "first declared here"))
+            }
 
-            ParseError::DuplicateDirective { span, prior, .. } => base.with_labels(vec![
-                primary(*span).with_message("duplicate directive"),
-                secondary(*prior).with_message("first directive here"),
-            ]),
+            ParseError::DuplicateDirective { span, prior, .. } => base.with_labels(dup_labels(
+                *span,
+                *prior,
+                "duplicate directive",
+                "first directive here",
+            )),
+
+            ParseError::DuplicateAttribute { span, prior, .. } => base.with_labels(dup_labels(
+                *span,
+                *prior,
+                "duplicate attribute here",
+                "first declared here",
+            )),
 
             ParseError::UndeclaredInDirective { span, name, .. } => base
-                .with_labels(vec![primary(*span)])
+                .with_labels(primary(*span).into_iter().collect())
                 .with_notes(vec![format!(
                     "add a `.decl {name}(...)` before this directive"
                 )]),
 
             ParseError::UndeclaredInIterativeList { span, name } => base
-                .with_labels(vec![primary(*span)])
+                .with_labels(primary(*span).into_iter().collect())
                 .with_notes(vec![format!(
                     "either `.decl {name}(...)` it, or drop `{name}` from the iterative list"
                 )]),
 
             ParseError::UndeclaredLoopCondition { span, name } => base
-                .with_labels(vec![primary(*span)])
+                .with_labels(primary(*span).into_iter().collect())
                 .with_notes(vec![format!(
                     "declare `{name}` as a nullary relation with `.decl {name}()` and derive it inside the loop"
                 )]),
 
             ParseError::CircularInclude { span, chain, .. } => {
-                let mut diag = base.with_labels(vec![primary(*span)]);
+                let mut diag = base.with_labels(primary(*span).into_iter().collect());
                 if !chain.is_empty() {
                     let shown: Vec<String> = chain.iter().map(|p| p.display().to_string()).collect();
                     diag = diag.with_notes(vec![format!("include chain: {}", shown.join(" → "))]);
@@ -177,7 +222,9 @@ impl Diagnostic for ParseError {
             | ParseError::LoopBlockInStandardMode { span }
             | ParseError::NonNullaryLoopCondition { span, .. }
             | ParseError::PlaceholderInUdf { span, .. }
-            | ParseError::IncludeIo { span, .. } => base.with_labels(vec![primary(*span)]),
+            | ParseError::IncludeIo { span, .. } => {
+                base.with_labels(primary(*span).into_iter().collect())
+            }
 
             ParseError::Internal(_) => unreachable!("handled above"),
         }
@@ -194,7 +241,6 @@ impl Diagnostic for ParseError {
 /// token that the grammar guarantees — e.g. `"atom_rule always contains
 /// relation_name"`. If such a site ever trips, it's a FlowLog bug, not a
 /// user error.
-#[allow(dead_code)]
 pub(crate) fn grammar_bug(detail: impl Into<String>) -> ParseError {
     ParseError::Internal(InternalError::new("parser", detail, BUG_URL))
 }

@@ -17,9 +17,11 @@
 //! ```
 
 use super::FnCall;
+use crate::error::{grammar_bug, ParseError};
 use crate::primitive::ConstType;
-use crate::{Lexeme, Rule};
+use crate::{span_of, Lexeme, Rule};
 
+use common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
@@ -51,23 +53,24 @@ impl fmt::Display for ArithmeticOperator {
 
 impl Lexeme for ArithmeticOperator {
     /// Parse an operator from the grammar.
-    ///
-    /// # Panics
-    /// Panics if the rule is not one of `plus|minus|times|divide|modulo`.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, _file: FileId) -> Result<Self, ParseError> {
         let op = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: operator missing inner token");
-        match op.as_rule() {
+            .ok_or_else(|| grammar_bug("operator missing inner token"))?;
+        Ok(match op.as_rule() {
             Rule::plus => Self::Plus,
             Rule::minus => Self::Minus,
             Rule::times => Self::Multiply,
             Rule::divide => Self::Divide,
             Rule::modulo => Self::Modulo,
             Rule::cat => Self::Cat,
-            other => panic!("Parser error: unknown arithmetic operator: {:?}", other),
-        }
+            other => {
+                return Err(grammar_bug(format!(
+                    "unknown arithmetic operator: {other:?}"
+                )))
+            }
+        })
     }
 }
 
@@ -118,22 +121,34 @@ impl fmt::Display for Factor {
     }
 }
 
+impl Factor {
+    /// Best-effort source location of this factor.
+    ///
+    /// Plain variant spans are not tracked; only `FnCall` preserves a real
+    /// span. Callers that cite factor-internal errors should prefer the
+    /// enclosing [`Arithmetic`]'s span.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::FnCall(fc) => fc.span(),
+            _ => Span::DUMMY,
+        }
+    }
+}
+
 impl Lexeme for Factor {
     /// Parse a factor (variable, constant, or function call).
-    ///
-    /// # Panics
-    /// Panics if the inner token is not `variable`, `constant`, or `fn_call_expr`.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: factor missing inner token");
-        match inner.as_rule() {
-            Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner)),
+            .ok_or_else(|| grammar_bug("factor missing inner token"))?;
+        Ok(match inner.as_rule() {
+            Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner, file)?),
             Rule::variable => Self::Var(inner.as_str().to_string()),
-            Rule::constant => Self::Const(ConstType::from_parsed_rule(inner)),
-            other => panic!("Parser error: invalid factor rule: {:?}", other),
-        }
+            Rule::constant => Self::Const(ConstType::from_parsed_rule(inner, file)?),
+            other => return Err(grammar_bug(format!("invalid factor rule: {other:?}"))),
+        })
     }
 }
 
@@ -142,12 +157,25 @@ impl Lexeme for Factor {
 pub struct Arithmetic {
     init: Factor,
     rest: Vec<(ArithmeticOperator, Factor)>,
+    span: Ignored<Span>,
 }
 
 impl Arithmetic {
     #[must_use]
     pub fn new(init: Factor, rest: Vec<(ArithmeticOperator, Factor)>) -> Self {
-        Self { init, rest }
+        Self {
+            init,
+            rest,
+            span: Ignored(Span::DUMMY),
+        }
+    }
+
+    /// Source location this expression was parsed from (`Span::DUMMY` for
+    /// nodes synthesized without a concrete source range).
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// First term.
@@ -203,29 +231,30 @@ impl fmt::Display for Arithmetic {
 
 impl Lexeme for Arithmetic {
     /// Parse `factor (operator factor)*`.
-    ///
-    /// # Panics
-    /// Panics if the sequence is malformed (e.g., operator without following factor).
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
 
-        let init = Factor::from_parsed_rule(
-            inner
-                .next()
-                .expect("Parser error: arithmetic missing initial factor"),
-        );
+        let init_pair = inner
+            .next()
+            .ok_or_else(|| grammar_bug("arithmetic missing initial factor"))?;
+        let init = Factor::from_parsed_rule(init_pair, file)?;
 
         let mut rest = Vec::new();
         while let Some(op_pair) = inner.next() {
             let factor_pair = inner
                 .next()
-                .expect("Parser error: arithmetic expected (operator, factor) pair");
-            let op = ArithmeticOperator::from_parsed_rule(op_pair);
-            let factor = Factor::from_parsed_rule(factor_pair);
+                .ok_or_else(|| grammar_bug("arithmetic expected (operator, factor) pair"))?;
+            let op = ArithmeticOperator::from_parsed_rule(op_pair, file)?;
+            let factor = Factor::from_parsed_rule(factor_pair, file)?;
             rest.push((op, factor));
         }
 
-        Self::new(init, rest)
+        Ok(Self {
+            init,
+            rest,
+            span: Ignored(span),
+        })
     }
 }
 

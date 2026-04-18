@@ -94,12 +94,34 @@ impl Diagnostic for InternalError {
 /// Render `err` to `writer` as a source-annotated diagnostic.
 ///
 /// Writes plain (uncolored) output; pass `&mut std::io::stderr()` for CLI
-/// use or a `&mut Vec<u8>` to capture the rendered string.
+/// use or a `&mut Vec<u8>` to capture the rendered string. For CLI
+/// binaries prefer [`emit_and_exit`], which additionally handles TTY
+/// color detection and exit-code mapping.
 pub fn emit(err: &BoxError, sources: &SourceMap, writer: &mut dyn io::Write) -> io::Result<()> {
     let diag = err.to_diagnostic();
     let config = codespan_reporting::term::Config::default();
     codespan_reporting::term::emit_to_io_write(writer, &config, sources, &diag)
         .map_err(io::Error::other)
+}
+
+/// Render `err` to stderr as a colored, source-annotated diagnostic and
+/// exit the process.
+///
+/// Exit code is `2` for internal compiler errors ([`Diagnostic::is_internal`])
+/// and `1` otherwise. Colors auto-disable when stderr is not a TTY.
+/// Intended for CLI binaries whose response to any pipeline failure is
+/// "print and give up"; library callers should use [`emit`] directly and
+/// propagate the error.
+pub fn emit_and_exit(err: impl Into<BoxError>, sources: &SourceMap) -> ! {
+    use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+    let boxed: BoxError = err.into();
+    let code = if boxed.is_internal() { 2 } else { 1 };
+    let writer = StandardStream::stderr(ColorChoice::Auto);
+    let diag = boxed.to_diagnostic();
+    let config = codespan_reporting::term::Config::default();
+    let _ =
+        codespan_reporting::term::emit_to_write_style(&mut writer.lock(), &config, sources, &diag);
+    std::process::exit(code);
 }
 
 #[cfg(test)]
