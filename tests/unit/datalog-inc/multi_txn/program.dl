@@ -4,7 +4,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Data(id: int32, val: int32)
-.input Data(IO="file", filename="Data.csv", delimiter=",")
+.input Data(IO="command", delimiter=",")
 
 .decl Out(id: int32, val: int32)
 Out(id, v) :- Data(id, v).

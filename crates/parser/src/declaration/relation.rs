@@ -13,8 +13,11 @@ use common::compute_fp;
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Relation {
-    /// Relation name.
+    /// Canonical (lowercased) relation name.
     name: String,
+
+    /// Original surface-syntax name.
+    raw_name: String,
 
     /// Relation fingerprint.
     fingerprint: u64,
@@ -37,15 +40,15 @@ pub struct Relation {
 
 impl Relation {
     /// Create a new relation.
-    ///
-    /// Converts the name to lowercase.
     #[must_use]
     #[inline]
     pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
+        let raw_name = name.to_string();
         let name = name.to_lowercase();
         let fingerprint = compute_fp(&name);
         Self {
             name,
+            raw_name,
             fingerprint,
             attributes,
             input_params: None,
@@ -55,11 +58,18 @@ impl Relation {
         }
     }
 
-    /// Relation name.
+    /// Canonical (lowercased) relation name.
     #[must_use]
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Original surface-syntax name.
+    #[must_use]
+    #[inline]
+    pub fn raw_name(&self) -> &str {
+        &self.raw_name
     }
 
     /// Relation fingerprint.
@@ -132,8 +142,19 @@ impl Relation {
     /// Check whether this relation has a `.input` directive.
     #[must_use]
     #[inline]
-    pub fn is_file_backed(&self) -> bool {
+    pub fn has_input(&self) -> bool {
         self.input_params.is_some()
+    }
+
+    /// Check whether this relation is file-backed (`IO="file"`).
+    /// Returns false for `IO="command"` (interactive-only).
+    #[must_use]
+    #[inline]
+    pub fn is_file_backed(&self) -> bool {
+        self.input_params
+            .as_ref()
+            .and_then(|m| m.get("IO"))
+            .is_some_and(|io| io.eq_ignore_ascii_case("file"))
     }
 
     /// Check if this is an output/printsize relation.
@@ -320,6 +341,7 @@ impl Lexeme for Relation {
         for rule in inner {
             match rule.as_rule() {
                 Rule::attributes_decl => {
+                    let mut seen: HashMap<String, String> = HashMap::new();
                     attributes = rule
                         .into_inner()
                         .map(|attr| {
@@ -337,6 +359,22 @@ impl Lexeme for Relation {
                                     "Parser error: invalid datatype `{dts}` for attribute `{aname}`: {e}"
                                 )
                             });
+                            let canonical = aname.to_lowercase();
+                            if let Some(prev_raw) = seen.get(&canonical) {
+                                if prev_raw == aname {
+                                    panic!(
+                                        "Parser error: duplicate attribute '{}' in relation '{}'",
+                                        aname, name
+                                    );
+                                }
+                                panic!(
+                                    "Parser error: attribute '{}' in relation '{}' collides \
+                                     with earlier attribute '{}' — flowlog identifiers are \
+                                     case-insensitive",
+                                    aname, name, prev_raw
+                                );
+                            }
+                            seen.insert(canonical, aname.to_string());
                             Attribute::new(aname.to_string(), dt)
                         })
                         .collect();

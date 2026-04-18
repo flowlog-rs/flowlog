@@ -21,3 +21,9 @@ pub fn compute_fp<T: Hash>(t: T) -> u64 {
     t.hash(&mut h);
     h.finish()
 }
+
+/// Parse a `TokenStream` into a `syn::File` and pretty-print it via `prettyplease`.
+pub fn pretty_print(ts: proc_macro2::TokenStream) -> String {
+    let ast: syn::File = syn::parse2(ts).expect("valid token stream");
+    prettyplease::unparse(&ast)
+}

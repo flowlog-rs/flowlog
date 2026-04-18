@@ -25,6 +25,16 @@ pub enum ExecutionMode {
     ExtendInc,
 }
 
+impl ExecutionMode {
+    pub(crate) fn is_incremental(self) -> bool {
+        matches!(self, Self::DatalogInc | Self::ExtendInc)
+    }
+
+    pub(crate) fn is_batch(self) -> bool {
+        matches!(self, Self::DatalogBatch | Self::ExtendBatch)
+    }
+}
+
 /// Command line arguments for FlowLog tools
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
@@ -76,6 +86,12 @@ pub struct Config {
     /// after building the executable.
     #[arg(long)]
     pub save_temps: bool,
+
+    /// Extra search directory for `.include` directives. May be specified
+    /// multiple times. Includes are resolved by trying the parent file's
+    /// directory first, then each `-I` directory in order.
+    #[arg(short = 'I', long = "include-dir", value_name = "DIR")]
+    pub include_dirs: Vec<String>,
 }
 
 impl Config {
@@ -160,20 +176,12 @@ impl Config {
         self.mode
     }
 
-    /// Whether the mode is an incremental mode (`DatalogInc` or `ExtendInc`).
     pub fn is_incremental(&self) -> bool {
-        matches!(
-            self.mode,
-            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc
-        )
+        self.mode.is_incremental()
     }
 
-    /// Whether the mode is a batch mode (`DatalogBatch` or `ExtendBatch`).
     pub fn is_batch(&self) -> bool {
-        matches!(
-            self.mode,
-            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch
-        )
+        self.mode.is_batch()
     }
 
     /// Whether the mode is `DatalogBatch`. This is the only mode that uses
@@ -226,6 +234,11 @@ impl Config {
     /// Path to the user-supplied UDF implementation file, if any.
     pub fn udf_file(&self) -> Option<&str> {
         self.udf_file.as_deref()
+    }
+
+    /// Extra `.include` search directories collected from `-I` flags.
+    pub fn include_dirs(&self) -> Vec<&Path> {
+        self.include_dirs.iter().map(Path::new).collect()
     }
 
     /// Whether to keep the intermediate generated Rust crate.

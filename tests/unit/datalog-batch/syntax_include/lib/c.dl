@@ -2,4 +2,4 @@
 // Included by b.dl.
 
 .decl edge(x: int32, y: int32)
-.input edge(IO="file", filename="edge", delimiter=",")
+.input edge(IO="file", filename="edge.csv", delimiter=",")

@@ -2,7 +2,9 @@
 members = [
     "crates/catalog",
     "crates/common",
-    "crates/compiler",
+    "crates/flowlog-runtime",
+    "crates/flowlog-build",
+    "crates/flowlog-compiler",
     "crates/optimizer",
     "crates/parser",
     "crates/planner",
@@ -15,7 +17,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 authors = ["Nemo Yu"]
-license = "MIT"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 clap = "4.5"
