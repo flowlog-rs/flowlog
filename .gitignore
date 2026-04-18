@@ -9,3 +9,6 @@
 
 # Local test program
 /example/test.dl
+
+# Test folder
+/test

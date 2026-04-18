@@ -148,8 +148,24 @@ impl Program {
     /// If `extended` is `false`, panics when the program contains any `loop`
     /// blocks — those require Extended Datalog mode (`--mode extend-batch`
     /// or `--mode extend-inc`).
+    ///
+    /// `.include` directives resolve relative to the parent file's directory.
+    /// For an include search path use [`Self::parse_with_includes`].
     #[must_use]
     pub fn parse(path: &str, extended: bool) -> Self {
+        Self::parse_with_includes(path, extended, &[])
+    }
+
+    /// Parse a Datalog program with extra include search directories.
+    ///
+    /// `.include "name.dl"` is resolved by trying:
+    /// 1. The parent file's directory (always tried first).
+    /// 2. Each entry in `include_dirs`, in order.
+    ///
+    /// `parse(path, extended)` is equivalent to
+    /// `parse_with_includes(path, extended, &[])`.
+    #[must_use]
+    pub fn parse_with_includes(path: &str, extended: bool, include_dirs: &[&Path]) -> Self {
         let file_path = Path::new(path);
         let source = fs::read_to_string(file_path)
             .unwrap_or_else(|_| panic!("Parser error: failed to read '{}'", path));
@@ -157,7 +173,13 @@ impl Program {
 
         let mut in_progress = HashSet::new();
         let mut completed = HashSet::new();
-        let combined = resolve_includes(&source, base_dir, &mut in_progress, &mut completed);
+        let combined = resolve_includes(
+            &source,
+            base_dir,
+            include_dirs,
+            &mut in_progress,
+            &mut completed,
+        );
 
         let mut pairs = FlowLogParser::parse(Rule::main_grammar, &combined)
             .unwrap_or_else(|e| panic!("Parser error in '{}': {}", path, e));
@@ -243,6 +265,23 @@ impl Program {
             .collect()
     }
 
+    /// IDB relations annotated with `.output`, in declaration order.
+    #[must_use]
+    #[inline]
+    pub fn output_idbs(&self) -> Vec<&Relation> {
+        self.relations.iter().filter(|rel| rel.output()).collect()
+    }
+
+    /// IDB relations annotated with `.printsize`, in declaration order.
+    #[must_use]
+    #[inline]
+    pub fn printsize_idbs(&self) -> Vec<&Relation> {
+        self.relations
+            .iter()
+            .filter(|rel| rel.printsize())
+            .collect()
+    }
+
     /// Ordered program items (rule segments and loop blocks in source order).
     ///
     /// This is the primary representation for the stratifier.  It processes
@@ -309,7 +348,7 @@ impl Program {
 
     #[inline]
     fn is_edb_relation(&self, rel: &Relation) -> bool {
-        rel.is_file_backed() || self.has_inline_facts(rel.name())
+        rel.has_input() || self.has_inline_facts(rel.name())
     }
 }
 
@@ -335,6 +374,7 @@ impl Program {
 fn resolve_includes(
     source: &str,
     base_dir: &Path,
+    include_dirs: &[&Path],
     in_progress: &mut HashSet<PathBuf>,
     completed: &mut HashSet<PathBuf>,
 ) -> String {
@@ -362,7 +402,8 @@ fn resolve_includes(
             .next()
             .expect("Parser error: include directive missing path");
         let raw = path_node.as_str().trim_matches('"');
-        let full_path = base_dir.join(raw);
+
+        let full_path = resolve_one_include(raw, base_dir, include_dirs);
         let canonical = fs::canonicalize(&full_path).unwrap_or_else(|_| {
             panic!(
                 "Parser error: cannot resolve include path '{}'",
@@ -387,7 +428,13 @@ fn resolve_includes(
         let included_base = full_path.parent().unwrap_or(Path::new("."));
 
         in_progress.insert(canonical.clone());
-        let inlined = resolve_includes(&included_source, included_base, in_progress, completed);
+        let inlined = resolve_includes(
+            &included_source,
+            included_base,
+            include_dirs,
+            in_progress,
+            completed,
+        );
         in_progress.remove(&canonical);
         completed.insert(canonical);
 
@@ -403,6 +450,25 @@ fn resolve_includes(
     // Append any remaining source after the last include directive.
     out.push_str(&source[cursor..]);
     out
+}
+
+/// Resolve `raw` (the include path string) by checking the parent directory
+/// first, then each entry in `include_dirs` in order. Returns the first
+/// existing file. Falls back to `base_dir.join(raw)` (the original behavior)
+/// if nothing matches — `resolve_includes` will then surface the I/O error
+/// with the resolved path so error messages stay informative.
+fn resolve_one_include(raw: &str, base_dir: &Path, include_dirs: &[&Path]) -> PathBuf {
+    let parent_relative = base_dir.join(raw);
+    if parent_relative.exists() {
+        return parent_relative;
+    }
+    for dir in include_dirs {
+        let candidate = dir.join(raw);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    parent_relative
 }
 
 // =============================================================================
@@ -439,6 +505,8 @@ impl Program {
     /// - Trailing rules after the last loop are sealed at the end.
     fn collect_program(parsed_rule: Pair<Rule>, extended: bool) -> Self {
         let mut relations: Vec<Relation> = Vec::new();
+        // Local to the parse loop; not threaded into the returned `Program`.
+        let mut decl_raw_names: HashMap<String, String> = HashMap::new();
         let mut input_directives: Vec<InputDirective> = Vec::new();
         let mut output_directives: Vec<OutputDirective> = Vec::new();
         let mut printsize_directives: Vec<PrintSizeDirective> = Vec::new();
@@ -450,7 +518,24 @@ impl Program {
         for node in parsed_rule.into_inner() {
             match node.as_rule() {
                 // ── Schema ────────────────────────────────────────────────────
-                Rule::declaration => relations.push(Relation::from_parsed_rule(node)),
+                Rule::declaration => {
+                    let rel = Relation::from_parsed_rule(node);
+                    // Hard-error on duplicate or case-collision — flowlog
+                    // identifiers are case-insensitive, and silent collapse
+                    // would merge two user-intended-distinct relations.
+                    if let Some(prev_raw) = decl_raw_names.get(rel.name()) {
+                        let raw = rel.raw_name();
+                        if prev_raw == raw {
+                            panic!("Parser error: duplicate .decl for relation '{raw}'");
+                        }
+                        panic!(
+                            "Parser error: .decl '{raw}' collides with earlier .decl '{prev_raw}' \
+                             — flowlog identifiers are case-insensitive"
+                        );
+                    }
+                    decl_raw_names.insert(rel.name().to_string(), rel.raw_name().to_string());
+                    relations.push(rel);
+                }
                 Rule::extern_fn => udfs.push(ExternFn::from_parsed_rule(node)),
 
                 // ── I/O directives ────────────────────────────────────────────
@@ -826,10 +911,10 @@ impl Program {
         // Remove IDB relations that are declared (with .output/.printsize) but
         // never derived by any rule and have no facts.  They will always be
         // empty, so keeping them only causes downstream codegen errors.
-        let file_backed: HashSet<String> = self
+        let input_relations: HashSet<String> = self
             .relations
             .iter()
-            .filter(|r| r.is_file_backed())
+            .filter(|r| r.has_input())
             .map(|r| r.name().to_string())
             .collect();
         let underived: Vec<String> = needed_preds
@@ -837,7 +922,7 @@ impl Program {
             .filter(|p| {
                 !head_to_rules.contains_key(p.as_str())
                     && !self.facts.contains_key(p.as_str())
-                    && !file_backed.contains(p.as_str())
+                    && !input_relations.contains(p.as_str())
             })
             .cloned()
             .collect();
@@ -1026,6 +1111,40 @@ mod tests {
         tmp.write_all(src.as_bytes())
             .expect("failed to write temp file");
         Program::parse(&tmp.path().to_string_lossy(), true)
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate .decl for relation 'edge'")]
+    fn decl_exact_duplicate_rejected() {
+        parse_program(
+            "
+            .decl edge(x: number)
+            .decl edge(y: number)
+            ",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "collides with earlier .decl 'edge'")]
+    fn decl_case_collision_rejected() {
+        parse_program(
+            "
+            .decl edge(x: number)
+            .decl Edge(y: number)
+            ",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate attribute 'x' in relation 'edge'")]
+    fn attr_exact_duplicate_rejected() {
+        parse_program(".decl edge(x: number, x: number)");
+    }
+
+    #[test]
+    #[should_panic(expected = "collides with earlier attribute 'x'")]
+    fn attr_case_collision_rejected() {
+        parse_program(".decl edge(x: number, X: number)");
     }
 
     #[test]

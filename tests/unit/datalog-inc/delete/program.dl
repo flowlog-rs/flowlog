@@ -4,7 +4,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Edge(src: int32, dst: int32)
-.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.input Edge(IO="command", delimiter=",")
 
 .decl Out(src: int32, dst: int32)
 Out(s, d) :- Edge(s, d).

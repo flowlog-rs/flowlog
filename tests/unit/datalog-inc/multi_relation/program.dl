@@ -4,10 +4,10 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Edge(src: int32, dst: int32)
-.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.input Edge(IO="command", delimiter=",")
 
 .decl Weight(src: int32, dst: int32, w: int32)
-.input Weight(IO="file", filename="Weight.csv", delimiter=",")
+.input Weight(IO="command", delimiter=",")
 
 .decl WeightedEdge(src: int32, dst: int32, w: int32)
 WeightedEdge(s, d, w) :- Edge(s, d), Weight(s, d, w).
