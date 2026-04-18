@@ -35,8 +35,9 @@ fn main() {
 
 /// Compile the program specified by `config.program()` into an executable.
 fn compile_single(config: &Config) {
-    let program = parse_program(config);
-    let stratifier = Stratifier::from_program(&program, config.is_extended());
+    let (program, sm) = parse_program(config);
+    let stratifier = Stratifier::from_program(&program, config.is_extended())
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
     let mut profiler = new_profiler(config);
     let mut optimizer = Optimizer::new();
     let strata = plan_strata(config, &mut optimizer, &mut profiler, &stratifier);
@@ -80,8 +81,15 @@ fn run_all_examples(config: &Config) {
                 continue;
             }
         };
+        let stratifier = match Stratifier::from_program(&program, config.is_extended()) {
+            Ok(s) => s,
+            Err(err) => {
+                failure += 1;
+                error!("FAILED: {} ({err})", file_name);
+                continue;
+            }
+        };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let stratifier = Stratifier::from_program(&program, config.is_extended());
             let mut optimizer = Optimizer::new();
             let mut profiler = new_profiler(config);
             let strata = plan_strata(config, &mut optimizer, &mut profiler, &stratifier);
@@ -123,15 +131,16 @@ fn run_all_examples(config: &Config) {
 // Pipeline helpers
 // =========================================================================
 
-fn parse_program(config: &Config) -> Program {
+fn parse_program(config: &Config) -> (Program, SourceMap) {
     let mut sm = SourceMap::new();
-    Program::parse_with_includes(
+    let program = Program::parse_with_includes(
         config.program(),
         config.is_extended(),
         &config.include_dirs(),
         &mut sm,
     )
-    .unwrap_or_else(|err| emit_and_exit(err, &sm))
+    .unwrap_or_else(|err| emit_and_exit(err, &sm));
+    (program, sm)
 }
 
 fn new_profiler(config: &Config) -> Option<Profiler> {
