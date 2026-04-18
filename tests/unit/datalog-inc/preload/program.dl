@@ -1,0 +1,23 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : preload
+// Feature : file-backed EDB preloaded, then extended interactively
+// Covers  : preload epoch (_t1), interactive insert (_t2), interactive
+//           file load (_t3), interactive delete (_t4)
+//
+// Initial edges (preloaded from Edge.csv):
+//   1→2, 2→3, 3→4
+// Derived reach at _t1: {(1,2),(1,3),(1,4),(2,3),(2,4),(3,4)}
+//
+// _t2: put edge 4,5 +1 → new reach pairs involving 5
+// _t3: file load MoreEdges.csv +1 (contains 5,6) → reach extends to 6
+// _t4: put edge 2,3 -1 → removes some reach pairs
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+Reach(s, d) :- Edge(s, d).
+Reach(s, d) :- Reach(s, x), Edge(x, d).
+
+.output Reach

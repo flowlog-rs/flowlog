@@ -26,6 +26,41 @@ pub enum AggregationOperator {
     Avg,
 }
 
+impl AggregationOperator {
+    /// Normalize Count → Sum (they share the same semiring).
+    #[must_use]
+    pub fn semiring_canonical(self) -> Self {
+        match self {
+            Self::Count => Self::Sum,
+            other => other,
+        }
+    }
+
+    /// Lowercase name for semiring module paths (e.g. `"min"`, `"sum"`).
+    #[must_use]
+    pub fn semiring_mod(self) -> &'static str {
+        match self.semiring_canonical() {
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Sum => "sum",
+            Self::Avg => "avg",
+            Self::Count => unreachable!(),
+        }
+    }
+
+    /// Title-case prefix for semiring type names (e.g. `"Min"`, `"Sum"`).
+    #[must_use]
+    pub fn semiring_prefix(self) -> &'static str {
+        match self.semiring_canonical() {
+            Self::Min => "Min",
+            Self::Max => "Max",
+            Self::Sum => "Sum",
+            Self::Avg => "Avg",
+            Self::Count => unreachable!(),
+        }
+    }
+}
+
 impl fmt::Display for AggregationOperator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

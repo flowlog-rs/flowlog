@@ -1,0 +1,26 @@
+[package]
+name = "flowlog-compiler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flowlog-compiler"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+toml_edit = { workspace = true }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+flowlog-build = { path = "../flowlog-build" }
+common = { path = "../common" }
+optimizer = { path = "../optimizer" }
+parser = { path = "../parser" }
+planner = { path = "../planner" }
+stratifier = { path = "../stratifier" }
+profiler = { path = "../profiler" }

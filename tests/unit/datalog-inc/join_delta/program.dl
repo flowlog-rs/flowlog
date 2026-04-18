@@ -4,10 +4,10 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Employee(id: int32, dept: int32)
-.input Employee(IO="file", filename="Employee.csv", delimiter=",")
+.input Employee(IO="command", delimiter=",")
 
 .decl Dept(id: int32, budget: int32)
-.input Dept(IO="file", filename="Dept.csv", delimiter=",")
+.input Dept(IO="command", delimiter=",")
 
 .decl EmpBudget(emp: int32, budget: int32)
 EmpBudget(e, b) :- Employee(e, d), Dept(d, b).

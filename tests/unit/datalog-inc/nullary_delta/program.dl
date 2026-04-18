@@ -4,7 +4,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Score(id: int32, val: int32)
-.input Score(IO="file", filename="Score.csv", delimiter=",")
+.input Score(IO="command", delimiter=",")
 
 .decl HasPerfect()
 HasPerfect() :- Score(_, v), v = 100.
