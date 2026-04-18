@@ -5,10 +5,13 @@
 //! relation declarations, logic rules, and primitive types.
 
 pub mod declaration;
+pub mod error;
 pub mod logic;
 pub mod primitive;
 pub mod program;
 pub mod segment;
+
+pub use error::ParseError;
 
 // Re-export core types for convenient access
 pub use declaration::{Attribute, ExternFn, Relation};
