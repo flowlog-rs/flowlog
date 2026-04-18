@@ -1,5 +1,5 @@
 use clap::Parser;
-use common::{get_example_files, Config, TestResult};
+use common::{emit_and_exit, get_example_files, Config, SourceMap, TestResult};
 use parser::Program;
 use stratifier::Stratifier;
 use tracing_subscriber::EnvFilter;
@@ -19,7 +19,9 @@ fn main() {
         .with_env_filter(EnvFilter::new("debug"))
         .init();
 
-    let program = Program::parse(config.program(), config.is_extended());
+    let mut sm = SourceMap::new();
+    let program = Program::parse(config.program(), config.is_extended(), &mut sm)
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
     let _stratifier = Stratifier::from_program(&program, config.is_extended());
 }
 
@@ -30,21 +32,33 @@ fn run_all_examples(config: &Config) {
     for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
-        match std::panic::catch_unwind(|| {
-            Program::parse(file_path.to_str().unwrap(), config.is_extended())
-        }) {
-            Ok(program) => {
-                let stratifier = Stratifier::from_program(&program, config.is_extended());
-                let recursive_cnt = stratifier
-                    .is_recursive_stratum_bitmap()
-                    .iter()
-                    .filter(|b| **b)
-                    .count();
+        let mut sm = SourceMap::new();
+        let program =
+            match Program::parse(file_path.to_str().unwrap(), config.is_extended(), &mut sm) {
+                Ok(p) => p,
+                Err(err) => {
+                    formatter.report_failure(file_name, Some(&err.to_string()));
+                    continue;
+                }
+            };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let stratifier = Stratifier::from_program(&program, config.is_extended());
+            let recursive_cnt = stratifier
+                .is_recursive_stratum_bitmap()
+                .iter()
+                .filter(|b| **b)
+                .count();
+            (
+                program.rules().len(),
+                stratifier.is_recursive_stratum_bitmap().len(),
+                recursive_cnt,
+            )
+        }));
+        match result {
+            Ok((rules, strata, recursive)) => {
                 let stats = format!(
                     "rules={}, strata={}, recursive={}",
-                    program.rules().len(),
-                    stratifier.is_recursive_stratum_bitmap().len(),
-                    recursive_cnt
+                    rules, strata, recursive
                 );
                 formatter.report_success(file_name, Some(&stats));
             }

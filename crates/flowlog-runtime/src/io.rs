@@ -74,7 +74,10 @@ pub fn byte_range_reader(
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("[flowlog-runtime::io] failed to open {}: {e}", path.display());
+            eprintln!(
+                "[flowlog-runtime::io] failed to open {}: {e}",
+                path.display()
+            );
             return None;
         }
     };
@@ -82,7 +85,10 @@ pub fn byte_range_reader(
     let file_size = match file.metadata() {
         Ok(m) => m.len(),
         Err(e) => {
-            eprintln!("[flowlog-runtime::io] failed to stat {}: {e}", path.display());
+            eprintln!(
+                "[flowlog-runtime::io] failed to stat {}: {e}",
+                path.display()
+            );
             return None;
         }
     };

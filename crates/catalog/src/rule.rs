@@ -570,7 +570,7 @@ impl fmt::Display for Catalog {
         writeln!(f, "\n{}", "-".repeat(40))?;
         writeln!(f, "Signature ↔ Var:")?;
         let mut sig_entries: Vec<_> = self.signature_to_argument_str_map.iter().collect();
-        sig_entries.sort_by(|(a, _), (b, _)| a.to_string().cmp(&b.to_string()));
+        sig_entries.sort_by_key(|(a, _)| a.to_string());
         let sig_line = sig_entries
             .iter()
             .map(|(k, v)| format!("{}={}", k, v))

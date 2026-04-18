@@ -61,7 +61,9 @@ fn dd_imports(f: &Features) -> TokenStream {
         out.push(quote! { use ::flowlog_runtime::differential_dataflow::input::Input; });
     }
     if f.threshold_total() {
-        out.push(quote! { use ::flowlog_runtime::differential_dataflow::operators::ThresholdTotal; });
+        out.push(
+            quote! { use ::flowlog_runtime::differential_dataflow::operators::ThresholdTotal; },
+        );
     }
     if f.as_collection() {
         out.push(quote! { use ::flowlog_runtime::differential_dataflow::AsCollection; });

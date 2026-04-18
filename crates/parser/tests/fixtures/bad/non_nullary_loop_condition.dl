@@ -1,0 +1,3 @@
+.decl done_flag(x: number)
+.output done_flag
+loop until { done_flag } { done_flag(1) :- done_flag(1). }

@@ -1,6 +1,6 @@
 use catalog::rule::Catalog;
 use clap::Parser;
-use common::{get_example_files, Config, TestResult};
+use common::{emit_and_exit, get_example_files, Config, SourceMap, TestResult};
 use parser::Program;
 use tracing_subscriber::EnvFilter;
 
@@ -19,7 +19,9 @@ fn main() {
         .with_env_filter(EnvFilter::new("debug"))
         .init();
 
-    let program = Program::parse(config.program(), config.is_extended());
+    let mut sm = SourceMap::new();
+    let program = Program::parse(config.program(), config.is_extended(), &mut sm)
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
     print_catalogs(&program);
 }
 
@@ -36,9 +38,8 @@ fn run_all_examples(config: &Config) {
     for file_path in example_files.iter() {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
-        match std::panic::catch_unwind(|| {
-            Program::parse(file_path.to_str().unwrap(), config.is_extended())
-        }) {
+        let mut sm = SourceMap::new();
+        match Program::parse(file_path.to_str().unwrap(), config.is_extended(), &mut sm) {
             Ok(program) => {
                 let stats = format!(
                     "rules={}, relations={}",
@@ -47,8 +48,8 @@ fn run_all_examples(config: &Config) {
                 );
                 formatter.report_success(file_name, Some(&stats));
             }
-            Err(_panic_info) => {
-                formatter.report_failure(file_name, None);
+            Err(err) => {
+                formatter.report_failure(file_name, Some(&err.to_string()));
             }
         }
     }

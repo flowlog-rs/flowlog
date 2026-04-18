@@ -8,11 +8,15 @@ use parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 
 use super::common::{
-    aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, result_from_key, row_pattern,
-    agg_semiring_new, ThresholdCmp,
+    agg_semiring_new, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
+    result_from_key, row_pattern, ThresholdCmp,
 };
 /// Generates the Min-semiring optimized aggregation pipeline.
-pub(crate) fn aggregation_min_optimize(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
+pub(crate) fn aggregation_min_optimize(
+    arity: usize,
+    agg_pos: usize,
+    agg_type: DataType,
+) -> TokenStream {
     aggregation_optimize_pipeline(
         arity,
         agg_pos,
@@ -24,7 +28,11 @@ pub(crate) fn aggregation_min_optimize(arity: usize, agg_pos: usize, agg_type: D
 }
 
 /// Generates the pre-leave conversion for min-aggregated recursive relations.
-pub(crate) fn aggregation_min_pre_leave(arity: usize, agg_pos: usize, agg_type: DataType) -> TokenStream {
+pub(crate) fn aggregation_min_pre_leave(
+    arity: usize,
+    agg_pos: usize,
+    agg_type: DataType,
+) -> TokenStream {
     aggregation_pre_leave_pipeline(
         arity,
         agg_pos,

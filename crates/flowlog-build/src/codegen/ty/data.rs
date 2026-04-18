@@ -203,11 +203,15 @@ impl CodeGen {
                     match arg_type {
                         Some(at) => {
                             assert_eq!(
-                            at,
-                            *param.data_type(),
-                            "CodeGen error: UDF '{}' param {} ('{}') expects {:?} but got {:?}",
-                            name, i, param.name(), param.data_type(), at,
-                        )
+                                at,
+                                *param.data_type(),
+                                "CodeGen error: UDF '{}' param {} ('{}') expects {:?} but got {:?}",
+                                name,
+                                i,
+                                param.name(),
+                                param.data_type(),
+                                at,
+                            )
                         }
                         None => {
                             // Numeric constants infer as None (polymorphic).

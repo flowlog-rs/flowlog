@@ -1000,10 +1000,12 @@ mod tests {
     use tracing_test::traced_test;
 
     fn parse_program(source: &str) -> Program {
+        use common::SourceMap;
         let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())
             .expect("failed to write temp file");
-        Program::parse(&tmp.path().to_string_lossy(), true)
+        let mut sm = SourceMap::new();
+        Program::parse(&tmp.path().to_string_lossy(), true, &mut sm).expect("parse failed")
     }
 
     /// A(x,y) :- Edge(x,y), !B(x,y).

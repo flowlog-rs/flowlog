@@ -14,7 +14,9 @@
 //! ```
 
 use super::Arithmetic;
-use crate::{Lexeme, Rule};
+use crate::error::{grammar_bug, ParseError};
+use crate::{span_of, Lexeme, Rule};
+use common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
@@ -63,23 +65,24 @@ impl fmt::Display for ComparisonOperator {
 
 impl Lexeme for ComparisonOperator {
     /// Parse a comparison operator from the grammar.
-    ///
-    /// # Panics
-    /// Panics if the rule is not one of the expected operator tokens.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, _file: FileId) -> Result<Self, ParseError> {
         let op = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: comparison operator missing inner token");
-        match op.as_rule() {
+            .ok_or_else(|| grammar_bug("comparison operator missing inner token"))?;
+        Ok(match op.as_rule() {
             Rule::equal => Self::Equal,
             Rule::not_equal => Self::NotEqual,
             Rule::greater_than => Self::GreaterThan,
             Rule::greater_equal_than => Self::GreaterEqualThan,
             Rule::less_than => Self::LessThan,
             Rule::less_equal_than => Self::LessEqualThan,
-            other => panic!("Parser error: unknown comparison operator: {:?}", other),
-        }
+            other => {
+                return Err(grammar_bug(format!(
+                    "unknown comparison operator: {other:?}"
+                )))
+            }
+        })
     }
 }
 
@@ -89,6 +92,7 @@ pub struct ComparisonExpr {
     left: Arithmetic,
     operator: ComparisonOperator,
     right: Arithmetic,
+    span: Ignored<Span>,
 }
 
 impl ComparisonExpr {
@@ -99,7 +103,15 @@ impl ComparisonExpr {
             left,
             operator,
             right,
+            span: Ignored(Span::DUMMY),
         }
+    }
+
+    /// Source location this comparison was parsed from.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// Left-hand expression.
@@ -154,27 +166,30 @@ impl fmt::Display for ComparisonExpr {
 
 impl Lexeme for ComparisonExpr {
     /// Parse `arithmetic ~ comparison_operator ~ arithmetic`.
-    ///
-    /// # Panics
-    /// Panics if any of the three parts are missing.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
 
         let left_pair = inner
             .next()
-            .expect("Parser error: comparison missing left expression");
+            .ok_or_else(|| grammar_bug("comparison missing left expression"))?;
         let op_pair = inner
             .next()
-            .expect("Parser error: comparison missing operator");
+            .ok_or_else(|| grammar_bug("comparison missing operator"))?;
         let right_pair = inner
             .next()
-            .expect("Parser error: comparison missing right expression");
+            .ok_or_else(|| grammar_bug("comparison missing right expression"))?;
 
-        let left = Arithmetic::from_parsed_rule(left_pair);
-        let operator = ComparisonOperator::from_parsed_rule(op_pair);
-        let right = Arithmetic::from_parsed_rule(right_pair);
+        let left = Arithmetic::from_parsed_rule(left_pair, file)?;
+        let operator = ComparisonOperator::from_parsed_rule(op_pair, file)?;
+        let right = Arithmetic::from_parsed_rule(right_pair, file)?;
 
-        Self::new(left, operator, right)
+        Ok(Self {
+            left,
+            operator,
+            right,
+            span: Ignored(span),
+        })
     }
 }
 

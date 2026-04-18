@@ -1,6 +1,8 @@
 //! Input/Output directive types for FlowLog Datalog programs.
 
-use crate::{Lexeme, Rule};
+use crate::error::{grammar_bug, ParseError};
+use crate::{span_of, Lexeme, Rule};
+use common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
@@ -9,6 +11,8 @@ use std::collections::HashMap;
 pub struct InputDirective {
     relation_name: String,
     parameters: HashMap<String, String>,
+    /// Span of the directive's target relation-name token.
+    span: Ignored<Span>,
 }
 
 impl InputDirective {
@@ -20,6 +24,7 @@ impl InputDirective {
         Self {
             relation_name: relation_name.to_lowercase(),
             parameters,
+            span: Ignored(Span::DUMMY),
         }
     }
 
@@ -34,12 +39,19 @@ impl InputDirective {
     pub fn parameters(&self) -> &HashMap<String, String> {
         &self.parameters
     }
+
+    /// Span of the directive's target relation-name token.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
+    }
 }
 
 /// Parse `io_params` children from a directive's inner pairs into a key→value map.
 fn parse_io_params<'i>(
     inner: impl Iterator<Item = pest::iterators::Pair<'i, Rule>>,
-) -> HashMap<String, String> {
+) -> Result<HashMap<String, String>, ParseError> {
     let mut parameters = HashMap::new();
     for node in inner {
         if node.as_rule() == Rule::io_params {
@@ -47,12 +59,12 @@ fn parse_io_params<'i>(
                 let mut kv = io_param.into_inner();
                 let key = kv
                     .next()
-                    .expect("Parser error: io parameter missing name")
+                    .ok_or_else(|| grammar_bug("io parameter missing name"))?
                     .as_str()
                     .to_string();
                 let value = kv
                     .next()
-                    .expect("Parser error: io parameter missing value")
+                    .ok_or_else(|| grammar_bug("io parameter missing value"))?
                     .as_str()
                     .trim_matches('"')
                     .to_string();
@@ -60,18 +72,22 @@ fn parse_io_params<'i>(
             }
         }
     }
-    parameters
+    Ok(parameters)
 }
 
 impl Lexeme for InputDirective {
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let mut inner = parsed_rule.into_inner();
-        let relation_name = inner
+        let name_pair = inner
             .next()
-            .expect("Parser error: input directive missing relation name")
-            .as_str()
-            .to_string();
-        Self::new(relation_name, parse_io_params(inner))
+            .ok_or_else(|| grammar_bug("input directive missing relation name"))?;
+        let span = span_of(&name_pair, file);
+        let relation_name = name_pair.as_str().to_lowercase();
+        Ok(Self {
+            relation_name,
+            parameters: parse_io_params(inner)?,
+            span: Ignored(span),
+        })
     }
 }
 
@@ -80,6 +96,7 @@ impl Lexeme for InputDirective {
 pub struct OutputDirective {
     relation_name: String,
     parameters: HashMap<String, String>,
+    span: Ignored<Span>,
 }
 
 impl OutputDirective {
@@ -91,6 +108,7 @@ impl OutputDirective {
         Self {
             relation_name: relation_name.to_lowercase(),
             parameters,
+            span: Ignored(Span::DUMMY),
         }
     }
 
@@ -105,17 +123,28 @@ impl OutputDirective {
     pub fn parameters(&self) -> &HashMap<String, String> {
         &self.parameters
     }
+
+    /// Span of the directive's target relation-name token.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
+    }
 }
 
 impl Lexeme for OutputDirective {
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let mut inner = parsed_rule.into_inner();
-        let relation_name = inner
+        let name_pair = inner
             .next()
-            .expect("Parser error: output directive missing relation name")
-            .as_str()
-            .to_string();
-        Self::new(relation_name, parse_io_params(inner))
+            .ok_or_else(|| grammar_bug("output directive missing relation name"))?;
+        let span = span_of(&name_pair, file);
+        let relation_name = name_pair.as_str().to_lowercase();
+        Ok(Self {
+            relation_name,
+            parameters: parse_io_params(inner)?,
+            span: Ignored(span),
+        })
     }
 }
 
@@ -123,6 +152,7 @@ impl Lexeme for OutputDirective {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrintSizeDirective {
     relation_name: String,
+    span: Ignored<Span>,
 }
 
 impl PrintSizeDirective {
@@ -133,6 +163,7 @@ impl PrintSizeDirective {
     pub fn new(relation_name: String) -> Self {
         Self {
             relation_name: relation_name.to_lowercase(),
+            span: Ignored(Span::DUMMY),
         }
     }
 
@@ -141,20 +172,30 @@ impl PrintSizeDirective {
     pub fn relation_name(&self) -> &str {
         &self.relation_name
     }
+
+    /// Span of the directive's target relation-name token.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
+    }
 }
 
 impl Lexeme for PrintSizeDirective {
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let mut inner = parsed_rule.into_inner();
 
         // First child is the relation name
-        let relation_name = inner
+        let name_pair = inner
             .next()
-            .expect("Parser error: printsize directive missing relation name")
-            .as_str()
-            .to_string();
+            .ok_or_else(|| grammar_bug("printsize directive missing relation name"))?;
+        let span = span_of(&name_pair, file);
+        let relation_name = name_pair.as_str().to_lowercase();
 
-        Self::new(relation_name)
+        Ok(Self {
+            relation_name,
+            span: Ignored(span),
+        })
     }
 }
 

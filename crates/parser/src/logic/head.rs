@@ -16,8 +16,10 @@
 //! ```
 
 use super::{Aggregation, Arithmetic};
-use crate::{Lexeme, Rule};
+use crate::error::{grammar_bug, ParseError};
+use crate::{span_of, Lexeme, Rule};
 use common::compute_fp;
+use common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -42,6 +44,17 @@ impl HeadArg {
             Self::Aggregation(agg) => agg.vars(),
         }
     }
+
+    /// Source location; delegates to the inner node. Plain `Var` variants
+    /// have no standalone span and return [`Span::DUMMY`].
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Arith(a) => a.span(),
+            Self::Aggregation(agg) => agg.span(),
+            Self::Var(_) => Span::DUMMY,
+        }
+    }
 }
 
 impl fmt::Display for HeadArg {
@@ -58,35 +71,35 @@ impl Lexeme for HeadArg {
     /// Parse a head argument from the grammar.
     ///
     /// Optimization: if the arithmetic is a single variable (`is_var()`), emit `Var` instead of `Arith`.
-    ///
-    /// # Panics
-    /// Panics on unknown/unsupported inner rule.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: head_arg missing inner token");
+            .ok_or_else(|| grammar_bug("head_arg missing inner token"))?;
 
-        match inner.as_rule() {
+        Ok(match inner.as_rule() {
             Rule::arithmetic_expr => {
-                let arith = Arithmetic::from_parsed_rule(inner);
+                let arith = Arithmetic::from_parsed_rule(inner, file)?;
                 if arith.is_var() {
-                    // `init()` must be a `Factor::Var` when `is_var()` is true.
                     let name = arith
                         .init()
                         .vars()
                         .into_iter()
                         .next()
-                        .expect("Parser bug: is_var() but no variable in init")
+                        .ok_or_else(|| grammar_bug("is_var() but no variable in init"))?
                         .clone();
                     Self::Var(name)
                 } else {
                     Self::Arith(arith)
                 }
             }
-            Rule::aggregate_expr => Self::Aggregation(Aggregation::from_parsed_rule(inner)),
-            other => panic!("Parser error: unexpected rule for HeadArg: {:?}", other),
-        }
+            Rule::aggregate_expr => Self::Aggregation(Aggregation::from_parsed_rule(inner, file)?),
+            other => {
+                return Err(grammar_bug(format!(
+                    "unexpected rule for HeadArg: {other:?}"
+                )))
+            }
+        })
     }
 }
 
@@ -96,6 +109,7 @@ pub struct Head {
     name: String,
     head_fingerprint: u64,
     head_arguments: Vec<HeadArg>,
+    span: Ignored<Span>,
 }
 
 impl Head {
@@ -110,7 +124,15 @@ impl Head {
             name,
             head_fingerprint,
             head_arguments,
+            span: Ignored(Span::DUMMY),
         }
+    }
+
+    /// Source location this head was parsed from.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// Relation name.
@@ -159,26 +181,29 @@ impl fmt::Display for Head {
 
 impl Lexeme for Head {
     /// Parse `relation_name "(" (head_arg ("," head_arg)*)? ")"`.
-    ///
-    /// # Panics
-    /// Panics if the name or argument list is malformed/missing.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
 
-        let name = inner
+        let name_pair = inner
             .next()
-            .expect("Parser error: head missing relation name")
-            .as_str()
-            .to_string();
+            .ok_or_else(|| grammar_bug("head missing relation name"))?;
+        let name = name_pair.as_str().to_lowercase();
+        let head_fingerprint = compute_fp(&name);
 
         let mut args = Vec::new();
         for pair in inner {
             if pair.as_rule() == Rule::head_arg {
-                args.push(HeadArg::from_parsed_rule(pair));
+                args.push(HeadArg::from_parsed_rule(pair, file)?);
             }
         }
 
-        Self::new(name, args)
+        Ok(Self {
+            name,
+            head_fingerprint,
+            head_arguments: args,
+            span: Ignored(span),
+        })
     }
 }
 

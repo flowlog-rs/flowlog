@@ -45,10 +45,12 @@
 //! # Example
 //!
 //! ```rust,no_run
+//! use common::SourceMap;
 //! use parser::Program;
 //! use stratifier::Stratifier;
 //!
-//! let program = Program::parse("path/to/program.dl", false);
+//! let mut sm = SourceMap::new();
+//! let program = Program::parse("path/to/program.dl", false, &mut sm).unwrap();
 //!
 //! // Standard Datalog mode — recursion in plain rules is fine.
 //! let s = Stratifier::from_program(&program, false);

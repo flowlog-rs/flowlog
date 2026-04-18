@@ -52,11 +52,11 @@ mod results;
 // and, via the re-exports below, by `flowlog-compiler`'s binary mode.
 mod codegen;
 
-pub use codegen::CodeGen;
 pub use codegen::code_parts::CodeParts;
 pub use codegen::features::Features;
-pub use codegen::ty::data::data_type_tokens;
 pub use codegen::idb_buffers::{field_accessor, gen_drain_block};
+pub use codegen::ty::data::data_type_tokens;
+pub use codegen::CodeGen;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -226,11 +226,7 @@ impl Builder {
     /// Library mode only has `flowlog-runtime` in its `[dependencies]`, so we
     /// prepend aliases that route the bare paths through `::flowlog_runtime::`
     /// — keeping the emitted semiring code mode-agnostic.
-    fn emit_semiring_modules(
-        &self,
-        output: &pipeline::Pipeline,
-        out_dir: &Path,
-    ) -> io::Result<()> {
+    fn emit_semiring_modules(&self, output: &pipeline::Pipeline, out_dir: &Path) -> io::Result<()> {
         if output.parts.semiring_modules.is_empty() {
             return Ok(());
         }
