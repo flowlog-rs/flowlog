@@ -10,7 +10,7 @@ use clap::Parser;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use common::{get_example_files, Config};
+use common::{emit_and_exit, get_example_files, Config, SourceMap};
 use flowlog_compiler::Compiler;
 use optimizer::Optimizer;
 use parser::Program;
@@ -66,18 +66,27 @@ fn run_all_examples(config: &Config) {
             .and_then(|n| n.to_str())
             .unwrap_or("<unnamed>");
 
-        let outcome = std::panic::catch_unwind(|| {
-            let program = Program::parse_with_includes(
-                file_path.to_str().expect("non-UTF-8 path"),
-                config.is_extended(),
-                &config.include_dirs(),
-            );
+        let mut sm = SourceMap::new();
+        let program = match Program::parse_with_includes(
+            file_path.to_str().expect("non-UTF-8 path"),
+            config.is_extended(),
+            &config.include_dirs(),
+            &mut sm,
+        ) {
+            Ok(p) => p,
+            Err(err) => {
+                failure += 1;
+                error!("FAILED: {} ({err})", file_name);
+                continue;
+            }
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let stratifier = Stratifier::from_program(&program, config.is_extended());
             let mut optimizer = Optimizer::new();
             let mut profiler = new_profiler(config);
             let strata = plan_strata(config, &mut optimizer, &mut profiler, &stratifier);
             (program.rules().len(), strata.len())
-        });
+        }));
 
         match outcome {
             Ok((rules, strata)) => {
@@ -115,11 +124,14 @@ fn run_all_examples(config: &Config) {
 // =========================================================================
 
 fn parse_program(config: &Config) -> Program {
+    let mut sm = SourceMap::new();
     Program::parse_with_includes(
         config.program(),
         config.is_extended(),
         &config.include_dirs(),
+        &mut sm,
     )
+    .unwrap_or_else(|err| emit_and_exit(err, &sm))
 }
 
 fn new_profiler(config: &Config) -> Option<Profiler> {

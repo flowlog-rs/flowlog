@@ -66,8 +66,10 @@
 //! ```
 
 use super::FlowLogRule;
-use crate::{Lexeme, Rule};
+use crate::error::{grammar_bug, ParseError};
+use crate::{span_of, Lexeme, Rule};
 use common::compute_fp;
+use common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -186,6 +188,7 @@ pub struct LoopBlock {
     /// `None` means a pure fixpoint loop (DD terminates when delta is empty).
     condition: Option<LoopCondition>,
     rules: Vec<FlowLogRule>,
+    span: Ignored<Span>,
 }
 
 impl LoopBlock {
@@ -199,7 +202,15 @@ impl LoopBlock {
             iterative_relations,
             condition,
             rules,
+            span: Ignored(Span::DUMMY),
         }
+    }
+
+    /// Source location this loop/fixpoint block was parsed from.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// Relations explicitly marked as iterative (replacement semantics).
@@ -330,8 +341,8 @@ impl fmt::Display for LoopBlock {
 // =============================================================================
 
 /// Compute the allowed iteration range for a single `@it op n` constraint.
-fn range_for_op(op: &str, n: u16) -> Vec<(u16, u16)> {
-    match op {
+fn range_for_op(op: &str, n: u16) -> Result<Vec<(u16, u16)>, ParseError> {
+    Ok(match op {
         "==" => vec![(n, n)],
         "<" => {
             if n == 0 {
@@ -349,8 +360,12 @@ fn range_for_op(op: &str, n: u16) -> Vec<(u16, u16)> {
             }
         }
         ">=" => vec![(n, u16::MAX)],
-        _ => panic!("Parser error: loop_iter_expr unknown comparison operator '{op}'"),
-    }
+        other => {
+            return Err(grammar_bug(format!(
+                "loop_iter_expr unknown comparison operator '{other}'"
+            )));
+        }
+    })
 }
 
 /// Intersect two range sets (AND semantics).
@@ -380,92 +395,104 @@ fn union_ranges(a: &[(u16, u16)], b: &[(u16, u16)]) -> Vec<(u16, u16)> {
 // =============================================================================
 
 /// Parse a `loop_connective` pair into a [`LoopConnective`].
-fn parse_connective(pair: Pair<Rule>) -> LoopConnective {
+fn parse_connective(pair: Pair<Rule>) -> Result<LoopConnective, ParseError> {
     let inner = pair
         .into_inner()
         .next()
-        .expect("Parser error: loop_connective missing child");
-    match inner.as_rule() {
+        .ok_or_else(|| grammar_bug("loop_connective missing child"))?;
+    Ok(match inner.as_rule() {
         Rule::loop_and => LoopConnective::And,
         Rule::loop_or => LoopConnective::Or,
-        r => panic!("Parser error: loop_connective unexpected rule {r:?}"),
-    }
+        r => {
+            return Err(grammar_bug(format!(
+                "loop_connective unexpected rule {r:?}"
+            )))
+        }
+    })
 }
 
 /// Parse a `loop_iter_expr` pair into an [`IterWindows`] list.
-fn parse_iter_expr(pair: Pair<Rule>) -> IterWindows {
+fn parse_iter_expr(pair: Pair<Rule>) -> Result<IterWindows, ParseError> {
     let mut children = pair.into_inner();
 
     let first_op = children
         .next()
-        .expect("Parser error: loop_iter_expr missing first compare op")
+        .ok_or_else(|| grammar_bug("loop_iter_expr missing first compare op"))?
         .as_str()
         .to_string();
     let first_n: u16 = children
         .next()
-        .expect("Parser error: loop_iter_expr missing first integer")
+        .ok_or_else(|| grammar_bug("loop_iter_expr missing first integer"))?
         .as_str()
         .trim_start_matches('+')
         .parse()
-        .expect("Parser error: loop_iter_expr iteration bound must fit in u16");
-    let mut ranges = range_for_op(&first_op, first_n);
+        .map_err(|e| {
+            grammar_bug(format!(
+                "loop_iter_expr iteration bound must fit in u16: {e}"
+            ))
+        })?;
+    let mut ranges = range_for_op(&first_op, first_n)?;
 
     // Subsequent: loop_connective, compare_op, integer (repeated).
     while let Some(conn_pair) = children.next() {
-        let connective = parse_connective(conn_pair);
+        let connective = parse_connective(conn_pair)?;
         let op = children
             .next()
-            .expect("Parser error: loop_iter_expr missing compare op in repeat")
+            .ok_or_else(|| grammar_bug("loop_iter_expr missing compare op in repeat"))?
             .as_str()
             .to_string();
         let n: u16 = children
             .next()
-            .expect("Parser error: loop_iter_expr missing integer in repeat")
+            .ok_or_else(|| grammar_bug("loop_iter_expr missing integer in repeat"))?
             .as_str()
             .trim_start_matches('+')
             .parse()
-            .expect("Parser error: loop_iter_expr iteration bound must fit in u16");
-        let new_range = range_for_op(&op, n);
+            .map_err(|e| {
+                grammar_bug(format!(
+                    "loop_iter_expr iteration bound must fit in u16: {e}"
+                ))
+            })?;
+        let new_range = range_for_op(&op, n)?;
         ranges = match connective {
             LoopConnective::And => intersect_ranges(&ranges, &new_range),
             LoopConnective::Or => union_ranges(&ranges, &new_range),
         };
     }
 
-    ranges
+    Ok(ranges)
 }
 
 /// Parse a `loop_stop_group` pair into a [`StopGroup`].
-fn parse_stop_group(pair: Pair<Rule>) -> StopGroup {
+fn parse_stop_group(pair: Pair<Rule>) -> Result<StopGroup, ParseError> {
     let mut children = pair.into_inner();
 
     let first_rel_pair = children
         .next()
-        .expect("Parser error: loop_stop_group missing first bool relation");
-    let first = parse_bool_relation(first_rel_pair);
+        .ok_or_else(|| grammar_bug("loop_stop_group missing first bool relation"))?;
+    let first = parse_bool_relation(first_rel_pair)?;
 
     let mut rest = Vec::new();
     while let Some(conn_pair) = children.next() {
-        let connective = parse_connective(conn_pair);
+        let connective = parse_connective(conn_pair)?;
         let rel_pair = children
             .next()
-            .expect("Parser error: loop_stop_group missing bool relation after connective");
-        rest.push((connective, parse_bool_relation(rel_pair)));
+            .ok_or_else(|| grammar_bug("loop_stop_group missing bool relation after connective"))?;
+        rest.push((connective, parse_bool_relation(rel_pair)?));
     }
 
-    StopGroup::new(first, rest)
+    Ok(StopGroup::new(first, rest))
 }
 
 /// Parse a `loop_bool_relation` pair into a [`StopRelation`].
-fn parse_bool_relation(pair: Pair<Rule>) -> StopRelation {
+fn parse_bool_relation(pair: Pair<Rule>) -> Result<StopRelation, ParseError> {
     let name = pair
         .into_inner()
         .next()
-        .expect("Parser error: loop_bool_relation missing relation_name")
+        .ok_or_else(|| grammar_bug("loop_bool_relation missing relation_name"))?
         .as_str()
         .to_ascii_lowercase();
     let fp = compute_fp(&name);
-    StopRelation { name, fp }
+    Ok(StopRelation { name, fp })
 }
 
 // =============================================================================
@@ -473,27 +500,21 @@ fn parse_bool_relation(pair: Pair<Rule>) -> StopRelation {
 // =============================================================================
 
 impl Lexeme for LoopCondition {
-    fn from_parsed_rule(pair: Pair<Rule>) -> Self {
-        // `pair` is `loop_condition`.
-        // Children: first child is either `loop_while` or `loop_until`,
-        // followed optionally by `loop_or` (connective) and the other clause.
-        // If no `loop_or` is present between two clauses, default is And (min).
+    fn from_parsed_rule(pair: Pair<Rule>, _file: FileId) -> Result<Self, ParseError> {
         let mut children = pair.into_inner().peekable();
 
         let first = children
             .next()
-            .expect("Parser error: loop_condition missing first clause");
+            .ok_or_else(|| grammar_bug("loop_condition missing first clause"))?;
 
-        match first.as_rule() {
+        Ok(match first.as_rule() {
             Rule::loop_while => {
-                // while clause first
                 let iter_expr = first
                     .into_inner()
                     .next()
-                    .expect("Parser error: loop_while missing loop_iter_expr");
-                let windows = parse_iter_expr(iter_expr);
+                    .ok_or_else(|| grammar_bug("loop_while missing loop_iter_expr"))?;
+                let windows = parse_iter_expr(iter_expr)?;
 
-                // Optional: [or] + until clause
                 let mut connective = None;
                 let mut until_group = None;
                 for next in children.by_ref() {
@@ -503,29 +524,29 @@ impl Lexeme for LoopCondition {
                             let stop_group_pair = next
                                 .into_inner()
                                 .next()
-                                .expect("Parser error: loop_until missing loop_stop_group");
-                            until_group = Some(parse_stop_group(stop_group_pair));
+                                .ok_or_else(|| grammar_bug("loop_until missing loop_stop_group"))?;
+                            until_group = Some(parse_stop_group(stop_group_pair)?);
                         }
-                        r => panic!(
-                            "Parser error: loop_condition unexpected rule after loop_while: {r:?}"
-                        ),
+                        r => {
+                            return Err(grammar_bug(format!(
+                                "loop_condition unexpected rule after loop_while: {r:?}"
+                            )));
+                        }
                     }
                 }
-                // Default to And when both clauses present but no explicit "or"
+                // No explicit connective → And (min semantics).
                 if until_group.is_some() && connective.is_none() {
                     connective = Some(LoopConnective::And);
                 }
                 Self::new(Some(windows), connective, until_group)
             }
             Rule::loop_until => {
-                // until clause first
                 let stop_group_pair = first
                     .into_inner()
                     .next()
-                    .expect("Parser error: loop_until missing loop_stop_group");
-                let stop_group = parse_stop_group(stop_group_pair);
+                    .ok_or_else(|| grammar_bug("loop_until missing loop_stop_group"))?;
+                let stop_group = parse_stop_group(stop_group_pair)?;
 
-                // Optional: [or] + while clause
                 let mut connective = None;
                 let mut while_windows = None;
                 for next in children {
@@ -535,32 +556,41 @@ impl Lexeme for LoopCondition {
                             let iter_expr = next
                                 .into_inner()
                                 .next()
-                                .expect("Parser error: loop_while missing loop_iter_expr");
-                            while_windows = Some(parse_iter_expr(iter_expr));
+                                .ok_or_else(|| grammar_bug("loop_while missing loop_iter_expr"))?;
+                            while_windows = Some(parse_iter_expr(iter_expr)?);
                         }
-                        r => panic!(
-                            "Parser error: loop_condition unexpected rule after loop_until: {r:?}"
-                        ),
+                        r => {
+                            return Err(grammar_bug(format!(
+                                "loop_condition unexpected rule after loop_until: {r:?}"
+                            )));
+                        }
                     }
                 }
-                // Default to And when both clauses present but no explicit "or"
                 if while_windows.is_some() && connective.is_none() {
                     connective = Some(LoopConnective::And);
                 }
                 Self::new(while_windows, connective, Some(stop_group))
             }
-            r => panic!("Parser error: loop_condition unexpected first child rule {r:?}"),
-        }
+            r => {
+                return Err(grammar_bug(format!(
+                    "loop_condition unexpected first child rule {r:?}"
+                )));
+            }
+        })
     }
 }
 
 impl Lexeme for LoopBlock {
-    fn from_parsed_rule(pair: Pair<Rule>) -> Self {
+    fn from_parsed_rule(pair: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        let span = span_of(&pair, file);
         let mut inner = pair.into_inner().peekable();
 
         // Optional condition clause (fixpoint blocks have no condition).
         let condition = if inner.peek().map(|p| p.as_rule()) == Some(Rule::loop_condition) {
-            Some(LoopCondition::from_parsed_rule(inner.next().unwrap()))
+            let cond_pair = inner
+                .next()
+                .ok_or_else(|| grammar_bug("missing loop_condition"))?;
+            Some(LoopCondition::from_parsed_rule(cond_pair, file)?)
         } else {
             None
         };
@@ -574,20 +604,29 @@ impl Lexeme for LoopBlock {
                     let name = item
                         .into_inner()
                         .next()
-                        .expect("Parser error: iterative_directive missing relation_name")
+                        .ok_or_else(|| grammar_bug("iterative_directive missing relation_name"))?
                         .as_str()
                         .to_ascii_lowercase();
                     let fp = compute_fp(&name);
                     iterative_relations.push((name, fp));
                 }
                 Rule::rule => {
-                    rules.extend(FlowLogRule::expand_from_parsed_rule(item));
+                    rules.extend(FlowLogRule::expand_from_parsed_rule(item, file)?);
                 }
-                r => panic!("Parser error: unexpected rule in loop/fixpoint block: {r:?}"),
+                r => {
+                    return Err(grammar_bug(format!(
+                        "unexpected rule in loop/fixpoint block: {r:?}"
+                    )));
+                }
             }
         }
 
-        Self::new(iterative_relations, condition, rules)
+        Ok(Self {
+            iterative_relations,
+            condition,
+            rules,
+            span: Ignored(span),
+        })
     }
 }
 
@@ -598,13 +637,14 @@ mod tests {
     use pest::Parser;
 
     fn parse_loop_block(input: &str) -> LoopBlock {
+        use common::source::FileId;
         // Try as loop_block first, then fixpoint_block
         if let Ok(mut pairs) = FlowLogParser::parse(Rule::loop_block, input) {
-            LoopBlock::from_parsed_rule(pairs.next().unwrap())
+            LoopBlock::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap()
         } else {
             let mut pairs = FlowLogParser::parse(Rule::fixpoint_block, input)
                 .unwrap_or_else(|e| panic!("parse error: {e}"));
-            LoopBlock::from_parsed_rule(pairs.next().unwrap())
+            LoopBlock::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap()
         }
     }
 

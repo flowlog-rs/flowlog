@@ -12,8 +12,10 @@
 //! ```
 
 use super::Arithmetic;
-use crate::{Lexeme, Rule};
+use crate::error::{grammar_bug, ParseError};
+use crate::{span_of, Lexeme, Rule};
 
+use common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -26,6 +28,7 @@ pub struct FnCall {
     args: Vec<Arithmetic>,
     /// Whether the result is negated (i.e. `!fn_name(...)`).
     is_negated: bool,
+    span: Ignored<Span>,
 }
 
 impl FnCall {
@@ -36,7 +39,15 @@ impl FnCall {
             name,
             args,
             is_negated,
+            span: Ignored(Span::DUMMY),
         }
+    }
+
+    /// Source location this call was parsed from.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// Function name.
@@ -85,18 +96,26 @@ impl fmt::Display for FnCall {
 
 impl Lexeme for FnCall {
     /// Parse a `fn_call_expr` grammar node into a [`FnCall`].
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        let span = span_of(&parsed_rule, file);
         let mut children = parsed_rule.into_inner();
         let fn_name = children
             .next()
-            .expect("Parser error: fn_call_expr missing function name")
+            .ok_or_else(|| grammar_bug("fn_call_expr missing function name"))?
             .as_str()
             .to_string();
-        let args: Vec<Arithmetic> = children
-            .filter(|p| p.as_rule() == Rule::arithmetic_expr)
-            .map(Arithmetic::from_parsed_rule)
-            .collect();
-        Self::new(fn_name, args, false)
+        let mut args = Vec::new();
+        for p in children {
+            if p.as_rule() == Rule::arithmetic_expr {
+                args.push(Arithmetic::from_parsed_rule(p, file)?);
+            }
+        }
+        Ok(Self {
+            name: fn_name,
+            args,
+            is_negated: false,
+            span: Ignored(span),
+        })
     }
 }
 
@@ -151,11 +170,12 @@ mod tests {
     #[test]
     fn parse_fn_call_expr() {
         use crate::{FlowLogParser, Lexeme, Rule};
+        use common::source::FileId;
         use pest::Parser;
 
         let input = "my_udf(x, y)";
         let mut pairs = FlowLogParser::parse(Rule::fn_call_expr, input).unwrap();
-        let fc = FnCall::from_parsed_rule(pairs.next().unwrap());
+        let fc = FnCall::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
         assert_eq!(fc.name(), "my_udf");
         assert_eq!(fc.args().len(), 2);
         assert!(!fc.is_negated());

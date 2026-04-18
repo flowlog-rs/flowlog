@@ -27,10 +27,12 @@
 
 use super::{
     declaration::{ExternFn, InputDirective, OutputDirective, PrintSizeDirective, Relation},
+    error::{grammar_bug, DirectiveKind, ParseError},
     logic::{Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, LoopBlock, Predicate},
     segment::Segment,
     ConstType, FlowLogParser, Lexeme, Rule,
 };
+use common::source::{FileId, SourceMap, Span};
 use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -47,7 +49,8 @@ use tracing::{debug, info, warn};
 /// [`Lexeme`] impl on an already-parsed pest node.
 ///
 /// ```ignore
-/// let program = Program::parse("path/to/program.fl", false);
+/// let mut sm = common::SourceMap::new();
+/// let program = Program::parse("path/to/program.fl", false, &mut sm)?;
 /// println!("{}", program);
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -143,17 +146,15 @@ impl Program {
     /// Parse a program from a file, resolving `.include` directives recursively.
     ///
     /// Included files are resolved relative to the including file's directory.
-    /// Panics on I/O errors, parse errors, or circular includes.
+    /// Source text is loaded into `sm` so later diagnostics can cite it.
     ///
-    /// If `extended` is `false`, panics when the program contains any `loop`
+    /// If `extended` is `false`, rejects programs that contain any `loop`
     /// blocks — those require Extended Datalog mode (`--mode extend-batch`
     /// or `--mode extend-inc`).
     ///
-    /// `.include` directives resolve relative to the parent file's directory.
     /// For an include search path use [`Self::parse_with_includes`].
-    #[must_use]
-    pub fn parse(path: &str, extended: bool) -> Self {
-        Self::parse_with_includes(path, extended, &[])
+    pub fn parse(path: &str, extended: bool, sm: &mut SourceMap) -> Result<Self, ParseError> {
+        Self::parse_with_includes(path, extended, &[], sm)
     }
 
     /// Parse a Datalog program with extra include search directories.
@@ -162,36 +163,60 @@ impl Program {
     /// 1. The parent file's directory (always tried first).
     /// 2. Each entry in `include_dirs`, in order.
     ///
-    /// `parse(path, extended)` is equivalent to
-    /// `parse_with_includes(path, extended, &[])`.
-    #[must_use]
-    pub fn parse_with_includes(path: &str, extended: bool, include_dirs: &[&Path]) -> Self {
-        let file_path = Path::new(path);
-        let source = fs::read_to_string(file_path)
-            .unwrap_or_else(|_| panic!("Parser error: failed to read '{}'", path));
-        let base_dir = file_path.parent().unwrap_or(Path::new("."));
+    /// `parse(path, extended, sm)` is equivalent to
+    /// `parse_with_includes(path, extended, &[], sm)`.
+    pub fn parse_with_includes(
+        path: &str,
+        extended: bool,
+        include_dirs: &[&Path],
+        sm: &mut SourceMap,
+    ) -> Result<Self, ParseError> {
+        let file_path = PathBuf::from(path);
+        let root_file = sm
+            .load(&file_path)
+            .map_err(|source| ParseError::IncludeIo {
+                span: Span::DUMMY,
+                path: file_path.clone(),
+                source,
+            })?;
+
+        let base_dir: PathBuf = file_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
 
         let mut in_progress = HashSet::new();
         let mut completed = HashSet::new();
+        in_progress.insert(fs::canonicalize(&file_path).unwrap_or_else(|_| file_path.clone()));
         let combined = resolve_includes(
-            &source,
-            base_dir,
+            sm.text(root_file).to_string(),
+            root_file,
+            &base_dir,
             include_dirs,
             &mut in_progress,
             &mut completed,
-        );
+            sm,
+        )?;
 
-        let mut pairs = FlowLogParser::parse(Rule::main_grammar, &combined)
-            .unwrap_or_else(|e| panic!("Parser error in '{}': {}", path, e));
-        let root = pairs.next().expect("Parser error: no parsed rule found");
+        // Re-register the combined text as the authoritative "file" we pass
+        // to `from_parsed_rule` below. Spans then point into this combined
+        // source; individual include files already live in `sm` for file
+        // I/O errors but aren't the positions Pest reports against.
+        let combined_file = sm.add(file_path.clone(), combined);
 
-        let mut program = Self::collect_program(root, extended);
+        let mut pairs = FlowLogParser::parse(Rule::main_grammar, sm.text(combined_file))
+            .map_err(|e| ParseError::syntax_from_pest(&e, combined_file))?;
+        let root = pairs
+            .next()
+            .ok_or_else(|| grammar_bug("no parsed rule found"))?;
+
+        let mut program = Self::collect_program(root, extended, combined_file)?;
         program.prune_dead_components();
 
         debug!("\n{}", program);
         info!("Successfully parsed program from '{}'.", path);
 
-        program
+        Ok(program)
     }
 
     /// All relation declarations.
@@ -372,15 +397,19 @@ impl Program {
 /// - `completed` — files fully inlined in a prior branch.  Re-encountering one
 ///   (diamond include) is silently skipped so its content is not duplicated.
 fn resolve_includes(
-    source: &str,
+    source: String,
+    source_file: FileId,
     base_dir: &Path,
     include_dirs: &[&Path],
     in_progress: &mut HashSet<PathBuf>,
     completed: &mut HashSet<PathBuf>,
-) -> String {
-    let mut pairs = FlowLogParser::parse(Rule::main_grammar, source)
-        .unwrap_or_else(|e| panic!("Parser error: {}", e));
-    let root = pairs.next().expect("Parser error: no parsed rule found");
+    sm: &mut SourceMap,
+) -> Result<String, ParseError> {
+    let mut pairs = FlowLogParser::parse(Rule::main_grammar, &source)
+        .map_err(|e| ParseError::syntax_from_pest(&e, source_file))?;
+    let root = pairs
+        .next()
+        .ok_or_else(|| grammar_bug("no parsed rule found"))?;
 
     let mut out = String::with_capacity(source.len());
     let mut cursor = 0usize; // byte offset into `source` of the last consumed position
@@ -391,6 +420,7 @@ fn resolve_includes(
         }
 
         let span = node.as_span();
+        let directive_span = Span::new(source_file, span.start() as u32, span.end() as u32);
 
         // Append all source text between the previous directive and this one.
         out.push_str(&source[cursor..span.start()]);
@@ -400,22 +430,18 @@ fn resolve_includes(
         let path_node = node
             .into_inner()
             .next()
-            .expect("Parser error: include directive missing path");
+            .ok_or_else(|| grammar_bug("include directive missing path"))?;
         let raw = path_node.as_str().trim_matches('"');
 
         let full_path = resolve_one_include(raw, base_dir, include_dirs);
-        let canonical = fs::canonicalize(&full_path).unwrap_or_else(|_| {
-            panic!(
-                "Parser error: cannot resolve include path '{}'",
-                full_path.display()
-            )
-        });
+        let canonical = fs::canonicalize(&full_path).unwrap_or_else(|_| full_path.clone());
 
         if in_progress.contains(&canonical) {
-            panic!(
-                "Parser error: circular include detected — '{}' is already being loaded",
-                full_path.display()
-            );
+            return Err(ParseError::CircularInclude {
+                span: directive_span,
+                path: full_path.clone(),
+                chain: in_progress.iter().cloned().collect(),
+            });
         }
         if completed.contains(&canonical) {
             warn!("Skipping duplicate include '{}'.", full_path.display());
@@ -423,18 +449,26 @@ fn resolve_includes(
         }
 
         debug!("Including '{}'.", full_path.display());
-        let included_source = fs::read_to_string(&full_path)
-            .unwrap_or_else(|_| panic!("Parser error: failed to read '{}'", full_path.display()));
-        let included_base = full_path.parent().unwrap_or(Path::new("."));
+        let included_file = sm
+            .load(&full_path)
+            .map_err(|source| ParseError::IncludeIo {
+                span: directive_span,
+                path: full_path.clone(),
+                source,
+            })?;
+        let included_source = sm.text(included_file).to_string();
+        let included_base = full_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
         in_progress.insert(canonical.clone());
         let inlined = resolve_includes(
-            &included_source,
-            included_base,
+            included_source,
+            included_file,
+            &included_base,
             include_dirs,
             in_progress,
             completed,
-        );
+            sm,
+        )?;
         in_progress.remove(&canonical);
         completed.insert(canonical);
 
@@ -449,7 +483,7 @@ fn resolve_includes(
 
     // Append any remaining source after the last include directive.
     out.push_str(&source[cursor..]);
-    out
+    Ok(out)
 }
 
 /// Resolve `raw` (the include path string) by checking the parent directory
@@ -486,6 +520,29 @@ fn flush_rules(pending: &mut Vec<FlowLogRule>, out: &mut Vec<Segment>) {
     }
 }
 
+fn check_duplicate_directives<T>(
+    dirs: &[T],
+    kind: DirectiveKind,
+    name_of: impl Fn(&T) -> &str,
+    span_of: impl Fn(&T) -> Span,
+) -> Result<(), ParseError> {
+    let mut seen: HashMap<&str, Span> = HashMap::new();
+    for d in dirs {
+        let name = name_of(d);
+        let span = span_of(d);
+        if let Some(prior) = seen.get(name) {
+            return Err(ParseError::DuplicateDirective {
+                span,
+                prior: *prior,
+                kind,
+                name: name.to_string(),
+            });
+        }
+        seen.insert(name, span);
+    }
+    Ok(())
+}
+
 // =============================================================================
 // Parsing internals
 // =============================================================================
@@ -503,10 +560,14 @@ impl Program {
     ///   `Segment::Plain`, then the loop is appended.
     /// - After the loop, rules resume accumulating into a fresh buffer.
     /// - Trailing rules after the last loop are sealed at the end.
-    fn collect_program(parsed_rule: Pair<Rule>, extended: bool) -> Self {
+    fn collect_program(
+        parsed_rule: Pair<Rule>,
+        extended: bool,
+        file: FileId,
+    ) -> Result<Self, ParseError> {
         let mut relations: Vec<Relation> = Vec::new();
         // Local to the parse loop; not threaded into the returned `Program`.
-        let mut decl_raw_names: HashMap<String, String> = HashMap::new();
+        let mut decl_spans: HashMap<String, (String, Span)> = HashMap::new();
         let mut input_directives: Vec<InputDirective> = Vec::new();
         let mut output_directives: Vec<OutputDirective> = Vec::new();
         let mut printsize_directives: Vec<PrintSizeDirective> = Vec::new();
@@ -519,59 +580,52 @@ impl Program {
             match node.as_rule() {
                 // ── Schema ────────────────────────────────────────────────────
                 Rule::declaration => {
-                    let rel = Relation::from_parsed_rule(node);
-                    // Hard-error on duplicate or case-collision — flowlog
-                    // identifiers are case-insensitive, and silent collapse
-                    // would merge two user-intended-distinct relations.
-                    if let Some(prev_raw) = decl_raw_names.get(rel.name()) {
-                        let raw = rel.raw_name();
-                        if prev_raw == raw {
-                            panic!("Parser error: duplicate .decl for relation '{raw}'");
-                        }
-                        panic!(
-                            "Parser error: .decl '{raw}' collides with earlier .decl '{prev_raw}' \
-                             — flowlog identifiers are case-insensitive"
-                        );
+                    let rel = Relation::from_parsed_rule(node, file)?;
+                    if let Some((_prev_raw, prior)) = decl_spans.get(rel.name()) {
+                        return Err(ParseError::DuplicateDecl {
+                            span: rel.span(),
+                            prior: *prior,
+                            name: rel.raw_name().to_string(),
+                        });
                     }
-                    decl_raw_names.insert(rel.name().to_string(), rel.raw_name().to_string());
+                    decl_spans.insert(
+                        rel.name().to_string(),
+                        (rel.raw_name().to_string(), rel.span()),
+                    );
                     relations.push(rel);
                 }
-                Rule::extern_fn => udfs.push(ExternFn::from_parsed_rule(node)),
+                Rule::extern_fn => udfs.push(ExternFn::from_parsed_rule(node, file)?),
 
                 // ── I/O directives ────────────────────────────────────────────
                 Rule::input_directive => {
-                    input_directives.push(InputDirective::from_parsed_rule(node))
+                    input_directives.push(InputDirective::from_parsed_rule(node, file)?)
                 }
                 Rule::output_directive => {
-                    output_directives.push(OutputDirective::from_parsed_rule(node))
+                    output_directives.push(OutputDirective::from_parsed_rule(node, file)?)
                 }
                 Rule::printsize_directive => {
-                    printsize_directives.push(PrintSizeDirective::from_parsed_rule(node))
+                    printsize_directives.push(PrintSizeDirective::from_parsed_rule(node, file)?)
                 }
 
                 // ── Rules and loop/fixpoint blocks ───────────────────────────
                 Rule::rule => {
-                    current_rules.extend(FlowLogRule::expand_from_parsed_rule(node));
+                    current_rules.extend(FlowLogRule::expand_from_parsed_rule(node, file)?);
                 }
                 Rule::loop_block => {
+                    let block = LoopBlock::from_parsed_rule(node, file)?;
                     if !extended {
-                        panic!(
-                            "Parser error: `loop` blocks require Extended Datalog mode. \
-                             Rerun with `--mode extend-batch` or `--mode extend-inc`."
-                        );
+                        return Err(ParseError::LoopBlockInStandardMode { span: block.span() });
                     }
                     flush_rules(&mut current_rules, &mut segments);
-                    segments.push(Segment::Loop(LoopBlock::from_parsed_rule(node)));
+                    segments.push(Segment::Loop(block));
                 }
                 Rule::fixpoint_block => {
+                    let block = LoopBlock::from_parsed_rule(node, file)?;
                     if !extended {
-                        panic!(
-                            "Parser error: `fixpoint` blocks require Extended Datalog mode. \
-                             Rerun with `--mode extend-batch` or `--mode extend-inc`."
-                        );
+                        return Err(ParseError::LoopBlockInStandardMode { span: block.span() });
                     }
                     flush_rules(&mut current_rules, &mut segments);
-                    segments.push(Segment::Fixpoint(LoopBlock::from_parsed_rule(node)));
+                    segments.push(Segment::Fixpoint(block));
                 }
 
                 // ── Ground facts ──────────────────────────────────────────────
@@ -579,15 +633,20 @@ impl Program {
                     let head_node = node
                         .into_inner()
                         .next()
-                        .expect("Parser error: fact missing head");
-                    raw_facts.push(FlowLogRule::new(Head::from_parsed_rule(head_node), vec![]));
+                        .ok_or_else(|| grammar_bug("fact missing head"))?;
+                    raw_facts.push(FlowLogRule::new(
+                        Head::from_parsed_rule(head_node, file)?,
+                        vec![],
+                    ));
                 }
 
                 // include_directive nodes should never appear here — all
                 // `.include` lines were replaced with their file contents by
                 // `resolve_includes` before this source was parsed.
                 Rule::include_directive => {
-                    panic!("Parser error: unexpected include_directive in parsed tree; includes should have been resolved before parsing")
+                    return Err(grammar_bug(
+                        "unexpected include_directive in parsed tree; includes should have been resolved before parsing",
+                    ));
                 }
 
                 _ => {}
@@ -602,9 +661,9 @@ impl Program {
             input_directives,
             output_directives,
             printsize_directives,
-        );
-        Self::reclassify_udf_predicates(&mut segments, &udfs);
-        Self::validate_loop_conditions(&segments, &relations);
+        )?;
+        Self::reclassify_udf_predicates(&mut segments, &udfs)?;
+        Self::validate_loop_conditions(&segments, &relations)?;
 
         let mut program = Self {
             relations,
@@ -616,7 +675,7 @@ impl Program {
             program.extract_fact(fact);
         }
 
-        program
+        Ok(program)
     }
 
     /// Apply `.input`, `.output`, and `.printsize` directives to `relations`.
@@ -630,31 +689,36 @@ impl Program {
         input_directives: Vec<InputDirective>,
         output_directives: Vec<OutputDirective>,
         printsize_directives: Vec<PrintSizeDirective>,
-    ) {
-        // Reject duplicate directives within each kind before applying any of them,
-        // so errors are reported early and the state remains consistent.
-        fn check_duplicates<T>(directives: &[T], name_fn: impl Fn(&T) -> &str, kind: &str) {
-            let mut seen = HashSet::new();
-            for d in directives {
-                let name = name_fn(d);
-                if !seen.insert(name) {
-                    panic!("Parser error: duplicate .{kind} directive for relation '{name}'");
-                }
-            }
-        }
-        check_duplicates(&input_directives, |d| d.relation_name(), "input");
-        check_duplicates(&output_directives, |d| d.relation_name(), "output");
-        check_duplicates(&printsize_directives, |d| d.relation_name(), "printsize");
+    ) -> Result<(), ParseError> {
+        check_duplicate_directives(
+            &input_directives,
+            DirectiveKind::Input,
+            |d| d.relation_name(),
+            |d| d.span(),
+        )?;
+        check_duplicate_directives(
+            &output_directives,
+            DirectiveKind::Output,
+            |d| d.relation_name(),
+            |d| d.span(),
+        )?;
+        check_duplicate_directives(
+            &printsize_directives,
+            DirectiveKind::PrintSize,
+            |d| d.relation_name(),
+            |d| d.span(),
+        )?;
 
-        // Apply each directive, panicking if the target relation is undeclared.
         for d in input_directives {
             match relations.iter_mut().find(|r| r.name() == d.relation_name()) {
                 Some(rel) => rel.set_input_params(d.parameters().clone()),
-                None => panic!(
-                    "Parser error: .input directive for undeclared relation '{}' — \
-                     declare it with .decl first",
-                    d.relation_name()
-                ),
+                None => {
+                    return Err(ParseError::UndeclaredInDirective {
+                        span: d.span(),
+                        kind: DirectiveKind::Input,
+                        name: d.relation_name().to_string(),
+                    });
+                }
             }
         }
         for d in output_directives {
@@ -665,23 +729,28 @@ impl Program {
                         rel.set_output_params(d.parameters().clone());
                     }
                 }
-                None => panic!(
-                    "Parser error: .output directive for undeclared relation '{}' — \
-                     declare it with .decl first",
-                    d.relation_name()
-                ),
+                None => {
+                    return Err(ParseError::UndeclaredInDirective {
+                        span: d.span(),
+                        kind: DirectiveKind::Output,
+                        name: d.relation_name().to_string(),
+                    });
+                }
             }
         }
         for d in printsize_directives {
             match relations.iter_mut().find(|r| r.name() == d.relation_name()) {
                 Some(rel) => rel.set_printsize(true),
-                None => panic!(
-                    "Parser error: .printsize directive for undeclared relation '{}' — \
-                     declare it with .decl first",
-                    d.relation_name()
-                ),
+                None => {
+                    return Err(ParseError::UndeclaredInDirective {
+                        span: d.span(),
+                        kind: DirectiveKind::PrintSize,
+                        name: d.relation_name().to_string(),
+                    });
+                }
             }
         }
+        Ok(())
     }
 
     /// Validate that every relation name appearing in a loop condition has a
@@ -690,7 +759,10 @@ impl Program {
     /// Loop condition relations act as boolean flags: a non-empty `rel()` means
     /// the condition holds.  Non-nullary relations are rejected here so the
     /// compiler can assume `Collection<G, ()>` without an extra `.map(|_| ())`.
-    fn validate_loop_conditions(items: &[Segment], relations: &[Relation]) {
+    fn validate_loop_conditions(
+        items: &[Segment],
+        relations: &[Relation],
+    ) -> Result<(), ParseError> {
         let declared: HashSet<&str> = relations.iter().map(|r| r.name()).collect();
 
         for item in items {
@@ -698,14 +770,12 @@ impl Program {
                 continue;
             };
 
-            // Validate iterative relation list: every name must be declared.
             for (name, _) in block.iterative_relations() {
                 if !declared.contains(name.as_str()) {
-                    panic!(
-                        "Parser error: `iterative` list references undeclared relation '{}'. \
-                         Declare it with .decl first.",
-                        name
-                    );
+                    return Err(ParseError::UndeclaredInIterativeList {
+                        span: block.span(),
+                        name: name.clone(),
+                    });
                 }
             }
 
@@ -719,33 +789,27 @@ impl Program {
 
             for rel in until_group.relations() {
                 let name = rel.name.as_str();
-                // Relation names are stored lowercase internally (Relation::new
-                // lowercases them), so compare case-insensitively.
                 if !declared.contains(name) && !declared.contains(name.to_lowercase().as_str()) {
-                    panic!(
-                        "Parser error: loop condition references undeclared relation '{}'. \
-                         Declare it with .decl first.",
-                        name
-                    );
+                    return Err(ParseError::UndeclaredLoopCondition {
+                        span: block.span(),
+                        name: name.to_string(),
+                    });
                 }
 
-                // Loop condition relations must be nullary (boolean flag).
                 let decl = relations
                     .iter()
                     .find(|r| r.name() == name || r.name() == name.to_lowercase().as_str())
-                    .expect("already confirmed declared above");
+                    .ok_or_else(|| grammar_bug("already confirmed declared above"))?;
                 if decl.arity() != 0 {
-                    panic!(
-                        "Parser error: loop condition relation '{}' must be nullary \
-                         (declared as '.decl {}()' with no arguments). \
-                         Got arity {}.",
-                        name,
-                        decl.name(),
-                        decl.arity()
-                    );
+                    return Err(ParseError::NonNullaryLoopCondition {
+                        span: block.span(),
+                        name: name.to_string(),
+                        arity: decl.arity(),
+                    });
                 }
             }
         }
+        Ok(())
     }
 
     /// Reclassify body atoms whose name matches an `.extern fn` as [`FnCallPredicate`].
@@ -757,26 +821,33 @@ impl Program {
     ///
     /// Processes rules in all items — both top-level rule segments and rules
     /// inside loop blocks.
-    fn reclassify_udf_predicates(items: &mut [Segment], udfs: &[ExternFn]) {
+    fn reclassify_udf_predicates(
+        items: &mut [Segment],
+        udfs: &[ExternFn],
+    ) -> Result<(), ParseError> {
         let udf_names: HashSet<&str> = udfs.iter().map(ExternFn::name).collect();
         if udf_names.is_empty() {
-            return;
+            return Ok(());
         }
 
         for item in items.iter_mut() {
             match item {
-                Segment::Plain(rules) => Self::reclassify_rules(rules, &udf_names),
+                Segment::Plain(rules) => Self::reclassify_rules(rules, &udf_names)?,
                 Segment::Loop(block) | Segment::Fixpoint(block) => {
-                    Self::reclassify_rules(block.rules_mut(), &udf_names)
+                    Self::reclassify_rules(block.rules_mut(), &udf_names)?
                 }
             }
         }
+        Ok(())
     }
 
     /// Rewrite rules in `rules` whose body atoms reference a UDF name.
     ///
     /// See [`Self::reclassify_udf_predicates`] for the rationale.
-    fn reclassify_rules(rules: &mut [FlowLogRule], udf_names: &HashSet<&str>) {
+    fn reclassify_rules(
+        rules: &mut [FlowLogRule],
+        udf_names: &HashSet<&str>,
+    ) -> Result<(), ParseError> {
         for rule in rules.iter_mut() {
             let needs_rewrite = rule.rhs().iter().any(|p| {
                 matches!(
@@ -789,28 +860,30 @@ impl Program {
                 continue;
             }
 
-            let new_rhs = rule
-                .rhs()
-                .iter()
-                .map(|pred| match pred {
+            let mut new_rhs = Vec::with_capacity(rule.rhs().len());
+            for pred in rule.rhs() {
+                new_rhs.push(match pred {
                     Predicate::PositiveAtomPredicate(atom)
                     | Predicate::NegativeAtomPredicate(atom)
                         if udf_names.contains(atom.name()) =>
                     {
-                        let args = atom
-                            .arguments()
-                            .iter()
-                            .map(|a| match a {
-                                AtomArg::Var(v) => Arithmetic::new(Factor::Var(v.clone()), vec![]),
-                                AtomArg::Const(c) => {
-                                    Arithmetic::new(Factor::Const(c.clone()), vec![])
+                        let mut args = Vec::with_capacity(atom.arguments().len());
+                        for a in atom.arguments() {
+                            match a {
+                                AtomArg::Var(v) => {
+                                    args.push(Arithmetic::new(Factor::Var(v.clone()), vec![]));
                                 }
-                                AtomArg::Placeholder => panic!(
-                                    "Parser error: placeholder '_' not allowed in UDF call '{}'",
-                                    atom.name()
-                                ),
-                            })
-                            .collect();
+                                AtomArg::Const(c) => {
+                                    args.push(Arithmetic::new(Factor::Const(c.clone()), vec![]));
+                                }
+                                AtomArg::Placeholder => {
+                                    return Err(ParseError::PlaceholderInUdf {
+                                        span: atom.span(),
+                                        udf_name: atom.name().to_string(),
+                                    });
+                                }
+                            }
+                        }
                         Predicate::FnCallPredicate(FnCall::new(
                             atom.name().to_string(),
                             args,
@@ -818,11 +891,12 @@ impl Program {
                         ))
                     }
                     other => other.clone(),
-                })
-                .collect();
+                });
+            }
 
             *rule = FlowLogRule::new(rule.head().clone(), new_rhs);
         }
+        Ok(())
     }
 
     /// Insert a ground-tuple fact into `self.facts`.
@@ -1107,44 +1181,63 @@ mod tests {
     }
 
     fn parse_program(src: &str) -> Program {
+        parse_program_result(src).expect("parse failed")
+    }
+
+    fn parse_program_result(src: &str) -> Result<Program, ParseError> {
         let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(src.as_bytes())
             .expect("failed to write temp file");
-        Program::parse(&tmp.path().to_string_lossy(), true)
+        let mut sm = SourceMap::new();
+        Program::parse(&tmp.path().to_string_lossy(), true, &mut sm)
     }
 
     #[test]
-    #[should_panic(expected = "duplicate .decl for relation 'edge'")]
     fn decl_exact_duplicate_rejected() {
-        parse_program(
+        let err = parse_program_result(
             "
             .decl edge(x: number)
             .decl edge(y: number)
             ",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ParseError::DuplicateDecl { .. }),
+            "got {err:?}"
         );
     }
 
     #[test]
-    #[should_panic(expected = "collides with earlier .decl 'edge'")]
     fn decl_case_collision_rejected() {
-        parse_program(
+        let err = parse_program_result(
             "
             .decl edge(x: number)
             .decl Edge(y: number)
             ",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ParseError::DuplicateDecl { .. }),
+            "got {err:?}"
         );
     }
 
     #[test]
-    #[should_panic(expected = "duplicate attribute 'x' in relation 'edge'")]
     fn attr_exact_duplicate_rejected() {
-        parse_program(".decl edge(x: number, x: number)");
+        let err = parse_program_result(".decl edge(x: number, x: number)").unwrap_err();
+        assert!(
+            matches!(err, ParseError::DuplicateAttribute { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "collides with earlier attribute 'x'")]
     fn attr_case_collision_rejected() {
-        parse_program(".decl edge(x: number, X: number)");
+        let err = parse_program_result(".decl edge(x: number, X: number)").unwrap_err();
+        assert!(
+            matches!(err, ParseError::DuplicateAttribute { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -1247,26 +1340,35 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "`iterative` list references undeclared relation 'active_edge'")]
     fn loop_iterative_undeclared_panics() {
-        parse_program("fixpoint { .iterative active_edge }");
+        let err = parse_program_result("fixpoint { .iterative active_edge }").unwrap_err();
+        assert!(
+            matches!(err, ParseError::UndeclaredInIterativeList { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "loop condition references undeclared relation 'done'")]
     fn loop_bool_relation_undeclared_panics() {
-        parse_program("loop until { done } { }");
+        let err = parse_program_result("loop until { done } { }").unwrap_err();
+        assert!(
+            matches!(err, ParseError::UndeclaredLoopCondition { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "loop condition relation 'done' must be nullary")]
     fn loop_relation_non_nullary_panics() {
         let src = "
             .decl done(x: number)
             .output done
             loop until { done } { done(1) :- done(1). }
         ";
-        parse_program(src);
+        let err = parse_program_result(src).unwrap_err();
+        assert!(
+            matches!(err, ParseError::NonNullaryLoopCondition { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]

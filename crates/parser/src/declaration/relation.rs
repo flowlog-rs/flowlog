@@ -1,14 +1,16 @@
 //! Relation declaration types for FlowLog Datalog programs.
 
 use super::Attribute;
+use crate::error::{grammar_bug, ParseError};
 use crate::primitive::DataType;
-use crate::{Lexeme, Rule};
+use crate::{span_of, Lexeme, Rule};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
 use common::compute_fp;
+use common::source::{FileId, Ignored, Span};
 
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +38,9 @@ pub struct Relation {
 
     /// Whether to print results size (e.g. row count)
     printsize: bool,
+
+    /// Span of the `.decl` declaration.
+    span: Ignored<Span>,
 }
 
 impl Relation {
@@ -55,7 +60,15 @@ impl Relation {
             output: false,
             output_params: None,
             printsize: false,
+            span: Ignored(Span::DUMMY),
         }
+    }
+
+    /// Source location of this `.decl` declaration.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// Canonical (lowercased) relation name.
@@ -324,16 +337,14 @@ impl fmt::Display for Relation {
 
 impl Lexeme for Relation {
     /// Build a `Relation` from a parsed grammar rule.
-    ///
-    /// # Panics
-    /// Panics if the grammar tree is malformed or contains unknown datatypes.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
 
         // name
         let name = inner
             .next()
-            .expect("Parser error: relation missing name")
+            .ok_or_else(|| grammar_bug("relation missing name"))?
             .as_str();
 
         let mut attributes: Vec<Attribute> = Vec::new();
@@ -341,55 +352,61 @@ impl Lexeme for Relation {
         for rule in inner {
             match rule.as_rule() {
                 Rule::attributes_decl => {
-                    let mut seen: HashMap<String, String> = HashMap::new();
-                    attributes = rule
-                        .into_inner()
-                        .map(|attr| {
-                            let mut parts = attr.into_inner();
-                            let aname = parts
-                                .next()
-                                .expect("Parser error: attribute missing name")
-                                .as_str();
-                            let dts = parts
-                                .next()
-                                .expect("Parser error: attribute missing datatype")
-                                .as_str();
-                            let dt = DataType::from_str(dts).unwrap_or_else(|e| {
-                                panic!(
-                                    "Parser error: invalid datatype `{dts}` for attribute `{aname}`: {e}"
-                                )
+                    // Per-attribute span lookup keyed on the canonicalized
+                    // (lowercased) name, so case-collisions can cite the
+                    // earlier occurrence just like exact duplicates.
+                    let mut seen: HashMap<String, Span> = HashMap::new();
+                    for attr in rule.into_inner() {
+                        let attr_span = span_of(&attr, file);
+                        let mut parts = attr.into_inner();
+                        let aname = parts
+                            .next()
+                            .ok_or_else(|| grammar_bug("attribute missing name"))?
+                            .as_str();
+                        let dts = parts
+                            .next()
+                            .ok_or_else(|| grammar_bug("attribute missing datatype"))?
+                            .as_str();
+                        let dt = DataType::from_str(dts).map_err(|e| {
+                            grammar_bug(format!(
+                                "invalid datatype `{dts}` for attribute `{aname}`: {e}"
+                            ))
+                        })?;
+                        let canonical = aname.to_lowercase();
+                        if let Some(prior) = seen.get(&canonical) {
+                            return Err(ParseError::DuplicateAttribute {
+                                span: attr_span,
+                                prior: *prior,
+                                relation: name.to_string(),
+                                name: aname.to_string(),
                             });
-                            let canonical = aname.to_lowercase();
-                            if let Some(prev_raw) = seen.get(&canonical) {
-                                if prev_raw == aname {
-                                    panic!(
-                                        "Parser error: duplicate attribute '{}' in relation '{}'",
-                                        aname, name
-                                    );
-                                }
-                                panic!(
-                                    "Parser error: attribute '{}' in relation '{}' collides \
-                                     with earlier attribute '{}' — flowlog identifiers are \
-                                     case-insensitive",
-                                    aname, name, prev_raw
-                                );
-                            }
-                            seen.insert(canonical, aname.to_string());
-                            Attribute::new(aname.to_string(), dt)
-                        })
-                        .collect();
+                        }
+                        seen.insert(canonical, attr_span);
+                        attributes.push(Attribute::new(aname.to_string(), dt));
+                    }
                 }
-                _ => {
-                    unreachable!(
-                        "Parser error: unexpected rule in relation declaration: {:?}",
-                        rule.as_rule()
-                    )
+                other => {
+                    return Err(grammar_bug(format!(
+                        "unexpected rule in relation declaration: {other:?}"
+                    )));
                 }
             }
         }
 
-        // Create relation with parsed attributes; output directive handled separately.
-        Self::new(name, attributes)
+        let raw_name = name.to_string();
+        let lname = name.to_lowercase();
+        let fingerprint = compute_fp(&lname);
+        Ok(Self {
+            name: lname,
+            raw_name,
+            fingerprint,
+            attributes,
+            input_params: None,
+            output: false,
+            output_params: None,
+            printsize: false,
+            span: Ignored(span),
+        })
     }
 }
 

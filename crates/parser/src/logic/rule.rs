@@ -5,8 +5,10 @@
 //! - Body: predicates that must all be satisfied
 
 use super::{Factor, Head, HeadArg, Predicate};
+use crate::error::{grammar_bug, ParseError};
 use crate::primitive::ConstType;
-use crate::{Lexeme, Rule};
+use crate::{span_of, Lexeme, Rule};
+use common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -15,6 +17,7 @@ use std::fmt;
 pub struct FlowLogRule {
     head: Head,
     rhs: Vec<Predicate>,
+    span: Ignored<Span>,
 }
 
 impl fmt::Display for FlowLogRule {
@@ -51,7 +54,18 @@ impl FlowLogRule {
     /// Construct a rule.
     #[must_use]
     pub fn new(head: Head, rhs: Vec<Predicate>) -> Self {
-        Self { head, rhs }
+        Self {
+            head,
+            rhs,
+            span: Ignored(Span::DUMMY),
+        }
+    }
+
+    /// Source location this rule was parsed from.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// Rule head.
@@ -107,33 +121,44 @@ impl FlowLogRule {
     ///
     /// Souffle-style semicolons separate alternative heads and bodies:
     ///   `h1; h2 :- b1; b2.` → `h1:-b1. h1:-b2. h2:-b1. h2:-b2.`
-    pub fn expand_from_parsed_rule(parsed_rule: Pair<Rule>) -> Vec<Self> {
+    pub fn expand_from_parsed_rule(
+        parsed_rule: Pair<Rule>,
+        file: FileId,
+    ) -> Result<Vec<Self>, ParseError> {
+        let rule_span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
 
-        let rule_heads_node = inner.next().expect("Parser error: rule missing heads");
-        let heads: Vec<Head> = rule_heads_node
-            .into_inner()
-            .map(Head::from_parsed_rule)
-            .collect();
+        let rule_heads_node = inner
+            .next()
+            .ok_or_else(|| grammar_bug("rule missing heads"))?;
+        let mut heads: Vec<Head> = Vec::new();
+        for h in rule_heads_node.into_inner() {
+            heads.push(Head::from_parsed_rule(h, file)?);
+        }
 
-        let rule_bodies_node = inner.next().expect("Parser error: rule missing bodies");
-        let bodies: Vec<Vec<Predicate>> = rule_bodies_node
-            .into_inner()
-            .map(|predicates_node| {
-                predicates_node
-                    .into_inner()
-                    .map(Predicate::from_parsed_rule)
-                    .collect()
-            })
-            .collect();
+        let rule_bodies_node = inner
+            .next()
+            .ok_or_else(|| grammar_bug("rule missing bodies"))?;
+        let mut bodies: Vec<Vec<Predicate>> = Vec::new();
+        for predicates_node in rule_bodies_node.into_inner() {
+            let mut body = Vec::new();
+            for p in predicates_node.into_inner() {
+                body.push(Predicate::from_parsed_rule(p, file)?);
+            }
+            bodies.push(body);
+        }
 
         let mut out = Vec::with_capacity(heads.len() * bodies.len());
         for head in &heads {
             for body in &bodies {
-                out.push(Self::new(head.clone(), body.clone()));
+                out.push(Self {
+                    head: head.clone(),
+                    rhs: body.clone(),
+                    span: Ignored(rule_span),
+                });
             }
         }
-        out
+        Ok(out)
     }
 }
 

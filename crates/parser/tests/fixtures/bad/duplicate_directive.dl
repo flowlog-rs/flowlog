@@ -1,0 +1,3 @@
+.decl edge(x: number, y: number)
+.output edge
+.output edge

@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use common::{get_example_files, Config, TestResult};
+use common::{emit_and_exit, get_example_files, Config, SourceMap, TestResult};
 use optimizer::Optimizer;
 use parser::Program;
 use planner::StratumPlanner;
@@ -28,8 +28,9 @@ fn main() {
         )
         .init();
 
-    // Parse and process single file
-    let program = Program::parse(config.program(), config.is_extended());
+    let mut sm = SourceMap::new();
+    let program = Program::parse(config.program(), config.is_extended(), &mut sm)
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Stratify the program
     let stratifier = Stratifier::from_program(&program, config.is_extended());
@@ -77,8 +78,16 @@ fn run_all_examples(config: &Config) {
     for file_path in &example_files {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
-        match std::panic::catch_unwind(|| {
-            let program = Program::parse(file_path.to_str().unwrap(), config.is_extended());
+        let mut sm = SourceMap::new();
+        let program =
+            match Program::parse(file_path.to_str().unwrap(), config.is_extended(), &mut sm) {
+                Ok(p) => p,
+                Err(err) => {
+                    formatter.report_failure(file_name, Some(&err.to_string()));
+                    continue;
+                }
+            };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let stratifier = Stratifier::from_program(&program, config.is_extended());
             let mut optimizer = Optimizer::new();
             let mut profiler = if config.profiling_enabled() {
@@ -87,7 +96,6 @@ fn run_all_examples(config: &Config) {
                 None
             };
 
-            // Run stratum planner without printing details
             for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
                 let _sp = StratumPlanner::from_rules(
@@ -101,7 +109,8 @@ fn run_all_examples(config: &Config) {
             }
 
             (program.rules().len(), stratifier.stratum().len())
-        }) {
+        }));
+        match result {
             Ok((rule_count, strata_count)) => {
                 let stats = format!("rules={}, strata={}", rule_count, strata_count);
                 formatter.report_success(file_name, Some(&stats));

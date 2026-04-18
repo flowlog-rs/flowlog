@@ -15,14 +15,15 @@
 //! assert!(a.to_string().starts_with("person(\"Alice\", 25, _)"));
 //! ```
 
+use crate::error::{grammar_bug, ParseError};
 use crate::primitive::ConstType;
-use crate::{Lexeme, Rule};
+use crate::{span_of, Lexeme, Rule};
 use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
-use std::hash::Hash;
 
 use common::compute_fp;
+use common::source::{FileId, Ignored, Span};
 
 /// An argument to an atom: variable, constant, or `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -70,21 +71,22 @@ impl fmt::Display for AtomArg {
 
 impl Lexeme for AtomArg {
     /// Parse an atom argument from the grammar.
-    ///
-    /// # Panics
-    /// Panics if the inner token is not `variable|constant|placeholder`.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let inner = parsed_rule
             .into_inner()
             .next()
-            .expect("Parser error: atom_arg missing inner token");
+            .ok_or_else(|| grammar_bug("atom_arg missing inner token"))?;
 
-        match inner.as_rule() {
+        Ok(match inner.as_rule() {
             Rule::variable => Self::Var(inner.as_str().to_string()),
-            Rule::constant => Self::Const(ConstType::from_parsed_rule(inner)),
+            Rule::constant => Self::Const(ConstType::from_parsed_rule(inner, file)?),
             Rule::placeholder => Self::Placeholder,
-            other => panic!("Parser error: invalid atom argument rule: {:?}", other),
-        }
+            other => {
+                return Err(grammar_bug(format!(
+                    "invalid atom argument rule: {other:?}"
+                )))
+            }
+        })
     }
 }
 
@@ -94,6 +96,7 @@ pub struct Atom {
     name: String,
     arguments: Vec<AtomArg>,
     fingerprint: u64,
+    span: Ignored<Span>,
 }
 
 impl Atom {
@@ -106,7 +109,15 @@ impl Atom {
             name: name.to_lowercase(),
             arguments,
             fingerprint,
+            span: Ignored(Span::DUMMY),
         }
+    }
+
+    /// Source location this atom was parsed from.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
     }
 
     /// Append an argument.
@@ -182,15 +193,13 @@ impl fmt::Debug for Atom {
 
 impl Lexeme for Atom {
     /// Parse `name("(" (atom_arg ("," atom_arg)*)? ")")`.
-    ///
-    /// # Panics
-    /// Panics if the structure is malformed.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>) -> Self {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
 
         let name = inner
             .next()
-            .expect("Parser error: atom missing relation name")
+            .ok_or_else(|| grammar_bug("atom missing relation name"))?
             .as_str()
             .to_lowercase();
         let fingerprint = compute_fp(&name);
@@ -198,11 +207,16 @@ impl Lexeme for Atom {
         let mut arguments = Vec::new();
         for pair in inner {
             if pair.as_rule() == Rule::atom_arg {
-                arguments.push(AtomArg::from_parsed_rule(pair));
+                arguments.push(AtomArg::from_parsed_rule(pair, file)?);
             }
         }
 
-        Self::new(&name, arguments, fingerprint)
+        Ok(Self {
+            name,
+            arguments,
+            fingerprint,
+            span: Ignored(span),
+        })
     }
 }
 
