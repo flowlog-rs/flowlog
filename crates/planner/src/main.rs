@@ -46,7 +46,9 @@ fn main() {
         None
     };
 
-    plan_and_print(&config, &mut optimizer, &stratifier, &mut profiler);
+    if let Err(err) = plan_and_print(&config, &mut optimizer, &stratifier, &mut profiler) {
+        emit_and_exit(err, &sm);
+    }
 }
 
 /// Plan and print results for each stratum in the stratified program
@@ -55,9 +57,8 @@ fn plan_and_print(
     optimizer: &mut Optimizer,
     stratifier: &Stratifier,
     profiler: &mut Option<Profiler>,
-) {
+) -> Result<(), catalog::CatalogError> {
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
-        // Clone rules into a local Vec to satisfy StratumPlanner signature
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
 
         let _stratum_planner = StratumPlanner::from_rules(
@@ -67,8 +68,9 @@ fn plan_and_print(
             profiler,
             stratifier,
             stratum_idx,
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// Run planner on all example files in the example directory
@@ -105,22 +107,25 @@ fn run_all_examples(config: &Config) {
 
             for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
                 let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
-                let _sp = StratumPlanner::from_rules(
+                StratumPlanner::from_rules(
                     config,
                     &rules,
                     &mut optimizer,
                     &mut profiler,
                     &stratifier,
                     stratum_idx,
-                );
+                )?;
             }
 
-            (program.rules().len(), stratifier.stratum().len())
+            Ok::<_, catalog::CatalogError>((program.rules().len(), stratifier.stratum().len()))
         }));
         match result {
-            Ok((rule_count, strata_count)) => {
+            Ok(Ok((rule_count, strata_count))) => {
                 let stats = format!("rules={}, strata={}", rule_count, strata_count);
                 formatter.report_success(file_name, Some(&stats));
+            }
+            Ok(Err(err)) => {
+                formatter.report_failure(file_name, Some(&err.to_string()));
             }
             Err(_) => {
                 formatter.report_failure(file_name, None);

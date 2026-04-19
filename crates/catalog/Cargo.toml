@@ -6,9 +6,11 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+clap = { workspace = true, features = ["derive"] }
+codespan-reporting.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-clap = { workspace = true, features = ["derive"] }
 
 common = { path = "../common" }
 parser = { path = "../parser" }
