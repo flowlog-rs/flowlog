@@ -271,7 +271,7 @@ impl RulePlanner {
             // Register this transformation as a producer
             self.insert_producer(new_fp, current_transformation_index);
 
-            trace!("Positive semijoin transformation:\n      {}", tx);
+            trace!("Positive semijoin transformation:\n{}", tx);
 
             new_names.push(new_name);
             new_fps.push(new_fp);
@@ -417,7 +417,7 @@ impl RulePlanner {
             // Update producer transformation index
             self.insert_producer(new_fp, current_transformation_index);
 
-            trace!("Anti semijoin transformation:\n      {}", tx);
+            trace!("Anti semijoin transformation:\n{}", tx);
 
             new_names.push(new_name);
             new_fps.push(new_fp);
@@ -499,7 +499,7 @@ impl RulePlanner {
             // Register this transformation as a producer
             self.insert_producer(new_fp, current_transformation_index);
 
-            trace!("Comparison transformation:\n      {}", tx);
+            trace!("Comparison transformation:\n{}", tx);
 
             new_names.push(new_name);
             new_fps.push(new_fp);
@@ -573,7 +573,7 @@ impl RulePlanner {
             // Register this transformation as a producer
             self.insert_producer(new_fp, current_transformation_index);
 
-            trace!("FnCall transformation:\n      {}", tx);
+            trace!("FnCall transformation:\n{}", tx);
 
             new_names.push(new_name);
             new_fps.push(new_fp);
@@ -665,7 +665,7 @@ impl RulePlanner {
             // Register this transformation as a producer
             self.insert_producer(new_fp, current_transformation_index);
 
-            trace!("Unused transformation:\n      {}", tx);
+            trace!("Unused transformation:\n{}", tx);
 
             // Store the transformation info
             self.transformation_infos.push(tx);

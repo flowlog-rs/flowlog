@@ -39,14 +39,14 @@ impl RulePlanner {
     /// the planned transformation infos.
     pub fn fuse(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
         trace!(
-            "Transformation infos before fusion\n {:?}",
-            self.transformation_infos,
+            "Transformation infos before fusion:\n{}",
+            self.transformation_infos_dump()
         );
         self.fuse_map(original_atom_fp)?;
         self.fuse_kv_layout(original_atom_fp)?;
         trace!(
-            "Transformation infos after fusion:\n{:?}",
-            self.transformation_infos
+            "Transformation infos after fusion:\n{}",
+            self.transformation_infos_dump()
         );
         Ok(())
     }
@@ -168,8 +168,8 @@ impl RulePlanner {
         }
 
         trace!(
-            "Transformation infos after map fusion\n {:?}",
-            self.transformation_infos,
+            "Transformation infos after map fusion:\n{}",
+            self.transformation_infos_dump()
         );
 
         // After removing fused maps, rebuild the producer-consumer

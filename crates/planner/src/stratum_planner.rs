@@ -1,8 +1,7 @@
 //! Stratum planner that plans a stratum (a group of rules).
 
 use std::collections::{HashMap, HashSet};
-use std::fmt;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use catalog::Catalog;
 use common::source::Span;
@@ -88,12 +87,12 @@ impl StratumPlanner {
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
 
-        debug!("New Stratum");
+        trace!("New Stratum");
 
         // Phase 1: Initialize catalogs and run prepare phase
         // to apply local filters/semijoin/comparison before core join planning
         for (i, rule) in stratum.iter().enumerate() {
-            debug!("rule[{i}] init:");
+            trace!("rule[{i}] init:");
             let mut catalog = Catalog::from_rule(rule)?;
 
             let mut planner = RulePlanner::new(rule.clone());
@@ -103,7 +102,7 @@ impl StratumPlanner {
                 "rule[{i}] prepare: {} transformations",
                 planner.transformation_infos().len()
             );
-            debug!("rule[{i}] after prepare:\n{catalog}");
+            trace!("rule[{i}] after prepare:\n{catalog}");
 
             catalogs.push(catalog);
             rule_planners.push(planner);
@@ -113,7 +112,7 @@ impl StratumPlanner {
         // to push down filters before the main join and reduce intermediate result size
         if config.sip_enabled() {
             for (i, planner) in rule_planners.iter_mut().enumerate() {
-                debug!("rule[{i}] SIP");
+                trace!("rule[{i}] SIP");
                 planner.apply_sip(&mut catalogs[i])?;
             }
         }
@@ -292,23 +291,25 @@ impl StratumPlanner {
     }
 }
 
-impl fmt::Display for StratumPlanner {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", "=".repeat(80))?;
+use common::{SECTION_BAR, SUBSECTION_BAR};
+
+impl std::fmt::Display for StratumPlanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{}", SECTION_BAR)?;
 
         let stratum_name = if self.is_recursive {
             "Recursive Stratum"
         } else {
             "Non-Recursive Stratum"
         };
-        writeln!(f, "[{stratum_name}] {} rules", self.rule_planners.len(),)?;
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "[{stratum_name}] {} rules", self.rule_planners.len())?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
 
         writeln!(f, "Rules:")?;
         for (idx, rule_planner) in self.rule_planners.iter().enumerate() {
             writeln!(f, "  ({:>2}) {:?}", idx, rule_planner.rule())?;
         }
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
 
         writeln!(
             f,
@@ -316,9 +317,9 @@ impl fmt::Display for StratumPlanner {
             self.non_recursive_transformations.len()
         )?;
         for (idx, tx) in self.non_recursive_transformations.iter().enumerate() {
-            writeln!(f, "  [N{:>3}] {:?}", idx, tx)?;
+            write!(f, "  [N{:>3}] {}", idx, tx)?;
         }
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
 
         if self.is_recursive {
             writeln!(
@@ -327,25 +328,25 @@ impl fmt::Display for StratumPlanner {
                 self.recursive_transformations.len()
             )?;
             for (idx, tx) in self.recursive_transformations.iter().enumerate() {
-                writeln!(f, "  [R{:>3}] {:?}", idx, tx)?;
+                write!(f, "  [R{:>3}] {}", idx, tx)?;
             }
         } else {
             writeln!(f, "(Non-recursive stratum: no recursive transformations)")?;
         }
 
         if !self.idb_to_aggregation_map.is_empty() {
-            writeln!(f, "\n{}", "-".repeat(40))?;
+            writeln!(f, "\n{}", SUBSECTION_BAR)?;
             writeln!(f, "IDB to Aggregation Map:")?;
             for (fp, (op, pos, arity)) in &self.idb_to_aggregation_map {
                 writeln!(
                     f,
-                    "  fp={:#018x},\n  op={:?},\n  pos={},\n  arity={}",
+                    "  fp=0x{:016x},\n  op={:?},\n  pos={},\n  arity={}",
                     fp, op, pos, arity
                 )?;
             }
         }
 
-        writeln!(f, "{}", "=".repeat(80))
+        writeln!(f, "{}", SECTION_BAR)
     }
 }
 

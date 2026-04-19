@@ -12,7 +12,6 @@
 //! replaced with real ones once they are known. This allows building
 //! a transformation plan before all details are finalized.
 
-use std::fmt;
 use std::hash::Hash;
 
 use catalog::{
@@ -21,6 +20,8 @@ use catalog::{
 };
 use common::compute_fp;
 use parser::ConstType;
+
+use crate::collection::Collection;
 
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
@@ -86,7 +87,7 @@ impl KeyValueLayout {
 
 /// Transformation information, describing how to transform input collection(s)
 /// into an output collection, along with any constraints that must hold.
-#[derive(PartialEq, Clone, Eq, Hash)]
+#[derive(PartialEq, Clone, Eq, Hash, Debug)]
 pub enum TransformationInfo {
     /// Unary Key-Value to Key-Value transformation (filter, map, projection, etc.).
     KVToKV {
@@ -638,212 +639,85 @@ impl TransformationInfo {
     }
 }
 
-impl fmt::Display for TransformationInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl TransformationInfo {
+    /// Display label mirroring [`crate::Transformation::operation_name`].
+    pub fn operation_name(&self) -> &'static str {
         match self {
-            Self::KVToKV {
-                input_info_fp,
-                is_row_input,
-                is_row_output,
-                input_kv_layout,
-                output_info_fp,
-                output_kv_layout,
-                predicates,
-                ..
-            } => {
-                let in_coll = fmt_collection(input_info_fp, input_kv_layout);
-                let out_coll = fmt_collection(output_info_fp, output_kv_layout);
-                let filters = fmt_flow_kv(
-                    &predicates.const_eq,
-                    &predicates.var_eq,
-                    &predicates.compare_exprs,
-                    &predicates.fn_call_preds,
-                );
-                let row_flags = match (*is_row_input, *is_row_output) {
-                    (true, true) => "[Row -> Row]",
-                    (true, false) => "[Row -> KV]",
-                    (false, true) => "[KV -> Row]",
-                    (false, false) => "[KV -> KV]",
-                };
-
-                if filters.is_empty() {
-                    write!(
-                        f,
-                        "{}\n   ┌─ In   : {}\n   └─> Out : {}\n",
-                        row_flags, in_coll, out_coll
-                    )
+            Self::KVToKV { .. } => match (self.is_row_input(), self.is_row_output()) {
+                (true, true) => "[Row -> Row]",
+                (true, false) => "[Row -> KV]",
+                (false, true) => "[KV -> Row]",
+                (false, false) => "[KV -> KV]",
+            },
+            Self::JoinToKV { .. } => {
+                if self.is_row_output() {
+                    "[Join -> Row]"
                 } else {
-                    write!(
-                        f,
-                        "{}\n   ┌─ In   : {}\n   └─> Out : {}\n       WHERE {}\n",
-                        row_flags, in_coll, out_coll, filters
-                    )
+                    "[Join -> KV]"
                 }
             }
-
-            Self::JoinToKV {
-                left_input_info_fp,
-                right_input_info_fp,
-                is_row_output,
-                output_info_fp,
-                left_input_kv_layout,
-                right_input_kv_layout,
-                output_kv_layout,
-                predicates,
-            } => {
-                let l = fmt_collection(left_input_info_fp, left_input_kv_layout);
-
-                // Right display uses the *join key* from the left and value positions from the right.
-                let r = fmt_collection(
-                    right_input_info_fp,
-                    &KeyValueLayout::new(
-                        right_input_kv_layout.key().to_vec(),
-                        right_input_kv_layout.value().to_vec(),
-                    ),
-                );
-
-                let out = fmt_collection(output_info_fp, output_kv_layout);
-                let filters = fmt_flow_kv(
-                    &[],
-                    &[],
-                    &predicates.compare_exprs,
-                    &predicates.fn_call_preds,
-                );
-                let row_flag = if *is_row_output {
-                    "[Jn -> Row]"
+            Self::AntiJoinToKV { .. } => {
+                if self.is_row_output() {
+                    "[AntiJoin -> Row]"
                 } else {
-                    "[Jn -> KV]"
-                };
-
-                if filters.is_empty() {
-                    write!(
-                        f,
-                        "{}\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n",
-                        row_flag, l, r, out
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{}\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n       WHERE {}\n",
-                        row_flag, l, r, out, filters
-                    )
+                    "[AntiJoin -> KV]"
                 }
-            }
-
-            Self::AntiJoinToKV {
-                left_input_info_fp,
-                right_input_info_fp,
-                output_info_fp,
-                is_row_output,
-                left_input_kv_layout,
-                right_input_kv_layout,
-                output_kv_layout,
-            } => {
-                let l = fmt_collection(left_input_info_fp, left_input_kv_layout);
-
-                // Right display uses the *join key* from the left and value positions from the right.
-                let r = fmt_collection(
-                    right_input_info_fp,
-                    &KeyValueLayout::new(
-                        right_input_kv_layout.key().to_vec(),
-                        right_input_kv_layout.value().to_vec(),
-                    ),
-                );
-
-                let out = fmt_collection(output_info_fp, output_kv_layout);
-                let row_flag = if *is_row_output {
-                    "[AntiJn -> Row]"
-                } else {
-                    "[AntiJn -> KV]"
-                };
-
-                write!(
-                    f,
-                    "{}\n   ┌─ Left : {}\n   ├─ Right: {}\n   └─> Out : {}\n",
-                    row_flag, l, r, out
-                )
             }
         }
     }
 }
 
-impl fmt::Debug for TransformationInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
+impl std::fmt::Display for TransformationInfo {
+    /// Multi-line block form:
+    /// ```text
+    /// [Join -> KV]
+    ///     Left : 0x...., key:(..), value:(..)
+    ///     Right: 0x...., key:(..), value:(..)
+    ///     Out  : 0x...., key:(..), value:(..)
+    ///     F    : (if x = 5 and y > 0)
+    /// ```
+    ///
+    /// Unlike [`crate::Transformation`], there is no `Flow` line — the
+    /// `TransformationFlow` is only materialized when a `Transformation` is
+    /// built from this info. The `F` line is omitted when no predicates apply.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let coll = |fp: u64, kv: &KeyValueLayout| Collection::new(fp, kv.key(), kv.value());
+
+        writeln!(f, "{}", self.operation_name())?;
+        match self {
+            Self::KVToKV { .. } => {
+                let (in_lay, _) = self.input_kv_layout();
+                writeln!(f, "    In   : {}", coll(self.input_info_fp().0, in_lay))?;
+                writeln!(
+                    f,
+                    "    Out  : {}",
+                    coll(self.output_info_fp(), self.output_kv_layout())
+                )?;
+                let preds = self.kv_predicates();
+                if !preds.is_empty() {
+                    writeln!(f, "    F    : (if {})", preds)?;
+                }
+            }
+            Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } => {
+                let (l, r) = self.input_kv_layout();
+                let r = r.expect("binary op must have right input");
+                let (lfp, rfp) = self.input_info_fp();
+                let rfp = rfp.expect("binary op must have right fp");
+                writeln!(f, "    Left : {}", coll(lfp, l))?;
+                writeln!(f, "    Right: {}", coll(rfp, r))?;
+                writeln!(
+                    f,
+                    "    Out  : {}",
+                    coll(self.output_info_fp(), self.output_kv_layout())
+                )?;
+                if let Self::JoinToKV { .. } = self {
+                    let preds = self.join_predicates();
+                    if !preds.is_empty() {
+                        writeln!(f, "    F    : (if {})", preds)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
-}
-
-// ========================
-// Private Helper Functions
-// ========================
-
-/// Formats a collection as:
-/// - with keys:    `ffffffffffffffff [key: (k1, k2), value: (v1, v2)]`
-/// - without keys: `ffffffffffffffff [key: (), value: (v1, v2)]`
-fn fmt_collection(sig: &u64, kv_layout: &KeyValueLayout) -> String {
-    let k = kv_layout
-        .key()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let v = kv_layout
-        .value()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    if k.is_empty() {
-        format!("{:016x} [key: (), value: ({})]", sig, v)
-    } else {
-        format!("{:016x} [key: ({}), value: ({})]", sig, k, v)
-    }
-}
-
-/// Formats filters (const-eq, var-eq, comparisons, fn_call predicates) joined by `AND`.
-fn fmt_flow_kv(
-    consts: &[(AtomArgumentSignature, ConstType)],
-    vars: &[(AtomArgumentSignature, AtomArgumentSignature)],
-    comps: &[ComparisonExprPos],
-    fn_calls: &[FnCallPredicatePos],
-) -> String {
-    let consts_str = consts
-        .iter()
-        .map(|(sig, c)| format!("{} = {:?}", sig, c))
-        .collect::<Vec<_>>()
-        .join(" AND ");
-
-    let vars_str = vars
-        .iter()
-        .map(|(l, r)| format!("{} = {}", l, r))
-        .collect::<Vec<_>>()
-        .join(" AND ");
-
-    let comps_str = comps
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(" AND ");
-
-    let fn_calls_str = fn_calls
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(" AND ");
-
-    let mut parts = Vec::new();
-    if !consts.is_empty() {
-        parts.push(consts_str);
-    }
-    if !vars.is_empty() {
-        parts.push(vars_str);
-    }
-    if !comps.is_empty() {
-        parts.push(comps_str);
-    }
-    if !fn_calls.is_empty() {
-        parts.push(fn_calls_str);
-    }
-    parts.join(" AND ")
 }

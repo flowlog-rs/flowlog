@@ -7,6 +7,7 @@ use crate::atom::{AtomArgumentSignature, AtomSignature};
 use crate::error::CatalogError;
 use crate::filter::Filters;
 use crate::{ArithmeticPos, ComparisonExprPos, FnCallPredicatePos};
+use common::{SECTION_BAR, SUBSECTION_BAR};
 use parser::{ComparisonExpr, FlowLogRule, FnCall, HeadArg, Predicate};
 use tracing::debug;
 
@@ -519,7 +520,7 @@ impl Catalog {
 
 impl fmt::Display for Catalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", "=".repeat(80))?;
+        writeln!(f, "{}", SECTION_BAR)?;
 
         writeln!(f, "Catalog of rule:\n  {:?}", self.rule())?;
 
@@ -545,7 +546,7 @@ impl fmt::Display for Catalog {
             )
         };
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Positive atoms:")?;
         for (i, fp) in self.positive_atom_fingerprints.iter().enumerate() {
             let args = fmt_sig_list(
@@ -555,7 +556,7 @@ impl fmt::Display for Catalog {
             writeln!(f, "  [{:>2}] 0x{:016x} args: {}", i, fp, args)?;
         }
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Negative atoms:")?;
         if self.negative_atom_fingerprints.is_empty() {
             writeln!(f, "  (none)")?;
@@ -570,7 +571,7 @@ impl fmt::Display for Catalog {
         }
 
         // NEW: print RHS index vectors with per-entry mapping
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "RHS indices (by atom kind):")?;
         writeln!(
             f,
@@ -591,7 +592,7 @@ impl fmt::Display for Catalog {
             writeln!(f, "    neg[{:>2}] -> rhs[{:>2}]", i, rhs_id)?;
         }
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Signature ↔ Var:")?;
         let mut sig_entries: Vec<_> = self.signature_to_argument_str_map.iter().collect();
         sig_entries.sort_by_key(|(a, _)| a.to_string());
@@ -606,7 +607,7 @@ impl fmt::Display for Catalog {
             writeln!(f, "  {}", sig_line)?;
         }
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Argument presence per positive atom:")?;
         let mut vars: Vec<_> = self.argument_presence_in_positive_atom_map.keys().collect();
         vars.sort();
@@ -619,7 +620,7 @@ impl fmt::Display for Catalog {
             writeln!(f, "  {}: [{}]", var, row)?;
         }
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Base filters:")?;
         if self.filters.is_empty() {
             writeln!(f, "  (none)")?
@@ -629,7 +630,7 @@ impl fmt::Display for Catalog {
             }
         }
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Comparison predicates:")?;
         if self.comparison_predicates.is_empty() {
             writeln!(f, "  (none)")?;
@@ -653,7 +654,7 @@ impl fmt::Display for Catalog {
             }
         }
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "FnCall predicates:")?;
         if self.fn_call_predicates.is_empty() {
             writeln!(f, "  (none)")?;
@@ -676,7 +677,7 @@ impl fmt::Display for Catalog {
             }
         }
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Supersets (per predicate → positive atom ids):")?;
         let mut print_supersets = |label: &str, supersets: &Vec<Vec<usize>>| -> fmt::Result {
             if supersets.is_empty() || supersets.iter().all(|supers| supers.is_empty()) {
@@ -705,7 +706,7 @@ impl fmt::Display for Catalog {
         print_supersets("comparisons", &self.comparison_supersets)?;
         print_supersets("fn_calls", &self.fn_call_supersets)?;
 
-        writeln!(f, "\n{}", "-".repeat(40))?;
+        writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Unused arguments per atom:")?;
         if self.unused_arguments_per_atom.is_empty() {
             writeln!(f, "  (none)")?;
@@ -715,7 +716,7 @@ impl fmt::Display for Catalog {
             }
         }
 
-        writeln!(f, "{}", "=".repeat(80))?;
+        writeln!(f, "{}", SECTION_BAR)?;
 
         Ok(())
     }

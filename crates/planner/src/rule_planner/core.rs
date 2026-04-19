@@ -184,7 +184,7 @@ impl RulePlanner {
 
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("Join transformation:\n      {}", tx);
+        trace!("Join transformation:\n{}", tx);
 
         // Store the transformation info
         self.transformation_infos.push(tx);

@@ -166,7 +166,7 @@ impl RulePlanner {
         // Update producer transformation index
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("Var-eq transformation:\n     {}", tx);
+        trace!("Var-eq transformation:\n{}", tx);
 
         // Update catalog with the projection modification
         catalog.projection_modify(*atom_signature, vec![right_sig], new_name, new_fp)?;
@@ -225,7 +225,7 @@ impl RulePlanner {
         // Update producer transformation index
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("Const-eq transformation:\n     {}", tx);
+        trace!("Const-eq transformation:\n{}", tx);
 
         // Update catalog with the projection modification
         catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp)?;
@@ -280,7 +280,7 @@ impl RulePlanner {
         // Update producer transformation index
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("Placeholder transformation:\n      {}", tx);
+        trace!("Placeholder transformation:\n{}", tx);
 
         // Update catalog with the projection modification
         catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp)?;
