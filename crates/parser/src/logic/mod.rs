@@ -38,6 +38,8 @@ pub use atom::{Atom, AtomArg};
 pub use comparison::{ComparisonExpr, ComparisonOperator};
 pub use fn_call::FnCall;
 pub use head::{Head, HeadArg};
-pub use loop_block::{LoopBlock, LoopCondition, LoopConnective, StopGroup, StopRelation};
+pub use loop_block::{
+    IterativeDirective, LoopBlock, LoopCondition, LoopConnective, StopGroup, StopRelation,
+};
 pub use predicate::Predicate;
 pub use rule::FlowLogRule;
