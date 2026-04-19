@@ -12,8 +12,9 @@
 //! Management of Data 3.3 (2025): 1-28, as part of algorithm 1.
 
 use super::RulePlanner;
+use crate::PlanError;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, CatalogError, KvPredicates};
+use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
 use parser::ConstType;
 use tracing::trace;
 
@@ -29,7 +30,7 @@ impl RulePlanner {
     /// 3) Projection that removes unused arguments
     ///
     /// The loop stops when a full iteration makes no changes.
-    pub fn prepare(&mut self, catalog: &mut Catalog) -> Result<(), CatalogError> {
+    pub fn prepare(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let mut step = 0;
 
         loop {
@@ -72,7 +73,7 @@ impl RulePlanner {
 // =========================================================================
 impl RulePlanner {
     /// Try to apply any available filter in priority order.
-    fn apply_filter(&mut self, catalog: &mut Catalog) -> Result<bool, CatalogError> {
+    fn apply_filter(&mut self, catalog: &mut Catalog) -> Result<bool, PlanError> {
         // (1) var == var
         if let Some((&left, &right)) = catalog.filters().var_eq_map().iter().next() {
             trace!(
@@ -115,7 +116,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         left: AtomArgumentSignature,
         right: AtomArgumentSignature,
-    ) -> Result<bool, CatalogError> {
+    ) -> Result<bool, PlanError> {
         let current_transformation_index = self.transformation_infos.len();
 
         // Canonicalize the kept/dropped order by argument id.
@@ -134,7 +135,7 @@ impl RulePlanner {
             catalog.original_atom_fingerprints(),
             atom_fp,
             current_transformation_index,
-        );
+        )?;
 
         // Get current values for this atom
         let in_vals = args
@@ -182,7 +183,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         var_sig: AtomArgumentSignature,
         const_val: ConstType,
-    ) -> Result<bool, CatalogError> {
+    ) -> Result<bool, PlanError> {
         let current_transformation_index = self.transformation_infos.len();
 
         // The variable to be dropped is var_sig.
@@ -194,7 +195,7 @@ impl RulePlanner {
             catalog.original_atom_fingerprints(),
             atom_fp,
             current_transformation_index,
-        );
+        )?;
 
         // Get current values for this atom
         let in_vals = args
@@ -240,7 +241,7 @@ impl RulePlanner {
         &mut self,
         catalog: &mut Catalog,
         var_sig: AtomArgumentSignature,
-    ) -> Result<bool, CatalogError> {
+    ) -> Result<bool, PlanError> {
         let current_transformation_index = self.transformation_infos.len();
 
         // The variable to be dropped is var_sig.
@@ -252,7 +253,7 @@ impl RulePlanner {
             catalog.original_atom_fingerprints(),
             atom_fp,
             current_transformation_index,
-        );
+        )?;
 
         // Get current values for this atom
         let in_vals = args

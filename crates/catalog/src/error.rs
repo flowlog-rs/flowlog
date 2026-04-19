@@ -64,9 +64,8 @@ impl Diagnostic for CatalogError {
             } => {
                 let mut labels = Vec::new();
                 if let Some(l) = primary_label(*predicate_span) {
-                    labels.push(
-                        l.with_message(format!("`{var}` is never bound in a positive atom")),
-                    );
+                    labels
+                        .push(l.with_message(format!("`{var}` is never bound in a positive atom")));
                 }
                 if let Some(l) = secondary_label(*rule_span) {
                     labels.push(l.with_message("in this rule"));
