@@ -19,7 +19,8 @@ use crate::{transformation::KeyValueLayout, TransformationInfo};
 
 use super::RulePlanner;
 use catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
+    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, CatalogError, JoinPredicates,
+    KvPredicates,
 };
 
 use tracing::trace;
@@ -29,7 +30,7 @@ use tracing::trace;
 // =========================================================================
 impl RulePlanner {
     /// Entry point for applying SIP optimizations to the current rule plan.
-    pub fn apply_sip(&mut self, catalog: &mut Catalog) {
+    pub fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), CatalogError> {
         let positive_atom_numbers = catalog.positive_atom_number();
 
         // Only apply SIP if there are at least 3 positive atoms
@@ -43,8 +44,12 @@ impl RulePlanner {
                             left_atom_idx,
                             right_atom_idx
                         );
-                        self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx));
-                        self.apply_sip_projection_semijoin(catalog, left_atom_idx, right_atom_idx);
+                        self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx))?;
+                        self.apply_sip_projection_semijoin(
+                            catalog,
+                            left_atom_idx,
+                            right_atom_idx,
+                        )?;
                         trace!("Catalog:\n{}", catalog);
                         trace!("{}", "-".repeat(60));
                     }
@@ -60,14 +65,19 @@ impl RulePlanner {
                             left_atom_idx,
                             right_atom_idx
                         );
-                        self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx));
-                        self.apply_sip_projection_semijoin(catalog, left_atom_idx, right_atom_idx);
+                        self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx))?;
+                        self.apply_sip_projection_semijoin(
+                            catalog,
+                            left_atom_idx,
+                            right_atom_idx,
+                        )?;
                         trace!("Catalog:\n{}", catalog);
                         trace!("{}", "-".repeat(60));
                     }
                 }
             }
         }
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -76,7 +86,11 @@ impl RulePlanner {
 
     /// Ensures that EDB atoms referenced by a SIP pair have identity premap
     /// transformations so they present a proper key/value layout.
-    fn apply_sip_premaps(&mut self, catalog: &mut Catalog, sip_pair: (usize, usize)) {
+    fn apply_sip_premaps(
+        &mut self,
+        catalog: &mut Catalog,
+        sip_pair: (usize, usize),
+    ) -> Result<(), CatalogError> {
         let (lhs_idx, rhs_idx) = sip_pair;
 
         let lhs_is_original = catalog
@@ -87,11 +101,12 @@ impl RulePlanner {
             .contains(&catalog.positive_atom_fingerprint(rhs_idx));
 
         if lhs_is_original {
-            self.create_edb_premap_transformations(catalog, lhs_idx, true);
+            self.create_edb_premap_transformations(catalog, lhs_idx, true)?;
         }
         if rhs_is_original {
-            self.create_edb_premap_transformations(catalog, rhs_idx, true);
+            self.create_edb_premap_transformations(catalog, rhs_idx, true)?;
         }
+        Ok(())
     }
 
     /// Builds a two-step **project → semijoin** plan that filters the RHS
@@ -104,7 +119,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_pos_idx: usize,
         rhs_pos_idx: usize,
-    ) {
+    ) -> Result<(), CatalogError> {
         let base_idx = self.transformation_infos.len();
         let originals = catalog.original_atom_fingerprints();
 
@@ -187,7 +202,7 @@ impl RulePlanner {
             new_arguments_list,
             semijoin_name,
             semijoin_fp,
-        );
+        )
     }
 
     // ------------------------------------------------------------------

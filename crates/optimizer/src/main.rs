@@ -4,6 +4,7 @@ use common::{emit_and_exit, get_example_files, Config, SourceMap, TestResult};
 use optimizer::Optimizer;
 use parser::Program;
 use stratifier::Stratifier;
+use tracing::error;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -35,17 +36,24 @@ fn main() {
 
     // Optimize each stratum
     let mut optimizer = Optimizer::new();
-    optimize_and_print(&mut optimizer, &stratifier);
+    if let Err(err) = optimize_and_print(&mut optimizer, &stratifier) {
+        emit_and_exit(err, &sm);
+    }
 }
 
 /// Optimize and print results for each stratum in the stratified program
-fn optimize_and_print(optimizer: &mut Optimizer, stratifier: &Stratifier) {
+fn optimize_and_print(
+    optimizer: &mut Optimizer,
+    stratifier: &Stratifier,
+) -> Result<(), catalog::CatalogError> {
     for rules in stratifier.stratum().iter() {
-        // Create catalogs for all rules in this stratum
-        let catalogs: Vec<Catalog> = rules.iter().map(|rule| Catalog::from_rule(rule)).collect();
-        // Plan the entire stratum
+        let catalogs: Vec<Catalog> = rules
+            .iter()
+            .map(|rule| Catalog::from_rule(rule))
+            .collect::<Result<_, _>>()?;
         let _ = optimizer.plan_stratum(&catalogs);
     }
+    Ok(())
 }
 
 /// Run optimizer on all example files in the example directory
@@ -76,17 +84,29 @@ fn run_all_examples(config: &Config) {
             let optimizer = Optimizer::new();
 
             for rules in stratifier.stratum().iter() {
-                let catalogs: Vec<Catalog> =
-                    rules.iter().map(|rule| Catalog::from_rule(rule)).collect();
+                let catalogs: Vec<Catalog> = match rules
+                    .iter()
+                    .map(|rule| Catalog::from_rule(rule))
+                    .collect::<Result<_, _>>()
+                {
+                    Ok(c) => c,
+                    Err(err) => {
+                        error!("FAILED: {} ({err})", file_name);
+                        return None;
+                    }
+                };
                 let _ = optimizer.plan_stratum(&catalogs);
             }
 
-            (program.rules().len(), stratifier.stratum().len())
+            Some((program.rules().len(), stratifier.stratum().len()))
         }));
         match result {
-            Ok((rule_count, strata_count)) => {
+            Ok(Some((rule_count, strata_count))) => {
                 let stats = format!("rules={}, strata={}", rule_count, strata_count);
                 formatter.report_success(file_name, Some(&stats));
+            }
+            Ok(None) => {
+                formatter.report_failure(file_name, Some("Catalog construction failed"));
             }
             Err(_) => {
                 formatter.report_failure(file_name, Some("Optimization failed"));

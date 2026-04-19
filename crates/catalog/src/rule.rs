@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::atom::{AtomArgumentSignature, AtomSignature};
+use crate::error::CatalogError;
 use crate::filter::Filters;
 use crate::{ArithmeticPos, ComparisonExprPos, FnCallPredicatePos};
 use parser::{ComparisonExpr, FlowLogRule, FnCall, HeadArg, Predicate};
@@ -92,7 +93,7 @@ pub struct Catalog {
 // Construction and lifecycle management
 impl Catalog {
     /// Build a Catalog from a single rule (derives signatures, filters and helper maps).
-    pub fn from_rule(rule: &FlowLogRule) -> Self {
+    pub fn from_rule(rule: &FlowLogRule) -> Result<Self, CatalogError> {
         let mut catalog = Self {
             rule: rule.clone(),
             signature_to_argument_str_map: HashMap::new(),
@@ -119,7 +120,7 @@ impl Catalog {
             head_idb_fingerprint: rule.head().head_fingerprint(),
             unused_arguments_per_atom: HashMap::new(),
         };
-        catalog.populate_all_metadata();
+        catalog.populate_all_metadata()?;
 
         // Store original atom fingerprints for reference
         for predicate in rule.rhs() {
@@ -136,7 +137,7 @@ impl Catalog {
         // Debug info print
         debug!("\n{}", catalog);
 
-        catalog
+        Ok(catalog)
     }
 
     /// Clear all metadata while keeping the rule unchanged.
@@ -166,10 +167,10 @@ impl Catalog {
     }
 
     /// Update the catalog with a new rule, recomputing corresponding metadata.
-    pub fn update_rule(&mut self, rule: &FlowLogRule) {
+    pub fn update_rule(&mut self, rule: &FlowLogRule) -> Result<(), CatalogError> {
         self.rule = rule.clone();
         self.clear();
-        self.populate_all_metadata();
+        self.populate_all_metadata()
     }
 }
 
@@ -225,7 +226,10 @@ impl Catalog {
 
     // Get original atom arguments
     #[inline]
-    pub fn original_atom_arguments(&self, origin_atom_fp: u64) -> Vec<AtomArgumentSignature> {
+    pub fn original_atom_arguments(
+        &self,
+        origin_atom_fp: u64,
+    ) -> Result<Vec<AtomArgumentSignature>, CatalogError> {
         assert!(
             self.original_atom_fingerprints.contains(&origin_atom_fp),
             "Requested original atom arguments for non original fingerprint: 0x{:016x}",
@@ -238,7 +242,7 @@ impl Catalog {
             .iter()
             .position(|&fp| fp == origin_atom_fp)
         {
-            return self.positive_atom_argument_signatures[index].clone();
+            return Ok(self.positive_atom_argument_signatures[index].clone());
         }
 
         // Check negative atoms
@@ -247,10 +251,13 @@ impl Catalog {
             .iter()
             .position(|&fp| fp == origin_atom_fp)
         {
-            return self.negative_atom_argument_signatures[index].clone();
+            return Ok(self.negative_atom_argument_signatures[index].clone());
         }
 
-        unreachable!("Original atom fingerprint should exist in either positive or negative atoms");
+        Err(CatalogError::internal(format!(
+            "original atom fingerprint 0x{origin_atom_fp:016x} absent from both positive \
+             and negative atoms"
+        )))
     }
 
     // === Positive Atoms ===
@@ -372,31 +379,35 @@ impl Catalog {
         &self,
         pos_atom_id: usize,
         comp_id: usize,
-    ) -> ComparisonExprPos {
+    ) -> Result<ComparisonExprPos, CatalogError> {
         let comp_exprs = &self.comparison_predicates[comp_id];
+        let resolve = |side: &'static str, v: &String| -> Result<AtomArgumentSignature, CatalogError> {
+            self.argument_presence_in_positive_atom_map
+                .get(v)
+                .and_then(|row| row.get(pos_atom_id).copied().flatten())
+                .ok_or_else(|| {
+                    CatalogError::internal(format!(
+                        "variable `{v}` in comparison {side} not found in positive atom #{pos_atom_id}"
+                    ))
+                })
+        };
         let left_var_signatures = comp_exprs
             .left()
             .vars()
             .iter()
-            .map(|&v| {
-                self.argument_presence_in_positive_atom_map[v][pos_atom_id]
-                    .expect("variable in comparison lhs not found in positive atom")
-            })
-            .collect::<Vec<_>>();
+            .map(|&v| resolve("lhs", v))
+            .collect::<Result<Vec<_>, _>>()?;
         let right_var_signatures = comp_exprs
             .right()
             .vars()
             .iter()
-            .map(|&v| {
-                self.argument_presence_in_positive_atom_map[v][pos_atom_id]
-                    .expect("variable in comparison rhs not found in positive atom")
-            })
-            .collect::<Vec<_>>();
-        ComparisonExprPos::from_comparison_expr(
+            .map(|&v| resolve("rhs", v))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ComparisonExprPos::from_comparison_expr(
             comp_exprs,
             &left_var_signatures,
             &right_var_signatures,
-        )
+        ))
     }
 
     // === FnCall Predicates ===
@@ -418,7 +429,7 @@ impl Catalog {
         &self,
         pos_atom_id: usize,
         fn_call_id: usize,
-    ) -> FnCallPredicatePos {
+    ) -> Result<FnCallPredicatePos, CatalogError> {
         let fn_call = &self.fn_call_predicates[fn_call_id];
         let args_pos: Vec<ArithmeticPos> = fn_call
             .args()
@@ -428,14 +439,25 @@ impl Catalog {
                     .vars()
                     .iter()
                     .map(|&v| {
-                        self.argument_presence_in_positive_atom_map[v][pos_atom_id]
-                            .expect("variable in fn_call arg not found in positive atom")
+                        self.argument_presence_in_positive_atom_map
+                            .get(v)
+                            .and_then(|row| row.get(pos_atom_id).copied().flatten())
+                            .ok_or_else(|| {
+                                CatalogError::internal(format!(
+                                    "variable `{v}` in fn_call arg not found in positive \
+                                     atom #{pos_atom_id}"
+                                ))
+                            })
                     })
-                    .collect();
-                ArithmeticPos::from_arithmetic(arg, &var_sigs)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok::<_, CatalogError>(ArithmeticPos::from_arithmetic(arg, &var_sigs))
             })
-            .collect();
-        FnCallPredicatePos::new(fn_call.name().to_string(), args_pos, fn_call.is_negated())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(FnCallPredicatePos::new(
+            fn_call.name().to_string(),
+            args_pos,
+            fn_call.is_negated(),
+        ))
     }
 
     // === Filters ===

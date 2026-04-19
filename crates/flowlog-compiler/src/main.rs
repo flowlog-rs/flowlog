@@ -40,7 +40,8 @@ fn compile_single(config: &Config) {
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
     let mut profiler = new_profiler(config);
     let mut optimizer = Optimizer::new();
-    let strata = plan_strata(config, &mut optimizer, &mut profiler, &stratifier);
+    let strata = plan_strata(config, &mut optimizer, &mut profiler, &stratifier)
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     let mut compiler = Compiler::new(config.clone(), program);
     if let Err(e) = compiler.compile(&strata, &mut profiler) {
@@ -92,17 +93,21 @@ fn run_all_examples(config: &Config) {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut optimizer = Optimizer::new();
             let mut profiler = new_profiler(config);
-            let strata = plan_strata(config, &mut optimizer, &mut profiler, &stratifier);
-            (program.rules().len(), strata.len())
+            plan_strata(config, &mut optimizer, &mut profiler, &stratifier)
+                .map(|strata| (program.rules().len(), strata.len()))
         }));
 
         match outcome {
-            Ok((rules, strata)) => {
+            Ok(Ok((rules, strata))) => {
                 success += 1;
                 info!(
                     "SUCCESS: {} (rules={}, strata={})",
                     file_name, rules, strata
                 );
+            }
+            Ok(Err(err)) => {
+                failure += 1;
+                error!("FAILED: {} ({err})", file_name);
             }
             Err(_) => {
                 failure += 1;
@@ -154,7 +159,7 @@ fn plan_strata(
     optimizer: &mut Optimizer,
     profiler: &mut Option<Profiler>,
     stratifier: &Stratifier,
-) -> Vec<StratumPlanner> {
+) -> Result<Vec<StratumPlanner>, common::diag::BoxError> {
     stratifier
         .stratum()
         .iter()
@@ -162,6 +167,7 @@ fn plan_strata(
         .map(|(idx, rule_refs)| {
             let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
             StratumPlanner::from_rules(config, &rules, optimizer, profiler, stratifier, idx)
+                .map_err(common::diag::BoxError::from)
         })
         .collect()
 }

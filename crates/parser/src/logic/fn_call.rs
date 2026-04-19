@@ -43,6 +43,13 @@ impl FnCall {
         }
     }
 
+    /// Attach a source span to this call.
+    #[must_use]
+    pub fn with_span(mut self, span: Span) -> Self {
+        self.span = Ignored(span);
+        self
+    }
+
     /// Source location this call was parsed from.
     #[must_use]
     #[inline]

@@ -13,7 +13,7 @@
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
+use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, CatalogError, KvPredicates};
 use parser::ConstType;
 use tracing::trace;
 
@@ -29,12 +29,12 @@ impl RulePlanner {
     /// 3) Projection that removes unused arguments
     ///
     /// The loop stops when a full iteration makes no changes.
-    pub fn prepare(&mut self, catalog: &mut Catalog) {
+    pub fn prepare(&mut self, catalog: &mut Catalog) -> Result<(), CatalogError> {
         let mut step = 0;
 
         loop {
             // 1) Try filters first to maximize early pruning and simplify later steps.
-            if self.apply_filter(catalog) {
+            if self.apply_filter(catalog)? {
                 step += 1;
                 trace!("Prepare Step {}: filter applied", step);
                 trace!("Catalog:\n{}", catalog);
@@ -43,7 +43,7 @@ impl RulePlanner {
             }
 
             // 2) Then (anti-)semijoins and comparison pushdown.
-            if self.apply_semijoin(catalog) {
+            if self.apply_semijoin(catalog)? {
                 step += 1;
                 trace!("Prepare Step {}: semijoin applied", step);
                 trace!("Catalog:\n{}", catalog);
@@ -52,7 +52,7 @@ impl RulePlanner {
             }
 
             // 3) Finally, remove any arguments that no longer contribute to outputs.
-            if self.remove_unused_arguments(catalog) {
+            if self.remove_unused_arguments(catalog)? {
                 step += 1;
                 trace!("Prepare Step {}: unused arguments removed", step);
                 trace!("Catalog:\n{}", catalog);
@@ -63,6 +63,7 @@ impl RulePlanner {
             // Nothing else to do in this phase.
             break;
         }
+        Ok(())
     }
 }
 
@@ -71,7 +72,7 @@ impl RulePlanner {
 // =========================================================================
 impl RulePlanner {
     /// Try to apply any available filter in priority order.
-    fn apply_filter(&mut self, catalog: &mut Catalog) -> bool {
+    fn apply_filter(&mut self, catalog: &mut Catalog) -> Result<bool, CatalogError> {
         // (1) var == var
         if let Some((&left, &right)) = catalog.filters().var_eq_map().iter().next() {
             trace!(
@@ -104,7 +105,7 @@ impl RulePlanner {
             return self.apply_placeholder_filter(catalog, var_sig);
         }
 
-        false
+        Ok(false)
     }
 
     /// Apply a variable equality filter (var1 == var2) by filtering and projecting
@@ -114,7 +115,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         left: AtomArgumentSignature,
         right: AtomArgumentSignature,
-    ) -> bool {
+    ) -> Result<bool, CatalogError> {
         let current_transformation_index = self.transformation_infos.len();
 
         // Canonicalize the kept/dropped order by argument id.
@@ -167,12 +168,12 @@ impl RulePlanner {
         trace!("Var-eq transformation:\n     {}", tx);
 
         // Update catalog with the projection modification
-        catalog.projection_modify(*atom_signature, vec![right_sig], new_name, new_fp);
+        catalog.projection_modify(*atom_signature, vec![right_sig], new_name, new_fp)?;
 
         // Store the transformation info
         self.transformation_infos.push(tx);
 
-        true
+        Ok(true)
     }
 
     /// Apply a constant equality filter (var == const) and project away the filtered column.
@@ -181,7 +182,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         var_sig: AtomArgumentSignature,
         const_val: ConstType,
-    ) -> bool {
+    ) -> Result<bool, CatalogError> {
         let current_transformation_index = self.transformation_infos.len();
 
         // The variable to be dropped is var_sig.
@@ -226,12 +227,12 @@ impl RulePlanner {
         trace!("Const-eq transformation:\n     {}", tx);
 
         // Update catalog with the projection modification
-        catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp);
+        catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp)?;
 
         // Store the transformation info
         self.transformation_infos.push(tx);
 
-        true
+        Ok(true)
     }
 
     /// Apply a placeholder filter and project away its column.
@@ -239,7 +240,7 @@ impl RulePlanner {
         &mut self,
         catalog: &mut Catalog,
         var_sig: AtomArgumentSignature,
-    ) -> bool {
+    ) -> Result<bool, CatalogError> {
         let current_transformation_index = self.transformation_infos.len();
 
         // The variable to be dropped is var_sig.
@@ -281,12 +282,12 @@ impl RulePlanner {
         trace!("Placeholder transformation:\n      {}", tx);
 
         // Update catalog with the projection modification
-        catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp);
+        catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp)?;
 
         // Store the layout information
         self.transformation_infos.push(tx);
 
-        true
+        Ok(true)
     }
 
     /// Build output expressions excluding a specific argument signature.
