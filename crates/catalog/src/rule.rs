@@ -381,7 +381,9 @@ impl Catalog {
         comp_id: usize,
     ) -> Result<ComparisonExprPos, CatalogError> {
         let comp_exprs = &self.comparison_predicates[comp_id];
-        let resolve = |side: &'static str, v: &String| -> Result<AtomArgumentSignature, CatalogError> {
+        let resolve = |side: &'static str,
+                       v: &String|
+         -> Result<AtomArgumentSignature, CatalogError> {
             self.argument_presence_in_positive_atom_map
                 .get(v)
                 .and_then(|row| row.get(pos_atom_id).copied().flatten())

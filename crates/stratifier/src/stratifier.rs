@@ -263,6 +263,25 @@ impl Stratifier {
             stratum_available_relations: Vec::new(),
         };
 
+        // Rules within a stratum are parallel (no inter-dependencies), so their
+        // SCC-traversal order is incidental. Sort by source position so every
+        // downstream consumer — plan trees, diagnostics, logs — sees rules in
+        // the order the user wrote them. `program.rule()` is O(segments) per
+        // lookup; precompute once so the comparator stays O(1).
+        let rule_starts: Vec<u32> = program
+            .segments()
+            .iter()
+            .flat_map(|seg| match seg {
+                Segment::Plain(rules) => rules.iter().map(|r| r.span().start).collect::<Vec<_>>(),
+                Segment::Loop(block) | Segment::Fixpoint(block) => {
+                    block.rules().iter().map(|r| r.span().start).collect()
+                }
+            })
+            .collect();
+        for stratum in &mut instance.stratum {
+            stratum.sort_by_key(|&rid| rule_starts[rid]);
+        }
+
         instance.build_stratum_metadata(&iterative_rels)?;
         instance.validate_forward_references()?;
         instance.validate_recursive_strata()?;

@@ -8,8 +8,9 @@
 use tracing::trace;
 
 use super::RulePlanner;
+use crate::PlanError;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{AtomArgumentSignature, AtomSignature, Catalog, CatalogError, JoinPredicates};
+use catalog::{AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates};
 
 // =========================================================================
 // Core Planning
@@ -22,7 +23,7 @@ impl RulePlanner {
         &mut self,
         catalog: &mut Catalog,
         join_tuple_index: (usize, usize),
-    ) -> Result<(), CatalogError> {
+    ) -> Result<(), PlanError> {
         trace!(
             "Join:\n  LHS atom: ({}, {})\n RHS atom: ({}, {})",
             catalog.rule().rhs()[catalog.positive_atom_rhs_id(join_tuple_index.0)],
@@ -68,7 +69,7 @@ impl RulePlanner {
         &mut self,
         catalog: &mut Catalog,
         join_tuple_index: (usize, usize),
-    ) -> Result<(), CatalogError> {
+    ) -> Result<(), PlanError> {
         let (lhs_idx, rhs_idx) = join_tuple_index;
 
         if catalog
@@ -92,7 +93,7 @@ impl RulePlanner {
         &mut self,
         catalog: &mut Catalog,
         join_tuple_index: (usize, usize),
-    ) -> Result<(), CatalogError> {
+    ) -> Result<(), PlanError> {
         let current_transformation_index = self.transformation_infos.len();
         let (lhs_idx, rhs_idx) = join_tuple_index;
 
@@ -105,7 +106,7 @@ impl RulePlanner {
             catalog.original_atom_fingerprints(),
             lhs_pos_fp,
             current_transformation_index,
-        );
+        )?;
 
         // Extract RHS atom information and register as consumer
         let rhs_pos_fp = catalog.positive_atom_fingerprint(rhs_idx);
@@ -116,7 +117,7 @@ impl RulePlanner {
             catalog.original_atom_fingerprints(),
             rhs_pos_fp,
             current_transformation_index,
-        );
+        )?;
 
         // Partition arguments into join keys and payload values
         let (lhs_keys, lhs_vals, rhs_keys, rhs_vals) = Self::partition_shared_keys(
@@ -195,6 +196,7 @@ impl RulePlanner {
             vec![new_arguments_list],
             vec![new_name],
             vec![new_fp],
-        )
+        )?;
+        Ok(())
     }
 }

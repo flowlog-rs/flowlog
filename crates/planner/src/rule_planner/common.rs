@@ -10,10 +10,9 @@ use std::collections::{HashMap, HashSet};
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::{transformation::KeyValueLayout, TransformationInfo};
+use crate::{transformation::KeyValueLayout, PlanError, TransformationInfo};
 use catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, CatalogError, JoinPredicates,
-    KvPredicates,
+    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
 };
 
 // =========================================================================
@@ -36,7 +35,7 @@ impl RulePlanner {
     /// as the reason showed above.
     ///
     /// Returns `true` if any optimization was applied, `false` otherwise.
-    pub(super) fn apply_semijoin(&mut self, catalog: &mut Catalog) -> Result<bool, CatalogError> {
+    pub(super) fn apply_semijoin(&mut self, catalog: &mut Catalog) -> Result<bool, PlanError> {
         // (1) Comparison predicate pushdown
         // When a comparison can be evaluated against specific atoms
         if let Some((lhs_comp_idx, rhs_pos_indices)) = catalog
@@ -146,7 +145,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_pos_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> Result<(), CatalogError> {
+    ) -> Result<(), PlanError> {
         // Even for empty key key-value layout, we still need premap for EDB relations.
         // ((), (value)) is not the same as (value) in differential dataflow.
 
@@ -178,7 +177,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_pos_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> Result<bool, CatalogError> {
+    ) -> Result<bool, PlanError> {
         // Extract LHS atom information
         let lhs_pos_args = catalog
             .positive_atom_argument_signature(lhs_pos_idx)
@@ -220,7 +219,7 @@ impl RulePlanner {
                 catalog.original_atom_fingerprints(),
                 lhs_pos_fp,
                 current_transformation_index,
-            );
+            )?;
 
             // Extract RHS atom information
             let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
@@ -231,7 +230,7 @@ impl RulePlanner {
                 catalog.original_atom_fingerprints(),
                 rhs_fp,
                 current_transformation_index,
-            );
+            )?;
 
             // Build RHS atom argument signatures; keys must mirror the LHS key ordering
             let (new_rhs_args, rhs_keys, rhs_vals) = Self::reorder_rhs_arguments(
@@ -239,7 +238,7 @@ impl RulePlanner {
                 &lhs_key_names,
                 catalog,
                 "positive semijoin",
-            );
+            )?;
             trace!(
                 "Semijoin RHS values: {:?}",
                 rhs_vals
@@ -298,7 +297,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_neg_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> Result<(), CatalogError> {
+    ) -> Result<(), PlanError> {
         // Even for empty key key-value layout, we still need premap for EDB relations.
         // ((), (value)) is not the same as (value) in differential dataflow.
 
@@ -330,7 +329,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_neg_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> Result<bool, CatalogError> {
+    ) -> Result<bool, PlanError> {
         // Extract LHS negative atom information
         let lhs_neg_args = catalog
             .negative_atom_argument_signature(lhs_neg_idx)
@@ -372,7 +371,7 @@ impl RulePlanner {
                 catalog.original_atom_fingerprints(),
                 lhs_neg_fp,
                 current_transformation_index,
-            );
+            )?;
 
             // Extract RHS atom information
             let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
@@ -383,10 +382,10 @@ impl RulePlanner {
                 catalog.original_atom_fingerprints(),
                 rhs_fp,
                 current_transformation_index,
-            );
+            )?;
 
             let (new_rhs_args, rhs_keys, rhs_vals) =
-                Self::reorder_rhs_arguments(&rhs_args, &lhs_key_names, catalog, "anti-semijoin");
+                Self::reorder_rhs_arguments(&rhs_args, &lhs_key_names, catalog, "anti-semijoin")?;
             trace!(
                 "Semijoin RHS values: {:?}",
                 rhs_vals
@@ -448,7 +447,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_comp_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> Result<bool, CatalogError> {
+    ) -> Result<bool, PlanError> {
         // Extract comparison predicate information
         let comparison_exprs = catalog.comparison_predicate(lhs_comp_idx);
 
@@ -470,7 +469,7 @@ impl RulePlanner {
                 catalog.original_atom_fingerprints(),
                 rhs_fp,
                 current_transformation_index,
-            );
+            )?;
 
             // Store signature for catalog update
             right_sigs.push(AtomSignature::new(true, rhs_idx));
@@ -522,7 +521,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_fn_call_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> Result<bool, CatalogError> {
+    ) -> Result<bool, PlanError> {
         // Extract fn_call predicate information
         let fn_call_predicate = catalog.fn_call_predicate(lhs_fn_call_idx);
 
@@ -544,7 +543,7 @@ impl RulePlanner {
                 catalog.original_atom_fingerprints(),
                 rhs_fp,
                 current_transformation_index,
-            );
+            )?;
 
             // Store signature for catalog update
             right_sigs.push(AtomSignature::new(true, rhs_idx));
@@ -596,7 +595,7 @@ impl RulePlanner {
     pub(super) fn remove_unused_arguments(
         &mut self,
         catalog: &mut Catalog,
-    ) -> Result<bool, CatalogError> {
+    ) -> Result<bool, PlanError> {
         // Get groups of unused arguments per atom from catalog analysis
         let groups = catalog.unused_arguments_per_atom();
         if groups.is_empty() {
@@ -627,7 +626,7 @@ impl RulePlanner {
                 catalog.original_atom_fingerprints(),
                 atom_fp,
                 current_transformation_index,
-            );
+            )?;
 
             // Create set of positions to drop for efficient filtering
             let drop_set: HashSet<ArithmeticPos> = to_delete
@@ -694,7 +693,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         atom_idx: usize,
         is_positive: bool,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<(), PlanError> {
         // Both positive and negative atoms can be pre-mapped.
         let (edb_fp, edb_args) = if is_positive {
             (
@@ -738,13 +737,14 @@ impl RulePlanner {
             catalog.original_atom_fingerprints(),
             edb_fp,
             current_transformation_index,
-        );
+        )?;
 
         // Register this transformation as a producer
         self.insert_producer(new_fp, current_transformation_index);
 
         // Update catalog to reflect the premap atom
-        catalog.map_modify(edb_atom_signature, new_name, new_fp)
+        catalog.map_modify(edb_atom_signature, new_name, new_fp)?;
+        Ok(())
     }
 }
 
@@ -763,16 +763,20 @@ impl RulePlanner {
     }
 
     /// Orders RHS arguments so join keys come first in the same order as the LHS keys.
+    #[allow(clippy::type_complexity)]
     fn reorder_rhs_arguments(
         rhs_args: &[AtomArgumentSignature],
         lhs_key_names: &[String],
         catalog: &Catalog,
         context: &str,
-    ) -> (
-        Vec<AtomArgumentSignature>,
-        Vec<ArithmeticPos>,
-        Vec<ArithmeticPos>,
-    ) {
+    ) -> Result<
+        (
+            Vec<AtomArgumentSignature>,
+            Vec<ArithmeticPos>,
+            Vec<ArithmeticPos>,
+        ),
+        PlanError,
+    > {
         let mut remaining: Vec<(String, AtomArgumentSignature)> = rhs_args
             .iter()
             .map(|&sig| (catalog.signature_to_argument_str(&sig).clone(), sig))
@@ -780,15 +784,16 @@ impl RulePlanner {
         let mut ordered = Vec::with_capacity(rhs_args.len());
 
         for key_name in lhs_key_names {
-            if let Some(position) = remaining.iter().position(|(name, _)| name == key_name) {
-                let (_, sig) = remaining.remove(position);
-                ordered.push(sig);
-            } else {
-                panic!(
-                    "Planner error: RHS missing key {} for {}",
-                    key_name, context
-                );
-            }
+            let position = remaining
+                .iter()
+                .position(|(name, _)| name == key_name)
+                .ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "reorder_rhs_arguments: RHS missing key {key_name} for {context}"
+                    ))
+                })?;
+            let (_, sig) = remaining.remove(position);
+            ordered.push(sig);
         }
 
         for (_, sig) in remaining {
@@ -805,7 +810,7 @@ impl RulePlanner {
             .map(|&sig| ArithmeticPos::from_var_signature(sig))
             .collect();
 
-        (ordered, rhs_keys, rhs_vals)
+        Ok((ordered, rhs_keys, rhs_vals))
     }
 
     /// Partitions atom arguments into join keys and remaining values.
@@ -890,46 +895,55 @@ impl RulePlanner {
     /// * `original_atom_fp` - Set of fingerprints for original input atoms
     /// * `producer_fp` - Fingerprint of the data being consumed
     /// * `consumer_idx` - Index of the transformation that consumes this data
+    ///
+    /// Returns an internal `PlanError` if a consumer registers for a non-original
+    /// fingerprint that has no producer yet (planner bug: inconsistent graph).
     pub(super) fn insert_consumer(
         &mut self,
         original_atom_fp: &HashSet<u64>,
         producer_fp: u64,
         consumer_idx: usize,
-    ) {
+    ) -> Result<(), PlanError> {
         // If this is an original atom fingerprint (read-in atom),
         // it's not produced by any transformation, so just return
         if original_atom_fp.contains(&producer_fp) {
-            return;
+            return Ok(());
         }
 
-        self.producer_consumer
-            .entry(producer_fp)
-            .and_modify(|(_, consumers)| {
+        match self.producer_consumer.get_mut(&producer_fp) {
+            Some((_, consumers)) => {
                 consumers.push(consumer_idx);
-            })
-            .or_insert_with(|| {
-                panic!(
-                    "No producer for transformation fingerprint: {:#018x}",
-                    producer_fp
-                )
-            });
+                Ok(())
+            }
+            None => Err(PlanError::internal(format!(
+                "insert_consumer: no producer for transformation fingerprint {producer_fp:#018x}"
+            ))),
+        }
     }
 
     /// Retrieves the indices of producer transformations for a given fingerprint.
     #[inline]
-    pub(super) fn producer_indices(&self, fp: u64) -> Vec<usize> {
+    pub(super) fn producer_indices(&self, fp: u64) -> Result<Vec<usize>, PlanError> {
         self.producer_consumer
             .get(&fp)
             .map(|(producers, _)| producers.clone())
-            .unwrap_or_else(|| panic!("No producer for transformation fingerprint: {:#018x}", fp))
+            .ok_or_else(|| {
+                PlanError::internal(format!(
+                    "producer_indices: no producer for transformation fingerprint {fp:#018x}"
+                ))
+            })
     }
 
     /// Retrieves the indices of consumer transformations for a given fingerprint.
     #[inline]
-    pub(super) fn consumer_indices(&self, fp: u64) -> Vec<usize> {
+    pub(super) fn consumer_indices(&self, fp: u64) -> Result<Vec<usize>, PlanError> {
         self.producer_consumer
             .get(&fp)
             .map(|(_, consumers)| consumers.clone())
-            .unwrap_or_else(|| panic!("No consumers for transformation fingerprint: {:#018x}", fp))
+            .ok_or_else(|| {
+                PlanError::internal(format!(
+                    "consumer_indices: no consumers for transformation fingerprint {fp:#018x}"
+                ))
+            })
     }
 }

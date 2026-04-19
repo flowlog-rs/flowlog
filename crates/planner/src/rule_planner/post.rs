@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::{transformation::KeyValueLayout, TransformationInfo};
+use crate::{transformation::KeyValueLayout, PlanError, TransformationInfo};
 use catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
 use parser::HeadArg;
 
@@ -20,20 +20,21 @@ impl RulePlanner {
     ///
     /// - If there is no prior transformation, create a single post transformation.
     /// - Otherwise, modify the last transformation in-place to match the head.
-    pub fn post(&mut self, catalog: &mut Catalog) {
+    pub fn post(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let head_args = catalog.head_arguments();
 
         // Note: here we always create row output layout for rule heads.
         if self.needs_post_transformation() {
-            self.create_post_transformation(catalog, head_args);
+            self.create_post_transformation(catalog, head_args)?;
         } else {
-            self.update_last_transformation_layout(catalog, head_args);
+            self.update_last_transformation_layout(catalog, head_args)?;
         }
 
         trace!(
             "Transformations after post:\n{:?}",
             self.transformation_infos
         );
+        Ok(())
     }
 }
 
@@ -45,25 +46,33 @@ impl RulePlanner {
     }
 
     /// Update the last transformation's output layout in-place for rule head.
-    fn update_last_transformation_layout(&mut self, catalog: &Catalog, head_args: &[HeadArg]) {
-        let last_tx = self
-            .transformation_infos
-            .last_mut()
-            .expect("No transformations available before post phase");
+    fn update_last_transformation_layout(
+        &mut self,
+        catalog: &Catalog,
+        head_args: &[HeadArg],
+    ) -> Result<(), PlanError> {
+        let last_tx = self.transformation_infos.last_mut().ok_or_else(|| {
+            PlanError::internal("post: no transformations available before post phase")
+        })?;
 
         let name_to_sig = Self::build_name_to_output_signatures_from_last_tx(catalog, last_tx);
-        let output_values = Self::resolve_head_arguments(&name_to_sig, head_args);
+        let output_values = Self::resolve_head_arguments(catalog, &name_to_sig, head_args)?;
 
         let new_layout = KeyValueLayout::new(Vec::new(), output_values);
         last_tx.update_row_output(true);
         last_tx.update_output_key_value_layout(new_layout);
         last_tx.update_output_fake_sig();
+        Ok(())
     }
 
     /// Create a new post transformation when there is no prior transformation.
-    fn create_post_transformation(&mut self, catalog: &Catalog, head_args: &[HeadArg]) {
+    fn create_post_transformation(
+        &mut self,
+        catalog: &Catalog,
+        head_args: &[HeadArg],
+    ) -> Result<(), PlanError> {
         let name_to_sig = Self::build_name_to_output_signatures_from_atom(catalog);
-        let output_values = Self::resolve_head_arguments(&name_to_sig, head_args);
+        let output_values = Self::resolve_head_arguments(catalog, &name_to_sig, head_args)?;
 
         // We default here assume the input layout is all values from the first positive atom.
         // No additional mapping is needed.
@@ -90,6 +99,7 @@ impl RulePlanner {
         post_tx.update_output_fake_sig();
 
         self.transformation_infos.push(post_tx);
+        Ok(())
     }
 }
 
@@ -142,32 +152,48 @@ impl RulePlanner {
     /// Notice we handled aggregation at stratum planning phase, so here we only need to
     /// convert aggregation arguments to arithmetic expressions.
     fn resolve_head_arguments(
+        catalog: &Catalog,
         name_to_sig: &HashMap<String, AtomArgumentSignature>,
         head_args: &[HeadArg],
-    ) -> Vec<ArithmeticPos> {
-        let sig_of = |name: &str| -> AtomArgumentSignature {
+    ) -> Result<Vec<ArithmeticPos>, PlanError> {
+        let rule = catalog.rule();
+        let head_span = rule.head().span();
+        let rule_span = rule.span();
+        let sig_of = |name: &str| -> Result<AtomArgumentSignature, PlanError> {
             name_to_sig
                 .get(name)
                 .copied()
-                .unwrap_or_else(|| panic!("Unknown head variable '{}' in post()", name))
+                .ok_or_else(|| PlanError::UnknownHeadVariable {
+                    head_span,
+                    rule_span,
+                    var: name.to_string(),
+                })
         };
 
-        head_args
-            .iter()
-            .flat_map(|arg| match arg {
+        let mut out = Vec::with_capacity(head_args.len());
+        for arg in head_args {
+            match arg {
                 HeadArg::Var(var) => {
-                    vec![ArithmeticPos::from_var_signature(sig_of(var.as_str()))]
+                    out.push(ArithmeticPos::from_var_signature(sig_of(var.as_str())?));
                 }
                 HeadArg::Arith(arith) => {
-                    let var_sigs: Vec<_> =
-                        arith.vars().iter().map(|v| sig_of(v.as_str())).collect();
-                    vec![ArithmeticPos::from_arithmetic(arith, &var_sigs)]
+                    let var_sigs: Vec<_> = arith
+                        .vars()
+                        .iter()
+                        .map(|v| sig_of(v.as_str()))
+                        .collect::<Result<_, _>>()?;
+                    out.push(ArithmeticPos::from_arithmetic(arith, &var_sigs));
                 }
                 HeadArg::Aggregation(agg) => {
-                    let var_sigs: Vec<_> = agg.vars().iter().map(|v| sig_of(v.as_str())).collect();
-                    vec![ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs)]
+                    let var_sigs: Vec<_> = agg
+                        .vars()
+                        .iter()
+                        .map(|v| sig_of(v.as_str()))
+                        .collect::<Result<_, _>>()?;
+                    out.push(ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs));
                 }
-            })
-            .collect()
+            }
+        }
+        Ok(out)
     }
 }
