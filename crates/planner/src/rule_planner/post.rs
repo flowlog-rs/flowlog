@@ -31,8 +31,8 @@ impl RulePlanner {
         }
 
         trace!(
-            "Transformations after post:\n{:?}",
-            self.transformation_infos
+            "Transformations after post:\n{}",
+            self.transformation_infos_dump()
         );
         Ok(())
     }

@@ -18,8 +18,8 @@
 //! dependency analyses.
 
 use crate::{Transformation, TransformationInfo};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 
 use parser::{FlowLogRule, Predicate};
 
@@ -71,7 +71,7 @@ impl RulePlanner {
 
     /// Returns the original rule.
     #[inline]
-    pub(super) fn rule(&self) -> &FlowLogRule {
+    pub(crate) fn rule(&self) -> &FlowLogRule {
         &self.rule
     }
 }
@@ -150,113 +150,126 @@ impl RulePlanner {
 
         (label, children)
     }
+
+    /// Render `self.transformation_infos` as an indexed list for trace output.
+    /// `TransformationInfo::Display` terminates each block with `\n`; we add
+    /// only the `[i]` prefix here.
+    pub(crate) fn transformation_infos_dump(&self) -> String {
+        if self.transformation_infos.is_empty() {
+            return "  (none)".to_string();
+        }
+        let mut out = String::new();
+        for (i, tx) in self.transformation_infos.iter().enumerate() {
+            let _ = write!(out, "  [{:>3}] {}", i, tx);
+        }
+        out
+    }
 }
 
-impl fmt::Display for RulePlanner {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let root = self.transformation_infos.last().unwrap().output_info_fp();
-        struct Walker<'a> {
-            debug_info_map: &'a BTreeMap<u64, (String, Vec<u64>)>,
-            ids: BTreeMap<u64, usize>,
-            next_id: usize,
-            expanded: BTreeSet<u64>,
-            stack: BTreeSet<u64>,
-        }
-
-        impl<'a> Walker<'a> {
-            fn node_title(&self, id: u64) -> &str {
-                self.debug_info_map
-                    .get(&id)
-                    .map(|(lbl, _)| lbl.as_str())
-                    .unwrap_or("<unknown>")
-            }
-
-            fn children(&self, id: u64) -> &[u64] {
-                self.debug_info_map
-                    .get(&id)
-                    .map(|(_, kids)| kids.as_slice())
-                    .unwrap_or(&[])
-            }
-
-            fn get_id(&mut self, node: u64) -> usize {
-                *self.ids.entry(node).or_insert_with(|| {
-                    let id = self.next_id;
-                    self.next_id += 1;
-                    id
-                })
-            }
-
-            fn fmt_node(
-                &mut self,
-                f: &mut fmt::Formatter<'_>,
-                node: u64,
-                prefix: &str,
-                is_last: bool,
-            ) -> fmt::Result {
-                let (branch, spacer) = if is_last {
-                    ("└───────────── ", "               ")
-                } else {
-                    ("├───────────── ", "│              ")
-                };
-                let uid = self.get_id(node);
-                let title = self.node_title(node);
-
-                if self.stack.contains(&node) {
-                    writeln!(
-                        f,
-                        "{}{}{}  [@{}]  ⚠ reentry suppressed",
-                        prefix, branch, title, uid
-                    )?;
-                    return Ok(());
-                }
-
-                if self.expanded.contains(&node) {
-                    writeln!(f, "{}{}[@{}]  ↩︎ ref", prefix, branch, uid)?;
-                    return Ok(());
-                }
-
-                writeln!(f, "{}{}{}  [@{}]", prefix, branch, title, uid)?;
-                self.expanded.insert(node);
-                self.stack.insert(node);
-
-                let kids: Vec<_> = self.children(node).to_vec();
-
-                let next_prefix = format!("{}{}", prefix, spacer);
-                for (i, cid) in kids.iter().enumerate() {
-                    self.fmt_node(f, *cid, &next_prefix, i + 1 == kids.len())?;
-                }
-
-                self.stack.remove(&node);
-                Ok(())
-            }
-        }
-
-        let mut walker = Walker {
-            debug_info_map: &self.generate_rule_plan_tree_debug_map(),
-            ids: BTreeMap::new(),
-            next_id: 1,
-            expanded: BTreeSet::new(),
-            stack: BTreeSet::new(),
+impl std::fmt::Display for RulePlanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Some(last) = self.transformation_infos.last() else {
+            return writeln!(f, "Plan Tree: (empty)");
         };
+        let root = last.output_info_fp();
+        let debug_map = self.generate_rule_plan_tree_debug_map();
 
         writeln!(f)?;
         writeln!(f, "Rule:\n{}", self.rule)?;
         writeln!(f)?;
-
         writeln!(f, "Plan Tree:")?;
+
+        let mut walker = Walker {
+            debug_info_map: &debug_map,
+            ids: HashMap::new(),
+            next_id: 1,
+            expanded: HashSet::new(),
+            stack: HashSet::new(),
+        };
         let root_uid = walker.get_id(root);
         writeln!(f, "{}  [@{}]", walker.node_title(root), root_uid)?;
         walker.expanded.insert(root);
         walker.stack.insert(root);
 
         let rc: Vec<_> = walker.children(root).to_vec();
-
         for (i, cid) in rc.iter().enumerate() {
             walker.fmt_node(f, *cid, "", i + 1 == rc.len())?;
         }
-
         walker.stack.remove(&root);
+        Ok(())
+    }
+}
 
+struct Walker<'a> {
+    debug_info_map: &'a BTreeMap<u64, (String, Vec<u64>)>,
+    ids: HashMap<u64, usize>,
+    next_id: usize,
+    expanded: HashSet<u64>,
+    stack: HashSet<u64>,
+}
+
+impl<'a> Walker<'a> {
+    fn node_title(&self, id: u64) -> &str {
+        self.debug_info_map
+            .get(&id)
+            .map(|(lbl, _)| lbl.as_str())
+            .unwrap_or("<unknown>")
+    }
+
+    fn children(&self, id: u64) -> &[u64] {
+        self.debug_info_map
+            .get(&id)
+            .map(|(_, kids)| kids.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn get_id(&mut self, node: u64) -> usize {
+        *self.ids.entry(node).or_insert_with(|| {
+            let id = self.next_id;
+            self.next_id += 1;
+            id
+        })
+    }
+
+    fn fmt_node(
+        &mut self,
+        f: &mut std::fmt::Formatter<'_>,
+        node: u64,
+        prefix: &str,
+        is_last: bool,
+    ) -> std::fmt::Result {
+        let (branch, spacer) = if is_last {
+            ("└───────────── ", "               ")
+        } else {
+            ("├───────────── ", "│              ")
+        };
+        let uid = self.get_id(node);
+        let title = self.node_title(node);
+
+        if self.stack.contains(&node) {
+            writeln!(
+                f,
+                "{}{}{}  [@{}]  ⚠ reentry suppressed",
+                prefix, branch, title, uid
+            )?;
+            return Ok(());
+        }
+
+        if self.expanded.contains(&node) {
+            writeln!(f, "{}{}[@{}]  ↩︎ ref", prefix, branch, uid)?;
+            return Ok(());
+        }
+
+        writeln!(f, "{}{}{}  [@{}]", prefix, branch, title, uid)?;
+        self.expanded.insert(node);
+        self.stack.insert(node);
+
+        let kids: Vec<_> = self.children(node).to_vec();
+        let next_prefix = format!("{}{}", prefix, spacer);
+        for (i, cid) in kids.iter().enumerate() {
+            self.fmt_node(f, *cid, &next_prefix, i + 1 == kids.len())?;
+        }
+        self.stack.remove(&node);
         Ok(())
     }
 }

@@ -92,24 +92,20 @@ impl Collection {
 }
 
 impl fmt::Display for Collection {
+    /// Canonical form: `0x{:016x}, key:(..), value:(..)`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let key = self
+        let k = self
             .key_argument_signatures
             .iter()
-            .map(|sig| sig.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        let value = self
+        let v = self
             .value_argument_signatures
             .iter()
-            .map(|sig| sig.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-
-        write!(
-            f,
-            "0x{:016x}, key:({}), value:({})",
-            self.fingerprint, key, value
-        )
+        write!(f, "0x{:016x}, key:({}), value:({})", self.fingerprint, k, v)
     }
 }
