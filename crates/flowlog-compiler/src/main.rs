@@ -10,7 +10,7 @@ use clap::Parser;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use common::{emit_and_exit, get_example_files, Config, SourceMap};
+use common::{emit_and_exit, get_example_files, Config, SourceMap, SECTION_BAR};
 use flowlog_compiler::Compiler;
 use optimizer::Optimizer;
 use parser::Program;
@@ -117,7 +117,7 @@ fn run_all_examples(config: &Config) {
     }
 
     println!();
-    println!("{}", "=".repeat(80));
+    println!("{}", SECTION_BAR);
     println!("SUMMARY:");
     println!("  Total files: {}", files.len());
     println!("  Successful: {success}");

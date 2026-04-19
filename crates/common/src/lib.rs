@@ -9,7 +9,7 @@ pub mod source;
 // Re-export main types for backwards compatibility
 pub use config::{get_example_files, Config, ExecutionMode};
 pub use diag::{emit, emit_and_exit, BoxError, Diagnostic, InternalError};
-pub use formatter::TestResult;
+pub use formatter::{TestResult, SECTION_BAR, SUBSECTION_BAR};
 pub use macros::INTERN_MAX_RETRIES;
 pub use source::{FileId, Ignored, SourceMap, Span};
 

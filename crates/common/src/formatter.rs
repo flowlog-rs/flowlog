@@ -3,6 +3,15 @@
 use std::process;
 use tracing::{error, info};
 
+/// Horizontal section bar (80 `=`). Use as outer boundary of multi-section
+/// reports, e.g. the catalog dump or a stratum report.
+pub const SECTION_BAR: &str =
+    "================================================================================";
+
+/// Horizontal subsection bar (40 `-`). Use between named subsections inside
+/// a report bounded by [`SECTION_BAR`].
+pub const SUBSECTION_BAR: &str = "----------------------------------------";
+
 /// Unified output formatting for processing all examples
 pub struct TestResult {
     tool_name: String,
@@ -14,7 +23,7 @@ pub struct TestResult {
 impl TestResult {
     pub fn new(tool_name: &str, total_files: usize) -> Self {
         info!("Running {} on {} example files...", tool_name, total_files);
-        info!("{}", "=".repeat(80));
+        info!("{}", SECTION_BAR);
 
         Self {
             tool_name: tool_name.to_string(),
@@ -44,7 +53,7 @@ impl TestResult {
 
     pub fn finish(self) {
         info!("");
-        info!("{}", "=".repeat(80));
+        info!("{}", SECTION_BAR);
         info!("SUMMARY:");
         info!("  Total files: {}", self.total_files);
         info!("  Successful: {}", self.successful);

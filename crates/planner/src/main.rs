@@ -12,21 +12,16 @@ fn main() {
     // Parse command line arguments
     let config = Config::parse();
 
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
+        )
+        .init();
+
     if config.should_process_all() {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-            )
-            .init();
         run_all_examples(&config);
         return;
     }
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")),
-        )
-        .init();
 
     let mut sm = SourceMap::new();
     let program = Program::parse(config.program(), config.is_extended(), &mut sm)

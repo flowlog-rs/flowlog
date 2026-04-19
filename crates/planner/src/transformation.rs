@@ -17,7 +17,7 @@ pub use flow::TransformationFlow;
 pub use info::{KeyValueLayout, TransformationInfo};
 
 /// Represents a data transformation operation in a query execution plan.
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum Transformation {
     // === Unary Transformations ===
     /// Row-to-row transformation (filtering, projection, aggregation)
@@ -177,8 +177,8 @@ impl Transformation {
             Transformation::KvToKv { .. } => "[KV -> KV]",
             Transformation::JnToRow { .. } => "[Join -> Row]",
             Transformation::JnToKv { .. } => "[Join -> KV]",
-            Transformation::NJnToRow { .. } => "[NJoin -> Row]",
-            Transformation::NJnToKv { .. } => "[NJoin -> KV]",
+            Transformation::NJnToRow { .. } => "[AntiJoin -> Row]",
+            Transformation::NJnToKv { .. } => "[AntiJoin -> KV]",
         }
     }
 }
@@ -207,7 +207,7 @@ impl Transformation {
     /// - `KvToK`: Key-value input → Key-only output (key extraction)
     /// - `KvToRow`: Key-value input → Row output (flattening)
     pub fn kv_to_kv(info: &TransformationInfo) -> Self {
-        trace!("Creating kv_to_kv transformation with info: {:?}", info);
+        trace!("Creating kv_to_kv transformation with info:\n{}", info);
         // Create the transformation flow that defines how data moves through the operation
         let flow = TransformationFlow::kv_to_kv(
             info.input_kv_layout().0,
@@ -400,134 +400,15 @@ impl Transformation {
 
 impl fmt::Display for Transformation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::RowToRow { flow, .. } => {
-                write!(f, "Map: {}", flow)
-            }
-            Self::RowToKv { flow, .. } => {
-                write!(f, "Arrange: {}", flow)
-            }
-            Self::KvToRow { flow, .. } => {
-                write!(f, "Flatten: {}", flow)
-            }
-            Self::KvToKv { flow, .. } => {
-                write!(f, "Transform: {}", flow)
-            }
-            Self::JnToRow { input, flow, .. } => {
-                if input.0.is_k_only() {
-                    write!(f, "SemiJoin: {}", flow)
-                } else {
-                    write!(f, "Join: {}", flow)
-                }
-            }
-            Self::JnToKv { input, flow, .. } => {
-                if input.0.is_k_only() {
-                    write!(f, "SemiJoinMap: {}", flow)
-                } else {
-                    write!(f, "JoinMap: {}", flow)
-                }
-            }
-            Self::NJnToRow { flow, .. } => {
-                write!(f, "AntiJoin: {}", flow)
-            }
-            Self::NJnToKv { flow, .. } => {
-                write!(f, "AntiJoinMap: {}", flow)
-            }
+        writeln!(f, "{}", self.operation_name())?;
+        if self.is_unary() {
+            writeln!(f, "    In   : {}", self.unary_input())?;
+        } else {
+            let (left, right) = self.binary_input();
+            writeln!(f, "    Left : {}", left)?;
+            writeln!(f, "    Right: {}", right)?;
         }
-    }
-}
-
-impl fmt::Debug for Transformation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::RowToRow {
-                input,
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[Row -> Row]\n    In   : {}\n    Flow : {}\n    Out  : {}",
-                    input, flow, output
-                )
-            }
-            Self::RowToKv {
-                input,
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[Row -> KV]\n    In   : {}\n    Flow : {}\n    Out  : {}",
-                    input, flow, output
-                )
-            }
-            Self::KvToRow {
-                input,
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[KV -> Row]\n    In   : {}\n    Flow : {}\n    Out  : {}",
-                    input, flow, output
-                )
-            }
-            Self::KvToKv {
-                input,
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[KV -> KV]\n    In   : {}\n    Flow : {}\n    Out  : {}",
-                    input, flow, output
-                )
-            }
-            Self::JnToRow {
-                input: (left, right),
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[Join -> Row]\n    Left : {}\n    Right: {}\n    Flow : {}\n    Out  : {}",
-                    left, right, flow, output
-                )
-            }
-            Self::JnToKv {
-                input: (left, right),
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[Join -> KV]\n    Left : {}\n    Right: {}\n    Flow : {}\n    Out  : {}",
-                    left, right, flow, output
-                )
-            }
-            Self::NJnToRow {
-                input: (left, right),
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[AntiJoin -> Row]\n    Left : {}\n    Right: {}\n    Flow : {}\n    Out  : {}",
-                    left, right, flow, output
-                )
-            }
-            Self::NJnToKv {
-                input: (left, right),
-                output,
-                flow,
-            } => {
-                write!(
-                    f,
-                    "[AntiJoin -> KV]\n    Left : {}\n    Right: {}\n    Flow : {}\n    Out  : {}",
-                    left, right, flow, output
-                )
-            }
-        }
+        writeln!(f, "    Flow : {}", self.flow())?;
+        writeln!(f, "    Out  : {}", self.output())
     }
 }
