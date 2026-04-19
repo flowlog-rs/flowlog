@@ -18,9 +18,9 @@
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 
 use super::RulePlanner;
+use crate::PlanError;
 use catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, CatalogError, JoinPredicates,
-    KvPredicates,
+    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
 };
 
 use tracing::trace;
@@ -30,7 +30,7 @@ use tracing::trace;
 // =========================================================================
 impl RulePlanner {
     /// Entry point for applying SIP optimizations to the current rule plan.
-    pub fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), CatalogError> {
+    pub fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let positive_atom_numbers = catalog.positive_atom_number();
 
         // Only apply SIP if there are at least 3 positive atoms
@@ -45,11 +45,7 @@ impl RulePlanner {
                             right_atom_idx
                         );
                         self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx))?;
-                        self.apply_sip_projection_semijoin(
-                            catalog,
-                            left_atom_idx,
-                            right_atom_idx,
-                        )?;
+                        self.apply_sip_projection_semijoin(catalog, left_atom_idx, right_atom_idx)?;
                         trace!("Catalog:\n{}", catalog);
                         trace!("{}", "-".repeat(60));
                     }
@@ -66,11 +62,7 @@ impl RulePlanner {
                             right_atom_idx
                         );
                         self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx))?;
-                        self.apply_sip_projection_semijoin(
-                            catalog,
-                            left_atom_idx,
-                            right_atom_idx,
-                        )?;
+                        self.apply_sip_projection_semijoin(catalog, left_atom_idx, right_atom_idx)?;
                         trace!("Catalog:\n{}", catalog);
                         trace!("{}", "-".repeat(60));
                     }
@@ -90,7 +82,7 @@ impl RulePlanner {
         &mut self,
         catalog: &mut Catalog,
         sip_pair: (usize, usize),
-    ) -> Result<(), CatalogError> {
+    ) -> Result<(), PlanError> {
         let (lhs_idx, rhs_idx) = sip_pair;
 
         let lhs_is_original = catalog
@@ -119,7 +111,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_pos_idx: usize,
         rhs_pos_idx: usize,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<(), PlanError> {
         let base_idx = self.transformation_infos.len();
         let originals = catalog.original_atom_fingerprints();
 
@@ -133,8 +125,8 @@ impl RulePlanner {
 
         // Register both atoms as consumers of their respective inputs.
         // The projection consumes LHS; the semijoin consumes the result of projection and RHS.
-        self.insert_consumer(originals, left_fp, base_idx);
-        self.insert_consumer(originals, right_fp, base_idx + 1);
+        self.insert_consumer(originals, left_fp, base_idx)?;
+        self.insert_consumer(originals, right_fp, base_idx + 1)?;
 
         // Partition arguments into shared keys and remaining values
         let (lhs_keys, lhs_vals, rhs_keys, rhs_vals) =
@@ -159,7 +151,7 @@ impl RulePlanner {
         // intermediate result consumed only by the semijoin below.
 
         // ---- Step 2: Semijoin projected-LHS ⋉ RHS ----
-        self.insert_consumer(originals, proj_fp, base_idx + 1);
+        self.insert_consumer(originals, proj_fp, base_idx + 1)?;
 
         // Rebuild the projected LHS keys with new signatures for the semijoin operator.
         let lhs_new_keys: Vec<ArithmeticPos> = lhs_keys
@@ -202,7 +194,8 @@ impl RulePlanner {
             new_arguments_list,
             semijoin_name,
             semijoin_fp,
-        )
+        )?;
+        Ok(())
     }
 
     // ------------------------------------------------------------------

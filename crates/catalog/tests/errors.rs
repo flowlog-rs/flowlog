@@ -86,12 +86,7 @@ fn unsafe_variable_in_negation() {
 
 #[test]
 fn unsafe_variable_in_comparison() {
-    assert_unsafe(
-        "unsafe_variable_in_comparison.dl",
-        "z",
-        "z",
-        "comparison",
-    );
+    assert_unsafe("unsafe_variable_in_comparison.dl", "z", "z", "comparison");
 }
 
 #[test]

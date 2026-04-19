@@ -31,20 +31,16 @@ impl Catalog {
 
         // Create a new mapped atom with the same arguments but a new name
         let new_atom = match &self.rule.rhs()[rhs_index] {
-            Predicate::PositiveAtomPredicate(atom) => {
-                Predicate::PositiveAtomPredicate(Atom::new(
-                    &new_atom_name,
-                    atom.arguments().to_vec(),
-                    new_atom_fingerprint,
-                ))
-            }
-            Predicate::NegativeAtomPredicate(atom) => {
-                Predicate::NegativeAtomPredicate(Atom::new(
-                    &new_atom_name,
-                    atom.arguments().to_vec(),
-                    new_atom_fingerprint,
-                ))
-            }
+            Predicate::PositiveAtomPredicate(atom) => Predicate::PositiveAtomPredicate(Atom::new(
+                &new_atom_name,
+                atom.arguments().to_vec(),
+                new_atom_fingerprint,
+            )),
+            Predicate::NegativeAtomPredicate(atom) => Predicate::NegativeAtomPredicate(Atom::new(
+                &new_atom_name,
+                atom.arguments().to_vec(),
+                new_atom_fingerprint,
+            )),
             other => {
                 return Err(CatalogError::internal(format!(
                     "map_modify: target predicate at rhs index {rhs_index} is not an atom: {other}"

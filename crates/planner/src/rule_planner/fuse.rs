@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::{transformation::KeyValueLayout, TransformationInfo};
+use crate::{transformation::KeyValueLayout, PlanError, TransformationInfo};
 use catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, FactorPos,
     FnCallPredicatePos, KvPredicates,
@@ -37,17 +37,18 @@ type LayoutAssignment = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
 impl RulePlanner {
     /// Run fusion passes (map fusion and KV-layout fusion) on
     /// the planned transformation infos.
-    pub fn fuse(&mut self, original_atom_fp: &HashSet<u64>) {
+    pub fn fuse(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
         trace!(
             "Transformation infos before fusion\n {:?}",
             self.transformation_infos,
         );
-        self.fuse_map(original_atom_fp);
-        self.fuse_kv_layout(original_atom_fp);
+        self.fuse_map(original_atom_fp)?;
+        self.fuse_kv_layout(original_atom_fp)?;
         trace!(
             "Transformation infos after fusion:\n{:?}",
             self.transformation_infos
         );
+        Ok(())
     }
 }
 
@@ -56,7 +57,7 @@ impl RulePlanner {
     ///
     /// Map transformations that directly consume the output of other transformations
     /// (and are not neg joins) can be fused into their producers.
-    fn fuse_map(&mut self, original_atom_fp: &HashSet<u64>) {
+    fn fuse_map(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
         let mut fused_map_indices = Vec::new();
 
         // Iterate in reverse order so consumers are processed before their producers.
@@ -93,7 +94,7 @@ impl RulePlanner {
             let out_kv_layout = output_kv_layout.clone();
             let predicates = predicates.clone();
 
-            let input_producer_indices = self.producer_indices(input_fp);
+            let input_producer_indices = self.producer_indices(input_fp)?;
             let mut input_producer_output_fp = 0u64;
             for &input_producer_index in &input_producer_indices {
                 // Short-lived borrow to check if producer is a neg join
@@ -104,9 +105,9 @@ impl RulePlanner {
                 {
                     // We always apply possible comparisons/fn_call before neg joins, so it is impossible
                     // to fuse a map with a neg join producer if there are any comparisons or fn_call predicates.
-                    panic!(
-                        "Planner error: [fuse_map] impossible fusion of map with neg join producer"
-                    );
+                    return Err(PlanError::internal(
+                        "fuse_map: impossible fusion of map with neg join producer",
+                    ));
                 }
 
                 trace!(
@@ -132,10 +133,10 @@ impl RulePlanner {
                     &key_argument_ids,
                     &value_argument_ids,
                     &predicates,
-                );
+                )?;
             }
 
-            let output_consumer_indices = self.consumer_indices(output_fp);
+            let output_consumer_indices = self.consumer_indices(output_fp)?;
 
             // Update all consumers to point to the producer's new output
             for &output_consumer_index in &output_consumer_indices {
@@ -147,7 +148,7 @@ impl RulePlanner {
                     original_atom_fp,
                     input_producer_output_fp,
                     output_consumer_index,
-                );
+                )?;
                 trace!(
                     "[fuse_map]   -> updated consumer idx {} to input {:#018x}",
                     output_consumer_index,
@@ -172,12 +173,13 @@ impl RulePlanner {
         );
 
         // After removing fused maps, rebuild the producer-consumer
-        self.rebuild_producer_consumer(original_atom_fp);
+        self.rebuild_producer_consumer(original_atom_fp)?;
+        Ok(())
     }
 
     /// Fuse correct key-value layout requirements from downstream transformation infos
     /// to upstream transformations.
-    fn fuse_kv_layout(&mut self, original_atom_fp: &HashSet<u64>) {
+    fn fuse_kv_layout(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
         // Collect output fingerprints in same order (deduplicated).
         // It is important to sharing optimization, different processing order
         // may leads to different fingerprints for same plan operatoions.
@@ -205,9 +207,9 @@ impl RulePlanner {
                 continue;
             }
 
-            let consumer_layouts = self.collect_consumer_layout_indices(&consumers, tx_fp);
+            let consumer_layouts = self.collect_consumer_layout_indices(&consumers, tx_fp)?;
             let producer_consumer_assignments =
-                Self::assign_layout_to_producer(tx_fp, &producer_indices, &consumer_layouts);
+                Self::assign_layout_to_producer(tx_fp, &producer_indices, &consumer_layouts)?;
 
             for (producers, consumers, key_indices, value_indices) in producer_consumer_assignments
             {
@@ -238,7 +240,8 @@ impl RulePlanner {
         }
 
         // After updating kv-layouts, rebuild the producer-consumer
-        self.rebuild_producer_consumer(original_atom_fp);
+        self.rebuild_producer_consumer(original_atom_fp)?;
+        Ok(())
     }
 }
 
@@ -255,21 +258,21 @@ impl RulePlanner {
         key_argument_ids: &[usize],
         value_argument_ids: &[usize],
         predicates: &KvPredicates,
-    ) -> u64 {
+    ) -> Result<u64, PlanError> {
         // Build the new output layout by selecting positions from the current producer output
         let all_positions = self.collect_output_positions(producer_idx);
         let new_out_kv_layout = self.generate_layout_from_argument_ids(
             &all_positions,
             key_argument_ids,
             value_argument_ids,
-        );
+        )?;
 
         let remapped_const_eq =
-            Self::remap_const_eq_constraints(&all_positions, &predicates.const_eq);
-        let remapped_var_eq = Self::remap_var_eq_constraints(&all_positions, &predicates.var_eq);
-        let remapped_cmps = Self::remap_comparisons(&all_positions, &predicates.compare_exprs);
+            Self::remap_const_eq_constraints(&all_positions, &predicates.const_eq)?;
+        let remapped_var_eq = Self::remap_var_eq_constraints(&all_positions, &predicates.var_eq)?;
+        let remapped_cmps = Self::remap_comparisons(&all_positions, &predicates.compare_exprs)?;
         let remapped_fn_calls =
-            Self::remap_fn_call_preds(&all_positions, &predicates.fn_call_preds);
+            Self::remap_fn_call_preds(&all_positions, &predicates.fn_call_preds)?;
 
         // Update producer output layout and comparisons
         {
@@ -291,7 +294,7 @@ impl RulePlanner {
         // Return the new output fingerprint
         let new_fp = self.transformation_infos[producer_idx].output_info_fp();
         self.insert_producer(new_fp, producer_idx);
-        new_fp
+        Ok(new_fp)
     }
 
     // Collect all output positions (keys + values) from an upstream transformation.
@@ -318,32 +321,24 @@ impl RulePlanner {
         positions: &[ArithmeticPos],
         key_ids: &[usize],
         value_ids: &[usize],
-    ) -> KeyValueLayout {
-        let new_key: Vec<_> = key_ids
-            .iter()
-            .map(|id| {
-                positions.get(*id).cloned().unwrap_or_else(|| {
-                    panic!(
-                        "Planner error: missing key argument id {} in output layout ({} positions)",
-                        id,
-                        positions.len()
-                    )
-                })
+    ) -> Result<KeyValueLayout, PlanError> {
+        let pick = |id: &usize, kind: &str| -> Result<ArithmeticPos, PlanError> {
+            positions.get(*id).cloned().ok_or_else(|| {
+                PlanError::internal(format!(
+                    "generate_layout_from_argument_ids: missing {kind} argument id {id} in output layout ({} positions)",
+                    positions.len()
+                ))
             })
-            .collect();
-        let new_value: Vec<_> = value_ids
+        };
+        let new_key = key_ids
             .iter()
-            .map(|id| {
-                positions.get(*id).cloned().unwrap_or_else(|| {
-                    panic!(
-                        "Planner error: missing value argument id {} in output layout ({} positions)",
-                        id,
-                        positions.len()
-                    )
-                })
-            })
-            .collect();
-        KeyValueLayout::new(new_key, new_value)
+            .map(|id| pick(id, "key"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let new_value = value_ids
+            .iter()
+            .map(|id| pick(id, "value"))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(KeyValueLayout::new(new_key, new_value))
     }
 
     /// Remap comparison expressions by converting each variable signature to the
@@ -351,12 +346,16 @@ impl RulePlanner {
     fn remap_comparisons(
         positions: &[ArithmeticPos],
         cmps: &[ComparisonExprPos],
-    ) -> Vec<ComparisonExprPos> {
+    ) -> Result<Vec<ComparisonExprPos>, PlanError> {
         cmps.iter()
             .map(|c| {
-                let left = Self::remap_arithmetic(positions, c.left());
-                let right = Self::remap_arithmetic(positions, c.right());
-                ComparisonExprPos::from_parts(left, c.operator().clone(), right)
+                let left = Self::remap_arithmetic(positions, c.left())?;
+                let right = Self::remap_arithmetic(positions, c.right())?;
+                Ok(ComparisonExprPos::from_parts(
+                    left,
+                    c.operator().clone(),
+                    right,
+                ))
             })
             .collect()
     }
@@ -366,7 +365,7 @@ impl RulePlanner {
     fn remap_fn_call_preds(
         positions: &[ArithmeticPos],
         fn_calls: &[FnCallPredicatePos],
-    ) -> Vec<FnCallPredicatePos> {
+    ) -> Result<Vec<FnCallPredicatePos>, PlanError> {
         fn_calls
             .iter()
             .map(|fc| {
@@ -374,38 +373,46 @@ impl RulePlanner {
                     .args()
                     .iter()
                     .map(|a| Self::remap_arithmetic(positions, a))
-                    .collect();
-                FnCallPredicatePos::new(fc.name().to_string(), new_args, fc.is_negated())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(FnCallPredicatePos::new(
+                    fc.name().to_string(),
+                    new_args,
+                    fc.is_negated(),
+                ))
             })
             .collect()
     }
 
     /// Remap an ArithmeticPos by resolving each variable signature through `positions`.
-    fn remap_arithmetic(positions: &[ArithmeticPos], expr: &ArithmeticPos) -> ArithmeticPos {
-        expr.map_vars(&|sig| {
+    fn remap_arithmetic(
+        positions: &[ArithmeticPos],
+        expr: &ArithmeticPos,
+    ) -> Result<ArithmeticPos, PlanError> {
+        for sig in expr.signatures() {
             let id = sig.argument_id();
-            let pos = positions
-                .get(id)
-                .unwrap_or_else(|| {
-                    panic!("Planner error: missing argument id {} in positions", id)
-                });
-            assert!(
-                pos.rest().is_empty(),
-                "Planner error: expected single-factor position for argument id {id}, got compound expression"
-            );
-            pos.init().clone()
-        })
+            let pos = positions.get(id).ok_or_else(|| {
+                PlanError::internal(format!(
+                    "remap_arithmetic: missing argument id {id} in positions"
+                ))
+            })?;
+            if !pos.rest().is_empty() {
+                return Err(PlanError::internal(format!(
+                    "remap_arithmetic: expected single-factor position for argument id {id}, got compound expression"
+                )));
+            }
+        }
+        Ok(expr.map_vars(&|sig| positions[sig.argument_id()].init().clone()))
     }
 
     fn remap_const_eq_constraints(
         positions: &[ArithmeticPos],
         constraints: &[(AtomArgumentSignature, ConstType)],
-    ) -> Vec<(AtomArgumentSignature, ConstType)> {
+    ) -> Result<Vec<(AtomArgumentSignature, ConstType)>, PlanError> {
         constraints
             .iter()
             .map(|(sig, constant)| {
-                let remapped = Self::remap_atom_signature(positions, sig);
-                (remapped, constant.clone())
+                let remapped = Self::remap_atom_signature(positions, sig)?;
+                Ok((remapped, constant.clone()))
             })
             .collect()
     }
@@ -413,14 +420,14 @@ impl RulePlanner {
     fn remap_var_eq_constraints(
         positions: &[ArithmeticPos],
         constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
-    ) -> Vec<(AtomArgumentSignature, AtomArgumentSignature)> {
+    ) -> Result<Vec<(AtomArgumentSignature, AtomArgumentSignature)>, PlanError> {
         constraints
             .iter()
             .map(|(left, right)| {
-                (
-                    Self::remap_atom_signature(positions, left),
-                    Self::remap_atom_signature(positions, right),
-                )
+                Ok((
+                    Self::remap_atom_signature(positions, left)?,
+                    Self::remap_atom_signature(positions, right)?,
+                ))
             })
             .collect()
     }
@@ -441,27 +448,28 @@ impl RulePlanner {
     fn remap_atom_signature(
         positions: &[ArithmeticPos],
         sig: &AtomArgumentSignature,
-    ) -> AtomArgumentSignature {
+    ) -> Result<AtomArgumentSignature, PlanError> {
         let idx = sig.argument_id();
-        let pos = positions.get(idx).unwrap_or_else(|| {
-            panic!(
-                "Planner error: missing argument id {} in output layout ({} positions)",
-                idx,
+        let pos = positions.get(idx).ok_or_else(|| {
+            PlanError::internal(format!(
+                "remap_atom_signature: missing argument id {idx} in output layout ({} positions)",
                 positions.len()
-            )
-        });
+            ))
+        })?;
 
         let signatures = pos.signatures();
-        signatures.first().copied().copied().unwrap_or_else(|| {
-            panic!(
-                "Planner error: no variable signature found for argument id {} during fusion",
-                idx
-            )
+        signatures.first().copied().copied().ok_or_else(|| {
+            PlanError::internal(format!(
+                "remap_atom_signature: no variable signature found for argument id {idx} during fusion"
+            ))
         })
     }
 
     /// Rebuild the producer_consumer map and key-value layouts after fusion.
-    fn rebuild_producer_consumer(&mut self, original_atom_fp: &HashSet<u64>) {
+    fn rebuild_producer_consumer(
+        &mut self,
+        original_atom_fp: &HashSet<u64>,
+    ) -> Result<(), PlanError> {
         // Clear caches
         self.producer_consumer.clear();
 
@@ -491,7 +499,7 @@ impl RulePlanner {
             };
 
             for input_fp in [Some(left_fp), right_fp_opt].into_iter().flatten() {
-                self.insert_consumer(original_atom_fp, input_fp, index);
+                self.insert_consumer(original_atom_fp, input_fp, index)?;
             }
         }
 
@@ -509,6 +517,7 @@ impl RulePlanner {
             "[rebuild_producer_consumer] done: {} producers  entries",
             self.producer_consumer.len(),
         );
+        Ok(())
     }
 
     /// Collect distinct key-value layouts required by consumers of a given input fingerprint.
@@ -517,7 +526,7 @@ impl RulePlanner {
         &mut self,
         consumer_indices: &[usize],
         input_fp: u64,
-    ) -> Vec<ConsumerLayout> {
+    ) -> Result<Vec<ConsumerLayout>, PlanError> {
         // Map from (key indices, value indices) to consumer ids
         let mut layouts: BTreeMap<(Vec<usize>, Vec<usize>), Vec<usize>> = BTreeMap::new();
         let mut real_key_value_layout = None;
@@ -553,10 +562,9 @@ impl RulePlanner {
                 } else if *right_fp == input_fp {
                     right_layout
                 } else {
-                    panic!(
-                        "Planner error: consumer idx {} does not match input fp {:#018x} in join/antijoin layout",
-                        consumer_idx, input_fp
-                    )
+                    return Err(PlanError::internal(format!(
+                        "collect_consumer_layout_indices: consumer idx {consumer_idx} does not match input fp {input_fp:#018x} in join/antijoin layout"
+                    )));
                 };
 
                 if real_key_value_layout.is_none() {
@@ -583,10 +591,11 @@ impl RulePlanner {
             }
 
             // The canonical layout comes from the first join/antijoin seen in pass 1.
-            let layout = real_key_value_layout.clone().unwrap_or_else(|| panic!(
-                "Planner error: consumer idx {} missing join/antijoin layout for producer fp {:#018x}",
-                consumer_idx, input_fp
-            ));
+            let layout = real_key_value_layout.clone().ok_or_else(|| {
+                PlanError::internal(format!(
+                    "collect_consumer_layout_indices: consumer idx {consumer_idx} missing join/antijoin layout for producer fp {input_fp:#018x}"
+                ))
+            })?;
 
             // Remap layout signatures to this consumer's atom id, then apply.
             let consumer_tx = &mut self.transformation_infos[consumer_idx];
@@ -594,10 +603,11 @@ impl RulePlanner {
             consumer_tx.update_input_layout(Self::remap_atom_kv_layout(&layout, atom_id));
 
             // Group this consumer under the same (key, value) indices as the joins.
-            let (key_indices, value_indices) = layouts.keys().next().cloned().unwrap_or_else(|| panic!(
-                "Planner error: consumer idx {} missing join/antijoin layout for producer fp {:#018x}",
-                consumer_idx, input_fp
-            ));
+            let (key_indices, value_indices) = layouts.keys().next().cloned().ok_or_else(|| {
+                PlanError::internal(format!(
+                    "collect_consumer_layout_indices: consumer idx {consumer_idx} missing join/antijoin layout keys for producer fp {input_fp:#018x}"
+                ))
+            })?;
             layouts
                 .entry((key_indices, value_indices))
                 .or_default()
@@ -612,7 +622,7 @@ impl RulePlanner {
             })
             .collect();
         consumer_collection.sort_by_key(|(first_consumer, _, _, _)| *first_consumer);
-        consumer_collection
+        Ok(consumer_collection)
     }
 
     /// Assign producer indices to consumer layout kinds.
@@ -622,15 +632,14 @@ impl RulePlanner {
         tx_fp: u64,
         producer_indices: &[usize],
         consumer_layouts: &[ConsumerLayout],
-    ) -> Vec<LayoutAssignment> {
+    ) -> Result<Vec<LayoutAssignment>, PlanError> {
         // Check feasibility.
         if consumer_layouts.len() > producer_indices.len() {
-            panic!(
-                "Planner error: 0x{:016x} {} consumer layout kinds but only {} producers available",
-                tx_fp,
+            return Err(PlanError::internal(format!(
+                "assign_layout_to_producer: {tx_fp:#018x} has {} consumer layout kinds but only {} producers available",
                 consumer_layouts.len(),
                 producer_indices.len()
-            );
+            )));
         }
 
         let mut available: VecDeque<_> = producer_indices.iter().copied().collect();
@@ -639,14 +648,17 @@ impl RulePlanner {
         let mut assignments = Vec::with_capacity(consumer_layouts.len());
 
         for (first_consumer, consumers, key_ids, value_ids) in consumer_layouts {
-            // We already check that there is at least one producer candidate, so just unwrap.
-            let producer_idx = available.pop_front().unwrap();
+            // Feasibility check above guarantees at least one producer candidate.
+            let producer_idx = available.pop_front().ok_or_else(|| {
+                PlanError::internal(
+                    "assign_layout_to_producer: no available producer despite feasibility check",
+                )
+            })?;
 
             if producer_idx >= *first_consumer {
-                panic!(
-                    "Planner error: no producer index found before consumer idx {}",
-                    first_consumer
-                );
+                return Err(PlanError::internal(format!(
+                    "assign_layout_to_producer: no producer index found before consumer idx {first_consumer}"
+                )));
             }
 
             assignments.push((
@@ -660,14 +672,19 @@ impl RulePlanner {
         // If there are any remaining available producers, assign them to the first consumer layout kind.
         // Randomly assign also works, for simplify code we just push to the first one.
         if !available.is_empty() {
-            if let Some((producer_ids, _, _, _)) = assignments.first_mut() {
-                producer_ids.extend(available);
-                producer_ids.sort_unstable();
-            } else {
-                panic!("Planner error: no consumer layout kinds to receive extra producers");
+            match assignments.first_mut() {
+                Some((producer_ids, _, _, _)) => {
+                    producer_ids.extend(available);
+                    producer_ids.sort_unstable();
+                }
+                None => {
+                    return Err(PlanError::internal(
+                        "assign_layout_to_producer: no consumer layout kinds to receive extra producers",
+                    ));
+                }
             }
         }
 
-        assignments
+        Ok(assignments)
     }
 }

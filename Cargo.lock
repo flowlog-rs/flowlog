@@ -710,11 +710,13 @@ version = "0.1.0"
 dependencies = [
  "catalog",
  "clap",
+ "codespan-reporting",
  "common",
  "optimizer",
  "parser",
  "profiler",
  "stratifier",
+ "thiserror",
  "tracing",
  "tracing-subscriber",
 ]

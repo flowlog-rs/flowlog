@@ -3,7 +3,7 @@ use clap::Parser;
 use common::{emit_and_exit, get_example_files, Config, SourceMap, TestResult};
 use optimizer::Optimizer;
 use parser::Program;
-use planner::StratumPlanner;
+use planner::{PlanError, StratumPlanner};
 use profiler::Profiler;
 use stratifier::Stratifier;
 use tracing_subscriber::EnvFilter;
@@ -57,7 +57,7 @@ fn plan_and_print(
     optimizer: &mut Optimizer,
     stratifier: &Stratifier,
     profiler: &mut Option<Profiler>,
-) -> Result<(), catalog::CatalogError> {
+) -> Result<(), PlanError> {
     for (stratum_idx, rule_refs) in stratifier.stratum().iter().enumerate() {
         let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
 
@@ -117,7 +117,7 @@ fn run_all_examples(config: &Config) {
                 )?;
             }
 
-            Ok::<_, catalog::CatalogError>((program.rules().len(), stratifier.stratum().len()))
+            Ok::<_, PlanError>((program.rules().len(), stratifier.stratum().len()))
         }));
         match result {
             Ok(Ok((rule_count, strata_count))) => {

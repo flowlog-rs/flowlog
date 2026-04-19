@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use tracing::debug;
 
-use catalog::{Catalog, CatalogError};
+use catalog::Catalog;
+use common::source::Span;
 use common::Config;
 use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
@@ -12,7 +13,7 @@ use parser::{AggregationOperator, HeadArg, LoopCondition};
 use profiler::{with_profiler, Profiler};
 use stratifier::Stratifier;
 
-use crate::{RulePlanner, Transformation, TransformationInfo};
+use crate::{PlanError, RulePlanner, Transformation, TransformationInfo};
 
 /// Planner for a single stratum (a group of parallel rules).
 ///
@@ -82,7 +83,7 @@ impl StratumPlanner {
         profiler: &mut Option<Profiler>,
         stratifier: &Stratifier,
         stratum_idx: usize,
-    ) -> Result<Self, CatalogError> {
+    ) -> Result<Self, PlanError> {
         let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
@@ -136,14 +137,14 @@ impl StratumPlanner {
         // Phase 4: Fusion
         // to combine transformations and optimize execution
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
-            planner.fuse(catalog.original_atom_fingerprints());
+            planner.fuse(catalog.original_atom_fingerprints())?;
         }
 
         // Phase 5: Post-processing
         // align final output to the rule head (vars and arithmetic)
         // to apply final adjustments after fusion, e.g. convert to row type
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
-            planner.post(catalog);
+            planner.post(catalog)?;
         }
 
         // Debug info for per-rule plan trees
@@ -194,7 +195,7 @@ impl StratumPlanner {
         stratum_planner.identify_recursive_transformations(is_recursive);
         stratum_planner
             .build_recursion_enter_collections(stratifier.stratum_available_relations(stratum_idx));
-        stratum_planner.build_idb_to_aggregation_map(&catalogs);
+        stratum_planner.build_idb_to_aggregation_map(&catalogs)?;
 
         // Debug info for non-recursive vs recursive transformations.
         debug!("\n{}", stratum_planner);
@@ -521,15 +522,41 @@ impl StratumPlanner {
 
     /// Build the mapping from each final output collection fingerprint to its aggregation requirement.
     /// Ensures consistent aggregation operator and position for a given output relation if multiple rules map to it.
-    fn build_idb_to_aggregation_map(&mut self, catalogs: &[Catalog]) {
+    fn build_idb_to_aggregation_map(&mut self, catalogs: &[Catalog]) -> Result<(), PlanError> {
+        // Side map of first-seen spans, populated alongside `idb_to_aggregation_map`.
+        // Used only to point callers at the prior rule when a conflict fires; not
+        // part of the persisted planner state.
+        let mut prior_spans: HashMap<u64, Span> = HashMap::new();
+
         for catalog in catalogs {
             let head_args = catalog.head_arguments();
 
-            // At most one aggregation per rule head.
-            assert!(
-                head_args.iter().filter(|a| matches!(a, HeadArg::Aggregation(_))).count() <= 1,
-                "Planner error: rule head contains multiple aggregations, but at most one is allowed",
-            );
+            // `catalog.rule()` may carry a dummy span after catalog-driven rule
+            // rewrites (join_modify/projection_modify rebuild the rule via
+            // `FlowLogRule::new`, which has no span). The head is cloned through
+            // those rewrites, so prefer its span.
+            let current_span = {
+                let rule = catalog.rule();
+                let head_span = rule.head().span();
+                if head_span.is_dummy() {
+                    rule.span()
+                } else {
+                    head_span
+                }
+            };
+
+            let agg_count = head_args
+                .iter()
+                .filter(|a| matches!(a, HeadArg::Aggregation(_)))
+                .count();
+            if agg_count > 1 {
+                return Err(PlanError::MultipleAggregationsInHead {
+                    head_span: current_span,
+                    rule_span: catalog.rule().span(),
+                    rel: catalog.rule().head().name().to_string(),
+                    count: agg_count,
+                });
+            }
 
             let Some((pos, op)) = head_args.iter().enumerate().find_map(|(i, arg)| match arg {
                 HeadArg::Aggregation(agg) => Some((i, *agg.operator())),
@@ -543,18 +570,29 @@ impl StratumPlanner {
             let entry = (op, pos, arity);
 
             match self.idb_to_aggregation_map.get(&head_idb_fp) {
-                Some(&existing) if existing != entry => {
-                    panic!(
-                        "Planner error: inconsistent aggregation for output {:#018x}: \
-                         found {:?}@{} but expected {:?}@{}",
-                        head_idb_fp, op, pos, existing.0, existing.1
-                    );
+                Some(&(existing_op, existing_pos, _))
+                    if (existing_op, existing_pos) != (op, pos) =>
+                {
+                    return Err(PlanError::InconsistentAggregation {
+                        rule_span: current_span,
+                        prior_span: prior_spans
+                            .get(&head_idb_fp)
+                            .copied()
+                            .unwrap_or(Span::DUMMY),
+                        rel: catalog.rule().head().name().to_string(),
+                        existing_op,
+                        existing_pos,
+                        found_op: op,
+                        found_pos: pos,
+                    });
                 }
                 None => {
                     self.idb_to_aggregation_map.insert(head_idb_fp, entry);
+                    prior_spans.insert(head_idb_fp, current_span);
                 }
                 _ => {} // consistent duplicate — skip
             }
         }
+        Ok(())
     }
 }
