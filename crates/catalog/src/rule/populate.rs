@@ -8,18 +8,19 @@ use std::collections::{HashMap, HashSet};
 
 use super::Catalog;
 use crate::atom::{AtomArgumentSignature, AtomSignature};
+use crate::error::{CatalogError, UnsafePredicateKind};
 use crate::filter::Filters;
 use parser::{AtomArg, Predicate};
 
 /// Internal API for populating all metadata fields given a parsed rule.
 impl Catalog {
     /// Populates all metadata required for rule processing.
-    pub(crate) fn populate_all_metadata(&mut self) {
+    pub(crate) fn populate_all_metadata(&mut self) -> Result<(), CatalogError> {
         // 1. Build signatures, filters, fingerprints, and collect comparison predicates
-        self.populate_argument_signatures();
+        self.populate_argument_signatures()?;
 
         // 2. Map each variable to the positive atoms (by rhs index) where it occurs
-        self.populate_argument_presence_in_positive_atom_map();
+        self.populate_argument_presence_in_positive_atom_map()?;
 
         // 3. Detect arguments that can be pruned (appear only once and not in head)
         self.populate_unused_arguments();
@@ -35,10 +36,12 @@ impl Catalog {
             .iter()
             .map(|ha| (ha.to_string(), ha.clone()))
             .collect();
+
+        Ok(())
     }
 
     /// Populates argument signatures and filters for positive/negative atoms and comparisons.
-    fn populate_argument_signatures(&mut self) {
+    fn populate_argument_signatures(&mut self) -> Result<(), CatalogError> {
         // Tracks vars that are already bound (safe) before encountering them in a negative atom
         let mut is_safe_set = HashSet::new();
 
@@ -121,7 +124,53 @@ impl Catalog {
             local_var_first_occurrence_map.clear();
         }
 
-        // Process negative atoms: only already-safe vars are allowed
+        // Range-restriction: every variable in a negative atom, comparison,
+        // or function call must appear in some positive body atom. Display
+        // strings and spans are fetched only on the error path.
+        let rule_span = self.rule.span();
+        for atom in &negative_atoms {
+            for arg in atom.arguments() {
+                if let AtomArg::Var(v) = arg {
+                    if !is_safe_set.contains(v) {
+                        return Err(CatalogError::UnsafeVariable {
+                            kind: UnsafePredicateKind::Negation,
+                            predicate: format!("!{atom}"),
+                            predicate_span: atom.span(),
+                            rule_span,
+                            var: v.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        for comp in &comparison_predicates {
+            for v in comp.vars_set() {
+                if !is_safe_set.contains(v) {
+                    return Err(CatalogError::UnsafeVariable {
+                        kind: UnsafePredicateKind::Comparison,
+                        predicate: comp.to_string(),
+                        predicate_span: comp.span(),
+                        rule_span,
+                        var: v.clone(),
+                    });
+                }
+            }
+        }
+        for fc in &fn_call_predicates {
+            for v in fc.vars() {
+                if !is_safe_set.contains(v) {
+                    return Err(CatalogError::UnsafeVariable {
+                        kind: UnsafePredicateKind::FnCall,
+                        predicate: fc.to_string(),
+                        predicate_span: fc.span(),
+                        rule_span,
+                        var: v.clone(),
+                    });
+                }
+            }
+        }
+
+        // Process negative atoms: populate signature metadata (safety already verified above).
         for (neg_rhs_id, atom) in negative_atoms.iter().enumerate() {
             let mut neg_sigs = Vec::new();
             let mut neg_var_str_set = HashSet::new();
@@ -130,20 +179,13 @@ impl Catalog {
                 neg_sigs.push(sig);
                 match arg {
                     AtomArg::Var(v) => {
-                        if is_safe_set.contains(v) {
-                            neg_var_str_set.insert(v.to_string());
-                            self.signature_to_argument_str_map
-                                .insert(sig, v.to_string());
-                            if let Some(first) = local_var_first_occurrence_map.get(v) {
-                                local_var_eq_map.insert(sig, *first);
-                            } else {
-                                local_var_first_occurrence_map.insert(v.to_string(), sig);
-                            }
+                        neg_var_str_set.insert(v.to_string());
+                        self.signature_to_argument_str_map
+                            .insert(sig, v.to_string());
+                        if let Some(first) = local_var_first_occurrence_map.get(v) {
+                            local_var_eq_map.insert(sig, *first);
                         } else {
-                            panic!(
-                                "Catalog error: unsafe var detected at negation !{} of rule {}",
-                                atom, self.rule
-                            );
+                            local_var_first_occurrence_map.insert(v.to_string(), sig);
                         }
                     }
                     AtomArg::Const(c) => {
@@ -159,12 +201,11 @@ impl Catalog {
             self.negative_atom_argument_vars_str_sets
                 .push(neg_var_str_set);
 
-            // Reset first-occurrence tracking for next atom
             local_var_first_occurrence_map.clear();
         }
 
-        // Build filter structures (variable equalities, constant bindings, placeholders)
         self.filters = Filters::new(local_var_eq_map, local_const_map, local_placeholder_set);
+
         // Build variable string sets for each comparison predicate (used for superset analysis)
         self.comparison_predicates_vars_str_set = comparison_predicates
             .iter()
@@ -183,10 +224,12 @@ impl Catalog {
             .map(|fc| fc.vars().into_iter().cloned().collect::<HashSet<String>>())
             .collect();
         self.fn_call_predicates = fn_call_predicates;
+
+        Ok(())
     }
 
     /// Creates a map of which variables appear in which positive atoms.
-    fn populate_argument_presence_in_positive_atom_map(&mut self) {
+    fn populate_argument_presence_in_positive_atom_map(&mut self) -> Result<(), CatalogError> {
         for (rhs_id, sigs) in self.positive_atom_argument_signatures.iter().enumerate() {
             for sig in sigs {
                 // Skip non-binding argument kinds (constants, equality-propagated vars, placeholders)
@@ -204,10 +247,13 @@ impl Catalog {
                         entry[rhs_id] = Some(*sig);
                     }
                 } else {
-                    panic!("Cataslog error: signature {:?} absent", sig);
+                    return Err(CatalogError::internal(format!(
+                        "argument signature {sig} absent from signature_to_argument_str_map"
+                    )));
                 }
             }
         }
+        Ok(())
     }
 
     /// Identifies arguments that appear only once and aren't in the head.

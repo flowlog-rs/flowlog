@@ -22,12 +22,10 @@ fn main() {
     let mut sm = SourceMap::new();
     let program = Program::parse(config.program(), config.is_extended(), &mut sm)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
-    print_catalogs(&program);
-}
-
-fn print_catalogs(program: &Program) {
-    for rule in program.rules().iter() {
-        let _catalog = Catalog::from_rule(rule);
+    for rule in program.rules() {
+        if let Err(err) = Catalog::from_rule(rule) {
+            emit_and_exit(err, &sm);
+        }
     }
 }
 
@@ -39,19 +37,33 @@ fn run_all_examples(config: &Config) {
         let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         let mut sm = SourceMap::new();
-        match Program::parse(file_path.to_str().unwrap(), config.is_extended(), &mut sm) {
-            Ok(program) => {
-                let stats = format!(
-                    "rules={}, relations={}",
-                    program.rules().len(),
-                    program.relations().len()
-                );
-                formatter.report_success(file_name, Some(&stats));
-            }
-            Err(err) => {
-                formatter.report_failure(file_name, Some(&err.to_string()));
+        let program =
+            match Program::parse(file_path.to_str().unwrap(), config.is_extended(), &mut sm) {
+                Ok(p) => p,
+                Err(err) => {
+                    formatter.report_failure(file_name, Some(&err.to_string()));
+                    continue;
+                }
+            };
+
+        let mut catalog_err = None;
+        for rule in program.rules() {
+            if let Err(e) = Catalog::from_rule(rule) {
+                catalog_err = Some(e);
+                break;
             }
         }
+        if let Some(err) = catalog_err {
+            formatter.report_failure(file_name, Some(&err.to_string()));
+            continue;
+        }
+
+        let stats = format!(
+            "rules={}, relations={}",
+            program.rules().len(),
+            program.relations().len()
+        );
+        formatter.report_success(file_name, Some(&stats));
     }
 
     formatter.finish();

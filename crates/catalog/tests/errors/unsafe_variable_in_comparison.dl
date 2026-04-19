@@ -1,0 +1,5 @@
+.decl Edge(x: int32, y: int32)
+.decl Reach(x: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.output Reach
+Reach(x) :- Edge(x, y), z > 5.
