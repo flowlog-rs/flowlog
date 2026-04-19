@@ -1,0 +1,12 @@
+.decl edge(x: int32, y: int32)
+.decl reach(x: int32, y: int32)
+.decl sink(x: int32)
+.input edge(IO="file", filename="edge.csv", delimiter=",")
+.output reach
+.output sink
+fixpoint {
+    .iterative sink
+    reach(x, y) :- edge(x, y).
+    reach(x, z) :- edge(x, y), reach(y, z).
+    sink(x) :- reach(x, y).
+}

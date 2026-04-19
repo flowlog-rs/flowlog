@@ -17,8 +17,9 @@ pub use error::ParseError;
 pub use declaration::{Attribute, ExternFn, Relation};
 pub use logic::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
-    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head, HeadArg, LoopBlock,
-    LoopCondition, LoopConnective, Predicate, StopGroup, StopRelation,
+    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head, HeadArg,
+    IterativeDirective, LoopBlock, LoopCondition, LoopConnective, Predicate, StopGroup,
+    StopRelation,
 };
 pub use primitive::{ConstType, DataType};
 pub use program::Program;

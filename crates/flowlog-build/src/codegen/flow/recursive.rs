@@ -676,21 +676,18 @@ impl CodeGen {
         let mut stmts: Vec<TokenStream> = Vec::new();
 
         // Initialise gate from the first until relation.
-        let first = until_group.first();
-        let first_next = next_bindings.get(&first.fp).unwrap_or_else(|| {
-            panic!(
-                "CodeGen error: until relation fp {} missing from next_bindings",
-                first.fp
-            )
+        let first_fp = until_group.first().fp();
+        let first_next = next_bindings.get(&first_fp).unwrap_or_else(|| {
+            panic!("CodeGen error: until relation fp {first_fp} missing from next_bindings")
         });
-        let first_sig = format_ident!("rel_sig_{}", first.fp);
+        let first_sig = format_ident!("rel_sig_{}", first_fp);
         let dedup = self.dedup_recursive();
         stmts.push(quote! { let #first_sig = #first_next.clone() #dedup; });
         let mut gate = first_sig;
 
         // Fold remaining until relations into the gate with explicit connectives.
         for (conn, rel) in until_group.rest() {
-            let fp = rel.fp;
+            let fp = rel.fp();
             let next_ident = next_bindings.get(&fp).unwrap_or_else(|| {
                 panic!("CodeGen error: until relation fp {fp} missing from next_bindings")
             });

@@ -908,10 +908,12 @@ name = "stratifier"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "codespan-reporting",
  "common",
  "itertools",
  "parser",
  "tempfile",
+ "thiserror",
  "tracing",
  "tracing-subscriber",
  "tracing-test",

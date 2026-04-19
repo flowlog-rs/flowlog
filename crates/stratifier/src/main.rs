@@ -22,7 +22,8 @@ fn main() {
     let mut sm = SourceMap::new();
     let program = Program::parse(config.program(), config.is_extended(), &mut sm)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
-    let _stratifier = Stratifier::from_program(&program, config.is_extended());
+    let _stratifier = Stratifier::from_program(&program, config.is_extended())
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
 }
 
 fn run_all_examples(config: &Config) {
@@ -41,36 +42,23 @@ fn run_all_examples(config: &Config) {
                     continue;
                 }
             };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let stratifier = Stratifier::from_program(&program, config.is_extended());
-            let recursive_cnt = stratifier
-                .is_recursive_stratum_bitmap()
-                .iter()
-                .filter(|b| **b)
-                .count();
-            (
-                program.rules().len(),
-                stratifier.is_recursive_stratum_bitmap().len(),
-                recursive_cnt,
-            )
-        }));
-        match result {
-            Ok((rules, strata, recursive)) => {
+        match Stratifier::from_program(&program, config.is_extended()) {
+            Ok(stratifier) => {
+                let recursive_cnt = stratifier
+                    .is_recursive_stratum_bitmap()
+                    .iter()
+                    .filter(|b| **b)
+                    .count();
                 let stats = format!(
                     "rules={}, strata={}, recursive={}",
-                    rules, strata, recursive
+                    program.rules().len(),
+                    stratifier.is_recursive_stratum_bitmap().len(),
+                    recursive_cnt,
                 );
                 formatter.report_success(file_name, Some(&stats));
             }
-            Err(panic_info) => {
-                let error_msg = if let Some(s) = panic_info.downcast_ref::<String>() {
-                    s.clone()
-                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    s.to_string()
-                } else {
-                    "Unknown panic occurred".to_string()
-                };
-                formatter.report_failure(file_name, Some(&error_msg));
+            Err(err) => {
+                formatter.report_failure(file_name, Some(&err.to_string()));
             }
         }
     }
