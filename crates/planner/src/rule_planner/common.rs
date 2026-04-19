@@ -12,7 +12,8 @@ use tracing::trace;
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
 use catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
+    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, CatalogError, JoinPredicates,
+    KvPredicates,
 };
 
 // =========================================================================
@@ -35,7 +36,7 @@ impl RulePlanner {
     /// as the reason showed above.
     ///
     /// Returns `true` if any optimization was applied, `false` otherwise.
-    pub(super) fn apply_semijoin(&mut self, catalog: &mut Catalog) -> bool {
+    pub(super) fn apply_semijoin(&mut self, catalog: &mut Catalog) -> Result<bool, CatalogError> {
         // (1) Comparison predicate pushdown
         // When a comparison can be evaluated against specific atoms
         if let Some((lhs_comp_idx, rhs_pos_indices)) = catalog
@@ -92,7 +93,7 @@ impl RulePlanner {
             .find(|(_, v)| !v.is_empty())
             .map(|(idx, indices)| (idx, indices.clone()))
         {
-            self.apply_positive_semijoin_premap(catalog, lhs_pos_idx, &rhs_pos_indices);
+            self.apply_positive_semijoin_premap(catalog, lhs_pos_idx, &rhs_pos_indices)?;
 
             trace!(
                 "Positive semijoin:\n  LHS atom: ({}, {})\n  RHS atoms: {:?}",
@@ -119,7 +120,7 @@ impl RulePlanner {
             .find(|(_, v)| !v.is_empty())
             .map(|(idx, indices)| (idx, indices.clone()))
         {
-            self.apply_anti_semijoin_premap(catalog, lhs_neg_idx, &rhs_pos_indices);
+            self.apply_anti_semijoin_premap(catalog, lhs_neg_idx, &rhs_pos_indices)?;
 
             trace!(
                 "Anti-semijoin:\n  LHS negative atom: ({}, !{})\n  RHS atoms: {:?}",
@@ -136,7 +137,7 @@ impl RulePlanner {
             return self.apply_anti_semijoin(catalog, lhs_neg_idx, &rhs_pos_indices);
         }
 
-        false
+        Ok(false)
     }
 
     /// Apply premap for positive semijoin optimization if needed..
@@ -145,7 +146,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_pos_idx: usize,
         rhs_pos_indices: &[usize],
-    ) {
+    ) -> Result<(), CatalogError> {
         // Even for empty key key-value layout, we still need premap for EDB relations.
         // ((), (value)) is not the same as (value) in differential dataflow.
 
@@ -154,8 +155,7 @@ impl RulePlanner {
             .original_atom_fingerprints()
             .contains(&catalog.positive_atom_fingerprint(lhs_pos_idx))
         {
-            // LHS atom is an EDB, need to create a map
-            self.create_edb_premap_transformations(catalog, lhs_pos_idx, true);
+            self.create_edb_premap_transformations(catalog, lhs_pos_idx, true)?;
         }
 
         // Process each RHS atom for positive semijoin.
@@ -164,10 +164,10 @@ impl RulePlanner {
                 .original_atom_fingerprints()
                 .contains(&catalog.positive_atom_fingerprint(rhs_idx))
             {
-                // RHS atom is not in key-only format; need to create a map
-                self.create_edb_premap_transformations(catalog, rhs_idx, true);
+                self.create_edb_premap_transformations(catalog, rhs_idx, true)?;
             }
         }
+        Ok(())
     }
 
     /// Applies positive semijoin optimization.
@@ -178,7 +178,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_pos_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> bool {
+    ) -> Result<bool, CatalogError> {
         // Extract LHS atom information
         let lhs_pos_args = catalog
             .positive_atom_argument_signature(lhs_pos_idx)
@@ -288,8 +288,8 @@ impl RulePlanner {
             new_arg_lists,
             new_names,
             new_fps,
-        );
-        true
+        )?;
+        Ok(true)
     }
 
     /// Apply premap for anti-semijoin optimization.
@@ -298,7 +298,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_neg_idx: usize,
         rhs_pos_indices: &[usize],
-    ) {
+    ) -> Result<(), CatalogError> {
         // Even for empty key key-value layout, we still need premap for EDB relations.
         // ((), (value)) is not the same as (value) in differential dataflow.
 
@@ -307,8 +307,7 @@ impl RulePlanner {
             .original_atom_fingerprints()
             .contains(&catalog.negative_atom_fingerprint(lhs_neg_idx))
         {
-            // LHS atom is not in key-only format; need to create a map
-            self.create_edb_premap_transformations(catalog, lhs_neg_idx, false);
+            self.create_edb_premap_transformations(catalog, lhs_neg_idx, false)?;
         }
 
         // Process each RHS atom for anti-semijoin.
@@ -317,10 +316,10 @@ impl RulePlanner {
                 .original_atom_fingerprints()
                 .contains(&catalog.positive_atom_fingerprint(rhs_idx))
             {
-                // RHS atom is not in key-only format; need to create a map
-                self.create_edb_premap_transformations(catalog, rhs_idx, true);
+                self.create_edb_premap_transformations(catalog, rhs_idx, true)?;
             }
         }
+        Ok(())
     }
 
     /// Applies anti-semijoin optimization.
@@ -331,7 +330,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_neg_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> bool {
+    ) -> Result<bool, CatalogError> {
         // Extract LHS negative atom information
         let lhs_neg_args = catalog
             .negative_atom_argument_signature(lhs_neg_idx)
@@ -435,8 +434,8 @@ impl RulePlanner {
             new_arg_lists,
             new_names,
             new_fps,
-        );
-        true
+        )?;
+        Ok(true)
     }
 
     /// Pushes down a comparison predicate onto RHS atoms that fully cover its variables.
@@ -449,7 +448,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_comp_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> bool {
+    ) -> Result<bool, CatalogError> {
         // Extract comparison predicate information
         let comparison_exprs = catalog.comparison_predicate(lhs_comp_idx);
 
@@ -488,7 +487,7 @@ impl RulePlanner {
                 KeyValueLayout::new(vec![], in_vals),
                 KvPredicates {
                     compare_exprs: vec![
-                        catalog.resolve_comparison_predicates(rhs_idx, lhs_comp_idx)
+                        catalog.resolve_comparison_predicates(rhs_idx, lhs_comp_idx)?
                     ],
                     ..Default::default() // no const-eq, no var-eq and fn call predicates
                 },
@@ -510,8 +509,8 @@ impl RulePlanner {
             self.transformation_infos.push(tx);
         }
 
-        catalog.comparison_modify(lhs_comp_idx, right_sigs, new_names, new_fps);
-        true
+        catalog.comparison_modify(lhs_comp_idx, right_sigs, new_names, new_fps)?;
+        Ok(true)
     }
 
     /// Pushes down a boolean UDF predicate onto RHS atoms that fully cover its variables.
@@ -523,7 +522,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         lhs_fn_call_idx: usize,
         rhs_pos_indices: &[usize],
-    ) -> bool {
+    ) -> Result<bool, CatalogError> {
         // Extract fn_call predicate information
         let fn_call_predicate = catalog.fn_call_predicate(lhs_fn_call_idx);
 
@@ -562,7 +561,7 @@ impl RulePlanner {
                 KeyValueLayout::new(vec![], in_vals),
                 KvPredicates {
                     fn_call_preds: vec![
-                        catalog.resolve_fn_call_predicates(rhs_idx, lhs_fn_call_idx)
+                        catalog.resolve_fn_call_predicates(rhs_idx, lhs_fn_call_idx)?
                     ],
                     ..Default::default() // no const-eq, var-eq, or comparisons
                 },
@@ -584,8 +583,8 @@ impl RulePlanner {
             self.transformation_infos.push(tx);
         }
 
-        catalog.fn_call_modify(lhs_fn_call_idx, right_sigs, new_names, new_fps);
-        true
+        catalog.fn_call_modify(lhs_fn_call_idx, right_sigs, new_names, new_fps)?;
+        Ok(true)
     }
 }
 
@@ -594,11 +593,14 @@ impl RulePlanner {
 // =========================================================================
 impl RulePlanner {
     /// Removes arguments across atoms that are provably unused for outputs.
-    pub(super) fn remove_unused_arguments(&mut self, catalog: &mut Catalog) -> bool {
+    pub(super) fn remove_unused_arguments(
+        &mut self,
+        catalog: &mut Catalog,
+    ) -> Result<bool, CatalogError> {
         // Get groups of unused arguments per atom from catalog analysis
         let groups = catalog.unused_arguments_per_atom();
         if groups.is_empty() {
-            return false;
+            return Ok(false);
         }
 
         let mut applied = false;
@@ -670,12 +672,12 @@ impl RulePlanner {
             self.transformation_infos.push(tx);
 
             // Modify the catalog to reflect the projected atom
-            catalog.projection_modify(atom_signature, to_delete, new_name, new_fp);
+            catalog.projection_modify(atom_signature, to_delete, new_name, new_fp)?;
 
             applied = true;
         }
 
-        applied
+        Ok(applied)
     }
 }
 
@@ -692,7 +694,7 @@ impl RulePlanner {
         catalog: &mut Catalog,
         atom_idx: usize,
         is_positive: bool,
-    ) {
+    ) -> Result<(), CatalogError> {
         // Both positive and negative atoms can be pre-mapped.
         let (edb_fp, edb_args) = if is_positive {
             (
@@ -742,7 +744,7 @@ impl RulePlanner {
         self.insert_producer(new_fp, current_transformation_index);
 
         // Update catalog to reflect the premap atom
-        catalog.map_modify(edb_atom_signature, new_name, new_fp);
+        catalog.map_modify(edb_atom_signature, new_name, new_fp)
     }
 }
 

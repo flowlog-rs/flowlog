@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use tracing::debug;
 
-use catalog::Catalog;
+use catalog::{Catalog, CatalogError};
 use common::Config;
 use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
@@ -75,7 +75,6 @@ pub struct StratumPlanner {
 
 impl StratumPlanner {
     /// Build a stratum planner from a stratum.
-    #[must_use]
     pub fn from_rules(
         config: &Config,
         stratum: &[FlowLogRule],
@@ -83,7 +82,7 @@ impl StratumPlanner {
         profiler: &mut Option<Profiler>,
         stratifier: &Stratifier,
         stratum_idx: usize,
-    ) -> Self {
+    ) -> Result<Self, CatalogError> {
         let is_recursive = stratifier.is_recursive_stratum(stratum_idx);
         let mut catalogs = Vec::with_capacity(stratum.len());
         let mut rule_planners = Vec::with_capacity(stratum.len());
@@ -94,10 +93,10 @@ impl StratumPlanner {
         // to apply local filters/semijoin/comparison before core join planning
         for (i, rule) in stratum.iter().enumerate() {
             debug!("rule[{i}] init:");
-            let mut catalog = Catalog::from_rule(rule);
+            let mut catalog = Catalog::from_rule(rule)?;
 
             let mut planner = RulePlanner::new(rule.clone());
-            planner.prepare(&mut catalog);
+            planner.prepare(&mut catalog)?;
 
             debug!(
                 "rule[{i}] prepare: {} transformations",
@@ -114,7 +113,7 @@ impl StratumPlanner {
         if config.sip_enabled() {
             for (i, planner) in rule_planners.iter_mut().enumerate() {
                 debug!("rule[{i}] SIP");
-                planner.apply_sip(&mut catalogs[i]);
+                planner.apply_sip(&mut catalogs[i])?;
             }
         }
 
@@ -129,7 +128,7 @@ impl StratumPlanner {
                 .zip(join_decisions)
             {
                 if let Some(join_tuple_index) = join_decision {
-                    planner.core(catalog, join_tuple_index);
+                    planner.core(catalog, join_tuple_index)?;
                 }
             }
         }
@@ -200,7 +199,7 @@ impl StratumPlanner {
         // Debug info for non-recursive vs recursive transformations.
         debug!("\n{}", stratum_planner);
 
-        stratum_planner
+        Ok(stratum_planner)
     }
 }
 

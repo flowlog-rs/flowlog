@@ -132,8 +132,10 @@ name = "catalog"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "codespan-reporting",
  "common",
  "parser",
+ "thiserror",
  "tracing",
  "tracing-subscriber",
 ]

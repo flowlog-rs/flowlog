@@ -11,6 +11,8 @@ pub mod arithmetic;
 pub mod atom;
 /// Comparison helpers for tracking variable sets of comparison predicates.
 pub mod compare;
+/// Typed errors raised by the catalog.
+mod error;
 /// Base constraint filters (var==var, var==const, placeholders).
 pub mod filter;
 /// FnCall predicate helpers for tracking UDF predicate positions.
@@ -24,6 +26,7 @@ pub mod rule;
 pub use arithmetic::{ArithmeticPos, FactorPos};
 pub use atom::{AtomArgumentSignature, AtomSignature};
 pub use compare::ComparisonExprPos;
+pub use error::CatalogError;
 pub use filter::Filters;
 pub use fn_call::FnCallPredicatePos;
 pub use predicate::{JoinPredicates, KvPredicates};

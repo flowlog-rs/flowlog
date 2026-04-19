@@ -85,7 +85,7 @@ fn plan(config: &Config, program: &Program) -> io::Result<Vec<StratumPlanner>> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let mut optimizer = Optimizer::new();
     let mut profiler = None;
-    Ok(stratifier
+    stratifier
         .stratum()
         .iter()
         .enumerate()
@@ -99,8 +99,9 @@ fn plan(config: &Config, program: &Program) -> io::Result<Vec<StratumPlanner>> {
                 &stratifier,
                 idx,
             )
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
         })
-        .collect())
+        .collect()
 }
 
 /// Project the library-mode [`Builder`] onto the shared compiler [`Config`].

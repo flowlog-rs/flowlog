@@ -1,0 +1,7 @@
+.decl Person(id: int32, name: string)
+.decl Blocked(id: int32)
+.decl Safe(name: string)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+.input Blocked(IO="file", filename="Blocked.csv", delimiter=",")
+.output Safe
+Safe(name) :- Person(id, name), !Blocked(other).

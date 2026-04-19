@@ -885,11 +885,14 @@ impl Program {
                                 }
                             }
                         }
-                        Predicate::FnCallPredicate(FnCall::new(
-                            atom.name().to_string(),
-                            args,
-                            matches!(pred, Predicate::NegativeAtomPredicate(_)),
-                        ))
+                        Predicate::FnCallPredicate(
+                            FnCall::new(
+                                atom.name().to_string(),
+                                args,
+                                matches!(pred, Predicate::NegativeAtomPredicate(_)),
+                            )
+                            .with_span(atom.span()),
+                        )
                     }
                     other => other.clone(),
                 });

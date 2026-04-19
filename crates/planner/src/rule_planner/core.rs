@@ -9,7 +9,7 @@ use tracing::trace;
 
 use super::RulePlanner;
 use crate::{transformation::KeyValueLayout, TransformationInfo};
-use catalog::{AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates};
+use catalog::{AtomArgumentSignature, AtomSignature, Catalog, CatalogError, JoinPredicates};
 
 // =========================================================================
 // Core Planning
@@ -18,7 +18,11 @@ impl RulePlanner {
     /// This is the main entry point for the rule planning process. It performs a join
     /// between two positive atoms and then applies optimization transformations in a
     /// fixed-point loop until no more optimizations can be applied.
-    pub fn core(&mut self, catalog: &mut Catalog, join_tuple_index: (usize, usize)) {
+    pub fn core(
+        &mut self,
+        catalog: &mut Catalog,
+        join_tuple_index: (usize, usize),
+    ) -> Result<(), CatalogError> {
         trace!(
             "Join:\n  LHS atom: ({}, {})\n RHS atom: ({}, {})",
             catalog.rule().rhs()[catalog.positive_atom_rhs_id(join_tuple_index.0)],
@@ -28,10 +32,10 @@ impl RulePlanner {
         );
 
         // Premap EDB atoms to match required key/value layouts
-        self.apply_join_premaps(catalog, join_tuple_index);
+        self.apply_join_premaps(catalog, join_tuple_index)?;
 
         // Execute the initial join between the two selected atoms
-        self.apply_join(catalog, join_tuple_index);
+        self.apply_join(catalog, join_tuple_index)?;
         trace!("Catalog:\n{}", catalog);
         trace!("{}", "-".repeat(60));
 
@@ -39,7 +43,7 @@ impl RulePlanner {
         loop {
             // 1) Apply semijoin optimizations and comparison pushdown
             // These optimizations can create new opportunities for projection
-            if self.apply_semijoin(catalog) {
+            if self.apply_semijoin(catalog)? {
                 trace!("Catalog:\n{}", catalog);
                 trace!("{}", "-".repeat(60));
                 continue;
@@ -47,7 +51,7 @@ impl RulePlanner {
 
             // 2) Remove unused arguments to reduce data volume
             // This must come after semijoins as they may eliminate argument usage
-            if self.remove_unused_arguments(catalog) {
+            if self.remove_unused_arguments(catalog)? {
                 trace!("Catalog:\n{}", catalog);
                 trace!("{}", "-".repeat(60));
                 continue;
@@ -56,31 +60,39 @@ impl RulePlanner {
             // Fixed point reached - no more optimizations possible
             break;
         }
+        Ok(())
     }
 
     /// Premaps EDB atoms to match required key/value layouts.
-    fn apply_join_premaps(&mut self, catalog: &mut Catalog, join_tuple_index: (usize, usize)) {
+    fn apply_join_premaps(
+        &mut self,
+        catalog: &mut Catalog,
+        join_tuple_index: (usize, usize),
+    ) -> Result<(), CatalogError> {
         let (lhs_idx, rhs_idx) = join_tuple_index;
 
-        // Create premap for LHS atom if needed
         if catalog
             .original_atom_fingerprints()
             .contains(&catalog.positive_atom_fingerprint(lhs_idx))
         {
-            self.create_edb_premap_transformations(catalog, lhs_idx, true);
+            self.create_edb_premap_transformations(catalog, lhs_idx, true)?;
         }
 
-        // Create premap for RHS atom if needed
         if catalog
             .original_atom_fingerprints()
             .contains(&catalog.positive_atom_fingerprint(rhs_idx))
         {
-            self.create_edb_premap_transformations(catalog, rhs_idx, true);
+            self.create_edb_premap_transformations(catalog, rhs_idx, true)?;
         }
+        Ok(())
     }
 
     /// Applies a join transformation between two positive atoms.
-    fn apply_join(&mut self, catalog: &mut Catalog, join_tuple_index: (usize, usize)) {
+    fn apply_join(
+        &mut self,
+        catalog: &mut Catalog,
+        join_tuple_index: (usize, usize),
+    ) -> Result<(), CatalogError> {
         let current_transformation_index = self.transformation_infos.len();
         let (lhs_idx, rhs_idx) = join_tuple_index;
 
@@ -183,6 +195,6 @@ impl RulePlanner {
             vec![new_arguments_list],
             vec![new_name],
             vec![new_fp],
-        );
+        )
     }
 }
