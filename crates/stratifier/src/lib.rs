@@ -53,14 +53,16 @@
 //! let program = Program::parse("path/to/program.dl", false, &mut sm).unwrap();
 //!
 //! // Standard Datalog mode — recursion in plain rules is fine.
-//! let s = Stratifier::from_program(&program, false);
+//! let s = Stratifier::from_program(&program, false).unwrap();
 //! println!("{}", s);
 //!
 //! // Extended Datalog mode — recursion must be inside `fixpoint`/`loop` blocks.
-//! let s = Stratifier::from_program(&program, true);
+//! let s = Stratifier::from_program(&program, true).unwrap();
 //! ```
 
 mod dependency_graph;
+pub mod error;
 pub mod stratifier;
 
+pub use error::StratifyError;
 pub use stratifier::Stratifier;

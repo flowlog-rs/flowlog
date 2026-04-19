@@ -13,11 +13,9 @@
 use std::path::PathBuf;
 
 use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
-use common::diag::{Diagnostic, InternalError};
+use common::diag::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
 use common::source::{FileId, Span};
 use thiserror::Error;
-
-const BUG_URL: &str = "https://github.com/flowlog-rs/flowlog/issues/new";
 
 /// Which `.decl`-style directive is being reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,21 +35,13 @@ impl std::fmt::Display for DirectiveKind {
     }
 }
 
-fn primary(span: Span) -> Option<Label<FileId>> {
-    (!span.is_dummy()).then(|| Label::primary(span.file, span.range()))
-}
-
-fn secondary(span: Span) -> Option<Label<FileId>> {
-    (!span.is_dummy()).then(|| Label::secondary(span.file, span.range()))
-}
-
 /// Build the `[primary, secondary]` label pair for a "duplicate X, first
 /// declared at Y" style diagnostic. Dummy spans (no source position) drop
 /// out instead of pointing at a bogus file.
 fn dup_labels(span: Span, prior: Span, here: &str, first: &str) -> Vec<Label<FileId>> {
     [
-        primary(span).map(|l| l.with_message(here)),
-        secondary(prior).map(|l| l.with_message(first)),
+        primary_label(span).map(|l| l.with_message(here)),
+        secondary_label(prior).map(|l| l.with_message(first)),
     ]
     .into_iter()
     .flatten()
@@ -192,25 +182,25 @@ impl Diagnostic for ParseError {
             )),
 
             ParseError::UndeclaredInDirective { span, name, .. } => base
-                .with_labels(primary(*span).into_iter().collect())
+                .with_labels(primary_label(*span).into_iter().collect())
                 .with_notes(vec![format!(
                     "add a `.decl {name}(...)` before this directive"
                 )]),
 
             ParseError::UndeclaredInIterativeList { span, name } => base
-                .with_labels(primary(*span).into_iter().collect())
+                .with_labels(primary_label(*span).into_iter().collect())
                 .with_notes(vec![format!(
                     "either `.decl {name}(...)` it, or drop `{name}` from the iterative list"
                 )]),
 
             ParseError::UndeclaredLoopCondition { span, name } => base
-                .with_labels(primary(*span).into_iter().collect())
+                .with_labels(primary_label(*span).into_iter().collect())
                 .with_notes(vec![format!(
                     "declare `{name}` as a nullary relation with `.decl {name}()` and derive it inside the loop"
                 )]),
 
             ParseError::CircularInclude { span, chain, .. } => {
-                let mut diag = base.with_labels(primary(*span).into_iter().collect());
+                let mut diag = base.with_labels(primary_label(*span).into_iter().collect());
                 if !chain.is_empty() {
                     let shown: Vec<String> = chain.iter().map(|p| p.display().to_string()).collect();
                     diag = diag.with_notes(vec![format!("include chain: {}", shown.join(" → "))]);
@@ -223,7 +213,7 @@ impl Diagnostic for ParseError {
             | ParseError::NonNullaryLoopCondition { span, .. }
             | ParseError::PlaceholderInUdf { span, .. }
             | ParseError::IncludeIo { span, .. } => {
-                base.with_labels(primary(*span).into_iter().collect())
+                base.with_labels(primary_label(*span).into_iter().collect())
             }
 
             ParseError::Internal(_) => unreachable!("handled above"),

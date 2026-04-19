@@ -1,6 +1,6 @@
 //! Integration tests for every user-reachable `ParseError` variant.
 //!
-//! Each fixture under `tests/fixtures/bad/*.dl` exercises one variant. We
+//! Each fixture under `tests/errors/*.dl` exercises one variant. We
 //! (a) assert the right variant comes back, and (b) run `common::diag::emit`
 //! and check the rendered text cites the offending line and message.
 
@@ -14,8 +14,7 @@ use parser::{ParseError, Program};
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
-        .join("fixtures")
-        .join("bad")
+        .join("errors")
         .join(name)
 }
 

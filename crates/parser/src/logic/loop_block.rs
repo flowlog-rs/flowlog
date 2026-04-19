@@ -94,8 +94,82 @@ pub type IterWindows = Vec<(u16, u16)>;
 /// A single nullary (boolean) relation referenced in an `until` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StopRelation {
-    pub name: String,
-    pub fp: u64,
+    name: String,
+    fp: u64,
+    span: Ignored<Span>,
+}
+
+impl StopRelation {
+    #[must_use]
+    pub fn new(name: String) -> Self {
+        let fp = compute_fp(&name);
+        Self {
+            name,
+            fp,
+            span: Ignored(Span::DUMMY),
+        }
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn fp(&self) -> u64 {
+        self.fp
+    }
+
+    /// Span of the relation name in the `until { ... }` clause.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
+    }
+}
+
+/// A relation marked `.iterative` inside a loop/fixpoint block.
+///
+/// Iterative relations use replacement (`Variable::new_from`) semantics
+/// instead of the default accumulative semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IterativeDirective {
+    name: String,
+    fp: u64,
+    span: Ignored<Span>,
+}
+
+impl IterativeDirective {
+    #[must_use]
+    pub fn new(name: String) -> Self {
+        let fp = compute_fp(&name);
+        Self {
+            name,
+            fp,
+            span: Ignored(Span::DUMMY),
+        }
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn fp(&self) -> u64 {
+        self.fp
+    }
+
+    /// Span of the `.iterative <name>` directive.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span.0
+    }
 }
 
 /// A group of one or more `until` relations joined by `and`/`or`.
@@ -184,7 +258,7 @@ impl LoopCondition {
 pub struct LoopBlock {
     /// Relations using replacement (iterative) semantics — `Variable::new_from`.
     /// Relations absent from this list default to accumulative (`Variable::new`) semantics.
-    iterative_relations: Vec<(String, u64)>,
+    iterative_relations: Vec<IterativeDirective>,
     /// `None` means a pure fixpoint loop (DD terminates when delta is empty).
     condition: Option<LoopCondition>,
     rules: Vec<FlowLogRule>,
@@ -194,7 +268,7 @@ pub struct LoopBlock {
 impl LoopBlock {
     #[must_use]
     pub fn new(
-        iterative_relations: Vec<(String, u64)>,
+        iterative_relations: Vec<IterativeDirective>,
         condition: Option<LoopCondition>,
         rules: Vec<FlowLogRule>,
     ) -> Self {
@@ -215,7 +289,7 @@ impl LoopBlock {
 
     /// Relations explicitly marked as iterative (replacement semantics).
     #[must_use]
-    pub fn iterative_relations(&self) -> &[(String, u64)] {
+    pub fn iterative_relations(&self) -> &[IterativeDirective] {
         &self.iterative_relations
     }
 
@@ -326,8 +400,8 @@ impl fmt::Display for LoopBlock {
         } else {
             writeln!(f, " {{")?;
         }
-        for (name, _) in &self.iterative_relations {
-            writeln!(f, "    .iterative {name}")?;
+        for directive in &self.iterative_relations {
+            writeln!(f, "    .iterative {}", directive.name())?;
         }
         for rule in &self.rules {
             writeln!(f, "    {rule}")?;
@@ -463,13 +537,13 @@ fn parse_iter_expr(pair: Pair<Rule>) -> Result<IterWindows, ParseError> {
 }
 
 /// Parse a `loop_stop_group` pair into a [`StopGroup`].
-fn parse_stop_group(pair: Pair<Rule>) -> Result<StopGroup, ParseError> {
+fn parse_stop_group(pair: Pair<Rule>, file: FileId) -> Result<StopGroup, ParseError> {
     let mut children = pair.into_inner();
 
     let first_rel_pair = children
         .next()
         .ok_or_else(|| grammar_bug("loop_stop_group missing first bool relation"))?;
-    let first = parse_bool_relation(first_rel_pair)?;
+    let first = parse_bool_relation(first_rel_pair, file)?;
 
     let mut rest = Vec::new();
     while let Some(conn_pair) = children.next() {
@@ -477,14 +551,15 @@ fn parse_stop_group(pair: Pair<Rule>) -> Result<StopGroup, ParseError> {
         let rel_pair = children
             .next()
             .ok_or_else(|| grammar_bug("loop_stop_group missing bool relation after connective"))?;
-        rest.push((connective, parse_bool_relation(rel_pair)?));
+        rest.push((connective, parse_bool_relation(rel_pair, file)?));
     }
 
     Ok(StopGroup::new(first, rest))
 }
 
 /// Parse a `loop_bool_relation` pair into a [`StopRelation`].
-fn parse_bool_relation(pair: Pair<Rule>) -> Result<StopRelation, ParseError> {
+fn parse_bool_relation(pair: Pair<Rule>, file: FileId) -> Result<StopRelation, ParseError> {
+    let span = span_of(&pair, file);
     let name = pair
         .into_inner()
         .next()
@@ -492,7 +567,11 @@ fn parse_bool_relation(pair: Pair<Rule>) -> Result<StopRelation, ParseError> {
         .as_str()
         .to_ascii_lowercase();
     let fp = compute_fp(&name);
-    Ok(StopRelation { name, fp })
+    Ok(StopRelation {
+        name,
+        fp,
+        span: Ignored(span),
+    })
 }
 
 // =============================================================================
@@ -500,7 +579,7 @@ fn parse_bool_relation(pair: Pair<Rule>) -> Result<StopRelation, ParseError> {
 // =============================================================================
 
 impl Lexeme for LoopCondition {
-    fn from_parsed_rule(pair: Pair<Rule>, _file: FileId) -> Result<Self, ParseError> {
+    fn from_parsed_rule(pair: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let mut children = pair.into_inner().peekable();
 
         let first = children
@@ -525,7 +604,7 @@ impl Lexeme for LoopCondition {
                                 .into_inner()
                                 .next()
                                 .ok_or_else(|| grammar_bug("loop_until missing loop_stop_group"))?;
-                            until_group = Some(parse_stop_group(stop_group_pair)?);
+                            until_group = Some(parse_stop_group(stop_group_pair, file)?);
                         }
                         r => {
                             return Err(grammar_bug(format!(
@@ -545,7 +624,7 @@ impl Lexeme for LoopCondition {
                     .into_inner()
                     .next()
                     .ok_or_else(|| grammar_bug("loop_until missing loop_stop_group"))?;
-                let stop_group = parse_stop_group(stop_group_pair)?;
+                let stop_group = parse_stop_group(stop_group_pair, file)?;
 
                 let mut connective = None;
                 let mut while_windows = None;
@@ -601,6 +680,7 @@ impl Lexeme for LoopBlock {
         for item in inner {
             match item.as_rule() {
                 Rule::iterative_directive => {
+                    let directive_span = span_of(&item, file);
                     let name = item
                         .into_inner()
                         .next()
@@ -608,7 +688,11 @@ impl Lexeme for LoopBlock {
                         .as_str()
                         .to_ascii_lowercase();
                     let fp = compute_fp(&name);
-                    iterative_relations.push((name, fp));
+                    iterative_relations.push(IterativeDirective {
+                        name,
+                        fp,
+                        span: Ignored(directive_span),
+                    });
                 }
                 Rule::rule => {
                     rules.extend(FlowLogRule::expand_from_parsed_rule(item, file)?);
@@ -694,8 +778,8 @@ mod tests {
         let cond = block.condition().unwrap();
         assert!(cond.while_part().is_none());
         let sg = cond.until_part().unwrap();
-        assert_eq!(sg.first().name, "done");
-        assert_eq!(sg.first().fp, compute_fp("done"));
+        assert_eq!(sg.first().name(), "done");
+        assert_eq!(sg.first().fp(), compute_fp("done"));
         assert!(sg.rest().is_empty());
     }
 
@@ -704,10 +788,10 @@ mod tests {
         let block = parse_loop_block("loop until { done1 or done2 } { }");
         let cond = block.condition().unwrap();
         let sg = cond.until_part().unwrap();
-        assert_eq!(sg.first().name, "done1");
+        assert_eq!(sg.first().name(), "done1");
         assert_eq!(sg.rest().len(), 1);
         assert_eq!(sg.rest()[0].0, LoopConnective::Or);
-        assert_eq!(sg.rest()[0].1.name, "done2");
+        assert_eq!(sg.rest()[0].1.name(), "done2");
     }
 
     #[test]
@@ -718,7 +802,7 @@ mod tests {
         assert_eq!(cond.while_part().unwrap(), &[(0u16, 6u16)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::And));
         let sg = cond.until_part().unwrap();
-        assert_eq!(sg.first().name, "done");
+        assert_eq!(sg.first().name(), "done");
     }
 
     #[test]
@@ -728,7 +812,7 @@ mod tests {
         let cond = block.condition().unwrap();
         assert_eq!(cond.while_part().unwrap(), &[(0u16, 3u16)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::And));
-        assert_eq!(cond.until_part().unwrap().first().name, "done");
+        assert_eq!(cond.until_part().unwrap().first().name(), "done");
     }
 
     #[test]
@@ -738,7 +822,7 @@ mod tests {
         let cond = block.condition().unwrap();
         assert_eq!(cond.while_part().unwrap(), &[(0u16, 1u16)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::Or));
-        assert_eq!(cond.until_part().unwrap().first().name, "done");
+        assert_eq!(cond.until_part().unwrap().first().name(), "done");
     }
 
     #[test]
@@ -747,7 +831,7 @@ mod tests {
         let cond = block.condition().unwrap();
         assert_eq!(cond.while_part().unwrap(), &[(0u16, 0u16)]);
         assert_eq!(cond.connective(), Some(&LoopConnective::Or));
-        assert_eq!(cond.until_part().unwrap().first().name, "done");
+        assert_eq!(cond.until_part().unwrap().first().name(), "done");
     }
 
     #[test]
@@ -784,7 +868,7 @@ mod tests {
         let block = parse_loop_block("loop until { done1 or done2 } { }");
         let cond = block.condition().unwrap();
         let sg = cond.until_part().unwrap();
-        let names: Vec<&str> = sg.relations().map(|r| r.name.as_str()).collect();
+        let names: Vec<&str> = sg.relations().map(StopRelation::name).collect();
         assert_eq!(names, vec!["done1", "done2"]);
     }
 
@@ -793,8 +877,8 @@ mod tests {
         let block = parse_loop_block("fixpoint { .iterative removed }");
         let itr = block.iterative_relations();
         assert_eq!(itr.len(), 1);
-        assert_eq!(itr[0].0, "removed");
-        assert_eq!(itr[0].1, compute_fp("removed"));
+        assert_eq!(itr[0].name(), "removed");
+        assert_eq!(itr[0].fp(), compute_fp("removed"));
         assert!(block.rules().is_empty());
     }
 
@@ -803,8 +887,8 @@ mod tests {
         let block = parse_loop_block("fixpoint { .iterative active_edge .iterative degree }");
         let itr = block.iterative_relations();
         assert_eq!(itr.len(), 2);
-        assert_eq!(itr[0].0, "active_edge");
-        assert_eq!(itr[1].0, "degree");
+        assert_eq!(itr[0].name(), "active_edge");
+        assert_eq!(itr[1].name(), "degree");
     }
 
     #[test]
@@ -813,7 +897,7 @@ mod tests {
             "fixpoint { .iterative reach  reach(X, Z) :- edge(X, Y), reach(Y, Z). }",
         );
         assert_eq!(block.iterative_relations().len(), 1);
-        assert_eq!(block.iterative_relations()[0].0, "reach");
+        assert_eq!(block.iterative_relations()[0].name(), "reach");
         assert_eq!(block.rules().len(), 1);
     }
 
@@ -823,7 +907,7 @@ mod tests {
             "loop while { @it <= 5 } { .iterative active_edge  active_edge(X,Y) :- edge(X,Y). }",
         );
         assert_eq!(block.iterative_relations().len(), 1);
-        assert_eq!(block.iterative_relations()[0].0, "active_edge");
+        assert_eq!(block.iterative_relations()[0].name(), "active_edge");
         let cond = block.condition().unwrap();
         assert_eq!(cond.while_part().unwrap(), &[(0u16, 5u16)]);
     }

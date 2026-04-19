@@ -49,7 +49,7 @@ impl Pipeline {
 
         let config = build_config(builder, program_str);
         let program = parse(&config, &builder.include_dirs)?;
-        let strata = plan(&config, &program);
+        let strata = plan(&config, &program)?;
 
         let mut profiler = None;
         let mut cg = CodeGen::new(config, program.clone());
@@ -80,11 +80,12 @@ fn parse(config: &Config, include_dirs: &[std::path::PathBuf]) -> io::Result<Pro
 }
 
 /// Stratify the program and plan each stratum independently.
-fn plan(config: &Config, program: &Program) -> Vec<StratumPlanner> {
-    let stratifier = Stratifier::from_program(program, config.is_extended());
+fn plan(config: &Config, program: &Program) -> io::Result<Vec<StratumPlanner>> {
+    let stratifier = Stratifier::from_program(program, config.is_extended())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let mut optimizer = Optimizer::new();
     let mut profiler = None;
-    stratifier
+    Ok(stratifier
         .stratum()
         .iter()
         .enumerate()
@@ -99,7 +100,7 @@ fn plan(config: &Config, program: &Program) -> Vec<StratumPlanner> {
                 idx,
             )
         })
-        .collect()
+        .collect())
 }
 
 /// Project the library-mode [`Builder`] onto the shared compiler [`Config`].

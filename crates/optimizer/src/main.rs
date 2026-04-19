@@ -30,7 +30,8 @@ fn main() {
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Stratify the program
-    let stratifier = Stratifier::from_program(&program, config.is_extended());
+    let stratifier = Stratifier::from_program(&program, config.is_extended())
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Optimize each stratum
     let mut optimizer = Optimizer::new();
@@ -64,8 +65,14 @@ fn run_all_examples(config: &Config) {
                     continue;
                 }
             };
+        let stratifier = match Stratifier::from_program(&program, config.is_extended()) {
+            Ok(s) => s,
+            Err(err) => {
+                formatter.report_failure(file_name, Some(&err.to_string()));
+                continue;
+            }
+        };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let stratifier = Stratifier::from_program(&program, config.is_extended());
             let optimizer = Optimizer::new();
 
             for rules in stratifier.stratum().iter() {

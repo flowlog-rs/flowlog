@@ -770,11 +770,12 @@ impl Program {
                 continue;
             };
 
-            for (name, _) in block.iterative_relations() {
-                if !declared.contains(name.as_str()) {
+            for directive in block.iterative_relations() {
+                let name = directive.name();
+                if !declared.contains(name) {
                     return Err(ParseError::UndeclaredInIterativeList {
                         span: block.span(),
-                        name: name.clone(),
+                        name: name.to_string(),
                     });
                 }
             }
@@ -788,7 +789,7 @@ impl Program {
             };
 
             for rel in until_group.relations() {
-                let name = rel.name.as_str();
+                let name = rel.name();
                 if !declared.contains(name) && !declared.contains(name.to_lowercase().as_str()) {
                     return Err(ParseError::UndeclaredLoopCondition {
                         span: block.span(),
@@ -958,7 +959,7 @@ impl Program {
                         .condition()
                         .and_then(|cond| cond.until_part())
                         .into_iter()
-                        .flat_map(|stop| stop.relations().map(|rel| rel.name.clone()))
+                        .flat_map(|stop| stop.relations().map(|rel| rel.name().to_string()))
                 }),
         );
 

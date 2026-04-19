@@ -1,0 +1,11 @@
+.decl edge(x: int32, y: int32)
+.decl reach(x: int32, y: int32)
+.decl done()
+.input edge(IO="file", filename="edge.csv", delimiter=",")
+.output reach
+.output done
+loop until { done } {
+    reach(x, y) :- edge(x, y).
+    reach(x, z) :- edge(x, y), reach(y, z).
+    done() :- edge(x, y).
+}
