@@ -15,7 +15,7 @@ pub(crate) mod user;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 
-use parser::{Program, Relation};
+use crate::parser::{Program, Relation};
 
 use crate::codegen::features::Features;
 

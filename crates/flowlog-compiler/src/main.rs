@@ -10,13 +10,13 @@ use clap::Parser;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use common::{emit_and_exit, get_example_files, Config, SourceMap, SECTION_BAR};
+use flowlog_build::common::{emit_and_exit, get_example_files, Config, SourceMap, SECTION_BAR};
 use flowlog_compiler::Compiler;
-use optimizer::Optimizer;
-use parser::Program;
-use planner::StratumPlanner;
-use profiler::Profiler;
-use stratifier::Stratifier;
+use flowlog_build::optimizer::Optimizer;
+use flowlog_build::parser::Program;
+use flowlog_build::planner::StratumPlanner;
+use flowlog_build::profiler::Profiler;
+use flowlog_build::stratifier::Stratifier;
 
 fn main() {
     let config = Config::parse();
@@ -44,7 +44,7 @@ fn main() {
 /// Compile the program specified by `config.program()` into an executable.
 fn compile_single(config: &Config) {
     let (program, sm) = parse_program(config);
-    typechecker::check_program(&program).unwrap_or_else(|err| emit_and_exit(err, &sm));
+    flowlog_build::typechecker::check_program(&program).unwrap_or_else(|err| emit_and_exit(err, &sm));
     let stratifier = Stratifier::from_program(&program, config.is_extended())
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
     let mut profiler = new_profiler(config);
@@ -173,7 +173,7 @@ fn plan_strata(
     optimizer: &mut Optimizer,
     profiler: &mut Option<Profiler>,
     stratifier: &Stratifier,
-) -> Result<Vec<StratumPlanner>, common::diag::BoxError> {
+) -> Result<Vec<StratumPlanner>, flowlog_build::common::diag::BoxError> {
     stratifier
         .stratum()
         .iter()
@@ -181,7 +181,7 @@ fn plan_strata(
         .map(|(idx, rule_refs)| {
             let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
             StratumPlanner::from_rules(config, &rules, optimizer, profiler, stratifier, idx)
-                .map_err(common::diag::BoxError::from)
+                .map_err(flowlog_build::common::diag::BoxError::from)
         })
         .collect()
 }

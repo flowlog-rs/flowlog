@@ -9,8 +9,8 @@
 use crate::codegen::ty::tuple_type;
 use crate::codegen::CodeGen;
 
-use parser::{DataType, Relation};
-use profiler::{with_profiler, Profiler};
+use crate::parser::{DataType, Relation};
+use crate::profiler::{with_profiler, Profiler};
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;

@@ -9,8 +9,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use parser::{ConstType, DataType};
-use planner::{
+use crate::parser::{ConstType, DataType};
+use crate::planner::{
     ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
 };
 

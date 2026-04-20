@@ -15,8 +15,8 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, io, process};
 
-use planner::StratumPlanner;
-use profiler::Profiler;
+use flowlog_build::planner::StratumPlanner;
+use flowlog_build::profiler::Profiler;
 use quote::quote;
 use tracing::info;
 
@@ -32,14 +32,14 @@ impl Compiler {
         &mut self,
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
-    ) -> Result<(), common::diag::BoxError> {
+    ) -> Result<(), flowlog_build::common::diag::BoxError> {
         let parts = self.codegen.generate(strata, profiler)?;
         let features = self.codegen.features();
 
         // `src/relation.rs` — Relation trait + per-EDB `Rel{name}` input handlers.
         let relation_body = relation::gen_relation(&self.program, features, self.config.is_batch());
         let relation_extras = imports::gen_binary_relation_extras(&self.program, features);
-        let relation_rs = common::pretty_print(quote! {
+        let relation_rs = flowlog_build::common::pretty_print(quote! {
             #![allow(non_camel_case_types)]
             #relation_body
             #relation_extras

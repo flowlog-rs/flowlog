@@ -12,8 +12,8 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::Index;
 
-use parser::{ArithmeticOperator, ComparisonOperator, ConstType, DataType};
-use planner::{
+use crate::parser::{ArithmeticOperator, ComparisonOperator, ConstType, DataType};
+use crate::planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
     FnCallPredicateArgument, TransformationArgument,
 };

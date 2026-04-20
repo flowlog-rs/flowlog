@@ -4,8 +4,8 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use std::collections::HashSet;
 
-use planner::StratumPlanner;
-use profiler::{with_profiler, Profiler};
+use crate::planner::StratumPlanner;
+use crate::profiler::{with_profiler, Profiler};
 
 use crate::codegen::error::CodegenError;
 use crate::codegen::idb_buffers::InspectorCodegen;

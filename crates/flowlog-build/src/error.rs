@@ -3,14 +3,14 @@
 //! [`BuildError`] covers infrastructure and input-validation failures
 //! raised while driving a `build.rs` compilation. Pipeline-stage errors
 //! (parse / stratify / plan / codegen) flow through this crate as their
-//! own [`Diagnostic`] types inside a [`common::diag::BoxError`]; they
+//! own [`Diagnostic`] types inside a [`crate::common::diag::BoxError`]; they
 //! don't round-trip through `BuildError`.
 
 use std::io;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use common::diag::Diagnostic;
-use common::source::FileId;
+use crate::common::diag::Diagnostic;
+use crate::common::source::FileId;
 use thiserror::Error;
 
 /// Infrastructure failure raised by the library-mode build flow.
@@ -20,11 +20,11 @@ use thiserror::Error;
 /// catches before handing off to the pipeline. Distinct from:
 ///
 /// - [`crate::CodegenError`] — user-source errors caught during codegen.
-/// - [`common::diag::InternalError`] — compiler invariant violations
+/// - [`crate::common::diag::InternalError`] — compiler invariant violations
 ///   that render as "please file a bug" ICEs.
 ///
 /// [`Diagnostic::is_internal`] returns `false` for every `BuildError`
-/// variant, so a top-level renderer (e.g. [`common::diag::emit_and_exit`])
+/// variant, so a top-level renderer (e.g. [`crate::common::diag::emit_and_exit`])
 /// exits with code `1` and omits the bug-report note — the user fixes
 /// their build setup, not their `.dl` program.
 #[non_exhaustive]

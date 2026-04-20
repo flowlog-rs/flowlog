@@ -12,12 +12,12 @@ use std::path::{Path, PathBuf};
 
 use proc_macro2::TokenStream;
 
-use common::diag::BoxError;
-use common::{Config, SourceMap};
-use optimizer::Optimizer;
-use parser::Program;
-use planner::StratumPlanner;
-use stratifier::Stratifier;
+use crate::common::diag::BoxError;
+use crate::common::{Config, SourceMap};
+use crate::optimizer::Optimizer;
+use crate::parser::Program;
+use crate::planner::StratumPlanner;
+use crate::stratifier::Stratifier;
 
 use crate::codegen::features::Features;
 use crate::relation::gen_input_module;
@@ -47,7 +47,7 @@ impl Pipeline {
 
         let config = build_config(builder, program_str);
         let program = parse(&config, &builder.include_dirs, sm)?;
-        typechecker::check_program(&program)?;
+        crate::typechecker::check_program(&program)?;
         let strata = plan(&config, &program)?;
 
         let mut profiler = None;

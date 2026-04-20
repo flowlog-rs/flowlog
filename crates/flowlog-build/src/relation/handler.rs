@@ -10,7 +10,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use parser::{ConstType, Relation};
+use crate::parser::{ConstType, Relation};
 
 use crate::codegen::arg::const_to_token;
 use crate::codegen::ty::data::tuple_tokens;

@@ -8,7 +8,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use parser::{DataType, Program, Relation};
+use crate::parser::{DataType, Program, Relation};
 
 use crate::codegen::ty::data::user_tuple_tokens;
 

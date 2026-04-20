@@ -5,7 +5,7 @@
 //! `(sum: value, count: 1)`.  Consolidation accumulates both components,
 //! and the final average is computed as `sum / count` in Phase 3.
 
-use parser::{AggregationOperator, DataType};
+use crate::parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 

@@ -32,12 +32,12 @@ mod scaffold;
 
 pub use error::CompilerError;
 
-use common::diag::BoxError;
-use common::Config;
+use flowlog_build::common::diag::BoxError;
+use flowlog_build::common::Config;
 use flowlog_build::CodeGen;
-use parser::Program;
-use planner::StratumPlanner;
-use profiler::Profiler;
+use flowlog_build::parser::Program;
+use flowlog_build::planner::StratumPlanner;
+use flowlog_build::profiler::Profiler;
 
 /// Drives code generation + build for a single FlowLog program.
 pub struct Compiler {

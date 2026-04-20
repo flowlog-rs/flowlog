@@ -11,7 +11,7 @@ use std::path::Path;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use common::pretty_print;
+use crate::common::pretty_print;
 
 use crate::codegen::features::Features;
 use crate::engine::gen_lib_engine;

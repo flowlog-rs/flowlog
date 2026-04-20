@@ -10,7 +10,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use parser::Program;
+use crate::parser::Program;
 
 use crate::relation::{rust_ident, user_struct_ident};
 

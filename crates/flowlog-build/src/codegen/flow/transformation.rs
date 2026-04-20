@@ -9,7 +9,7 @@ use quote::{format_ident, quote};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use profiler::{with_profiler, Profiler};
+use crate::profiler::{with_profiler, Profiler};
 
 use crate::codegen::arg::{
     build_kv_constraints_predicate, build_row_constraints_predicate, combine_predicates,
@@ -21,7 +21,7 @@ use crate::codegen::ident::find_local_ident;
 use crate::codegen::ty::data::data_type_tokens;
 use crate::codegen::CodeGen;
 
-use planner::{StratumPlanner, Transformation};
+use crate::planner::{StratumPlanner, Transformation};
 
 /// Generate differential dataflow pipelines for a single transformation.
 ///

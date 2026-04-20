@@ -12,7 +12,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use parser::{DataType, Program, Relation};
+use crate::parser::{DataType, Program, Relation};
 
 use crate::codegen::ty::data::tuple_tokens;
 use crate::relation::user::{tuple_to_user_expr, user_to_tuple_expr};
