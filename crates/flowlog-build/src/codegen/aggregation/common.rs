@@ -10,11 +10,12 @@ use quote::{format_ident, quote};
 
 use parser::{AggregationOperator, DataType};
 
+use crate::codegen::error::CodegenError;
 use crate::codegen::ty::data::tuple_tokens;
 
-// =============================================================================
+// ==================================================
 // Semiring constructor helpers
-// =============================================================================
+// ==================================================
 
 /// Semiring type ident, e.g. `MinI32`, `SumF64`.
 fn agg_semiring_type_ident(op: AggregationOperator, dt: DataType) -> proc_macro2::Ident {
@@ -44,97 +45,92 @@ pub(super) fn agg_semiring_unit(op: AggregationOperator, agg_type: DataType) -> 
     }
 }
 
-// =============================================================================
+// ==================================================
 // Structural helpers
-// =============================================================================
+// ==================================================
 
 /// Local shorthand for [`tuple_tokens`].
 pub(super) fn tuple(fields: &[TokenStream]) -> TokenStream {
     tuple_tokens(fields.iter().cloned())
 }
 
+/// `(x0, x1, …, x<n-1>)` field tokens.
+fn indexed_fields(prefix: &str, indices: impl Iterator<Item = usize>) -> Vec<TokenStream> {
+    indices
+        .map(|i| {
+            let id = format_ident!("{prefix}{i}");
+            quote! { #id }
+        })
+        .collect()
+}
+
 /// Row destructuring pattern: `(x0,)` (arity 1) or `(x0, x1, …)`.
 pub(super) fn row_pattern(arity: usize) -> TokenStream {
-    let fields: Vec<_> = (0..arity)
-        .map(|i| {
-            let id = format_ident!("x{}", i);
-            quote! { #id }
-        })
-        .collect();
-    tuple(&fields)
+    tuple(&indexed_fields("x", 0..arity))
 }
 
-/// Key construction from row fields, excluding the aggregated position: `(x0,)`.
+/// Key construction from row fields, excluding the aggregated position.
 pub(super) fn key_from_row(arity: usize, agg_pos: usize) -> TokenStream {
-    let fields: Vec<_> = (0..arity)
-        .filter(|&i| i != agg_pos)
-        .map(|i| {
-            let id = format_ident!("x{}", i);
-            quote! { #id }
-        })
-        .collect();
-    tuple(&fields)
+    tuple(&indexed_fields("x", (0..arity).filter(|&i| i != agg_pos)))
 }
 
-/// Key destructuring pattern for post-conversion: `(k0, k1, …)` or `_key`.
+/// Key destructuring pattern `(k0, k1, …)`, or `_key` when the key is empty.
 pub(super) fn key_pattern(arity: usize) -> TokenStream {
     let key_arity = arity - 1;
     if key_arity == 0 {
         return quote! { _key };
     }
-    let fields: Vec<_> = (0..key_arity)
-        .map(|i| {
-            let id = format_ident!("k{}", i);
-            quote! { #id }
-        })
-        .collect();
-    tuple(&fields)
+    tuple(&indexed_fields("k", 0..key_arity))
 }
 
 /// Full row reconstruction from `(key, agg_val)` where the aggregated value is
 /// accessed as `agg_val.value` (semiring wrapper) at position `agg_pos`.
 pub(super) fn result_from_key(arity: usize, agg_pos: usize) -> TokenStream {
-    let key_arity = arity - 1;
+    row_with_agg_at(arity, agg_pos, quote! { agg_val.value })
+}
+
+/// Interleave `agg_token` at `agg_pos` with `k0, k1, …` at the other
+/// positions to reconstruct a full output row of `arity` slots.
+fn row_with_agg_at(arity: usize, agg_pos: usize, agg_token: TokenStream) -> TokenStream {
     let mut parts = Vec::with_capacity(arity);
     let mut ki = 0usize;
     for i in 0..arity {
         if i == agg_pos {
-            parts.push(quote! { agg_val.value });
+            parts.push(agg_token.clone());
         } else {
             let kf = format_ident!("k{}", ki);
             parts.push(quote! { #kf });
             ki += 1;
         }
     }
-    debug_assert_eq!(ki, key_arity);
+    debug_assert_eq!(ki, arity - 1);
     tuple(&parts)
 }
 
-// =============================================================================
+// ==================================================
 // Shared semiring-optimised pipeline helpers
-// =============================================================================
+// ==================================================
 
-/// Threshold comparison strategy for the semiring optimisation pipeline.
-///
-/// Determines when a consolidated semiring value is re-emitted.
+/// Threshold comparison strategy — when a consolidated semiring value
+/// is re-emitted.
 pub(super) enum ThresholdCmp {
-    /// Emit when the new value is strictly less than the current (`min`).
+    /// `min`: emit when strictly less than current.
     Lt,
-    /// Emit when the new value is strictly greater than the current (`max`).
+    /// `max`: emit when strictly greater than current.
     Gt,
-    /// Emit when the new value differs from the current (`sum`, `count`, `avg`).
+    /// `sum` / `count` / `avg`: emit when different from current.
     Ne,
 }
 
-/// Generates the 3-phase semiring-optimised aggregation pipeline.
+/// Three-phase semiring-optimised aggregation pipeline:
 ///
-/// 1. **Phase 1** – Rewrite each `(row, time, _diff)` into `(key, time, Semiring::new(value))`
-/// 2. **Phase 2** – `threshold_semigroup` with the semiring; emits only when the
+/// 1. Rewrite each `(row, time, _diff)` into `(key, time, Semiring::new(value))`.
+/// 2. `threshold_semigroup` with the semiring; only re-emits when the
 ///    consolidated value satisfies the comparison predicate.
-/// 3. **Phase 3** – Convert back: `(key, time, SemiringVal)` → `(full_row, time, SEMIRING_ONE)`
+/// 3. Convert back: `(key, time, SemiringVal)` → `(full_row, time, SEMIRING_ONE)`.
 ///
-/// `phase3_result` controls how the aggregated value is extracted:
-/// use `result_from_key` (`.value`) for min/max/sum/count, or
+/// `phase3_result` controls how the aggregated value is extracted —
+/// `result_from_key` (`.value`) for min/max/sum/count, or
 /// `avg_result_from_key` (`.avg()`) for avg.
 pub(super) fn aggregation_optimize_pipeline(
     arity: usize,
@@ -147,37 +143,20 @@ pub(super) fn aggregation_optimize_pipeline(
     let key_expr = key_from_row(arity, agg_pos);
     let key_pat = key_pattern(arity);
 
-    let threshold = match cmp {
-        ThresholdCmp::Lt => quote! {
-            .threshold_semigroup(|_k, &new_val, current_val| {
-                match current_val {
-                    Some(current) if new_val < *current => Some(new_val),
-                    Some(_) => None,
-                    None if !new_val.is_zero() => Some(new_val),
-                    None => None,
-                }
-            })
-        },
-        ThresholdCmp::Gt => quote! {
-            .threshold_semigroup(|_k, &new_val, current_val| {
-                match current_val {
-                    Some(current) if new_val > *current => Some(new_val),
-                    Some(_) => None,
-                    None if !new_val.is_zero() => Some(new_val),
-                    None => None,
-                }
-            })
-        },
-        ThresholdCmp::Ne => quote! {
-            .threshold_semigroup(|_k, &new_val, current_val| {
-                match current_val {
-                    Some(current) if new_val != *current => Some(new_val),
-                    Some(_) => None,
-                    None if !new_val.is_zero() => Some(new_val),
-                    None => None,
-                }
-            })
-        },
+    let cmp_op = match cmp {
+        ThresholdCmp::Lt => quote! { < },
+        ThresholdCmp::Gt => quote! { > },
+        ThresholdCmp::Ne => quote! { != },
+    };
+    let threshold = quote! {
+        .threshold_semigroup(|_k, &new_val, current_val| {
+            match current_val {
+                Some(current) if new_val #cmp_op *current => Some(new_val),
+                Some(_) => None,
+                None if !new_val.is_zero() => Some(new_val),
+                None => None,
+            }
+        })
     };
 
     quote! {
@@ -199,10 +178,9 @@ pub(super) fn aggregation_optimize_pipeline(
     }
 }
 
-/// Generates the pre-leave conversion for semiring-optimised recursive relations.
-///
-/// Converts `(row, time, Present)` → `((key,), time, Semiring::new(value))` so
-/// that `leave()` carries semiring diffs across iterations.
+/// Pre-leave conversion for semiring-optimised recursive relations:
+/// `(row, time, Present)` → `((key,), time, Semiring::new(value))`, so
+/// `leave()` carries semiring diffs across iterations.
 pub(super) fn aggregation_pre_leave_pipeline(
     arity: usize,
     agg_pos: usize,
@@ -218,16 +196,16 @@ pub(super) fn aggregation_pre_leave_pipeline(
     }
 }
 
-// =============================================================================
+// ==================================================
 // Semiring-optimised post-leave (shared by min / max / sum / avg)
-// =============================================================================
+// ==================================================
 
 /// Post-leave conversion for semiring-optimised recursive relations.
 ///
 /// After `leave()`, the collection carries semiring diffs from multiple
-/// iteration timestamps collapsed to the same outer time.  `consolidate()`
+/// iteration timestamps collapsed to the same outer time. `consolidate()`
 /// triggers `plus_equals` to merge them, then we convert back to
-/// `(row, Present)`.  This is aggregation-type agnostic.
+/// `(row, Present)`. Aggregation-type agnostic.
 pub(crate) fn aggregation_opt_post_leave(arity: usize, agg_pos: usize) -> TokenStream {
     let key_pat = key_pattern(arity);
     let result = result_from_key(arity, agg_pos);
@@ -243,11 +221,11 @@ pub(crate) fn aggregation_opt_post_leave(arity: usize, agg_pos: usize) -> TokenS
     }
 }
 
-// =============================================================================
+// ==================================================
 // Normal aggregation pipelines (row chop → reduce → merge_kv)
-// =============================================================================
+// ==================================================
 
-/// Generates a closure to split a row into `(group-by key, aggregation value)`.
+/// Closure splitting a row into `(group-by key, aggregation value)`.
 pub(crate) fn aggregation_row_chop(arity: usize, agg_pos: usize) -> TokenStream {
     let pat = row_pattern(arity);
     let key = key_from_row(arity, agg_pos);
@@ -258,8 +236,17 @@ pub(crate) fn aggregation_row_chop(arity: usize, agg_pos: usize) -> TokenStream 
     }
 }
 
-fn aggregation_result_expr(op: &AggregationOperator, agg_type: DataType) -> TokenStream {
-    match op {
+fn aggregation_result_expr(
+    op: &AggregationOperator,
+    agg_type: DataType,
+) -> Result<TokenStream, CodegenError> {
+    let non_numeric = |op: &AggregationOperator| {
+        CodegenError::internal(format!(
+            "{op:?} aggregation reached codegen with non-numeric column `{agg_type:?}` \
+             — upstream `check_aggregation_type` should have rejected this"
+        ))
+    };
+    Ok(match op {
         AggregationOperator::Count => match agg_type {
             DataType::Int8 => quote! { (!input.is_empty()).then_some(input.len() as i8) },
             DataType::Int16 => quote! { (!input.is_empty()).then_some(input.len() as i16) },
@@ -275,9 +262,7 @@ fn aggregation_result_expr(op: &AggregationOperator, agg_type: DataType) -> Toke
             DataType::Float64 => {
                 quote! { (!input.is_empty()).then_some(OrderedFloat(input.len() as f64)) }
             }
-            _ => {
-                panic!("CodeGen error: count aggregation result should be numeric type")
-            }
+            _ => return Err(non_numeric(op)),
         },
         AggregationOperator::Sum => match agg_type {
             DataType::Int8 => {
@@ -318,7 +303,7 @@ fn aggregation_result_expr(op: &AggregationOperator, agg_type: DataType) -> Toke
                         .fold(OrderedFloat(0.0f64), |a, b| a + b)
                 )
             },
-            _ => panic!("CodeGen error: sum aggregation result should be numeric type"),
+            _ => return Err(non_numeric(op)),
         },
         AggregationOperator::Min => match agg_type {
             DataType::Int8
@@ -331,9 +316,7 @@ fn aggregation_result_expr(op: &AggregationOperator, agg_type: DataType) -> Toke
             | DataType::UInt64
             | DataType::Float32
             | DataType::Float64 => quote! { input.iter().map(|(v, _)| *v).min().copied() },
-            _ => {
-                panic!("CodeGen error: min aggregation is not supported on non-numeric type")
-            }
+            _ => return Err(non_numeric(op)),
         },
         AggregationOperator::Max => match agg_type {
             DataType::Int8
@@ -346,9 +329,7 @@ fn aggregation_result_expr(op: &AggregationOperator, agg_type: DataType) -> Toke
             | DataType::UInt64
             | DataType::Float32
             | DataType::Float64 => quote! { input.iter().map(|(v, _)| *v).max().copied() },
-            _ => {
-                panic!("CodeGen error: max aggregation is not supported on non-numeric type")
-            }
+            _ => return Err(non_numeric(op)),
         },
         AggregationOperator::Avg => match agg_type {
             DataType::Int8 => quote! {
@@ -441,87 +422,71 @@ fn aggregation_result_expr(op: &AggregationOperator, agg_type: DataType) -> Toke
                     Some(OrderedFloat(sum / count))
                 }
             },
-            _ => panic!("CodeGen error: avg aggregation result should be numeric type"),
+            _ => return Err(non_numeric(op)),
         },
-    }
+    })
 }
 
 /// Reduce closure for `reduce_core` (batch); emits a single update when
 /// the aggregation yields a value.
-fn aggregation_reduce(op: &AggregationOperator, agg_type: DataType) -> TokenStream {
-    let result_expr = aggregation_result_expr(op, agg_type);
-
-    quote! {
+fn aggregation_reduce(
+    op: &AggregationOperator,
+    agg_type: DataType,
+) -> Result<TokenStream, CodegenError> {
+    let result_expr = aggregation_result_expr(op, agg_type)?;
+    Ok(quote! {
         |_, input, _output, updates| {
             if let Some(result) = { #result_expr } {
                 updates.push((result, SEMIRING_ONE));
             }
         }
-    }
+    })
 }
 
 /// Reduce closure for `reduce_abelian` (incremental); same logic but with
 /// the arity expected by the abelian variant, which auto-retracts previous
 /// outputs on replacement.
-fn aggregation_reduce_abelian(op: &AggregationOperator, agg_type: DataType) -> TokenStream {
-    let result_expr = aggregation_result_expr(op, agg_type);
-
-    quote! {
+fn aggregation_reduce_abelian(
+    op: &AggregationOperator,
+    agg_type: DataType,
+) -> Result<TokenStream, CodegenError> {
+    let result_expr = aggregation_result_expr(op, agg_type)?;
+    Ok(quote! {
         |_, input, updates| {
             if let Some(result) = { #result_expr } {
                 updates.push((result, SEMIRING_ONE));
             }
         }
-    }
+    })
 }
 
-/// Reduction operator call for the generic aggregation pipeline — picks
-/// `reduce_core` for batch and `reduce_abelian` for incremental so
-/// aggregate replacements emit the required retractions automatically.
+/// Reduction operator for the generic aggregation pipeline — picks
+/// `reduce_core` (batch) or `reduce_abelian` (incremental) so aggregate
+/// replacements emit the required retractions automatically.
 pub(crate) fn aggregation_reduce_stmt(
     is_incremental: bool,
     op: &AggregationOperator,
     agg_type: DataType,
-) -> TokenStream {
-    if is_incremental {
-        let reduce_logic = aggregation_reduce_abelian(op, agg_type);
-        quote! {
-            .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
-                "aggregation",
-                #reduce_logic
-            )
-        }
+) -> Result<TokenStream, CodegenError> {
+    let (combinator, reduce_logic) = if is_incremental {
+        (
+            quote! { reduce_abelian },
+            aggregation_reduce_abelian(op, agg_type)?,
+        )
     } else {
-        let reduce_logic = aggregation_reduce(op, agg_type);
-        quote! {
-            .reduce_core::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
-                "aggregation",
-                #reduce_logic
-            )
-        }
-    }
+        (quote! { reduce_core }, aggregation_reduce(op, agg_type)?)
+    };
+    Ok(quote! {
+        .#combinator::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+            "aggregation",
+            #reduce_logic
+        )
+    })
 }
 
-/// Generates a closure to merge `(group-by key, aggregation value)` into a full output row.
+/// Closure merging `(group-by key, aggregation value)` into a full output row.
 pub(crate) fn aggregation_merge_kv(arity: usize, agg_pos: usize) -> TokenStream {
     let pattern = key_pattern(arity);
-    let key_arity = arity - 1;
-
-    let mut result_parts = Vec::with_capacity(arity);
-    let mut ki = 0usize;
-    for i in 0..arity {
-        if i == agg_pos {
-            result_parts.push(quote! { v });
-        } else {
-            let kf = format_ident!("k{}", ki);
-            result_parts.push(quote! { #kf });
-            ki += 1;
-        }
-    }
-    debug_assert_eq!(ki, key_arity);
-    let result_tuple = tuple(&result_parts);
-
-    quote! {
-        |&#pattern, &v| #result_tuple
-    }
+    let result_tuple = row_with_agg_at(arity, agg_pos, quote! { v });
+    quote! { |&#pattern, &v| #result_tuple }
 }

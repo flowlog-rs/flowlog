@@ -1,0 +1,13 @@
+[package]
+name = "typechecker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+codespan-reporting.workspace = true
+thiserror.workspace = true
+
+common = { path = "../common" }
+parser = { path = "../parser" }

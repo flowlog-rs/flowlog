@@ -1,0 +1,5 @@
+.decl Entry(id: int32, tag: string)
+.decl Out(id: int32)
+.input Entry(IO="file", filename="Entry.csv", delimiter=",")
+.output Out
+Out(id) :- Entry(id, tag), id = tag.

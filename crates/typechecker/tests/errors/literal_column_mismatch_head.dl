@@ -1,0 +1,5 @@
+.decl Src(id: int32)
+.decl Out(id: int32, label: string)
+.input Src(IO="file", filename="Src.csv", delimiter=",")
+.output Out
+Out(id, 5) :- Src(id).

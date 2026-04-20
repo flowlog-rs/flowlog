@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use planner::StratumPlanner;
 use profiler::{with_profiler, Profiler};
 
+use crate::codegen::error::CodegenError;
 use crate::codegen::idb_buffers::InspectorCodegen;
 use crate::codegen::CodeGen;
 
@@ -68,7 +69,7 @@ impl CodeGen {
         &mut self,
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
-    ) -> CodeParts {
+    ) -> Result<CodeParts, CodegenError> {
         // Record entering main dataflow scope in profiler if enabled
         with_profiler(profiler, |profiler| {
             profiler.enter_scope();
@@ -92,7 +93,7 @@ impl CodeGen {
             });
 
             let (core_flows, non_recursive_arranged_map) =
-                self.gen_non_recursive_core_flows(stratum, profiler);
+                self.gen_non_recursive_core_flows(stratum, profiler)?;
             flows.extend(core_flows);
 
             if stratum.is_recursive() {
@@ -100,13 +101,13 @@ impl CodeGen {
                     &non_recursive_arranged_map,
                     stratum,
                     profiler,
-                ));
+                )?);
             } else {
                 flows.extend(self.gen_non_recursive_post_flows(
                     &calculated_output_fps,
                     stratum,
                     profiler,
-                ));
+                )?);
             }
 
             calculated_output_fps.extend(stratum.output_relations());
@@ -142,7 +143,7 @@ impl CodeGen {
         let type_declarations = self.gen_type_declarations();
         let semiring_modules = self.render_semiring_modules();
 
-        CodeParts {
+        Ok(CodeParts {
             edb_decls,
             handle_binding,
             dataflow_return,
@@ -162,6 +163,6 @@ impl CodeGen {
             memory_profile_write_incremental,
             type_declarations,
             semiring_modules,
-        }
+        })
     }
 }
