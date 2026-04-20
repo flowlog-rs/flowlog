@@ -9,7 +9,8 @@ members = [
     "crates/parser",
     "crates/planner",
     "crates/profiler",
-    "crates/stratifier"
+    "crates/stratifier",
+    "crates/typechecker"
 ]
 resolver = "2"
 

@@ -1,0 +1,7 @@
+.extern fn upper(s: string) -> string
+
+.decl Src(id: int32, label: string)
+.decl Out(id: int32, label: string)
+.input Src(IO="file", filename="Src.csv", delimiter=",")
+.output Out
+Out(id, upper(id)) :- Src(id, label).

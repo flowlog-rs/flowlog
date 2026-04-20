@@ -1,0 +1,5 @@
+.decl Flag(id: int32, active: bool)
+.decl Double(id: int32, v: bool)
+.input Flag(IO="file", filename="Flag.csv", delimiter=",")
+.output Double
+Double(id, a + a) :- Flag(id, a).

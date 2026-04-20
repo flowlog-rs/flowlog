@@ -1,0 +1,5 @@
+.decl Meas(id: int32, rate: f64)
+.decl Out(id: int32, x: int32)
+.input Meas(IO="file", filename="Meas.csv", delimiter=",")
+.output Out
+Out(id, id + rate) :- Meas(id, rate).

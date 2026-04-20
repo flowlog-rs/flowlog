@@ -31,6 +31,16 @@ pub fn secondary_label(span: Span) -> Option<Label<FileId>> {
     (!span.is_dummy()).then(|| Label::secondary(span.file, span.range()))
 }
 
+/// Wrap [`primary_label`] with a message into a `Vec<Label<FileId>>`
+/// ready for `CsDiagnostic::with_labels`. Yields an empty `Vec` for
+/// dummy spans so variants with optional spans fall through cleanly.
+pub fn labels(span: Span, msg: impl Into<String>) -> Vec<Label<FileId>> {
+    primary_label(span)
+        .map(|l| l.with_message(msg.into()))
+        .into_iter()
+        .collect()
+}
+
 /// Error types that can be rendered as a source-annotated diagnostic.
 ///
 /// [`to_diagnostic`] maps variant data into a `codespan-reporting`
