@@ -7,9 +7,11 @@ license.workspace = true
 description = "Build-time FlowLog compiler — emits a typed DatalogBatchEngine to OUT_DIR."
 
 [dependencies]
+codespan-reporting.workspace = true
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 syn = { workspace = true, features = ["full"] }
+thiserror.workspace = true
 tracing.workspace = true
 
 common = { path = "../common" }

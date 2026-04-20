@@ -1,0 +1,5 @@
+.decl Flags(id: int32, a: bool, b: bool)
+.decl Out(id: int32)
+.input Flags(IO="file", filename="Flags.csv", delimiter=",")
+.output Out
+Out(id) :- Flags(id, a, b), a < b.

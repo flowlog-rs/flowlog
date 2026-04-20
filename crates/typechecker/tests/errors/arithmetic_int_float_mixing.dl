@@ -1,0 +1,5 @@
+.decl Score(id: int32, pts: int32)
+.decl Out(id: int32, v: int32)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+.output Out
+Out(id, pts + 5.0) :- Score(id, pts).

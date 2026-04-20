@@ -1,0 +1,7 @@
+.extern fn add(a: int32, b: int32) -> int32
+
+.decl Src(x: int32)
+.decl Out(v: int32)
+.input Src(IO="file", filename="Src.csv", delimiter=",")
+.output Out
+Out(add(x)) :- Src(x).

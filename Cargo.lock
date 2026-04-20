@@ -344,6 +344,8 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 name = "flowlog-build"
 version = "0.1.0"
 dependencies = [
+ "catalog",
+ "codespan-reporting",
  "common",
  "optimizer",
  "parser",
@@ -353,14 +355,18 @@ dependencies = [
  "quote",
  "stratifier",
  "syn",
+ "thiserror",
  "tracing",
+ "typechecker",
 ]
 
 [[package]]
 name = "flowlog-compiler"
 version = "0.1.0"
 dependencies = [
+ "catalog",
  "clap",
+ "codespan-reporting",
  "common",
  "flowlog-build",
  "optimizer",
@@ -370,9 +376,11 @@ dependencies = [
  "profiler",
  "quote",
  "stratifier",
+ "thiserror",
  "toml_edit",
  "tracing",
  "tracing-subscriber",
+ "typechecker",
 ]
 
 [[package]]
@@ -1164,6 +1172,16 @@ checksum = "ad06847b7afb65c7866a36664b75c40b895e318cea4f71299f013fb22965329d"
 dependencies = [
  "quote",
  "syn",
+]
+
+[[package]]
+name = "typechecker"
+version = "0.1.0"
+dependencies = [
+ "codespan-reporting",
+ "common",
+ "parser",
+ "thiserror",
 ]
 
 [[package]]

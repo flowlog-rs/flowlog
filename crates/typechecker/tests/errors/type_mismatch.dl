@@ -1,0 +1,7 @@
+.decl Age(id: int32, years: int32)
+.decl Name(id: int32, label: string)
+.decl Out(id: int32)
+.input Age(IO="file", filename="Age.csv", delimiter=",")
+.input Name(IO="file", filename="Name.csv", delimiter=",")
+.output Out
+Out(id) :- Age(id, v), Name(id, v).

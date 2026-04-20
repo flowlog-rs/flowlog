@@ -1,0 +1,5 @@
+.decl Person(name: string, city: string)
+.decl Totals(name: string)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+.output Totals
+Totals(sum(city)) :- Person(name, city).

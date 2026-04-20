@@ -1,0 +1,5 @@
+.decl Person(id: int32, name: string)
+.decl Out(id: int32)
+.input Person(IO="file", filename="Person.csv", delimiter=",")
+.output Out
+Out(id) :- Person(id, 5).

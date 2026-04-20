@@ -1,0 +1,5 @@
+.decl Orders(amount: int32)
+.decl Out(total: string)
+.input Orders(IO="file", filename="Orders.csv", delimiter=",")
+.output Out
+Out(sum(amount)) :- Orders(amount).

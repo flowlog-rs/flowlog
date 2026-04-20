@@ -8,6 +8,7 @@ pub(crate) mod arg;
 pub(crate) mod code_parts;
 pub(crate) mod dedup;
 pub(crate) mod edb_handles;
+pub(crate) mod error;
 pub(crate) mod features;
 pub(crate) mod flow;
 pub(crate) mod idb_buffers;
@@ -26,6 +27,7 @@ use planner::StratumPlanner;
 use profiler::Profiler;
 
 use self::code_parts::CodeParts;
+use self::error::CodegenError;
 use self::features::Features;
 
 pub struct CodeGen {
@@ -67,7 +69,7 @@ impl CodeGen {
         &mut self,
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
-    ) -> CodeParts {
+    ) -> Result<CodeParts, CodegenError> {
         self.features.reset();
         self.collect_parts(strata, profiler)
     }
