@@ -19,12 +19,20 @@ use profiler::Profiler;
 use stratifier::Stratifier;
 
 fn main() {
-    init_tracing();
     let config = Config::parse();
 
     // `--program all` is a batch mode that dry-runs the pipeline over every
     // bundled example for regression checking; otherwise compile the single
     // file the user pointed at.
+    // Batch mode wants per-file progress (info); single-file wants silent on
+    // success and errors via codespan (warn).
+    let default_level = if config.should_process_all() {
+        "info"
+    } else {
+        "warn"
+    };
+    init_tracing(default_level);
+
     if config.should_process_all() {
         run_all_examples(&config);
         return;
@@ -176,7 +184,8 @@ fn plan_strata(
 // Tracing
 // =========================================================================
 
-fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+fn init_tracing(default_level: &str) {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_level));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }

@@ -220,12 +220,14 @@ impl Transformation {
 
         let input = Arc::new(Collection::new(
             info.input_info_fp().0,
+            info.input_name().0.to_string(),
             info.input_kv_layout().0.key(),
             info.input_kv_layout().0.value(),
         ));
 
         let output = Arc::new(Collection::new(
             info.output_info_fp(),
+            info.output_name().to_string(),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
         ));
@@ -290,11 +292,13 @@ impl Transformation {
         let input = (
             Arc::new(Collection::new(
                 info.input_info_fp().0,
+                info.input_name().0.to_string(),
                 info.input_kv_layout().0.key(),
                 info.input_kv_layout().0.value(),
             )),
             Arc::new(Collection::new(
                 info.input_info_fp().1.unwrap(),
+                info.input_name().1.unwrap().to_string(),
                 info.input_kv_layout().1.unwrap().key(),
                 info.input_kv_layout().1.unwrap().value(),
             )),
@@ -302,6 +306,7 @@ impl Transformation {
 
         let output = Arc::new(Collection::new(
             info.output_info_fp(),
+            info.output_name().to_string(),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
         ));
@@ -364,11 +369,13 @@ impl Transformation {
         let input = (
             Arc::new(Collection::new(
                 info.input_info_fp().0,
+                info.input_name().0.to_string(),
                 info.input_kv_layout().0.key(),
                 info.input_kv_layout().0.value(),
             )),
             Arc::new(Collection::new(
                 info.input_info_fp().1.unwrap(),
+                info.input_name().1.unwrap().to_string(),
                 info.input_kv_layout().1.unwrap().key(),
                 info.input_kv_layout().1.unwrap().value(),
             )),
@@ -376,6 +383,7 @@ impl Transformation {
 
         let output = Arc::new(Collection::new(
             info.output_info_fp(),
+            info.output_name().to_string(),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
         ));

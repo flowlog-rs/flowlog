@@ -93,8 +93,12 @@ pub enum TransformationInfo {
     KVToKV {
         /// Upstream (input) collection fingerprint (fake until resolved).
         input_info_fp: u64,
+        /// Upstream collection's hierarchical name (e.g. `proj(reach)`).
+        input_name: String,
         /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
+        /// Output collection's hierarchical name.
+        output_name: String,
         /// Whether row input
         is_row_input: bool,
         /// Whether row output
@@ -113,10 +117,16 @@ pub enum TransformationInfo {
     JoinToKV {
         /// Left input collection fingerprint.
         left_input_info_fp: u64,
+        /// Left input's hierarchical name.
+        left_input_name: String,
         /// Right input collection fingerprint.
         right_input_info_fp: u64,
+        /// Right input's hierarchical name.
+        right_input_name: String,
         /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
+        /// Output collection's hierarchical name (e.g. `join(reach, arc)`).
+        output_name: String,
         /// Whether row output
         is_row_output: bool,
         /// Left input layout (its key is the join key).
@@ -133,10 +143,16 @@ pub enum TransformationInfo {
     AntiJoinToKV {
         /// Left input collection fingerprint.
         left_input_info_fp: u64,
+        /// Left input's hierarchical name.
+        left_input_name: String,
         /// Right input collection fingerprint.
         right_input_info_fp: u64,
+        /// Right input's hierarchical name.
+        right_input_name: String,
         /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
+        /// Output collection's hierarchical name (e.g. `antijoin(reach, arc)`).
+        output_name: String,
         /// Whether row output
         is_row_output: bool,
         /// Left input layout (its key is the anti-join key).
@@ -155,6 +171,8 @@ impl TransformationInfo {
     /// Build a Key-Value to Key-Value transformation with a derived (fake) output fingerprint.
     pub fn kv_to_kv(
         input_fake_sig: u64,
+        input_name: String,
+        output_name: String,
         is_row_input: bool,
         input_kv_layout: KeyValueLayout,
         output_fake_kv_layout: KeyValueLayout,
@@ -169,7 +187,9 @@ impl TransformationInfo {
         ));
         Self::KVToKV {
             input_info_fp: input_fake_sig,
+            input_name,
             output_info_fp: fake_output_sig,
+            output_name,
             is_row_input,
             is_row_output: false,
             input_kv_layout,
@@ -191,9 +211,13 @@ impl TransformationInfo {
     }
 
     /// Build a Join to Key-Value transformation with a derived (fake) output fingerprint.
+    #[allow(clippy::too_many_arguments)]
     pub fn join_to_kv(
         left_fake_sig: u64,
+        left_input_name: String,
         right_fake_sig: u64,
+        right_input_name: String,
+        output_name: String,
         left_kv_layout: KeyValueLayout,
         right_kv_layout: KeyValueLayout,
         output_fake_kv_layout: KeyValueLayout,
@@ -210,8 +234,11 @@ impl TransformationInfo {
         ));
         Self::JoinToKV {
             left_input_info_fp: left_fake_sig,
+            left_input_name,
             right_input_info_fp: right_fake_sig,
+            right_input_name,
             output_info_fp: fake_output_sig,
+            output_name,
             is_row_output: false,
             left_input_kv_layout: left_kv_layout,
             right_input_kv_layout: right_kv_layout,
@@ -221,9 +248,13 @@ impl TransformationInfo {
     }
 
     /// Build an AntiJoin to Key-Value transformation with a derived (fake) output fingerprint.
+    #[allow(clippy::too_many_arguments)]
     pub fn anti_join_to_kv(
         left_fake_sig: u64,
+        left_input_name: String,
         right_fake_sig: u64,
+        right_input_name: String,
+        output_name: String,
         left_kv_layout: KeyValueLayout,
         right_kv_layout: KeyValueLayout,
         output_fake_kv_layout: KeyValueLayout,
@@ -239,8 +270,11 @@ impl TransformationInfo {
 
         Self::AntiJoinToKV {
             left_input_info_fp: left_fake_sig,
+            left_input_name,
             right_input_info_fp: right_fake_sig,
+            right_input_name,
             output_info_fp: fake_output_sig,
+            output_name,
             is_row_output: false,
             left_input_kv_layout: left_kv_layout,
             right_input_kv_layout: right_kv_layout,
@@ -288,6 +322,34 @@ impl TransformationInfo {
             Self::KVToKV { output_info_fp, .. }
             | Self::JoinToKV { output_info_fp, .. }
             | Self::AntiJoinToKV { output_info_fp, .. } => *output_info_fp,
+        }
+    }
+
+    /// Input hierarchical name(s); for joins/anti-joins returns `(left, Some(right))`.
+    #[inline]
+    pub fn input_name(&self) -> (&str, Option<&str>) {
+        match self {
+            Self::KVToKV { input_name, .. } => (input_name.as_str(), None),
+            Self::JoinToKV {
+                left_input_name,
+                right_input_name,
+                ..
+            }
+            | Self::AntiJoinToKV {
+                left_input_name,
+                right_input_name,
+                ..
+            } => (left_input_name.as_str(), Some(right_input_name.as_str())),
+        }
+    }
+
+    /// Output hierarchical name.
+    #[inline]
+    pub fn output_name(&self) -> &str {
+        match self {
+            Self::KVToKV { output_name, .. }
+            | Self::JoinToKV { output_name, .. }
+            | Self::AntiJoinToKV { output_name, .. } => output_name.as_str(),
         }
     }
 
@@ -453,6 +515,21 @@ impl TransformationInfo {
         }
     }
 
+    /// Update the hierarchical output name.
+    ///
+    /// Used by the fuse phase when a map transformation is absorbed into its
+    /// producer: the producer now semantically emits what the fused map used
+    /// to emit, so its `output_name` must reflect that.
+    pub fn update_output_name(&mut self, new_output_name: String) {
+        match self {
+            Self::KVToKV { output_name, .. }
+            | Self::JoinToKV { output_name, .. }
+            | Self::AntiJoinToKV { output_name, .. } => {
+                *output_name = new_output_name;
+            }
+        }
+    }
+
     /// Replace a placeholder (fake) output layout with its resolved (real) positions.
     ///
     /// Necessary once the actual output schema is known, since downstream operators
@@ -604,6 +681,7 @@ impl TransformationInfo {
                 output_kv_layout,
                 predicates,
                 output_info_fp,
+                ..
             } => {
                 *output_info_fp = compute_fp((
                     "join_to_kv",
@@ -624,6 +702,7 @@ impl TransformationInfo {
                 right_input_kv_layout,
                 output_kv_layout,
                 output_info_fp,
+                ..
             } => {
                 *output_info_fp = compute_fp((
                     "anti_join_to_kv",
@@ -671,51 +750,117 @@ impl std::fmt::Display for TransformationInfo {
     /// Multi-line block form:
     /// ```text
     /// [Join -> KV]
-    ///     Left : 0x...., key:(..), value:(..)
-    ///     Right: 0x...., key:(..), value:(..)
-    ///     Out  : 0x...., key:(..), value:(..)
+    ///     Left : join(reach, arc) [0x....], key:(..), value:(..)
+    ///     Right: arc [0x....], key:(..), value:(..)
+    ///     Out  : join(join(reach, arc), arc) [0x....], key:(..), value:(..)
     ///     F    : (if x = 5 and y > 0)
     /// ```
     ///
-    /// Unlike [`crate::Transformation`], there is no `Flow` line — the
-    /// `TransformationFlow` is only materialized when a `Transformation` is
-    /// built from this info. The `F` line is omitted when no predicates apply.
+    /// Each collection is rendered as `<hierarchical-name> [0x<fingerprint>], key:(..), value:(..)`.
+    /// The name encodes the full construction path from EDBs (composed by
+    /// each phase's constructor); the fingerprint is the disambiguating
+    /// identity. Unlike [`crate::Transformation`], there is no `Flow` line —
+    /// the `TransformationFlow` is only materialized when a `Transformation`
+    /// is built from this info. The `F` line is omitted when no predicates
+    /// apply.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let coll = |fp: u64, kv: &KeyValueLayout| Collection::new(fp, kv.key(), kv.value());
+        let coll = |fp: u64, name: &str, kv: &KeyValueLayout| {
+            Collection::new(fp, name.to_string(), kv.key(), kv.value())
+        };
 
         writeln!(f, "{}", self.operation_name())?;
         match self {
-            Self::KVToKV { .. } => {
-                let (in_lay, _) = self.input_kv_layout();
-                writeln!(f, "    In   : {}", coll(self.input_info_fp().0, in_lay))?;
+            Self::KVToKV {
+                input_info_fp,
+                input_name,
+                output_info_fp,
+                output_name,
+                input_kv_layout,
+                output_kv_layout,
+                predicates,
+                ..
+            } => {
+                writeln!(
+                    f,
+                    "    In   : {}",
+                    coll(*input_info_fp, input_name, input_kv_layout)
+                )?;
                 writeln!(
                     f,
                     "    Out  : {}",
-                    coll(self.output_info_fp(), self.output_kv_layout())
+                    coll(*output_info_fp, output_name, output_kv_layout)
                 )?;
-                let preds = self.kv_predicates();
-                if !preds.is_empty() {
-                    writeln!(f, "    F    : (if {})", preds)?;
+                if !predicates.is_empty() {
+                    writeln!(f, "    F    : (if {})", predicates)?;
                 }
             }
-            Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } => {
-                let (l, r) = self.input_kv_layout();
-                let r = r.expect("binary op must have right input");
-                let (lfp, rfp) = self.input_info_fp();
-                let rfp = rfp.expect("binary op must have right fp");
-                writeln!(f, "    Left : {}", coll(lfp, l))?;
-                writeln!(f, "    Right: {}", coll(rfp, r))?;
+            Self::JoinToKV {
+                left_input_info_fp,
+                left_input_name,
+                right_input_info_fp,
+                right_input_name,
+                output_info_fp,
+                output_name,
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
+                predicates,
+                ..
+            } => {
+                writeln!(
+                    f,
+                    "    Left : {}",
+                    coll(*left_input_info_fp, left_input_name, left_input_kv_layout)
+                )?;
+                writeln!(
+                    f,
+                    "    Right: {}",
+                    coll(
+                        *right_input_info_fp,
+                        right_input_name,
+                        right_input_kv_layout
+                    )
+                )?;
                 writeln!(
                     f,
                     "    Out  : {}",
-                    coll(self.output_info_fp(), self.output_kv_layout())
+                    coll(*output_info_fp, output_name, output_kv_layout)
                 )?;
-                if let Self::JoinToKV { .. } = self {
-                    let preds = self.join_predicates();
-                    if !preds.is_empty() {
-                        writeln!(f, "    F    : (if {})", preds)?;
-                    }
+                if !predicates.is_empty() {
+                    writeln!(f, "    F    : (if {})", predicates)?;
                 }
+            }
+            Self::AntiJoinToKV {
+                left_input_info_fp,
+                left_input_name,
+                right_input_info_fp,
+                right_input_name,
+                output_info_fp,
+                output_name,
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
+                ..
+            } => {
+                writeln!(
+                    f,
+                    "    Left : {}",
+                    coll(*left_input_info_fp, left_input_name, left_input_kv_layout)
+                )?;
+                writeln!(
+                    f,
+                    "    Right: {}",
+                    coll(
+                        *right_input_info_fp,
+                        right_input_name,
+                        right_input_kv_layout
+                    )
+                )?;
+                writeln!(
+                    f,
+                    "    Out  : {}",
+                    coll(*output_info_fp, output_name, output_kv_layout)
+                )?;
             }
         }
         Ok(())

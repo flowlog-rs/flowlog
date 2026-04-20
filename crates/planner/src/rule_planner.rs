@@ -111,7 +111,7 @@ impl RulePlanner {
             debug_info_map.entry(child_fp).or_insert_with(|| {
                 let (name, args) = atom_info.get(&child_fp).unwrap();
                 let values = args.join(", ");
-                (format!("[{}] ({})", name, values), Vec::new())
+                (format!("{}({})", name, values), Vec::new())
             });
         }
 
@@ -187,7 +187,7 @@ impl std::fmt::Display for RulePlanner {
             stack: HashSet::new(),
         };
         let root_uid = walker.get_id(root);
-        writeln!(f, "{}  [@{}]", walker.node_title(root), root_uid)?;
+        writeln!(f, "#{}  {}", root_uid, walker.node_title(root))?;
         walker.expanded.insert(root);
         walker.stack.insert(root);
 
@@ -239,28 +239,24 @@ impl<'a> Walker<'a> {
         is_last: bool,
     ) -> std::fmt::Result {
         let (branch, spacer) = if is_last {
-            ("└───────────── ", "               ")
+            ("└── ", "    ")
         } else {
-            ("├───────────── ", "│              ")
+            ("├── ", "│   ")
         };
         let uid = self.get_id(node);
         let title = self.node_title(node);
 
         if self.stack.contains(&node) {
-            writeln!(
-                f,
-                "{}{}{}  [@{}]  ⚠ reentry suppressed",
-                prefix, branch, title, uid
-            )?;
+            writeln!(f, "{}{}⟲ #{} (cycle)", prefix, branch, uid)?;
             return Ok(());
         }
 
         if self.expanded.contains(&node) {
-            writeln!(f, "{}{}[@{}]  ↩︎ ref", prefix, branch, uid)?;
+            writeln!(f, "{}{}↪ #{}", prefix, branch, uid)?;
             return Ok(());
         }
 
-        writeln!(f, "{}{}{}  [@{}]", prefix, branch, title, uid)?;
+        writeln!(f, "{}{}#{}  {}", prefix, branch, uid, title)?;
         self.expanded.insert(node);
         self.stack.insert(node);
 

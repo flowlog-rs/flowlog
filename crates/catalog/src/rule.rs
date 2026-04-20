@@ -275,6 +275,21 @@ impl Catalog {
         self.positive_atom_fingerprints[index]
     }
 
+    /// Get the current (possibly rewritten) name of a positive atom by its index.
+    /// Atom names are mutated in place by `projection_modify` / `join_modify` /
+    /// `comparison_modify` / `fn_call_modify`, so this returns the hierarchical
+    /// name that currently describes the atom.
+    #[inline]
+    pub fn positive_atom_name(&self, index: usize) -> Result<&str, CatalogError> {
+        let rhs_idx = self.positive_atom_rhs_ids[index];
+        match &self.rule.rhs()[rhs_idx] {
+            Predicate::PositiveAtomPredicate(a) => Ok(a.name()),
+            other => Err(CatalogError::internal(format!(
+                "positive_atom_rhs_ids[{index}] points at non-positive-atom predicate {other:?}"
+            ))),
+        }
+    }
+
     /// Get the argument signatures for a positive atom by its index.
     #[inline]
     pub fn positive_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
@@ -310,6 +325,18 @@ impl Catalog {
         self.negative_atom_fingerprints[index]
     }
 
+    /// Get the current (possibly rewritten) name of a negative atom by its index.
+    #[inline]
+    pub fn negative_atom_name(&self, index: usize) -> Result<&str, CatalogError> {
+        let rhs_idx = self.negative_atom_rhs_ids[index];
+        match &self.rule.rhs()[rhs_idx] {
+            Predicate::NegativeAtomPredicate(a) => Ok(a.name()),
+            other => Err(CatalogError::internal(format!(
+                "negative_atom_rhs_ids[{index}] points at non-negative-atom predicate {other:?}"
+            ))),
+        }
+    }
+
     /// Get the argument signatures for a negative atom by its index.
     #[inline]
     pub fn negative_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
@@ -330,25 +357,28 @@ impl Catalog {
 
     // === Atom Resolution ===
 
-    /// Resolve an atom signature to its argument signatures, fingerprint, and RHS ID.
+    /// Resolve an atom signature to its argument signatures, fingerprint,
+    /// RHS id, and current hierarchical name.
     #[inline]
     pub fn resolve_atom(
         &self,
         atom_signature: &AtomSignature,
-    ) -> (&[AtomArgumentSignature], u64, usize) {
+    ) -> Result<(&[AtomArgumentSignature], u64, usize, &str), CatalogError> {
         let atom_id = atom_signature.rhs_id();
         if atom_signature.is_positive() {
-            (
+            Ok((
                 &self.positive_atom_argument_signatures[atom_id],
                 self.positive_atom_fingerprints[atom_id],
                 atom_id,
-            )
+                self.positive_atom_name(atom_id)?,
+            ))
         } else {
-            (
+            Ok((
                 &self.negative_atom_argument_signatures[atom_id],
                 self.negative_atom_fingerprints[atom_id],
                 atom_id,
-            )
+                self.negative_atom_name(atom_id)?,
+            ))
         }
     }
 
