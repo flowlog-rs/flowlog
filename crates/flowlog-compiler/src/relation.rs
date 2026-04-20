@@ -8,7 +8,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use flowlog_build::Features;
+use flowlog_build::{data_type_tokens, Features};
 use parser::{ConstType, DataType, Program, Relation};
 
 /// Emit the shared relation-handler module body for binary mode.
@@ -249,14 +249,7 @@ fn gen_one_rel_nonnullary(
         .copied()
         .unwrap_or(b',');
 
-    let rust_tys: Vec<TokenStream> = dts.iter().map(|dt| dt_to_rust(dt, string_intern)).collect();
-    let tuple_ty: TokenStream = match arity {
-        1 => {
-            let t0 = &rust_tys[0];
-            quote! { (#t0,) }
-        }
-        _ => quote! { (#(#rust_tys),*) },
-    };
+    let tuple_ty = data_type_tokens(&dts, string_intern);
 
     let shard_tuple = match dts[0] {
         DataType::Int8 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
@@ -476,29 +469,6 @@ fn gen_inline_facts(facts: Option<&Vec<Vec<ConstType>>>, string_intern: bool) ->
 // ------------------------------------------------------------
 // Type + parsing helpers
 // ------------------------------------------------------------
-
-fn dt_to_rust(dt: &DataType, string_intern: bool) -> TokenStream {
-    match *dt {
-        DataType::Int8 => quote! { i8 },
-        DataType::Int16 => quote! { i16 },
-        DataType::Int32 => quote! { i32 },
-        DataType::Int64 => quote! { i64 },
-        DataType::UInt8 => quote! { u8 },
-        DataType::UInt16 => quote! { u16 },
-        DataType::UInt32 => quote! { u32 },
-        DataType::UInt64 => quote! { u64 },
-        DataType::Float32 => quote! { OrderedFloat<f32> },
-        DataType::Float64 => quote! { OrderedFloat<f64> },
-        DataType::String => {
-            if string_intern {
-                quote! { Spur }
-            } else {
-                quote! { String }
-            }
-        }
-        DataType::Bool => quote! { bool },
-    }
-}
 
 /// Parse from `it: Iterator<Item=&str>` into f0..f{n-1}.
 fn gen_parse_from_str(rel: &str, dts: &[DataType], string_intern: bool) -> TokenStream {

@@ -15,7 +15,7 @@ use quote::quote;
 use common::ExecutionMode;
 use flowlog_build::CodeParts;
 
-use crate::Compiler;
+use crate::{Compiler, CompilerError};
 
 impl Compiler {
     pub(crate) fn assemble_main(
@@ -23,8 +23,8 @@ impl Compiler {
         parts: &CodeParts,
         imports: &proc_macro2::TokenStream,
         worker_helpers: &proc_macro2::TokenStream,
-    ) -> String {
-        let merge_blocks = self.gen_merge_blocks();
+    ) -> Result<String, CompilerError> {
+        let merge_blocks = self.gen_merge_blocks()?;
         let input = self.gen_input(parts, &merge_blocks);
 
         let main_fn = match self.config.mode() {
@@ -47,6 +47,6 @@ impl Compiler {
             #main_fn
         };
 
-        common::pretty_print(file_ts)
+        Ok(common::pretty_print(file_ts))
     }
 }

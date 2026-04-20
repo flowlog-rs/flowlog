@@ -1,26 +1,31 @@
-//! DataType inference and Rust-type-token emission.
+//! Intermediate-fingerprint type registry + Rust-type-token emission.
 //!
-//! Maintains the global fingerprint → `(key_types, value_types)` map,
-//! verifies types flowing through each transformation, and emits the Rust
-//! tuple types used by DD (internal) and the user-facing library API.
+//! Type *checking* lives in the [`typechecker`] crate; this module only
+//! (a) seeds declared types from `.decl`s, (b) propagates them through
+//! planner transformations to the intermediate fingerprints codegen
+//! emits, and (c) emits the Rust tuple types for both the internal
+//! (DD-facing) and user-facing shapes.
 
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use parser::{AggregationOperator, ArithmeticOperator, ConstType, DataType};
+use parser::{ConstType, DataType};
 use planner::{
     ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
 };
 
+use crate::codegen::error::CodegenError;
 use crate::codegen::CodeGen;
 
-// ============================================================================
-// Global type inference (fingerprint -> (key_types, value_types))
-// ============================================================================
+/// `(key_types, value_types)` — a relation's shape in key++value form.
+pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
+
+// ==================================================
+// Fingerprint → KvTypes registry
+// ==================================================
+
 impl CodeGen {
-    /// Seed the fingerprint → type map from every declared relation. Types
-    /// stay stable across strata; recursion strata may introduce new
-    /// identifiers but those refer back to these entries.
+    /// Seed the registry from every declared relation.
     pub(crate) fn make_global_data_type_map(&mut self) {
         self.global_fp_to_type = self
             .program
@@ -30,280 +35,128 @@ impl CodeGen {
             .collect();
     }
 
-    /// Verify (or infer + insert) the output type of a transformation.
-    /// `right_fingerprint` is `Some` only for binary transformations
-    /// (`join`, `njoin`, …).
-    pub(crate) fn verify_and_infer_global_data_type(
+    /// A missing fingerprint is a planner/codegen contract violation.
+    pub(crate) fn find_global_data_type(&self, fingerprint: u64) -> Result<&KvTypes, CodegenError> {
+        self.global_fp_to_type.get(&fingerprint).ok_or_else(|| {
+            CodegenError::internal(format!(
+                "input type missing for fingerprint 0x{fingerprint:016x}"
+            ))
+        })
+    }
+
+    /// Column type at `agg_pos` in the key++value layout of `idb_fp`.
+    pub(crate) fn agg_column_type(
+        &self,
+        idb_fp: u64,
+        agg_pos: usize,
+    ) -> Result<DataType, CodegenError> {
+        let (keys, vals) = self.find_global_data_type(idb_fp)?;
+        keys.iter()
+            .chain(vals)
+            .nth(agg_pos)
+            .copied()
+            .ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "aggregation position {agg_pos} out of bounds for \
+                 relation fingerprint 0x{idb_fp:016x}"
+                ))
+            })
+    }
+
+    /// Propagate types through `flow` and register the output shape
+    /// under `output_fingerprint` (or its IDB fingerprint, if this head
+    /// feeds one). Inference is infallible post-typecheck.
+    pub(crate) fn record_transformation_output_type(
         &mut self,
         left_fingerprint: u64,
         right_fingerprint: Option<u64>,
         output_fingerprint: u64,
         flow: &TransformationFlow,
         stratum: &StratumPlanner,
-    ) {
-        let head_to_idb_map = stratum.head_to_idb_map();
-        let idb_to_aggregation_map = stratum.idb_to_aggregation_map();
+    ) -> Result<(), CodegenError> {
+        let left_type = self.find_global_data_type(left_fingerprint)?.clone();
+        let right_type = right_fingerprint
+            .map(|rf| self.find_global_data_type(rf))
+            .transpose()?
+            .cloned();
 
-        let left_type = self.find_global_data_type(left_fingerprint);
-        let right_type = right_fingerprint.map(|rf| self.find_global_data_type(rf));
+        let resolve = |expr: &ArithmeticArgument| {
+            self.infer_expr_type(expr, &left_type, right_type.as_ref())
+                .expect("post-typecheck: expression has a concrete type")
+        };
+        let keys = flow.key().iter().map(&resolve).collect();
+        let vals = flow.value().iter().map(&resolve).collect();
 
-        self.assert_join_key_type_compat(
-            left_fingerprint,
-            left_type,
-            right_fingerprint,
-            right_type,
-        );
-
-        let key_types: Vec<Option<DataType>> = flow
-            .key()
-            .iter()
-            .map(|expr| self.infer_expr_type(expr, left_type, right_type))
-            .collect();
-
-        let value_types: Vec<Option<DataType>> = flow
-            .value()
-            .iter()
-            .map(|expr| self.infer_expr_type(expr, left_type, right_type))
-            .collect();
-
-        // If this head feeds into a declared IDB, resolve to the IDB fingerprint
-        // so we verify/insert against the IDB's declared types directly.
-        let resolved_idb_fp = head_to_idb_map.get(&output_fingerprint).copied();
-        let output_fingerprint = resolved_idb_fp.unwrap_or(output_fingerprint);
-
-        // If the resolved IDB has an aggregation, validate the aggregation
-        // position according to the operator's type contract instead of requiring
-        // an exact match between the pre-aggregation expression type and the
-        // post-aggregation declared type.
-        let agg_info = idb_to_aggregation_map.get(&output_fingerprint);
+        let output_fingerprint = stratum
+            .head_to_idb_map()
+            .get(&output_fingerprint)
+            .copied()
+            .unwrap_or(output_fingerprint);
 
         self.global_fp_to_type
             .entry(output_fingerprint)
-            .and_modify(|existing| {
-                let key_len = existing.0.len();
-
-                // Check whether position `flat_i` (in key++value space) satisfies
-                // the aggregation operator's type contract.
-                let agg_type_ok = |flat_i: usize, decl: &DataType, inf: &DataType| -> bool {
-                    let Some((op, pos, _)) = agg_info else {
-                        return false;
-                    };
-                    if flat_i != *pos {
-                        return false;
-                    }
-                    match op {
-                        // count(T) → any input type; output must be integer
-                        AggregationOperator::Count => decl.is_integer(),
-                        // sum(T), avg(T), min(T), max(T) → input and output must
-                        // match and both be numeric
-                        AggregationOperator::Sum
-                        | AggregationOperator::Avg
-                        | AggregationOperator::Min
-                        | AggregationOperator::Max => inf == decl && decl.is_numeric(),
-                    }
-                };
-
-                let types_match =
-                    |declared: &[DataType], inferred: &[Option<DataType>], offset: usize| {
-                        declared.len() == inferred.len()
-                            && declared.iter().zip(inferred).enumerate().all(
-                                |(i, (decl, inf))| {
-                                    inf.as_ref()
-                                        .is_none_or(|t| t == decl || agg_type_ok(offset + i, decl, t))
-                                },
-                            )
-                    };
-                assert!(
-                    types_match(&existing.0, &key_types, 0)
-                        && types_match(&existing.1, &value_types, key_len),
-                    "CodeGen error: type mismatch for fingerprint 0x{:016x}",
-                    output_fingerprint
-                );
-            })
-            .or_insert_with(|| {
-                let keys = key_types
-                    .into_iter()
-                    .map(|t| t.expect("CodeGen error: cannot infer type for all-constant position for intermediate relation without IDB declaration"))
-                    .collect();
-                let vals = value_types
-                    .into_iter()
-                    .map(|t| t.expect("CodeGen error: cannot infer type for all-constant position for intermediate relation without IDB declaration"))
-                    .collect();
-                (keys, vals)
-            });
+            .or_insert((keys, vals));
+        Ok(())
     }
 
-    /// Assert the left/right key types agree for a binary (join) input.
-    fn assert_join_key_type_compat(
+    /// Type of the first factor we can pin down. `None` iff every factor
+    /// is a polymorphic numeric literal (impossible after typecheck).
+    pub(crate) fn infer_expr_type(
         &self,
-        left_fp: u64,
-        left_type: &(Vec<DataType>, Vec<DataType>),
-        right_fp: Option<u64>,
-        right_type: Option<&(Vec<DataType>, Vec<DataType>)>,
-    ) {
-        if let (Some(rf), Some(rt)) = (right_fp, right_type) {
-            assert!(
-                left_type.0 == rt.0,
-                "CodeGen error: key type mismatch for fingerprints 0x{:016x} and 0x{:016x}",
-                left_fp,
-                rf
-            );
-        }
+        expr: &ArithmeticArgument,
+        left_type: &KvTypes,
+        right_type: Option<&KvTypes>,
+    ) -> Option<DataType> {
+        std::iter::once(expr.init())
+            .chain(expr.rest().iter().map(|(_, f)| f))
+            .find_map(|f| self.infer_factor_type(f, left_type, right_type))
     }
 
-    /// Infer the `DataType` of a single factor.
     fn infer_factor_type(
         &self,
         factor: &FactorArgument,
-        left_type: &(Vec<DataType>, Vec<DataType>),
-        right_type: Option<&(Vec<DataType>, Vec<DataType>)>,
+        left_type: &KvTypes,
+        right_type: Option<&KvTypes>,
     ) -> Option<DataType> {
         match factor {
-            // KV variables always refer to the left input's key/value slots.
             FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => {
-                let src = if *is_key { &left_type.0 } else { &left_type.1 };
-                src.get(*idx).cloned()
+                slot(left_type, *is_key).get(*idx).copied()
             }
-            // Join variables can reference either side; right side must exist.
             FactorArgument::Var(TransformationArgument::Jn((is_left, is_key, idx))) => {
                 let base = if *is_left {
                     left_type
                 } else {
-                    right_type
-                        .expect("CodeGen error: right input type missing for join transformation")
+                    right_type.expect("codegen ICE: join with no right input")
                 };
-                let src = if *is_key { &base.0 } else { &base.1 };
-                src.get(*idx).cloned()
+                slot(base, *is_key).get(*idx).copied()
             }
-            FactorArgument::Const(ConstType::Int(_)) => None,
-            FactorArgument::Const(ConstType::Float(_)) => None,
+            FactorArgument::Const(ConstType::Int(_) | ConstType::Float(_)) => None,
             FactorArgument::Const(ConstType::Text(_)) => Some(DataType::String),
             FactorArgument::Const(ConstType::Bool(_)) => Some(DataType::Bool),
-            FactorArgument::FnCall { name, args } => {
-                let ext = self
-                    .program
-                    .udfs()
-                    .iter()
-                    .find(|e| e.name() == name)
-                    .unwrap_or_else(|| panic!("CodeGen error: UDF '{}' not declared", name));
-
-                // 1. Assert argument count.
-                assert_eq!(
-                    args.len(),
-                    ext.params().len(),
-                    "CodeGen error: UDF '{}' expects {} args but got {}",
-                    name,
-                    ext.params().len(),
-                    args.len(),
-                );
-
-                // 2. Assert each argument type matches the parameter type.
-                for (i, (arg, param)) in args.iter().zip(ext.params()).enumerate() {
-                    let arg_type = self.infer_expr_type(arg, left_type, right_type);
-                    match arg_type {
-                        Some(at) => {
-                            assert_eq!(
-                                at,
-                                *param.data_type(),
-                                "CodeGen error: UDF '{}' param {} ('{}') expects {:?} but got {:?}",
-                                name,
-                                i,
-                                param.name(),
-                                param.data_type(),
-                                at,
-                            )
-                        }
-                        None => {
-                            // Numeric constants infer as None (polymorphic).
-                            // Still reject if the param expects a non-numeric type.
-                            assert!(
-                                param.data_type().is_numeric(),
-                                "CodeGen error: UDF '{}' param {} ('{}') expects {:?} but got a numeric literal",
-                                name, i, param.name(), param.data_type(),
-                            );
-                        }
-                    }
-                }
-
-                // 3. Return type.
-                Some(ext.ret_type())
-            }
+            FactorArgument::FnCall { name, .. } => self
+                .program
+                .udfs()
+                .iter()
+                .find(|e| e.name() == name)
+                .map(|e| e.ret_type()),
         }
-    }
-
-    /// Infer the `DataType` of an arithmetic expression. All factors
-    /// must agree; mixed types panic.
-    pub(crate) fn infer_expr_type(
-        &self,
-        expr: &ArithmeticArgument,
-        left_type: &(Vec<DataType>, Vec<DataType>),
-        right_type: Option<&(Vec<DataType>, Vec<DataType>)>,
-    ) -> Option<DataType> {
-        let mut inferred: Option<DataType> = None;
-
-        // Init factor.
-        if let Some(dt) = self.infer_factor_type(&expr.init, left_type, right_type) {
-            inferred = Some(dt);
-        }
-
-        // Remaining factors must match.
-        for (op, factor) in &expr.rest {
-            if let Some(dt) = self.infer_factor_type(factor, left_type, right_type) {
-                match inferred {
-                    None => inferred = Some(dt),
-                    Some(existing) => assert!(
-                        existing == dt,
-                        "CodeGen error: mixed data types in arithmetic expression: {:?} vs {:?}",
-                        existing,
-                        dt
-                    ),
-                }
-            }
-
-            // Validate operator-type compatibility.
-            if let Some(dt) = inferred {
-                if dt == DataType::Bool {
-                    panic!("CodeGen error: arithmetic operations are not supported on Bool type");
-                } else if dt == DataType::String {
-                    assert!(
-                        matches!(op, ArithmeticOperator::Cat),
-                        "CodeGen error: arithmetic operator {:?} is not allowed on string type, use 'cat'",
-                        op
-                    );
-                } else {
-                    assert!(
-                        !matches!(op, ArithmeticOperator::Cat),
-                        "CodeGen error: 'cat' operator is not allowed on numeric type {:?}",
-                        dt
-                    );
-                }
-            }
-        }
-
-        inferred
-    }
-
-    /// Look up `(key_types, value_types)` for `fingerprint`; panics if
-    /// the fingerprint wasn't seeded or inferred.
-    pub(crate) fn find_global_data_type(
-        &self,
-        fingerprint: u64,
-    ) -> &(Vec<DataType>, Vec<DataType>) {
-        self.global_fp_to_type.get(&fingerprint).unwrap_or_else(|| {
-            panic!(
-                "CodeGen error: input type missing for fingerprint 0x{:016x}",
-                fingerprint
-            )
-        })
     }
 }
 
-// ============================================================================
-// DataType → Rust type tokens
-// ============================================================================
+fn slot(tp: &KvTypes, is_key: bool) -> &[DataType] {
+    if is_key {
+        &tp.0
+    } else {
+        &tp.1
+    }
+}
 
-/// Internal-tuple type (DD's in-memory shape): `f32` → `OrderedFloat<f32>`,
-/// `String` → `Spur` under interning, else `String`.
+// ==================================================
+// DataType → Rust type tokens
+// ==================================================
+
+/// Internal tuple type (DD's in-memory shape): `f32`/`f64` become
+/// `OrderedFloat<_>`, `String` becomes `Spur` under interning.
 pub fn data_type_tokens(input_types: &[DataType], string_intern: bool) -> TokenStream {
     tuple_tokens(
         input_types
@@ -312,8 +165,8 @@ pub fn data_type_tokens(input_types: &[DataType], string_intern: bool) -> TokenS
     )
 }
 
-/// User-facing tuple type: `f32` / `String` regardless of interning. The
-/// engine does the insert/drain conversion to and from the internal shape.
+/// User-facing tuple type: `f32` / `String` regardless of interning.
+/// The engine converts on insert / drain.
 pub(crate) fn user_tuple_tokens(input_types: &[DataType]) -> TokenStream {
     tuple_tokens(input_types.iter().map(user_column_tokens))
 }
@@ -344,8 +197,7 @@ fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
     }
 }
 
-/// Wrap per-column tokens as `()`, `(T,)`, or `(T1, T2, …)`. Works for
-/// type tokens and value tokens alike.
+/// Wrap per-column tokens as `()`, `(T,)`, or `(T1, T2, …)`.
 pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> TokenStream {
     let tys: Vec<TokenStream> = cols.into_iter().collect();
     match tys.as_slice() {

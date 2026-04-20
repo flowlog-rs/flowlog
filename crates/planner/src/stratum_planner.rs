@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, trace};
 
 use catalog::Catalog;
-use common::source::Span;
 use common::Config;
 use optimizer::Optimizer;
 use parser::logic::FlowLogRule;
@@ -65,7 +64,7 @@ pub struct StratumPlanner {
 
     /// Aggregation metadata keyed by IDB fingerprint.
     /// Only populated for rules whose heads contain an aggregation argument.
-    /// Values are `(AggregationOperator, output_position, output_arity)` tuples.
+    /// Values are `(AggregationOperator, output_position, output_arity)`.
     idb_to_aggregation_map: HashMap<u64, (AggregationOperator, usize, usize)>,
 
     /// Loop condition for this stratum, if it was declared as a loop block.
@@ -272,7 +271,8 @@ impl StratumPlanner {
     }
 
     /// Get the mapping from IDB fingerprint to corresponding aggregation.
-    /// Returns tuples of (AggregationOperator, position in output relation, output arity).
+    /// Returns tuples of `(AggregationOperator, position in output relation,
+    /// output arity)`.
     #[inline]
     pub fn idb_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
         &self.idb_to_aggregation_map
@@ -521,21 +521,20 @@ impl StratumPlanner {
         }
     }
 
-    /// Build the mapping from each final output collection fingerprint to its aggregation requirement.
-    /// Ensures consistent aggregation operator and position for a given output relation if multiple rules map to it.
+    /// Build the mapping from each final output collection fingerprint to
+    /// its aggregation requirement. Ensures consistent aggregation operator
+    /// and position across rules that produce the same relation.
     fn build_idb_to_aggregation_map(&mut self, catalogs: &[Catalog]) -> Result<(), PlanError> {
-        // Side map of first-seen spans, populated alongside `idb_to_aggregation_map`.
-        // Used only to point callers at the prior rule when a conflict fires; not
-        // part of the persisted planner state.
-        let mut prior_spans: HashMap<u64, Span> = HashMap::new();
+        // Side map of first-seen head spans used only when constructing
+        // the `InconsistentAggregation` diagnostic's `prior_span`.
+        let mut prior_spans: HashMap<u64, common::source::Span> = HashMap::new();
 
         for catalog in catalogs {
             let head_args = catalog.head_arguments();
 
-            // `catalog.rule()` may carry a dummy span after catalog-driven rule
-            // rewrites (join_modify/projection_modify rebuild the rule via
-            // `FlowLogRule::new`, which has no span). The head is cloned through
-            // those rewrites, so prefer its span.
+            // Rule rewrites (join_modify / projection_modify) rebuild the
+            // rule via `FlowLogRule::new`, which leaves a dummy rule span.
+            // The head is cloned through unchanged, so prefer its span.
             let current_span = {
                 let rule = catalog.rule();
                 let head_span = rule.head().span();
@@ -568,7 +567,6 @@ impl StratumPlanner {
 
             let arity = head_args.len();
             let head_idb_fp = catalog.head_idb_fingerprint();
-            let entry = (op, pos, arity);
 
             match self.idb_to_aggregation_map.get(&head_idb_fp) {
                 Some(&(existing_op, existing_pos, _))
@@ -579,7 +577,7 @@ impl StratumPlanner {
                         prior_span: prior_spans
                             .get(&head_idb_fp)
                             .copied()
-                            .unwrap_or(Span::DUMMY),
+                            .unwrap_or(common::source::Span::DUMMY),
                         rel: catalog.rule().head().name().to_string(),
                         existing_op,
                         existing_pos,
@@ -588,7 +586,8 @@ impl StratumPlanner {
                     });
                 }
                 None => {
-                    self.idb_to_aggregation_map.insert(head_idb_fp, entry);
+                    self.idb_to_aggregation_map
+                        .insert(head_idb_fp, (op, pos, arity));
                     prior_spans.insert(head_idb_fp, current_span);
                 }
                 _ => {} // consistent duplicate — skip

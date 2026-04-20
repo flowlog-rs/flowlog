@@ -15,24 +15,24 @@ use quote::quote;
 use flowlog_build::{field_accessor, gen_drain_block};
 use parser::Relation;
 
-use crate::Compiler;
+use crate::{Compiler, CompilerError};
 
 impl Compiler {
     /// Per-IDB merge blocks spliced into `main()` after the barrier
     /// (worker 0 only). The order follows `.output` then `.printsize`.
-    pub(crate) fn gen_merge_blocks(&self) -> Vec<TokenStream> {
+    pub(crate) fn gen_merge_blocks(&self) -> Result<Vec<TokenStream>, CompilerError> {
         let mut blocks = Vec::new();
         for idb in self.program.output_idbs() {
-            blocks.push(self.gen_output_drain(idb));
+            blocks.push(self.gen_output_drain(idb)?);
         }
         for idb in self.program.printsize_idbs() {
             blocks.push(gen_size_report(idb));
         }
-        blocks
+        Ok(blocks)
     }
 
     /// Drain one `.output` relation's shared buffer through its sink.
-    fn gen_output_drain(&self, idb: &Relation) -> TokenStream {
+    fn gen_output_drain(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
         let buf_ident = Ident::new(&format!("buf_{}", idb.name()), Span::call_site());
         let string_intern = self.codegen.features().string_intern();
         let is_incremental = self.config.is_incremental();
@@ -43,17 +43,24 @@ impl Compiler {
                 gen_write_row_stderr(idb, string_intern),
             )
         } else {
-            let base_dir = self
-                .config
-                .output_dir()
-                .expect("binary mode requires output_dir when writing IDB output to files");
+            let base_dir = self.config.output_dir().ok_or_else(|| {
+                CompilerError::internal(
+                    "binary mode writing IDB output to files but `output_dir` is unset",
+                )
+            })?;
             (
                 gen_file_preamble(idb.name(), base_dir, is_incremental),
                 gen_write_row_file(idb, string_intern, is_incremental),
             )
         };
 
-        gen_drain_block(&buf_ident, idb, sink_preamble, write_row, string_intern)
+        Ok(gen_drain_block(
+            &buf_ident,
+            idb,
+            sink_preamble,
+            write_row,
+            string_intern,
+        ))
     }
 }
 

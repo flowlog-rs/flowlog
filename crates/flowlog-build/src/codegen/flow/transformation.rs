@@ -16,6 +16,7 @@ use crate::codegen::arg::{
     compute_join_param_tokens, compute_kv_param_tokens, kv_use_counts, row_pattern_and_fields,
     row_use_counts,
 };
+use crate::codegen::error::CodegenError;
 use crate::codegen::ident::find_local_ident;
 use crate::codegen::ty::data::data_type_tokens;
 use crate::codegen::CodeGen;
@@ -35,7 +36,7 @@ impl CodeGen {
         arranged_map: &mut HashMap<u64, Ident>,
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
-    ) -> TokenStream {
+    ) -> Result<TokenStream, CodegenError> {
         let transformation_name = format!("{transformation}");
         let si = self.features.string_intern();
 
@@ -75,14 +76,14 @@ impl CodeGen {
                     flow.fn_call_preds(),
                     flow.constraints(),
                 );
-                self.verify_and_infer_global_data_type(
+                self.record_transformation_output_type(
                     input.fingerprint(),
                     None,
                     output.fingerprint(),
                     flow,
                     stratum,
-                );
-                let input_type = self.find_global_data_type(input.fingerprint()).clone();
+                )?;
+                let input_type = self.find_global_data_type(input.fingerprint())?.clone();
                 let itype = input_type.1.clone();
 
                 // Output expression + predicates
@@ -93,12 +94,17 @@ impl CodeGen {
                     &row_fields,
                     si,
                     Some(&remaining),
-                );
-                let cmp_pred =
-                    self.build_row_compare_predicate(flow.compares(), &row_fields, si, &input_type);
-                let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields, si);
+                )?;
+                let cmp_pred = self.build_row_compare_predicate(
+                    flow.compares(),
+                    &row_fields,
+                    si,
+                    &input_type,
+                )?;
+                let cst_pred =
+                    build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
                 let fc_pred =
-                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si);
+                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
 
                 let flat_map_body = if let Some(pred) = pred {
@@ -107,10 +113,10 @@ impl CodeGen {
                     quote! { std::iter::once( #out_val ) }
                 };
 
-                quote! {
+                Ok(quote! {
                     let #out = #inp.clone()
                         .flat_map(|#row_pat: #row_ty| { #flat_map_body });
-                }
+                })
             }
 
             // Row -> KV
@@ -144,38 +150,47 @@ impl CodeGen {
                     flow.fn_call_preds(),
                     flow.constraints(),
                 );
-                self.verify_and_infer_global_data_type(
+                self.record_transformation_output_type(
                     input.fingerprint(),
                     None,
                     output.fingerprint(),
                     flow,
                     stratum,
-                );
-                let input_type = self.find_global_data_type(input.fingerprint()).clone();
+                )?;
+                let input_type = self.find_global_data_type(input.fingerprint())?.clone();
                 let itype = input_type.1.clone();
 
                 // Output expression + predicates
                 let row_ty = data_type_tokens(&itype, si);
                 let remaining = RefCell::new(row_use_counts(&[flow.key(), flow.value()]));
-                let out_key =
-                    self.build_key_val_from_row_args(flow.key(), &row_fields, si, Some(&remaining));
+                let out_key = self.build_key_val_from_row_args(
+                    flow.key(),
+                    &row_fields,
+                    si,
+                    Some(&remaining),
+                )?;
                 let out_val = self.build_key_val_from_row_args(
                     flow.value(),
                     &row_fields,
                     si,
                     Some(&remaining),
-                );
+                )?;
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
                     quote! { ( #out_key, #out_val ) }
                 };
 
-                let cmp_pred =
-                    self.build_row_compare_predicate(flow.compares(), &row_fields, si, &input_type);
-                let cst_pred = build_row_constraints_predicate(flow.constraints(), &row_fields, si);
+                let cmp_pred = self.build_row_compare_predicate(
+                    flow.compares(),
+                    &row_fields,
+                    si,
+                    &input_type,
+                )?;
+                let cst_pred =
+                    build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
                 let fc_pred =
-                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si);
+                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
 
                 // Transformation logic
@@ -198,10 +213,10 @@ impl CodeGen {
                     output.is_k_only(),
                 );
 
-                quote! {
+                Ok(quote! {
                     #transformation
                     #arrange_stmt
-                }
+                })
             }
 
             // KV -> Row
@@ -225,21 +240,22 @@ impl CodeGen {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_data_type(
+                self.record_transformation_output_type(
                     input.fingerprint(),
                     None,
                     output.fingerprint(),
                     flow,
                     stratum,
-                );
+                )?;
 
                 // Output value + predicates
-                let input_type = self.find_global_data_type(input.fingerprint()).clone();
+                let input_type = self.find_global_data_type(input.fingerprint())?.clone();
                 let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
-                let out_val = self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
-                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type);
-                let cst_pred = build_kv_constraints_predicate(flow.constraints(), si);
-                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si);
+                let out_val =
+                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
+                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type)?;
+                let cst_pred = build_kv_constraints_predicate(flow.constraints(), si)?;
+                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
@@ -256,10 +272,10 @@ impl CodeGen {
                     quote! { std::iter::once( #out_val ) }
                 };
 
-                quote! {
+                Ok(quote! {
                     let #out = #inp.clone()
                         .flat_map(|( #kv_param_k, #kv_param_v )| { #flat_map_body });
-                }
+                })
             }
 
             // KV -> KV
@@ -284,27 +300,28 @@ impl CodeGen {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_data_type(
+                self.record_transformation_output_type(
                     input.fingerprint(),
                     None,
                     output.fingerprint(),
                     flow,
                     stratum,
-                );
+                )?;
 
                 // Output expression + predicates
-                let input_type = self.find_global_data_type(input.fingerprint()).clone();
+                let input_type = self.find_global_data_type(input.fingerprint())?.clone();
                 let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
-                let out_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining));
-                let out_val = self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
+                let out_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining))?;
+                let out_val =
+                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
                     quote! { ( #out_key, #out_val ) }
                 };
-                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type);
-                let cst_pred = build_kv_constraints_predicate(flow.constraints(), si);
-                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si);
+                let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type)?;
+                let cst_pred = build_kv_constraints_predicate(flow.constraints(), si)?;
+                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
@@ -352,10 +369,10 @@ impl CodeGen {
                     output.is_k_only(),
                 );
 
-                quote! {
+                Ok(quote! {
                     #transformation
                     #arrange_stmt
-                }
+                })
             }
 
             // Join: Key-value ⋈ Key-value -> Row
@@ -368,8 +385,8 @@ impl CodeGen {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
-                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
-                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
+                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base)?;
+                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
                 // Profiler hook (optional)
@@ -383,13 +400,13 @@ impl CodeGen {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_data_type(
+                self.record_transformation_output_type(
                     left.fingerprint(),
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
                     stratum,
-                );
+                )?;
 
                 // Output expression + predicates
                 let (jn_k, jn_lv, jn_rv) = compute_join_param_tokens(
@@ -398,13 +415,17 @@ impl CodeGen {
                     flow.compares(),
                     flow.fn_call_preds(),
                 );
-                let out_val = self.build_key_val_from_join_args(flow.value(), si);
+                let out_val = self.build_key_val_from_join_args(flow.value(), si)?;
 
-                let left_type = self.find_global_data_type(left.fingerprint()).clone();
-                let right_type = self.find_global_data_type(right.fingerprint()).clone();
-                let cmp_pred =
-                    self.build_join_compare_predicate(flow.compares(), si, &left_type, &right_type);
-                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si);
+                let left_type = self.find_global_data_type(left.fingerprint())?.clone();
+                let right_type = self.find_global_data_type(right.fingerprint())?.clone();
+                let cmp_pred = self.build_join_compare_predicate(
+                    flow.compares(),
+                    si,
+                    &left_type,
+                    &right_type,
+                )?;
+                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si)?;
                 let pred = combine_predicates(vec![cmp_pred, fc_pred]);
                 let join_body = if let Some(pred) = pred {
                     quote! { if #pred { Some( #out_val ) } else { None } }
@@ -412,10 +433,10 @@ impl CodeGen {
                     quote! { Some( #out_val ) }
                 };
 
-                quote! {
+                Ok(quote! {
                     let #out = #l.clone()
                         .join_core(#r.clone(), |#jn_k, #jn_lv, #jn_rv| { #join_body });
-                }
+                })
             }
 
             // Join: Key-value ⋈ Key-value -> key-value
@@ -428,8 +449,8 @@ impl CodeGen {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
-                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
-                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
+                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base)?;
+                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
                 // Profiler hook (optional)
@@ -444,13 +465,13 @@ impl CodeGen {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_data_type(
+                self.record_transformation_output_type(
                     left.fingerprint(),
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
                     stratum,
-                );
+                )?;
 
                 // Output expression + predicates
                 let (jn_k, jn_lv, jn_rv) = compute_join_param_tokens(
@@ -459,19 +480,23 @@ impl CodeGen {
                     flow.compares(),
                     flow.fn_call_preds(),
                 );
-                let out_key = self.build_key_val_from_join_args(flow.key(), si);
-                let out_val = self.build_key_val_from_join_args(flow.value(), si);
+                let out_key = self.build_key_val_from_join_args(flow.key(), si)?;
+                let out_val = self.build_key_val_from_join_args(flow.value(), si)?;
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
                     quote! { ( #out_key, #out_val ) }
                 };
 
-                let left_type = self.find_global_data_type(left.fingerprint()).clone();
-                let right_type = self.find_global_data_type(right.fingerprint()).clone();
-                let cmp_pred =
-                    self.build_join_compare_predicate(flow.compares(), si, &left_type, &right_type);
-                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si);
+                let left_type = self.find_global_data_type(left.fingerprint())?.clone();
+                let right_type = self.find_global_data_type(right.fingerprint())?.clone();
+                let cmp_pred = self.build_join_compare_predicate(
+                    flow.compares(),
+                    si,
+                    &left_type,
+                    &right_type,
+                )?;
+                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si)?;
                 let pred = combine_predicates(vec![cmp_pred, fc_pred]);
                 let join_body = if let Some(pred) = pred {
                     quote! { if #pred { Some( #out_expr ) } else { None } }
@@ -491,10 +516,10 @@ impl CodeGen {
                     output.is_k_only(),
                 );
 
-                quote! {
+                Ok(quote! {
                     #transformation
                     #arrange_stmt
-                }
+                })
             }
 
             // Antijoin: Key-value ¬ Key-only to Row
@@ -510,8 +535,8 @@ impl CodeGen {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
-                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
-                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
+                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base)?;
+                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
                 // Profiler hook (optional)
@@ -525,13 +550,13 @@ impl CodeGen {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_data_type(
+                self.record_transformation_output_type(
                     left.fingerprint(),
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
                     stratum,
-                );
+                )?;
 
                 let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();
 
@@ -540,11 +565,11 @@ impl CodeGen {
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
                 let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
                 let out_map_value =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
+                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
                 let inter_dedup = self.dedup_antijoin();
                 let final_normalize = self.dedup_recursive();
 
-                quote! {
+                Ok(quote! {
                     let #out =
                         #r.clone()
                             .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
@@ -562,7 +587,7 @@ impl CodeGen {
                             )
                             .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_value ))
                             #final_normalize;
-                }
+                })
             }
 
             // Antijoin: Key-only ¬ Key-only to key-value
@@ -578,8 +603,8 @@ impl CodeGen {
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
                 let r_base = find_local_ident(local_fp_to_ident, right.fingerprint());
-                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base);
-                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base);
+                let l = expect_arranged(arranged_map, left.fingerprint(), &l_base)?;
+                let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
                 // Profiler hook (optional)
@@ -594,13 +619,13 @@ impl CodeGen {
                 });
 
                 // Type inference
-                self.verify_and_infer_global_data_type(
+                self.record_transformation_output_type(
                     left.fingerprint(),
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
                     stratum,
-                );
+                )?;
 
                 let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();
 
@@ -608,9 +633,10 @@ impl CodeGen {
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
                 let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
-                let out_map_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining));
+                let out_map_key =
+                    self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining))?;
                 let out_map_value =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining));
+                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
                 let out_map_expr = if output.is_k_only() {
                     quote! { #out_map_key }
                 } else {
@@ -646,10 +672,10 @@ impl CodeGen {
                     output.is_k_only(),
                 );
 
-                quote! {
+                Ok(quote! {
                     #transformation
                     #arrange_stmt
-                }
+                })
             }
         }
     }
@@ -716,11 +742,11 @@ fn expect_arranged(
     arranged_map: &HashMap<u64, Ident>,
     fingerprint: u64,
     base_ident: &Ident,
-) -> Ident {
-    arranged_map.get(&fingerprint).cloned().unwrap_or_else(|| {
-        panic!(
-            "collection '{}' (fingerprint {:016x}) must be arranged before use",
-            base_ident, fingerprint
-        )
+) -> Result<Ident, CodegenError> {
+    arranged_map.get(&fingerprint).cloned().ok_or_else(|| {
+        CodegenError::internal(format!(
+            "collection `{base_ident}` (fingerprint 0x{fingerprint:016x}) \
+             must be arranged before use"
+        ))
     })
 }

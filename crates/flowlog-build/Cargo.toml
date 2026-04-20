@@ -14,9 +14,11 @@ syn = { workspace = true, features = ["full"] }
 thiserror.workspace = true
 tracing.workspace = true
 
+catalog = { path = "../catalog" }
 common = { path = "../common" }
 optimizer = { path = "../optimizer" }
 parser = { path = "../parser" }
 planner = { path = "../planner" }
 stratifier = { path = "../stratifier" }
 profiler = { path = "../profiler" }
+typechecker = { path = "../typechecker" }

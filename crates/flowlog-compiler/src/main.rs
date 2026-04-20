@@ -44,6 +44,7 @@ fn main() {
 /// Compile the program specified by `config.program()` into an executable.
 fn compile_single(config: &Config) {
     let (program, sm) = parse_program(config);
+    typechecker::check_program(&program).unwrap_or_else(|err| emit_and_exit(err, &sm));
     let stratifier = Stratifier::from_program(&program, config.is_extended())
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
     let mut profiler = new_profiler(config);
@@ -52,10 +53,9 @@ fn compile_single(config: &Config) {
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     let mut compiler = Compiler::new(config.clone(), program);
-    if let Err(e) = compiler.compile(&strata, &mut profiler) {
-        error!("{}", e);
-        process::exit(1);
-    }
+    compiler
+        .compile(&strata, &mut profiler)
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
 }
 
 /// Dry-run the parse → stratify → plan pipeline on every bundled example.
@@ -76,9 +76,15 @@ fn run_all_examples(config: &Config) {
             .and_then(|n| n.to_str())
             .unwrap_or("<unnamed>");
 
+        let Some(path_str) = file_path.to_str() else {
+            failure += 1;
+            error!("FAILED: non-UTF-8 path {}", file_path.display());
+            continue;
+        };
+
         let mut sm = SourceMap::new();
         let program = match Program::parse_with_includes(
-            file_path.to_str().expect("non-UTF-8 path"),
+            path_str,
             config.is_extended(),
             &config.include_dirs(),
             &mut sm,
@@ -185,7 +191,7 @@ fn plan_strata(
 // =========================================================================
 
 fn init_tracing(default_level: &str) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
