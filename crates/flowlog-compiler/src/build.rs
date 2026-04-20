@@ -32,8 +32,8 @@ impl Compiler {
         &mut self,
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
-    ) -> io::Result<()> {
-        let parts = self.codegen.generate(strata, profiler);
+    ) -> Result<(), common::diag::BoxError> {
+        let parts = self.codegen.generate(strata, profiler)?;
         let features = self.codegen.features();
 
         // `src/relation.rs` — Relation trait + per-EDB `Rel{name}` input handlers.
@@ -48,7 +48,7 @@ impl Compiler {
         // `src/main.rs` — dataflow scope, timely::execute, EDB registry, drain.
         let bin_imports = imports::gen_imports(&self.config, features);
         let worker_helpers = imports::gen_worker_helpers();
-        let main_rs = self.assemble_main(&parts, &bin_imports, &worker_helpers);
+        let main_rs = self.assemble_main(&parts, &bin_imports, &worker_helpers)?;
 
         // Cargo project metadata.
         let cargo_toml = scaffold::render_cargo_toml(&self.config, features);
@@ -62,6 +62,8 @@ impl Compiler {
             &cargo_config,
             profiler,
         )
+        .map_err(crate::CompilerError::from)?;
+        Ok(())
     }
 
     /// Compile the emitted crate with `cargo build --release`, install the

@@ -24,11 +24,15 @@
 
 mod assembly;
 mod build;
+mod error;
 mod imports;
 mod io;
 mod relation;
 mod scaffold;
 
+pub use error::CompilerError;
+
+use common::diag::BoxError;
 use common::Config;
 use flowlog_build::CodeGen;
 use parser::Program;
@@ -56,12 +60,17 @@ impl Compiler {
     /// Emit the scaffolded Rust crate, run `cargo build --release`, copy the
     /// binary to [`Config::executable_path`], and clean up build artifacts
     /// unless [`Config::save_temps`] is set.
+    ///
+    /// Returns a [`BoxError`] on failure — user-facing codegen diagnostics
+    /// propagate directly, and infrastructure failures (cargo shell-out,
+    /// filesystem writes) surface as internal-compiler-error ICEs.
     pub fn compile(
         &mut self,
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
-    ) -> std::io::Result<()> {
+    ) -> Result<(), BoxError> {
         self.emit_sources(strata, profiler)?;
-        self.build()
+        self.build().map_err(CompilerError::from)?;
+        Ok(())
     }
 }

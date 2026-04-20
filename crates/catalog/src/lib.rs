@@ -21,8 +21,6 @@ pub mod fn_call;
 pub mod predicate;
 /// Per-rule catalog with precomputed metadata and signatures.
 pub mod rule;
-/// Rule-level type checker run once per program before stratification.
-pub mod typecheck;
 
 /// Re-exported.
 pub use arithmetic::{ArithmeticPos, FactorPos};
