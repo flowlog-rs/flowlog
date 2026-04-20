@@ -136,7 +136,8 @@ impl RulePlanner {
 
         // ---- Step 1: Project LHS → join keys only ----
         let left_name = catalog.positive_atom_name(lhs_pos_idx)?.to_string();
-        let proj_name = RulePlanner::proj_name(&left_name);
+        let lhs_key_names = RulePlanner::attrs_from_positions(&lhs_keys, catalog);
+        let proj_name = RulePlanner::proj_name(&left_name, &lhs_key_names);
         let proj_tx = TransformationInfo::kv_to_kv(
             left_fp,
             left_name,
@@ -169,7 +170,7 @@ impl RulePlanner {
             .collect();
 
         let right_name = catalog.positive_atom_name(rhs_pos_idx)?.to_string();
-        let semijoin_name = RulePlanner::semijoin_name(&proj_name, &right_name);
+        let semijoin_name = RulePlanner::semijoin_name(&proj_name, &right_name, &lhs_key_names);
         let semijoin_tx = TransformationInfo::join_to_kv(
             proj_fp,
             proj_name,

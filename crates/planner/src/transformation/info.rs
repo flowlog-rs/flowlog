@@ -93,7 +93,7 @@ pub enum TransformationInfo {
     KVToKV {
         /// Upstream (input) collection fingerprint (fake until resolved).
         input_info_fp: u64,
-        /// Upstream collection's hierarchical name (e.g. `proj(reach)`).
+        /// Upstream collection's hierarchical name (e.g. `π[x](reach)`).
         input_name: String,
         /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
@@ -125,7 +125,7 @@ pub enum TransformationInfo {
         right_input_name: String,
         /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
-        /// Output collection's hierarchical name (e.g. `join(reach, arc)`).
+        /// Output collection's hierarchical name (e.g. `(reach ⋈[y] arc)`).
         output_name: String,
         /// Whether row output
         is_row_output: bool,
@@ -151,7 +151,7 @@ pub enum TransformationInfo {
         right_input_name: String,
         /// Output collection fingerprint (fake until resolved).
         output_info_fp: u64,
-        /// Output collection's hierarchical name (e.g. `antijoin(reach, arc)`).
+        /// Output collection's hierarchical name (e.g. `(reach ▷[y] arc)`).
         output_name: String,
         /// Whether row output
         is_row_output: bool,
@@ -750,9 +750,9 @@ impl std::fmt::Display for TransformationInfo {
     /// Multi-line block form:
     /// ```text
     /// [Join -> KV]
-    ///     Left : join(reach, arc) [0x....], key:(..), value:(..)
+    ///     Left : (reach ⋈[y] arc) [0x....], key:(..), value:(..)
     ///     Right: arc [0x....], key:(..), value:(..)
-    ///     Out  : join(join(reach, arc), arc) [0x....], key:(..), value:(..)
+    ///     Out  : ((reach ⋈[y] arc) ⋈[y] arc) [0x....], key:(..), value:(..)
     ///     F    : (if x = 5 and y > 0)
     /// ```
     ///
