@@ -14,8 +14,8 @@ pub struct Collection {
     fingerprint: u64,
 
     /// Hierarchical name describing how this collection was built from EDBs
-    /// (e.g. `join(reach, arc)` or `proj(filter(arc))`). Used for log/debug
-    /// rendering. Empty for internal placeholders.
+    /// (e.g. `(reach ⋈[y] arc)` or `π[x](σ[x > 0](arc))`). Used for
+    /// log/debug rendering. Empty for internal placeholders.
     name: String,
 
     /// Key argument signatures (empty for row-only collections)
