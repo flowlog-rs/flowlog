@@ -14,11 +14,11 @@ use quote::quote;
 use crate::common::pretty_print;
 
 use crate::codegen::features::Features;
-use crate::engine::gen_lib_engine;
-use crate::imports::gen_lib_imports;
-use crate::pipeline::Pipeline;
-use crate::relation::user::gen_public_rel_module;
-use crate::results::gen_batch_results;
+use crate::build::engine::gen_lib_engine;
+use crate::build::imports::gen_lib_imports;
+use crate::build::pipeline::Pipeline;
+use crate::build::relation::user::gen_public_rel_module;
+use crate::build::results::gen_batch_results;
 
 /// Render the library-mode source file for one compiled program.
 pub(crate) fn assemble(

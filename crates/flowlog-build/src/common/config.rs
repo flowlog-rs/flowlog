@@ -36,7 +36,7 @@ impl ExecutionMode {
 }
 
 /// Command line arguments for FlowLog tools
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Clone, Default)]
 #[command(version, about, long_about = None)]
 pub struct Config {
     /// Path to the Datalog (.dl) program file

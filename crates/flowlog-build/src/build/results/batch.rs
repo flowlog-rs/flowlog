@@ -12,7 +12,7 @@ use quote::{format_ident, quote};
 
 use crate::parser::Program;
 
-use crate::relation::{rust_ident, user_struct_ident};
+use crate::build::relation::{rust_ident, user_struct_ident};
 
 pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {
     let mut fields: Vec<TokenStream> = Vec::new();

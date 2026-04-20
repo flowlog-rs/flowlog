@@ -20,7 +20,7 @@ use crate::planner::StratumPlanner;
 use crate::stratifier::Stratifier;
 
 use crate::codegen::features::Features;
-use crate::relation::gen_input_module;
+use crate::build::relation::gen_input_module;
 use crate::{BuildError, Builder, CodeGen, CodeParts};
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
