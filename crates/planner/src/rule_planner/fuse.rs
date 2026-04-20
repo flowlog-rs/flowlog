@@ -65,6 +65,7 @@ impl RulePlanner {
             let Some(TransformationInfo::KVToKV {
                 input_info_fp,
                 output_info_fp,
+                output_name,
                 output_kv_layout,
                 predicates,
                 is_sip_projection,
@@ -91,6 +92,7 @@ impl RulePlanner {
 
             let input_fp = *input_info_fp;
             let output_fp = *output_info_fp;
+            let fused_map_name = output_name.clone();
             let out_kv_layout = output_kv_layout.clone();
             let predicates = predicates.clone();
 
@@ -133,6 +135,7 @@ impl RulePlanner {
                     &key_argument_ids,
                     &value_argument_ids,
                     &predicates,
+                    fused_map_name.clone(),
                 )?;
             }
 
@@ -258,6 +261,7 @@ impl RulePlanner {
         key_argument_ids: &[usize],
         value_argument_ids: &[usize],
         predicates: &KvPredicates,
+        fused_map_output_name: String,
     ) -> Result<u64, PlanError> {
         // Build the new output layout by selecting positions from the current producer output
         let all_positions = self.collect_output_positions(producer_idx);
@@ -274,7 +278,9 @@ impl RulePlanner {
         let remapped_fn_calls =
             Self::remap_fn_call_preds(&all_positions, &predicates.fn_call_preds)?;
 
-        // Update producer output layout and comparisons
+        // Update producer output layout, predicates, name and fingerprint.
+        // The producer now semantically emits what the fused map used to emit,
+        // so its output_name inherits the map's.
         {
             let producer_tx = &mut self.transformation_infos[producer_idx];
             producer_tx.update_output_key_value_layout(new_out_kv_layout);
@@ -288,6 +294,7 @@ impl RulePlanner {
             if !predicates.fn_call_preds.is_empty() {
                 producer_tx.update_fn_call_preds(remapped_fn_calls);
             }
+            producer_tx.update_output_name(fused_map_output_name);
             producer_tx.update_output_fake_sig();
         }
 

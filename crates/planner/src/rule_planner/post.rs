@@ -88,8 +88,12 @@ impl RulePlanner {
             ),
         );
 
+        // Post is a layout-only alignment; the name passes through unchanged.
+        let input_name = catalog.positive_atom_name(0)?.to_string();
         let mut post_tx = TransformationInfo::kv_to_kv(
             input_fake_sig,
+            input_name.clone(),
+            input_name,
             true,
             input_kv_layout,
             KeyValueLayout::new(Vec::new(), output_values),

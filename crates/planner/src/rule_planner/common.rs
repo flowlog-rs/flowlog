@@ -255,17 +255,21 @@ impl RulePlanner {
             right_sigs.push(AtomSignature::new(true, rhs_idx));
 
             // Create the join transformation
+            let lhs_name = catalog.positive_atom_name(lhs_pos_idx)?.to_string();
+            let rhs_name = catalog.positive_atom_name(rhs_idx)?.to_string();
+            let new_name = Self::semijoin_name(&lhs_name, &rhs_name);
             let tx = TransformationInfo::join_to_kv(
                 lhs_pos_fp,
+                lhs_name,
                 rhs_fp,
+                rhs_name,
+                new_name.clone(),
                 KeyValueLayout::new(lhs_keys.clone(), Vec::new()), // LHS: keys only
                 KeyValueLayout::new(rhs_keys, rhs_vals.clone()),   // RHS: keys aligned + values
                 KeyValueLayout::new(lhs_keys.clone(), rhs_vals),
                 JoinPredicates::default(), // no additional comparisons and fn call predicates
             );
 
-            // Generate descriptive name for the new atom
-            let new_name = format!("atom_pos{}_pos_semijoin_atom_pos{}", lhs_pos_idx, rhs_idx);
             let new_fp = tx.output_info_fp();
 
             // Register this transformation as a producer
@@ -402,16 +406,20 @@ impl RulePlanner {
             right_sigs.push(AtomSignature::new(true, rhs_idx));
 
             // Create the anti-join transformation
+            let lhs_name = catalog.negative_atom_name(lhs_neg_idx)?.to_string();
+            let rhs_name = catalog.positive_atom_name(rhs_idx)?.to_string();
+            let new_name = Self::antijoin_name(&lhs_name, &rhs_name);
             let tx = TransformationInfo::anti_join_to_kv(
                 lhs_neg_fp,
+                lhs_name,
                 rhs_fp,
+                rhs_name,
+                new_name.clone(),
                 KeyValueLayout::new(lhs_keys.clone(), Vec::new()), // LHS: keys only
                 KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()), // RHS: values only
                 KeyValueLayout::new(rhs_keys, rhs_vals),
             );
 
-            // Generate descriptive name for the new atom
-            let new_name = format!("atom_neg{}_neg_semijoin_atom_pos{}", lhs_neg_idx, rhs_idx);
             let new_fp = tx.output_info_fp();
 
             // Update producer transformation index
@@ -448,9 +456,6 @@ impl RulePlanner {
         lhs_comp_idx: usize,
         rhs_pos_indices: &[usize],
     ) -> Result<bool, PlanError> {
-        // Extract comparison predicate information
-        let comparison_exprs = catalog.comparison_predicate(lhs_comp_idx);
-
         // Initialize collections for new atoms created by the comparison pushdown
         let mut new_names = Vec::new();
         let mut new_fps = Vec::new();
@@ -479,8 +484,12 @@ impl RulePlanner {
                 .map(|&sig| ArithmeticPos::from_var_signature(sig))
                 .collect::<Vec<_>>();
 
+            let input_name = catalog.positive_atom_name(rhs_idx)?.to_string();
+            let new_name = Self::filter_name(&input_name);
             let tx = TransformationInfo::kv_to_kv(
                 rhs_fp,
+                input_name,
+                new_name.clone(),
                 catalog.original_atom_fingerprints().contains(&rhs_fp),
                 KeyValueLayout::new(vec![], in_vals.clone()),
                 KeyValueLayout::new(vec![], in_vals),
@@ -492,8 +501,6 @@ impl RulePlanner {
                 },
             );
 
-            // Generate descriptive name for the new atom
-            let new_name = format!("comparison_{}_filter_atom_pos{}", comparison_exprs, rhs_idx);
             let new_fp = tx.output_info_fp();
 
             // Register this transformation as a producer
@@ -522,9 +529,6 @@ impl RulePlanner {
         lhs_fn_call_idx: usize,
         rhs_pos_indices: &[usize],
     ) -> Result<bool, PlanError> {
-        // Extract fn_call predicate information
-        let fn_call_predicate = catalog.fn_call_predicate(lhs_fn_call_idx);
-
         // Initialize collections for new atoms created by the fn_call pushdown
         let mut new_names = Vec::new();
         let mut new_fps = Vec::new();
@@ -553,8 +557,12 @@ impl RulePlanner {
                 .map(|&sig| ArithmeticPos::from_var_signature(sig))
                 .collect::<Vec<_>>();
 
+            let input_name = catalog.positive_atom_name(rhs_idx)?.to_string();
+            let new_name = Self::filter_name(&input_name);
             let tx = TransformationInfo::kv_to_kv(
                 rhs_fp,
+                input_name,
+                new_name.clone(),
                 catalog.original_atom_fingerprints().contains(&rhs_fp),
                 KeyValueLayout::new(vec![], in_vals.clone()),
                 KeyValueLayout::new(vec![], in_vals),
@@ -566,8 +574,6 @@ impl RulePlanner {
                 },
             );
 
-            // Generate descriptive name for the new atom
-            let new_name = format!("fn_call_{}_filter_atom_pos{}", fn_call_predicate, rhs_idx);
             let new_fp = tx.output_info_fp();
 
             // Register this transformation as a producer
@@ -619,7 +625,8 @@ impl RulePlanner {
             );
 
             // Resolve atom information from signature
-            let (args, atom_fp, atom_id) = catalog.resolve_atom(&atom_signature);
+            let (args, atom_fp, _atom_id, input_name) = catalog.resolve_atom(&atom_signature)?;
+            let input_name = input_name.to_string();
 
             // Register atom as consumer of this transformation
             self.insert_consumer(
@@ -650,16 +657,17 @@ impl RulePlanner {
             trace!("Output KV layout: keys=[], values={:?}", out_vals);
 
             // Create projection transformation that removes unused arguments
+            let new_name = Self::proj_name(&input_name);
             let tx = TransformationInfo::kv_to_kv(
                 atom_fp,
+                input_name,
+                new_name.clone(),
                 catalog.original_atom_fingerprints().contains(&atom_fp),
                 KeyValueLayout::new(vec![], in_vals),
                 KeyValueLayout::new(vec![], out_vals),
                 KvPredicates::default(), // no const-eq, var-eq, comparisons and fn_call predicates
             );
 
-            // Generate descriptive name for projected atom
-            let new_name = Self::projection_name(&atom_signature, atom_id);
             let new_fp = tx.output_info_fp();
 
             // Register this transformation as a producer
@@ -717,16 +725,24 @@ impl RulePlanner {
                 .collect(),
         );
 
+        // EDB premap is a layout-only pass-through: keep the atom's current
+        // hierarchical name as both input and output name.
+        let edb_name = if is_positive {
+            catalog.positive_atom_name(atom_idx)?.to_string()
+        } else {
+            catalog.negative_atom_name(atom_idx)?.to_string()
+        };
         let tx = TransformationInfo::kv_to_kv(
             edb_fp,
+            edb_name.clone(),
+            edb_name.clone(),
             true,
             edb_layout.clone(),
             edb_layout,
             KvPredicates::default(), // no const-eq, var-eq, comparisons and fn_call predicates
         );
 
-        // Generate descriptive name for the projected atom
-        let new_name = format!("edb_{}_premap", edb_fp);
+        let new_name = edb_name;
         let new_fp = tx.output_info_fp();
 
         // Store the transformation info
@@ -752,14 +768,32 @@ impl RulePlanner {
 // Private Utilities
 // =========================================================================
 impl RulePlanner {
-    /// Generates a consistent projection name based on atom polarity and RHS identifier.
+    /// Hierarchical name wrappers. These describe the logical operation
+    /// applied to the input(s), so each transformation's `output_name`
+    /// records the full construction path from EDBs.
     #[inline]
-    pub(super) fn projection_name(atom_signature: &AtomSignature, atom_id: usize) -> String {
-        if atom_signature.is_positive() {
-            format!("atom_{}_proj", atom_id)
-        } else {
-            format!("neg_atom_{}_proj", atom_id)
-        }
+    pub(super) fn proj_name(input_name: &str) -> String {
+        format!("proj({})", input_name)
+    }
+
+    #[inline]
+    pub(super) fn filter_name(input_name: &str) -> String {
+        format!("filter({})", input_name)
+    }
+
+    #[inline]
+    pub(super) fn join_name(left: &str, right: &str) -> String {
+        format!("join({}, {})", left, right)
+    }
+
+    #[inline]
+    pub(super) fn semijoin_name(left: &str, right: &str) -> String {
+        format!("semijoin({}, {})", left, right)
+    }
+
+    #[inline]
+    pub(super) fn antijoin_name(left: &str, right: &str) -> String {
+        format!("antijoin({}, {})", left, right)
     }
 
     /// Orders RHS arguments so join keys come first in the same order as the LHS keys.
