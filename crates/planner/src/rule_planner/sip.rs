@@ -135,8 +135,12 @@ impl RulePlanner {
         Self::trace_sip_partitions(catalog, &lhs_keys, &lhs_vals, &rhs_vals);
 
         // ---- Step 1: Project LHS → join keys only ----
+        let left_name = catalog.positive_atom_name(lhs_pos_idx)?.to_string();
+        let proj_name = RulePlanner::proj_name(&left_name);
         let proj_tx = TransformationInfo::kv_to_kv(
             left_fp,
+            left_name,
+            proj_name.clone(),
             originals.contains(&left_fp),
             KeyValueLayout::new(lhs_keys.clone(), lhs_vals),
             KeyValueLayout::new(lhs_keys.clone(), vec![]),
@@ -164,19 +168,20 @@ impl RulePlanner {
             })
             .collect();
 
+        let right_name = catalog.positive_atom_name(rhs_pos_idx)?.to_string();
+        let semijoin_name = RulePlanner::semijoin_name(&proj_name, &right_name);
         let semijoin_tx = TransformationInfo::join_to_kv(
             proj_fp,
+            proj_name,
             right_fp,
+            right_name,
+            semijoin_name.clone(),
             KeyValueLayout::new(lhs_new_keys.clone(), vec![]),
             KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
             KeyValueLayout::new(lhs_new_keys.clone(), rhs_vals.clone()),
             JoinPredicates::default(),
         );
         let semijoin_fp = semijoin_tx.output_info_fp();
-        let semijoin_name = format!(
-            "atom_pos{}_sip_semijoin_atom_pos{}",
-            lhs_pos_idx, rhs_pos_idx
-        );
 
         self.insert_producer(semijoin_fp, base_idx + 1);
         self.transformation_infos.push(semijoin_tx);

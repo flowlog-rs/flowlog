@@ -166,9 +166,15 @@ impl RulePlanner {
             .collect();
 
         // Create the join transformation with proper key-value layouts
+        let lhs_name = catalog.positive_atom_name(lhs_idx)?.to_string();
+        let rhs_name = catalog.positive_atom_name(rhs_idx)?.to_string();
+        let new_name = Self::join_name(&lhs_name, &rhs_name);
         let tx = TransformationInfo::join_to_kv(
             lhs_pos_fp,
+            lhs_name,
             rhs_pos_fp,
+            rhs_name,
+            new_name.clone(),
             KeyValueLayout::new(lhs_keys.clone(), lhs_vals.clone()),
             KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
             KeyValueLayout::new(
@@ -178,8 +184,6 @@ impl RulePlanner {
             JoinPredicates::default(),
         );
 
-        // Generate descriptive name and register the transformation
-        let new_name = format!("atom_pos{}_join_atom_pos{}", lhs_idx, rhs_idx);
         let new_fp = tx.output_info_fp();
 
         self.insert_producer(new_fp, current_transformation_index);

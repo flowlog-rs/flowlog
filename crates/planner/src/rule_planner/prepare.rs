@@ -128,7 +128,8 @@ impl RulePlanner {
 
         // The kept variable is left_sig, the dropped variable is right_sig.
         let atom_signature = left_sig.atom_signature();
-        let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
+        let (args, atom_fp, _atom_id, input_name) = catalog.resolve_atom(atom_signature)?;
+        let input_name = input_name.to_string();
 
         // Update consumer transformation index for the atom
         self.insert_consumer(
@@ -148,8 +149,11 @@ impl RulePlanner {
         trace!("Output values after dropping {}: {:?}", right_sig, out_vals);
 
         // Build a Key-Value to Key-Value info.
+        let new_name = Self::proj_name(&input_name);
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
+            input_name,
+            new_name.clone(),
             catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(vec![], in_vals),
             KeyValueLayout::new(vec![], out_vals.clone()),
@@ -159,8 +163,6 @@ impl RulePlanner {
             },
         );
 
-        // Generate descriptive name
-        let new_name = Self::projection_name(atom_signature, atom_id);
         let new_fp = tx.output_info_fp();
 
         // Update producer transformation index
@@ -188,7 +190,8 @@ impl RulePlanner {
 
         // The variable to be dropped is var_sig.
         let atom_signature = var_sig.atom_signature();
-        let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
+        let (args, atom_fp, _atom_id, input_name) = catalog.resolve_atom(atom_signature)?;
+        let input_name = input_name.to_string();
 
         // Update consumer transformation index for the atom
         self.insert_consumer(
@@ -207,8 +210,11 @@ impl RulePlanner {
         trace!("Output values after dropping {}: {:?}", var_sig, out_vals);
 
         // Build a Key-Value to Key-Value info.
+        let new_name = Self::proj_name(&input_name);
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
+            input_name,
+            new_name.clone(),
             catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(vec![], in_vals),
             KeyValueLayout::new(vec![], out_vals.clone()),
@@ -218,8 +224,6 @@ impl RulePlanner {
             },
         );
 
-        // Generate descriptive name
-        let new_name = Self::projection_name(atom_signature, atom_id);
         let new_fp = tx.output_info_fp();
 
         // Update producer transformation index
@@ -246,7 +250,8 @@ impl RulePlanner {
 
         // The variable to be dropped is var_sig.
         let atom_signature = var_sig.atom_signature();
-        let (args, atom_fp, atom_id) = catalog.resolve_atom(atom_signature);
+        let (args, atom_fp, _atom_id, input_name) = catalog.resolve_atom(atom_signature)?;
+        let input_name = input_name.to_string();
 
         // Update consumer transformation index for the atom
         self.insert_consumer(
@@ -265,16 +270,17 @@ impl RulePlanner {
         trace!("Output values after dropping {}: {:?}", var_sig, out_vals);
 
         // Build a Key-Value to Key-Value info.
+        let new_name = Self::proj_name(&input_name);
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
+            input_name,
+            new_name.clone(),
             catalog.original_atom_fingerprints().contains(&atom_fp),
             KeyValueLayout::new(vec![], in_vals),
             KeyValueLayout::new(vec![], out_vals.clone()),
             KvPredicates::default(),
         );
 
-        // Generate descriptive name
-        let new_name = Self::projection_name(atom_signature, atom_id);
         let new_fp = tx.output_info_fp();
 
         // Update producer transformation index
