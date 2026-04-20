@@ -149,7 +149,8 @@ impl RulePlanner {
         trace!("Output values after dropping {}: {:?}", right_sig, out_vals);
 
         // Build a Key-Value to Key-Value info.
-        let new_name = Self::proj_name(&input_name);
+        let kept_attrs = Self::attrs_from_positions(&out_vals, catalog);
+        let new_name = Self::proj_name(&input_name, &kept_attrs);
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
             input_name,
@@ -210,7 +211,8 @@ impl RulePlanner {
         trace!("Output values after dropping {}: {:?}", var_sig, out_vals);
 
         // Build a Key-Value to Key-Value info.
-        let new_name = Self::proj_name(&input_name);
+        let kept_attrs = Self::attrs_from_positions(&out_vals, catalog);
+        let new_name = Self::proj_name(&input_name, &kept_attrs);
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
             input_name,
@@ -270,7 +272,8 @@ impl RulePlanner {
         trace!("Output values after dropping {}: {:?}", var_sig, out_vals);
 
         // Build a Key-Value to Key-Value info.
-        let new_name = Self::proj_name(&input_name);
+        let kept_attrs = Self::attrs_from_positions(&out_vals, catalog);
+        let new_name = Self::proj_name(&input_name, &kept_attrs);
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
             input_name,
