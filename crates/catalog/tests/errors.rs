@@ -1,10 +1,8 @@
 //! Integration tests for every user-reachable `CatalogError` variant.
 //!
-//! Each fixture under `tests/errors/*.dl` exercises one variant. We
-//! (a) parse and stratify successfully, (b) build a catalog per rule and
-//! assert the right variant is returned, and (c) render via
-//! `common::diag::emit` and check the output cites the offending program
-//! element.
+//! Each fixture under `tests/errors/*.dl` exercises one variant by
+//! building a [`Catalog`] per rule and rendering the error via
+//! [`common::diag::emit`].
 
 use std::path::PathBuf;
 
@@ -27,7 +25,6 @@ fn catalog_for(name: &str) -> (Result<(), CatalogError>, SourceMap) {
     let path = fixture(name);
     let program = Program::parse(path.to_str().unwrap(), false, &mut sm)
         .expect("fixture should parse cleanly");
-
     let mut result = Ok(());
     for rule in program.rules() {
         if let Err(e) = Catalog::from_rule(rule) {

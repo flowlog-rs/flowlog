@@ -19,6 +19,7 @@ use crate::codegen::aggregation::{
     aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce_stmt,
     aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
+use crate::codegen::error::CodegenError;
 use crate::codegen::ident::find_local_ident;
 use crate::codegen::CodeGen;
 
@@ -34,7 +35,7 @@ impl CodeGen {
         non_recursive_arranged_map: &HashMap<u64, Ident>,
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
-    ) -> TokenStream {
+    ) -> Result<TokenStream, CodegenError> {
         self.features.mark_recursive();
 
         with_profiler(profiler, |profiler| {
@@ -44,7 +45,7 @@ impl CodeGen {
         // Early exit if nothing leaves recursion.
         let leave_fps = stratum.recursion_leave_collections();
         if leave_fps.is_empty() {
-            return quote! {};
+            return Ok(quote! {});
         }
 
         // --- Enter bindings -------------------------------------------------
@@ -119,7 +120,7 @@ impl CodeGen {
             .map(|tx| {
                 self.gen_transformation(&current, tx, &mut recursive_arranged, stratum, profiler)
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         // --- Union per IDB (delta_X) and aggregation ------------------------
         let (next_bindings, union_stmts) = self.collect_unions(
@@ -128,7 +129,7 @@ impl CodeGen {
             itr_fps,
             stratum.idb_to_aggregation_map(),
             profiler,
-        );
+        )?;
 
         // --- Feedback assignments (Variable::set), optionally gated --------
         let set_stmts = self.gen_feedback_stmts(
@@ -137,7 +138,7 @@ impl CodeGen {
             &recursive_bindings,
             itr_fps,
             profiler,
-        );
+        )?;
 
         // --- Leave outputs --------------------------------------------------
         let (leave_pattern, leave_stmt, post_leave) = self.build_leave_outputs(
@@ -147,9 +148,9 @@ impl CodeGen {
             itr_fps,
             stratum.idb_to_aggregation_map(),
             profiler,
-        );
+        )?;
 
-        quote! {
+        Ok(quote! {
             let #leave_pattern = scope.iterative::<Iter, _, _>(|inner| {
                 #(#enter_stmts)*
                 #(#recursive_var_inits)*
@@ -166,7 +167,7 @@ impl CodeGen {
                 #leave_stmt
             });
             #post_leave
-        }
+        })
     }
 
     /// Emit one `let in_X = X.enter(inner);` per entering collection, plus
@@ -215,7 +216,7 @@ impl CodeGen {
         iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         profiler: &mut Option<Profiler>,
-    ) -> (HashMap<u64, Ident>, Vec<TokenStream>) {
+    ) -> Result<(HashMap<u64, Ident>, Vec<TokenStream>), CodegenError> {
         let mut next_bindings: HashMap<u64, Ident> = HashMap::new();
         let mut union_stmts = Vec::new();
 
@@ -238,9 +239,12 @@ impl CodeGen {
             }
 
             // Build concatenation expression for all sources.
-            let (head, tail) = sources
-                .split_first()
-                .expect("CodeGen error: at least one source collection for union");
+            let (head, tail) = sources.split_first().ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "recursive IDB 0x{idb_fp:016x} has no source \
+                     collections to union"
+                ))
+            })?;
 
             let union_expr = tail.iter().fold(quote! { #head.clone() }, |ts, ident| {
                 quote! { #ts.concat(#ident.clone()) }
@@ -280,14 +284,7 @@ impl CodeGen {
             // ----------------------------------------------------------------
             if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(idb_fp) {
                 let output_name = self.find_global_ident(*idb_fp).to_string();
-
-                // Look up the aggregated column's data type.
-                let (key_types, val_types) = self.find_global_data_type(*idb_fp);
-                let agg_type = *key_types
-                    .iter()
-                    .chain(val_types)
-                    .nth(*agg_pos)
-                    .expect("CodeGen error: aggregation position out of bounds");
+                let agg_type = self.agg_column_type(*idb_fp, *agg_pos)?;
 
                 // Semiring fast path: replace reduce_core with threshold_semigroup
                 // using the appropriate semigroup, avoiding a second arrangement.
@@ -332,7 +329,7 @@ impl CodeGen {
                     let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
                     // Aggregate after union + dedup.
                     let reduce_stmt =
-                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type);
+                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type)?;
                     block = quote! {
                         #block
                         let #next_ident = #next_ident
@@ -355,7 +352,7 @@ impl CodeGen {
             union_stmts.push(block);
         }
 
-        (next_bindings, union_stmts)
+        Ok((next_bindings, union_stmts))
     }
 
     /// Assemble the `.leave()` expression(s) and any post-leave
@@ -368,7 +365,7 @@ impl CodeGen {
         iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         profiler: &mut Option<Profiler>,
-    ) -> (TokenStream, TokenStream, TokenStream) {
+    ) -> Result<(TokenStream, TokenStream, TokenStream), CodegenError> {
         // Resolve target identifiers and construct pattern.
         let targets: Vec<Ident> = leave_fps
             .iter()
@@ -383,22 +380,20 @@ impl CodeGen {
         let leave_exprs: Vec<TokenStream> = leave_fps
             .iter()
             .zip(targets.iter())
-            .map(|(fp, target)| {
-                let next_ident = next.get(fp).expect(
-                    "CodeGen error: leave relation missing from next bindings during recursion",
-                );
+            .map(|(fp, target)| -> Result<TokenStream, CodegenError> {
+                let next_ident = next.get(fp).ok_or_else(|| {
+                    CodegenError::internal(format!(
+                        "leave relation fingerprint 0x{fp:016x} missing \
+                         from next bindings during recursion"
+                    ))
+                })?;
 
                 // For aggregated relations (min/max/sum/count/avg) in datalog-batch mode:
                 // convert to semiring diff before leave() so cross-iteration aggregates
                 // are computed by consolidation after leave.
                 if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp) {
                     if self.config.is_datalog_batch() {
-                        let (key_types, val_types) = self.find_global_data_type(*fp);
-                        let agg_type = *key_types
-                            .iter()
-                            .chain(val_types)
-                            .nth(*agg_pos)
-                            .expect("CodeGen error: aggregation position out of bounds");
+                        let agg_type = self.agg_column_type(*fp, *agg_pos)?;
                         let pre_leave = match agg_op {
                             AggregationOperator::Min => {
                                 aggregation_min_pre_leave(*agg_arity, *agg_pos, agg_type)
@@ -425,7 +420,7 @@ impl CodeGen {
                             );
                         });
 
-                        return quote! { #next_ident #pre_leave .leave() };
+                        return Ok(quote! { #next_ident #pre_leave .leave() });
                     }
                 }
 
@@ -445,37 +440,37 @@ impl CodeGen {
                 if !iterative_fps.is_empty() {
                     if let Some(recursive_ident) = recursive.get(fp) {
                         if iterative_fps.contains(fp) {
-                            return quote! { #recursive_ident.leave().consolidate() };
+                            return Ok(quote! { #recursive_ident.leave().consolidate() });
                         } else {
-                            return quote! { #recursive_ident.leave() };
+                            return Ok(quote! { #recursive_ident.leave() });
                         }
                     }
                 }
 
-                quote! { #next_ident.leave() }
+                Ok(quote! { #next_ident.leave() })
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         with_profiler(profiler, |profiler| {
             profiler.leave_scope();
         });
 
-        leave_fps
-            .iter()
-            .zip(targets.iter())
-            .for_each(|(fp, target)| {
-                let next_ident = next.get(fp).expect(
-                    "CodeGen error: leave relation missing from next bindings during recursion",
-                );
+        for (fp, target) in leave_fps.iter().zip(targets.iter()) {
+            let next_ident = next.get(fp).ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "leave relation fingerprint 0x{fp:016x} missing from \
+                     next bindings during recursion"
+                ))
+            })?;
 
-                with_profiler(profiler, |profiler| {
-                    profiler.recursive_leave_operator(
-                        target.to_string(),
-                        next_ident.to_string(),
-                        target.to_string(),
-                    );
-                });
+            with_profiler(profiler, |profiler| {
+                profiler.recursive_leave_operator(
+                    target.to_string(),
+                    next_ident.to_string(),
+                    target.to_string(),
+                );
             });
+        }
 
         let leave_stmt = match leave_exprs.as_slice() {
             [expr] => quote! { #expr },
@@ -512,7 +507,7 @@ impl CodeGen {
 
         let post_leave = quote! { #(#post_leave_stmts)* };
 
-        (pattern, leave_stmt, post_leave)
+        Ok((pattern, leave_stmt, post_leave))
     }
 
     /// Build `recursive_X` identifier names and the `fp → recursive_X` binding map.
@@ -540,12 +535,13 @@ impl CodeGen {
         &mut self,
         condition: Option<&LoopCondition>,
         next_bindings: &HashMap<u64, Ident>,
-    ) -> (Vec<TokenStream>, ConditionPlan) {
+    ) -> Result<(Vec<TokenStream>, ConditionPlan), CodegenError> {
         let Some(cond) = condition else {
-            return (Vec::new(), ConditionPlan::default());
+            return Ok((Vec::new(), ConditionPlan::default()));
         };
 
-        let (prelude, boolean_until_conditions) = self.build_until_conditions(cond, next_bindings);
+        let (prelude, boolean_until_conditions) =
+            self.build_until_conditions(cond, next_bindings)?;
 
         // Preserve empty window lists as Some([]) rather than collapsing them to
         // None.  An empty list arises from contradictory bounds (e.g. `@it >= 5
@@ -568,14 +564,14 @@ impl CodeGen {
         }
 
         let connective = cond.connective().cloned();
-        (
+        Ok((
             prelude,
             ConditionPlan {
                 boolean_until_conditions,
                 iter_while_conditions,
                 connective,
             },
-        )
+        ))
     }
 
     /// Emit `Variable::set(feedback)` for each recursive relation, where
@@ -587,14 +583,17 @@ impl CodeGen {
         recursive_bindings: &HashMap<u64, Ident>,
         iterative_fps: &[u64],
         profiler: &mut Option<Profiler>,
-    ) -> Vec<TokenStream> {
-        let (mut stmts, plan) = self.prepare_loop_condition(condition, next_bindings);
+    ) -> Result<Vec<TokenStream>, CodegenError> {
+        let (mut stmts, plan) = self.prepare_loop_condition(condition, next_bindings)?;
         let has_iterative = !iterative_fps.is_empty();
 
         for (fp, recursive_ident) in recursive_bindings {
-            let next_ident = next_bindings.get(fp).unwrap_or_else(|| {
-                panic!("CodeGen error: recursive relation fp {fp} missing next binding")
-            });
+            let next_ident = next_bindings.get(fp).ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "recursive relation fingerprint 0x{fp:016x} missing \
+                     from next bindings"
+                ))
+            })?;
             let iter_var = find_local_ident(recursive_bindings, *fp);
             with_profiler(profiler, |profiler| {
                 profiler.recursive_resultsin_operator(
@@ -658,7 +657,7 @@ impl CodeGen {
             stmts.push(quote! { #var_name.set(#feedback); });
         }
 
-        stmts
+        Ok(stmts)
     }
 
     /// Build prelude stmts and the arranged gate signal for the `until` clause.
@@ -666,9 +665,9 @@ impl CodeGen {
         &mut self,
         cond: &LoopCondition,
         next_bindings: &HashMap<u64, Ident>,
-    ) -> (Vec<TokenStream>, Option<Ident>) {
+    ) -> Result<(Vec<TokenStream>, Option<Ident>), CodegenError> {
         let Some(until_group) = cond.until_part() else {
-            return (Vec::new(), None);
+            return Ok((Vec::new(), None));
         };
         self.features.mark_as_collection();
         self.features.mark_timely_map();
@@ -677,9 +676,12 @@ impl CodeGen {
 
         // Initialise gate from the first until relation.
         let first_fp = until_group.first().fp();
-        let first_next = next_bindings.get(&first_fp).unwrap_or_else(|| {
-            panic!("CodeGen error: until relation fp {first_fp} missing from next_bindings")
-        });
+        let first_next = next_bindings.get(&first_fp).ok_or_else(|| {
+            CodegenError::internal(format!(
+                "until relation fingerprint 0x{first_fp:016x} missing \
+                 from next bindings"
+            ))
+        })?;
         let first_sig = format_ident!("rel_sig_{}", first_fp);
         let dedup = self.dedup_recursive();
         stmts.push(quote! { let #first_sig = #first_next.clone() #dedup; });
@@ -688,9 +690,12 @@ impl CodeGen {
         // Fold remaining until relations into the gate with explicit connectives.
         for (conn, rel) in until_group.rest() {
             let fp = rel.fp();
-            let next_ident = next_bindings.get(&fp).unwrap_or_else(|| {
-                panic!("CodeGen error: until relation fp {fp} missing from next_bindings")
-            });
+            let next_ident = next_bindings.get(&fp).ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "until relation fingerprint 0x{fp:016x} missing from \
+                     next bindings"
+                ))
+            })?;
             let sig = format_ident!("rel_sig_{}", fp);
             stmts.push(quote! { let #sig = #next_ident.clone() #dedup; });
 
@@ -709,7 +714,7 @@ impl CodeGen {
 
         let arr = format_ident!("{}_arr", gate);
         stmts.push(quote! { let #arr = #gate.clone().arrange_by_self(); });
-        (stmts, Some(arr))
+        Ok((stmts, Some(arr)))
     }
 }
 

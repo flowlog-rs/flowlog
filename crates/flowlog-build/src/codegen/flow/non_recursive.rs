@@ -22,6 +22,7 @@ use crate::codegen::aggregation::{
     aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce_stmt, aggregation_row_chop,
     aggregation_sum_optimize,
 };
+use crate::codegen::error::CodegenError;
 use crate::codegen::CodeGen;
 
 // =========================================================================
@@ -34,7 +35,7 @@ impl CodeGen {
         &mut self,
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
-    ) -> (Vec<TokenStream>, HashMap<u64, Ident>) {
+    ) -> Result<(Vec<TokenStream>, HashMap<u64, Ident>), CodegenError> {
         let mut flows = Vec::new();
         // Stratum-scoped cache of arrangements; emit arrange_by_key just before first use.
         let mut non_recursive_arranged_map: HashMap<u64, Ident> = HashMap::new();
@@ -47,11 +48,11 @@ impl CodeGen {
                 &mut non_recursive_arranged_map,
                 stratum,
                 profiler,
-            ));
+            )?);
         }
 
         trace!("Generated static flows:\n{}\n", quote! { #(#flows)* });
-        (flows, non_recursive_arranged_map)
+        Ok((flows, non_recursive_arranged_map))
     }
 
     /// Emit per-IDB post-processing: union the contributing heads, dedup,
@@ -62,7 +63,7 @@ impl CodeGen {
         calculated_output_fps: &HashSet<u64>,
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
-    ) -> Vec<TokenStream> {
+    ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::new();
         let dedup_stats = self.dedup_nonrecursive();
 
@@ -116,12 +117,7 @@ impl CodeGen {
 
             if let Some((agg_op, agg_pos, agg_arity)) = stratum.idb_to_aggregation_map().get(idb_fp)
             {
-                let (key_types, val_types) = self.find_global_data_type(*idb_fp);
-                let agg_type = *key_types
-                    .iter()
-                    .chain(val_types)
-                    .nth(*agg_pos)
-                    .expect("CodeGen error: aggregation position out of bounds");
+                let agg_type = self.agg_column_type(*idb_fp, *agg_pos)?;
 
                 // `DatalogBatch`-only fast path: compute the aggregation with
                 // a monoid via `threshold_semigroup`, skipping the second
@@ -166,7 +162,7 @@ impl CodeGen {
                     let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
                     let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
                     let reduce_stmt =
-                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type);
+                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type)?;
                     block = quote! {
                         #block
                         let #output = #output
@@ -193,6 +189,6 @@ impl CodeGen {
             "Generated post-processing flows:\n{}\n",
             quote! { #(#flows)* }
         );
-        flows
+        Ok(flows)
     }
 }

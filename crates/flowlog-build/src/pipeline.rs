@@ -47,6 +47,7 @@ impl Pipeline {
 
         let config = build_config(builder, program_str);
         let program = parse(&config, &builder.include_dirs, sm)?;
+        typechecker::check_program(&program)?;
         let strata = plan(&config, &program)?;
 
         let mut profiler = None;
