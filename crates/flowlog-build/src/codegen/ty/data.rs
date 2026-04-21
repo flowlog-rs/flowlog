@@ -74,6 +74,23 @@ impl CodeGen {
         flow: &TransformationFlow,
         stratum: &StratumPlanner,
     ) -> Result<(), CodegenError> {
+        let output_fingerprint = stratum
+            .head_to_idb_map()
+            .get(&output_fingerprint)
+            .copied()
+            .unwrap_or(output_fingerprint);
+
+        // Outputs that already have a declared shape (every IDB is seeded
+        // from its `.decl` in `make_global_data_type_map`) skip inference
+        // entirely. This both avoids redundant work and sidesteps a
+        // post-typecheck `expect` panic for heads whose flow consists
+        // only of polymorphic literals — e.g. `Foo(x, 42, 999)` — whose
+        // concrete column types live in the `.decl`, not the planner's
+        // `TransformationFlow`.
+        if self.global_fp_to_type.contains_key(&output_fingerprint) {
+            return Ok(());
+        }
+
         let left_type = self.find_global_data_type(left_fingerprint)?.clone();
         let right_type = right_fingerprint
             .map(|rf| self.find_global_data_type(rf))
@@ -87,15 +104,8 @@ impl CodeGen {
         let keys = flow.key().iter().map(&resolve).collect();
         let vals = flow.value().iter().map(&resolve).collect();
 
-        let output_fingerprint = stratum
-            .head_to_idb_map()
-            .get(&output_fingerprint)
-            .copied()
-            .unwrap_or(output_fingerprint);
-
         self.global_fp_to_type
-            .entry(output_fingerprint)
-            .or_insert((keys, vals));
+            .insert(output_fingerprint, (keys, vals));
         Ok(())
     }
 
