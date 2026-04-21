@@ -64,10 +64,10 @@ pub struct Program {
     segments: Vec<Segment>,
     /// External scalar UDF declarations (`.extern fn`).
     udfs: Vec<ExternFn>,
-    /// Inline ground facts, keyed by relation name.
-    ///
-    /// Each value is a list of constant tuples, one per `rel(c1, c2, ...).` fact.
-    facts: HashMap<String, Vec<Vec<ConstType>>>,
+    /// Inline ground facts, keyed by relation name. Each entry is a list
+    /// of `(span, tuple)` — the head span of the source `rel(c1, ...).`
+    /// fact plus its constant columns.
+    facts: HashMap<String, Vec<(Span, Vec<ConstType>)>>,
 }
 
 // =============================================================================
@@ -123,7 +123,7 @@ impl fmt::Display for Program {
             writeln!(f, "Facts")?;
             writeln!(f, "---------------------------------------------")?;
             for (rel_name, facts) in &self.facts {
-                for vals in facts {
+                for (_, vals) in facts {
                     let values = vals
                         .iter()
                         .map(|c| c.to_string())
@@ -330,6 +330,18 @@ impl Program {
             .collect()
     }
 
+    /// Mutable version of [`segments`](Self::segments).
+    pub fn segments_mut(&mut self) -> &mut [Segment] {
+        &mut self.segments
+    }
+
+    /// Mutable access to inline ground facts — only used by the typechecker's
+    /// lowering pass to rewrite polymorphic literals to their concrete
+    /// declared types.
+    pub fn facts_mut(&mut self) -> &mut HashMap<String, Vec<(Span, Vec<ConstType>)>> {
+        &mut self.facts
+    }
+
     /// Look up a rule by its global source-order ID.
     ///
     /// # Panics
@@ -353,7 +365,7 @@ impl Program {
     /// Inline facts (ground tuples).
     #[must_use]
     #[inline]
-    pub fn facts(&self) -> &HashMap<String, Vec<Vec<ConstType>>> {
+    pub fn facts(&self) -> &HashMap<String, Vec<(Span, Vec<ConstType>)>> {
         &self.facts
     }
 
@@ -675,7 +687,58 @@ impl Program {
             program.extract_fact(fact);
         }
 
+        program.validate_relation_references()?;
+
         Ok(program)
+    }
+
+    /// Reject any rule head, body atom, or ground fact whose relation
+    /// name has no matching `.decl`. Mirrors the check directives already
+    /// do via [`ParseError::UndeclaredInDirective`]; covering the rule and
+    /// fact paths here lets the typechecker assume every reference is
+    /// declared.
+    fn validate_relation_references(&self) -> Result<(), ParseError> {
+        let declared: HashSet<&str> = self.relations.iter().map(|r| r.name()).collect();
+
+        for segment in &self.segments {
+            let rules: &[FlowLogRule] = match segment {
+                Segment::Plain(rules) => rules,
+                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
+            };
+            for rule in rules {
+                let head = rule.head();
+                if !declared.contains(head.name()) {
+                    return Err(ParseError::UndeclaredInRule {
+                        span: head.span(),
+                        name: head.name().to_string(),
+                    });
+                }
+                for pred in rule.rhs() {
+                    if let Predicate::PositiveAtomPredicate(atom)
+                    | Predicate::NegativeAtomPredicate(atom) = pred
+                    {
+                        if !declared.contains(atom.name()) {
+                            return Err(ParseError::UndeclaredInRule {
+                                span: atom.span(),
+                                name: atom.name().to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        for (rel_name, tuples) in &self.facts {
+            if !declared.contains(rel_name.as_str()) {
+                let span = tuples.first().map(|(s, _)| *s).unwrap_or(Span::DUMMY);
+                return Err(ParseError::UndeclaredInFact {
+                    span,
+                    name: rel_name.clone(),
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// Apply `.input`, `.output`, and `.printsize` directives to `relations`.
@@ -903,11 +966,13 @@ impl Program {
         Ok(())
     }
 
-    /// Insert a ground-tuple fact into `self.facts`.
+    /// Insert a ground-tuple fact into `self.facts`, preserving the head
+    /// span so the typechecker can cite the offending source position.
     fn extract_fact(&mut self, fact_rule: FlowLogRule) {
         let rel_name = fact_rule.head().name().to_string();
+        let span = fact_rule.head().span();
         let tuple = fact_rule.extract_constants_from_head();
-        self.facts.entry(rel_name).or_default().push(tuple);
+        self.facts.entry(rel_name).or_default().push((span, tuple));
     }
 }
 

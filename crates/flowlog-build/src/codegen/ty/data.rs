@@ -9,7 +9,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::parser::{ConstType, DataType};
+use crate::parser::DataType;
 use crate::planner::{
     ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
 };
@@ -65,7 +65,7 @@ impl CodeGen {
 
     /// Propagate types through `flow` and register the output shape
     /// under `output_fingerprint` (or its IDB fingerprint, if this head
-    /// feeds one). Inference is infallible post-typecheck.
+    /// feeds one).
     pub(crate) fn record_transformation_output_type(
         &mut self,
         left_fingerprint: u64,
@@ -80,17 +80,6 @@ impl CodeGen {
             .copied()
             .unwrap_or(output_fingerprint);
 
-        // Outputs that already have a declared shape (every IDB is seeded
-        // from its `.decl` in `make_global_data_type_map`) skip inference
-        // entirely. This both avoids redundant work and sidesteps a
-        // post-typecheck `expect` panic for heads whose flow consists
-        // only of polymorphic literals — e.g. `Foo(x, 42, 999)` — whose
-        // concrete column types live in the `.decl`, not the planner's
-        // `TransformationFlow`.
-        if self.global_fp_to_type.contains_key(&output_fingerprint) {
-            return Ok(());
-        }
-
         let left_type = self.find_global_data_type(left_fingerprint)?.clone();
         let right_type = right_fingerprint
             .map(|rf| self.find_global_data_type(rf))
@@ -99,27 +88,33 @@ impl CodeGen {
 
         let resolve = |expr: &ArithmeticArgument| {
             self.infer_expr_type(expr, &left_type, right_type.as_ref())
-                .expect("post-typecheck: expression has a concrete type")
         };
-        let keys = flow.key().iter().map(&resolve).collect();
-        let vals = flow.value().iter().map(&resolve).collect();
+        let keys = flow
+            .key()
+            .iter()
+            .map(&resolve)
+            .collect::<Result<_, _>>()?;
+        let vals = flow
+            .value()
+            .iter()
+            .map(&resolve)
+            .collect::<Result<_, _>>()?;
 
         self.global_fp_to_type
             .insert(output_fingerprint, (keys, vals));
         Ok(())
     }
 
-    /// Type of the first factor we can pin down. `None` iff every factor
-    /// is a polymorphic numeric literal (impossible after typecheck).
+    /// Type of the expression's initial factor — post-typecheck every
+    /// factor has a concrete type, and an arithmetic expression's factors
+    /// all unify to the same type, so the first one is authoritative.
     pub(crate) fn infer_expr_type(
         &self,
         expr: &ArithmeticArgument,
         left_type: &KvTypes,
         right_type: Option<&KvTypes>,
-    ) -> Option<DataType> {
-        std::iter::once(expr.init())
-            .chain(expr.rest().iter().map(|(_, f)| f))
-            .find_map(|f| self.infer_factor_type(f, left_type, right_type))
+    ) -> Result<DataType, CodegenError> {
+        self.infer_factor_type(expr.init(), left_type, right_type)
     }
 
     fn infer_factor_type(
@@ -127,28 +122,50 @@ impl CodeGen {
         factor: &FactorArgument,
         left_type: &KvTypes,
         right_type: Option<&KvTypes>,
-    ) -> Option<DataType> {
+    ) -> Result<DataType, CodegenError> {
         match factor {
-            FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => {
-                slot(left_type, *is_key).get(*idx).copied()
-            }
+            FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => slot(
+                left_type, *is_key,
+            )
+            .get(*idx)
+            .copied()
+            .ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "KV slot out of bounds: is_key={is_key}, idx={idx}, \
+                     left shape=({}, {})",
+                    left_type.0.len(),
+                    left_type.1.len()
+                ))
+            }),
             FactorArgument::Var(TransformationArgument::Jn((is_left, is_key, idx))) => {
                 let base = if *is_left {
                     left_type
                 } else {
-                    right_type.expect("codegen ICE: join with no right input")
+                    right_type.ok_or_else(|| {
+                        CodegenError::internal(
+                            "join factor references right input but no right type is bound"
+                                .to_string(),
+                        )
+                    })?
                 };
-                slot(base, *is_key).get(*idx).copied()
+                slot(base, *is_key).get(*idx).copied().ok_or_else(|| {
+                    CodegenError::internal(format!(
+                        "join slot out of bounds: is_left={is_left}, is_key={is_key}, idx={idx}"
+                    ))
+                })
             }
-            FactorArgument::Const(ConstType::Int(_) | ConstType::Float(_)) => None,
-            FactorArgument::Const(ConstType::Text(_)) => Some(DataType::String),
-            FactorArgument::Const(ConstType::Bool(_)) => Some(DataType::Bool),
+            FactorArgument::Const(c) => c.data_type().ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "polymorphic const {c:?} reached codegen; typechecker should have pinned it"
+                ))
+            }),
             FactorArgument::FnCall { name, .. } => self
                 .program
                 .udfs()
                 .iter()
                 .find(|e| e.name() == name)
-                .map(|e| e.ret_type()),
+                .map(|e| e.ret_type())
+                .ok_or_else(|| CodegenError::internal(format!("UDF `{name}` not declared"))),
         }
     }
 }
@@ -215,4 +232,49 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
         [t0] => quote! { ( #t0, ) },
         _ => quote! { ( #(#tys),* ) },
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::Config;
+    use crate::parser::{ArithmeticOperator, ConstType, Program};
+
+    fn make_codegen() -> CodeGen {
+        CodeGen::new(Config::default(), Program::default())
+    }
+
+    #[test]
+    fn infer_factor_type_concrete_literal_returns_its_type() {
+        let cg = make_codegen();
+        let empty: KvTypes = (vec![], vec![]);
+        assert_eq!(
+            cg.infer_factor_type(&FactorArgument::Const(ConstType::Int32(42)), &empty, None)
+                .unwrap(),
+            DataType::Int32
+        );
+        assert_eq!(
+            cg.infer_factor_type(&FactorArgument::Const(ConstType::Bool(true)), &empty, None)
+                .unwrap(),
+            DataType::Bool
+        );
+    }
+
+    #[test]
+    fn infer_expr_type_picks_first_concrete_factor() {
+        let cg = make_codegen();
+        let expr = ArithmeticArgument {
+            init: FactorArgument::Const(ConstType::Int64(0)),
+            rest: vec![(
+                ArithmeticOperator::Plus,
+                FactorArgument::Var(TransformationArgument::KV((false, 0))),
+            )],
+        };
+        let left_type: KvTypes = (vec![], vec![DataType::Int64]);
+        assert_eq!(
+            cg.infer_expr_type(&expr, &left_type, None).unwrap(),
+            DataType::Int64
+        );
+    }
+
 }

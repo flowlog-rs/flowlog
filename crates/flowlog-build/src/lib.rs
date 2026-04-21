@@ -65,6 +65,7 @@ pub mod stratifier;
 pub mod typechecker;
 
 pub use build::BuildError;
+pub use codegen::arg::const_to_token;
 pub use codegen::code_parts::CodeParts;
 pub use codegen::error::CodegenError;
 pub use codegen::features::Features;

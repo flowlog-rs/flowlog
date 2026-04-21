@@ -190,6 +190,14 @@ impl Arithmetic {
         &self.rest
     }
 
+    pub fn init_mut(&mut self) -> &mut Factor {
+        &mut self.init
+    }
+
+    pub fn rest_mut(&mut self) -> &mut [(ArithmeticOperator, Factor)] {
+        &mut self.rest
+    }
+
     /// Variables in order of appearance (duplicates preserved).
     #[must_use]
     pub fn vars(&self) -> Vec<&String> {

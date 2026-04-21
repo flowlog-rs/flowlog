@@ -51,4 +51,18 @@ impl Segment {
             Self::Plain(_) => None,
         }
     }
+
+    pub fn as_rules_mut(&mut self) -> &mut [FlowLogRule] {
+        match self {
+            Self::Plain(rules) => rules,
+            Self::Loop(_) | Self::Fixpoint(_) => &mut [],
+        }
+    }
+
+    pub fn as_loop_mut(&mut self) -> Option<&mut LoopBlock> {
+        match self {
+            Self::Loop(block) | Self::Fixpoint(block) => Some(block),
+            Self::Plain(_) => None,
+        }
+    }
 }

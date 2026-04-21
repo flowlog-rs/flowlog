@@ -14,9 +14,9 @@
 //! ```
 
 use super::Arithmetic;
+use crate::common::source::{FileId, Ignored, Span};
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{span_of, Lexeme, Rule};
-use crate::common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
@@ -133,6 +133,16 @@ impl ComparisonExpr {
     #[inline]
     pub fn right(&self) -> &Arithmetic {
         &self.right
+    }
+
+    #[inline]
+    pub fn left_mut(&mut self) -> &mut Arithmetic {
+        &mut self.left
+    }
+
+    #[inline]
+    pub fn right_mut(&mut self) -> &mut Arithmetic {
+        &mut self.right
     }
 
     /// Unique variables referenced on either side (deduplicated).

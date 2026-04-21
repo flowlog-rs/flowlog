@@ -156,6 +156,11 @@ impl Head {
         &self.head_arguments
     }
 
+    #[inline]
+    pub fn head_arguments_mut(&mut self) -> &mut [HeadArg] {
+        &mut self.head_arguments
+    }
+
     /// Arity (number of arguments).
     #[must_use]
     #[inline]

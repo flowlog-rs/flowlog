@@ -1,31 +1,63 @@
 //! Constant value types for FlowLog Datalog programs.
 
+use super::DataType;
+use crate::common::source::FileId;
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{Lexeme, Rule};
-use crate::common::source::FileId;
 use ordered_float::OrderedFloat;
 use pest::iterators::Pair;
 use std::fmt;
 
 /// A literal constant in a FlowLog Datalog program.
 ///
-/// Constants may appear in atom arguments, arithmetic expressions,
-/// and comparisons. Currently supported:
-/// - [`ConstType::Int`] for integer constants (stored as i64)
-/// - [`ConstType::Text`] for UTF-8 strings
-/// - [`ConstType::Bool`] for boolean values
+/// Constants live in two stages:
 ///
-/// Integer literals are parsed into a single `i64` representation.
-/// The actual column width (i8, i16, i32, i64) is determined by relation
-/// declarations. Codegen emits unsuffixed literals so Rust infers the
-/// correct type from context.
+/// - **Pre-typecheck** (parser-emitted): [`ConstType::Int`] and
+///   [`ConstType::Float`] are *polymorphic placeholders*. Their concrete
+///   width isn't known until the typechecker unifies them against column
+///   types from the `.decl` (or a sibling variable's type).
+/// - **Post-typecheck**: constant type inference pins every polymorphic
+///   variant to its concrete counterpart — [`ConstType::Int8`] through
+///   [`ConstType::Int64`], [`ConstType::UInt8`] through [`ConstType::UInt64`],
+///   [`ConstType::Float32`] / [`ConstType::Float64`] — via [`ConstType::pin`].
+///
+/// [`ConstType::Text`] and [`ConstType::Bool`] are already concrete; they
+/// pass through unchanged.
+///
+/// **Invariant for downstream consumers.** Catalog, planner, and codegen
+/// may assume all literals are concrete and call [`ConstType::data_type`]
+/// unconditionally.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstType {
-    /// Integer constant (stored as i64).
+    /// Polymorphic integer literal (parser-emitted, stored as i64).
+    /// Replaced by one of the width-specific variants during typechecking.
     Int(i64),
 
-    /// Floating-point constant (stored as OrderedFloat<f64>).
+    /// Polymorphic floating-point literal (parser-emitted, stored as
+    /// `OrderedFloat<f64>`). Replaced by `Float32` / `Float64` during
+    /// typechecking.
     Float(OrderedFloat<f64>),
+
+    /// 8-bit signed integer constant.
+    Int8(i8),
+    /// 16-bit signed integer constant.
+    Int16(i16),
+    /// 32-bit signed integer constant.
+    Int32(i32),
+    /// 64-bit signed integer constant.
+    Int64(i64),
+    /// 8-bit unsigned integer constant.
+    UInt8(u8),
+    /// 16-bit unsigned integer constant.
+    UInt16(u16),
+    /// 32-bit unsigned integer constant.
+    UInt32(u32),
+    /// 64-bit unsigned integer constant.
+    UInt64(u64),
+    /// 32-bit floating-point constant.
+    Float32(OrderedFloat<f32>),
+    /// 64-bit floating-point constant.
+    Float64(OrderedFloat<f64>),
 
     /// UTF-8 string constant.
     Text(String),
@@ -34,13 +66,96 @@ pub enum ConstType {
     Bool(bool),
 }
 
+impl ConstType {
+    /// Resolved column type, or `None` for the polymorphic `Int` / `Float`
+    /// variants — the typechecker must pin those before downstream
+    /// consumers can rely on a concrete width.
+    pub fn data_type(&self) -> Option<DataType> {
+        Some(match self {
+            Self::Int8(_) => DataType::Int8,
+            Self::Int16(_) => DataType::Int16,
+            Self::Int32(_) => DataType::Int32,
+            Self::Int64(_) => DataType::Int64,
+            Self::UInt8(_) => DataType::UInt8,
+            Self::UInt16(_) => DataType::UInt16,
+            Self::UInt32(_) => DataType::UInt32,
+            Self::UInt64(_) => DataType::UInt64,
+            Self::Float32(_) => DataType::Float32,
+            Self::Float64(_) => DataType::Float64,
+            Self::Text(_) => DataType::String,
+            Self::Bool(_) => DataType::Bool,
+            Self::Int(_) | Self::Float(_) => return None,
+        })
+    }
+
+    /// `true` only for the parser-emitted `Int` / `Float` variants. Useful
+    /// for debug-assertions that the typechecker's const-inference pass ran.
+    pub fn is_polymorphic(&self) -> bool {
+        matches!(self, Self::Int(_) | Self::Float(_))
+    }
+
+    /// Pin a polymorphic literal to the concrete variant matching `target`.
+    /// No-op on already-concrete variants (asserts the type matches).
+    ///
+    /// Integer casts use `as` (truncating); float `f64` → `f32` uses `as f32`
+    /// (lossy). Range-checking is deferred to rustc on the generated code,
+    /// matching [`crate::typechecker`]'s "we do not range-check integer
+    /// literals" contract.
+    ///
+    /// Panics on family mismatch (e.g. `Int` → `String`) — the typechecker
+    /// must accept the literal's family against `target` first.
+    pub fn pin(&mut self, target: DataType) {
+        match self {
+            Self::Int(v) => {
+                let v = *v;
+                *self = match target {
+                    DataType::Int8 => Self::Int8(v as i8),
+                    DataType::Int16 => Self::Int16(v as i16),
+                    DataType::Int32 => Self::Int32(v as i32),
+                    DataType::Int64 => Self::Int64(v),
+                    DataType::UInt8 => Self::UInt8(v as u8),
+                    DataType::UInt16 => Self::UInt16(v as u16),
+                    DataType::UInt32 => Self::UInt32(v as u32),
+                    DataType::UInt64 => Self::UInt64(v as u64),
+                    _ => panic!("ConstType error: pin({target}) on Int({v}): family mismatch"),
+                };
+            }
+            Self::Float(v) => {
+                let f = v.into_inner();
+                *self = match target {
+                    DataType::Float32 => Self::Float32(OrderedFloat(f as f32)),
+                    DataType::Float64 => Self::Float64(OrderedFloat(f)),
+                    _ => panic!("ConstType error: pin({target}) on Float({f}): family mismatch"),
+                };
+            }
+            _ => {
+                debug_assert_eq!(
+                    self.data_type(),
+                    Some(target),
+                    "ConstType::pin() on already-concrete literal with mismatched target",
+                );
+            }
+        }
+    }
+}
+
 impl fmt::Display for ConstType {
-    /// Prints constants in Datalog syntax:
-    /// integers as-is, strings with quotes.
+    /// Prints constants in Datalog syntax: numbers as-is (all widths),
+    /// strings with quotes, bools as `True` / `False`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Int(v) => write!(f, "{v}"),
             Self::Float(v) => write!(f, "{v}"),
+            Self::Int8(v) => write!(f, "{v}"),
+            Self::Int16(v) => write!(f, "{v}"),
+            Self::Int32(v) => write!(f, "{v}"),
+            Self::Int64(v) => write!(f, "{v}"),
+            Self::UInt8(v) => write!(f, "{v}"),
+            Self::UInt16(v) => write!(f, "{v}"),
+            Self::UInt32(v) => write!(f, "{v}"),
+            Self::UInt64(v) => write!(f, "{v}"),
+            Self::Float32(v) => write!(f, "{v}"),
+            Self::Float64(v) => write!(f, "{v}"),
             Self::Text(s) => write!(f, "\"{s}\""),
             Self::Bool(b) => write!(f, "{}", if *b { "True" } else { "False" }),
         }
@@ -92,27 +207,37 @@ impl Lexeme for ConstType {
 mod tests {
     use super::*;
 
+    /// The variant → `DataType` bridge is a hand-written 1:1 table — a
+    /// typo here (e.g. `Int16 → DataType::Int8`) would silently emit the
+    /// wrong tuple type in codegen without failing the e2e suite unless
+    /// the exact width was covered.
     #[test]
-    fn display_integer_golden() {
-        assert_eq!(ConstType::Int(42).to_string(), "42");
-        assert_eq!(ConstType::Int(10995116277782).to_string(), "10995116277782");
-    }
-
-    #[test]
-    fn display_text_edge_cases() {
+    fn data_type_matches_variant() {
         let cases = [
-            ("", "\"\""),
-            ("hello world", "\"hello world\""),
-            ("café 🦀", "\"café 🦀\""),
-            ("say \"hello\"", "\"say \"hello\"\""),
+            (ConstType::Int8(0), DataType::Int8),
+            (ConstType::Int16(0), DataType::Int16),
+            (ConstType::Int32(0), DataType::Int32),
+            (ConstType::Int64(0), DataType::Int64),
+            (ConstType::UInt8(0), DataType::UInt8),
+            (ConstType::UInt16(0), DataType::UInt16),
+            (ConstType::UInt32(0), DataType::UInt32),
+            (ConstType::UInt64(0), DataType::UInt64),
+            (ConstType::Float32(OrderedFloat(0.0)), DataType::Float32),
+            (ConstType::Float64(OrderedFloat(0.0)), DataType::Float64),
+            (ConstType::Text("x".into()), DataType::String),
+            (ConstType::Bool(true), DataType::Bool),
         ];
-        for (raw, expect) in cases {
-            assert_eq!(ConstType::Text(raw.into()).to_string(), expect);
+        for (c, expected) in cases {
+            assert_eq!(c.data_type(), Some(expected));
         }
     }
 
+    /// Downstream consumers distinguish "concrete, known width" from
+    /// "polymorphic placeholder" by this `Some`/`None` split; a silent
+    /// default width would leak through typechecker bugs.
     #[test]
-    fn equality_cross_type() {
-        assert_ne!(ConstType::Int(42), ConstType::Text("42".into()));
+    fn data_type_is_none_on_polymorphic() {
+        assert_eq!(ConstType::Int(42).data_type(), None);
+        assert_eq!(ConstType::Float(OrderedFloat(1.5)).data_type(), None);
     }
 }

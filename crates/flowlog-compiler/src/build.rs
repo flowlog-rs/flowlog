@@ -37,7 +37,8 @@ impl Compiler {
         let features = self.codegen.features();
 
         // `src/relation.rs` — Relation trait + per-EDB `Rel{name}` input handlers.
-        let relation_body = relation::gen_relation(&self.program, features, self.config.is_batch());
+        let relation_body =
+            relation::gen_relation(&self.program, features, self.config.is_batch())?;
         let relation_extras = imports::gen_binary_relation_extras(&self.program, features);
         let relation_rs = flowlog_build::common::pretty_print(quote! {
             #![allow(non_camel_case_types)]

@@ -137,6 +137,10 @@ impl Atom {
         &self.arguments
     }
 
+    pub fn arguments_mut(&mut self) -> &mut [AtomArg] {
+        &mut self.arguments
+    }
+
     /// Number of arguments.
     #[must_use]
     pub fn arity(&self) -> usize {

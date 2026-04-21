@@ -71,6 +71,11 @@ impl FnCall {
         &self.args
     }
 
+    #[inline]
+    pub fn args_mut(&mut self) -> &mut [Arithmetic] {
+        &mut self.args
+    }
+
     /// Whether the UDF result is negated.
     #[must_use]
     #[inline]

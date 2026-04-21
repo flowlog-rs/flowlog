@@ -138,6 +138,11 @@ impl Aggregation {
         &self.arithmetic
     }
 
+    #[inline]
+    pub fn arithmetic_mut(&mut self) -> &mut Arithmetic {
+        &mut self.arithmetic
+    }
+
     /// Aggregation operator.
     #[must_use]
     #[inline]

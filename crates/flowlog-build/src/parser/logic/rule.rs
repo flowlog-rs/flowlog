@@ -82,6 +82,16 @@ impl FlowLogRule {
         &self.rhs
     }
 
+    #[inline]
+    pub fn head_mut(&mut self) -> &mut Head {
+        &mut self.head
+    }
+
+    #[inline]
+    pub fn rhs_mut(&mut self) -> &mut [Predicate] {
+        &mut self.rhs
+    }
+
     /// Indexed access to a body predicate (panics if out of bounds).
     #[inline]
     pub fn get(&self, i: usize) -> &Predicate {

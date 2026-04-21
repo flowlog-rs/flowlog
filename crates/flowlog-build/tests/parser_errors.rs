@@ -75,6 +75,24 @@ fn undeclared_loop_condition() {
 }
 
 #[test]
+fn undeclared_in_rule() {
+    assert_err!(
+        parse("undeclared_in_rule.dl", true),
+        ParseError::UndeclaredInRule { .. },
+        ["rule references undeclared relation", "ghost_rel"]
+    );
+}
+
+#[test]
+fn undeclared_in_fact() {
+    assert_err!(
+        parse("undeclared_in_fact.dl", true),
+        ParseError::UndeclaredInFact { .. },
+        ["fact references undeclared relation", "ghost_rel"]
+    );
+}
+
+#[test]
 fn non_nullary_loop_condition() {
     assert_err!(
         parse("non_nullary_loop_condition.dl", true),

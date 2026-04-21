@@ -19,8 +19,8 @@ use crate::parser::Program;
 use crate::planner::StratumPlanner;
 use crate::stratifier::Stratifier;
 
-use crate::codegen::features::Features;
 use crate::build::relation::gen_input_module;
+use crate::codegen::features::Features;
 use crate::{BuildError, Builder, CodeGen, CodeParts};
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
@@ -46,15 +46,15 @@ impl Pipeline {
         })?;
 
         let config = build_config(builder, program_str);
-        let program = parse(&config, &builder.include_dirs, sm)?;
-        crate::typechecker::check_program(&program)?;
+        let mut program = parse(&config, &builder.include_dirs, sm)?;
+        crate::typechecker::check_program(&mut program)?;
         let strata = plan(&config, &program)?;
 
         let mut profiler = None;
         let mut cg = CodeGen::new(config, program.clone());
         let parts = cg.generate(&strata, &mut profiler)?;
         let features = cg.features().clone();
-        let relations = gen_input_module(&program, &features);
+        let relations = gen_input_module(&program, &features)?;
 
         Ok(Self {
             parts,
