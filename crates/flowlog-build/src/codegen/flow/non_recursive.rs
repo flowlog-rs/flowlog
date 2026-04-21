@@ -13,9 +13,9 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use tracing::trace;
 
-use parser::AggregationOperator;
-use planner::StratumPlanner;
-use profiler::{with_profiler, Profiler};
+use crate::parser::AggregationOperator;
+use crate::planner::StratumPlanner;
+use crate::profiler::{with_profiler, Profiler};
 
 use crate::codegen::aggregation::{
     aggregation_avg_optimize, aggregation_count_optimize, aggregation_max_optimize,

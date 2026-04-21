@@ -7,8 +7,8 @@
 use std::io;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use common::diag::{Diagnostic, InternalError, BUG_URL};
-use common::source::FileId;
+use flowlog_build::common::diag::{Diagnostic, InternalError, BUG_URL};
+use flowlog_build::common::source::FileId;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

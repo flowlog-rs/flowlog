@@ -6,7 +6,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use common::{Config, INTERN_MAX_RETRIES};
+use flowlog_build::common::{Config, INTERN_MAX_RETRIES};
 use flowlog_build::Features;
 
 pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
@@ -104,25 +104,25 @@ pub(crate) fn gen_worker_helpers() -> TokenStream {
 /// unqualified. The actual implementations live in the `flowlog` runtime
 /// crate (same crate library mode pulls in).
 pub(crate) fn gen_binary_relation_extras(
-    program: &parser::Program,
+    program: &flowlog_build::parser::Program,
     features: &Features,
 ) -> TokenStream {
-    let non_nullary_edbs: Vec<&parser::Relation> = program
+    let non_nullary_edbs: Vec<&flowlog_build::parser::Relation> = program
         .edbs()
         .iter()
         .filter(|r| r.arity() > 0)
         .copied()
         .collect();
-    let first_cols: Vec<parser::DataType> = non_nullary_edbs
+    let first_cols: Vec<flowlog_build::parser::DataType> = non_nullary_edbs
         .iter()
         .filter_map(|r| r.data_type().first().copied())
         .collect();
     let needs_int = first_cols
         .iter()
-        .any(|dt| !matches!(dt, parser::DataType::String));
+        .any(|dt| !matches!(dt, flowlog_build::parser::DataType::String));
     let has_string = first_cols
         .iter()
-        .any(|dt| matches!(dt, parser::DataType::String));
+        .any(|dt| matches!(dt, flowlog_build::parser::DataType::String));
     let needs_str = has_string && !features.string_intern();
     let needs_spur = has_string && features.string_intern();
     let needs_byte_range = !non_nullary_edbs.is_empty();

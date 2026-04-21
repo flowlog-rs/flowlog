@@ -11,7 +11,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use common::ExecutionMode;
+use crate::common::ExecutionMode;
 
 use crate::codegen::CodeGen;
 

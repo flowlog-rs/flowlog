@@ -19,12 +19,4 @@ toml_edit = { workspace = true }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
-catalog = { path = "../catalog" }
-common = { path = "../common" }
 flowlog-build = { path = "../flowlog-build" }
-optimizer = { path = "../optimizer" }
-parser = { path = "../parser" }
-planner = { path = "../planner" }
-profiler = { path = "../profiler" }
-stratifier = { path = "../stratifier" }
-typechecker = { path = "../typechecker" }

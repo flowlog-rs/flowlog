@@ -4,7 +4,7 @@
 //! as `(relative_path, content)` pairs, ready for the downstream compiler
 //! to write into the generated project.
 
-use parser::AggregationOperator;
+use crate::parser::AggregationOperator;
 
 use crate::codegen::CodeGen;
 

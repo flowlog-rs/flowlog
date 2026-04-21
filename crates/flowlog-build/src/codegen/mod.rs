@@ -21,10 +21,10 @@ use std::collections::HashMap;
 
 use proc_macro2::Ident;
 
-use common::Config;
-use parser::{DataType, Program};
-use planner::StratumPlanner;
-use profiler::Profiler;
+use crate::common::Config;
+use crate::parser::{DataType, Program};
+use crate::planner::StratumPlanner;
+use crate::profiler::Profiler;
 
 use self::code_parts::CodeParts;
 use self::error::CodegenError;

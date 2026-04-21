@@ -13,7 +13,7 @@ use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 
 use flowlog_build::{field_accessor, gen_drain_block};
-use parser::Relation;
+use flowlog_build::parser::Relation;
 
 use crate::{Compiler, CompilerError};
 

@@ -8,7 +8,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use parser::{AggregationOperator, DataType};
+use crate::parser::{AggregationOperator, DataType};
 
 use crate::codegen::ty::data::tuple_tokens;
 
