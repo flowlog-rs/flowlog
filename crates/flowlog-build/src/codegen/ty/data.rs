@@ -278,4 +278,46 @@ mod tests {
             DataType::Int64
         );
     }
+
+    /// Aggregation rules feed a transformation flow whose column types
+    /// match the *pre-reduce* input (e.g. `count(n: String)` flows a
+    /// `String`), not the IDB's declared output. Inferring from that flow
+    /// would overwrite the authoritative `.decl` shape and break later
+    /// codegen (see `agg_count_string` e2e).
+    #[test]
+    fn record_transformation_output_type_preserves_declared_idb_shape() {
+        use crate::planner::Constraints;
+        use std::sync::Arc;
+
+        let mut cg = make_codegen();
+        // IDB's declared shape: e.g. `DeptHeadcount(d: int32, cnt: int32)`.
+        let declared = (vec![DataType::Int32], vec![DataType::Int32]);
+        cg.global_fp_to_type.insert(0x1, declared.clone());
+
+        // Pre-aggregation input: `(d: Int32, n: String)`. If the
+        // short-circuit is removed, the flow below would resolve its
+        // value column as `String` from this input, and overwrite the
+        // declared IDB shape at fp 0x1.
+        cg.global_fp_to_type
+            .insert(0x2, (vec![], vec![DataType::Int32, DataType::String]));
+        let flow = TransformationFlow::KVToKV {
+            key: Arc::new(vec![ArithmeticArgument {
+                init: FactorArgument::Var(TransformationArgument::KV((false, 0))),
+                rest: vec![],
+            }]),
+            value: Arc::new(vec![ArithmeticArgument {
+                init: FactorArgument::Var(TransformationArgument::KV((false, 1))),
+                rest: vec![],
+            }]),
+            constraints: Constraints::new(vec![], vec![]),
+            compares: vec![],
+            fn_call_preds: vec![],
+        };
+        let stratum = StratumPlanner::default();
+
+        cg.record_transformation_output_type(0x2, None, 0x1, &flow, &stratum)
+            .expect("short-circuit on registered output must not error");
+
+        assert_eq!(cg.global_fp_to_type.get(&0x1), Some(&declared));
+    }
 }
