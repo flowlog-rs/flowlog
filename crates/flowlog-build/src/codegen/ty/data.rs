@@ -80,20 +80,25 @@ impl CodeGen {
             .copied()
             .unwrap_or(output_fingerprint);
 
+        // IDB relations are seeded from their `.decl` in
+        // `make_global_data_type_map`, and that declared shape is
+        // authoritative. For aggregation rules in particular, the
+        // transformation flow carries the *pre-aggregation* column types
+        // (e.g. `count(n)` where `n: String` flows a `String` value),
+        // which don't match the IDB's `.decl`-declared output type.
+        if self.global_fp_to_type.contains_key(&output_fingerprint) {
+            return Ok(());
+        }
+
         let left_type = self.find_global_data_type(left_fingerprint)?.clone();
         let right_type = right_fingerprint
             .map(|rf| self.find_global_data_type(rf))
             .transpose()?
             .cloned();
 
-        let resolve = |expr: &ArithmeticArgument| {
-            self.infer_expr_type(expr, &left_type, right_type.as_ref())
-        };
-        let keys = flow
-            .key()
-            .iter()
-            .map(&resolve)
-            .collect::<Result<_, _>>()?;
+        let resolve =
+            |expr: &ArithmeticArgument| self.infer_expr_type(expr, &left_type, right_type.as_ref());
+        let keys = flow.key().iter().map(&resolve).collect::<Result<_, _>>()?;
         let vals = flow
             .value()
             .iter()
@@ -124,19 +129,16 @@ impl CodeGen {
         right_type: Option<&KvTypes>,
     ) -> Result<DataType, CodegenError> {
         match factor {
-            FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => slot(
-                left_type, *is_key,
-            )
-            .get(*idx)
-            .copied()
-            .ok_or_else(|| {
-                CodegenError::internal(format!(
-                    "KV slot out of bounds: is_key={is_key}, idx={idx}, \
+            FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => {
+                slot(left_type, *is_key).get(*idx).copied().ok_or_else(|| {
+                    CodegenError::internal(format!(
+                        "KV slot out of bounds: is_key={is_key}, idx={idx}, \
                      left shape=({}, {})",
-                    left_type.0.len(),
-                    left_type.1.len()
-                ))
-            }),
+                        left_type.0.len(),
+                        left_type.1.len()
+                    ))
+                })
+            }
             FactorArgument::Var(TransformationArgument::Jn((is_left, is_key, idx))) => {
                 let base = if *is_left {
                     left_type
@@ -276,5 +278,4 @@ mod tests {
             DataType::Int64
         );
     }
-
 }
