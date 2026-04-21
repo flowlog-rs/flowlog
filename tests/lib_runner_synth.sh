@@ -118,8 +118,9 @@ _parse_decl() {
     inside=$(echo "$line" | sed -E 's/^[^(]*\(([^)]*)\).*$/\1/')
     [[ -n "$inside" ]] || { echo ""; return 0; }  # nullary
     # Attribute names are lowercased to mirror parser normalization
-    # (crates/parser/src/declaration/attribute.rs). The generated struct
-    # exposes lowercase field names; loaders / writers must match.
+    # (crates/flowlog-build/src/parser/declaration/attribute.rs). The
+    # generated struct exposes lowercase field names; loaders / writers
+    # must match.
     if [[ "$mode" == "both" ]]; then
         echo "$inside" \
             | tr ',' '\n' \
@@ -217,9 +218,13 @@ write_build_rs() {
     fi
 
     cat > "${LIB_RUNNER_DIR}/build.rs" <<EOF
-fn main() -> std::io::Result<()> {
-${include_decl}    flowlog_build::configure()
-${knob_setters}${udf_setter}${builder_tail}
+fn main() {
+${include_decl}    let result = flowlog_build::Builder::default()
+${knob_setters}${udf_setter}${builder_tail};
+    if let Err(err) = result {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
 }
 EOF
 }

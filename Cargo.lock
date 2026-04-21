@@ -128,19 +128,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
-name = "catalog"
-version = "0.1.0"
-dependencies = [
- "clap",
- "codespan-reporting",
- "common",
- "parser",
- "thiserror",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -233,19 +220,6 @@ checksum = "b90b1614014f6958477dcdb77a2d489555db48ca61efe94c5cde2b0446933ed1"
 dependencies = [
  "paste",
  "smallvec",
-]
-
-[[package]]
-name = "common"
-version = "0.1.0"
-dependencies = [
- "clap",
- "codespan-reporting",
- "prettyplease",
- "proc-macro2",
- "syn",
- "tempfile",
- "tracing",
 ]
 
 [[package]]
@@ -344,43 +318,37 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 name = "flowlog-build"
 version = "0.1.0"
 dependencies = [
- "catalog",
+ "clap",
  "codespan-reporting",
- "common",
- "optimizer",
- "parser",
- "planner",
+ "itertools",
+ "ordered-float",
+ "pest",
+ "pest_derive",
+ "prettyplease",
  "proc-macro2",
- "profiler",
  "quote",
- "stratifier",
+ "serde",
+ "serde_json",
  "syn",
+ "tempfile",
  "thiserror",
  "tracing",
- "typechecker",
+ "tracing-test",
 ]
 
 [[package]]
 name = "flowlog-compiler"
 version = "0.1.0"
 dependencies = [
- "catalog",
  "clap",
  "codespan-reporting",
- "common",
  "flowlog-build",
- "optimizer",
- "parser",
- "planner",
  "proc-macro2",
- "profiler",
  "quote",
- "stratifier",
  "thiserror",
  "toml_edit",
  "tracing",
  "tracing-subscriber",
- "typechecker",
 ]
 
 [[package]]
@@ -605,19 +573,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "optimizer"
-version = "0.1.0"
-dependencies = [
- "catalog",
- "clap",
- "common",
- "parser",
- "stratifier",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "ordered-float"
 version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -639,22 +594,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
-]
-
-[[package]]
-name = "parser"
-version = "0.1.0"
-dependencies = [
- "clap",
- "codespan-reporting",
- "common",
- "ordered-float",
- "pest",
- "pest_derive",
- "tempfile",
- "thiserror",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -713,23 +652,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "planner"
-version = "0.1.0"
-dependencies = [
- "catalog",
- "clap",
- "codespan-reporting",
- "common",
- "optimizer",
- "parser",
- "profiler",
- "stratifier",
- "thiserror",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -746,16 +668,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "profiler"
-version = "0.1.0"
-dependencies = [
- "common",
- "serde",
- "serde_json",
- "tracing",
 ]
 
 [[package]]
@@ -913,22 +825,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "stratifier"
-version = "0.1.0"
-dependencies = [
- "clap",
- "codespan-reporting",
- "common",
- "itertools",
- "parser",
- "tempfile",
- "thiserror",
- "tracing",
- "tracing-subscriber",
- "tracing-test",
 ]
 
 [[package]]
@@ -1172,16 +1068,6 @@ checksum = "ad06847b7afb65c7866a36664b75c40b895e318cea4f71299f013fb22965329d"
 dependencies = [
  "quote",
  "syn",
-]
-
-[[package]]
-name = "typechecker"
-version = "0.1.0"
-dependencies = [
- "codespan-reporting",
- "common",
- "parser",
- "thiserror",
 ]
 
 [[package]]

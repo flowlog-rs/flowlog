@@ -5,8 +5,8 @@ use quote::{format_ident, quote};
 
 use crate::codegen::CodeGen;
 
-use parser::DataType;
-use profiler::{with_profiler, Profiler};
+use crate::parser::DataType;
+use crate::profiler::{with_profiler, Profiler};
 
 impl CodeGen {
     /// Generate per-EDB declarations as `(handle, collection)` pairs:

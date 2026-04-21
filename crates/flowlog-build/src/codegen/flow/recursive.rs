@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use parser::{AggregationOperator, LoopCondition, LoopConnective};
-use planner::StratumPlanner;
-use profiler::{with_profiler, Profiler};
+use crate::parser::{AggregationOperator, LoopCondition, LoopConnective};
+use crate::planner::StratumPlanner;
+use crate::profiler::{with_profiler, Profiler};
 
 use crate::codegen::aggregation::{
     aggregation_avg_optimize, aggregation_avg_post_leave, aggregation_avg_pre_leave,

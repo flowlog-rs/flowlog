@@ -64,8 +64,9 @@ _bench_lib_parse_decl_typed() {
     inside=$(echo "$line" | sed -E 's/^[^(]*\(([^)]*)\).*$/\1/')
     [[ -n "$inside" ]] || { echo ""; return 0; }  # nullary
     # Attribute names are lowercased to mirror parser normalization
-    # (crates/parser/src/declaration/attribute.rs) — the generated struct
-    # exposes lowercase field names, so all consumers must see the same.
+    # (crates/flowlog-build/src/parser/declaration/attribute.rs) — the
+    # generated struct exposes lowercase field names, so all consumers
+    # must see the same.
     echo "$inside" \
         | tr ',' '\n' \
         | awk -F: '{
@@ -120,9 +121,13 @@ bench_lib_write_build_rs() {
     (( ${LIB_BENCH_STR_INTERN:-0} )) && knob_setters+=$'        .string_intern(true)\n'
 
     cat > "${LIB_BENCH_RUNNER_DIR}/build.rs" <<EOF
-fn main() -> std::io::Result<()> {
-    flowlog_build::configure()
-${knob_setters}        .compile(&["program.dl"] as &[&str], &[] as &[&std::path::Path])
+fn main() {
+    let result = flowlog_build::Builder::default()
+${knob_setters}        .compile(&["program.dl"] as &[&str], &[] as &[&std::path::Path]);
+    if let Err(err) = result {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
 }
 EOF
 }
