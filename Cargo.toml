@@ -1,16 +1,8 @@
 [workspace]
 members = [
-    "crates/catalog",
-    "crates/common",
     "crates/flowlog-runtime",
     "crates/flowlog-build",
     "crates/flowlog-compiler",
-    "crates/optimizer",
-    "crates/parser",
-    "crates/planner",
-    "crates/profiler",
-    "crates/stratifier",
-    "crates/typechecker"
 ]
 resolver = "2"
 

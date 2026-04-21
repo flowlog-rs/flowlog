@@ -8,8 +8,8 @@
 //! bug` ICEs.
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use common::diag::{Diagnostic, InternalError, BUG_URL};
-use common::source::FileId;
+use crate::common::diag::{Diagnostic, InternalError, BUG_URL};
+use crate::common::source::FileId;
 use thiserror::Error;
 
 #[non_exhaustive]

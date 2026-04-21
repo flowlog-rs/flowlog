@@ -42,32 +42,42 @@
 //! }
 //! ```
 
-mod assembly;
-mod engine;
-mod error;
-mod imports;
-mod pipeline;
-mod relation;
-mod results;
+// Library-mode build flow (parse → stratify → plan → codegen → emit
+// `$OUT_DIR/<stem>.rs`). Binary mode (`flowlog-compiler`) bypasses this
+// and goes straight to `codegen`.
+mod build;
 
 // Shared codegen core — consumed by this crate's library mode and, via
 // the re-exports below, by `flowlog-compiler`'s binary mode.
 mod codegen;
 
+// Shared primitives — previously the `common` crate, folded in here.
+pub mod common;
+
+// Pipeline stages — previously independent crates, folded in here so
+// `flowlog-build` ships as a single publishable library.
+pub mod catalog;
+pub mod optimizer;
+pub mod parser;
+pub mod planner;
+pub mod profiler;
+pub mod stratifier;
+pub mod typechecker;
+
+pub use build::BuildError;
 pub use codegen::code_parts::CodeParts;
 pub use codegen::error::CodegenError;
 pub use codegen::features::Features;
 pub use codegen::idb_buffers::{field_accessor, gen_drain_block};
 pub use codegen::ty::data::data_type_tokens;
 pub use codegen::CodeGen;
-pub use error::BuildError;
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-use common::diag::{self, BoxError};
-pub use common::ExecutionMode;
-use common::SourceMap;
+use crate::common::diag::{self, BoxError};
+pub use crate::common::ExecutionMode;
+use crate::common::SourceMap;
 
 /// Compile a single `.dl` program with default options.
 ///
@@ -183,8 +193,8 @@ impl Builder {
                 ))
             })?;
 
-        let output = pipeline::Pipeline::build(self, program_path, sm)?;
-        let source = assembly::assemble(&output, out_dir, self.udf_file.as_deref())
+        let output = build::Pipeline::build(self, program_path, sm)?;
+        let source = build::assemble(&output, out_dir, self.udf_file.as_deref())
             .map_err(BuildError::from)?;
         self.emit_semiring_modules(&output, out_dir)
             .map_err(BuildError::from)?;
@@ -199,7 +209,7 @@ impl Builder {
     /// prepend aliases that route `serde` / `ordered_float` /
     /// `differential_dataflow` through `::flowlog_runtime::` — keeping
     /// the templates mode-agnostic with binary mode.
-    fn emit_semiring_modules(&self, output: &pipeline::Pipeline, out_dir: &Path) -> io::Result<()> {
+    fn emit_semiring_modules(&self, output: &build::Pipeline, out_dir: &Path) -> io::Result<()> {
         if output.parts.semiring_modules.is_empty() {
             return Ok(());
         }

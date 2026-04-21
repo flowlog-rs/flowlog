@@ -23,9 +23,9 @@ use std::path::Path;
 
 use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Value};
 
-use common::Config;
+use flowlog_build::common::Config;
 use flowlog_build::{CodeParts, Features};
-use profiler::{with_profiler_ref, Profiler};
+use flowlog_build::profiler::{with_profiler_ref, Profiler};
 
 use crate::Compiler;
 
