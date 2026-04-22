@@ -71,6 +71,11 @@ pub struct StratumPlanner {
     /// Loop condition for this stratum, if it was declared as a loop block.
     /// `None` for plain strata (which run to fixpoint implicitly).
     loop_condition: Option<LoopCondition>,
+
+    /// Output fingerprints that at least one downstream Join/AntiJoin consumes as an arrangement.
+    /// Codegen uses this to skip `arrange_by_key`/`arrange_by_self` for collections nobody reads
+    /// as an arrangement (e.g. an EDB premap feeding only KV→KV SIP projections).
+    arranged_fingerprints: HashSet<u64>,
 }
 
 impl StratumPlanner {
@@ -193,8 +198,10 @@ impl StratumPlanner {
             head_to_idb_map: HashMap::new(),
             idb_to_aggregation_map: HashMap::new(),
             loop_condition: stratifier.loop_condition(stratum_idx).cloned(),
+            arranged_fingerprints: HashSet::new(),
         };
         stratum_planner.materialize_transformations();
+        stratum_planner.build_arranged_fingerprints();
 
         // Phase 7: Recursive split and metadata mappings
         // this phase to factoring optimizations
@@ -297,6 +304,13 @@ impl StratumPlanner {
     pub fn is_recursive(&self) -> bool {
         self.is_recursive
     }
+
+    /// Fingerprints whose producer output is consumed as an arrangement by some Join/AntiJoin
+    /// in this stratum.
+    #[inline]
+    pub fn arranged_fingerprints(&self) -> &HashSet<u64> {
+        &self.arranged_fingerprints
+    }
 }
 
 impl fmt::Display for StratumPlanner {
@@ -371,6 +385,16 @@ impl StratumPlanner {
                 TransformationInfo::JoinToKV { .. } => Transformation::join(info),
                 TransformationInfo::AntiJoinToKV { .. } => Transformation::antijoin(info),
             })
+            .collect();
+    }
+
+    /// Collect fingerprints consumed as arrangements by Join/AntiJoin transformations.
+    fn build_arranged_fingerprints(&mut self) {
+        self.arranged_fingerprints = self
+            .transformations
+            .iter()
+            .filter(|tx| !tx.is_unary())
+            .flat_map(|tx| tx.input_fingerprints())
             .collect();
     }
 

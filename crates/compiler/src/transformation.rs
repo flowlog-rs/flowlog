@@ -7,7 +7,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use profiler::{with_profiler, Profiler};
 
@@ -193,6 +193,7 @@ impl Compiler {
                 // Arrangement registration
                 let arrange_stmt = self.register_arrangement(
                     arranged_map,
+                    stratum.arranged_fingerprints(),
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
@@ -347,6 +348,7 @@ impl Compiler {
                 // Arrangement registration
                 let arrange_stmt = self.register_arrangement(
                     arranged_map,
+                    stratum.arranged_fingerprints(),
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
@@ -486,6 +488,7 @@ impl Compiler {
 
                 let arrange_stmt = self.register_arrangement(
                     arranged_map,
+                    stratum.arranged_fingerprints(),
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
@@ -641,6 +644,7 @@ impl Compiler {
 
                 let arrange_stmt = self.register_arrangement(
                     arranged_map,
+                    stratum.arranged_fingerprints(),
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
@@ -724,10 +728,14 @@ impl Compiler {
     fn register_arrangement(
         &mut self,
         arranged_map: &mut HashMap<u64, Ident>,
+        arranged_fps: &HashSet<u64>,
         fingerprint: u64,
         collection_ident: &Ident,
         only_key: bool,
     ) -> TokenStream {
+        if !arranged_fps.contains(&fingerprint) {
+            return TokenStream::new();
+        }
         let arrangement_ident = format_ident!("{}_arr", collection_ident);
         arranged_map.insert(fingerprint, arrangement_ident.clone());
 
