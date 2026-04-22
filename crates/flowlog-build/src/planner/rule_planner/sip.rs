@@ -15,13 +15,13 @@
 //! > general SIP framework (e.g. sideways information-passing strategies for
 //! > full rules) is left for future work.
 
-use crate::planner::{transformation::KeyValueLayout, TransformationInfo};
+use crate::planner::{KeyValueLayout, TransformationInfo};
 
 use super::RulePlanner;
-use crate::planner::PlanError;
 use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
 };
+use crate::planner::PlanError;
 
 use tracing::trace;
 
@@ -30,7 +30,7 @@ use tracing::trace;
 // =========================================================================
 impl RulePlanner {
     /// Entry point for applying SIP optimizations to the current rule plan.
-    pub fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
+    pub(crate) fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let positive_atom_numbers = catalog.positive_atom_number();
 
         // Only apply SIP if there are at least 3 positive atoms
@@ -232,5 +232,108 @@ impl RulePlanner {
             "SIP semijoin RHS values: {:?}",
             rhs_vals.iter().map(fmt).collect::<Vec<_>>()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::common::test_setup;
+
+    /// Two-atom rule falls below the `positive_atom_numbers > 2` gate in
+    /// sip.rs:37. SIP must produce zero transformations. Removing that
+    /// guard would duplicate every pairwise semijoin for simple 2-atom
+    /// rules — perf regression with no correctness signal.
+    #[test]
+    fn apply_sip_skips_two_atom_rule() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32)\n\
+            .decl B(a: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x), B(x).\n",
+        );
+        planner.apply_sip(&mut catalog).expect("sip");
+        assert_eq!(
+            planner.transformation_infos().len(),
+            0,
+            "SIP must not run on 2-atom rules"
+        );
+        // Post-state: catalog must also be untouched — SIP that
+        // silently modified atom state while emitting nothing would
+        // desync the catalog from the empty transformation_infos.
+        assert_eq!(catalog.positive_atom_number(), 2);
+    }
+
+    /// Three-atom rule with shared vars across adjacent pairs — forward
+    /// pass must emit projection+semijoin pairs. Counts `is_sip_projection`
+    /// to prove forward pass actually fired (not just returned Ok(())).
+    #[test]
+    fn apply_sip_forward_pass_fires() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32)\n\
+            .decl B(a: int32, b: int32)\n\
+            .decl C(a: int32, b: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+            .decl Out(x: int32, z: int32)\n\
+            .output Out\n\
+            Out(x, z) :- A(x), B(x, y), C(y, z).\n",
+        );
+        planner.apply_sip(&mut catalog).expect("sip");
+
+        let proj_count = planner
+            .transformation_infos()
+            .iter()
+            .filter(|t| t.is_sip_projection())
+            .count();
+        assert!(
+            proj_count >= 2,
+            "expected at least 2 SIP projections from forward pass (A→B, B→C), got {proj_count}"
+        );
+        // SIP replaces atoms with filtered semijoin results; atom count
+        // stays at 3. A bug in sip_modify that dropped atoms would
+        // silently corrupt planning for the subsequent core pass.
+        assert_eq!(catalog.positive_atom_number(), 3);
+    }
+
+    /// The backward pass in sip.rs:56 gives later atoms the chance to
+    /// filter earlier ones. If it were removed, atom A (first in the body)
+    /// could only ever be a SIP *source*, never a *target* — losing a
+    /// valid optimization. We assert a strictly higher projection count
+    /// than forward-only to prove backward ran.
+    #[test]
+    fn apply_sip_backward_pass_filters_earlier_atom() {
+        // Chain A(y), B(y, z), C(z):
+        //   forward  : SIP B from A, SIP C from B     → 2 projections
+        //   backward : SIP B from C, SIP A from B     → 2 projections
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32)\n\
+            .decl B(a: int32, b: int32)\n\
+            .decl C(a: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+            .decl Out(z: int32)\n\
+            .output Out\n\
+            Out(z) :- A(y), B(y, z), C(z).\n",
+        );
+        planner.apply_sip(&mut catalog).expect("sip");
+
+        let proj_count = planner
+            .transformation_infos()
+            .iter()
+            .filter(|t| t.is_sip_projection())
+            .count();
+        assert!(
+            proj_count >= 4,
+            "forward alone yields 2 projections; with backward expect ≥4, got {proj_count}"
+        );
+        assert_eq!(catalog.positive_atom_number(), 3);
     }
 }

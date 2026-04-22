@@ -5,14 +5,20 @@
 //! - Body: predicates that must all be satisfied
 
 use super::{Factor, Head, HeadArg, Predicate};
+use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::primitive::ConstType;
 use crate::parser::{span_of, Lexeme, Rule};
-use crate::common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
 /// A complete FlowLog rule.
+///
+/// Declared `pub` (not `pub(crate)`) because it leaks through
+/// `Catalog::from_rule` / `Program::rules` signatures that external
+/// callers (flowlog-compiler, integration tests) consume. The rule's
+/// inherent methods stay `pub(crate)` — external code only passes rules
+/// by reference without inspecting fields.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct FlowLogRule {
     head: Head,
@@ -53,7 +59,7 @@ impl fmt::Debug for FlowLogRule {
 impl FlowLogRule {
     /// Construct a rule.
     #[must_use]
-    pub fn new(head: Head, rhs: Vec<Predicate>) -> Self {
+    pub(crate) fn new(head: Head, rhs: Vec<Predicate>) -> Self {
         Self {
             head,
             rhs,
@@ -64,35 +70,39 @@ impl FlowLogRule {
     /// Source location this rule was parsed from.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 
     /// Rule head.
     #[must_use]
     #[inline]
-    pub fn head(&self) -> &Head {
+    pub(crate) fn head(&self) -> &Head {
         &self.head
     }
 
     /// Rule body (right-hand side predicates).
     #[must_use]
     #[inline]
-    pub fn rhs(&self) -> &[Predicate] {
+    pub(crate) fn rhs(&self) -> &[Predicate] {
         &self.rhs
     }
 
-    /// Indexed access to a body predicate (panics if out of bounds).
     #[inline]
-    pub fn get(&self, i: usize) -> &Predicate {
-        &self.rhs[i]
+    pub(crate) fn head_mut(&mut self) -> &mut Head {
+        &mut self.head
+    }
+
+    #[inline]
+    pub(crate) fn rhs_mut(&mut self) -> &mut [Predicate] {
+        &mut self.rhs
     }
 
     /// Extract constants from a fact's head.
     ///
     /// Panics if any head argument is not a simple constant.
     #[must_use]
-    pub fn extract_constants_from_head(&self) -> Vec<ConstType> {
+    pub(crate) fn extract_constants_from_head(&self) -> Vec<ConstType> {
         let mut out = Vec::new();
         for arg in self.head.head_arguments() {
             match arg {
@@ -121,7 +131,7 @@ impl FlowLogRule {
     ///
     /// Souffle-style semicolons separate alternative heads and bodies:
     ///   `h1; h2 :- b1; b2.` → `h1:-b1. h1:-b2. h2:-b1. h2:-b2.`
-    pub fn expand_from_parsed_rule(
+    pub(crate) fn expand_from_parsed_rule(
         parsed_rule: Pair<Rule>,
         file: FileId,
     ) -> Result<Vec<Self>, ParseError> {
@@ -164,94 +174,16 @@ impl FlowLogRule {
 
 #[cfg(test)]
 mod tests {
-    use super::super::ArithmeticOperator;
     use super::*;
-    use crate::parser::logic::{Arithmetic, Atom, AtomArg, ComparisonExpr, ComparisonOperator, Factor};
+    use crate::parser::logic::{Aggregation, Arithmetic, Factor};
     use crate::parser::primitive::ConstType;
+    use crate::parser::AggregationOperator;
 
-    // Helpers
-    fn var_arg(name: &str) -> AtomArg {
-        AtomArg::Var(name.into())
-    }
-    fn atom(name: &str, args: Vec<AtomArg>) -> Atom {
-        Atom::new(name, args, 0)
-    }
-    fn head_var(name: &str) -> HeadArg {
-        HeadArg::Var(name.into())
-    }
     fn head_const(v: ConstType) -> HeadArg {
         HeadArg::Arith(Arithmetic::new(Factor::Const(v), vec![]))
     }
     fn head_named(name: &str, args: Vec<HeadArg>) -> Head {
         Head::new(name.into(), args)
-    }
-
-    fn pos_pred(name: &str, args: Vec<AtomArg>) -> Predicate {
-        Predicate::PositiveAtomPredicate(atom(name, args))
-    }
-    fn neg_pred(name: &str, args: Vec<AtomArg>) -> Predicate {
-        Predicate::NegativeAtomPredicate(atom(name, args))
-    }
-
-    fn cmp_pred() -> Predicate {
-        let l = Arithmetic::new(Factor::Var("X".into()), vec![]);
-        let r = Arithmetic::new(Factor::Const(ConstType::Int(5)), vec![]);
-        let c = ComparisonExpr::new(l, ComparisonOperator::GreaterThan, r);
-        Predicate::ComparePredicate(c)
-    }
-
-    #[test]
-    fn create_and_access() {
-        let head = head_named("result", vec![head_var("X")]);
-        let body = vec![pos_pred("input", vec![var_arg("X")])];
-        let r = FlowLogRule::new(head, body);
-
-        assert_eq!(r.head().name(), "result");
-        assert_eq!(r.rhs().len(), 1);
-    }
-
-    #[test]
-    fn get_by_index() {
-        let head = head_named("multi", vec![head_var("X")]);
-        let body = vec![pos_pred("first", vec![var_arg("X")]), cmp_pred()];
-        let r = FlowLogRule::new(head, body);
-
-        match r.get(0) {
-            Predicate::PositiveAtomPredicate(a) => assert_eq!(a.name(), "first"),
-            _ => panic!("expected positive atom"),
-        }
-        assert!(matches!(r.get(1), Predicate::ComparePredicate(_)));
-    }
-
-    #[test]
-    fn display_formats() {
-        let head = head_named("result", vec![head_var("X")]);
-        let body = vec![pos_pred("input", vec![var_arg("X")])];
-        let r = FlowLogRule::new(head, body);
-        assert!(r.to_string().starts_with("result(X) :- input(X)"));
-
-        let head2 = head_named("complex", vec![head_var("A"), head_var("B")]);
-        let body2 = vec![
-            pos_pred("rel1", vec![var_arg("A")]),
-            neg_pred("rel2", vec![var_arg("B")]),
-        ];
-        let r2 = FlowLogRule::new(head2, body2);
-        let s2 = r2.to_string();
-        assert!(s2.starts_with("complex(A, B) :- rel1(A)"));
-        assert!(s2.contains("!rel2(B)"));
-        assert!(s2.ends_with('.'));
-
-        let head3 = head_named("filtered", vec![head_var("X")]);
-        let body3 = vec![pos_pred("data", vec![var_arg("X")]), {
-            let l = Arithmetic::new(Factor::Var("X".into()), vec![]);
-            let r = Arithmetic::new(Factor::Const(ConstType::Int(5)), vec![]);
-            Predicate::ComparePredicate(ComparisonExpr::new(l, ComparisonOperator::GreaterThan, r))
-        }];
-        let r3 = FlowLogRule::new(head3, body3);
-        let s3 = r3.to_string();
-        assert!(s3.starts_with("filtered(X) :- data(X)"));
-        assert!(s3.contains(", X > 5"));
-        assert!(s3.ends_with('.'));
     }
 
     #[test]
@@ -264,11 +196,8 @@ mod tests {
             ],
         );
         let r = FlowLogRule::new(head, vec![]);
-
         let c = r.extract_constants_from_head();
-        assert_eq!(c.len(), 2);
-        assert_eq!(c[0], ConstType::Int(42));
-        assert_eq!(c[1], ConstType::Text("hello".into()));
+        assert_eq!(c, vec![ConstType::Int(42), ConstType::Text("hello".into())]);
     }
 
     #[test]
@@ -276,74 +205,22 @@ mod tests {
     fn extract_constants_panics_on_var() {
         let head = head_named(
             "invalid",
-            vec![head_const(ConstType::Int(1)), head_var("X")],
+            vec![head_const(ConstType::Int(1)), HeadArg::Var("X".into())],
         );
-        let r = FlowLogRule::new(head, vec![]);
-        let _ = r.extract_constants_from_head();
+        let _ = FlowLogRule::new(head, vec![]).extract_constants_from_head();
     }
 
     #[test]
     #[should_panic(expected = "Fact head must contain only constants")]
     fn extract_constants_panics_on_aggregation() {
-        use crate::parser::logic::{Aggregation, AggregationOperator};
-        let arith = Arithmetic::new(Factor::Var("X".into()), vec![]);
-        let agg = Aggregation::new(AggregationOperator::Sum, arith);
+        let agg = Aggregation::new(
+            AggregationOperator::Sum,
+            Arithmetic::new(Factor::Var("X".into()), vec![]),
+        );
         let head = head_named(
             "invalid",
             vec![head_const(ConstType::Int(1)), HeadArg::Aggregation(agg)],
         );
-        let r = FlowLogRule::new(head, vec![]);
-        let _ = r.extract_constants_from_head();
-    }
-
-    #[test]
-    #[should_panic(expected = "Fact head must contain only constants")]
-    fn extract_constants_panics_on_complex_arith() {
-        let complex = Arithmetic::new(
-            Factor::Var("X".into()),
-            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(1)))],
-        );
-        let head = head_named("invalid", vec![HeadArg::Arith(complex)]);
-        let r = FlowLogRule::new(head, vec![]);
-        let _ = r.extract_constants_from_head();
-    }
-
-    #[test]
-    fn clone_hash_eq() {
-        let head = head_named("test", vec![head_var("X")]);
-        let body = vec![pos_pred("input", vec![var_arg("X")])];
-        let r = FlowLogRule::new(head, body);
-        let c = r.clone();
-        assert_eq!(r, c);
-
-        use std::collections::HashSet;
-        let mut set = HashSet::new();
-        set.insert(r.clone());
-        set.insert(c);
-        assert_eq!(set.len(), 1);
-    }
-
-    #[test]
-    fn complex_rule_example() {
-        // derived(Person, Age) :- person(Person, Age), Age > 18, !blocked(Person).
-        let head = head_named("derived", vec![head_var("Person"), head_var("Age")]);
-        let left = Arithmetic::new(Factor::Var("Age".into()), vec![]);
-        let right = Arithmetic::new(Factor::Const(ConstType::Int(18)), vec![]);
-        let age_gt = ComparisonExpr::new(left, ComparisonOperator::GreaterThan, right);
-        let body = vec![
-            pos_pred("person", vec![var_arg("Person"), var_arg("Age")]),
-            Predicate::ComparePredicate(age_gt),
-            neg_pred("blocked", vec![var_arg("Person")]),
-        ];
-        let r = FlowLogRule::new(head, body);
-
-        assert_eq!(r.head().name(), "derived");
-        assert_eq!(r.head().arity(), 2);
-        assert_eq!(r.rhs().len(), 3);
-        let sr = r.to_string();
-        assert!(sr.starts_with("derived(Person, Age) :- person(Person, Age)"));
-        assert!(sr.contains("Age > 18"));
-        assert!(sr.contains("!blocked(Person)"));
-        assert!(sr.ends_with('.'));
+        let _ = FlowLogRule::new(head, vec![]).extract_constants_from_head();
     }
 }

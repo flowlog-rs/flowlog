@@ -12,9 +12,9 @@
 
 use std::path::PathBuf;
 
+use crate::common::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
+use crate::common::{FileId, Span};
 use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
-use crate::common::diag::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
-use crate::common::source::{FileId, Span};
 use thiserror::Error;
 
 /// Which `.decl`-style directive is being reported.
@@ -98,6 +98,14 @@ pub enum ParseError {
     #[error("loop condition references undeclared relation `{name}`")]
     UndeclaredLoopCondition { span: Span, name: String },
 
+    /// A rule head or body atom names a relation that was never `.decl`-d.
+    #[error("rule references undeclared relation `{name}`")]
+    UndeclaredInRule { span: Span, name: String },
+
+    /// A ground fact names a relation that was never `.decl`-d.
+    #[error("fact references undeclared relation `{name}`")]
+    UndeclaredInFact { span: Span, name: String },
+
     /// A `loop` / `fixpoint` block appeared outside `extend-*` mode.
     #[error("`loop`/`fixpoint` blocks require `--mode extend-batch` or `extend-inc`")]
     LoopBlockInStandardMode { span: Span },
@@ -143,7 +151,10 @@ pub enum ParseError {
 impl ParseError {
     /// Construct a [`ParseError::Syntax`] from a Pest error, anchoring the
     /// span to `file`.
-    pub(crate) fn syntax_from_pest(err: &pest::error::Error<crate::parser::Rule>, file: FileId) -> Self {
+    pub(crate) fn syntax_from_pest(
+        err: &pest::error::Error<crate::parser::Rule>,
+        file: FileId,
+    ) -> Self {
         use pest::error::InputLocation;
         let (start, end) = match err.location {
             InputLocation::Pos(p) => (p as u32, p as u32),
@@ -199,6 +210,13 @@ impl Diagnostic for ParseError {
                     "declare `{name}` as a nullary relation with `.decl {name}()` and derive it inside the loop"
                 )]),
 
+            ParseError::UndeclaredInRule { span, name }
+            | ParseError::UndeclaredInFact { span, name } => base
+                .with_labels(primary_label(*span).into_iter().collect())
+                .with_notes(vec![format!(
+                    "add a matching `.decl {name}(...)` declaration, or remove the reference"
+                )]),
+
             ParseError::CircularInclude { span, chain, .. } => {
                 let mut diag = base.with_labels(primary_label(*span).into_iter().collect());
                 if !chain.is_empty() {
@@ -238,8 +256,8 @@ pub(crate) fn grammar_bug(detail: impl Into<String>) -> ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::diag::{emit, BoxError};
-    use crate::common::source::SourceMap;
+    use crate::common::{emit, BoxError};
+    use crate::common::SourceMap;
 
     fn make_sm_with(text: &str) -> (SourceMap, FileId) {
         let mut sm = SourceMap::new();

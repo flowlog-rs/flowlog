@@ -14,7 +14,7 @@ use quote::{format_ident, quote};
 
 use crate::parser::{DataType, Program, Relation};
 
-use crate::codegen::ty::data::tuple_tokens;
+use crate::codegen::tuple_tokens;
 use crate::build::relation::user::{tuple_to_user_expr, user_to_tuple_expr};
 use crate::build::relation::{input_struct_ident, rust_ident, user_struct_ident};
 use crate::{data_type_tokens, gen_drain_block, CodeParts};

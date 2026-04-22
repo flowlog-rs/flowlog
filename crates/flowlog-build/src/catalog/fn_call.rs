@@ -1,11 +1,11 @@
 //! FnCall predicate signatures for FlowLog Datalog programs.
 
-use crate::catalog::arithmetic::ArithmeticPos;
+use crate::catalog::ArithmeticPos;
 use std::fmt;
 
 /// A fn_call predicate with variables resolved to their concrete positions.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct FnCallPredicatePos {
+pub(crate) struct FnCallPredicatePos {
     name: String,
     args: Vec<ArithmeticPos>,
     is_negated: bool,
@@ -13,7 +13,7 @@ pub struct FnCallPredicatePos {
 
 impl FnCallPredicatePos {
     /// Construct a new positional fn_call predicate.
-    pub fn new(name: String, args: Vec<ArithmeticPos>, is_negated: bool) -> Self {
+    pub(crate) fn new(name: String, args: Vec<ArithmeticPos>, is_negated: bool) -> Self {
         Self {
             name,
             args,
@@ -23,19 +23,19 @@ impl FnCallPredicatePos {
 
     /// Returns the function name.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     /// Returns the argument arithmetic positions.
     #[inline]
-    pub fn args(&self) -> &[ArithmeticPos] {
+    pub(crate) fn args(&self) -> &[ArithmeticPos] {
         &self.args
     }
 
     /// Whether the UDF result is negated.
     #[inline]
-    pub fn is_negated(&self) -> bool {
+    pub(crate) fn is_negated(&self) -> bool {
         self.is_negated
     }
 }

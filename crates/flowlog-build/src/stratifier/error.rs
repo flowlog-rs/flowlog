@@ -7,9 +7,9 @@
 //! fire. Each variant carries at least one [`Span`] so the renderer can
 //! point at the offending source.
 
+use crate::common::{primary_label, Diagnostic};
+use crate::common::{FileId, Span};
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use crate::common::diag::{primary_label, Diagnostic};
-use crate::common::source::{FileId, Span};
 use thiserror::Error;
 
 /// Errors raised while stratifying a FlowLog program.

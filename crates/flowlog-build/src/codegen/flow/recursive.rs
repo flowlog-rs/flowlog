@@ -19,7 +19,7 @@ use crate::codegen::aggregation::{
     aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce_stmt,
     aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
-use crate::codegen::error::CodegenError;
+use crate::codegen::CodegenError;
 use crate::codegen::ident::find_local_ident;
 use crate::codegen::CodeGen;
 

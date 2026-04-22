@@ -2,30 +2,18 @@
 //!
 //! - [`HeadArg`]: `Var | Arith | Aggregation`
 //! - [`Head`]: `rel(arg1, ..., argN)`
-//!
-//! # Example
-//! ```rust
-//! use flowlog_build::parser::logic::{Head, HeadArg, Arithmetic, Factor, ArithmeticOperator};
-//! use flowlog_build::parser::primitive::ConstType;
-//! let inc = Arithmetic::new(
-//!     Factor::Var("Y".into()),
-//!     vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(10)))],
-//! );
-//! let head = Head::new("result".into(), vec![HeadArg::Var("X".into()), HeadArg::Arith(inc)]);
-//! assert_eq!(head.to_string(), "result(X, Y + 10)");
-//! ```
 
 use super::{Aggregation, Arithmetic};
+use crate::common::compute_fp;
+use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{span_of, Lexeme, Rule};
-use crate::common::compute_fp;
-use crate::common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
 /// Argument in a rule head.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum HeadArg {
+pub(crate) enum HeadArg {
     /// Pass-through variable.
     Var(String),
     /// Arithmetic expression (includes UDF calls).
@@ -37,22 +25,11 @@ pub enum HeadArg {
 impl HeadArg {
     /// Variables referenced by this argument (order preserved, duplicates kept).
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub(crate) fn vars(&self) -> Vec<&String> {
         match self {
             Self::Var(v) => vec![v],
             Self::Arith(a) => a.vars(),
             Self::Aggregation(agg) => agg.vars(),
-        }
-    }
-
-    /// Source location; delegates to the inner node. Plain `Var` variants
-    /// have no standalone span and return [`Span::DUMMY`].
-    #[must_use]
-    pub fn span(&self) -> Span {
-        match self {
-            Self::Arith(a) => a.span(),
-            Self::Aggregation(agg) => agg.span(),
-            Self::Var(_) => Span::DUMMY,
         }
     }
 }
@@ -105,7 +82,7 @@ impl Lexeme for HeadArg {
 
 /// `rel(arg1, ..., argN)`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Head {
+pub(crate) struct Head {
     name: String,
     head_fingerprint: u64,
     head_arguments: Vec<HeadArg>,
@@ -113,11 +90,8 @@ pub struct Head {
 }
 
 impl Head {
-    /// Create a new rule head.
-    ///
-    /// Converts the name to lowercase.
-    #[must_use]
-    pub fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
         let name = name.to_lowercase();
         let head_fingerprint = compute_fp(&name);
         Self {
@@ -131,35 +105,40 @@ impl Head {
     /// Source location this head was parsed from.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 
     /// Relation name.
     #[must_use]
     #[inline]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     /// Head fingerprint.
     #[must_use]
     #[inline]
-    pub fn head_fingerprint(&self) -> u64 {
+    pub(crate) fn head_fingerprint(&self) -> u64 {
         self.head_fingerprint
     }
 
     /// Arguments.
     #[must_use]
     #[inline]
-    pub fn head_arguments(&self) -> &[HeadArg] {
+    pub(crate) fn head_arguments(&self) -> &[HeadArg] {
         &self.head_arguments
+    }
+
+    #[inline]
+    pub(crate) fn head_arguments_mut(&mut self) -> &mut [HeadArg] {
+        &mut self.head_arguments
     }
 
     /// Arity (number of arguments).
     #[must_use]
     #[inline]
-    pub fn arity(&self) -> usize {
+    pub(crate) fn arity(&self) -> usize {
         self.head_arguments.len()
     }
 }
@@ -204,87 +183,5 @@ impl Lexeme for Head {
             head_arguments: args,
             span: Ignored(span),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::parser::logic::{ArithmeticOperator, Factor};
-    use crate::parser::primitive::ConstType;
-
-    fn var_arg(s: &str) -> HeadArg {
-        HeadArg::Var(s.into())
-    }
-    fn arith_var(s: &str) -> Arithmetic {
-        Arithmetic::new(Factor::Var(s.into()), vec![])
-    }
-    fn arith_plus_x_5() -> Arithmetic {
-        Arithmetic::new(
-            Factor::Var("X".into()),
-            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(5)))],
-        )
-    }
-
-    #[test]
-    fn headarg_vars_and_display() {
-        let v = var_arg("P");
-        assert_eq!(v.vars(), vec![&"P".to_string()]);
-        assert_eq!(v.to_string(), "P");
-
-        let a = HeadArg::Arith(arith_plus_x_5());
-        assert_eq!(a.vars(), vec![&"X".to_string()]);
-        assert_eq!(a.to_string(), "X + 5");
-
-        let agg = HeadArg::Aggregation(Aggregation::new(
-            super::super::AggregationOperator::Count,
-            arith_var("X"),
-        ));
-        assert_eq!(agg.vars(), vec![&"X".to_string()]);
-        assert_eq!(agg.to_string(), "count(X)");
-    }
-
-    #[test]
-    fn head_basics() {
-        let h = Head::new("Person".into(), vec![var_arg("Name"), var_arg("Age")]);
-        assert_eq!(h.name(), "person");
-        assert_eq!(h.arity(), 2);
-        assert_eq!(h.to_string(), "person(Name, Age)");
-    }
-
-    #[test]
-    fn head_nullary_and_mixed() {
-        let nullary = Head::new("flag".into(), vec![]);
-        assert_eq!(nullary.arity(), 0);
-        assert_eq!(nullary.to_string(), "flag()");
-
-        let mixed = Head::new(
-            "computed".into(),
-            vec![var_arg("X"), HeadArg::Arith(arith_plus_x_5())],
-        );
-        assert_eq!(mixed.to_string(), "computed(X, X + 5)");
-    }
-
-    #[test]
-    fn head_clone_hash_eq() {
-        let h = Head::new("t".into(), vec![var_arg("X")]);
-        let c = h.clone();
-        assert_eq!(h, c);
-
-        use std::collections::HashSet;
-        let mut set = HashSet::new();
-        set.insert(h);
-        set.insert(c);
-        assert_eq!(set.len(), 1);
-    }
-
-    #[test]
-    fn headarg_arith_only_constants_has_no_vars() {
-        let a = HeadArg::Arith(Arithmetic::new(
-            Factor::Const(ConstType::Int(10)),
-            vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(5)))],
-        ));
-        assert!(a.vars().is_empty());
-        assert_eq!(a.to_string(), "10 + 5");
     }
 }

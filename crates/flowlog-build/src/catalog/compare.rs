@@ -6,7 +6,7 @@ use std::fmt;
 
 /// A comparison expression with variables resolved to their concrete positions.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ComparisonExprPos {
+pub(crate) struct ComparisonExprPos {
     left: ArithmeticPos,
     operator: ComparisonOperator,
     right: ArithmeticPos,
@@ -14,7 +14,7 @@ pub struct ComparisonExprPos {
 
 impl ComparisonExprPos {
     /// Constructs a positional comparison expression from a parsed expression.
-    pub fn from_comparison_expr(
+    pub(crate) fn from_comparison_expr(
         compare_expr: &ComparisonExpr,
         left_var_signatures: &[AtomArgumentSignature],
         right_var_signatures: &[AtomArgumentSignature],
@@ -31,7 +31,7 @@ impl ComparisonExprPos {
     }
 
     /// Construct a positional comparison expression directly from parts.
-    pub fn from_parts(
+    pub(crate) fn from_parts(
         left: ArithmeticPos,
         operator: ComparisonOperator,
         right: ArithmeticPos,
@@ -45,19 +45,19 @@ impl ComparisonExprPos {
 
     /// Returns the comparison operator.
     #[inline]
-    pub fn operator(&self) -> &ComparisonOperator {
+    pub(crate) fn operator(&self) -> &ComparisonOperator {
         &self.operator
     }
 
     /// Returns the left-hand side arithmetic expression.
     #[inline]
-    pub fn left(&self) -> &ArithmeticPos {
+    pub(crate) fn left(&self) -> &ArithmeticPos {
         &self.left
     }
 
     /// Returns the right-hand side arithmetic expression.
     #[inline]
-    pub fn right(&self) -> &ArithmeticPos {
+    pub(crate) fn right(&self) -> &ArithmeticPos {
         &self.right
     }
 }

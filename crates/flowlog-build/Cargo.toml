@@ -4,7 +4,12 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Build-time FlowLog compiler — emits a typed DatalogBatchEngine to OUT_DIR."
+description = "Build-time FlowLog compiler for library mode."
+repository = "https://github.com/flowlog-rs/flowlog"
+homepage = "https://www.flowlog-rs.com/"
+readme = "README.md"
+keywords = ["datalog", "dataflow", "compiler", "build-script"]
+categories = ["compilers", "database", "development-tools::build-utils"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
@@ -19,7 +24,7 @@ syn = { workspace = true, features = ["full"] }
 thiserror.workspace = true
 tracing.workspace = true
 
-# Parser grammar (moved from standalone parser crate).
+# Parser grammar.
 pest = "2.8"
 pest_derive = "2.8"
 ordered-float = "5.1"

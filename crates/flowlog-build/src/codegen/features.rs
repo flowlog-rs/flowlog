@@ -45,13 +45,13 @@ impl AggSemiringNeeds {
     }
 
     #[inline]
-    pub fn int_needs(&self, op: AggregationOperator) -> [bool; 8] {
+    pub(crate) fn int_needs(&self, op: AggregationOperator) -> [bool; 8] {
         let op = op.semiring_canonical();
         INT_DATA_TYPES.map(|dt| self.0.contains(&(op, dt)))
     }
 
     #[inline]
-    pub fn float_needs(&self, op: AggregationOperator) -> [bool; 2] {
+    pub(crate) fn float_needs(&self, op: AggregationOperator) -> [bool; 2] {
         let op = op.semiring_canonical();
         FLOAT_DATA_TYPES.map(|dt| self.0.contains(&(op, dt)))
     }

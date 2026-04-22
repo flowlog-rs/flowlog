@@ -4,10 +4,12 @@
 //! [`codespan_reporting`] diagnostic that points at the offending site
 //! (and, where helpful, a secondary site such as the original binding).
 
-use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use crate::common::diag::{labels, primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
-use crate::common::source::{FileId, Span};
+use crate::common::{
+    labels, primary_label, secondary_label, Diagnostic, InternalError, BUG_URL,
+};
+use crate::common::{FileId, Span};
 use crate::parser::{AggregationOperator, ArithmeticOperator, ComparisonOperator, DataType};
+use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -130,7 +132,7 @@ pub enum TypeCheckError {
 }
 
 impl TypeCheckError {
-    pub(crate) fn internal(detail: impl Into<String>) -> Self {
+    pub(super) fn internal(detail: impl Into<String>) -> Self {
         Self::Internal(InternalError::new("typechecker", detail, BUG_URL))
     }
 }

@@ -17,25 +17,30 @@ use quote::{format_ident, quote};
 
 use crate::parser::{Program, Relation};
 
-use crate::codegen::features::Features;
+use crate::codegen::CodegenError;
+use crate::codegen::Features;
 
 /// Emit the body of the library-mode `relops` module — EDB input handlers
 /// + the `Inputs` container — plus the `use` lines they depend on.
-pub(crate) fn gen_input_module(program: &Program, features: &Features) -> TokenStream {
+pub(crate) fn gen_input_module(
+    program: &Program,
+    features: &Features,
+) -> Result<TokenStream, CodegenError> {
     let edbs = program.edbs();
     let string_intern = features.string_intern();
 
     let preamble = gen_preamble(program, features);
     let input_structs = edbs
         .iter()
-        .map(|rel| handler::gen_input_struct(rel, program.facts().get(rel.name()), string_intern));
+        .map(|rel| handler::gen_input_struct(rel, program.facts().get(rel.name()), string_intern))
+        .collect::<Result<Vec<_>, _>>()?;
     let inputs_container = gen_inputs_container(&edbs);
 
-    quote! {
+    Ok(quote! {
         #preamble
         #(#input_structs)*
         #inputs_container
-    }
+    })
 }
 
 // ------------------------------------------------------------

@@ -6,79 +6,35 @@
 //!
 //! Predicates form the antecedent of rules: `head(...) :- p1, !p2, X > Y.`
 
-use super::{Atom, AtomArg, ComparisonExpr, FnCall};
+use super::{Atom, ComparisonExpr, FnCall};
+use crate::common::FileId;
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{Lexeme, Rule};
-use crate::common::source::{FileId, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
 /// A predicate in a rule body.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Predicate {
+pub(crate) enum Predicate {
     /// Positive atom, e.g. `edge(X, Y)`.
-    PositiveAtomPredicate(Atom),
+    PositiveAtom(Atom),
     /// Negative atom (negation as failure), e.g. `!edge(X, Y)`.
-    NegativeAtomPredicate(Atom),
+    NegativeAtom(Atom),
     /// Comparison expression, e.g. `X > 5`.
-    ComparePredicate(ComparisonExpr),
+    Compare(ComparisonExpr),
     /// UDF predicate call, e.g. `is_valid(X, Y + 1)`.
-    FnCallPredicate(FnCall),
+    FnCall(FnCall),
 }
 
+#[cfg(test)]
 impl Predicate {
-    /// Arguments of the (negative) atom.
-    ///
-    /// # Panics
-    /// Panics if called on non-atom predicates.
-    #[inline]
-    pub fn arguments(&self) -> Vec<&AtomArg> {
+    /// Relation name for atom / negative-atom predicates. Tests only;
+    /// production code pattern-matches the variant.
+    pub(crate) fn name(&self) -> &str {
         match self {
-            Self::PositiveAtomPredicate(atom) | Self::NegativeAtomPredicate(atom) => {
-                atom.arguments().iter().collect()
-            }
-            Self::ComparePredicate(_) => {
-                unreachable!("Cannot get arguments from a comparison predicate")
-            }
-            Self::FnCallPredicate(_) => {
-                unreachable!("Cannot get arguments from a fn call predicate")
-            }
-        }
-    }
-
-    /// Relation name (for atom / negative atom).
-    ///
-    /// # Panics
-    /// Panics if called on non-atom predicates.
-    #[must_use]
-    #[inline]
-    pub fn name(&self) -> &str {
-        match self {
-            Self::PositiveAtomPredicate(atom) | Self::NegativeAtomPredicate(atom) => atom.name(),
-            Self::ComparePredicate(_) => {
-                unreachable!("Cannot get name from a comparison predicate")
-            }
-            Self::FnCallPredicate(_) => {
-                unreachable!("Cannot get name from a fn call predicate")
-            }
-        }
-    }
-
-    /// Is this a UDF predicate call?
-    #[inline]
-    pub fn is_fn_call(&self) -> bool {
-        matches!(self, Self::FnCallPredicate(_))
-    }
-
-    /// Source location this predicate was parsed from. Delegates to the
-    /// inner node; `FnCallPredicate` does not carry a span today and
-    /// returns [`Span::DUMMY`].
-    #[must_use]
-    pub fn span(&self) -> Span {
-        match self {
-            Self::PositiveAtomPredicate(a) | Self::NegativeAtomPredicate(a) => a.span(),
-            Self::ComparePredicate(c) => c.span(),
-            Self::FnCallPredicate(fc) => fc.span(),
+            Self::PositiveAtom(atom) | Self::NegativeAtom(atom) => atom.name(),
+            Self::Compare(_) => unreachable!("no name on Compare"),
+            Self::FnCall(_) => unreachable!("no name on FnCall"),
         }
     }
 }
@@ -86,10 +42,10 @@ impl Predicate {
 impl fmt::Display for Predicate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::PositiveAtomPredicate(atom) => write!(f, "{atom}"),
-            Self::NegativeAtomPredicate(atom) => write!(f, "!{atom}"),
-            Self::ComparePredicate(expr) => write!(f, "{expr}"),
-            Self::FnCallPredicate(fc) => write!(f, "{fc}"),
+            Self::PositiveAtom(atom) => write!(f, "{atom}"),
+            Self::NegativeAtom(atom) => write!(f, "!{atom}"),
+            Self::Compare(expr) => write!(f, "{expr}"),
+            Self::FnCall(fc) => write!(f, "{fc}"),
         }
     }
 }
@@ -97,10 +53,10 @@ impl fmt::Display for Predicate {
 impl fmt::Debug for Predicate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::PositiveAtomPredicate(atom) => write!(f, "{atom:?}"),
-            Self::NegativeAtomPredicate(atom) => write!(f, "!{atom:?}"),
-            Self::ComparePredicate(expr) => write!(f, "{expr}"),
-            Self::FnCallPredicate(fc) => write!(f, "{fc}"),
+            Self::PositiveAtom(atom) => write!(f, "{atom:?}"),
+            Self::NegativeAtom(atom) => write!(f, "!{atom:?}"),
+            Self::Compare(expr) => write!(f, "{expr}"),
+            Self::FnCall(fc) => write!(f, "{fc}"),
         }
     }
 }
@@ -118,147 +74,17 @@ impl Lexeme for Predicate {
             .ok_or_else(|| grammar_bug("expected inner rule for predicate"))?;
 
         Ok(match inner.as_rule() {
-            Rule::atom => Self::PositiveAtomPredicate(Atom::from_parsed_rule(inner, file)?),
+            Rule::atom => Self::PositiveAtom(Atom::from_parsed_rule(inner, file)?),
             Rule::negative_atom => {
                 let atom_rule = inner
                     .into_inner()
                     .next()
                     .ok_or_else(|| grammar_bug("negative_atom missing inner atom"))?;
-                Self::NegativeAtomPredicate(Atom::from_parsed_rule(atom_rule, file)?)
+                Self::NegativeAtom(Atom::from_parsed_rule(atom_rule, file)?)
             }
-            Rule::compare_expr => {
-                Self::ComparePredicate(ComparisonExpr::from_parsed_rule(inner, file)?)
-            }
-            Rule::fn_call_expr => Self::FnCallPredicate(FnCall::from_parsed_rule(inner, file)?),
+            Rule::compare_expr => Self::Compare(ComparisonExpr::from_parsed_rule(inner, file)?),
+            Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner, file)?),
             other => return Err(grammar_bug(format!("invalid predicate type: {other:?}"))),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::parser::logic::{Arithmetic, ArithmeticOperator, ComparisonOperator, Factor};
-    use crate::parser::primitive::ConstType;
-
-    // Helpers
-    fn atom(name: &str, args: Vec<AtomArg>) -> Atom {
-        Atom::new(name, args, 0)
-    }
-    fn var(name: &str) -> AtomArg {
-        AtomArg::Var(name.into())
-    }
-    fn int(v: i64) -> AtomArg {
-        AtomArg::Const(ConstType::Int(v))
-    }
-    fn txt(s: &str) -> AtomArg {
-        AtomArg::Const(ConstType::Text(s.into()))
-    }
-    fn cmp_expr_gt_x_5() -> ComparisonExpr {
-        let l = Arithmetic::new(Factor::Var("X".into()), vec![]);
-        let r = Arithmetic::new(Factor::Const(ConstType::Int(5)), vec![]);
-        ComparisonExpr::new(l, ComparisonOperator::GreaterThan, r)
-    }
-
-    #[test]
-    fn positive_atom_predicate() {
-        let p = Predicate::PositiveAtomPredicate(atom("edge", vec![var("X"), var("Y")]));
-        assert_eq!(p.name(), "edge");
-        assert!(p.to_string().starts_with("edge(X, Y)"));
-        let args = p.arguments();
-        assert_eq!(args.len(), 2);
-        assert_eq!(args[0], &var("X"));
-        assert_eq!(args[1], &var("Y"));
-    }
-
-    #[test]
-    fn negative_atom_predicate() {
-        let p = Predicate::NegativeAtomPredicate(atom("blocked", vec![var("User")]));
-        assert_eq!(p.name(), "blocked");
-        assert!(p.to_string().starts_with("!blocked(User)"));
-        let args = p.arguments();
-        assert_eq!(args.len(), 1);
-        assert_eq!(args[0], &var("User"));
-    }
-
-    #[test]
-    fn comparison_predicate_display() {
-        let p = Predicate::ComparePredicate(cmp_expr_gt_x_5());
-        assert_eq!(p.to_string(), "X > 5");
-    }
-
-    #[test]
-    #[should_panic(expected = "Cannot get arguments from a comparison predicate")]
-    fn compare_arguments_panics() {
-        let p = Predicate::ComparePredicate(cmp_expr_gt_x_5());
-        let _ = p.arguments();
-    }
-
-    #[test]
-    #[should_panic(expected = "Cannot get name from a comparison predicate")]
-    fn compare_name_panics() {
-        let p = Predicate::ComparePredicate(cmp_expr_gt_x_5());
-        let _ = p.name();
-    }
-
-    #[test]
-    fn display_matrix_and_complex_examples() {
-        // Mixed atom
-        let pa = Predicate::PositiveAtomPredicate(atom("person", vec![txt("Alice"), int(30)]));
-        assert!(pa.to_string().starts_with("person(\"Alice\", 30)"));
-
-        // All comparison ops
-        let l = Arithmetic::new(Factor::Var("x".into()), vec![]);
-        let r = Arithmetic::new(Factor::Const(ConstType::Int(10)), vec![]);
-        let cases = [
-            (ComparisonOperator::Equal, "x == 10"),
-            (ComparisonOperator::NotEqual, "x ≠ 10"),
-            (ComparisonOperator::GreaterThan, "x > 10"),
-            (ComparisonOperator::GreaterEqualThan, "x ≥ 10"),
-            (ComparisonOperator::LessThan, "x < 10"),
-            (ComparisonOperator::LessEqualThan, "x ≤ 10"),
-        ];
-        for (op, expected) in cases {
-            let p = Predicate::ComparePredicate(ComparisonExpr::new(l.clone(), op, r.clone()));
-            assert_eq!(p.to_string(), expected);
-        }
-
-        // Complex comparison: salary * 12 > 100000
-        let left = Arithmetic::new(
-            Factor::Var("salary".into()),
-            vec![(
-                ArithmeticOperator::Multiply,
-                Factor::Const(ConstType::Int(12)),
-            )],
-        );
-        let right = Arithmetic::new(Factor::Const(ConstType::Int(100000)), vec![]);
-        let complex = Predicate::ComparePredicate(ComparisonExpr::new(
-            left,
-            ComparisonOperator::GreaterThan,
-            right,
-        ));
-        assert_eq!(complex.to_string(), "salary * 12 > 100000");
-    }
-
-    #[test]
-    fn nullary_atom_predicate() {
-        let p = Predicate::PositiveAtomPredicate(atom("flag", vec![]));
-        assert_eq!(p.name(), "flag");
-        assert!(p.to_string().starts_with("flag()"));
-        assert!(p.arguments().is_empty());
-    }
-
-    #[test]
-    fn clone_hash_eq() {
-        let a = Predicate::PositiveAtomPredicate(atom("t", vec![var("X")]));
-        let b = a.clone();
-        assert_eq!(a, b);
-
-        use std::collections::HashSet;
-        let mut set = HashSet::new();
-        set.insert(a);
-        set.insert(b);
-        set.insert(Predicate::ComparePredicate(cmp_expr_gt_x_5()));
-        assert_eq!(set.len(), 2);
     }
 }

@@ -8,11 +8,16 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use flowlog_build::{data_type_tokens, Features};
+use flowlog_build::common::Span;
 use flowlog_build::parser::{ConstType, DataType, Program, Relation};
+use flowlog_build::{const_to_token, data_type_tokens, CodegenError, Features};
 
 /// Emit the shared relation-handler module body for binary mode.
-pub(crate) fn gen_relation(program: &Program, features: &Features, is_batch: bool) -> TokenStream {
+pub(crate) fn gen_relation(
+    program: &Program,
+    features: &Features,
+    is_batch: bool,
+) -> Result<TokenStream, CodegenError> {
     let edbs = program.edbs();
     let str_intern = features.string_intern();
     let facts = program.facts();
@@ -53,7 +58,7 @@ pub(crate) fn gen_relation(program: &Program, features: &Features, is_batch: boo
                 gen_one_rel_nonnullary(rel, rel_facts, str_intern)
             }
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     let preamble = quote! {
         use differential_dataflow::input::InputSession;
@@ -68,7 +73,7 @@ pub(crate) fn gen_relation(program: &Program, features: &Features, is_batch: boo
         #ordered_float_import
     };
 
-    quote! {
+    Ok(quote! {
         #preamble
 
         /// Operations supported by a dynamic relation handler.
@@ -110,7 +115,7 @@ pub(crate) fn gen_relation(program: &Program, features: &Features, is_batch: boo
         }
 
         #(#rel_impls)*
-    }
+    })
 }
 
 // ------------------------------------------------------------
@@ -119,9 +124,9 @@ pub(crate) fn gen_relation(program: &Program, features: &Features, is_batch: boo
 
 fn gen_one_rel_nullary(
     rel: &Relation,
-    facts: Option<&Vec<Vec<ConstType>>>,
+    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
     is_batch: bool,
-) -> TokenStream {
+) -> Result<TokenStream, CodegenError> {
     let name = rel.name();
     let struct_name = format_ident!("Rel{}", name);
 
@@ -171,7 +176,7 @@ fn gen_one_rel_nullary(
         }
     };
 
-    quote! {
+    Ok(quote! {
         /// Input handler for the nullary relation.
         ///
         /// Nullary relations store a single boolean-like fact (`True`/`False`) and are
@@ -226,14 +231,14 @@ fn gen_one_rel_nullary(
                 }
             }
         }
-    }
+    })
 }
 
 fn gen_one_rel_nonnullary(
     rel: &Relation,
-    facts: Option<&Vec<Vec<ConstType>>>,
+    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
     string_intern: bool,
-) -> TokenStream {
+) -> Result<TokenStream, CodegenError> {
     let name = rel.name();
     let struct_name = format_ident!("Rel{}", name);
 
@@ -278,7 +283,7 @@ fn gen_one_rel_nonnullary(
     let tuple_parse_stmts = gen_parse_from_str(name, &dts, string_intern);
     let file_parse_stmts = gen_parse_from_bytes(name, &dts, string_intern);
     let has_header = rel.input_has_header();
-    let inline_body = gen_inline_facts(facts, string_intern);
+    let inline_body = gen_inline_facts(facts, string_intern)?;
     let apply_inline_impl = if inline_body.is_empty() {
         quote! { fn apply_inline(&mut self, _index: usize) {} }
     } else {
@@ -298,7 +303,7 @@ fn gen_one_rel_nonnullary(
         }
     };
 
-    quote! {
+    Ok(quote! {
         /// Input handler for the relation.
         ///
         /// - Parses tuples using the relation delimiter.
@@ -410,60 +415,46 @@ fn gen_one_rel_nonnullary(
                 }
             }
         }
-    }
+    })
 }
 
 // ------------------------------------------------------------
 // Inline fact code generation
 // ------------------------------------------------------------
 
-fn gen_inline_facts(facts: Option<&Vec<Vec<ConstType>>>, string_intern: bool) -> TokenStream {
+fn gen_inline_facts(
+    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
+    string_intern: bool,
+) -> Result<TokenStream, CodegenError> {
     let Some(rows) = facts else {
-        return quote! {};
+        return Ok(quote! {});
     };
     if rows.is_empty() {
-        return quote! {};
+        return Ok(quote! {});
     }
 
     let tuples: Vec<TokenStream> = rows
         .iter()
-        .map(|vals| {
+        .map(|(_, vals)| {
             let elems: Vec<TokenStream> = vals
                 .iter()
-                .map(|c| match c {
-                    ConstType::Int(i) => {
-                        let lit = proc_macro2::Literal::i64_unsuffixed(*i);
-                        quote! { #lit }
-                    }
-                    ConstType::Float(v) => {
-                        let lit = proc_macro2::Literal::f64_unsuffixed(v.into_inner());
-                        quote! { OrderedFloat(#lit) }
-                    }
-                    ConstType::Text(s) => {
-                        if string_intern {
-                            quote! { intern(#s) }
-                        } else {
-                            quote! { #s.to_string() }
-                        }
-                    }
-                    ConstType::Bool(b) => quote! { #b },
-                })
-                .collect();
+                .map(|c| const_to_token(c, string_intern))
+                .collect::<Result<_, _>>()?;
 
-            if elems.len() == 1 {
+            Ok(if elems.len() == 1 {
                 let e0 = &elems[0];
                 quote! { ( #e0, ) }
             } else {
                 quote! { ( #(#elems),* ) }
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, CodegenError>>()?;
 
-    quote! {
+    Ok(quote! {
         for row in [ #(#tuples),* ] {
             self.h_mut().update(row, SEMIRING_ONE);
         }
-    }
+    })
 }
 
 // ------------------------------------------------------------

@@ -4,35 +4,41 @@
 //! Provides structured representations for Datalog programs including
 //! relation declarations, logic rules, and primitive types.
 
-pub mod declaration;
-pub mod error;
-pub mod logic;
-pub mod primitive;
-pub mod program;
-pub mod segment;
+mod declaration;
+mod error;
+mod logic;
+mod primitive;
+mod program;
+mod segment;
 
-pub use error::ParseError;
+pub use error::{DirectiveKind, ParseError};
 
-// Re-export core types for convenient access
-pub use declaration::{Attribute, ExternFn, Relation};
-pub use logic::{
-    Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
-    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head, HeadArg,
-    IterativeDirective, LoopBlock, LoopCondition, LoopConnective, Predicate, StopGroup,
-    StopRelation,
-};
+// External API (reached by flowlog-compiler and integration tests).
+// ArithmeticOperator / ComparisonOperator leak through TypeCheckError's
+// pub variants; AggregationOperator leaks through Features::agg_semirings.
+pub use declaration::Relation;
+pub use logic::{AggregationOperator, ArithmeticOperator, ComparisonOperator, FlowLogRule};
 pub use primitive::{ConstType, DataType};
 pub use program::Program;
-pub use segment::Segment;
 
-use crate::common::source::{FileId, Span};
+// Intra-crate shortcuts — these logic types are imported from elsewhere
+// in the crate (catalog, planner, codegen, etc.) as `crate::parser::X`.
+// Declaration/segment/program inner types are reached via their own
+// submodule paths and don't need a shortcut here.
+pub(crate) use logic::{
+    Aggregation, Arithmetic, Atom, AtomArg, ComparisonExpr, Factor, FnCall, HeadArg,
+    IterativeDirective, LoopCondition, LoopConnective, Predicate,
+};
+pub(crate) use segment::Segment;
+
+use crate::common::{FileId, Span};
 use pest::iterators::Pair;
 use pest_derive::Parser;
 
 /// FlowLog Parser is powered by Pest, a PEG parser framework.
 #[derive(Parser)]
 #[grammar = "parser/grammar.pest"]
-pub struct FlowLogParser;
+pub(crate) struct FlowLogParser;
 
 /// Trait for converting Pest parse trees into FlowLog types.
 ///
@@ -40,7 +46,7 @@ pub struct FlowLogParser;
 /// conversion from parse trees to structured types. `file` identifies the
 /// source file the pair came from; it is stored in every produced span so
 /// later diagnostics can cite the user's source.
-pub trait Lexeme: Sized {
+pub(crate) trait Lexeme: Sized {
     /// Converts a Pest parse rule into a structured FlowLog type.
     ///
     /// Returns `Err(ParseError)` on grammar-contract violations that the

@@ -7,19 +7,8 @@
 //! These types form the building blocks of FlowLog Datalog programs and appear
 //! in atoms, expressions, and relation schemas.
 //!
-//! # Example
-//! ```rust
-//! use flowlog_build::parser::primitive::{DataType, ConstType};
-//! use std::str::FromStr;
-//!
-//! let ty = DataType::from_str("int32").unwrap();
-//! let c = ConstType::Int(42);
-//! assert_eq!(ty.to_string(), "int32");
-//! assert_eq!(c.to_string(), "42");
-//! ```
-
-pub mod const_type;
-pub mod data_type;
+mod const_type;
+mod data_type;
 
 pub use const_type::ConstType;
 pub use data_type::DataType;

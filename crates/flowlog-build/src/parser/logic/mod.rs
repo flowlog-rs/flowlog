@@ -8,38 +8,32 @@
 //! - [`arithmetic`]: arithmetic expressions and factors
 //! - [`comparison`]: comparison expressions and operators
 //! - [`aggregation`]: aggregation operators and wrappers
-//!
-//! # Example
-//! ```rust
-//! use flowlog_build::parser::logic::{FlowLogRule, Head, HeadArg, Predicate, Atom, AtomArg};
-//!
-//! // result(X) :- input(X).
-//! let head = Head::new("result".to_string(), vec![HeadArg::Var("X".to_string())]);
-//! let body = vec![Predicate::PositiveAtomPredicate(
-//!     Atom::new("input", vec![AtomArg::Var("X".to_string())], 0),
-//! )];
-//! let rule = FlowLogRule::new(head, body);
-//! ```
 
-pub mod aggregation;
-pub mod arithmetic;
-pub mod atom;
-pub mod comparison;
-pub mod fn_call;
-pub mod head;
-pub mod loop_block;
-pub mod predicate;
-pub mod rule;
+mod aggregation;
+mod arithmetic;
+mod atom;
+mod comparison;
+mod fn_call;
+mod head;
+mod loop_block;
+mod predicate;
+mod rule;
 
-// Re-exports for a convenient public surface.
-pub use aggregation::{Aggregation, AggregationOperator};
-pub use arithmetic::{Arithmetic, ArithmeticOperator, Factor};
-pub use atom::{Atom, AtomArg};
-pub use comparison::{ComparisonExpr, ComparisonOperator};
-pub use fn_call::FnCall;
-pub use head::{Head, HeadArg};
-pub use loop_block::{
-    IterativeDirective, LoopBlock, LoopCondition, LoopConnective, StopGroup, StopRelation,
-};
-pub use predicate::Predicate;
+// Re-exports for a flat intra-crate path; the outer parser/mod.rs
+// re-re-exports the externally-needed ones at `parser::*`.
+//
+// Externally-visible: widened to `pub` so parser/mod.rs can re-export them.
+pub use aggregation::AggregationOperator;
+pub use arithmetic::ArithmeticOperator;
+pub use comparison::ComparisonOperator;
 pub use rule::FlowLogRule;
+
+// Intra-crate only.
+pub(crate) use aggregation::Aggregation;
+pub(crate) use arithmetic::{Arithmetic, Factor};
+pub(crate) use atom::{Atom, AtomArg};
+pub(crate) use comparison::ComparisonExpr;
+pub(crate) use fn_call::FnCall;
+pub(crate) use head::{Head, HeadArg};
+pub(crate) use loop_block::{IterativeDirective, LoopBlock, LoopCondition, LoopConnective};
+pub(crate) use predicate::Predicate;
