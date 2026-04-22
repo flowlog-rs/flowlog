@@ -154,7 +154,10 @@ impl RulePlanner {
 
 impl fmt::Display for RulePlanner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let root = self.transformation_infos.last().unwrap().output_info_fp();
+        let Some(last_info) = self.transformation_infos.last() else {
+            return writeln!(f, "Plan Tree: <empty>");
+        };
+        let root = last_info.output_info_fp();
         struct Walker<'a> {
             debug_info_map: &'a BTreeMap<u64, (String, Vec<u64>)>,
             ids: BTreeMap<u64, usize>,

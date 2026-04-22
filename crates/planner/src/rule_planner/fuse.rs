@@ -571,10 +571,12 @@ impl RulePlanner {
             }
         }
 
-        // Second pass: KV-to-KV consumers inherit the join/antijoin layout requirement.
-        // They don't define their own key/value split — they adopt the first join/antijoin's.
+        // Second pass: KV-to-KV consumers adapt to the canonical layout.
+        // Preferred source is the first join/antijoin from pass 1 (strict requirement).
+        // If no join/antijoin consumes this producer, the first KV-to-KV consumer's own
+        // declared `input_kv_layout` bootstraps the canonical layout, and any subsequent
+        // KV-to-KV consumers adapt to it.
         for &consumer_idx in consumer_indices {
-            // Only process KV-to-KV maps whose input matches this producer.
             if !matches!(
                 &self.transformation_infos[consumer_idx],
                 TransformationInfo::KVToKV { input_info_fp, .. } if *input_info_fp == input_fp
@@ -582,22 +584,25 @@ impl RulePlanner {
                 continue;
             }
 
-            // The canonical layout comes from the first join/antijoin seen in pass 1.
-            let layout = real_key_value_layout.clone().unwrap_or_else(|| panic!(
-                "Planner error: consumer idx {} missing join/antijoin layout for producer fp {:#018x}",
-                consumer_idx, input_fp
-            ));
+            if real_key_value_layout.is_none() {
+                real_key_value_layout = Some(
+                    self.transformation_infos[consumer_idx]
+                        .input_kv_layout()
+                        .0
+                        .clone(),
+                );
+            }
+            let layout = real_key_value_layout.as_ref().unwrap();
 
-            // Remap layout signatures to this consumer's atom id, then apply.
             let consumer_tx = &mut self.transformation_infos[consumer_idx];
             let atom_id = consumer_tx.input_kv_layout().0.extract_atom_id();
-            consumer_tx.update_input_layout(Self::remap_atom_kv_layout(&layout, atom_id));
+            consumer_tx.update_input_layout(Self::remap_atom_kv_layout(layout, atom_id));
 
-            // Group this consumer under the same (key, value) indices as the joins.
-            let (key_indices, value_indices) = layouts.keys().next().cloned().unwrap_or_else(|| panic!(
-                "Planner error: consumer idx {} missing join/antijoin layout for producer fp {:#018x}",
-                consumer_idx, input_fp
-            ));
+            let (key_indices, value_indices) = layouts
+                .keys()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| layout.extract_argument_ids_from_layout());
             layouts
                 .entry((key_indices, value_indices))
                 .or_default()
