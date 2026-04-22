@@ -7,7 +7,7 @@ license.workspace = true
 description = "Build-time FlowLog compiler for library mode."
 repository = "https://github.com/flowlog-rs/flowlog"
 homepage = "https://www.flowlog-rs.com/"
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["datalog", "dataflow", "compiler", "build-script"]
 categories = ["compilers", "database", "development-tools::build-utils"]
 
