@@ -66,16 +66,16 @@
 //! ```
 
 use super::FlowLogRule;
+use crate::common::compute_fp;
+use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{span_of, Lexeme, Rule};
-use crate::common::compute_fp;
-use crate::common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
 /// A boolean connective joining two clauses or sub-conditions.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum LoopConnective {
+pub(crate) enum LoopConnective {
     And,
     Or,
 }
@@ -89,11 +89,11 @@ pub enum LoopConnective {
 /// - `@it <= 6`                → `[(0, 6)]`
 /// - `@it >= 5 and @it <= 10` → `[(5, 10)]`
 /// - `@it < 5 or @it > 10`    → `[(0, 4), (11, u16::MAX)]`
-pub type IterWindows = Vec<(u16, u16)>;
+pub(crate) type IterWindows = Vec<(u16, u16)>;
 
 /// A single nullary (boolean) relation referenced in an `until` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StopRelation {
+pub(crate) struct StopRelation {
     name: String,
     fp: u64,
     span: Ignored<Span>,
@@ -101,31 +101,21 @@ pub struct StopRelation {
 
 impl StopRelation {
     #[must_use]
-    pub fn new(name: String) -> Self {
-        let fp = compute_fp(&name);
-        Self {
-            name,
-            fp,
-            span: Ignored(Span::DUMMY),
-        }
-    }
-
-    #[must_use]
     #[inline]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     #[must_use]
     #[inline]
-    pub fn fp(&self) -> u64 {
+    pub(crate) fn fp(&self) -> u64 {
         self.fp
     }
 
     /// Span of the relation name in the `until { ... }` clause.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 }
@@ -135,7 +125,7 @@ impl StopRelation {
 /// Iterative relations use replacement (`Variable::new_from`) semantics
 /// instead of the default accumulative semantics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct IterativeDirective {
+pub(crate) struct IterativeDirective {
     name: String,
     fp: u64,
     span: Ignored<Span>,
@@ -143,60 +133,50 @@ pub struct IterativeDirective {
 
 impl IterativeDirective {
     #[must_use]
-    pub fn new(name: String) -> Self {
-        let fp = compute_fp(&name);
-        Self {
-            name,
-            fp,
-            span: Ignored(Span::DUMMY),
-        }
-    }
-
-    #[must_use]
     #[inline]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     #[must_use]
     #[inline]
-    pub fn fp(&self) -> u64 {
+    pub(crate) fn fp(&self) -> u64 {
         self.fp
     }
 
     /// Span of the `.iterative <name>` directive.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 }
 
 /// A group of one or more `until` relations joined by `and`/`or`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StopGroup {
+pub(crate) struct StopGroup {
     first: StopRelation,
     rest: Vec<(LoopConnective, StopRelation)>,
 }
 
 impl StopGroup {
     #[must_use]
-    pub fn new(first: StopRelation, rest: Vec<(LoopConnective, StopRelation)>) -> Self {
+    pub(crate) fn new(first: StopRelation, rest: Vec<(LoopConnective, StopRelation)>) -> Self {
         Self { first, rest }
     }
 
     #[must_use]
-    pub fn first(&self) -> &StopRelation {
+    pub(crate) fn first(&self) -> &StopRelation {
         &self.first
     }
 
     #[must_use]
-    pub fn rest(&self) -> &[(LoopConnective, StopRelation)] {
+    pub(crate) fn rest(&self) -> &[(LoopConnective, StopRelation)] {
         &self.rest
     }
 
     /// Iterator over all `until` relations (first + rest).
-    pub fn relations(&self) -> impl Iterator<Item = &StopRelation> {
+    pub(crate) fn relations(&self) -> impl Iterator<Item = &StopRelation> {
         std::iter::once(&self.first).chain(self.rest.iter().map(|(_, r)| r))
     }
 }
@@ -209,7 +189,7 @@ impl StopGroup {
 /// No connective (default) = min (stop when EITHER fires).
 /// Explicit `or`           = max (stop when BOTH fire).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LoopCondition {
+pub(crate) struct LoopCondition {
     while_part: Option<IterWindows>,
     connective: Option<LoopConnective>,
     until_part: Option<StopGroup>,
@@ -217,7 +197,7 @@ pub struct LoopCondition {
 
 impl LoopCondition {
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         while_part: Option<IterWindows>,
         connective: Option<LoopConnective>,
         until_part: Option<StopGroup>,
@@ -231,20 +211,20 @@ impl LoopCondition {
 
     /// The parsed iter windows from the `while { ... }` clause, if present.
     #[must_use]
-    pub fn while_part(&self) -> Option<&[(u16, u16)]> {
+    pub(crate) fn while_part(&self) -> Option<&[(u16, u16)]> {
         self.while_part.as_deref()
     }
 
     /// The connective joining the `while` and `until` clauses, if both are present.
     /// `None` (default when both present) means And / min semantics.
     #[must_use]
-    pub fn connective(&self) -> Option<&LoopConnective> {
+    pub(crate) fn connective(&self) -> Option<&LoopConnective> {
         self.connective.as_ref()
     }
 
     /// The `until { ... }` relation group, if present.
     #[must_use]
-    pub fn until_part(&self) -> Option<&StopGroup> {
+    pub(crate) fn until_part(&self) -> Option<&StopGroup> {
         self.until_part.as_ref()
     }
 }
@@ -255,7 +235,7 @@ impl LoopCondition {
 /// The `iterative` list is scoped per-block: the same relation can be
 /// iterative in one block and accumulative in another.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LoopBlock {
+pub(crate) struct LoopBlock {
     /// Relations using replacement (iterative) semantics — `Variable::new_from`.
     /// Relations absent from this list default to accumulative (`Variable::new`) semantics.
     iterative_relations: Vec<IterativeDirective>,
@@ -266,45 +246,31 @@ pub struct LoopBlock {
 }
 
 impl LoopBlock {
-    #[must_use]
-    pub fn new(
-        iterative_relations: Vec<IterativeDirective>,
-        condition: Option<LoopCondition>,
-        rules: Vec<FlowLogRule>,
-    ) -> Self {
-        Self {
-            iterative_relations,
-            condition,
-            rules,
-            span: Ignored(Span::DUMMY),
-        }
-    }
-
     /// Source location this loop/fixpoint block was parsed from.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 
     /// Relations explicitly marked as iterative (replacement semantics).
     #[must_use]
-    pub fn iterative_relations(&self) -> &[IterativeDirective] {
+    pub(crate) fn iterative_relations(&self) -> &[IterativeDirective] {
         &self.iterative_relations
     }
 
     /// The loop condition, or `None` for a pure fixpoint block.
     #[must_use]
-    pub fn condition(&self) -> Option<&LoopCondition> {
+    pub(crate) fn condition(&self) -> Option<&LoopCondition> {
         self.condition.as_ref()
     }
 
     #[must_use]
-    pub fn rules(&self) -> &[FlowLogRule] {
+    pub(crate) fn rules(&self) -> &[FlowLogRule] {
         &self.rules
     }
 
-    pub fn rules_mut(&mut self) -> &mut Vec<FlowLogRule> {
+    pub(crate) fn rules_mut(&mut self) -> &mut Vec<FlowLogRule> {
         &mut self.rules
     }
 }
@@ -721,7 +687,7 @@ mod tests {
     use pest::Parser;
 
     fn parse_loop_block(input: &str) -> LoopBlock {
-        use crate::common::source::FileId;
+        use crate::common::FileId;
         // Try as loop_block first, then fixpoint_block
         if let Ok(mut pairs) = FlowLogParser::parse(Rule::loop_block, input) {
             LoopBlock::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap()

@@ -1,17 +1,22 @@
 //! Shared common utilities for FlowLog Datalog programs.
 
-pub mod config;
-pub mod diag;
-pub mod formatter;
-pub mod macros;
-pub mod source;
+mod config;
+mod diag;
+mod formatter;
+mod macros;
+mod source;
 
-// Re-export main types for backwards compatibility
+// External API — consumed by flowlog-compiler and integration tests.
 pub use config::{get_example_files, Config, ExecutionMode};
-pub use diag::{emit, emit_and_exit, BoxError, Diagnostic, InternalError};
-pub use formatter::{TestResult, SECTION_BAR, SUBSECTION_BAR};
+pub use diag::{emit, emit_and_exit, BoxError, Diagnostic, InternalError, BUG_URL};
+pub use formatter::SECTION_BAR;
 pub use macros::INTERN_MAX_RETRIES;
-pub use source::{FileId, Ignored, SourceMap, Span};
+pub use source::{FileId, SourceMap, Span};
+
+// Intra-crate shortcuts.
+pub(crate) use diag::{labels, primary_label, secondary_label};
+pub(crate) use formatter::SUBSECTION_BAR;
+pub(crate) use source::Ignored;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -20,7 +25,7 @@ use std::hash::{Hash, Hasher};
 ///
 /// NOTE: Uses `DefaultHasher` which is deterministic within a build but not
 /// guaranteed stable across Rust versions.
-pub fn compute_fp<T: Hash>(t: T) -> u64 {
+pub(crate) fn compute_fp<T: Hash>(t: T) -> u64 {
     let mut h = DefaultHasher::new();
     t.hash(&mut h);
     h.finish()

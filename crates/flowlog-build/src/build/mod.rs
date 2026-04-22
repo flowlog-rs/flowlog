@@ -6,6 +6,6 @@ mod pipeline;
 mod relation;
 mod results;
 
-pub use error::BuildError;
 pub(crate) use assembly::assemble;
+pub use error::BuildError;
 pub(crate) use pipeline::Pipeline;

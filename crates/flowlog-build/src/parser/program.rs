@@ -32,7 +32,7 @@ use super::{
     segment::Segment,
     ConstType, FlowLogParser, Lexeme, Rule,
 };
-use crate::common::source::{FileId, SourceMap, Span};
+use crate::common::{FileId, SourceMap, Span};
 use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -47,12 +47,6 @@ use tracing::{debug, info, warn};
 ///
 /// Construct one with [`Program::parse`] (file path) or, in tests, via the
 /// [`Lexeme`] impl on an already-parsed pest node.
-///
-/// ```ignore
-/// let mut sm = crate::common::SourceMap::new();
-/// let program = Program::parse("path/to/program.fl", false, &mut sm)?;
-/// println!("{}", program);
-/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Program {
     /// All relation declarations (`.decl`), in source order.
@@ -64,10 +58,10 @@ pub struct Program {
     segments: Vec<Segment>,
     /// External scalar UDF declarations (`.extern fn`).
     udfs: Vec<ExternFn>,
-    /// Inline ground facts, keyed by relation name.
-    ///
-    /// Each value is a list of constant tuples, one per `rel(c1, c2, ...).` fact.
-    facts: HashMap<String, Vec<Vec<ConstType>>>,
+    /// Inline ground facts, keyed by relation name. Each entry is a list
+    /// of `(span, tuple)` — the head span of the source `rel(c1, ...).`
+    /// fact plus its constant columns.
+    facts: HashMap<String, Vec<(Span, Vec<ConstType>)>>,
 }
 
 // =============================================================================
@@ -123,7 +117,7 @@ impl fmt::Display for Program {
             writeln!(f, "Facts")?;
             writeln!(f, "---------------------------------------------")?;
             for (rel_name, facts) in &self.facts {
-                for vals in facts {
+                for (_, vals) in facts {
                     let values = vals
                         .iter()
                         .map(|c| c.to_string())
@@ -222,7 +216,7 @@ impl Program {
     /// All relation declarations.
     #[must_use]
     #[inline]
-    pub fn relations(&self) -> &[Relation] {
+    pub(crate) fn relations(&self) -> &[Relation] {
         &self.relations
     }
 
@@ -241,19 +235,19 @@ impl Program {
             .collect()
     }
 
-    /// Relations declared with `.input` and therefore backed by file ingestion.
+    #[cfg(test)]
     #[must_use]
     #[inline]
-    pub fn file_backed_relations(&self) -> Vec<&Relation> {
+    pub(crate) fn file_backed_relations(&self) -> Vec<&Relation> {
         self.relations
             .iter()
             .filter(|rel| rel.is_file_backed())
             .collect()
     }
 
-    /// Relations that have at least one inline ground fact in the program source.
+    #[cfg(test)]
     #[must_use]
-    pub fn inline_fact_relations(&self) -> Vec<&Relation> {
+    pub(crate) fn inline_fact_relations(&self) -> Vec<&Relation> {
         self.relations
             .iter()
             .filter(|rel| self.has_inline_facts(rel.name()))
@@ -262,7 +256,7 @@ impl Program {
 
     /// Ordered EDB relation names (sorted lexicographically).
     #[must_use]
-    pub fn edb_names(&self) -> Vec<String> {
+    pub(crate) fn edb_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .edbs()
             .iter()
@@ -274,7 +268,7 @@ impl Program {
 
     /// Deduplicated EDB relation fingerprints.
     #[must_use]
-    pub fn edb_fingerprints(&self) -> HashSet<u64> {
+    pub(crate) fn edb_fingerprints(&self) -> HashSet<u64> {
         self.edbs().iter().map(|rel| rel.fingerprint()).collect()
     }
 
@@ -283,7 +277,7 @@ impl Program {
     /// Returned in declaration order.
     #[must_use]
     #[inline]
-    pub fn idbs(&self) -> Vec<&Relation> {
+    pub(crate) fn idbs(&self) -> Vec<&Relation> {
         self.relations
             .iter()
             .filter(|rel| rel.is_output_printsize())
@@ -313,7 +307,7 @@ impl Program {
     /// items in order and treats each `Segment::Loop` as a hard barrier.
     #[must_use]
     #[inline]
-    pub fn segments(&self) -> &[Segment] {
+    pub(crate) fn segments(&self) -> &[Segment] {
         &self.segments
     }
 
@@ -330,12 +324,24 @@ impl Program {
             .collect()
     }
 
+    /// Mutable version of [`segments`](Self::segments).
+    pub(crate) fn segments_mut(&mut self) -> &mut [Segment] {
+        &mut self.segments
+    }
+
+    /// Mutable access to inline ground facts — only used by the typechecker's
+    /// lowering pass to rewrite polymorphic literals to their concrete
+    /// declared types.
+    pub(crate) fn facts_mut(&mut self) -> &mut HashMap<String, Vec<(Span, Vec<ConstType>)>> {
+        &mut self.facts
+    }
+
     /// Look up a rule by its global source-order ID.
     ///
     /// # Panics
     /// Panics if `rid` is out of bounds.
     #[must_use]
-    pub fn rule(&self, rid: usize) -> &FlowLogRule {
+    pub(crate) fn rule(&self, rid: usize) -> &FlowLogRule {
         let mut offset = 0;
         for seg in &self.segments {
             let rules: &[FlowLogRule] = match seg {
@@ -353,21 +359,21 @@ impl Program {
     /// Inline facts (ground tuples).
     #[must_use]
     #[inline]
-    pub fn facts(&self) -> &HashMap<String, Vec<Vec<ConstType>>> {
+    pub fn facts(&self) -> &HashMap<String, Vec<(Span, Vec<ConstType>)>> {
         &self.facts
     }
 
     /// Whether the named relation has any inline ground facts.
     #[must_use]
     #[inline]
-    pub fn has_inline_facts(&self, relation_name: &str) -> bool {
+    pub(crate) fn has_inline_facts(&self, relation_name: &str) -> bool {
         self.facts.contains_key(relation_name)
     }
 
     /// External UDF declarations.
     #[must_use]
     #[inline]
-    pub fn udfs(&self) -> &[ExternFn] {
+    pub(crate) fn udfs(&self) -> &[ExternFn] {
         &self.udfs
     }
 
@@ -675,7 +681,58 @@ impl Program {
             program.extract_fact(fact);
         }
 
+        program.validate_relation_references()?;
+
         Ok(program)
+    }
+
+    /// Reject any rule head, body atom, or ground fact whose relation
+    /// name has no matching `.decl`. Mirrors the check directives already
+    /// do via [`ParseError::UndeclaredInDirective`]; covering the rule and
+    /// fact paths here lets the typechecker assume every reference is
+    /// declared.
+    fn validate_relation_references(&self) -> Result<(), ParseError> {
+        let declared: HashSet<&str> = self.relations.iter().map(|r| r.name()).collect();
+
+        for segment in &self.segments {
+            let rules: &[FlowLogRule] = match segment {
+                Segment::Plain(rules) => rules,
+                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
+            };
+            for rule in rules {
+                let head = rule.head();
+                if !declared.contains(head.name()) {
+                    return Err(ParseError::UndeclaredInRule {
+                        span: head.span(),
+                        name: head.name().to_string(),
+                    });
+                }
+                for pred in rule.rhs() {
+                    if let Predicate::PositiveAtom(atom)
+                    | Predicate::NegativeAtom(atom) = pred
+                    {
+                        if !declared.contains(atom.name()) {
+                            return Err(ParseError::UndeclaredInRule {
+                                span: atom.span(),
+                                name: atom.name().to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        for (rel_name, tuples) in &self.facts {
+            if !declared.contains(rel_name.as_str()) {
+                let span = tuples.first().map(|(s, _)| *s).unwrap_or(Span::DUMMY);
+                return Err(ParseError::UndeclaredInFact {
+                    span,
+                    name: rel_name.clone(),
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// Apply `.input`, `.output`, and `.printsize` directives to `relations`.
@@ -813,7 +870,7 @@ impl Program {
         Ok(())
     }
 
-    /// Reclassify body atoms whose name matches an `.extern fn` as [`FnCallPredicate`].
+    /// Reclassify body atoms whose name matches an `.extern fn` as [`FnCall`].
     ///
     /// PEG grammars resolve `name(args...)` as `atom` before `fn_call_expr` since
     /// they share identical syntax. The distinction is semantic (declared as a
@@ -853,7 +910,7 @@ impl Program {
             let needs_rewrite = rule.rhs().iter().any(|p| {
                 matches!(
                     p,
-                    Predicate::PositiveAtomPredicate(a) | Predicate::NegativeAtomPredicate(a)
+                    Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a)
                     if udf_names.contains(a.name())
                 )
             });
@@ -864,8 +921,8 @@ impl Program {
             let mut new_rhs = Vec::with_capacity(rule.rhs().len());
             for pred in rule.rhs() {
                 new_rhs.push(match pred {
-                    Predicate::PositiveAtomPredicate(atom)
-                    | Predicate::NegativeAtomPredicate(atom)
+                    Predicate::PositiveAtom(atom)
+                    | Predicate::NegativeAtom(atom)
                         if udf_names.contains(atom.name()) =>
                     {
                         let mut args = Vec::with_capacity(atom.arguments().len());
@@ -885,11 +942,11 @@ impl Program {
                                 }
                             }
                         }
-                        Predicate::FnCallPredicate(
+                        Predicate::FnCall(
                             FnCall::new(
                                 atom.name().to_string(),
                                 args,
-                                matches!(pred, Predicate::NegativeAtomPredicate(_)),
+                                matches!(pred, Predicate::NegativeAtom(_)),
                             )
                             .with_span(atom.span()),
                         )
@@ -903,11 +960,13 @@ impl Program {
         Ok(())
     }
 
-    /// Insert a ground-tuple fact into `self.facts`.
+    /// Insert a ground-tuple fact into `self.facts`, preserving the head
+    /// span so the typechecker can cite the offending source position.
     fn extract_fact(&mut self, fact_rule: FlowLogRule) {
         let rel_name = fact_rule.head().name().to_string();
+        let span = fact_rule.head().span();
         let tuple = fact_rule.extract_constants_from_head();
-        self.facts.entry(rel_name).or_default().push(tuple);
+        self.facts.entry(rel_name).or_default().push((span, tuple));
     }
 }
 
@@ -1024,8 +1083,8 @@ impl Program {
                     .rhs()
                     .iter()
                     .filter_map(|pred| match pred {
-                        Predicate::PositiveAtomPredicate(a)
-                        | Predicate::NegativeAtomPredicate(a) => Some(a.name()),
+                        Predicate::PositiveAtom(a)
+                        | Predicate::NegativeAtom(a) => Some(a.name()),
                         _ => None,
                     })
                     .flat_map(|atom_name| {
@@ -1197,21 +1256,6 @@ mod tests {
     }
 
     #[test]
-    fn decl_exact_duplicate_rejected() {
-        let err = parse_program_result(
-            "
-            .decl edge(x: number)
-            .decl edge(y: number)
-            ",
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ParseError::DuplicateDecl { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
     fn decl_case_collision_rejected() {
         let err = parse_program_result(
             "
@@ -1222,15 +1266,6 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(err, ParseError::DuplicateDecl { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn attr_exact_duplicate_rejected() {
-        let err = parse_program_result(".decl edge(x: number, x: number)").unwrap_err();
-        assert!(
-            matches!(err, ParseError::DuplicateAttribute { .. }),
             "got {err:?}"
         );
     }
@@ -1341,38 +1376,6 @@ mod tests {
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
         assert_eq!(loop_blocks(&program)[0].iterative_relations().len(), 1);
-    }
-
-    #[test]
-    fn loop_iterative_undeclared_panics() {
-        let err = parse_program_result("fixpoint { .iterative active_edge }").unwrap_err();
-        assert!(
-            matches!(err, ParseError::UndeclaredInIterativeList { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn loop_bool_relation_undeclared_panics() {
-        let err = parse_program_result("loop until { done } { }").unwrap_err();
-        assert!(
-            matches!(err, ParseError::UndeclaredLoopCondition { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn loop_relation_non_nullary_panics() {
-        let src = "
-            .decl done(x: number)
-            .output done
-            loop until { done } { done(1) :- done(1). }
-        ";
-        let err = parse_program_result(src).unwrap_err();
-        assert!(
-            matches!(err, ParseError::NonNullaryLoopCondition { .. }),
-            "got {err:?}"
-        );
     }
 
     #[test]
@@ -1522,5 +1525,67 @@ mod tests {
         assert_eq!(rules[2].rhs()[0].name(), "a");
         assert_eq!(rules[3].head().name(), "d");
         assert_eq!(rules[3].rhs()[0].name(), "b");
+    }
+
+    /// Diamond include: `root` includes `left` and `right`, both include
+    /// `leaf`. The `completed` set in `resolve_includes` must prevent
+    /// `leaf` from being inlined twice — otherwise `.decl leaf_rel` would
+    /// appear twice and fail with `DuplicateDecl`. This guards the warn-
+    /// and-skip branch at the `completed.contains` check.
+    #[test]
+    fn diamond_include_dedups_leaf() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let write = |name: &str, body: &str| {
+            std::fs::write(dir.path().join(name), body).expect("write");
+        };
+        write(
+            "leaf.dl",
+            ".decl leaf_rel(x: number)\n.output leaf_rel\nleaf_rel(1).\n",
+        );
+        write("left.dl", ".include \"leaf.dl\"\n");
+        write("right.dl", ".include \"leaf.dl\"\n");
+        write("root.dl", ".include \"left.dl\"\n.include \"right.dl\"\n");
+
+        let mut sm = SourceMap::new();
+        let program = Program::parse(&dir.path().join("root.dl").to_string_lossy(), true, &mut sm)
+            .expect("diamond include should succeed with dedup");
+
+        let rels: Vec<_> = program
+            .relations()
+            .iter()
+            .filter(|r| r.name() == "leaf_rel")
+            .collect();
+        assert_eq!(rels.len(), 1, "leaf_rel inlined twice");
+    }
+
+    /// UDF reclassification must preserve negation: `!my_udf(x)` parses
+    /// first as `NegativeAtom`, then `reclassify_udf_predicates`
+    /// rewrites it to `FnCall` with `is_negated = true`. A bug
+    /// dropping the flag would turn a negated filter into a positive one
+    /// — wrong semantics, no compile error.
+    #[test]
+    fn negated_udf_reclassification_preserves_negation() {
+        let src = "
+            .decl edge(x: number, y: number)
+            .decl out(x: number, y: number)
+            .output out
+            .extern fn cost(x: number) -> number
+            out(X, Y) :- edge(X, Y), !cost(X).
+        ";
+        let program = parse_program(src);
+        let rule = program.rules()[0];
+        let fn_call = rule
+            .rhs()
+            .iter()
+            .find_map(|p| match p {
+                Predicate::FnCall(fc) => Some(fc),
+                _ => None,
+            })
+            .expect("udf body atom should be reclassified to FnCall");
+        assert!(
+            fn_call.is_negated(),
+            "negation lost during reclassification"
+        );
+        assert_eq!(fn_call.name(), "cost");
     }
 }

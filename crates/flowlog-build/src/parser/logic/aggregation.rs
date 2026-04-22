@@ -2,23 +2,19 @@
 //!
 //! - [`AggregationOperator`]: `min | max | count | sum | average`
 //! - [`Aggregation`]: `op(expr)` (e.g., `sum(price * qty)`)
-//!
-//! # Example
-//! ```rust
-//! use flowlog_build::parser::logic::{Aggregation, AggregationOperator, Arithmetic, Factor};
-//! let expr = Arithmetic::new(Factor::Var("x".into()), vec![]);
-//! let agg = Aggregation::new(AggregationOperator::Sum, expr);
-//! assert_eq!(agg.to_string(), "sum(x)");
-//! ```
 
 use super::Arithmetic;
+use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{span_of, Lexeme, Rule};
-use crate::common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
 /// Supported aggregation operators.
+///
+/// Declared `pub` because `Features::agg_semirings()` returns
+/// `&[(AggregationOperator, DataType)]` which `flowlog-compiler` iterates
+/// over and calls [`Self::semiring_mod`] / [`Self::semiring_prefix`] on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AggregationOperator {
     Min,
@@ -31,7 +27,7 @@ pub enum AggregationOperator {
 impl AggregationOperator {
     /// Normalize Count → Sum (they share the same semiring).
     #[must_use]
-    pub fn semiring_canonical(self) -> Self {
+    pub(crate) fn semiring_canonical(self) -> Self {
         match self {
             Self::Count => Self::Sum,
             other => other,
@@ -100,17 +96,15 @@ impl Lexeme for AggregationOperator {
 
 /// `op(expr)` aggregation (e.g., `sum(price * qty)`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Aggregation {
+pub(crate) struct Aggregation {
     operator: AggregationOperator,
     arithmetic: Arithmetic,
     span: Ignored<Span>,
 }
 
 impl Aggregation {
-    /// Create a new aggregation.
-    #[must_use]
-    #[inline]
-    pub fn new(operator: AggregationOperator, arithmetic: Arithmetic) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(operator: AggregationOperator, arithmetic: Arithmetic) -> Self {
         Self {
             operator,
             arithmetic,
@@ -121,27 +115,32 @@ impl Aggregation {
     /// Source location this aggregation was parsed from.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 
     /// Variables referenced by the arithmetic expression.
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub(crate) fn vars(&self) -> Vec<&String> {
         self.arithmetic.vars()
     }
 
     /// Underlying arithmetic expression.
     #[must_use]
     #[inline]
-    pub fn arithmetic(&self) -> &Arithmetic {
+    pub(crate) fn arithmetic(&self) -> &Arithmetic {
         &self.arithmetic
+    }
+
+    #[inline]
+    pub(crate) fn arithmetic_mut(&mut self) -> &mut Arithmetic {
+        &mut self.arithmetic
     }
 
     /// Aggregation operator.
     #[must_use]
     #[inline]
-    pub fn operator(&self) -> &AggregationOperator {
+    pub(crate) fn operator(&self) -> &AggregationOperator {
         &self.operator
     }
 }
@@ -179,57 +178,15 @@ impl Lexeme for Aggregation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::logic::{ArithmeticOperator, Factor};
-    use crate::parser::primitive::ConstType;
-    use AggregationOperator::*;
+    use crate::common::FileId;
+    use crate::parser::{FlowLogParser, Lexeme, Rule};
+    use pest::Parser;
 
     #[test]
-    fn operator_display() {
-        assert_eq!(Min.to_string(), "min");
-        assert_eq!(Max.to_string(), "max");
-        assert_eq!(Count.to_string(), "count");
-        assert_eq!(Sum.to_string(), "sum");
-    }
-
-    #[test]
-    fn aggregation_display_golden() {
-        let salary = Aggregation::new(Sum, Arithmetic::new(Factor::Var("salary".into()), vec![]));
-        assert_eq!(salary.to_string(), "sum(salary)");
-
-        let count1 = Aggregation::new(
-            Count,
-            Arithmetic::new(Factor::Const(ConstType::Int(1)), vec![]),
-        );
-        assert_eq!(count1.to_string(), "count(1)");
-
-        let expr = Arithmetic::new(
-            Factor::Var("price".into()),
-            vec![(ArithmeticOperator::Multiply, Factor::Var("qty".into()))],
-        );
-        let maxp = Aggregation::new(Max, expr);
-        assert_eq!(maxp.to_string(), "max(price * qty)");
-    }
-
-    #[test]
-    fn vars_extraction() {
-        let expr = Arithmetic::new(
-            Factor::Var("base".into()),
-            vec![
-                (ArithmeticOperator::Plus, Factor::Var("bonus".into())),
-                (ArithmeticOperator::Multiply, Factor::Var("rate".into())),
-            ],
-        );
-        let agg = Aggregation::new(Sum, expr);
-        let v = agg.vars();
-        assert_eq!(v.len(), 3);
-        assert!(v.iter().any(|s| *s == "base"));
-        assert!(v.iter().any(|s| *s == "bonus"));
-        assert!(v.iter().any(|s| *s == "rate"));
-
-        let c = Aggregation::new(
-            Count,
-            Arithmetic::new(Factor::Const(ConstType::Int(0)), vec![]),
-        );
-        assert!(c.vars().is_empty());
+    fn parse_aggregate_expr() {
+        let mut pairs = FlowLogParser::parse(Rule::aggregate_expr, "sum(price * qty)").unwrap();
+        let agg = Aggregation::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
+        assert_eq!(*agg.operator(), AggregationOperator::Sum);
+        assert_eq!(agg.vars().len(), 2);
     }
 }

@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use crate::common::source::{FileId, Ignored, Span};
+use crate::common::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 
 use crate::parser::error::{grammar_bug, ParseError};
@@ -15,7 +15,7 @@ use super::Attribute;
 
 /// Common data for an external (user-defined) function declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternFn {
+pub(crate) struct ExternFn {
     /// Function name (must be a valid Rust identifier).
     name: String,
     /// Typed parameters.
@@ -27,49 +27,32 @@ pub struct ExternFn {
 }
 
 impl ExternFn {
-    /// Create a new extern function declaration.
-    #[must_use]
-    pub fn new(name: String, params: Vec<Attribute>, ret_type: DataType) -> Self {
-        Self {
-            name,
-            params,
-            ret_type,
-            span: Ignored(Span::DUMMY),
-        }
-    }
-
-    /// Source location of this `.extern fn` declaration.
-    #[must_use]
-    #[inline]
-    pub fn span(&self) -> Span {
-        self.span.0
-    }
-
     /// Function name.
     #[must_use]
     #[inline]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     /// Typed parameter list.
     #[must_use]
     #[inline]
-    pub fn params(&self) -> &[Attribute] {
+    pub(crate) fn params(&self) -> &[Attribute] {
         &self.params
     }
 
     /// Return type.
     #[must_use]
     #[inline]
-    pub fn ret_type(&self) -> DataType {
+    pub(crate) fn ret_type(&self) -> DataType {
         self.ret_type
     }
 
-    /// Number of parameters (arity).
+    /// Number of parameters (arity). Tests only; production code uses `params().len()`.
+    #[cfg(test)]
     #[must_use]
     #[inline]
-    pub fn arity(&self) -> usize {
+    pub(crate) fn arity(&self) -> usize {
         self.params.len()
     }
 }
@@ -155,8 +138,8 @@ impl Lexeme for ExternFn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::FileId;
     use crate::parser::FlowLogParser;
-    use crate::common::source::FileId;
     use pest::Parser;
 
     #[test]
@@ -181,21 +164,5 @@ mod tests {
         assert_eq!(ext.params()[1].name(), "y");
         assert_eq!(*ext.params()[1].data_type(), DataType::Int32);
         assert_eq!(ext.ret_type(), DataType::Int64);
-    }
-
-    #[test]
-    fn display_roundtrip_scalar() {
-        let ext = ExternFn::new(
-            "foo".into(),
-            vec![
-                Attribute::new("a".into(), DataType::Int32),
-                Attribute::new("b".into(), DataType::String),
-            ],
-            DataType::Int64,
-        );
-        assert_eq!(
-            ext.to_string(),
-            ".extern fn foo(a: int32, b: string) -> int64"
-        );
     }
 }

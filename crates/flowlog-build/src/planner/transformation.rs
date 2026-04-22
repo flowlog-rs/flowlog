@@ -4,21 +4,21 @@
 //! through query execution plans. Transformations represent operations like filtering,
 //! projection, joins, and aggregation that convert input collections into output collections.
 
-use crate::planner::collection::Collection;
+use crate::planner::Collection;
 use std::fmt;
 use std::sync::Arc;
 use tracing::trace;
 
-pub mod flow;
-pub mod info;
+mod flow;
+mod info;
 
 use crate::catalog::JoinPredicates;
-pub use flow::TransformationFlow;
-pub use info::{KeyValueLayout, TransformationInfo};
+pub(crate) use flow::TransformationFlow;
+pub(crate) use info::{KeyValueLayout, TransformationInfo};
 
 /// Represents a data transformation operation in a query execution plan.
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
-pub enum Transformation {
+pub(crate) enum Transformation {
     // === Unary Transformations ===
     /// Row-to-row transformation (filtering, projection, aggregation)
     RowToRow {
@@ -81,7 +81,7 @@ pub enum Transformation {
 // ========================
 impl Transformation {
     /// Returns `true` if this is a unary transformation.
-    pub fn is_unary(&self) -> bool {
+    pub(crate) fn is_unary(&self) -> bool {
         matches!(
             self,
             Self::RowToRow { .. }
@@ -101,7 +101,7 @@ impl Transformation {
     /// # Panics
     ///
     /// Panics if called on a binary transformation. Use `is_unary()` to check first.
-    pub fn unary_input(&self) -> &Arc<Collection> {
+    pub(crate) fn unary_input(&self) -> &Arc<Collection> {
         match self {
             Self::RowToRow { input, .. }
             | Self::RowToKv { input, .. }
@@ -116,7 +116,7 @@ impl Transformation {
     /// # Panics
     ///
     /// Panics if called on a unary transformation. Use `is_unary()` to check first.
-    pub fn binary_input(&self) -> &(Arc<Collection>, Arc<Collection>) {
+    pub(crate) fn binary_input(&self) -> &(Arc<Collection>, Arc<Collection>) {
         match self {
             Self::JnToRow { input, .. }
             | Self::JnToKv { input, .. }
@@ -127,7 +127,7 @@ impl Transformation {
     }
 
     /// Returns the input fingerprint(s) for any transformation.
-    pub fn input_fingerprints(&self) -> Vec<u64> {
+    pub(crate) fn input_fingerprints(&self) -> Vec<u64> {
         match self {
             Self::RowToRow { input, .. }
             | Self::RowToKv { input, .. }
@@ -141,7 +141,7 @@ impl Transformation {
     }
 
     /// Returns the output collection for any transformation.
-    pub fn output(&self) -> &Arc<Collection> {
+    pub(crate) fn output(&self) -> &Arc<Collection> {
         match self {
             Self::RowToRow { output, .. }
             | Self::RowToKv { output, .. }
@@ -155,7 +155,7 @@ impl Transformation {
     }
 
     /// Returns the transformation flow for any transformation.
-    pub fn flow(&self) -> &TransformationFlow {
+    pub(crate) fn flow(&self) -> &TransformationFlow {
         match self {
             Self::RowToRow { flow, .. }
             | Self::RowToKv { flow, .. }
@@ -169,7 +169,7 @@ impl Transformation {
     }
 
     /// Return the transformation operation name.
-    pub fn operation_name(&self) -> &str {
+    pub(crate) fn operation_name(&self) -> &str {
         match self {
             Transformation::RowToRow { .. } => "[Row -> Row]",
             Transformation::RowToKv { .. } => "[Row -> KV]",
@@ -206,7 +206,7 @@ impl Transformation {
     /// - `KvToKv`: Key-value input → Key-value output (transformation)
     /// - `KvToK`: Key-value input → Key-only output (key extraction)
     /// - `KvToRow`: Key-value input → Row output (flattening)
-    pub fn kv_to_kv(info: &TransformationInfo) -> Self {
+    pub(crate) fn kv_to_kv(info: &TransformationInfo) -> Self {
         trace!("Creating kv_to_kv transformation with info:\n{}", info);
         // Create the transformation flow that defines how data moves through the operation
         let flow = TransformationFlow::kv_to_kv(
@@ -278,7 +278,7 @@ impl Transformation {
     /// - `JnKvK`: Key-value ⋈ Key-only join (left has values)
     /// - `JnKvKv`: Key-value ⋈ Key-value join (both have values)
     /// - `Cartesian`: Cartesian product (no join keys)
-    pub fn join(info: &TransformationInfo) -> Self {
+    pub(crate) fn join(info: &TransformationInfo) -> Self {
         // Create transformation flow that defines how the join operation processes data
         let flow = TransformationFlow::join_to_kv(
             info.input_kv_layout().0,
@@ -348,7 +348,7 @@ impl Transformation {
     ///
     /// Panics if the left collection is not key-only, as antijoins require the left
     /// collection to contain only keys for filtering purposes.
-    pub fn antijoin(info: &TransformationInfo) -> Self {
+    pub(crate) fn antijoin(info: &TransformationInfo) -> Self {
         // Antijoins require the left collection to be key-only (used for filtering)
         assert!(
             info.input_kv_layout().0.value().is_empty(),

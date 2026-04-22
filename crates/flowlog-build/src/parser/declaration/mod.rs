@@ -7,26 +7,12 @@
 //! - [`OutputDirective`]: output directive specifying which relation to output
 //! - [`PrintSizeDirective`]: print size directive for size reporting
 //!
-//! # Example
-//! ```rust
-//! use flowlog_build::parser::declaration::{Attribute, Relation};
-//! use flowlog_build::parser::primitive::DataType;
-//!
-//! let name = Attribute::new("name".into(), DataType::String);
-//! let age  = Attribute::new("age".into(), DataType::Int32);
-//!
-//! let person = Relation::new("person", vec![name, age]);
-//!
-//! // Minimal sanity checks (run as doctest):
-//! assert_eq!(person.name(), "person");
-//! assert_eq!(person.attributes().len(), 2);
-//! ```
-pub mod attribute;
-pub mod directive;
-pub mod extern_fn;
-pub mod relation;
+mod attribute;
+mod directive;
+mod extern_fn;
+mod relation;
 
-pub use attribute::Attribute;
-pub use directive::{InputDirective, OutputDirective, PrintSizeDirective};
-pub use extern_fn::ExternFn;
+pub(crate) use attribute::Attribute;
+pub(crate) use directive::{InputDirective, OutputDirective, PrintSizeDirective};
+pub(crate) use extern_fn::ExternFn;
 pub use relation::Relation;

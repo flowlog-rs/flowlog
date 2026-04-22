@@ -1,7 +1,7 @@
 //! Dependency graph construction for FlowLog Datalog programs.
 
+use crate::parser::{FlowLogRule, Predicate};
 use itertools::Itertools;
-use crate::parser::{logic::FlowLogRule, Predicate};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
@@ -48,8 +48,8 @@ impl DependencyGraph {
         for (rule_id, rule) in rules.iter().enumerate() {
             for predicate in rule.rhs() {
                 let (atom_name, is_negative) = match predicate {
-                    Predicate::PositiveAtomPredicate(atom) => (atom.name(), false),
-                    Predicate::NegativeAtomPredicate(atom) => (atom.name(), true),
+                    Predicate::PositiveAtom(atom) => (atom.name(), false),
+                    Predicate::NegativeAtom(atom) => (atom.name(), true),
                     _ => continue,
                 };
                 if let Some(dep_ids) = head_to_rule_map.get(atom_name) {

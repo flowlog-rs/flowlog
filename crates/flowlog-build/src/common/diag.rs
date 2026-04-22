@@ -22,19 +22,19 @@ pub const BUG_URL: &str = "https://github.com/flowlog-rs/flowlog/issues/new";
 /// Dummy spans come from synthesized AST nodes; attaching a label to one
 /// would point the renderer at a bogus file offset. Returning `None` lets
 /// callers `flatten()` them away.
-pub fn primary_label(span: Span) -> Option<Label<FileId>> {
+pub(crate) fn primary_label(span: Span) -> Option<Label<FileId>> {
     (!span.is_dummy()).then(|| Label::primary(span.file, span.range()))
 }
 
 /// Build a secondary label for `span`, or `None` if the span is dummy.
-pub fn secondary_label(span: Span) -> Option<Label<FileId>> {
+pub(crate) fn secondary_label(span: Span) -> Option<Label<FileId>> {
     (!span.is_dummy()).then(|| Label::secondary(span.file, span.range()))
 }
 
 /// Wrap [`primary_label`] with a message into a `Vec<Label<FileId>>`
 /// ready for `CsDiagnostic::with_labels`. Yields an empty `Vec` for
 /// dummy spans so variants with optional spans fall through cleanly.
-pub fn labels(span: Span, msg: impl Into<String>) -> Vec<Label<FileId>> {
+pub(crate) fn labels(span: Span, msg: impl Into<String>) -> Vec<Label<FileId>> {
     primary_label(span)
         .map(|l| l.with_message(msg.into()))
         .into_iter()
@@ -77,9 +77,9 @@ impl<E: Diagnostic> From<E> for BoxError {
 /// <url>" note.
 #[derive(Debug)]
 pub struct InternalError {
-    pub stage: &'static str,
-    pub detail: String,
-    pub bug_url: &'static str,
+    pub(crate) stage: &'static str,
+    pub(crate) detail: String,
+    pub(crate) bug_url: &'static str,
 }
 
 impl InternalError {

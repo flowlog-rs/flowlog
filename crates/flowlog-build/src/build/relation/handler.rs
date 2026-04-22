@@ -10,28 +10,30 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use crate::common::Span;
 use crate::parser::{ConstType, Relation};
 
-use crate::codegen::arg::const_to_token;
-use crate::codegen::ty::data::tuple_tokens;
+use crate::codegen::const_to_token;
+use crate::codegen::CodegenError;
+use crate::codegen::tuple_tokens;
 use crate::data_type_tokens;
 
 use super::input_struct_ident;
 
 pub(super) fn gen_input_struct(
     rel: &Relation,
-    facts: Option<&Vec<Vec<ConstType>>>,
+    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
     string_intern: bool,
-) -> TokenStream {
+) -> Result<TokenStream, CodegenError> {
     let struct_name = input_struct_ident(rel);
     let tuple_ty = if rel.arity() == 0 {
         quote! { () }
     } else {
         data_type_tokens(&rel.data_type(), string_intern)
     };
-    let apply_inline = gen_apply_inline(rel, facts, string_intern);
+    let apply_inline = gen_apply_inline(rel, facts, string_intern)?;
 
-    quote! {
+    Ok(quote! {
         pub(crate) struct #struct_name {
             h: Option<InputSession<Ts, #tuple_ty, Diff>>,
         }
@@ -66,7 +68,7 @@ pub(super) fn gen_input_struct(
                 self.h_mut().update(tuple, diff);
             }
         }
-    }
+    })
 }
 
 /// Emit `apply_inline` — a no-op if the relation has no `.fact` rows,
@@ -74,18 +76,21 @@ pub(super) fn gen_input_struct(
 /// number of rows to a single presence marker.
 fn gen_apply_inline(
     rel: &Relation,
-    facts: Option<&Vec<Vec<ConstType>>>,
+    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
     string_intern: bool,
-) -> TokenStream {
+) -> Result<TokenStream, CodegenError> {
     let rows = match facts {
         Some(rows) if !rows.is_empty() => rows,
-        _ => return quote! { pub fn apply_inline(&mut self, _index: usize) {} },
+        _ => return Ok(quote! { pub fn apply_inline(&mut self, _index: usize) {} }),
     };
 
     let body = if rel.arity() == 0 {
         quote! { self.h_mut().update((), SEMIRING_ONE); }
     } else {
-        let tuples = rows.iter().map(|row| fact_tuple(row, string_intern));
+        let tuples = rows
+            .iter()
+            .map(|(_, row)| fact_tuple(row, string_intern))
+            .collect::<Result<Vec<_>, _>>()?;
         quote! {
             for row in [ #(#tuples),* ] {
                 self.h_mut().update(row, SEMIRING_ONE);
@@ -93,14 +98,18 @@ fn gen_apply_inline(
         }
     };
 
-    quote! {
+    Ok(quote! {
         pub fn apply_inline(&mut self, index: usize) {
             if index != 0 { return; }
             #body
         }
-    }
+    })
 }
 
-fn fact_tuple(row: &[ConstType], string_intern: bool) -> TokenStream {
-    tuple_tokens(row.iter().map(|c| const_to_token(c, string_intern)))
+fn fact_tuple(row: &[ConstType], string_intern: bool) -> Result<TokenStream, CodegenError> {
+    let parts = row
+        .iter()
+        .map(|c| const_to_token(c, string_intern))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(tuple_tokens(parts))
 }

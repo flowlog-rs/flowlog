@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use crate::planner::StratumPlanner;
 use crate::profiler::{with_profiler, Profiler};
 
-use crate::codegen::error::CodegenError;
+use crate::codegen::CodegenError;
 use crate::codegen::idb_buffers::InspectorCodegen;
 use crate::codegen::CodeGen;
 

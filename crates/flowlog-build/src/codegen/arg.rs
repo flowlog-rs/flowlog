@@ -18,8 +18,8 @@ use crate::planner::{
     FnCallPredicateArgument, TransformationArgument,
 };
 
-use crate::codegen::error::CodegenError;
-use crate::codegen::ty::data::tuple_tokens;
+use crate::codegen::CodegenError;
+use crate::codegen::tuple_tokens;
 use crate::codegen::CodeGen;
 
 // ==================================================
@@ -350,10 +350,8 @@ impl CodeGen {
                 Ok(
                     if string_intern
                         && c.operator().is_inequality()
-                        && self.infer_expr_type(c.left(), input_type, None)
-                            == Some(DataType::String)
-                        && self.infer_expr_type(c.right(), input_type, None)
-                            == Some(DataType::String)
+                        && self.infer_expr_type(c.left(), input_type, None)? == DataType::String
+                        && self.infer_expr_type(c.right(), input_type, None)? == DataType::String
                     {
                         self.features.mark_string_resolve();
                         quote! { resolve(#l) #op resolve(#r) }
@@ -387,10 +385,10 @@ impl CodeGen {
                 Ok(
                     if string_intern
                         && c.operator().is_inequality()
-                        && self.infer_expr_type(c.left(), left_type, Some(right_type))
-                            == Some(DataType::String)
-                        && self.infer_expr_type(c.right(), left_type, Some(right_type))
-                            == Some(DataType::String)
+                        && self.infer_expr_type(c.left(), left_type, Some(right_type))?
+                            == DataType::String
+                        && self.infer_expr_type(c.right(), left_type, Some(right_type))?
+                            == DataType::String
                     {
                         self.features.mark_string_resolve();
                         quote! { resolve(#l) #op resolve(#r) }
@@ -430,10 +428,8 @@ impl CodeGen {
                 Ok(
                     if string_intern
                         && c.operator().is_inequality()
-                        && self.infer_expr_type(c.left(), input_type, None)
-                            == Some(DataType::String)
-                        && self.infer_expr_type(c.right(), input_type, None)
-                            == Some(DataType::String)
+                        && self.infer_expr_type(c.left(), input_type, None)? == DataType::String
+                        && self.infer_expr_type(c.right(), input_type, None)? == DataType::String
                     {
                         self.features.mark_string_resolve();
                         quote! { resolve(#l) #op resolve(#r) }
@@ -559,7 +555,7 @@ pub(super) fn build_kv_constraints_predicate(
         .iter()
         .map(|(arg, c)| {
             let lhs = trans_arg_to_kv_expr(arg)?;
-            let rhs = const_to_token(c, string_intern);
+            let rhs = const_to_token(c, string_intern)?;
             Ok(quote! { #lhs == #rhs })
         })
         .collect::<Result<_, CodegenError>>()?;
@@ -591,7 +587,7 @@ pub(super) fn build_row_constraints_predicate(
         .iter()
         .map(|(arg, c)| {
             let lhs = trans_arg_to_row_expr(arg, row_fields)?;
-            let rhs = const_to_token(c, string_intern);
+            let rhs = const_to_token(c, string_intern)?;
             Ok(quote! { #lhs == #rhs })
         })
         .collect::<Result<_, CodegenError>>()?;
@@ -617,13 +613,59 @@ pub(super) fn build_row_constraints_predicate(
 
 /// Lower a parsed constant to the internal tuple-slot expression —
 /// wraps floats in `OrderedFloat`, interns strings when enabled.
-pub(crate) fn const_to_token(constant: &ConstType, string_intern: bool) -> TokenStream {
-    match constant {
-        ConstType::Int(n) => {
+///
+/// Every numeric variant emits an unsuffixed literal so Rust's own
+/// inference picks the matching width from the enclosing tuple type.
+/// Returns `CodegenError::internal` for polymorphic `Int` / `Float` — the
+/// typechecker should have pinned those to a concrete width first.
+pub fn const_to_token(
+    constant: &ConstType,
+    string_intern: bool,
+) -> Result<TokenStream, CodegenError> {
+    Ok(match constant {
+        ConstType::Int(_) | ConstType::Float(_) => {
+            return Err(CodegenError::internal(format!(
+                "polymorphic literal {constant:?} reached codegen; \
+                 typechecker should have pinned it"
+            )))
+        }
+        ConstType::Int8(n) => {
+            let lit = proc_macro2::Literal::i8_unsuffixed(*n);
+            quote! { #lit }
+        }
+        ConstType::Int16(n) => {
+            let lit = proc_macro2::Literal::i16_unsuffixed(*n);
+            quote! { #lit }
+        }
+        ConstType::Int32(n) => {
+            let lit = proc_macro2::Literal::i32_unsuffixed(*n);
+            quote! { #lit }
+        }
+        ConstType::Int64(n) => {
             let lit = proc_macro2::Literal::i64_unsuffixed(*n);
             quote! { #lit }
         }
-        ConstType::Float(v) => {
+        ConstType::UInt8(n) => {
+            let lit = proc_macro2::Literal::u8_unsuffixed(*n);
+            quote! { #lit }
+        }
+        ConstType::UInt16(n) => {
+            let lit = proc_macro2::Literal::u16_unsuffixed(*n);
+            quote! { #lit }
+        }
+        ConstType::UInt32(n) => {
+            let lit = proc_macro2::Literal::u32_unsuffixed(*n);
+            quote! { #lit }
+        }
+        ConstType::UInt64(n) => {
+            let lit = proc_macro2::Literal::u64_unsuffixed(*n);
+            quote! { #lit }
+        }
+        ConstType::Float32(v) => {
+            let lit = proc_macro2::Literal::f32_unsuffixed(v.into_inner());
+            quote! { OrderedFloat(#lit) }
+        }
+        ConstType::Float64(v) => {
             let lit = proc_macro2::Literal::f64_unsuffixed(v.into_inner());
             quote! { OrderedFloat(#lit) }
         }
@@ -635,7 +677,7 @@ pub(crate) fn const_to_token(constant: &ConstType, string_intern: bool) -> Token
             }
         }
         ConstType::Bool(b) => quote! { #b },
-    }
+    })
 }
 
 fn trans_arg_to_kv_expr(arg: &TransformationArgument) -> Result<TokenStream, CodegenError> {
@@ -804,7 +846,7 @@ impl CodeGen {
     {
         match factor {
             FactorArgument::Var(arg) => resolve_var(arg),
-            FactorArgument::Const(c) => Ok(const_to_token(c, string_intern)),
+            FactorArgument::Const(c) => const_to_token(c, string_intern),
             FactorArgument::FnCall { name, args } => {
                 self.fncall_to_token(name, args, string_intern, resolve_var)
             }
@@ -831,12 +873,12 @@ impl CodeGen {
                     var_token
                 })
             }
-            FactorArgument::Const(c) => Ok(match c {
+            FactorArgument::Const(c) => match c {
                 // String literals are already displayable – emit them
                 // directly without interning first.
-                ConstType::Text(s) => quote! { #s },
+                ConstType::Text(s) => Ok(quote! { #s }),
                 _ => const_to_token(c, string_intern),
-            }),
+            },
             FactorArgument::FnCall { name, args } => {
                 // UDF returns Spur when string_intern is on — resolve for display.
                 let call = self.fncall_to_token(name, args, string_intern, resolve_var)?;

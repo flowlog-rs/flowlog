@@ -1,13 +1,13 @@
 //! Arithmetic expression signatures for FlowLog Datalog programs.
 
-use crate::catalog::atom::AtomArgumentSignature;
+use crate::catalog::AtomArgumentSignature;
 use crate::parser::{Arithmetic, ArithmeticOperator, ConstType, Factor};
 use std::fmt;
 
 /// A factor in an arithmetic expression with variables resolved to their
 /// concrete positions within atoms.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FactorPos {
+pub(crate) enum FactorPos {
     /// A variable reference identified by its atom and argument position
     Var(AtomArgumentSignature),
     /// A constant value (integer, string, etc.)
@@ -21,7 +21,7 @@ pub enum FactorPos {
 
 impl FactorPos {
     /// Returns the argument signature if this factor is a single variable.
-    pub fn as_var_signature(&self) -> Option<&AtomArgumentSignature> {
+    pub(crate) fn as_var_signature(&self) -> Option<&AtomArgumentSignature> {
         match self {
             FactorPos::Var(atom_arg_signature) => Some(atom_arg_signature),
             FactorPos::Const(_) | FactorPos::FnCall { .. } => None,
@@ -29,7 +29,7 @@ impl FactorPos {
     }
 
     /// Returns all argument signatures referenced in this factor (including nested in FnCall args).
-    pub fn signatures(&self) -> Vec<&AtomArgumentSignature> {
+    pub(crate) fn signatures(&self) -> Vec<&AtomArgumentSignature> {
         match self {
             FactorPos::Var(sig) => vec![sig],
             FactorPos::Const(_) => vec![],
@@ -38,7 +38,7 @@ impl FactorPos {
     }
 
     /// Transform every variable in this factor using `f`, recursing into FnCall args.
-    pub fn map_vars(&self, f: &impl Fn(&AtomArgumentSignature) -> FactorPos) -> FactorPos {
+    pub(crate) fn map_vars(&self, f: &impl Fn(&AtomArgumentSignature) -> FactorPos) -> FactorPos {
         match self {
             FactorPos::Var(sig) => f(sig),
             FactorPos::Const(c) => FactorPos::Const(c.clone()),
@@ -70,7 +70,7 @@ impl fmt::Display for FactorPos {
 /// Positional arithmetic expression with variables resolved to their
 /// concrete argument signatures.
 #[derive(Clone, Hash, PartialEq, Eq)]
-pub struct ArithmeticPos {
+pub(crate) struct ArithmeticPos {
     /// The initial factor (left-most term)
     init: FactorPos,
     /// Subsequent operations and factors (operator, right operand)
@@ -79,12 +79,12 @@ pub struct ArithmeticPos {
 
 impl ArithmeticPos {
     /// Creates a new positional arithmetic expression.
-    pub fn new(init: FactorPos, rest: Vec<(ArithmeticOperator, FactorPos)>) -> Self {
+    pub(crate) fn new(init: FactorPos, rest: Vec<(ArithmeticOperator, FactorPos)>) -> Self {
         Self { init, rest }
     }
 
     /// Creates a simple ArithmeticPos for a single variable from an AtomArgumentSignature.
-    pub fn from_var_signature(signature: AtomArgumentSignature) -> Self {
+    pub(crate) fn from_var_signature(signature: AtomArgumentSignature) -> Self {
         ArithmeticPos {
             init: FactorPos::Var(signature),
             rest: vec![],
@@ -92,7 +92,10 @@ impl ArithmeticPos {
     }
 
     /// Constructs a positional arithmetic expression from a parsed arithmetic expression.
-    pub fn from_arithmetic(arith: &Arithmetic, var_signatures: &[AtomArgumentSignature]) -> Self {
+    pub(crate) fn from_arithmetic(
+        arith: &Arithmetic,
+        var_signatures: &[AtomArgumentSignature],
+    ) -> Self {
         fn map_factor(
             factor: &Factor,
             var_signatures: &[AtomArgumentSignature],
@@ -138,18 +141,18 @@ impl ArithmeticPos {
 
     /// Returns the initial (left-most) factor.
     #[inline]
-    pub fn init(&self) -> &FactorPos {
+    pub(crate) fn init(&self) -> &FactorPos {
         &self.init
     }
 
     /// Returns the sequence of operators and factors after the initial term.
     #[inline]
-    pub fn rest(&self) -> &[(ArithmeticOperator, FactorPos)] {
+    pub(crate) fn rest(&self) -> &[(ArithmeticOperator, FactorPos)] {
         &self.rest
     }
 
     /// Returns a vector of all variable signatures referenced in this expression, in order.
-    pub fn signatures(&self) -> Vec<&AtomArgumentSignature> {
+    pub(crate) fn signatures(&self) -> Vec<&AtomArgumentSignature> {
         let mut sigs = self.init.signatures();
         for (_, factor) in &self.rest {
             sigs.extend(factor.signatures());
@@ -158,7 +161,7 @@ impl ArithmeticPos {
     }
 
     /// Transform every variable in this expression using `f`, recursing into FnCall args.
-    pub fn map_vars(&self, f: &impl Fn(&AtomArgumentSignature) -> FactorPos) -> ArithmeticPos {
+    pub(crate) fn map_vars(&self, f: &impl Fn(&AtomArgumentSignature) -> FactorPos) -> ArithmeticPos {
         let init = self.init.map_vars(f);
         let rest = self
             .rest

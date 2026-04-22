@@ -22,7 +22,7 @@ use crate::codegen::aggregation::{
     aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce_stmt, aggregation_row_chop,
     aggregation_sum_optimize,
 };
-use crate::codegen::error::CodegenError;
+use crate::codegen::CodegenError;
 use crate::codegen::CodeGen;
 
 // =========================================================================

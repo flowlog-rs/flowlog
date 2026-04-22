@@ -9,13 +9,13 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::parser::{ConstType, DataType};
+use crate::parser::DataType;
 use crate::planner::{
     ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
 };
 
-use crate::codegen::error::CodegenError;
 use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
 
 /// `(key_types, value_types)` — a relation's shape in key++value form.
 pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
@@ -65,7 +65,7 @@ impl CodeGen {
 
     /// Propagate types through `flow` and register the output shape
     /// under `output_fingerprint` (or its IDB fingerprint, if this head
-    /// feeds one). Inference is infallible post-typecheck.
+    /// feeds one).
     pub(crate) fn record_transformation_output_type(
         &mut self,
         left_fingerprint: u64,
@@ -80,13 +80,12 @@ impl CodeGen {
             .copied()
             .unwrap_or(output_fingerprint);
 
-        // Outputs that already have a declared shape (every IDB is seeded
-        // from its `.decl` in `make_global_data_type_map`) skip inference
-        // entirely. This both avoids redundant work and sidesteps a
-        // post-typecheck `expect` panic for heads whose flow consists
-        // only of polymorphic literals — e.g. `Foo(x, 42, 999)` — whose
-        // concrete column types live in the `.decl`, not the planner's
-        // `TransformationFlow`.
+        // IDB relations are seeded from their `.decl` in
+        // `make_global_data_type_map`, and that declared shape is
+        // authoritative. For aggregation rules in particular, the
+        // transformation flow carries the *pre-aggregation* column types
+        // (e.g. `count(n)` where `n: String` flows a `String` value),
+        // which don't match the IDB's `.decl`-declared output type.
         if self.global_fp_to_type.contains_key(&output_fingerprint) {
             return Ok(());
         }
@@ -97,29 +96,30 @@ impl CodeGen {
             .transpose()?
             .cloned();
 
-        let resolve = |expr: &ArithmeticArgument| {
-            self.infer_expr_type(expr, &left_type, right_type.as_ref())
-                .expect("post-typecheck: expression has a concrete type")
-        };
-        let keys = flow.key().iter().map(&resolve).collect();
-        let vals = flow.value().iter().map(&resolve).collect();
+        let resolve =
+            |expr: &ArithmeticArgument| self.infer_expr_type(expr, &left_type, right_type.as_ref());
+        let keys = flow.key().iter().map(&resolve).collect::<Result<_, _>>()?;
+        let vals = flow
+            .value()
+            .iter()
+            .map(&resolve)
+            .collect::<Result<_, _>>()?;
 
         self.global_fp_to_type
             .insert(output_fingerprint, (keys, vals));
         Ok(())
     }
 
-    /// Type of the first factor we can pin down. `None` iff every factor
-    /// is a polymorphic numeric literal (impossible after typecheck).
+    /// Type of the expression's initial factor — post-typecheck every
+    /// factor has a concrete type, and an arithmetic expression's factors
+    /// all unify to the same type, so the first one is authoritative.
     pub(crate) fn infer_expr_type(
         &self,
         expr: &ArithmeticArgument,
         left_type: &KvTypes,
         right_type: Option<&KvTypes>,
-    ) -> Option<DataType> {
-        std::iter::once(expr.init())
-            .chain(expr.rest().iter().map(|(_, f)| f))
-            .find_map(|f| self.infer_factor_type(f, left_type, right_type))
+    ) -> Result<DataType, CodegenError> {
+        self.infer_factor_type(expr.init(), left_type, right_type)
     }
 
     fn infer_factor_type(
@@ -127,28 +127,47 @@ impl CodeGen {
         factor: &FactorArgument,
         left_type: &KvTypes,
         right_type: Option<&KvTypes>,
-    ) -> Option<DataType> {
+    ) -> Result<DataType, CodegenError> {
         match factor {
             FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => {
-                slot(left_type, *is_key).get(*idx).copied()
+                slot(left_type, *is_key).get(*idx).copied().ok_or_else(|| {
+                    CodegenError::internal(format!(
+                        "KV slot out of bounds: is_key={is_key}, idx={idx}, \
+                     left shape=({}, {})",
+                        left_type.0.len(),
+                        left_type.1.len()
+                    ))
+                })
             }
             FactorArgument::Var(TransformationArgument::Jn((is_left, is_key, idx))) => {
                 let base = if *is_left {
                     left_type
                 } else {
-                    right_type.expect("codegen ICE: join with no right input")
+                    right_type.ok_or_else(|| {
+                        CodegenError::internal(
+                            "join factor references right input but no right type is bound"
+                                .to_string(),
+                        )
+                    })?
                 };
-                slot(base, *is_key).get(*idx).copied()
+                slot(base, *is_key).get(*idx).copied().ok_or_else(|| {
+                    CodegenError::internal(format!(
+                        "join slot out of bounds: is_left={is_left}, is_key={is_key}, idx={idx}"
+                    ))
+                })
             }
-            FactorArgument::Const(ConstType::Int(_) | ConstType::Float(_)) => None,
-            FactorArgument::Const(ConstType::Text(_)) => Some(DataType::String),
-            FactorArgument::Const(ConstType::Bool(_)) => Some(DataType::Bool),
+            FactorArgument::Const(c) => c.data_type().ok_or_else(|| {
+                CodegenError::internal(format!(
+                    "polymorphic const {c:?} reached codegen; typechecker should have pinned it"
+                ))
+            }),
             FactorArgument::FnCall { name, .. } => self
                 .program
                 .udfs()
                 .iter()
                 .find(|e| e.name() == name)
-                .map(|e| e.ret_type()),
+                .map(|e| e.ret_type())
+                .ok_or_else(|| CodegenError::internal(format!("UDF `{name}` not declared"))),
         }
     }
 }
@@ -214,5 +233,116 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
         [] => quote! { () },
         [t0] => quote! { ( #t0, ) },
         _ => quote! { ( #(#tys),* ) },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::Config;
+    use crate::parser::{ArithmeticOperator, ConstType, Program};
+
+    fn make_codegen() -> CodeGen {
+        CodeGen::new(Config::default(), Program::default())
+    }
+
+    #[test]
+    fn infer_factor_type_concrete_literal_returns_its_type() {
+        let cg = make_codegen();
+        let empty: KvTypes = (vec![], vec![]);
+        assert_eq!(
+            cg.infer_factor_type(&FactorArgument::Const(ConstType::Int32(42)), &empty, None)
+                .unwrap(),
+            DataType::Int32
+        );
+        assert_eq!(
+            cg.infer_factor_type(&FactorArgument::Const(ConstType::Bool(true)), &empty, None)
+                .unwrap(),
+            DataType::Bool
+        );
+    }
+
+    #[test]
+    fn infer_expr_type_picks_first_concrete_factor() {
+        let cg = make_codegen();
+        let expr = ArithmeticArgument {
+            init: FactorArgument::Const(ConstType::Int64(0)),
+            rest: vec![(
+                ArithmeticOperator::Plus,
+                FactorArgument::Var(TransformationArgument::KV((false, 0))),
+            )],
+        };
+        let left_type: KvTypes = (vec![], vec![DataType::Int64]);
+        assert_eq!(
+            cg.infer_expr_type(&expr, &left_type, None).unwrap(),
+            DataType::Int64
+        );
+    }
+
+    /// Aggregation rules feed a transformation flow whose column types
+    /// match the *pre-reduce* input (e.g. `count(n: String)` flows a
+    /// `String`), not the IDB's declared output. Inferring from that flow
+    /// would overwrite the authoritative `.decl` shape and break later
+    /// codegen (see `agg_count_string` e2e).
+    #[test]
+    fn record_transformation_output_type_preserves_declared_idb_shape() {
+        use crate::planner::Constraints;
+        use std::sync::Arc;
+
+        let mut cg = make_codegen();
+        // IDB's declared shape: e.g. `DeptHeadcount(d: int32, cnt: int32)`.
+        let declared = (vec![DataType::Int32], vec![DataType::Int32]);
+        cg.global_fp_to_type.insert(0x1, declared.clone());
+
+        // Pre-aggregation input: `(d: Int32, n: String)`. If the
+        // short-circuit is removed, the flow below would resolve its
+        // value column as `String` from this input, and overwrite the
+        // declared IDB shape at fp 0x1.
+        cg.global_fp_to_type
+            .insert(0x2, (vec![], vec![DataType::Int32, DataType::String]));
+        let flow = TransformationFlow::KVToKV {
+            key: Arc::new(vec![ArithmeticArgument {
+                init: FactorArgument::Var(TransformationArgument::KV((false, 0))),
+                rest: vec![],
+            }]),
+            value: Arc::new(vec![ArithmeticArgument {
+                init: FactorArgument::Var(TransformationArgument::KV((false, 1))),
+                rest: vec![],
+            }]),
+            constraints: Constraints::new(vec![], vec![]),
+            compares: vec![],
+            fn_call_preds: vec![],
+        };
+        let stratum = StratumPlanner::default();
+
+        cg.record_transformation_output_type(0x2, None, 0x1, &flow, &stratum)
+            .expect("short-circuit on registered output must not error");
+
+        assert_eq!(cg.global_fp_to_type.get(&0x1), Some(&declared));
+    }
+
+    /// Rust distinguishes `(T)` (a parenthesized type) from `(T,)` (a
+    /// 1-tuple). `tuple_tokens` must emit the trailing comma for the
+    /// singleton case or every 1-column IDB silently gets the wrong
+    /// type in the generated project. Also pins the 0-arity and n-arity
+    /// branches so a refactor can't accidentally collapse the `match`.
+    #[test]
+    fn tuple_tokens_arity_dispatch_keeps_singleton_comma() {
+        // Arity 0 → unit type `()`.
+        assert_eq!(tuple_tokens(std::iter::empty()).to_string(), "()");
+
+        // Arity 1 → `(T,)` — the comma is the whole point.
+        let single = tuple_tokens(std::iter::once(quote! { i32 })).to_string();
+        let single_norm: String = single.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            single_norm, "(i32 ,)",
+            "singleton tuple must carry trailing comma; `(i32)` would be a \
+             parenthesized type, not a 1-tuple"
+        );
+
+        // Arity 2+ → standard comma-separated tuple without trailing comma.
+        let pair = tuple_tokens(vec![quote! { i32 }, quote! { String }]).to_string();
+        let pair_norm: String = pair.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(pair_norm, "(i32 , String)");
     }
 }

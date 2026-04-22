@@ -7,15 +7,15 @@
 use std::collections::{HashMap, HashSet};
 
 use super::Catalog;
-use crate::catalog::atom::{AtomArgumentSignature, AtomSignature};
-use crate::catalog::error::{CatalogError, UnsafePredicateKind};
-use crate::catalog::filter::Filters;
+use crate::catalog::{
+    AtomArgumentSignature, AtomSignature, CatalogError, Filters, UnsafePredicateKind,
+};
 use crate::parser::{AtomArg, Predicate};
 
 /// Internal API for populating all metadata fields given a parsed rule.
 impl Catalog {
     /// Populates all metadata required for rule processing.
-    pub(crate) fn populate_all_metadata(&mut self) -> Result<(), CatalogError> {
+    pub(super) fn populate_all_metadata(&mut self) -> Result<(), CatalogError> {
         // 1. Build signatures, filters, fingerprints, and collect comparison predicates
         self.populate_argument_signatures()?;
 
@@ -68,16 +68,16 @@ impl Catalog {
             (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             |(mut pos, mut neg, mut comp, mut fncalls), (i, p)| {
                 match p {
-                    Predicate::PositiveAtomPredicate(a) => {
+                    Predicate::PositiveAtom(a) => {
                         pos.push(a);
                         self.positive_atom_rhs_ids.push(i);
                     }
-                    Predicate::NegativeAtomPredicate(a) => {
+                    Predicate::NegativeAtom(a) => {
                         neg.push(a);
                         self.negative_atom_rhs_ids.push(i);
                     }
-                    Predicate::ComparePredicate(expr) => comp.push(expr.clone()),
-                    Predicate::FnCallPredicate(fc) => fncalls.push(fc.clone()),
+                    Predicate::Compare(expr) => comp.push(expr.clone()),
+                    Predicate::FnCall(fc) => fncalls.push(fc.clone()),
                 };
                 (pos, neg, comp, fncalls)
             },

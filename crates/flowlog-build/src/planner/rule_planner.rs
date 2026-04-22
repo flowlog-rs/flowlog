@@ -32,7 +32,7 @@ mod sip; // Side Information Passing (SIP) optimization for pushing down filters
 
 /// Planner state for a single rule.
 #[derive(Debug)]
-pub struct RulePlanner {
+pub(crate) struct RulePlanner {
     /// The original rule.
     rule: FlowLogRule,
 
@@ -55,7 +55,7 @@ pub struct RulePlanner {
 
 impl RulePlanner {
     /// Creates a new empty RulePlanner.
-    pub fn new(rule: FlowLogRule) -> Self {
+    pub(crate) fn new(rule: FlowLogRule) -> Self {
         Self {
             rule,
             transformation_infos: Vec::new(),
@@ -65,7 +65,7 @@ impl RulePlanner {
 
     /// Returns the planned transformations for this rule.
     #[inline]
-    pub fn transformation_infos(&self) -> &Vec<TransformationInfo> {
+    pub(crate) fn transformation_infos(&self) -> &Vec<TransformationInfo> {
         &self.transformation_infos
     }
 
@@ -80,7 +80,7 @@ impl RulePlanner {
 /// Rule Plan Tree Debugging Information
 /// ========================================================================
 impl RulePlanner {
-    pub fn generate_rule_plan_tree_debug_map(&self) -> BTreeMap<u64, (String, Vec<u64>)> {
+    pub(crate) fn generate_rule_plan_tree_debug_map(&self) -> BTreeMap<u64, (String, Vec<u64>)> {
         let mut debug_info_map: BTreeMap<u64, (String, Vec<u64>)> = BTreeMap::new();
 
         if self.transformation_infos.is_empty() {
@@ -122,7 +122,7 @@ impl RulePlanner {
         let mut atom_info = HashMap::new();
         for predicate in self.rule.rhs() {
             if let Some((fp, info)) = match predicate {
-                Predicate::PositiveAtomPredicate(atom) | Predicate::NegativeAtomPredicate(atom) => {
+                Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
                     Some((
                         atom.fingerprint(),
                         (
