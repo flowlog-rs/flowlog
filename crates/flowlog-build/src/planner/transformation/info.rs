@@ -295,6 +295,19 @@ impl TransformationInfo {
         matches!(self, Self::AntiJoinToKV { .. })
     }
 
+    /// `true` only for a KVToKV whose `is_sip_projection` flag is set.
+    /// A plain KVToKV filter or any join/anti-join returns `false`.
+    #[inline]
+    pub fn is_sip_projection(&self) -> bool {
+        matches!(
+            self,
+            Self::KVToKV {
+                is_sip_projection: true,
+                ..
+            }
+        )
+    }
+
     // Fingerprint getters
 
     /// Input fingerprint(s); for joins/anti-joins returns `(left, Some(right))`.

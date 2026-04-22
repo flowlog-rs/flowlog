@@ -17,12 +17,12 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::planner::{transformation::KeyValueLayout, PlanError, TransformationInfo};
 use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, FactorPos,
     FnCallPredicatePos, KvPredicates,
 };
 use crate::parser::ConstType;
+use crate::planner::{transformation::KeyValueLayout, PlanError, TransformationInfo};
 
 /// Ordered consumer indices alongside their key/value index selections.
 /// (minimum consumer id, consumer ids, key indices, value indices)
@@ -693,5 +693,89 @@ impl RulePlanner {
         }
 
         Ok(assignments)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::common::test_setup;
+
+    /// A filter whose input is an EDB atom must survive fuse — the EDB
+    /// guard at fuse.rs:84 blocks fusion into something that has no
+    /// upstream producer. A broken guard would error out or silently
+    /// drop the filter.
+    #[test]
+    fn fuse_map_skips_edb_input() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x, 5).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+        let before = planner.transformation_infos().len();
+        assert!(
+            before >= 1,
+            "prepare must emit at least the const_eq filter"
+        );
+
+        planner
+            .fuse(catalog.original_atom_fingerprints())
+            .expect("fuse");
+        let after = planner.transformation_infos().len();
+        assert_eq!(
+            before, after,
+            "EDB-input filter must not be fused into its (absent) producer"
+        );
+    }
+
+    /// fuse.rs:79 explicitly skips `is_sip_projection == true`. If that
+    /// guard were removed, SIP's project→semijoin pair would collapse
+    /// into the wrong producer and SIP semantics would silently break.
+    ///
+    /// Rule shape avoids positive-subset relations among atoms so that
+    /// `prepare`'s `apply_positive_semijoin` doesn't consume the SIP
+    /// opportunities before SIP runs.
+    #[test]
+    fn fuse_map_preserves_sip_projection() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl B(a: int32, b: int32)\n\
+            .decl C(a: int32, b: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+            .decl Out(x: int32, w: int32, z: int32)\n\
+            .output Out\n\
+            Out(x, w, z) :- A(x, w), B(x, y), C(y, z).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+        planner.apply_sip(&mut catalog).expect("sip");
+        while !catalog.is_planned() {
+            planner.core(&mut catalog, (0, 1)).expect("core");
+        }
+
+        let sip_before = planner
+            .transformation_infos()
+            .iter()
+            .filter(|t| t.is_sip_projection())
+            .count();
+        assert!(sip_before > 0, "SIP must produce projections to test");
+
+        planner
+            .fuse(catalog.original_atom_fingerprints())
+            .expect("fuse");
+        let sip_after = planner
+            .transformation_infos()
+            .iter()
+            .filter(|t| t.is_sip_projection())
+            .count();
+        assert_eq!(
+            sip_before, sip_after,
+            "fuse must preserve every SIP projection"
+        );
     }
 }

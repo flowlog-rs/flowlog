@@ -8,9 +8,9 @@
 use tracing::trace;
 
 use super::RulePlanner;
+use crate::catalog::{AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates};
 use crate::planner::PlanError;
 use crate::planner::{transformation::KeyValueLayout, TransformationInfo};
-use crate::catalog::{AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates};
 
 // =========================================================================
 // Core Planning
@@ -203,5 +203,100 @@ impl RulePlanner {
             vec![new_fp],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::common::test_setup;
+    use super::*;
+
+    /// `Out(x, z) :- A(x, y), B(y, z).` — shared var `y` is the join key.
+    /// Core must emit a `JoinToKV` whose output layout has `y` as the sole
+    /// join key, `x` (from A) and `z` (from B) as values, and both input
+    /// layouts keyed on `y`. A broken `partition_shared_keys` would route
+    /// `x` or `z` to the key position (cross product with wrong semantics)
+    /// or route `y` to values (no join at all, just stapling two streams).
+    ///
+    /// Signatures are captured before `core()` runs because the pass
+    /// calls `update_rule` under the hood, rebuilding the catalog's
+    /// sig→name map around the joined atom. We compare by sig identity,
+    /// which pins each slot to the exact source-level argument regardless
+    /// of any post-join name remapping.
+    #[test]
+    fn core_join_emits_join_to_kv_with_shared_key_as_join_key() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl B(a: int32, b: int32)\n\
+            .decl Out(x: int32, z: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, z) :- A(x, y), B(y, z).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+
+        // Pin each source var to its pre-core argument signature.
+        let a_sigs = catalog.positive_atom_argument_signature(0).clone();
+        let b_sigs = catalog.positive_atom_argument_signature(1).clone();
+        let x_in_a = a_sigs[0];
+        let y_in_a = a_sigs[1];
+        let y_in_b = b_sigs[0];
+        let z_in_b = b_sigs[1];
+
+        planner.core(&mut catalog, (0, 1)).expect("core");
+
+        let join = planner
+            .transformation_infos()
+            .iter()
+            .find(|t| matches!(t, TransformationInfo::JoinToKV { .. }))
+            .expect("JoinToKV transformation missing");
+
+        let sig_of = |pos: &crate::catalog::ArithmeticPos| {
+            *pos.init().as_var_signature().expect("var signature")
+        };
+
+        let out = join.output_kv_layout();
+        assert_eq!(out.key().len(), 1, "exactly one join key");
+        assert_eq!(
+            sig_of(&out.key()[0]),
+            y_in_a,
+            "join key must be `y` from LHS (A's arg 1)"
+        );
+        assert_eq!(out.value().len(), 2, "two payload values");
+        assert_eq!(
+            sig_of(&out.value()[0]),
+            x_in_a,
+            "first output value must be `x` from LHS"
+        );
+        assert_eq!(
+            sig_of(&out.value()[1]),
+            z_in_b,
+            "second output value must be `z` from RHS"
+        );
+
+        // Both input layouts must also be keyed on `y` — if either side
+        // was keyed on its own local var, the join degenerates.
+        let (left, right) = join.input_kv_layout();
+        let right = right.expect("JoinToKV has a right input layout");
+        assert_eq!(sig_of(&left.key()[0]), y_in_a, "LHS input keyed on `y`");
+        assert_eq!(sig_of(&right.key()[0]), y_in_b, "RHS input keyed on `y`");
+        assert_eq!(sig_of(&left.value()[0]), x_in_a, "LHS payload is `x`");
+        assert_eq!(sig_of(&right.value()[0]), z_in_b, "RHS payload is `z`");
+
+        // Post-state: core must leave the catalog reduced to one atom
+        // (the join result) and flagged planned. A planner that emitted
+        // the right JoinToKV but forgot to call `catalog.join_modify`
+        // would fail here but pass the structural checks above.
+        assert_eq!(
+            catalog.positive_atom_number(),
+            1,
+            "two atoms must collapse into one after the join"
+        );
+        assert!(
+            catalog.is_planned(),
+            "catalog should be flagged planned after a complete 2-atom join"
+        );
     }
 }

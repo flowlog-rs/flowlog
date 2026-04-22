@@ -12,10 +12,10 @@
 //! Management of Data 3.3 (2025): 1-28, as part of algorithm 1.
 
 use super::RulePlanner;
-use crate::planner::PlanError;
-use crate::planner::{transformation::KeyValueLayout, TransformationInfo};
 use crate::catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
 use crate::parser::ConstType;
+use crate::planner::PlanError;
+use crate::planner::{transformation::KeyValueLayout, TransformationInfo};
 use tracing::trace;
 
 // =========================================================================
@@ -310,5 +310,144 @@ impl RulePlanner {
             .filter(|&sig| *sig != drop_sig)
             .map(|&sig| ArithmeticPos::from_var_signature(sig))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::common::test_setup;
+    use super::*;
+
+    /// `A(x, x)` — var_eq canonicalization must keep the lower-argument-id
+    /// slot (arg 0) and drop the higher (arg 1). If the `<=` flipped, the
+    /// wrong slot survives and downstream indexes go stale silently.
+    #[test]
+    fn prepare_var_eq_drops_canonical_slot() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x, x).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+
+        let tx = planner
+            .transformation_infos()
+            .iter()
+            .find(|t| !t.kv_predicates().var_eq.is_empty())
+            .expect("var_eq transformation missing");
+        let (kept, dropped) = &tx.kv_predicates().var_eq[0];
+        assert_eq!(kept.argument_id(), 0, "kept sig must be arg 0");
+        assert_eq!(dropped.argument_id(), 1, "dropped sig must be arg 1");
+        assert_eq!(
+            tx.output_kv_layout().value().len(),
+            1,
+            "one slot must be dropped after var_eq projection"
+        );
+
+        // Post-state: the filter must be consumed from the catalog, not
+        // just "processed". A broken projection_modify that left var_eq_map
+        // populated would cause prepare to loop forever or re-emit the
+        // same filter.
+        assert!(
+            catalog.filters().var_eq_map().is_empty(),
+            "var_eq filter must be consumed from catalog"
+        );
+    }
+
+    /// `A(x, 5)` — const_eq must route the literal verbatim (same value,
+    /// same variant). A bug that swapped or truncated the constant would
+    /// silently generate wrong filters at codegen.
+    #[test]
+    fn prepare_const_eq_preserves_constant_value() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x, 5).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+
+        let tx = planner
+            .transformation_infos()
+            .iter()
+            .find(|t| !t.kv_predicates().const_eq.is_empty())
+            .expect("const_eq transformation missing");
+        assert_eq!(tx.kv_predicates().const_eq[0].1, ConstType::Int(5));
+        assert_eq!(tx.output_kv_layout().value().len(), 1);
+
+        assert!(
+            catalog.filters().const_map().is_empty(),
+            "const_eq filter must be consumed from catalog"
+        );
+    }
+
+    /// `A(_, y)` — placeholder filter runs via a distinct branch. It must
+    /// drop the slot WITHOUT adding anything to var_eq or const_eq. A
+    /// refactor that merged placeholder handling into one of the other
+    /// filter branches would miscategorize the predicate.
+    #[test]
+    fn prepare_placeholder_filter_runs_without_eq_predicate() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl Out(y: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(y) :- A(_, y).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+
+        let tx = planner
+            .transformation_infos()
+            .iter()
+            .find(|t| t.kv_predicates().is_empty() && t.output_kv_layout().value().len() == 1)
+            .expect("placeholder transformation missing");
+        assert!(tx.kv_predicates().var_eq.is_empty());
+        assert!(tx.kv_predicates().const_eq.is_empty());
+
+        assert!(
+            catalog.filters().placeholder_set().is_empty(),
+            "placeholder must be consumed from catalog"
+        );
+    }
+
+    /// `A(x, x, 5)` triggers BOTH var_eq and const_eq. The fixed-point
+    /// `loop { if ... apply_filter ... continue; ... }` must keep going
+    /// until every filter has fired. A break-instead-of-continue bug
+    /// would apply exactly one filter and stop.
+    #[test]
+    fn prepare_fixpoint_applies_all_filters() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32, b: int32, c: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x, x, 5).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+
+        let txs = planner.transformation_infos();
+        let var_eq_hits = txs
+            .iter()
+            .filter(|t| !t.kv_predicates().var_eq.is_empty())
+            .count();
+        let const_eq_hits = txs
+            .iter()
+            .filter(|t| !t.kv_predicates().const_eq.is_empty())
+            .count();
+        assert_eq!(var_eq_hits, 1, "var_eq filter must fire once");
+        assert_eq!(const_eq_hits, 1, "const_eq filter must fire once");
+
+        assert!(
+            catalog.filters().is_empty(),
+            "all filters must be consumed after fixed-point prepare"
+        );
+        assert!(catalog.is_planned());
     }
 }

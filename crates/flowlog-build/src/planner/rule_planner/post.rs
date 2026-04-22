@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::planner::{transformation::KeyValueLayout, PlanError, TransformationInfo};
 use crate::catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
 use crate::parser::HeadArg;
+use crate::planner::{transformation::KeyValueLayout, PlanError, TransformationInfo};
 
 // =========================================================================
 // Post Processing
@@ -199,5 +199,76 @@ impl RulePlanner {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::common::test_setup;
+
+    /// `Out(y, x) :- A(x, y).` — post must reorder the final layout so
+    /// output values map to head order, not source order. A no-op post
+    /// would emit (x, y) — every output row swapped, no error.
+    #[test]
+    fn post_aligns_head_var_order() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl Out(y: int32, x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(y, x) :- A(x, y).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+        planner
+            .fuse(catalog.original_atom_fingerprints())
+            .expect("fuse");
+        planner.post(&mut catalog).expect("post");
+
+        let last = planner
+            .transformation_infos()
+            .last()
+            .expect("post must emit/update a transformation");
+        let values = last.output_kv_layout().value();
+        assert_eq!(values.len(), 2);
+        let id0 = values[0].init().as_var_signature().unwrap().argument_id();
+        let id1 = values[1].init().as_var_signature().unwrap().argument_id();
+        assert_eq!(
+            (id0, id1),
+            (1, 0),
+            "head `Out(y, x)` over `A(x, y)` must map to (arg1=y, arg0=x)"
+        );
+    }
+
+    /// `Out(x + 1) :- A(x).` — the head carries an arithmetic expression.
+    /// Post must preserve the `+ 1` operator, not flatten to bare `x`.
+    /// If post dropped the Arith branch, codegen emits `x` — off-by-one
+    /// every row with no compiler error.
+    #[test]
+    fn post_emits_head_arithmetic_expression() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x + 1) :- A(x).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+        planner
+            .fuse(catalog.original_atom_fingerprints())
+            .expect("fuse");
+        planner.post(&mut catalog).expect("post");
+
+        let last = planner
+            .transformation_infos()
+            .last()
+            .expect("post transformation missing");
+        let values = last.output_kv_layout().value();
+        assert_eq!(values.len(), 1);
+        assert!(
+            !values[0].rest().is_empty(),
+            "head arithmetic `x + 1` collapsed to bare var"
+        );
     }
 }

@@ -751,3 +751,145 @@ impl fmt::Display for Catalog {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests target invariants that integration fixtures (positive
+    //! paths in e2e + 3 UnsafeVariable error fixtures) can't pin down:
+    //! within-atom equality filters, placeholder/const recording, SIP
+    //! eligibility truth table, and the "head var never unused" rule.
+    //!
+    //! Tests skip the typechecker pass so literals stay polymorphic
+    //! (`ConstType::Int(_)`), matching how `tests/catalog_errors.rs`
+    //! drives the catalog.
+    use super::*;
+    use crate::common::source::SourceMap;
+    use crate::parser::{ConstType, Program};
+    use std::io::Write;
+
+    fn catalog_for(src: &str) -> Catalog {
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        tmp.write_all(src.as_bytes()).expect("write");
+        let mut sm = SourceMap::new();
+        let program =
+            Program::parse(&tmp.path().to_string_lossy(), false, &mut sm).expect("parse failed");
+        Catalog::from_rule(program.rules()[0]).expect("catalog build failed")
+    }
+
+    /// `A(x, x)` — the second `x` must not create a fresh binding; it must
+    /// emit an equality filter mapping arg1's sig to arg0's sig. A broken
+    /// `local_var_first_occurrence_map` would re-bind and silently drop
+    /// the join predicate.
+    #[test]
+    fn repeated_var_in_atom_creates_var_eq_entry() {
+        let src = "\
+            .decl A(a: int32, b: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x, x).\n";
+        let catalog = catalog_for(src);
+        let sigs = catalog.positive_atom_argument_signature(0);
+        let var_eq = catalog.filters().var_eq_map();
+        assert_eq!(
+            var_eq.get(&sigs[1]),
+            Some(&sigs[0]),
+            "second `x` must map back to first `x`"
+        );
+    }
+
+    /// `A(_, 5)` — arg0 is a placeholder, arg1 is a const. Both must
+    /// populate their respective filter sets. Downstream codegen runs
+    /// pruning and const folding off these sets; empty sets on either
+    /// side would emit wrong filters.
+    #[test]
+    fn placeholder_and_const_populate_filter_sets() {
+        let src = "\
+            .decl A(a: int32, b: int32)\n\
+            .decl Out()\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out() :- A(_, 5).\n";
+        let catalog = catalog_for(src);
+        let sigs = catalog.positive_atom_argument_signature(0);
+        let filters = catalog.filters();
+        assert!(
+            filters.placeholder_set().contains(&sigs[0]),
+            "placeholder `_` missing from placeholder_set"
+        );
+        assert_eq!(
+            filters.const_map().get(&sigs[1]),
+            Some(&ConstType::Int(5)),
+            "constant 5 missing from const_map"
+        );
+    }
+
+    /// `check_sip_pair` guards SIP eligibility — two positive atoms must
+    /// share at least one body variable. Inverted `is_disjoint` logic or
+    /// indexing into the wrong backing array would silently enable or
+    /// disable every semijoin the planner considers.
+    #[test]
+    fn check_sip_pair_var_share_semantics() {
+        // Shared `y` → eligible.
+        let shared = catalog_for(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl B(a: int32, b: int32)\n\
+            .decl Out(x: int32, y: int32, z: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, y, z) :- A(x, y), B(y, z).\n",
+        );
+        assert!(
+            shared.check_sip_pair(0, 1),
+            "atoms sharing `y` should be SIP-eligible"
+        );
+
+        // No shared var → ineligible.
+        let disjoint = catalog_for(
+            "\
+            .decl A(a: int32)\n\
+            .decl B(a: int32)\n\
+            .decl Out(x: int32, y: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, y) :- A(x), B(y).\n",
+        );
+        assert!(
+            !disjoint.check_sip_pair(0, 1),
+            "atoms with no shared var must not be SIP-eligible"
+        );
+    }
+
+    /// Head variables must NEVER be marked unused, even when they appear
+    /// only once in the body. A regression would let codegen drop a
+    /// head-bound var's backing column, producing wrong rule output.
+    #[test]
+    fn head_variable_never_marked_unused() {
+        let src = "\
+            .decl A(a: int32, b: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x, y).\n";
+        let catalog = catalog_for(src);
+        let sigs = catalog.positive_atom_argument_signature(0);
+        let x_sig = sigs[0];
+        let y_sig = sigs[1];
+        let all_unused: HashSet<&AtomArgumentSignature> = catalog
+            .unused_arguments_per_atom()
+            .values()
+            .flat_map(|v| v.iter())
+            .collect();
+        assert!(
+            !all_unused.contains(&x_sig),
+            "`x` is a head var and must never be marked unused"
+        );
+        assert!(
+            all_unused.contains(&y_sig),
+            "`y` appears once and is not in the head → should be marked unused"
+        );
+    }
+}

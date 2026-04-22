@@ -10,10 +10,10 @@ use std::collections::{HashMap, HashSet};
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::planner::{transformation::KeyValueLayout, PlanError, TransformationInfo};
 use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
 };
+use crate::planner::{transformation::KeyValueLayout, PlanError, TransformationInfo};
 
 // =========================================================================
 // Semijoin & Comparison Operations
@@ -1000,4 +1000,27 @@ impl RulePlanner {
                 ))
             })
     }
+}
+
+/// Shared setup helper for planner phase tests.
+///
+/// Parses a program source and builds a fresh `(RulePlanner, Catalog)` for
+/// its first rule. Bypasses the typechecker, so literal constants stay
+/// polymorphic (`ConstType::Int(_)`) — matching the behavior of
+/// `tests/catalog_errors.rs`.
+#[cfg(test)]
+pub(super) fn test_setup(src: &str) -> (RulePlanner, Catalog) {
+    use crate::common::source::SourceMap;
+    use crate::parser::Program;
+    use std::io::Write;
+
+    let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+    tmp.write_all(src.as_bytes()).expect("write");
+    let mut sm = SourceMap::new();
+    let program =
+        Program::parse(&tmp.path().to_string_lossy(), false, &mut sm).expect("parse failed");
+    let rule = program.rules()[0].clone();
+    let catalog = Catalog::from_rule(&rule).expect("catalog build failed");
+    let planner = RulePlanner::new(rule);
+    (planner, catalog)
 }
