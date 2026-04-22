@@ -490,3 +490,50 @@ pub(crate) fn aggregation_merge_kv(arity: usize, agg_pos: usize) -> TokenStream 
     let result_tuple = row_with_agg_at(arity, agg_pos, quote! { v });
     quote! { |&#pattern, &v| #result_tuple }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `row_with_agg_at(arity, agg_pos, agg_token)` drives two counters:
+    /// `i` walks every output slot, `ki` only advances through the
+    /// non-agg positions. Off-by-one in either — advancing `ki` at
+    /// `i == agg_pos`, or using `i` for the key fields — puts the
+    /// aggregated value in the wrong slot or duplicates a `kN`.
+    #[test]
+    fn row_with_agg_at_interleaves_agg_at_correct_position() {
+        // arity=4, agg_pos=2 → positions [k0, k1, AGG_SLOT, k2].
+        let output = row_with_agg_at(4, 2, quote! { AGG_SLOT }).to_string();
+        // Normalize to collapse whitespace variants proc-macro2 may emit.
+        let normalized: String = output.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            normalized, "(k0 , k1 , AGG_SLOT , k2)",
+            "agg must be at slot 2; k-fields at 0, 1, 3"
+        );
+
+        // Boundary case: agg at slot 0.
+        let at_zero = row_with_agg_at(3, 0, quote! { AGG_SLOT }).to_string();
+        let at_zero_norm: String = at_zero.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(at_zero_norm, "(AGG_SLOT , k0 , k1)");
+
+        // Boundary case: agg at slot len-1.
+        let at_last = row_with_agg_at(3, 2, quote! { AGG_SLOT }).to_string();
+        let at_last_norm: String = at_last.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(at_last_norm, "(k0 , k1 , AGG_SLOT)");
+    }
+
+    /// `key_pattern(arity=1)` means the key is empty (the one slot is
+    /// the agg). The function must return the `_key` wildcard pattern,
+    /// not a `()` destructuring — downstream closures destructure the
+    /// key positionally and `()` would silently match nothing.
+    #[test]
+    fn key_pattern_arity_one_returns_wildcard() {
+        let single = key_pattern(1).to_string();
+        assert_eq!(single, "_key", "arity-1 (empty key) must yield `_key`");
+
+        // Spot-check the non-special branch: arity=3 → two k-fields.
+        let multi = key_pattern(3).to_string();
+        let multi_norm: String = multi.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(multi_norm, "(k0 , k1)");
+    }
+}

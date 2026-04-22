@@ -320,4 +320,29 @@ mod tests {
 
         assert_eq!(cg.global_fp_to_type.get(&0x1), Some(&declared));
     }
+
+    /// Rust distinguishes `(T)` (a parenthesized type) from `(T,)` (a
+    /// 1-tuple). `tuple_tokens` must emit the trailing comma for the
+    /// singleton case or every 1-column IDB silently gets the wrong
+    /// type in the generated project. Also pins the 0-arity and n-arity
+    /// branches so a refactor can't accidentally collapse the `match`.
+    #[test]
+    fn tuple_tokens_arity_dispatch_keeps_singleton_comma() {
+        // Arity 0 → unit type `()`.
+        assert_eq!(tuple_tokens(std::iter::empty()).to_string(), "()");
+
+        // Arity 1 → `(T,)` — the comma is the whole point.
+        let single = tuple_tokens(std::iter::once(quote! { i32 })).to_string();
+        let single_norm: String = single.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            single_norm, "(i32 ,)",
+            "singleton tuple must carry trailing comma; `(i32)` would be a \
+             parenthesized type, not a 1-tuple"
+        );
+
+        // Arity 2+ → standard comma-separated tuple without trailing comma.
+        let pair = tuple_tokens(vec![quote! { i32 }, quote! { String }].into_iter()).to_string();
+        let pair_norm: String = pair.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(pair_norm, "(i32 , String)");
+    }
 }
