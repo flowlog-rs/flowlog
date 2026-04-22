@@ -60,6 +60,16 @@ pub struct Config {
     #[arg(long)]
     pub sip: bool,
 
+    /// Use approximate semi join in Sideways Information Passing (SIP) optimization.
+    /// Only effective when SIP is also enabled.
+    #[arg(long)]
+    pub sip_approx: bool,
+
+    /// Number of times a target relation is filtered by a filtering relation
+    /// in approximate SIP. Only effective when SIP approximate is enabled.
+    #[arg(long, default_value = "1")]
+    pub sip_approx_rounds: u32,
+
     /// Intern string columns as compact integer keys at load time for faster
     /// joins, hashing, and lower memory usage. Recommended when the majority
     /// of join keys are string-typed
@@ -216,6 +226,16 @@ impl Config {
     /// Whether Sideways Information Passing (SIP) optimization is enabled.
     pub fn sip_enabled(&self) -> bool {
         self.sip
+    }
+
+    /// Whether approximate semi join in SIP is enabled.
+    pub fn sip_approx_enabled(&self) -> bool {
+        self.sip_approx
+    }
+
+    /// Number of times a target relation is filtered in approximate SIP.
+    pub fn sip_approx_rounds(&self) -> u32 {
+        self.sip_approx_rounds
     }
 
     /// Whether string interning is enabled.

@@ -118,6 +118,13 @@ impl StratumPlanner {
             }
         }
 
+        // Debug info for per-rule plan trees
+        rule_planners.iter().for_each(|rp| {
+            debug!("{}", rp);
+        });
+
+        debug!("SIP DONE");
+
         // Phase 3: Core planning with optimizer guidance
         // this phase may introduce exponential blowup in intermediate results if not guided properly
         while !catalogs.iter().all(|c| c.is_planned()) {
