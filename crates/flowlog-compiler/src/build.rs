@@ -32,7 +32,7 @@ impl Compiler {
         &mut self,
         strata: &[StratumPlanner],
         profiler: &mut Option<Profiler>,
-    ) -> Result<(), flowlog_build::common::diag::BoxError> {
+    ) -> Result<(), flowlog_build::common::BoxError> {
         let parts = self.codegen.generate(strata, profiler)?;
         let features = self.codegen.features();
 

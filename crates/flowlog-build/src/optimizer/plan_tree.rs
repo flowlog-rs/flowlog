@@ -1,5 +1,5 @@
 //! Plan tree (left-to-right chain) over core atoms for FlowLog Datalog programs.
-use crate::catalog::rule::Catalog;
+use crate::catalog::Catalog;
 use std::collections::HashMap;
 use std::fmt;
 use tracing::debug;
@@ -11,39 +11,6 @@ pub struct PlanTree {
 }
 
 impl PlanTree {
-    /// Returns the root node index of the plan tree.
-    pub fn root(&self) -> usize {
-        self.root
-    }
-
-    /// Returns the parent -> children mapping.
-    pub fn tree(&self) -> &HashMap<usize, Vec<usize>> {
-        &self.tree
-    }
-
-    /// Returns true if the node has no children.
-    pub fn is_leaf(&self, x: usize) -> bool {
-        self.tree
-            .get(&x)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Optimizer error: node {} not found in plan tree (is_leaf)",
-                    x
-                )
-            })
-            .is_empty()
-    }
-
-    /// Returns the children list for a node.
-    pub fn children(&self, x: usize) -> &Vec<usize> {
-        self.tree.get(&x).unwrap_or_else(|| {
-            panic!(
-                "Optimizer error: node {} not found in plan tree (children)",
-                x
-            )
-        })
-    }
-
     /// Build a plan tree from a Catalog.
     ///
     /// The catalog is assumed to have already been processed by GYO optimization,

@@ -13,7 +13,7 @@ use super::RulePlanner;
 use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
 };
-use crate::planner::{transformation::KeyValueLayout, PlanError, TransformationInfo};
+use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
 
 // =========================================================================
 // Semijoin & Comparison Operations
@@ -1010,7 +1010,7 @@ impl RulePlanner {
 /// `tests/catalog_errors.rs`.
 #[cfg(test)]
 pub(super) fn test_setup(src: &str) -> (RulePlanner, Catalog) {
-    use crate::common::source::SourceMap;
+    use crate::common::SourceMap;
     use crate::parser::Program;
     use std::io::Write;
 

@@ -9,7 +9,7 @@ use tracing::error;
 
 /// Address in a Timely Dataflow log, representing nested scopes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Addr(pub Vec<u32>);
+pub(super) struct Addr(Vec<u32>);
 
 impl Default for Addr {
     fn default() -> Self {
@@ -19,12 +19,12 @@ impl Default for Addr {
 
 impl Addr {
     /// Enter a new scope.
-    pub fn enter_scope(&mut self) {
+    pub(super) fn enter_scope(&mut self) {
         self.0.push(1);
     }
 
     /// Leave the current scope.
-    pub fn leave_scope(&mut self) {
+    pub(super) fn leave_scope(&mut self) {
         if self.0.len() > 1 {
             self.0.pop();
         } else {
@@ -33,12 +33,12 @@ impl Addr {
     }
 
     /// Advance the last position by `steps`, returning previous addresses.
-    pub fn advance(&mut self, steps: u32) -> Vec<Addr> {
+    pub(super) fn advance(&mut self, steps: u32) -> Vec<Addr> {
         (0..steps).map(|_| self.advance_one()).collect()
     }
 
     /// Advance the last position by one, returning the previous address.
-    pub fn advance_one(&mut self) -> Addr {
+    fn advance_one(&mut self) -> Addr {
         let prev = self.clone();
         if let Some(last) = self.0.last_mut() {
             *last += 1;

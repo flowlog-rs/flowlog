@@ -21,31 +21,31 @@ use crate::catalog::{
 use crate::common::compute_fp;
 use crate::parser::ConstType;
 
-use crate::planner::collection::Collection;
+use crate::planner::Collection;
 
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
-pub struct KeyValueLayout {
-    pub key: Vec<ArithmeticPos>,
-    pub value: Vec<ArithmeticPos>,
+pub(crate) struct KeyValueLayout {
+    pub(crate) key: Vec<ArithmeticPos>,
+    pub(crate) value: Vec<ArithmeticPos>,
 }
 
 impl KeyValueLayout {
     /// Construct a new Key-Value layout.
     #[inline]
-    pub fn new(key: Vec<ArithmeticPos>, value: Vec<ArithmeticPos>) -> Self {
+    pub(crate) fn new(key: Vec<ArithmeticPos>, value: Vec<ArithmeticPos>) -> Self {
         Self { key, value }
     }
 
     /// Reference to key positions.
     #[inline]
-    pub fn key(&self) -> &[ArithmeticPos] {
+    pub(crate) fn key(&self) -> &[ArithmeticPos] {
         &self.key
     }
 
     /// Reference to value positions.
     #[inline]
-    pub fn value(&self) -> &[ArithmeticPos] {
+    pub(crate) fn value(&self) -> &[ArithmeticPos] {
         &self.value
     }
 
@@ -60,7 +60,7 @@ impl KeyValueLayout {
     /// - `Vec<usize>`: Argument IDs from all key positions
     /// - `Vec<usize>`: Argument IDs from all value positions
     #[inline]
-    pub fn extract_argument_ids_from_layout(&self) -> (Vec<usize>, Vec<usize>) {
+    pub(crate) fn extract_argument_ids_from_layout(&self) -> (Vec<usize>, Vec<usize>) {
         let extract = |positions: &[ArithmeticPos]| -> Vec<usize> {
             positions
                 .iter()
@@ -72,7 +72,7 @@ impl KeyValueLayout {
     }
 
     #[inline]
-    pub fn extract_atom_id(&self) -> usize {
+    pub(crate) fn extract_atom_id(&self) -> usize {
         self.key()
             .iter()
             .chain(self.value().iter())
@@ -88,7 +88,7 @@ impl KeyValueLayout {
 /// Transformation information, describing how to transform input collection(s)
 /// into an output collection, along with any constraints that must hold.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
-pub enum TransformationInfo {
+pub(crate) enum TransformationInfo {
     /// Unary Key-Value to Key-Value transformation (filter, map, projection, etc.).
     KVToKV {
         /// Upstream (input) collection fingerprint (fake until resolved).
@@ -169,7 +169,7 @@ pub enum TransformationInfo {
 // ========================
 impl TransformationInfo {
     /// Build a Key-Value to Key-Value transformation with a derived (fake) output fingerprint.
-    pub fn kv_to_kv(
+    pub(crate) fn kv_to_kv(
         input_fake_sig: u64,
         input_name: String,
         output_name: String,
@@ -200,7 +200,7 @@ impl TransformationInfo {
     }
 
     /// Mark this Key-Value transformation as a SIP projection.
-    pub fn into_sip_projection(mut self) -> Self {
+    pub(crate) fn into_sip_projection(mut self) -> Self {
         match &mut self {
             Self::KVToKV {
                 is_sip_projection, ..
@@ -212,7 +212,7 @@ impl TransformationInfo {
 
     /// Build a Join to Key-Value transformation with a derived (fake) output fingerprint.
     #[allow(clippy::too_many_arguments)]
-    pub fn join_to_kv(
+    pub(crate) fn join_to_kv(
         left_fake_sig: u64,
         left_input_name: String,
         right_fake_sig: u64,
@@ -249,7 +249,7 @@ impl TransformationInfo {
 
     /// Build an AntiJoin to Key-Value transformation with a derived (fake) output fingerprint.
     #[allow(clippy::too_many_arguments)]
-    pub fn anti_join_to_kv(
+    pub(crate) fn anti_join_to_kv(
         left_fake_sig: u64,
         left_input_name: String,
         right_fake_sig: u64,
@@ -291,14 +291,15 @@ impl TransformationInfo {
 
     /// Whether this is a neg join transformation info.
     #[inline]
-    pub fn is_neg_join(&self) -> bool {
+    pub(crate) fn is_neg_join(&self) -> bool {
         matches!(self, Self::AntiJoinToKV { .. })
     }
 
     /// `true` only for a KVToKV whose `is_sip_projection` flag is set.
     /// A plain KVToKV filter or any join/anti-join returns `false`.
+    #[cfg(test)]
     #[inline]
-    pub fn is_sip_projection(&self) -> bool {
+    pub(crate) fn is_sip_projection(&self) -> bool {
         matches!(
             self,
             Self::KVToKV {
@@ -312,7 +313,7 @@ impl TransformationInfo {
 
     /// Input fingerprint(s); for joins/anti-joins returns `(left, Some(right))`.
     #[inline]
-    pub fn input_info_fp(&self) -> (u64, Option<u64>) {
+    pub(crate) fn input_info_fp(&self) -> (u64, Option<u64>) {
         match self {
             Self::KVToKV { input_info_fp, .. } => (*input_info_fp, None),
             Self::JoinToKV {
@@ -330,7 +331,7 @@ impl TransformationInfo {
 
     /// Output fingerprint.
     #[inline]
-    pub fn output_info_fp(&self) -> u64 {
+    pub(crate) fn output_info_fp(&self) -> u64 {
         match self {
             Self::KVToKV { output_info_fp, .. }
             | Self::JoinToKV { output_info_fp, .. }
@@ -340,7 +341,7 @@ impl TransformationInfo {
 
     /// Input hierarchical name(s); for joins/anti-joins returns `(left, Some(right))`.
     #[inline]
-    pub fn input_name(&self) -> (&str, Option<&str>) {
+    pub(crate) fn input_name(&self) -> (&str, Option<&str>) {
         match self {
             Self::KVToKV { input_name, .. } => (input_name.as_str(), None),
             Self::JoinToKV {
@@ -358,7 +359,7 @@ impl TransformationInfo {
 
     /// Output hierarchical name.
     #[inline]
-    pub fn output_name(&self) -> &str {
+    pub(crate) fn output_name(&self) -> &str {
         match self {
             Self::KVToKV { output_name, .. }
             | Self::JoinToKV { output_name, .. }
@@ -369,7 +370,7 @@ impl TransformationInfo {
     /// Whether the input is row-based.
     /// Only KVtoKV needs this info.
     #[inline]
-    pub fn is_row_input(&self) -> bool {
+    pub(crate) fn is_row_input(&self) -> bool {
         match self {
             Self::KVToKV { is_row_input, .. } => *is_row_input,
             _ => panic!("Planner error: is_row_input is only available for KVToKV"),
@@ -378,7 +379,7 @@ impl TransformationInfo {
 
     /// Whether the output is row-based.
     #[inline]
-    pub fn is_row_output(&self) -> bool {
+    pub(crate) fn is_row_output(&self) -> bool {
         match self {
             Self::KVToKV { is_row_output, .. } => *is_row_output,
             Self::JoinToKV { is_row_output, .. } => *is_row_output,
@@ -390,7 +391,7 @@ impl TransformationInfo {
 
     /// Input layout(s); for joins/anti-joins returns `(left, Some(right))`.
     #[inline]
-    pub fn input_kv_layout(&self) -> (&KeyValueLayout, Option<&KeyValueLayout>) {
+    pub(crate) fn input_kv_layout(&self) -> (&KeyValueLayout, Option<&KeyValueLayout>) {
         match self {
             Self::KVToKV {
                 input_kv_layout, ..
@@ -410,7 +411,7 @@ impl TransformationInfo {
 
     /// Output layout (key/value positions).
     #[inline]
-    pub fn output_kv_layout(&self) -> &KeyValueLayout {
+    pub(crate) fn output_kv_layout(&self) -> &KeyValueLayout {
         match self {
             Self::KVToKV {
                 output_kv_layout, ..
@@ -428,7 +429,7 @@ impl TransformationInfo {
 
     /// Input layout modifier for SIP premap transformations; only applicable to KVToKV transformations.
     #[inline]
-    pub fn update_input_layout(&mut self, new_input_kv_layout: KeyValueLayout) {
+    pub(crate) fn update_input_layout(&mut self, new_input_kv_layout: KeyValueLayout) {
         match self {
             Self::KVToKV {
                 input_kv_layout, ..
@@ -443,7 +444,7 @@ impl TransformationInfo {
 
     /// Predicate filters for KVToKV transformations.
     #[inline]
-    pub fn kv_predicates(&self) -> &KvPredicates {
+    pub(crate) fn kv_predicates(&self) -> &KvPredicates {
         match self {
             Self::KVToKV { predicates, .. } => predicates,
             _ => panic!("Planner error: kv_predicates is only available for KVToKV"),
@@ -452,7 +453,7 @@ impl TransformationInfo {
 
     /// Predicate filters for JoinToKV transformations.
     #[inline]
-    pub fn join_predicates(&self) -> &JoinPredicates {
+    pub(crate) fn join_predicates(&self) -> &JoinPredicates {
         match self {
             Self::JoinToKV { predicates, .. } => predicates,
             _ => panic!("Planner error: join_predicates is only available for JoinToKV"),
@@ -480,7 +481,7 @@ impl TransformationInfo {
     ///
     /// For binary operations, panics if `input_fake_sig` doesn't match either
     /// the left or right input fingerprint.
-    pub fn update_input_fake_info_fp(&mut self, input_real_sig: u64, input_fake_sig: &u64) {
+    pub(crate) fn update_input_fake_info_fp(&mut self, input_real_sig: u64, input_fake_sig: &u64) {
         match self {
             Self::KVToKV { input_info_fp, .. } => {
                 *input_info_fp = input_real_sig;
@@ -505,7 +506,7 @@ impl TransformationInfo {
     }
 
     /// Update whether the output is row-based.
-    pub fn update_row_output(&mut self, is_row_output: bool) {
+    pub(crate) fn update_row_output(&mut self, is_row_output: bool) {
         match self {
             Self::KVToKV {
                 is_row_output: row_out,
@@ -533,7 +534,7 @@ impl TransformationInfo {
     /// Used by the fuse phase when a map transformation is absorbed into its
     /// producer: the producer now semantically emits what the fused map used
     /// to emit, so its `output_name` must reflect that.
-    pub fn update_output_name(&mut self, new_output_name: String) {
+    pub(crate) fn update_output_name(&mut self, new_output_name: String) {
         match self {
             Self::KVToKV { output_name, .. }
             | Self::JoinToKV { output_name, .. }
@@ -547,7 +548,7 @@ impl TransformationInfo {
     ///
     /// Necessary once the actual output schema is known, since downstream operators
     /// (e.g., joins) require concrete key/value layouts.
-    pub fn update_output_key_value_layout(&mut self, real_output_kv_layout: KeyValueLayout) {
+    pub(crate) fn update_output_key_value_layout(&mut self, real_output_kv_layout: KeyValueLayout) {
         match self {
             Self::KVToKV {
                 output_kv_layout, ..
@@ -567,7 +568,7 @@ impl TransformationInfo {
     ///
     /// Necessary when the actual key/value split is known, e.g., after downstream
     /// join operators determine the key-value layout.
-    pub fn refactor_output_key_value_layout(
+    pub(crate) fn refactor_output_key_value_layout(
         &mut self,
         real_key_indices: &[usize],
         real_value_indices: &[usize],
@@ -620,7 +621,7 @@ impl TransformationInfo {
     /// Update comparison expressions for transformations that support them.
     ///
     /// Comparison expressions should be added incrementally.
-    pub fn update_comparisons(&mut self, new_compare_exprs: Vec<ComparisonExprPos>) {
+    pub(crate) fn update_comparisons(&mut self, new_compare_exprs: Vec<ComparisonExprPos>) {
         match self {
             Self::KVToKV { predicates, .. } => predicates.compare_exprs.extend(new_compare_exprs),
             Self::JoinToKV { predicates, .. } => predicates.compare_exprs.extend(new_compare_exprs),
@@ -633,7 +634,7 @@ impl TransformationInfo {
     /// Update boolean UDF predicate filters for transformations that support them.
     ///
     /// UDF predicates should be added incrementally.
-    pub fn update_fn_call_preds(&mut self, new_fn_call_preds: Vec<FnCallPredicatePos>) {
+    pub(crate) fn update_fn_call_preds(&mut self, new_fn_call_preds: Vec<FnCallPredicatePos>) {
         match self {
             Self::KVToKV { predicates, .. } => predicates.fn_call_preds.extend(new_fn_call_preds),
             Self::JoinToKV { predicates, .. } => predicates.fn_call_preds.extend(new_fn_call_preds),
@@ -644,7 +645,7 @@ impl TransformationInfo {
     }
 
     /// Update constant equality constraints, avoiding duplicates.
-    pub fn update_const_eq_and_var_eq_constraints(
+    pub(crate) fn update_const_eq_and_var_eq_constraints(
         &mut self,
         const_eq: Vec<(AtomArgumentSignature, ConstType)>,
         var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
@@ -663,7 +664,7 @@ impl TransformationInfo {
     /// Recompute the (fake) output fingerprint using the current resolved fields.
     ///
     /// Call this after all relevant inputs/layouts/constraints are up-to-date.
-    pub fn update_output_fake_sig(&mut self) {
+    pub(crate) fn update_output_fake_sig(&mut self) {
         match self {
             Self::KVToKV {
                 input_info_fp,
@@ -733,7 +734,7 @@ impl TransformationInfo {
 
 impl TransformationInfo {
     /// Display label mirroring [`crate::planner::Transformation::operation_name`].
-    pub fn operation_name(&self) -> &'static str {
+    pub(crate) fn operation_name(&self) -> &'static str {
         match self {
             Self::KVToKV { .. } => match (self.is_row_input(), self.is_row_output()) {
                 (true, true) => "[Row -> Row]",

@@ -8,7 +8,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::codegen::features::Features;
+use crate::codegen::Features;
 
 /// Emit every import the generated library-mode module needs, including the
 /// private `mod relops { … }` wrapper that encapsulates the input-handler

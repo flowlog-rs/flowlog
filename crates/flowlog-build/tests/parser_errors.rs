@@ -1,8 +1,7 @@
 mod errors;
 
-use flowlog_build::common::source::SourceMap;
-use flowlog_build::parser::error::DirectiveKind;
-use flowlog_build::parser::{ParseError, Program};
+use flowlog_build::common::SourceMap;
+use flowlog_build::parser::{DirectiveKind, ParseError, Program};
 
 use errors::{fixture, render};
 

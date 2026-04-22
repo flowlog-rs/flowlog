@@ -10,12 +10,12 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::common::source::Span;
+use crate::common::Span;
 use crate::parser::{ConstType, Relation};
 
-use crate::codegen::arg::const_to_token;
-use crate::codegen::error::CodegenError;
-use crate::codegen::ty::data::tuple_tokens;
+use crate::codegen::const_to_token;
+use crate::codegen::CodegenError;
+use crate::codegen::tuple_tokens;
 use crate::data_type_tokens;
 
 use super::input_struct_ident;

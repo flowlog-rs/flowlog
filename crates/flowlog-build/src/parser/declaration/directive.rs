@@ -1,14 +1,14 @@
 //! Input/Output directive types for FlowLog Datalog programs.
 
+use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{span_of, Lexeme, Rule};
-use crate::common::source::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
 /// Represents an input directive (EDB source + parameters like file path)
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InputDirective {
+pub(crate) struct InputDirective {
     relation_name: String,
     parameters: HashMap<String, String>,
     /// Span of the directive's target relation-name token.
@@ -16,34 +16,22 @@ pub struct InputDirective {
 }
 
 impl InputDirective {
-    /// Create a new InputDirective with a relation name and parameters
-    ///
-    /// Converts the relation name to lowercase.
-    #[must_use]
-    pub fn new(relation_name: String, parameters: HashMap<String, String>) -> Self {
-        Self {
-            relation_name: relation_name.to_lowercase(),
-            parameters,
-            span: Ignored(Span::DUMMY),
-        }
-    }
-
     /// Get the relation name
     #[must_use]
-    pub fn relation_name(&self) -> &str {
+    pub(crate) fn relation_name(&self) -> &str {
         &self.relation_name
     }
 
     /// Get all input parameters (IO type, filename, etc.)
     #[must_use]
-    pub fn parameters(&self) -> &HashMap<String, String> {
+    pub(crate) fn parameters(&self) -> &HashMap<String, String> {
         &self.parameters
     }
 
     /// Span of the directive's target relation-name token.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 }
@@ -93,41 +81,29 @@ impl Lexeme for InputDirective {
 
 /// Represents an output directive (which relation to write, with optional parameters)
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputDirective {
+pub(crate) struct OutputDirective {
     relation_name: String,
     parameters: HashMap<String, String>,
     span: Ignored<Span>,
 }
 
 impl OutputDirective {
-    /// Create a new OutputDirective
-    ///
-    /// Converts the relation name to lowercase.
-    #[must_use]
-    pub fn new(relation_name: String, parameters: HashMap<String, String>) -> Self {
-        Self {
-            relation_name: relation_name.to_lowercase(),
-            parameters,
-            span: Ignored(Span::DUMMY),
-        }
-    }
-
     /// Get the relation name
     #[must_use]
-    pub fn relation_name(&self) -> &str {
+    pub(crate) fn relation_name(&self) -> &str {
         &self.relation_name
     }
 
     /// Get all output parameters
     #[must_use]
-    pub fn parameters(&self) -> &HashMap<String, String> {
+    pub(crate) fn parameters(&self) -> &HashMap<String, String> {
         &self.parameters
     }
 
     /// Span of the directive's target relation-name token.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 }
@@ -150,33 +126,22 @@ impl Lexeme for OutputDirective {
 
 /// Directive for printing the size of an EDB relation
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrintSizeDirective {
+pub(crate) struct PrintSizeDirective {
     relation_name: String,
     span: Ignored<Span>,
 }
 
 impl PrintSizeDirective {
-    /// Create a new PrintSizeDirective
-    ///
-    /// Converts the relation name to lowercase.
-    #[must_use]
-    pub fn new(relation_name: String) -> Self {
-        Self {
-            relation_name: relation_name.to_lowercase(),
-            span: Ignored(Span::DUMMY),
-        }
-    }
-
     /// Get the relation name
     #[must_use]
-    pub fn relation_name(&self) -> &str {
+    pub(crate) fn relation_name(&self) -> &str {
         &self.relation_name
     }
 
     /// Span of the directive's target relation-name token.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 }
@@ -196,55 +161,5 @@ impl Lexeme for PrintSizeDirective {
             relation_name,
             span: Ignored(span),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_input_directive_creation() {
-        let mut params = HashMap::new();
-        params.insert("IO".to_string(), "file".to_string());
-        params.insert("filename".to_string(), "test.csv".to_string());
-
-        let input_dir = InputDirective::new("TestRelation".to_string(), params);
-
-        assert_eq!(input_dir.relation_name(), "testrelation");
-        assert_eq!(input_dir.parameters().get("IO"), Some(&"file".to_string()));
-        assert_eq!(
-            input_dir.parameters().get("filename"),
-            Some(&"test.csv".to_string())
-        );
-    }
-
-    #[test]
-    fn test_output_directive_creation() {
-        let output_dir = OutputDirective::new("OutputRelation".to_string(), HashMap::new());
-        assert_eq!(output_dir.relation_name(), "outputrelation");
-    }
-
-    #[test]
-    fn test_printsize_directive_creation() {
-        let printsize_dir = PrintSizeDirective::new("SizeRelation".to_string());
-        assert_eq!(printsize_dir.relation_name(), "sizerelation");
-    }
-
-    #[test]
-    fn test_directive_equality() {
-        let input1 = InputDirective::new("Test".to_string(), HashMap::new());
-        let input2 = InputDirective::new("Test".to_string(), HashMap::new());
-        let input3 = InputDirective::new("Other".to_string(), HashMap::new());
-
-        assert_eq!(input1, input2);
-        assert_ne!(input1, input3);
-
-        let output1 = OutputDirective::new("Test".to_string(), HashMap::new());
-        let output2 = OutputDirective::new("Test".to_string(), HashMap::new());
-        let output3 = OutputDirective::new("Other".to_string(), HashMap::new());
-
-        assert_eq!(output1, output2);
-        assert_ne!(output1, output3);
     }
 }

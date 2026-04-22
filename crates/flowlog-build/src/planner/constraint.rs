@@ -1,13 +1,13 @@
 //! Constraints representation for query planning in FlowLog Datalog programs.
 
-use crate::planner::argument::TransformationArgument;
+use crate::planner::TransformationArgument;
 use crate::parser::ConstType;
 use std::fmt;
 use std::sync::Arc;
 
 /// Represents constraints in a query plan.
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
-pub struct Constraints {
+pub(crate) struct Constraints {
     /// Constraints that equate a variable (transformation arg) to a constant value (e.g., `x = 5`)
     constant_eq_constraints: Arc<Vec<(TransformationArgument, ConstType)>>,
 
@@ -17,7 +17,7 @@ pub struct Constraints {
 
 impl Constraints {
     /// Creates a new Constraints instance.
-    pub fn new(
+    pub(crate) fn new(
         constant_eq_constraints: Vec<(TransformationArgument, ConstType)>,
         variable_eq_constraints: Vec<(TransformationArgument, TransformationArgument)>,
     ) -> Self {
@@ -28,38 +28,20 @@ impl Constraints {
     }
 
     /// Returns the constant equality constraints.
-    pub fn constant_eq_constraints(&self) -> &Arc<Vec<(TransformationArgument, ConstType)>> {
+    pub(crate) fn constant_eq_constraints(&self) -> &Arc<Vec<(TransformationArgument, ConstType)>> {
         &self.constant_eq_constraints
     }
 
     /// Returns the variable equality constraints.
-    pub fn variable_eq_constraints(
+    pub(crate) fn variable_eq_constraints(
         &self,
     ) -> &Arc<Vec<(TransformationArgument, TransformationArgument)>> {
         &self.variable_eq_constraints
     }
 
     /// Checks if this constraint set is empty.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.constant_eq_constraints.is_empty() && self.variable_eq_constraints.is_empty()
-    }
-
-    /// Returns all transformation arguments referenced in these constraints.
-    pub fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
-        let mut args = Vec::new();
-
-        // Collect arguments from constant constraints
-        for (arg, _) in self.constant_eq_constraints.iter() {
-            args.push(arg);
-        }
-
-        // Collect arguments from variable constraints
-        for (left_arg, right_arg) in self.variable_eq_constraints.iter() {
-            args.push(left_arg);
-            args.push(right_arg);
-        }
-
-        args
     }
 }
 

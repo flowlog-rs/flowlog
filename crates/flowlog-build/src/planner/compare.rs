@@ -7,7 +7,7 @@ use std::fmt;
 
 /// Represents a comparison expression in a query plan.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ComparisonExprArgument {
+pub(crate) struct ComparisonExprArgument {
     /// The left-hand side arithmetic expression
     left: ArithmeticArgument,
 
@@ -20,7 +20,7 @@ pub struct ComparisonExprArgument {
 
 impl ComparisonExprArgument {
     /// Creates a new ComparisonExprArgument from constituent parts.
-    pub fn from_comparison_expr(
+    pub(crate) fn from_comparison_expr(
         compare_expr: &ComparisonExprPos,
         left_arguments: &[TransformationArgument],
         right_arguments: &[TransformationArgument],
@@ -37,26 +37,20 @@ impl ComparisonExprArgument {
     }
 
     /// Returns the comparison operator used in this expression.
-    pub fn operator(&self) -> &ComparisonOperator {
+    pub(crate) fn operator(&self) -> &ComparisonOperator {
         &self.operator
     }
 
     /// Returns the left-hand side arithmetic expression.
-    pub fn left(&self) -> &ArithmeticArgument {
+    pub(crate) fn left(&self) -> &ArithmeticArgument {
         &self.left
     }
 
     /// Returns the right-hand side arithmetic expression.
-    pub fn right(&self) -> &ArithmeticArgument {
+    pub(crate) fn right(&self) -> &ArithmeticArgument {
         &self.right
     }
 
-    /// Returns all transformation arguments referenced in this comparison expression.
-    pub fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
-        let mut transformation_arguments = self.left.transformation_arguments();
-        transformation_arguments.extend(self.right.transformation_arguments());
-        transformation_arguments
-    }
 }
 
 impl fmt::Display for ComparisonExprArgument {

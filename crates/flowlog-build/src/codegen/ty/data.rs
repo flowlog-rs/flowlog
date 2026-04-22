@@ -14,8 +14,8 @@ use crate::planner::{
     ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
 };
 
-use crate::codegen::error::CodegenError;
 use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
 
 /// `(key_types, value_types)` — a relation's shape in key++value form.
 pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
@@ -341,7 +341,7 @@ mod tests {
         );
 
         // Arity 2+ → standard comma-separated tuple without trailing comma.
-        let pair = tuple_tokens(vec![quote! { i32 }, quote! { String }].into_iter()).to_string();
+        let pair = tuple_tokens(vec![quote! { i32 }, quote! { String }]).to_string();
         let pair_norm: String = pair.split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(pair_norm, "(i32 , String)");
     }

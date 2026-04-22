@@ -1,21 +1,26 @@
-pub mod argument;
-pub mod arithmetic;
-pub mod collection;
-pub mod compare;
-pub mod constraint;
+mod argument;
+mod arithmetic;
+mod collection;
+mod compare;
+mod constraint;
 mod error;
-pub mod fn_call;
-pub mod rule_planner;
-pub mod stratum_planner;
-pub mod transformation;
+mod fn_call;
+mod rule_planner;
+mod stratum_planner;
+mod transformation;
 
-pub use argument::TransformationArgument;
-pub use arithmetic::{ArithmeticArgument, FactorArgument};
-pub use collection::Collection;
-pub use compare::ComparisonExprArgument;
-pub use constraint::Constraints;
+// External API — used by flowlog-compiler and integration tests.
 pub use error::PlanError;
-pub use fn_call::FnCallPredicateArgument;
-pub use rule_planner::RulePlanner;
 pub use stratum_planner::StratumPlanner;
-pub use transformation::{Transformation, TransformationFlow, TransformationInfo};
+
+// Intra-crate shortcuts.
+pub(crate) use argument::TransformationArgument;
+pub(crate) use arithmetic::{ArithmeticArgument, FactorArgument};
+pub(crate) use collection::Collection;
+pub(crate) use compare::ComparisonExprArgument;
+pub(crate) use constraint::Constraints;
+pub(crate) use fn_call::FnCallPredicateArgument;
+pub(crate) use rule_planner::RulePlanner;
+pub(crate) use transformation::{
+    KeyValueLayout, Transformation, TransformationFlow, TransformationInfo,
+};

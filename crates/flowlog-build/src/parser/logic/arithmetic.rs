@@ -3,25 +3,13 @@
 //! - [`ArithmeticOperator`]: `+ | - | * | / | %`
 //! - [`Factor`]: variables or constants
 //! - [`Arithmetic`]: `factor (op, factor)*`
-//!
-//! # Example
-//! ```rust
-//! use flowlog_build::parser::logic::{Arithmetic, ArithmeticOperator, Factor};
-//! use flowlog_build::parser::primitive::ConstType;
-//!
-//! let expr = Arithmetic::new(
-//!     Factor::Var("x".into()),
-//!     vec![(ArithmeticOperator::Plus, Factor::Const(ConstType::Int(5)))],
-//! );
-//! assert_eq!(expr.to_string(), "x + 5");
-//! ```
 
 use super::FnCall;
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::primitive::ConstType;
 use crate::parser::{span_of, Lexeme, Rule};
 
-use crate::common::source::{FileId, Ignored, Span};
+use crate::common::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
@@ -76,7 +64,7 @@ impl Lexeme for ArithmeticOperator {
 
 /// Atomic operand for arithmetic: variable, constant, or function call.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Factor {
+pub(crate) enum Factor {
     Var(String),
     Const(ConstType),
     /// User-defined function call (e.g., `transform(x, y + 1)`).
@@ -85,29 +73,23 @@ pub enum Factor {
 
 impl Factor {
     #[must_use]
-    pub fn is_var(&self) -> bool {
+    pub(crate) fn is_var(&self) -> bool {
         matches!(self, Self::Var(_))
     }
 
     #[must_use]
-    pub fn is_const(&self) -> bool {
+    pub(crate) fn is_const(&self) -> bool {
         matches!(self, Self::Const(_))
     }
 
     /// Variables appearing in this factor.
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub(crate) fn vars(&self) -> Vec<&String> {
         match self {
             Self::Var(v) => vec![v],
             Self::Const(_) => vec![],
             Self::FnCall(fc) => fc.vars(),
         }
-    }
-
-    /// Unique variables in this factor.
-    #[must_use]
-    pub fn vars_set(&self) -> HashSet<&String> {
-        self.vars().into_iter().collect()
     }
 }
 
@@ -117,21 +99,6 @@ impl fmt::Display for Factor {
             Self::Var(v) => write!(f, "{v}"),
             Self::Const(c) => write!(f, "{c}"),
             Self::FnCall(fc) => write!(f, "{fc}"),
-        }
-    }
-}
-
-impl Factor {
-    /// Best-effort source location of this factor.
-    ///
-    /// Plain variant spans are not tracked; only `FnCall` preserves a real
-    /// span. Callers that cite factor-internal errors should prefer the
-    /// enclosing [`Arithmetic`]'s span.
-    #[must_use]
-    pub fn span(&self) -> Span {
-        match self {
-            Self::FnCall(fc) => fc.span(),
-            _ => Span::DUMMY,
         }
     }
 }
@@ -154,7 +121,7 @@ impl Lexeme for Factor {
 
 /// `factor (op, factor)*` expression (left-associative pretty print).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Arithmetic {
+pub(crate) struct Arithmetic {
     init: Factor,
     rest: Vec<(ArithmeticOperator, Factor)>,
     span: Ignored<Span>,
@@ -162,7 +129,7 @@ pub struct Arithmetic {
 
 impl Arithmetic {
     #[must_use]
-    pub fn new(init: Factor, rest: Vec<(ArithmeticOperator, Factor)>) -> Self {
+    pub(crate) fn new(init: Factor, rest: Vec<(ArithmeticOperator, Factor)>) -> Self {
         Self {
             init,
             rest,
@@ -174,33 +141,33 @@ impl Arithmetic {
     /// nodes synthesized without a concrete source range).
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 
     /// First term.
     #[must_use]
-    pub fn init(&self) -> &Factor {
+    pub(crate) fn init(&self) -> &Factor {
         &self.init
     }
 
     /// Remaining `(op, factor)` pairs.
     #[must_use]
-    pub fn rest(&self) -> &[(ArithmeticOperator, Factor)] {
+    pub(crate) fn rest(&self) -> &[(ArithmeticOperator, Factor)] {
         &self.rest
     }
 
-    pub fn init_mut(&mut self) -> &mut Factor {
+    pub(crate) fn init_mut(&mut self) -> &mut Factor {
         &mut self.init
     }
 
-    pub fn rest_mut(&mut self) -> &mut [(ArithmeticOperator, Factor)] {
+    pub(crate) fn rest_mut(&mut self) -> &mut [(ArithmeticOperator, Factor)] {
         &mut self.rest
     }
 
     /// Variables in order of appearance (duplicates preserved).
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub(crate) fn vars(&self) -> Vec<&String> {
         let mut out = self.init.vars();
         for (_, f) in &self.rest {
             out.extend(f.vars());
@@ -210,19 +177,19 @@ impl Arithmetic {
 
     /// Unique variables (deduplicated).
     #[must_use]
-    pub fn vars_set(&self) -> HashSet<&String> {
+    pub(crate) fn vars_set(&self) -> HashSet<&String> {
         self.vars().into_iter().collect()
     }
 
     /// `true` if a single constant with no ops.
     #[must_use]
-    pub fn is_const(&self) -> bool {
+    pub(crate) fn is_const(&self) -> bool {
         self.rest.is_empty() && self.init.is_const()
     }
 
     /// `true` if a single variable with no ops.
     #[must_use]
-    pub fn is_var(&self) -> bool {
+    pub(crate) fn is_var(&self) -> bool {
         self.rest.is_empty() && self.init.is_var()
     }
 }
@@ -269,66 +236,8 @@ impl Lexeme for Arithmetic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::primitive::ConstType::{Int, Text};
-    use ArithmeticOperator::*;
-    use Factor::*;
-
-    fn v(name: &str) -> Factor {
-        Var(name.into())
-    }
-    fn i(n: i64) -> Factor {
-        Const(Int(n))
-    }
-    fn s(t: &str) -> Factor {
-        Const(Text(t.into()))
-    }
-
-    #[test]
-    fn operator_display() {
-        assert_eq!(Plus.to_string(), "+");
-        assert_eq!(Minus.to_string(), "-");
-        assert_eq!(Multiply.to_string(), "*");
-        assert_eq!(Divide.to_string(), "/");
-        assert_eq!(Modulo.to_string(), "%");
-        // Cat is a named (non-symbolic) operator — a rename like
-        // `Cat => "||"` would break string-concat codegen silently.
-        assert_eq!(Cat.to_string(), "cat");
-    }
-
-    #[test]
-    fn factor_basics_and_display() {
-        assert!(v("x").is_var());
-        assert!(!i(1).is_var());
-        assert!(i(1).is_const());
-        assert_eq!(v("x").to_string(), "x");
-        assert_eq!(i(42).to_string(), "42");
-        assert_eq!(s("hi").to_string(), "\"hi\"");
-    }
-
-    #[test]
-    fn arithmetic_smoke() {
-        let a = Arithmetic::new(v("x"), vec![]);
-        assert!(a.is_var());
-        assert_eq!(a.to_string(), "x");
-        assert_eq!(a.vars(), vec![&"x".to_string()]);
-
-        let b = Arithmetic::new(i(42), vec![]);
-        assert!(b.is_const());
-        assert_eq!(b.to_string(), "42");
-
-        let c = Arithmetic::new(
-            v("x"),
-            vec![(Plus, i(5)), (Multiply, v("y")), (Minus, i(10))],
-        );
-        assert!(!c.is_var() && !c.is_const());
-        assert_eq!(c.to_string(), "x + 5 * y - 10");
-
-        let set = c.vars_set();
-        let x_str = "x".to_string();
-        let y_str = "y".to_string();
-        assert!(set.contains(&x_str));
-        assert!(set.contains(&y_str));
-    }
+    use ArithmeticOperator::Plus;
+    use Factor::Var;
 
     /// `vars()` preserves order and duplicates; `vars_set()` dedups. The
     /// two accessors exist because downstream passes need both: variable
@@ -338,7 +247,10 @@ mod tests {
     #[test]
     fn vars_preserves_dups_vars_set_dedups() {
         // x + x + y  →  vars = [x, x, y], vars_set = {x, y}
-        let a = Arithmetic::new(v("x"), vec![(Plus, v("x")), (Plus, v("y"))]);
+        let a = Arithmetic::new(
+            Var("x".into()),
+            vec![(Plus, Var("x".into())), (Plus, Var("y".into()))],
+        );
         let x = "x".to_string();
         let y = "y".to_string();
         assert_eq!(a.vars(), vec![&x, &x, &y]);

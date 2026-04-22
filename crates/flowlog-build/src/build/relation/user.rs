@@ -10,7 +10,7 @@ use quote::quote;
 
 use crate::parser::{DataType, Program, Relation};
 
-use crate::codegen::ty::data::user_tuple_tokens;
+use crate::codegen::user_tuple_tokens;
 
 use super::user_struct_ident;
 

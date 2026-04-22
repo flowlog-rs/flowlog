@@ -15,7 +15,7 @@
 //! > general SIP framework (e.g. sideways information-passing strategies for
 //! > full rules) is left for future work.
 
-use crate::planner::{transformation::KeyValueLayout, TransformationInfo};
+use crate::planner::{KeyValueLayout, TransformationInfo};
 
 use super::RulePlanner;
 use crate::catalog::{
@@ -30,7 +30,7 @@ use tracing::trace;
 // =========================================================================
 impl RulePlanner {
     /// Entry point for applying SIP optimizations to the current rule plan.
-    pub fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
+    pub(crate) fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let positive_atom_numbers = catalog.positive_atom_number();
 
         // Only apply SIP if there are at least 3 positive atoms

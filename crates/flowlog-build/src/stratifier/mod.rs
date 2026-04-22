@@ -41,28 +41,10 @@
 //! In datalog modes (`datalog-batch` / `datalog-inc`), recursion in
 //! plain rules is allowed and handled implicitly via SCC detection, matching
 //! classic stratified-Datalog semantics.
-//!
-//! # Example
-//!
-//! ```rust,no_run
-//! use flowlog_build::common::SourceMap;
-//! use flowlog_build::parser::Program;
-//! use flowlog_build::stratifier::Stratifier;
-//!
-//! let mut sm = SourceMap::new();
-//! let program = Program::parse("path/to/program.dl", false, &mut sm).unwrap();
-//!
-//! // Standard Datalog mode — recursion in plain rules is fine.
-//! let s = Stratifier::from_program(&program, false).unwrap();
-//! println!("{}", s);
-//!
-//! // Extended Datalog mode — recursion must be inside `fixpoint`/`loop` blocks.
-//! let s = Stratifier::from_program(&program, true).unwrap();
-//! ```
 
-pub mod core;
+mod core;
 mod dependency_graph;
-pub mod error;
+mod error;
 
 pub use self::core::Stratifier;
 pub use error::StratifyError;

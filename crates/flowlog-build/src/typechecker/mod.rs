@@ -49,7 +49,7 @@ pub use error::TypeCheckError;
 
 use std::collections::HashMap;
 
-use crate::common::source::Span;
+use crate::common::Span;
 use crate::parser::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
     ComparisonExpr, ComparisonOperator, ConstType, DataType, Factor, FlowLogRule, FnCall, HeadArg,
@@ -166,20 +166,20 @@ fn check_rule(
     // Bind vars first so out-of-order body predicates can resolve them.
     let mut bindings: Bindings = HashMap::new();
     for predicate in rule.rhs() {
-        if let Predicate::PositiveAtomPredicate(atom) = predicate {
+        if let Predicate::PositiveAtom(atom) = predicate {
             bind_atom_vars(atom, decls, &mut bindings)?;
         }
     }
 
     for predicate in rule.rhs_mut() {
         match predicate {
-            Predicate::PositiveAtomPredicate(atom) => pin_atom_consts(atom, decls)?,
-            Predicate::NegativeAtomPredicate(atom) => {
+            Predicate::PositiveAtom(atom) => pin_atom_consts(atom, decls)?,
+            Predicate::NegativeAtom(atom) => {
                 check_atom_uses(atom, decls, &bindings)?;
                 pin_atom_consts(atom, decls)?;
             }
-            Predicate::ComparePredicate(cmp) => check_comparison(cmp, &bindings, udfs)?,
-            Predicate::FnCallPredicate(fc) => {
+            Predicate::Compare(cmp) => check_comparison(cmp, &bindings, udfs)?,
+            Predicate::FnCall(fc) => {
                 // UDF predicate return is always bool; drop the inferred type.
                 infer_fn_call_type(fc, &bindings, udfs)?;
                 pin_fn_call_args(fc, udfs)?;
@@ -731,7 +731,7 @@ mod tests {
         let program = parse_and_check(src);
         let rule = program.rules()[0];
         let flag_atom = match &rule.rhs()[1] {
-            Predicate::PositiveAtomPredicate(a) => a,
+            Predicate::PositiveAtom(a) => a,
             other => panic!("expected Flag atom, got {other:?}"),
         };
         match &flag_atom.arguments()[0] {
@@ -754,7 +754,7 @@ mod tests {
         let program = parse_and_check(src);
         let rule = program.rules()[0];
         let cmp = match &rule.rhs()[1] {
-            Predicate::ComparePredicate(c) => c,
+            Predicate::Compare(c) => c,
             other => panic!("expected comparison, got {other:?}"),
         };
         match cmp.right().init() {

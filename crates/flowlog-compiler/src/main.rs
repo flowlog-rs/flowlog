@@ -174,7 +174,7 @@ fn plan_strata(
     optimizer: &mut Optimizer,
     profiler: &mut Option<Profiler>,
     stratifier: &Stratifier,
-) -> Result<Vec<StratumPlanner>, flowlog_build::common::diag::BoxError> {
+) -> Result<Vec<StratumPlanner>, flowlog_build::common::BoxError> {
     stratifier
         .stratum()
         .iter()
@@ -182,7 +182,7 @@ fn plan_strata(
         .map(|(idx, rule_refs)| {
             let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
             StratumPlanner::from_rules(config, &rules, optimizer, profiler, stratifier, idx)
-                .map_err(flowlog_build::common::diag::BoxError::from)
+                .map_err(flowlog_build::common::BoxError::from)
         })
         .collect()
 }

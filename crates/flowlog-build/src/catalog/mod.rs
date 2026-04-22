@@ -5,29 +5,23 @@
 //! atoms, records local filters, and exposes helpers to reason about variable
 //! occurrence and comparisons.
 
-/// Arithmetic utilities for tracking positions inside head expressions.
-pub mod arithmetic;
-/// Atom and argument signature types used to uniquely identify positions in rules.
-pub mod atom;
-/// Comparison helpers for tracking variable sets of comparison predicates.
-pub mod compare;
-/// Typed errors raised by the catalog.
+mod arithmetic;
+mod atom;
+mod compare;
 mod error;
-/// Base constraint filters (var==var, var==const, placeholders).
-pub mod filter;
-/// FnCall predicate helpers for tracking UDF predicate positions.
-pub mod fn_call;
-/// Predicate filter structs for planner transformations.
-pub mod predicate;
-/// Per-rule catalog with precomputed metadata and signatures.
-pub mod rule;
+mod filter;
+mod fn_call;
+mod predicate;
+mod rule;
 
-/// Re-exported.
-pub use arithmetic::{ArithmeticPos, FactorPos};
-pub use atom::{AtomArgumentSignature, AtomSignature};
-pub use compare::ComparisonExprPos;
-pub use error::CatalogError;
-pub use filter::Filters;
-pub use fn_call::FnCallPredicatePos;
-pub use predicate::{JoinPredicates, KvPredicates};
+// External API — used by integration tests.
+pub use error::{CatalogError, UnsafePredicateKind};
 pub use rule::Catalog;
+
+// Intra-crate shortcuts.
+pub(crate) use arithmetic::{ArithmeticPos, FactorPos};
+pub(crate) use atom::{AtomArgumentSignature, AtomSignature};
+pub(crate) use compare::ComparisonExprPos;
+pub(crate) use filter::Filters;
+pub(crate) use fn_call::FnCallPredicatePos;
+pub(crate) use predicate::{JoinPredicates, KvPredicates};

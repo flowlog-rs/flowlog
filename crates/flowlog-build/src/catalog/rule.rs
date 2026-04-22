@@ -3,10 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::catalog::atom::{AtomArgumentSignature, AtomSignature};
-use crate::catalog::error::CatalogError;
-use crate::catalog::filter::Filters;
-use crate::catalog::{ArithmeticPos, ComparisonExprPos, FnCallPredicatePos};
+use crate::catalog::{
+    ArithmeticPos, AtomArgumentSignature, AtomSignature, CatalogError, ComparisonExprPos, Filters,
+    FnCallPredicatePos,
+};
 use crate::common::{SECTION_BAR, SUBSECTION_BAR};
 use crate::parser::{ComparisonExpr, FlowLogRule, FnCall, HeadArg, Predicate};
 use tracing::debug;
@@ -126,7 +126,7 @@ impl Catalog {
         // Store original atom fingerprints for reference
         for predicate in rule.rhs() {
             match predicate {
-                Predicate::PositiveAtomPredicate(atom) | Predicate::NegativeAtomPredicate(atom) => {
+                Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
                     catalog
                         .original_atom_fingerprints
                         .insert(atom.fingerprint());
@@ -168,7 +168,7 @@ impl Catalog {
     }
 
     /// Update the catalog with a new rule, recomputing corresponding metadata.
-    pub fn update_rule(&mut self, rule: &FlowLogRule) -> Result<(), CatalogError> {
+    pub(crate) fn update_rule(&mut self, rule: &FlowLogRule) -> Result<(), CatalogError> {
         self.rule = rule.clone();
         self.clear();
         self.populate_all_metadata()
@@ -179,13 +179,13 @@ impl Catalog {
 impl Catalog {
     /// Get the underlying rule.
     #[inline]
-    pub fn rule(&self) -> &FlowLogRule {
+    pub(crate) fn rule(&self) -> &FlowLogRule {
         &self.rule
     }
 
     /// Get the argument string for a specific signature.
     #[inline]
-    pub fn signature_to_argument_str(&self, sig: &AtomArgumentSignature) -> &String {
+    pub(crate) fn signature_to_argument_str(&self, sig: &AtomArgumentSignature) -> &String {
         self.signature_to_argument_str_map.get(sig).unwrap()
     }
 
@@ -195,7 +195,7 @@ impl Catalog {
     /// Panics if the rule has any supersets or filters, as this method
     /// is only valid for "core" rules without optimization opportunities.
     #[inline]
-    pub fn core_atom_number(&self) -> usize {
+    pub(crate) fn core_atom_number(&self) -> usize {
         assert!(
             self.positive_supersets.iter().all(|s| s.is_empty()),
             "Rule has positive supersets - not a core rule"
@@ -221,57 +221,21 @@ impl Catalog {
 
     // Get original atom fingerprints
     #[inline]
-    pub fn original_atom_fingerprints(&self) -> &HashSet<u64> {
+    pub(crate) fn original_atom_fingerprints(&self) -> &HashSet<u64> {
         &self.original_atom_fingerprints
-    }
-
-    // Get original atom arguments
-    #[inline]
-    pub fn original_atom_arguments(
-        &self,
-        origin_atom_fp: u64,
-    ) -> Result<Vec<AtomArgumentSignature>, CatalogError> {
-        assert!(
-            self.original_atom_fingerprints.contains(&origin_atom_fp),
-            "Requested original atom arguments for non original fingerprint: 0x{:016x}",
-            origin_atom_fp
-        );
-
-        // Check positive atoms
-        if let Some(index) = self
-            .positive_atom_fingerprints
-            .iter()
-            .position(|&fp| fp == origin_atom_fp)
-        {
-            return Ok(self.positive_atom_argument_signatures[index].clone());
-        }
-
-        // Check negative atoms
-        if let Some(index) = self
-            .negative_atom_fingerprints
-            .iter()
-            .position(|&fp| fp == origin_atom_fp)
-        {
-            return Ok(self.negative_atom_argument_signatures[index].clone());
-        }
-
-        Err(CatalogError::internal(format!(
-            "original atom fingerprint 0x{origin_atom_fp:016x} absent from both positive \
-             and negative atoms"
-        )))
     }
 
     // === Positive Atoms ===
 
     /// Get the number of positive atoms in the RHS.
     #[inline]
-    pub fn positive_atom_number(&self) -> usize {
+    pub(crate) fn positive_atom_number(&self) -> usize {
         self.positive_atom_fingerprints.len()
     }
 
     /// Get the fingerprint of a positive atom by its index.
     #[inline]
-    pub fn positive_atom_fingerprint(&self, index: usize) -> u64 {
+    pub(crate) fn positive_atom_fingerprint(&self, index: usize) -> u64 {
         self.positive_atom_fingerprints[index]
     }
 
@@ -280,10 +244,10 @@ impl Catalog {
     /// `comparison_modify` / `fn_call_modify`, so this returns the hierarchical
     /// name that currently describes the atom.
     #[inline]
-    pub fn positive_atom_name(&self, index: usize) -> Result<&str, CatalogError> {
+    pub(crate) fn positive_atom_name(&self, index: usize) -> Result<&str, CatalogError> {
         let rhs_idx = self.positive_atom_rhs_ids[index];
         match &self.rule.rhs()[rhs_idx] {
-            Predicate::PositiveAtomPredicate(a) => Ok(a.name()),
+            Predicate::PositiveAtom(a) => Ok(a.name()),
             other => Err(CatalogError::internal(format!(
                 "positive_atom_rhs_ids[{index}] points at non-positive-atom predicate {other:?}"
             ))),
@@ -292,19 +256,19 @@ impl Catalog {
 
     /// Get the argument signatures for a positive atom by its index.
     #[inline]
-    pub fn positive_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
+    pub(crate) fn positive_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
         &self.positive_atom_argument_signatures[index]
     }
 
     /// For each positive atom, get indices of positive atoms with superset variable sets.
     #[inline]
-    pub fn positive_supersets(&self) -> &Vec<Vec<usize>> {
+    pub(crate) fn positive_supersets(&self) -> &Vec<Vec<usize>> {
         &self.positive_supersets
     }
 
     /// Get the RHS id (index) of a positive atom by its index.
     #[inline]
-    pub fn positive_atom_rhs_id(&self, index: usize) -> usize {
+    pub(crate) fn positive_atom_rhs_id(&self, index: usize) -> usize {
         self.positive_atom_rhs_ids[index]
     }
 
@@ -312,7 +276,7 @@ impl Catalog {
     /// indicating that a SIP (side-information passing) semijoin between
     /// them may be beneficial.
     #[inline]
-    pub fn check_sip_pair(&self, left_atom_id: usize, right_atom_id: usize) -> bool {
+    pub(crate) fn check_sip_pair(&self, left_atom_id: usize, right_atom_id: usize) -> bool {
         let left_vars = &self.positive_atom_argument_vars_str_sets[left_atom_id];
         let right_vars = &self.positive_atom_argument_vars_str_sets[right_atom_id];
         !left_vars.is_disjoint(right_vars)
@@ -321,16 +285,16 @@ impl Catalog {
     // === Negative Atoms ===
     /// Get the fingerprint of a negative atom by its index.
     #[inline]
-    pub fn negative_atom_fingerprint(&self, index: usize) -> u64 {
+    pub(crate) fn negative_atom_fingerprint(&self, index: usize) -> u64 {
         self.negative_atom_fingerprints[index]
     }
 
     /// Get the current (possibly rewritten) name of a negative atom by its index.
     #[inline]
-    pub fn negative_atom_name(&self, index: usize) -> Result<&str, CatalogError> {
+    pub(crate) fn negative_atom_name(&self, index: usize) -> Result<&str, CatalogError> {
         let rhs_idx = self.negative_atom_rhs_ids[index];
         match &self.rule.rhs()[rhs_idx] {
-            Predicate::NegativeAtomPredicate(a) => Ok(a.name()),
+            Predicate::NegativeAtom(a) => Ok(a.name()),
             other => Err(CatalogError::internal(format!(
                 "negative_atom_rhs_ids[{index}] points at non-negative-atom predicate {other:?}"
             ))),
@@ -339,19 +303,19 @@ impl Catalog {
 
     /// Get the argument signatures for a negative atom by its index.
     #[inline]
-    pub fn negative_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
+    pub(crate) fn negative_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
         &self.negative_atom_argument_signatures[index]
     }
 
     /// For each negative atom, get indices of positive atoms with superset variable sets.
     #[inline]
-    pub fn negative_supersets(&self) -> &Vec<Vec<usize>> {
+    pub(crate) fn negative_supersets(&self) -> &Vec<Vec<usize>> {
         &self.negative_supersets
     }
 
     /// Get the RHS id (index) of a negative atom by its index.
     #[inline]
-    pub fn negative_atom_rhs_id(&self, index: usize) -> usize {
+    pub(crate) fn negative_atom_rhs_id(&self, index: usize) -> usize {
         self.negative_atom_rhs_ids[index]
     }
 
@@ -360,7 +324,7 @@ impl Catalog {
     /// Resolve an atom signature to its argument signatures, fingerprint,
     /// RHS id, and current hierarchical name.
     #[inline]
-    pub fn resolve_atom(
+    pub(crate) fn resolve_atom(
         &self,
         atom_signature: &AtomSignature,
     ) -> Result<(&[AtomArgumentSignature], u64, usize, &str), CatalogError> {
@@ -383,7 +347,7 @@ impl Catalog {
     }
 
     /// Finds the global RHS index of an atom given its signature.
-    pub fn rhs_index_from_signature(&self, sig: AtomSignature) -> usize {
+    pub(crate) fn rhs_index_from_signature(&self, sig: AtomSignature) -> usize {
         if sig.is_positive() {
             self.positive_atom_rhs_ids[sig.rhs_id()]
         } else {
@@ -395,18 +359,18 @@ impl Catalog {
 
     /// Get a comparison predicate by its index.
     #[inline]
-    pub fn comparison_predicate(&self, index: usize) -> ComparisonExpr {
+    pub(crate) fn comparison_predicate(&self, index: usize) -> ComparisonExpr {
         self.comparison_predicates[index].clone()
     }
 
     /// For each comparison predicate, get indices of positive atoms with superset variable sets.
     #[inline]
-    pub fn comparison_supersets(&self) -> &Vec<Vec<usize>> {
+    pub(crate) fn comparison_supersets(&self) -> &Vec<Vec<usize>> {
         &self.comparison_supersets
     }
 
     /// Resolve a comparison expression with argument positions for a given positive atom and comparison predicate.
-    pub fn resolve_comparison_predicates(
+    pub(crate) fn resolve_comparison_predicates(
         &self,
         pos_atom_id: usize,
         comp_id: usize,
@@ -447,18 +411,18 @@ impl Catalog {
 
     /// Get a fn_call predicate by its index.
     #[inline]
-    pub fn fn_call_predicate(&self, index: usize) -> &FnCall {
+    pub(crate) fn fn_call_predicate(&self, index: usize) -> &FnCall {
         &self.fn_call_predicates[index]
     }
 
     /// For each fn_call predicate, get indices of positive atoms with superset variable sets.
     #[inline]
-    pub fn fn_call_supersets(&self) -> &Vec<Vec<usize>> {
+    pub(crate) fn fn_call_supersets(&self) -> &Vec<Vec<usize>> {
         &self.fn_call_supersets
     }
 
     /// Resolve a fn_call predicate with argument positions for a given positive atom.
-    pub fn resolve_fn_call_predicates(
+    pub(crate) fn resolve_fn_call_predicates(
         &self,
         pos_atom_id: usize,
         fn_call_id: usize,
@@ -497,32 +461,26 @@ impl Catalog {
 
     /// Get the local atom filters (var==var, var==const, placeholders).
     #[inline]
-    pub fn filters(&self) -> &Filters {
+    pub(crate) fn filters(&self) -> &Filters {
         &self.filters
     }
 
     // === Head Information ===
 
-    /// Get the head predicate name.
-    #[inline]
-    pub fn head_name(&self) -> &str {
-        self.rule.head().name()
-    }
-
     /// Get the head IDB fingerprint.
     #[inline]
-    pub fn head_idb_fingerprint(&self) -> u64 {
+    pub(crate) fn head_idb_fingerprint(&self) -> u64 {
         self.head_idb_fingerprint
     }
 
     /// Get the head arguments.
     #[inline]
-    pub fn head_arguments(&self) -> &[HeadArg] {
+    pub(crate) fn head_arguments(&self) -> &[HeadArg] {
         self.rule.head().head_arguments()
     }
 
     /// Get all variable strings from the head arguments.
-    pub fn head_arguments_strs(&self) -> HashSet<String> {
+    pub(crate) fn head_arguments_strs(&self) -> HashSet<String> {
         self.head_arguments()
             .iter()
             .flat_map(|h| h.vars().into_iter().cloned())
@@ -533,13 +491,13 @@ impl Catalog {
 
     /// Get unused arguments grouped by atom signature.
     #[inline]
-    pub fn unused_arguments_per_atom(&self) -> &HashMap<AtomSignature, Vec<AtomArgumentSignature>> {
+    pub(crate) fn unused_arguments_per_atom(&self) -> &HashMap<AtomSignature, Vec<AtomArgumentSignature>> {
         &self.unused_arguments_per_atom
     }
 
     // === Plan Logic ===
     /// Check if current rule planning is done.
-    pub fn is_planned(&self) -> bool {
+    pub(crate) fn is_planned(&self) -> bool {
         self.positive_atom_fingerprints.len() == 1
             && self.negative_atom_fingerprints.is_empty()
             && self.filters.is_empty()
@@ -763,7 +721,7 @@ mod tests {
     //! (`ConstType::Int(_)`), matching how `tests/catalog_errors.rs`
     //! drives the catalog.
     use super::*;
-    use crate::common::source::SourceMap;
+    use crate::common::SourceMap;
     use crate::parser::{ConstType, Program};
     use std::io::Write;
 

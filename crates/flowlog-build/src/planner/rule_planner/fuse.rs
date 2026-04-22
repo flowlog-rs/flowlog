@@ -22,7 +22,7 @@ use crate::catalog::{
     FnCallPredicatePos, KvPredicates,
 };
 use crate::parser::ConstType;
-use crate::planner::{transformation::KeyValueLayout, PlanError, TransformationInfo};
+use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
 
 /// Ordered consumer indices alongside their key/value index selections.
 /// (minimum consumer id, consumer ids, key indices, value indices)
@@ -37,7 +37,7 @@ type LayoutAssignment = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
 impl RulePlanner {
     /// Run fusion passes (map fusion and KV-layout fusion) on
     /// the planned transformation infos.
-    pub fn fuse(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
+    pub(crate) fn fuse(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
         trace!(
             "Transformation infos before fusion:\n{}",
             self.transformation_infos_dump()

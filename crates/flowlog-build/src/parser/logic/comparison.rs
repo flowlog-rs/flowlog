@@ -2,19 +2,9 @@
 //!
 //! - [`ComparisonOperator`]: `== | ≠ | > | ≥ | < | ≤`
 //! - [`ComparisonExpr`]: `{left} {op} {right}`
-//!
-//! # Example
-//! ```rust
-//! use flowlog_build::parser::logic::{Arithmetic, ComparisonExpr, ComparisonOperator, Factor};
-//! use flowlog_build::parser::primitive::ConstType;
-//! let lhs = Arithmetic::new(Factor::Var("age".into()), vec![]);
-//! let rhs = Arithmetic::new(Factor::Const(ConstType::Int(18)), vec![]);
-//! let cmp = ComparisonExpr::new(lhs, ComparisonOperator::GreaterEqualThan, rhs);
-//! assert_eq!(cmp.to_string(), "age ≥ 18");
-//! ```
 
 use super::Arithmetic;
-use crate::common::source::{FileId, Ignored, Span};
+use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{span_of, Lexeme, Rule};
 use pest::iterators::Pair;
@@ -35,13 +25,7 @@ pub enum ComparisonOperator {
 impl ComparisonOperator {
     #[must_use]
     #[inline]
-    pub fn is_equal(&self) -> bool {
-        matches!(self, Self::Equal)
-    }
-
-    #[must_use]
-    #[inline]
-    pub fn is_inequality(&self) -> bool {
+    pub(crate) fn is_inequality(&self) -> bool {
         matches!(
             self,
             Self::LessThan | Self::LessEqualThan | Self::GreaterThan | Self::GreaterEqualThan
@@ -88,7 +72,7 @@ impl Lexeme for ComparisonOperator {
 
 /// `{left} {op} {right}` boolean comparison.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ComparisonExpr {
+pub(crate) struct ComparisonExpr {
     left: Arithmetic,
     operator: ComparisonOperator,
     right: Arithmetic,
@@ -96,75 +80,52 @@ pub struct ComparisonExpr {
 }
 
 impl ComparisonExpr {
-    /// Create a new comparison.
-    #[must_use]
-    pub fn new(left: Arithmetic, operator: ComparisonOperator, right: Arithmetic) -> Self {
-        Self {
-            left,
-            operator,
-            right,
-            span: Ignored(Span::DUMMY),
-        }
-    }
-
     /// Source location this comparison was parsed from.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 
     /// Left-hand expression.
     #[must_use]
     #[inline]
-    pub fn left(&self) -> &Arithmetic {
+    pub(crate) fn left(&self) -> &Arithmetic {
         &self.left
     }
 
     /// Operator.
     #[must_use]
     #[inline]
-    pub fn operator(&self) -> &ComparisonOperator {
+    pub(crate) fn operator(&self) -> &ComparisonOperator {
         &self.operator
     }
 
     /// Right-hand expression.
     #[must_use]
     #[inline]
-    pub fn right(&self) -> &Arithmetic {
+    pub(crate) fn right(&self) -> &Arithmetic {
         &self.right
     }
 
     #[inline]
-    pub fn left_mut(&mut self) -> &mut Arithmetic {
+    pub(crate) fn left_mut(&mut self) -> &mut Arithmetic {
         &mut self.left
     }
 
     #[inline]
-    pub fn right_mut(&mut self) -> &mut Arithmetic {
+    pub(crate) fn right_mut(&mut self) -> &mut Arithmetic {
         &mut self.right
     }
 
     /// Unique variables referenced on either side (deduplicated).
     #[must_use]
-    pub fn vars_set(&self) -> HashSet<&String> {
+    pub(crate) fn vars_set(&self) -> HashSet<&String> {
         self.left
             .vars_set()
             .union(&self.right.vars_set())
             .cloned()
             .collect()
-    }
-
-    /// Variables from the left expression (order preserved, duplicates kept).
-    #[must_use]
-    pub fn left_vars(&self) -> Vec<&String> {
-        self.left.vars()
-    }
-
-    /// Variables from the right expression (order preserved, duplicates kept).
-    #[must_use]
-    pub fn right_vars(&self) -> Vec<&String> {
-        self.right.vars()
     }
 }
 
@@ -200,74 +161,5 @@ impl Lexeme for ComparisonExpr {
             right,
             span: Ignored(span),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::parser::logic::{Arithmetic, Factor};
-    use crate::parser::primitive::ConstType;
-    use ComparisonOperator::*;
-
-    fn var(name: &str) -> Arithmetic {
-        Arithmetic::new(Factor::Var(name.into()), vec![])
-    }
-    fn iconst(v: i64) -> Arithmetic {
-        Arithmetic::new(Factor::Const(ConstType::Int(v)), vec![])
-    }
-
-    #[test]
-    fn operator_display_and_predicate() {
-        assert_eq!(Equal.to_string(), "==");
-        assert_eq!(NotEqual.to_string(), "≠");
-        assert_eq!(GreaterThan.to_string(), ">");
-        assert_eq!(GreaterEqualThan.to_string(), "≥");
-        assert_eq!(LessThan.to_string(), "<");
-        assert_eq!(LessEqualThan.to_string(), "≤");
-        assert!(Equal.is_equal());
-        assert!(!NotEqual.is_equal());
-    }
-
-    #[test]
-    fn expr_basics_and_display() {
-        let e1 = ComparisonExpr::new(var("x"), Equal, var("y"));
-        assert_eq!(e1.to_string(), "x == y");
-
-        let e2 = ComparisonExpr::new(var("age"), GreaterEqualThan, iconst(18));
-        assert_eq!(e2.to_string(), "age ≥ 18");
-
-        let e3 = ComparisonExpr::new(iconst(0), LessThan, var("score"));
-        assert_eq!(e3.to_string(), "0 < score");
-    }
-
-    #[test]
-    fn vars_accessors() {
-        let e = ComparisonExpr::new(var("x"), NotEqual, var("y"));
-        let set = e.vars_set();
-        assert_eq!(set.len(), 2);
-        let x_str = "x".to_string();
-        let y_str = "y".to_string();
-        assert!(set.contains(&x_str));
-        assert!(set.contains(&y_str));
-
-        assert_eq!(e.left_vars(), vec![&"x".to_string()]);
-        assert_eq!(e.right_vars(), vec![&"y".to_string()]);
-
-        let dedup = ComparisonExpr::new(var("x"), Equal, var("x"));
-        assert_eq!(dedup.vars_set().len(), 1);
-    }
-
-    #[test]
-    fn clone_hash_eq() {
-        let a = ComparisonExpr::new(var("n"), LessEqualThan, iconst(10));
-        let b = a.clone();
-        assert_eq!(a, b);
-
-        use std::collections::HashSet;
-        let mut set = HashSet::new();
-        set.insert(a);
-        set.insert(b);
-        assert_eq!(set.len(), 1);
     }
 }

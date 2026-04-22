@@ -5,7 +5,7 @@ use std::fmt;
 
 /// Represents different types of transformation arguments used in query planning.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum TransformationArgument {
+pub(crate) enum TransformationArgument {
     /// Key-Value transformation from input stream (key/value, index)
     KV((bool, usize)),
 
@@ -14,31 +14,9 @@ pub enum TransformationArgument {
 }
 
 impl TransformationArgument {
-    /// Extracts key-value indices from a KV variant.
-    pub fn kv_indices(&self) -> (bool, usize) {
-        match self {
-            Self::KV(indices) => *indices,
-            _ => panic!(
-                "Planner error: TransformationArgument::kv_indices expects KV variant, got: {:?}",
-                self
-            ),
-        }
-    }
-
-    /// Extracts join indices from a Jn variant.
-    pub fn jn_indices(&self) -> (bool, bool, usize) {
-        match self {
-            Self::Jn(indices) => *indices,
-            _ => panic!(
-                "Planner error: TransformationArgument::jn_indices expects Jn variant, got: {:?}",
-                self
-            ),
-        }
-    }
-
     /// Converts ArithmeticArgument(s) to TransformationArgument(s).
     /// Each ArithmeticArgument is expected to contain only a single variable reference.
-    pub fn from_arithmetic_arguments(arith_args: Vec<ArithmeticArgument>) -> Vec<Self> {
+    pub(crate) fn from_arithmetic_arguments(arith_args: Vec<ArithmeticArgument>) -> Vec<Self> {
         arith_args
             .into_iter()
             .map(|arith_arg| {

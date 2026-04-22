@@ -10,7 +10,7 @@ use tracing::trace;
 use super::RulePlanner;
 use crate::catalog::{AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates};
 use crate::planner::PlanError;
-use crate::planner::{transformation::KeyValueLayout, TransformationInfo};
+use crate::planner::{KeyValueLayout, TransformationInfo};
 
 // =========================================================================
 // Core Planning
@@ -19,7 +19,7 @@ impl RulePlanner {
     /// This is the main entry point for the rule planning process. It performs a join
     /// between two positive atoms and then applies optimization transformations in a
     /// fixed-point loop until no more optimizations can be applied.
-    pub fn core(
+    pub(crate) fn core(
         &mut self,
         catalog: &mut Catalog,
         join_tuple_index: (usize, usize),

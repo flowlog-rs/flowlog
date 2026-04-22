@@ -4,12 +4,12 @@
 //! positions (as `ArithmeticPos`). Collections can be row-based (no keys) or
 //! key/value-based and are identified by a fingerprint.
 
-use crate::catalog::{ArithmeticPos, AtomArgumentSignature};
+use crate::catalog::ArithmeticPos;
 use std::fmt;
 
 /// Represents a data collection with key-value structure.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Collection {
+pub(crate) struct Collection {
     /// A fingerprint identifying the collection type and lineage
     fingerprint: u64,
 
@@ -27,7 +27,7 @@ pub struct Collection {
 
 impl Collection {
     /// Creates a new collection with the given fingerprint, name, and argument signatures.
-    pub fn new(
+    pub(crate) fn new(
         fingerprint: u64,
         name: String,
         key_argument_signatures: &[ArithmeticPos],
@@ -41,31 +41,9 @@ impl Collection {
         }
     }
 
-    /// Creates a collection from an atom with the given argument signatures and fingerprint.
-    /// The atom's name is used as the hierarchical name (atoms are EDB leaves).
-    pub fn from_atom(
-        atom_argument_signatures: &[AtomArgumentSignature],
-        atom_fingerprint: u64,
-        atom_name: String,
-    ) -> Self {
-        // Convert each AtomArgumentSignature to ArithmeticPos
-        let value_argument_signatures: Vec<ArithmeticPos> = atom_argument_signatures
-            .iter()
-            .map(|sig| ArithmeticPos::from_var_signature(*sig))
-            .collect();
-
-        // Create collection with no keys (row-based) and all arguments as values
-        Self {
-            fingerprint: atom_fingerprint,
-            name: atom_name,
-            key_argument_signatures: Vec::new(), // No keys for row-based atom
-            value_argument_signatures,
-        }
-    }
-
     /// Returns the arity as (key_count, value_count).
     #[inline]
-    pub fn arity(&self) -> (usize, usize) {
+    pub(crate) fn arity(&self) -> (usize, usize) {
         (
             self.key_argument_signatures.len(),
             self.value_argument_signatures.len(),
@@ -73,31 +51,13 @@ impl Collection {
     }
 
     /// Returns `true` if this collection has only keys (no values).
-    pub fn is_k_only(&self) -> bool {
+    pub(crate) fn is_k_only(&self) -> bool {
         self.value_argument_signatures.is_empty()
     }
 
     /// Returns the collection fingerprint.
-    pub fn fingerprint(&self) -> u64 {
+    pub(crate) fn fingerprint(&self) -> u64 {
         self.fingerprint
-    }
-
-    /// Returns references to both key and value argument signatures.
-    pub fn kv_argument_signatures(&self) -> (&[ArithmeticPos], &[ArithmeticPos]) {
-        (
-            &self.key_argument_signatures,
-            &self.value_argument_signatures,
-        )
-    }
-
-    /// Returns the key argument signatures.
-    pub fn key_argument_signatures(&self) -> &[ArithmeticPos] {
-        &self.key_argument_signatures
-    }
-
-    /// Returns the value argument signatures.
-    pub fn value_argument_signatures(&self) -> &[ArithmeticPos] {
-        &self.value_argument_signatures
     }
 }
 

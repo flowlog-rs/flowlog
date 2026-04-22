@@ -18,9 +18,9 @@ mod operators;
 mod rule;
 mod steps;
 
+use crate::common::ExecutionMode;
 use crate::profiler::node::{NodeManager, NodeProfile};
 use crate::profiler::rule::RuleProfile;
-use crate::common::ExecutionMode;
 use serde::{Deserialize, Serialize};
 use std::io;
 
@@ -38,7 +38,7 @@ pub struct Profiler {
 }
 
 /// Run a closure if a profiler instance is present.
-pub fn with_profiler<F>(profiler: &mut Option<Profiler>, f: F)
+pub(crate) fn with_profiler<F>(profiler: &mut Option<Profiler>, f: F)
 where
     F: FnOnce(&mut Profiler),
 {
@@ -75,7 +75,7 @@ impl Profiler {
     }
 
     /// Insert a rule using raw plan tree info; the plan tree is rendered internally.
-    pub fn insert_rule(
+    pub(crate) fn insert_rule(
         &mut self,
         rule_text: String,
         plan_tree_info: Vec<((u64, Option<u64>), u64)>,
@@ -87,23 +87,23 @@ impl Profiler {
     // Node manager delegation (scope & block tracking)
     // =================================================================
 
-    pub fn update_input_block(&mut self) {
+    pub(crate) fn update_input_block(&mut self) {
         self.node_manager.update_input_block();
     }
 
-    pub fn update_stratum_block(&mut self, stratum_id: usize) {
+    pub(crate) fn update_stratum_block(&mut self, stratum_id: usize) {
         self.node_manager.update_stratum_block(stratum_id);
     }
 
-    pub fn update_inspect_block(&mut self) {
+    pub(crate) fn update_inspect_block(&mut self) {
         self.node_manager.update_inspect_block();
     }
 
-    pub fn enter_scope(&mut self) {
+    pub(crate) fn enter_scope(&mut self) {
         self.node_manager.enter_scope();
     }
 
-    pub fn leave_scope(&mut self) {
+    pub(crate) fn leave_scope(&mut self) {
         self.node_manager.leave_scope();
     }
 

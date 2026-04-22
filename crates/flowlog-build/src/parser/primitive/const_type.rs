@@ -1,7 +1,7 @@
 //! Constant value types for FlowLog Datalog programs.
 
 use super::DataType;
-use crate::common::source::FileId;
+use crate::common::FileId;
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{Lexeme, Rule};
 use ordered_float::OrderedFloat;
@@ -70,7 +70,7 @@ impl ConstType {
     /// Resolved column type, or `None` for the polymorphic `Int` / `Float`
     /// variants — the typechecker must pin those before downstream
     /// consumers can rely on a concrete width.
-    pub fn data_type(&self) -> Option<DataType> {
+    pub(crate) fn data_type(&self) -> Option<DataType> {
         Some(match self {
             Self::Int8(_) => DataType::Int8,
             Self::Int16(_) => DataType::Int16,
@@ -90,7 +90,7 @@ impl ConstType {
 
     /// `true` only for the parser-emitted `Int` / `Float` variants. Useful
     /// for debug-assertions that the typechecker's const-inference pass ran.
-    pub fn is_polymorphic(&self) -> bool {
+    pub(crate) fn is_polymorphic(&self) -> bool {
         matches!(self, Self::Int(_) | Self::Float(_))
     }
 
@@ -104,7 +104,7 @@ impl ConstType {
     ///
     /// Panics on family mismatch (e.g. `Int` → `String`) — the typechecker
     /// must accept the literal's family against `target` first.
-    pub fn pin(&mut self, target: DataType) {
+    pub(crate) fn pin(&mut self, target: DataType) {
         match self {
             Self::Int(v) => {
                 let v = *v;

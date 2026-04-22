@@ -12,8 +12,8 @@
 
 use std::path::PathBuf;
 
-use crate::common::diag::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
-use crate::common::source::{FileId, Span};
+use crate::common::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
+use crate::common::{FileId, Span};
 use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
 use thiserror::Error;
 
@@ -256,8 +256,8 @@ pub(crate) fn grammar_bug(detail: impl Into<String>) -> ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::diag::{emit, BoxError};
-    use crate::common::source::SourceMap;
+    use crate::common::{emit, BoxError};
+    use crate::common::SourceMap;
 
     fn make_sm_with(text: &str) -> (SourceMap, FileId) {
         let mut sm = SourceMap::new();

@@ -32,7 +32,7 @@ use super::{
     segment::Segment,
     ConstType, FlowLogParser, Lexeme, Rule,
 };
-use crate::common::source::{FileId, SourceMap, Span};
+use crate::common::{FileId, SourceMap, Span};
 use pest::{iterators::Pair, Parser};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -47,12 +47,6 @@ use tracing::{debug, info, warn};
 ///
 /// Construct one with [`Program::parse`] (file path) or, in tests, via the
 /// [`Lexeme`] impl on an already-parsed pest node.
-///
-/// ```ignore
-/// let mut sm = crate::common::SourceMap::new();
-/// let program = Program::parse("path/to/program.fl", false, &mut sm)?;
-/// println!("{}", program);
-/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Program {
     /// All relation declarations (`.decl`), in source order.
@@ -222,7 +216,7 @@ impl Program {
     /// All relation declarations.
     #[must_use]
     #[inline]
-    pub fn relations(&self) -> &[Relation] {
+    pub(crate) fn relations(&self) -> &[Relation] {
         &self.relations
     }
 
@@ -241,19 +235,19 @@ impl Program {
             .collect()
     }
 
-    /// Relations declared with `.input` and therefore backed by file ingestion.
+    #[cfg(test)]
     #[must_use]
     #[inline]
-    pub fn file_backed_relations(&self) -> Vec<&Relation> {
+    pub(crate) fn file_backed_relations(&self) -> Vec<&Relation> {
         self.relations
             .iter()
             .filter(|rel| rel.is_file_backed())
             .collect()
     }
 
-    /// Relations that have at least one inline ground fact in the program source.
+    #[cfg(test)]
     #[must_use]
-    pub fn inline_fact_relations(&self) -> Vec<&Relation> {
+    pub(crate) fn inline_fact_relations(&self) -> Vec<&Relation> {
         self.relations
             .iter()
             .filter(|rel| self.has_inline_facts(rel.name()))
@@ -262,7 +256,7 @@ impl Program {
 
     /// Ordered EDB relation names (sorted lexicographically).
     #[must_use]
-    pub fn edb_names(&self) -> Vec<String> {
+    pub(crate) fn edb_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .edbs()
             .iter()
@@ -274,7 +268,7 @@ impl Program {
 
     /// Deduplicated EDB relation fingerprints.
     #[must_use]
-    pub fn edb_fingerprints(&self) -> HashSet<u64> {
+    pub(crate) fn edb_fingerprints(&self) -> HashSet<u64> {
         self.edbs().iter().map(|rel| rel.fingerprint()).collect()
     }
 
@@ -283,7 +277,7 @@ impl Program {
     /// Returned in declaration order.
     #[must_use]
     #[inline]
-    pub fn idbs(&self) -> Vec<&Relation> {
+    pub(crate) fn idbs(&self) -> Vec<&Relation> {
         self.relations
             .iter()
             .filter(|rel| rel.is_output_printsize())
@@ -313,7 +307,7 @@ impl Program {
     /// items in order and treats each `Segment::Loop` as a hard barrier.
     #[must_use]
     #[inline]
-    pub fn segments(&self) -> &[Segment] {
+    pub(crate) fn segments(&self) -> &[Segment] {
         &self.segments
     }
 
@@ -331,14 +325,14 @@ impl Program {
     }
 
     /// Mutable version of [`segments`](Self::segments).
-    pub fn segments_mut(&mut self) -> &mut [Segment] {
+    pub(crate) fn segments_mut(&mut self) -> &mut [Segment] {
         &mut self.segments
     }
 
     /// Mutable access to inline ground facts — only used by the typechecker's
     /// lowering pass to rewrite polymorphic literals to their concrete
     /// declared types.
-    pub fn facts_mut(&mut self) -> &mut HashMap<String, Vec<(Span, Vec<ConstType>)>> {
+    pub(crate) fn facts_mut(&mut self) -> &mut HashMap<String, Vec<(Span, Vec<ConstType>)>> {
         &mut self.facts
     }
 
@@ -347,7 +341,7 @@ impl Program {
     /// # Panics
     /// Panics if `rid` is out of bounds.
     #[must_use]
-    pub fn rule(&self, rid: usize) -> &FlowLogRule {
+    pub(crate) fn rule(&self, rid: usize) -> &FlowLogRule {
         let mut offset = 0;
         for seg in &self.segments {
             let rules: &[FlowLogRule] = match seg {
@@ -372,14 +366,14 @@ impl Program {
     /// Whether the named relation has any inline ground facts.
     #[must_use]
     #[inline]
-    pub fn has_inline_facts(&self, relation_name: &str) -> bool {
+    pub(crate) fn has_inline_facts(&self, relation_name: &str) -> bool {
         self.facts.contains_key(relation_name)
     }
 
     /// External UDF declarations.
     #[must_use]
     #[inline]
-    pub fn udfs(&self) -> &[ExternFn] {
+    pub(crate) fn udfs(&self) -> &[ExternFn] {
         &self.udfs
     }
 
@@ -714,8 +708,8 @@ impl Program {
                     });
                 }
                 for pred in rule.rhs() {
-                    if let Predicate::PositiveAtomPredicate(atom)
-                    | Predicate::NegativeAtomPredicate(atom) = pred
+                    if let Predicate::PositiveAtom(atom)
+                    | Predicate::NegativeAtom(atom) = pred
                     {
                         if !declared.contains(atom.name()) {
                             return Err(ParseError::UndeclaredInRule {
@@ -876,7 +870,7 @@ impl Program {
         Ok(())
     }
 
-    /// Reclassify body atoms whose name matches an `.extern fn` as [`FnCallPredicate`].
+    /// Reclassify body atoms whose name matches an `.extern fn` as [`FnCall`].
     ///
     /// PEG grammars resolve `name(args...)` as `atom` before `fn_call_expr` since
     /// they share identical syntax. The distinction is semantic (declared as a
@@ -916,7 +910,7 @@ impl Program {
             let needs_rewrite = rule.rhs().iter().any(|p| {
                 matches!(
                     p,
-                    Predicate::PositiveAtomPredicate(a) | Predicate::NegativeAtomPredicate(a)
+                    Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a)
                     if udf_names.contains(a.name())
                 )
             });
@@ -927,8 +921,8 @@ impl Program {
             let mut new_rhs = Vec::with_capacity(rule.rhs().len());
             for pred in rule.rhs() {
                 new_rhs.push(match pred {
-                    Predicate::PositiveAtomPredicate(atom)
-                    | Predicate::NegativeAtomPredicate(atom)
+                    Predicate::PositiveAtom(atom)
+                    | Predicate::NegativeAtom(atom)
                         if udf_names.contains(atom.name()) =>
                     {
                         let mut args = Vec::with_capacity(atom.arguments().len());
@@ -948,11 +942,11 @@ impl Program {
                                 }
                             }
                         }
-                        Predicate::FnCallPredicate(
+                        Predicate::FnCall(
                             FnCall::new(
                                 atom.name().to_string(),
                                 args,
-                                matches!(pred, Predicate::NegativeAtomPredicate(_)),
+                                matches!(pred, Predicate::NegativeAtom(_)),
                             )
                             .with_span(atom.span()),
                         )
@@ -1089,8 +1083,8 @@ impl Program {
                     .rhs()
                     .iter()
                     .filter_map(|pred| match pred {
-                        Predicate::PositiveAtomPredicate(a)
-                        | Predicate::NegativeAtomPredicate(a) => Some(a.name()),
+                        Predicate::PositiveAtom(a)
+                        | Predicate::NegativeAtom(a) => Some(a.name()),
                         _ => None,
                     })
                     .flat_map(|atom_name| {
@@ -1565,8 +1559,8 @@ mod tests {
     }
 
     /// UDF reclassification must preserve negation: `!my_udf(x)` parses
-    /// first as `NegativeAtomPredicate`, then `reclassify_udf_predicates`
-    /// rewrites it to `FnCallPredicate` with `is_negated = true`. A bug
+    /// first as `NegativeAtom`, then `reclassify_udf_predicates`
+    /// rewrites it to `FnCall` with `is_negated = true`. A bug
     /// dropping the flag would turn a negated filter into a positive one
     /// — wrong semantics, no compile error.
     #[test]
@@ -1584,10 +1578,10 @@ mod tests {
             .rhs()
             .iter()
             .find_map(|p| match p {
-                Predicate::FnCallPredicate(fc) => Some(fc),
+                Predicate::FnCall(fc) => Some(fc),
                 _ => None,
             })
-            .expect("udf body atom should be reclassified to FnCallPredicate");
+            .expect("udf body atom should be reclassified to FnCall");
         assert!(
             fn_call.is_negated(),
             "negation lost during reclassification"

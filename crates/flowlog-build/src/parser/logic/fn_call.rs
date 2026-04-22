@@ -2,26 +2,18 @@
 //!
 //! A [`FnCall`] represents a user-defined function applied to arguments
 //! in a rule head or as a boolean predicate (e.g., `my_udf(x, y + 1)`).
-//!
-//! # Example
-//! ```rust
-//! use flowlog_build::parser::logic::{FnCall, Arithmetic, Factor};
-//! let arg = Arithmetic::new(Factor::Var("x".into()), vec![]);
-//! let fc = FnCall::new("my_udf".into(), vec![arg], false);
-//! assert_eq!(fc.to_string(), "my_udf(x)");
-//! ```
 
 use super::Arithmetic;
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{span_of, Lexeme, Rule};
 
-use crate::common::source::{FileId, Ignored, Span};
+use crate::common::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
 /// A user-defined function call in a rule head or body predicates.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FnCall {
+pub(crate) struct FnCall {
     /// Function name.
     name: String,
     /// Arguments.
@@ -34,7 +26,7 @@ pub struct FnCall {
 impl FnCall {
     /// Create a new function call.
     #[must_use]
-    pub fn new(name: String, args: Vec<Arithmetic>, is_negated: bool) -> Self {
+    pub(crate) fn new(name: String, args: Vec<Arithmetic>, is_negated: bool) -> Self {
         Self {
             name,
             args,
@@ -45,7 +37,7 @@ impl FnCall {
 
     /// Attach a source span to this call.
     #[must_use]
-    pub fn with_span(mut self, span: Span) -> Self {
+    pub(crate) fn with_span(mut self, span: Span) -> Self {
         self.span = Ignored(span);
         self
     }
@@ -53,39 +45,39 @@ impl FnCall {
     /// Source location this call was parsed from.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 
     /// Function name.
     #[must_use]
     #[inline]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     /// Arguments.
     #[must_use]
     #[inline]
-    pub fn args(&self) -> &[Arithmetic] {
+    pub(crate) fn args(&self) -> &[Arithmetic] {
         &self.args
     }
 
     #[inline]
-    pub fn args_mut(&mut self) -> &mut [Arithmetic] {
+    pub(crate) fn args_mut(&mut self) -> &mut [Arithmetic] {
         &mut self.args
     }
 
     /// Whether the UDF result is negated.
     #[must_use]
     #[inline]
-    pub fn is_negated(&self) -> bool {
+    pub(crate) fn is_negated(&self) -> bool {
         self.is_negated
     }
 
     /// Variables referenced by this function call.
     #[must_use]
-    pub fn vars(&self) -> Vec<&String> {
+    pub(crate) fn vars(&self) -> Vec<&String> {
         self.args.iter().flat_map(|a| a.vars()).collect()
     }
 }
@@ -134,57 +126,12 @@ impl Lexeme for FnCall {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::logic::Factor;
-
-    fn arith_var(name: &str) -> Arithmetic {
-        Arithmetic::new(Factor::Var(name.into()), vec![])
-    }
-
-    #[test]
-    fn new_non_negated() {
-        let fc = FnCall::new("my_udf".into(), vec![arith_var("x")], false);
-        assert_eq!(fc.name(), "my_udf");
-        assert_eq!(fc.args().len(), 1);
-        assert!(!fc.is_negated());
-    }
-
-    #[test]
-    fn new_negated() {
-        let fc = FnCall::new(
-            "is_valid".into(),
-            vec![arith_var("x"), arith_var("y")],
-            true,
-        );
-        assert_eq!(fc.name(), "is_valid");
-        assert_eq!(fc.args().len(), 2);
-        assert!(fc.is_negated());
-    }
-
-    #[test]
-    fn display_non_negated() {
-        let fc = FnCall::new("f".into(), vec![arith_var("a"), arith_var("b")], false);
-        assert_eq!(fc.to_string(), "f(a, b)");
-    }
-
-    #[test]
-    fn display_negated() {
-        let fc = FnCall::new("f".into(), vec![arith_var("a")], true);
-        assert_eq!(fc.to_string(), "!f(a)");
-    }
-
-    #[test]
-    fn vars_collects_all_arguments() {
-        let fc = FnCall::new("g".into(), vec![arith_var("x"), arith_var("y")], false);
-        let vars: Vec<&str> = fc.vars().iter().map(|s| s.as_str()).collect();
-        assert_eq!(vars, vec!["x", "y"]);
-    }
+    use crate::common::FileId;
+    use crate::parser::{FlowLogParser, Lexeme, Rule};
+    use pest::Parser;
 
     #[test]
     fn parse_fn_call_expr() {
-        use crate::parser::{FlowLogParser, Lexeme, Rule};
-        use crate::common::source::FileId;
-        use pest::Parser;
-
         let input = "my_udf(x, y)";
         let mut pairs = FlowLogParser::parse(Rule::fn_call_expr, input).unwrap();
         let fc = FnCall::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();

@@ -2,20 +2,18 @@
 
 use std::fmt;
 
-use crate::catalog::atom::AtomArgumentSignature;
-use crate::catalog::compare::ComparisonExprPos;
-use crate::catalog::fn_call::FnCallPredicatePos;
+use crate::catalog::{AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos};
 use crate::parser::ConstType;
 
 /// Predicate filters for a Join (or Anti-Join) to Key-Value transformation.
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct JoinPredicates {
-    pub compare_exprs: Vec<ComparisonExprPos>,
-    pub fn_call_preds: Vec<FnCallPredicatePos>,
+pub(crate) struct JoinPredicates {
+    pub(crate) compare_exprs: Vec<ComparisonExprPos>,
+    pub(crate) fn_call_preds: Vec<FnCallPredicatePos>,
 }
 
 impl JoinPredicates {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.compare_exprs.is_empty() && self.fn_call_preds.is_empty()
     }
 }
@@ -44,15 +42,15 @@ impl fmt::Display for JoinPredicates {
 
 /// Predicate filters for a Key-Value to Key-Value transformation.
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct KvPredicates {
-    pub const_eq: Vec<(AtomArgumentSignature, ConstType)>,
-    pub var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
-    pub compare_exprs: Vec<ComparisonExprPos>,
-    pub fn_call_preds: Vec<FnCallPredicatePos>,
+pub(crate) struct KvPredicates {
+    pub(crate) const_eq: Vec<(AtomArgumentSignature, ConstType)>,
+    pub(crate) var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
+    pub(crate) compare_exprs: Vec<ComparisonExprPos>,
+    pub(crate) fn_call_preds: Vec<FnCallPredicatePos>,
 }
 
 impl KvPredicates {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.const_eq.is_empty()
             && self.var_eq.is_empty()
             && self.compare_exprs.is_empty()

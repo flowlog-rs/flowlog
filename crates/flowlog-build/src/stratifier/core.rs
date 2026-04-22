@@ -3,7 +3,7 @@
 //! See the crate-level documentation for an overview of strata, recursion, and
 //! the Extended Datalog mode.
 
-use crate::common::source::Span;
+use crate::common::Span;
 use crate::parser::{
     AggregationOperator, FlowLogRule, HeadArg, IterativeDirective, LoopCondition, Predicate,
     Program, Segment,
@@ -111,31 +111,16 @@ pub struct Stratifier {
 // =============================================================================
 
 impl Stratifier {
-    /// The original program that was stratified.
-    #[must_use]
-    pub fn program(&self) -> &Program {
-        &self.program
-    }
-
-    /// A parallel bitmap indicating which strata are recursive.
-    ///
-    /// `bitmap[i]` is `true` when stratum *i* contains a dependency cycle and
-    /// requires recursive evaluation.
-    #[must_use]
-    pub fn is_recursive_stratum_bitmap(&self) -> &[bool] {
-        &self.is_recursive_stratum_bitmap
-    }
-
     /// Returns `true` if stratum `idx` is recursive.
     #[must_use]
-    pub fn is_recursive_stratum(&self, idx: usize) -> bool {
+    pub(crate) fn is_recursive_stratum(&self, idx: usize) -> bool {
         self.is_recursive_stratum_bitmap[idx]
     }
 
     /// Returns the loop condition for a loop-derived stratum, or `None` for a
     /// plain SCC-derived stratum.
     #[must_use]
-    pub fn loop_condition(&self, idx: usize) -> Option<&LoopCondition> {
+    pub(crate) fn loop_condition(&self, idx: usize) -> Option<&LoopCondition> {
         self.stratum_loop_condition[idx].as_ref()
     }
 
@@ -156,7 +141,7 @@ impl Stratifier {
     /// Recursive relations (head ∩ body) not marked `.iterative`.
     /// Empty for non-recursive strata.
     #[must_use]
-    pub fn stratum_accumulate_recursive_relation(&self, idx: usize) -> &[u64] {
+    pub(crate) fn stratum_accumulate_recursive_relation(&self, idx: usize) -> &[u64] {
         &self.stratum_accumulate_recursive_relation[idx]
     }
 
@@ -165,13 +150,13 @@ impl Stratifier {
     /// Recursive relations (head ∩ body) explicitly marked `.iterative`.
     /// Empty for non-loop strata or loops without an `iterative` annotation.
     #[must_use]
-    pub fn stratum_iterative_recursive_relation(&self, idx: usize) -> &[u64] {
+    pub(crate) fn stratum_iterative_recursive_relation(&self, idx: usize) -> &[u64] {
         &self.stratum_iterative_recursive_relation[idx]
     }
 
     /// Relation fingerprints whose values must be retained after stratum `idx`.
     #[must_use]
-    pub fn stratum_leave_relation(&self, idx: usize) -> &Vec<u64> {
+    pub(crate) fn stratum_leave_relation(&self, idx: usize) -> &Vec<u64> {
         &self.stratum_leave_relation[idx]
     }
 
@@ -179,7 +164,7 @@ impl Stratifier {
     ///
     /// Always includes EDB relations and the leave sets of all earlier strata.
     #[must_use]
-    pub fn stratum_available_relations(&self, idx: usize) -> &HashSet<u64> {
+    pub(crate) fn stratum_available_relations(&self, idx: usize) -> &HashSet<u64> {
         &self.stratum_available_relations[idx]
     }
 }
@@ -596,8 +581,8 @@ impl Stratifier {
                 .iter()
                 .flat_map(|&rid| {
                     self.program.rule(rid).rhs().iter().filter_map(|p| match p {
-                        Predicate::PositiveAtomPredicate(atom)
-                        | Predicate::NegativeAtomPredicate(atom) => Some(atom.fingerprint()),
+                        Predicate::PositiveAtom(atom)
+                        | Predicate::NegativeAtom(atom) => Some(atom.fingerprint()),
                         _ => None,
                     })
                 })
@@ -724,8 +709,8 @@ impl Stratifier {
                 let rule = self.program.rule(rid);
                 for predicate in rule.rhs() {
                     let (fp, atom_span) = match predicate {
-                        Predicate::PositiveAtomPredicate(atom)
-                        | Predicate::NegativeAtomPredicate(atom) => {
+                        Predicate::PositiveAtom(atom)
+                        | Predicate::NegativeAtom(atom) => {
                             (atom.fingerprint(), atom.span())
                         }
                         _ => continue,
@@ -810,8 +795,8 @@ impl Stratifier {
                 .iter()
                 .flat_map(|r| {
                     r.rhs().iter().filter_map(|p| match p {
-                        Predicate::PositiveAtomPredicate(a)
-                        | Predicate::NegativeAtomPredicate(a) => Some(a.fingerprint()),
+                        Predicate::PositiveAtom(a)
+                        | Predicate::NegativeAtom(a) => Some(a.fingerprint()),
                         _ => None,
                     })
                 })
