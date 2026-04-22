@@ -52,32 +52,47 @@ mod build;
 mod codegen;
 
 // Shared primitives — previously the `common` crate, folded in here.
+#[doc(hidden)]
 pub mod common;
 
 // Pipeline stages — previously independent crates, folded in here so
 // `flowlog-build` ships as a single publishable library.
+//
+// NOTE: These modules are `pub` because the `flowlog-compiler` binary
+// (separate crate, `publish = false`) and the integration tests under
+// `tests/` both reach into them. They are `#[doc(hidden)]` to signal
+// that they are NOT part of the stable public API — do not rely on
+// them from external crates.
+#[doc(hidden)]
 pub mod catalog;
+#[doc(hidden)]
 pub mod optimizer;
+#[doc(hidden)]
 pub mod parser;
+#[doc(hidden)]
 pub mod planner;
+#[doc(hidden)]
 pub mod profiler;
+#[doc(hidden)]
 pub mod stratifier;
+#[doc(hidden)]
 pub mod typechecker;
 
 pub use build::BuildError;
-pub use codegen::code_parts::CodeParts;
-pub use codegen::error::CodegenError;
-pub use codegen::features::Features;
-pub use codegen::idb_buffers::{field_accessor, gen_drain_block};
-pub use codegen::ty::data::data_type_tokens;
-pub use codegen::CodeGen;
+
+// Internal codegen re-exports — only consumed by `flowlog-compiler`.
+// Hidden from docs.rs for the same reason as the pipeline modules above.
+#[doc(hidden)]
+pub use codegen::{
+    const_to_token, data_type_tokens, field_accessor, gen_drain_block, AggSemiringNeeds, CodeGen,
+    CodeParts, CodegenError, Features,
+};
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::common::diag::{self, BoxError};
+use crate::common::{emit, BoxError, SourceMap};
 pub use crate::common::ExecutionMode;
-use crate::common::SourceMap;
 
 /// Compile a single `.dl` program with default options.
 ///
@@ -92,7 +107,7 @@ pub fn compile<P: AsRef<Path>>(program_path: P) -> io::Result<()> {
         .compile_one(program_path.as_ref(), &out_dir, &mut sm)
         .map_err(|err| {
             let mut buf = Vec::new();
-            let _ = diag::emit(&err, &sm, &mut buf);
+            let _ = emit(&err, &sm, &mut buf);
             io::Error::other(String::from_utf8_lossy(&buf).into_owned())
         })
 }

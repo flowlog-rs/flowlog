@@ -1,6 +1,6 @@
 //! Optimizer for FlowLog Datalog programs.
 use crate::optimizer::plan_tree::PlanTree;
-use crate::catalog::rule::Catalog;
+use crate::catalog::Catalog;
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]

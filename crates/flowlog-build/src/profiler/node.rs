@@ -7,56 +7,56 @@ use crate::profiler::addr::Addr;
 
 /// A profiled node in the dataflow plan graph.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct NodeProfile {
+pub(super) struct NodeProfile {
     /// Node id.
-    pub id: usize,
+    id: usize,
     /// Human-friendly node name.
-    pub name: String,
+    name: String,
     /// Block label (e.g., input/stratum/inspect) for grouping in UI.
-    pub block: String,
+    block: String,
     /// Optional fingerprint used to identify the rule transformation.
-    pub fingerprint: Option<String>,
+    fingerprint: Option<String>,
     /// Tags for presentation and filtering.
-    pub tags: Vec<String>,
+    tags: Vec<String>,
     /// Operator addresses associated with this node.
-    pub operators: Vec<Addr>,
+    operators: Vec<Addr>,
     /// Parent node ids (upstream dependencies).
-    pub parents: Vec<usize>,
+    parents: Vec<usize>,
 }
 
 impl NodeProfile {
     /// Update the node id.
-    pub(crate) fn update_id(&mut self, new_id: usize) {
+    fn update_id(&mut self, new_id: usize) {
         self.id = new_id;
     }
 
     /// Update the node name.
-    pub(crate) fn update_name(&mut self, new_name: String) {
+    fn update_name(&mut self, new_name: String) {
         self.name = new_name;
     }
 
     /// Update the block label.
-    pub(crate) fn update_block(&mut self, new_block: String) {
+    fn update_block(&mut self, new_block: String) {
         self.block = new_block;
     }
 
     /// Set the fingerprint from a raw u64 value.
-    pub(crate) fn update_fingerprint(&mut self, fingerprint: u64) {
+    fn update_fingerprint(&mut self, fingerprint: u64) {
         self.fingerprint = Some(format!("0x{:016x}", fingerprint));
     }
 
     /// Add a tag to the node.
-    pub(crate) fn add_tag(&mut self, tag: String) {
+    fn add_tag(&mut self, tag: String) {
         self.tags.push(tag);
     }
 
     /// Append operator addresses.
-    pub(crate) fn add_operators(&mut self, operator_addrs: Vec<Addr>) {
+    fn add_operators(&mut self, operator_addrs: Vec<Addr>) {
         self.operators.extend(operator_addrs);
     }
 
     /// Append parent node ids.
-    pub(crate) fn add_parents(&mut self, parent_ids: Vec<usize>) {
+    fn add_parents(&mut self, parent_ids: Vec<usize>) {
         self.parents.extend(parent_ids);
     }
 }
@@ -65,11 +65,11 @@ impl NodeProfile {
 #[derive(Debug, Clone, Default)]
 pub(super) struct NodeManager {
     /// Next node id to allocate.
-    pub(super) id_cnt: usize,
+    id_cnt: usize,
     /// Address counter used to create operator addresses.
-    pub(super) addr_cnt: Addr,
+    addr_cnt: Addr,
     /// Current block label for node grouping.
-    pub(super) block: String,
+    block: String,
 
     /// Tracks the most recent node id for each variable name.
     node_map: HashMap<String, usize>,

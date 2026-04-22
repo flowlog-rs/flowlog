@@ -1,8 +1,7 @@
 mod errors;
 
-use flowlog_build::common::source::SourceMap;
-use flowlog_build::parser::error::DirectiveKind;
-use flowlog_build::parser::{ParseError, Program};
+use flowlog_build::common::SourceMap;
+use flowlog_build::parser::{DirectiveKind, ParseError, Program};
 
 use errors::{fixture, render};
 
@@ -71,6 +70,24 @@ fn undeclared_loop_condition() {
         parse("undeclared_loop_condition.dl", true),
         ParseError::UndeclaredLoopCondition { .. },
         ["loop condition", "ghost_flag"]
+    );
+}
+
+#[test]
+fn undeclared_in_rule() {
+    assert_err!(
+        parse("undeclared_in_rule.dl", true),
+        ParseError::UndeclaredInRule { .. },
+        ["rule references undeclared relation", "ghost_rel"]
+    );
+}
+
+#[test]
+fn undeclared_in_fact() {
+    assert_err!(
+        parse("undeclared_in_fact.dl", true),
+        ParseError::UndeclaredInFact { .. },
+        ["fact references undeclared relation", "ghost_rel"]
     );
 }
 

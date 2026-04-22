@@ -3,19 +3,31 @@
 //! (library mode here, binary mode in `flowlog-compiler`) assembles into
 //! its own final Rust source.
 
-pub(crate) mod aggregation;
-pub(crate) mod arg;
-pub(crate) mod code_parts;
-pub(crate) mod dedup;
-pub(crate) mod edb_handles;
-pub(crate) mod error;
-pub(crate) mod features;
-pub(crate) mod flow;
-pub(crate) mod idb_buffers;
-pub(crate) mod ident;
-pub(crate) mod profile;
-pub(crate) mod semiring;
-pub(crate) mod ty;
+mod aggregation;
+mod arg;
+mod code_parts;
+mod dedup;
+mod edb_handles;
+mod error;
+mod features;
+mod flow;
+mod idb_buffers;
+mod ident;
+mod profile;
+mod semiring;
+mod ty;
+
+// External API — used by flowlog-compiler via lib.rs re-exports.
+// `AggSemiringNeeds` leaks through `Features::agg_semirings()`.
+pub use arg::const_to_token;
+pub use code_parts::CodeParts;
+pub use error::CodegenError;
+pub use features::{AggSemiringNeeds, Features};
+pub use idb_buffers::{field_accessor, gen_drain_block};
+pub use ty::data::data_type_tokens;
+
+// Intra-crate shortcuts used by build/ (library mode).
+pub(crate) use ty::data::{tuple_tokens, user_tuple_tokens};
 
 use std::collections::HashMap;
 
@@ -25,10 +37,6 @@ use crate::common::Config;
 use crate::parser::{DataType, Program};
 use crate::planner::StratumPlanner;
 use crate::profiler::Profiler;
-
-use self::code_parts::CodeParts;
-use self::error::CodegenError;
-use self::features::Features;
 
 pub struct CodeGen {
     pub(crate) config: Config,

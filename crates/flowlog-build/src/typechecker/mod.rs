@@ -1,9 +1,20 @@
-//! FlowLog rule-level type checker.
+//! FlowLog rule-level type checker with constant-type inference.
 //!
 //! Runs after parse, before stratification. Binds variable types from
-//! positive-atom columns, then checks every body and head site against
-//! the binding map. Spans come from the AST, so diagnostics point at the
-//! offending expression rather than the enclosing rule.
+//! positive-atom columns, checks every body and head site against the
+//! binding map, **and pins every polymorphic literal** to the concrete
+//! width derived from its surrounding context. Spans come from the AST,
+//! so diagnostics point at the offending expression rather than the
+//! enclosing rule.
+//!
+//! # Two jobs
+//!
+//! - **Check.** Reject programs whose types don't line up.
+//! - **Infer const types.** Every `ConstType::Int(_)` / `Float(_)`
+//!   placeholder from the parser is rewritten in place to its concrete
+//!   counterpart via [`ConstType::pin`]. After [`check_program`] returns
+//!   `Ok`, no polymorphic literal survives anywhere in the program —
+//!   catalog, planner, and codegen can call `data_type()` unconditionally.
 //!
 //! # What we reject
 //!
@@ -25,7 +36,7 @@
 //!
 //! - Integer literals match any integer column (`Int8`..`UInt64`); float
 //!   literals match any float column (`Float32`/`Float64`). The width is
-//!   fixed by context.
+//!   fixed by context and written back by [`ConstType::pin`].
 //! - We do **not** range-check integer literals: `300` into a `UInt8`
 //!   column passes here and is caught later by the Rust compiler on the
 //!   generated code.
@@ -38,31 +49,62 @@ pub use error::TypeCheckError;
 
 use std::collections::HashMap;
 
-use crate::common::source::Span;
+use crate::common::Span;
 use crate::parser::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
-    ComparisonExpr, ComparisonOperator, ConstType, DataType, ExternFn, Factor, FlowLogRule, FnCall,
-    HeadArg, Predicate, Program, Relation,
+    ComparisonExpr, ComparisonOperator, ConstType, DataType, Factor, FlowLogRule, FnCall, HeadArg,
+    Predicate, Program,
 };
 
-/// Type-check every rule. Stops at the first failure.
-pub fn check_program(program: &Program) -> Result<(), TypeCheckError> {
-    let decls: DeclMap = program.relations().iter().map(|r| (r.name(), r)).collect();
-    let udfs: UdfMap = program.udfs().iter().map(|u| (u.name(), u)).collect();
-    for rule in program.rules() {
-        check_rule(rule, &decls, &udfs)?;
+/// Type-check every rule and pin each polymorphic literal to its
+/// concrete width. Stops at the first failure; on `Ok(())` the program's
+/// literals are fully concrete.
+pub fn check_program(program: &mut Program) -> Result<(), TypeCheckError> {
+    let decls: DeclTypes = program
+        .relations()
+        .iter()
+        .map(|r| (r.name().to_string(), r.data_type()))
+        .collect();
+    let udfs: UdfSigs = program
+        .udfs()
+        .iter()
+        .map(|u| {
+            (
+                u.name().to_string(),
+                (
+                    u.params()
+                        .iter()
+                        .map(|p| (p.name().to_string(), *p.data_type()))
+                        .collect(),
+                    u.ret_type(),
+                ),
+            )
+        })
+        .collect();
+
+    for segment in program.segments_mut() {
+        for rule in segment.as_rules_mut() {
+            check_rule(rule, &decls, &udfs)?;
+        }
+        if let Some(block) = segment.as_loop_mut() {
+            for rule in block.rules_mut() {
+                check_rule(rule, &decls, &udfs)?;
+            }
+        }
     }
-    Ok(())
+
+    check_and_pin_facts(program.facts_mut(), &decls)
 }
 
-type DeclMap<'a> = HashMap<&'a str, &'a Relation>;
-type UdfMap<'a> = HashMap<&'a str, &'a ExternFn>;
+type DeclTypes = HashMap<String, Vec<DataType>>;
+type UdfSigs = HashMap<String, (Vec<(String, DataType)>, DataType)>;
 
 /// Var → (first-seen type, first-seen span). Later uses must agree.
 type Bindings = HashMap<String, (DataType, Span)>;
 
 /// Numeric literals stay polymorphic within their family (`IntLit` /
-/// `FloatLit`) until a concrete context fixes the type.
+/// `FloatLit`) until a concrete context fixes the type. Concrete literals
+/// carry their resolved [`DataType`] directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LitKind {
     IntLit,
@@ -86,7 +128,8 @@ impl LitKind {
         }
     }
 
-    /// Representative concrete type for diagnostic rendering.
+    /// Representative concrete type for diagnostic rendering **and** for
+    /// pinning all-literal expressions that never met a concrete partner.
     fn report_ty(self) -> DataType {
         match self {
             LitKind::IntLit => DataType::Int32,
@@ -115,24 +158,31 @@ fn merge_lit(a: LitKind, b: LitKind) -> Option<LitKind> {
     }
 }
 
-fn check_rule(rule: &FlowLogRule, decls: &DeclMap, udfs: &UdfMap) -> Result<(), TypeCheckError> {
+fn check_rule(
+    rule: &mut FlowLogRule,
+    decls: &DeclTypes,
+    udfs: &UdfSigs,
+) -> Result<(), TypeCheckError> {
+    // Bind vars first so out-of-order body predicates can resolve them.
     let mut bindings: Bindings = HashMap::new();
-
-    // Bind variables first so out-of-order body predicates can resolve.
     for predicate in rule.rhs() {
-        if let Predicate::PositiveAtomPredicate(atom) = predicate {
+        if let Predicate::PositiveAtom(atom) = predicate {
             bind_atom_vars(atom, decls, &mut bindings)?;
         }
     }
 
-    for predicate in rule.rhs() {
+    for predicate in rule.rhs_mut() {
         match predicate {
-            Predicate::PositiveAtomPredicate(_) => {}
-            Predicate::NegativeAtomPredicate(atom) => check_atom_uses(atom, decls, &bindings)?,
-            Predicate::ComparePredicate(cmp) => check_comparison(cmp, &bindings, udfs)?,
-            Predicate::FnCallPredicate(fc) => {
+            Predicate::PositiveAtom(atom) => pin_atom_consts(atom, decls)?,
+            Predicate::NegativeAtom(atom) => {
+                check_atom_uses(atom, decls, &bindings)?;
+                pin_atom_consts(atom, decls)?;
+            }
+            Predicate::Compare(cmp) => check_comparison(cmp, &bindings, udfs)?,
+            Predicate::FnCall(fc) => {
                 // UDF predicate return is always bool; drop the inferred type.
                 infer_fn_call_type(fc, &bindings, udfs)?;
+                pin_fn_call_args(fc, udfs)?;
             }
         }
     }
@@ -140,9 +190,12 @@ fn check_rule(rule: &FlowLogRule, decls: &DeclMap, udfs: &UdfMap) -> Result<(), 
     check_head(rule, decls, udfs, &bindings)
 }
 
+/// Record each variable's first-seen type; validate const arg families.
+/// Consts are pinned separately by [`pin_atom_consts`] so bindings can
+/// be populated for the whole rule before any mutation.
 fn bind_atom_vars(
     atom: &Atom,
-    decls: &DeclMap,
+    decls: &DeclTypes,
     bindings: &mut Bindings,
 ) -> Result<(), TypeCheckError> {
     for (i, arg) in atom.arguments().iter().enumerate() {
@@ -164,7 +217,7 @@ fn bind_atom_vars(
                 Some(_) => {}
             },
             AtomArg::Const(c) => {
-                if !lit_kind(c).fits(col_ty) {
+                if !lit_kind(c)?.fits(col_ty) {
                     return Err(TypeCheckError::LiteralColumnMismatch {
                         span: atom.span(),
                         literal: c.to_string(),
@@ -182,46 +235,85 @@ fn bind_atom_vars(
 /// reported separately by the range-restriction pass.
 fn check_atom_uses(
     atom: &Atom,
-    decls: &DeclMap,
+    decls: &DeclTypes,
     bindings: &Bindings,
 ) -> Result<(), TypeCheckError> {
     for (i, arg) in atom.arguments().iter().enumerate() {
         let col_ty = resolve_atom_column(atom, i, decls)?;
-        if let AtomArg::Var(v) = arg {
-            if let Some(&(bound_ty, bound_span)) = bindings.get(v) {
-                if bound_ty != col_ty {
-                    return Err(TypeCheckError::TypeMismatch {
-                        var: v.clone(),
-                        first_ty: bound_ty,
-                        first_span: bound_span,
-                        later_ty: col_ty,
-                        later_span: atom.span(),
+        match arg {
+            AtomArg::Var(v) => {
+                if let Some(&(bound_ty, bound_span)) = bindings.get(v) {
+                    if bound_ty != col_ty {
+                        return Err(TypeCheckError::TypeMismatch {
+                            var: v.clone(),
+                            first_ty: bound_ty,
+                            first_span: bound_span,
+                            later_ty: col_ty,
+                            later_span: atom.span(),
+                        });
+                    }
+                }
+            }
+            AtomArg::Const(c) => {
+                if !lit_kind(c)?.fits(col_ty) {
+                    return Err(TypeCheckError::LiteralColumnMismatch {
+                        span: atom.span(),
+                        literal: c.to_string(),
+                        expected: col_ty,
                     });
                 }
+            }
+            AtomArg::Placeholder => {}
+        }
+    }
+    Ok(())
+}
+
+/// Pin every polymorphic const argument of `atom` to its declared column
+/// type. Call after [`bind_atom_vars`] / [`check_atom_uses`] has already
+/// validated the family fit.
+fn pin_atom_consts(atom: &mut Atom, decls: &DeclTypes) -> Result<(), TypeCheckError> {
+    let col_types: Vec<DataType> = {
+        let Some(decl) = decls.get(atom.name()) else {
+            return Err(TypeCheckError::internal(format!(
+                "atom `{}` not declared",
+                atom.name()
+            )));
+        };
+        decl.clone()
+    };
+    for (arg, col_ty) in atom.arguments_mut().iter_mut().zip(col_types.iter()) {
+        if let AtomArg::Const(c) = arg {
+            if c.is_polymorphic() {
+                c.pin(*col_ty);
             }
         }
     }
     Ok(())
 }
 
-fn resolve_atom_column(atom: &Atom, i: usize, decls: &DeclMap) -> Result<DataType, TypeCheckError> {
+fn resolve_atom_column(
+    atom: &Atom,
+    i: usize,
+    decls: &DeclTypes,
+) -> Result<DataType, TypeCheckError> {
     let decl = decls
         .get(atom.name())
         .ok_or_else(|| TypeCheckError::internal(format!("atom `{}` not declared", atom.name())))?;
-    decl.data_type().get(i).copied().ok_or_else(|| {
+    decl.get(i).copied().ok_or_else(|| {
         TypeCheckError::internal(format!(
             "atom `{}` has {} arguments but `.decl` has {}",
             atom.name(),
             atom.arguments().len(),
-            decl.data_type().len(),
+            decl.len(),
         ))
     })
 }
 
 fn check_comparison(
-    cmp: &ComparisonExpr,
+    cmp: &mut ComparisonExpr,
     bindings: &Bindings,
-    udfs: &UdfMap,
+    udfs: &UdfSigs,
 ) -> Result<(), TypeCheckError> {
     let left = infer_expr_type(cmp.left(), bindings, udfs)?;
     let right = infer_expr_type(cmp.right(), bindings, udfs)?;
@@ -253,33 +345,50 @@ fn check_comparison(
             }
         }
     }
+
+    // Pin: both sides unify to the same concrete type. Fall back to the
+    // family's representative width when both sides are polymorphic.
+    let target = match (left, right) {
+        (Some(l), Some(r)) => merge_lit(l, r).map(LitKind::report_ty),
+        (Some(k), None) | (None, Some(k)) => Some(k.report_ty()),
+        (None, None) => None,
+    };
+    if let Some(t) = target {
+        pin_arith_literals(cmp.left_mut(), t, udfs)?;
+        pin_arith_literals(cmp.right_mut(), t, udfs)?;
+    }
     Ok(())
 }
 
 fn check_head(
-    rule: &FlowLogRule,
-    decls: &DeclMap,
-    udfs: &UdfMap,
+    rule: &mut FlowLogRule,
+    decls: &DeclTypes,
+    udfs: &UdfSigs,
     bindings: &Bindings,
 ) -> Result<(), TypeCheckError> {
-    let head = rule.head();
-    let decl = decls.get(head.name()).ok_or_else(|| {
-        TypeCheckError::internal(format!("head relation `{}` not declared", head.name()))
-    })?;
-    let col_types = decl.data_type();
+    let head = rule.head_mut();
+    let (rel_name, arity, head_span) = (head.name().to_string(), head.arity(), head.span());
+    let col_types: Vec<DataType> = {
+        let Some(decl) = decls.get(&rel_name) else {
+            return Err(TypeCheckError::internal(format!(
+                "head relation `{rel_name}` not declared"
+            )));
+        };
+        decl.clone()
+    };
 
-    if head.arity() != col_types.len() {
+    if arity != col_types.len() {
         return Err(TypeCheckError::HeadArity {
-            span: head.span(),
-            rel: head.name().to_string(),
+            span: head_span,
+            rel: rel_name,
             expected: col_types.len(),
-            found: head.arity(),
+            found: arity,
         });
     }
 
     for (col, (arg, expected)) in head
-        .head_arguments()
-        .iter()
+        .head_arguments_mut()
+        .iter_mut()
         .zip(col_types.iter().copied())
         .enumerate()
     {
@@ -289,8 +398,8 @@ fn check_head(
                 if let Some(&(found, _)) = bindings.get(v) {
                     if found != expected {
                         return Err(TypeCheckError::HeadColumnType {
-                            span: head.span(),
-                            rel: head.name().to_string(),
+                            span: head_span,
+                            rel: rel_name.clone(),
                             col,
                             expected,
                             found,
@@ -301,15 +410,10 @@ fn check_head(
             HeadArg::Arith(a) => {
                 if let Some(kind) = infer_expr_type(a, bindings, udfs)? {
                     if !kind.fits(expected) {
-                        return Err(head_or_literal_mismatch(
-                            a,
-                            head.name(),
-                            col,
-                            expected,
-                            kind,
-                        ));
+                        return Err(head_or_literal_mismatch(a, &rel_name, col, expected, kind));
                     }
                 }
+                pin_arith_literals(a, expected, udfs)?;
             }
         }
     }
@@ -342,19 +446,22 @@ fn head_or_literal_mismatch(
 }
 
 fn check_aggregation(
-    agg: &Aggregation,
+    agg: &mut Aggregation,
     declared: DataType,
-    udfs: &UdfMap,
+    udfs: &UdfSigs,
     bindings: &Bindings,
 ) -> Result<(), TypeCheckError> {
     let op = *agg.operator();
     let span = agg.span();
     let arg_kind = infer_expr_type(agg.arithmetic(), bindings, udfs)?;
 
-    // count: any input; output must be numeric.
+    // `count`'s input type is independent of its declared output.
     if matches!(op, AggregationOperator::Count) {
         if !declared.is_numeric() {
             return Err(TypeCheckError::AggregationOutputType { span, op, declared });
+        }
+        if let Some(k) = arg_kind {
+            pin_arith_literals(agg.arithmetic_mut(), k.report_ty(), udfs)?;
         }
         return Ok(());
     }
@@ -372,6 +479,7 @@ fn check_aggregation(
             return Err(TypeCheckError::AggregationOutputType { span, op, declared });
         }
     }
+    pin_arith_literals(agg.arithmetic_mut(), declared, udfs)?;
     Ok(())
 }
 
@@ -381,7 +489,7 @@ fn check_aggregation(
 fn infer_expr_type(
     expr: &Arithmetic,
     bindings: &Bindings,
-    udfs: &UdfMap,
+    udfs: &UdfSigs,
 ) -> Result<Option<LitKind>, TypeCheckError> {
     let span = expr.span();
     let mut inferred = infer_factor_type(expr.init(), bindings, udfs)?;
@@ -409,11 +517,11 @@ fn infer_expr_type(
 fn infer_factor_type(
     factor: &Factor,
     bindings: &Bindings,
-    udfs: &UdfMap,
+    udfs: &UdfSigs,
 ) -> Result<Option<LitKind>, TypeCheckError> {
     Ok(match factor {
         Factor::Var(v) => bindings.get(v).map(|&(ty, _)| LitKind::Concrete(ty)),
-        Factor::Const(c) => Some(lit_kind(c)),
+        Factor::Const(c) => Some(lit_kind(c)?),
         Factor::FnCall(fc) => Some(LitKind::Concrete(infer_fn_call_type(fc, bindings, udfs)?)),
     })
 }
@@ -421,50 +529,52 @@ fn infer_factor_type(
 fn infer_fn_call_type(
     fc: &FnCall,
     bindings: &Bindings,
-    udfs: &UdfMap,
+    udfs: &UdfSigs,
 ) -> Result<DataType, TypeCheckError> {
-    let udf = udfs
-        .get(fc.name())
-        .ok_or_else(|| TypeCheckError::UndeclaredUdf {
-            span: fc.span(),
-            name: fc.name().to_string(),
-        })?;
+    let (param_types, ret_ty) =
+        udfs.get(fc.name())
+            .ok_or_else(|| TypeCheckError::UndeclaredUdf {
+                span: fc.span(),
+                name: fc.name().to_string(),
+            })?;
 
-    if fc.args().len() != udf.params().len() {
+    if fc.args().len() != param_types.len() {
         return Err(TypeCheckError::UdfArity {
             span: fc.span(),
             name: fc.name().to_string(),
-            expected: udf.params().len(),
+            expected: param_types.len(),
             found: fc.args().len(),
         });
     }
 
-    for (arg, param) in fc.args().iter().zip(udf.params()) {
-        let expected = *param.data_type();
+    for (arg, (param_name, expected)) in fc.args().iter().zip(param_types.iter()) {
         let Some(kind) = infer_expr_type(arg, bindings, udfs)? else {
             continue;
         };
-        if !kind.fits(expected) {
+        if !kind.fits(*expected) {
             return Err(TypeCheckError::UdfArgType {
                 span: arg.span(),
                 name: fc.name().to_string(),
-                param: param.name().to_string(),
-                expected,
+                param: param_name.clone(),
+                expected: *expected,
                 found: kind.report_ty(),
             });
         }
     }
 
-    Ok(udf.ret_type())
+    Ok(*ret_ty)
 }
 
-fn lit_kind(c: &ConstType) -> LitKind {
-    match c {
+fn lit_kind(c: &ConstType) -> Result<LitKind, TypeCheckError> {
+    Ok(match c {
         ConstType::Int(_) => LitKind::IntLit,
         ConstType::Float(_) => LitKind::FloatLit,
-        ConstType::Text(_) => LitKind::Concrete(DataType::String),
-        ConstType::Bool(_) => LitKind::Concrete(DataType::Bool),
-    }
+        _ => LitKind::Concrete(c.data_type().ok_or_else(|| {
+            TypeCheckError::internal(format!(
+                "lit_kind: polymorphic literal {c:?} escaped Int/Float arms"
+            ))
+        })?),
+    })
 }
 
 /// `Some(c)` iff `a` is a single constant with no operators.
@@ -496,5 +606,289 @@ fn check_arith_op(
             op: op.clone(),
             ty: kind.report_ty(),
         })
+    }
+}
+
+/// Pin every polymorphic literal in `a` to `target`. Recurses into UDF
+/// argument expressions using the UDF's declared parameter types — those
+/// types are independent of the enclosing expression's `target`.
+fn pin_arith_literals(
+    a: &mut Arithmetic,
+    target: DataType,
+    udfs: &UdfSigs,
+) -> Result<(), TypeCheckError> {
+    pin_factor(a.init_mut(), target, udfs)?;
+    for (_, f) in a.rest_mut() {
+        pin_factor(f, target, udfs)?;
+    }
+    Ok(())
+}
+
+fn pin_factor(factor: &mut Factor, target: DataType, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
+    match factor {
+        Factor::Const(c) => {
+            if c.is_polymorphic() {
+                c.pin(target);
+            }
+            Ok(())
+        }
+        Factor::Var(_) => Ok(()),
+        Factor::FnCall(fc) => pin_fn_call_args(fc, udfs),
+    }
+}
+
+fn pin_fn_call_args(fc: &mut FnCall, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
+    // Collected by value so the recursive `pin_arith_literals` below can
+    // reborrow `udfs` — holding `&param_types` from `udfs.get(...)` across
+    // the recursion would block the reborrow.
+    let param_types: Vec<DataType> = udfs
+        .get(fc.name())
+        .map(|(params, _)| params.iter().map(|(_, ty)| *ty).collect())
+        .ok_or_else(|| {
+            TypeCheckError::internal(format!(
+                "pin_fn_call_args: UDF `{}` not declared",
+                fc.name()
+            ))
+        })?;
+    for (arg, pty) in fc.args_mut().iter_mut().zip(param_types.iter()) {
+        pin_arith_literals(arg, *pty, udfs)?;
+    }
+    Ok(())
+}
+
+/// Validate each fact tuple's column families against its `.decl` and pin
+/// polymorphic literals. Diagnostics cite the fact's head span.
+fn check_and_pin_facts(
+    facts: &mut HashMap<String, Vec<(Span, Vec<ConstType>)>>,
+    decls: &DeclTypes,
+) -> Result<(), TypeCheckError> {
+    for (rel_name, tuples) in facts.iter_mut() {
+        let Some(col_types) = decls.get(rel_name) else {
+            return Err(TypeCheckError::internal(format!(
+                "fact references undeclared relation `{rel_name}`"
+            )));
+        };
+        for (span, tuple) in tuples.iter_mut() {
+            if tuple.len() != col_types.len() {
+                return Err(TypeCheckError::HeadArity {
+                    span: *span,
+                    rel: rel_name.clone(),
+                    expected: col_types.len(),
+                    found: tuple.len(),
+                });
+            }
+            for (c, col_ty) in tuple.iter_mut().zip(col_types.iter()) {
+                if !lit_kind(c)?.fits(*col_ty) {
+                    return Err(TypeCheckError::LiteralColumnMismatch {
+                        span: *span,
+                        literal: c.to_string(),
+                        expected: *col_ty,
+                    });
+                }
+                if c.is_polymorphic() {
+                    c.pin(*col_ty);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests focus on the typechecker's *second* job — pinning every
+    //! polymorphic literal to its concrete width. The 15 integration
+    //! fixtures in `tests/errors/typechecker/` cover the check side;
+    //! pinning outcomes are not observable through those assertions.
+
+    use super::*;
+    use crate::common::SourceMap;
+    use std::io::Write;
+
+    fn parse_and_check(src: &str) -> Program {
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        tmp.write_all(src.as_bytes()).expect("write");
+        let mut sm = SourceMap::new();
+        let mut program =
+            Program::parse(&tmp.path().to_string_lossy(), true, &mut sm).expect("parse failed");
+        check_program(&mut program).expect("check failed");
+        program
+    }
+
+    /// Body-positive atom literal: `Flag(5)` with `.decl Flag(x: int8)` must
+    /// pin `5` to `Int8(5)` via `pin_atom_consts`. If that pass becomes a
+    /// no-op, catalog calls `data_type()` on a polymorphic `Int` and panics.
+    #[test]
+    fn body_atom_const_pinned_to_declared_column_width() {
+        let src = "\
+            .decl Item(x: int8)\n\
+            .decl Flag(x: int8)\n\
+            .decl Out(x: int8)\n\
+            .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+            .input Flag(IO=\"file\", filename=\"Flag.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- Item(x), Flag(5).\n";
+        let program = parse_and_check(src);
+        let rule = program.rules()[0];
+        let flag_atom = match &rule.rhs()[1] {
+            Predicate::PositiveAtom(a) => a,
+            other => panic!("expected Flag atom, got {other:?}"),
+        };
+        match &flag_atom.arguments()[0] {
+            AtomArg::Const(c) => assert_eq!(c, &ConstType::Int8(5)),
+            other => panic!("expected Const, got {other:?}"),
+        }
+    }
+
+    /// Comparison operand literal: `x > 100` with `x: int16` must pin `100`
+    /// to `Int16(100)` via `pin_arith_literals` inside `check_comparison`.
+    /// Guards the pin-target selection after `merge_lit` unifies left/right.
+    #[test]
+    fn comparison_literal_pinned_to_variable_type() {
+        let src = "\
+            .decl Item(x: int16)\n\
+            .decl Big(x: int16)\n\
+            .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+            .output Big\n\
+            Big(x) :- Item(x), x > 100.\n";
+        let program = parse_and_check(src);
+        let rule = program.rules()[0];
+        let cmp = match &rule.rhs()[1] {
+            Predicate::Compare(c) => c,
+            other => panic!("expected comparison, got {other:?}"),
+        };
+        match cmp.right().init() {
+            Factor::Const(c) => assert_eq!(c, &ConstType::Int16(100)),
+            other => panic!("expected Const, got {other:?}"),
+        }
+    }
+
+    /// Nested UDF call: in `f(1) + x` where `x: int64` and `f: int8 -> int64`,
+    /// the `1` must be pinned to the UDF's parameter width (`Int8`), NOT the
+    /// enclosing expression's target (`Int64`). A regression using outer
+    /// context inside `pin_fn_call_args` would silently widen the literal.
+    #[test]
+    fn nested_udf_arg_pinned_to_param_type_not_outer_target() {
+        let src = "\
+            .decl Item(x: int64)\n\
+            .decl Flag(x: int64)\n\
+            .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+            .output Flag\n\
+            .extern fn f(a: int8) -> int64\n\
+            Flag(f(1) + x) :- Item(x).\n";
+        let program = parse_and_check(src);
+        let rule = program.rules()[0];
+        let head_arith = match &rule.head().head_arguments()[0] {
+            HeadArg::Arith(a) => a,
+            other => panic!("expected Arith head arg, got {other:?}"),
+        };
+        let fc = match head_arith.init() {
+            Factor::FnCall(fc) => fc,
+            other => panic!("expected FnCall factor, got {other:?}"),
+        };
+        match fc.args()[0].init() {
+            Factor::Const(c) => assert_eq!(
+                c,
+                &ConstType::Int8(1),
+                "UDF arg must pin to param type (Int8), not outer target (Int64)"
+            ),
+            other => panic!("expected Const, got {other:?}"),
+        }
+    }
+
+    /// Fact tuple literal: `P(5)` with `.decl P(x: uint64)` must pin via
+    /// `check_and_pin_facts`. This is a separate code path from rule-body
+    /// pinning — a regression here would leak polymorphic literals into
+    /// `program.facts()` even though all rule literals are concrete.
+    #[test]
+    fn fact_tuple_const_pinned_to_declared_column_width() {
+        let src = "\
+            .decl P(x: uint64)\n\
+            .decl Out(x: uint64)\n\
+            .output Out\n\
+            P(5).\n\
+            Out(x) :- P(x).\n";
+        let program = parse_and_check(src);
+        let p_facts = program.facts().get("p").expect("p facts");
+        let (_, tuple) = &p_facts[0];
+        assert_eq!(tuple[0], ConstType::UInt64(5));
+    }
+
+    /// `merge_lit` is the single source of truth for arithmetic operand
+    /// unification. Integration fixtures exercise the rejection paths by
+    /// watching for `ArithmeticTypeMismatch`, but a regression that silently
+    /// *widened* acceptance (e.g. Int8+Int16 → Int16) would let bad programs
+    /// through and only surface as wrong codegen width. Each row below is a
+    /// specific bug class.
+    #[test]
+    fn merge_lit_table() {
+        use DataType::*;
+        use LitKind::*;
+
+        // Both sides polymorphic: must stay polymorphic so outer context
+        // can still pin. Collapsing to Concrete(Int32) would break
+        // narrow-width columns consuming `1 + 2`.
+        assert_eq!(merge_lit(IntLit, IntLit), Some(IntLit));
+        assert_eq!(merge_lit(FloatLit, FloatLit), Some(FloatLit));
+
+        // Polymorphic meets concrete: concrete wins, picks the exact width.
+        assert_eq!(merge_lit(IntLit, Concrete(Int8)), Some(Concrete(Int8)));
+        assert_eq!(merge_lit(Concrete(UInt16), IntLit), Some(Concrete(UInt16)));
+        assert_eq!(
+            merge_lit(FloatLit, Concrete(Float64)),
+            Some(Concrete(Float64))
+        );
+
+        // Same family, different width: rejects. Any "promote to wider"
+        // rule added here would silently accept type-mismatched programs.
+        assert_eq!(merge_lit(Concrete(Int8), Concrete(Int16)), None);
+        assert_eq!(merge_lit(Concrete(Float32), Concrete(Float64)), None);
+
+        // Cross-family: rejects.
+        assert_eq!(merge_lit(IntLit, FloatLit), None);
+        assert_eq!(merge_lit(Concrete(Int32), Concrete(Float32)), None);
+        assert_eq!(merge_lit(Concrete(Bool), IntLit), None);
+    }
+
+    /// `check_arith_op` controls which types can appear around which operator.
+    /// Integration covers Bool rejection; the `cat` operator corners
+    /// (`String cat String` accept, numeric `cat` reject, string `+` reject)
+    /// have no fixture. A regression in any row would silently flip
+    /// acceptance for real programs.
+    #[test]
+    fn check_arith_op_table() {
+        use ArithmeticOperator::*;
+        use DataType::*;
+        use LitKind::Concrete;
+
+        let span = Span::DUMMY;
+
+        // Positive: numeric with numeric ops is fine.
+        assert!(check_arith_op(Concrete(Int32), &Plus, span).is_ok());
+        assert!(check_arith_op(Concrete(Float64), &Multiply, span).is_ok());
+
+        // Positive: `cat` on strings.
+        assert!(check_arith_op(Concrete(String), &Cat, span).is_ok());
+
+        // Negative: `cat` on numeric → error.
+        assert!(check_arith_op(Concrete(Int32), &Cat, span).is_err());
+
+        // Negative: numeric op on strings → error.
+        assert!(check_arith_op(Concrete(String), &Plus, span).is_err());
+
+        // Negative: Bool rejects everything (numeric ops AND cat).
+        assert!(check_arith_op(Concrete(Bool), &Plus, span).is_err());
+        assert!(check_arith_op(Concrete(Bool), &Cat, span).is_err());
+    }
+
+    /// `report_ty` on polymorphic literals returns the default width used
+    /// both for diagnostic rendering and for pinning orphan all-literal
+    /// expressions (`5 > 10` with no variables). A regression that changed
+    /// these defaults would shift every diagnostic's "expected" type AND
+    /// silently change what width orphan constants get pinned to.
+    #[test]
+    fn report_ty_polymorphic_defaults() {
+        assert_eq!(LitKind::IntLit.report_ty(), DataType::Int32);
+        assert_eq!(LitKind::FloatLit.report_ty(), DataType::Float32);
     }
 }

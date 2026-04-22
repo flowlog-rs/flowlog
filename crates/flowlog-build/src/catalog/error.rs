@@ -3,8 +3,8 @@
 use std::fmt;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use crate::common::diag::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
-use crate::common::source::{FileId, Span};
+use crate::common::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
+use crate::common::{FileId, Span};
 use thiserror::Error;
 
 /// Which body predicate carried an unsafe variable. Only affects the
@@ -48,7 +48,7 @@ pub enum CatalogError {
 }
 
 impl CatalogError {
-    pub(crate) fn internal(detail: impl Into<String>) -> Self {
+    pub(super) fn internal(detail: impl Into<String>) -> Self {
         Self::Internal(InternalError::new("catalog", detail, BUG_URL))
     }
 }

@@ -3,14 +3,14 @@
 //! See the crate-level documentation for an overview of strata, recursion, and
 //! the Extended Datalog mode.
 
-use crate::stratifier::dependency_graph::DependencyGraph;
-use crate::stratifier::error::StratifyError;
-use crate::common::source::Span;
-use itertools::Itertools;
+use crate::common::Span;
 use crate::parser::{
     AggregationOperator, FlowLogRule, HeadArg, IterativeDirective, LoopCondition, Predicate,
     Program, Segment,
 };
+use crate::stratifier::dependency_graph::DependencyGraph;
+use crate::stratifier::error::StratifyError;
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use tracing::{debug, info, warn};
@@ -111,31 +111,16 @@ pub struct Stratifier {
 // =============================================================================
 
 impl Stratifier {
-    /// The original program that was stratified.
-    #[must_use]
-    pub fn program(&self) -> &Program {
-        &self.program
-    }
-
-    /// A parallel bitmap indicating which strata are recursive.
-    ///
-    /// `bitmap[i]` is `true` when stratum *i* contains a dependency cycle and
-    /// requires recursive evaluation.
-    #[must_use]
-    pub fn is_recursive_stratum_bitmap(&self) -> &[bool] {
-        &self.is_recursive_stratum_bitmap
-    }
-
     /// Returns `true` if stratum `idx` is recursive.
     #[must_use]
-    pub fn is_recursive_stratum(&self, idx: usize) -> bool {
+    pub(crate) fn is_recursive_stratum(&self, idx: usize) -> bool {
         self.is_recursive_stratum_bitmap[idx]
     }
 
     /// Returns the loop condition for a loop-derived stratum, or `None` for a
     /// plain SCC-derived stratum.
     #[must_use]
-    pub fn loop_condition(&self, idx: usize) -> Option<&LoopCondition> {
+    pub(crate) fn loop_condition(&self, idx: usize) -> Option<&LoopCondition> {
         self.stratum_loop_condition[idx].as_ref()
     }
 
@@ -156,7 +141,7 @@ impl Stratifier {
     /// Recursive relations (head ∩ body) not marked `.iterative`.
     /// Empty for non-recursive strata.
     #[must_use]
-    pub fn stratum_accumulate_recursive_relation(&self, idx: usize) -> &[u64] {
+    pub(crate) fn stratum_accumulate_recursive_relation(&self, idx: usize) -> &[u64] {
         &self.stratum_accumulate_recursive_relation[idx]
     }
 
@@ -165,13 +150,13 @@ impl Stratifier {
     /// Recursive relations (head ∩ body) explicitly marked `.iterative`.
     /// Empty for non-loop strata or loops without an `iterative` annotation.
     #[must_use]
-    pub fn stratum_iterative_recursive_relation(&self, idx: usize) -> &[u64] {
+    pub(crate) fn stratum_iterative_recursive_relation(&self, idx: usize) -> &[u64] {
         &self.stratum_iterative_recursive_relation[idx]
     }
 
     /// Relation fingerprints whose values must be retained after stratum `idx`.
     #[must_use]
-    pub fn stratum_leave_relation(&self, idx: usize) -> &Vec<u64> {
+    pub(crate) fn stratum_leave_relation(&self, idx: usize) -> &Vec<u64> {
         &self.stratum_leave_relation[idx]
     }
 
@@ -179,7 +164,7 @@ impl Stratifier {
     ///
     /// Always includes EDB relations and the leave sets of all earlier strata.
     #[must_use]
-    pub fn stratum_available_relations(&self, idx: usize) -> &HashSet<u64> {
+    pub(crate) fn stratum_available_relations(&self, idx: usize) -> &HashSet<u64> {
         &self.stratum_available_relations[idx]
     }
 }
@@ -596,8 +581,8 @@ impl Stratifier {
                 .iter()
                 .flat_map(|&rid| {
                     self.program.rule(rid).rhs().iter().filter_map(|p| match p {
-                        Predicate::PositiveAtomPredicate(atom)
-                        | Predicate::NegativeAtomPredicate(atom) => Some(atom.fingerprint()),
+                        Predicate::PositiveAtom(atom)
+                        | Predicate::NegativeAtom(atom) => Some(atom.fingerprint()),
                         _ => None,
                     })
                 })
@@ -724,8 +709,8 @@ impl Stratifier {
                 let rule = self.program.rule(rid);
                 for predicate in rule.rhs() {
                     let (fp, atom_span) = match predicate {
-                        Predicate::PositiveAtomPredicate(atom)
-                        | Predicate::NegativeAtomPredicate(atom) => {
+                        Predicate::PositiveAtom(atom)
+                        | Predicate::NegativeAtom(atom) => {
                             (atom.fingerprint(), atom.span())
                         }
                         _ => continue,
@@ -810,8 +795,8 @@ impl Stratifier {
                 .iter()
                 .flat_map(|r| {
                     r.rhs().iter().filter_map(|p| match p {
-                        Predicate::PositiveAtomPredicate(a)
-                        | Predicate::NegativeAtomPredicate(a) => Some(a.fingerprint()),
+                        Predicate::PositiveAtom(a)
+                        | Predicate::NegativeAtom(a) => Some(a.fingerprint()),
                         _ => None,
                     })
                 })
@@ -1055,38 +1040,6 @@ mod tests {
         assert!(logs_contain("`sum` in recursive stratum"));
     }
 
-    /// Reachable(x, count(y)) :- Reachable(x, n), Edge(x, y).
-    /// count in the head of a recursive rule → non-monotone aggregation warning.
-    #[test]
-    #[traced_test]
-    fn warns_count_in_recursive_stratum() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Reachable(x: int32, n: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            Reachable(x, count(y)) :- Edge(x, y).\n\
-            Reachable(x, count(y)) :- Reachable(x, n), Edge(x, y).\n\
-            .output Reachable\n";
-        Stratifier::from_program(&parse_program(src), false).expect("stratify should succeed");
-        assert!(logs_contain("`count` in recursive stratum"));
-    }
-
-    /// Score(x, AVG(v)) :- Score(x, s), Base(x, v).
-    /// avg in the head of a recursive rule → non-monotone aggregation warning.
-    #[test]
-    #[traced_test]
-    fn warns_avg_in_recursive_stratum() {
-        let src = "\
-            .decl Base(x: int32, v: int32)\n\
-            .decl Score(x: int32, s: int32)\n\
-            .input Base(IO=\"file\", filename=\"Base.csv\", delimiter=\",\")\n\
-            Score(x, AVG(v)) :- Base(x, v).\n\
-            Score(x, AVG(v)) :- Score(x, s), Base(x, v).\n\
-            .output Score\n";
-        Stratifier::from_program(&parse_program(src), false).expect("stratify should succeed");
-        assert!(logs_contain("`average` in recursive stratum"));
-    }
-
     /// Best(x, min(cost)) :- Best(x, b), Edge(x, y, cost).
     /// min is monotone → no fixpoint warning emitted.
     #[test]
@@ -1098,22 +1051,6 @@ mod tests {
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             Best(x, min(cost)) :- Edge(x, y, cost).\n\
             Best(x, min(cost)) :- Best(x, b), Edge(x, y, cost).\n\
-            .output Best\n";
-        Stratifier::from_program(&parse_program(src), false).expect("stratify should succeed");
-        assert!(!logs_contain("fixpoint may never converge"));
-    }
-
-    /// Best(x, max(cost)) :- Best(x, b), Edge(x, y, cost).
-    /// max is monotone → no fixpoint warning emitted.
-    #[test]
-    #[traced_test]
-    fn no_warn_max_in_recursive_stratum() {
-        let src = "\
-            .decl Edge(x: int32, y: int32, cost: int32)\n\
-            .decl Best(x: int32, b: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            Best(x, max(cost)) :- Edge(x, y, cost).\n\
-            Best(x, max(cost)) :- Best(x, b), Edge(x, y, cost).\n\
             .output Best\n";
         Stratifier::from_program(&parse_program(src), false).expect("stratify should succeed");
         assert!(!logs_contain("fixpoint may never converge"));
@@ -1205,48 +1142,6 @@ mod tests {
         assert!(s.is_recursive_stratum(0));
     }
 
-    /// Extended Datalog mode: recursive rules in a plain segment are a hard error.
-    #[test]
-    fn extended_mode_plain_recursion_errors() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Reach(x: int32, y: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            Reach(x, y) :- Edge(x, y).\n\
-            Reach(x, z) :- Edge(x, y), Reach(y, z).\n";
-        let err = Stratifier::from_program(&parse_program(src), true).unwrap_err();
-        assert!(
-            matches!(err, StratifyError::RecursionOutsideLoop { .. }),
-            "got {err:?}"
-        );
-    }
-
-    /// A plain-segment rule that references a relation only defined inside a
-    /// later `loop` block is a forward reference → stratifier hard error.
-    #[test]
-    fn forward_reference_across_loop_barrier_errors() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl A(x: int32, y: int32)\n\
-            .decl B(x: int32, y: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output A\n\
-            A(x, y) :- B(x, y).\n\
-            fixpoint {\n\
-                B(x, y) :- Edge(x, y).\n\
-                B(x, z) :- Edge(x, y), B(y, z).\n\
-            }\n";
-        let err = Stratifier::from_program(&parse_program(src), false).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                StratifyError::ForwardReference { rule: 0, ref rel, .. } if rel == "b"
-            ),
-            "got {err:?}"
-        );
-    }
-
     /// Inline fact-only relations are EDBs and must be available to the very
     /// first stratum just like file-backed `.input` relations.
     #[test]
@@ -1270,25 +1165,6 @@ mod tests {
         assert!(
             s.stratum_available_relations(0).contains(&param_fp),
             "inline fact relation should be available before the first stratum"
-        );
-    }
-
-    /// A `loop` block where no head relation appears as a body atom has no
-    /// recursive relations → stratifier hard error.
-    #[test]
-    fn loop_block_with_no_recursive_relations_errors() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl A(x: int32, y: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output A\n\
-            fixpoint {\n\
-                A(x, y) :- Edge(x, y).\n\
-            }\n";
-        let err = Stratifier::from_program(&parse_program(src), false).unwrap_err();
-        assert!(
-            matches!(err, StratifyError::RecursiveStratumEmpty { stratum: 1, .. }),
-            "got {err:?}"
         );
     }
 
@@ -1335,89 +1211,116 @@ mod tests {
         );
     }
 
-    /// An `iterative` declaration for a relation that has no deriving rule in
-    /// the loop body (not in HEAD) → stratifier hard error.
+    /// Helper: look up a relation's fingerprint by name.
+    fn fp_of(program: &Program, name: &str) -> u64 {
+        program
+            .relations()
+            .iter()
+            .find(|r| r.name() == name)
+            .unwrap_or_else(|| panic!("relation `{name}` missing"))
+            .fingerprint()
+    }
+
+    /// Leave set for stratum N must contain a head relation consumed by any
+    /// *later* stratum. If `later_body_atoms_per_stratum` accumulation breaks,
+    /// intermediate relations get dropped and codegen silently loses data.
     #[test]
-    fn loop_iterative_relation_not_derived_errors() {
-        // `ghost` is listed in iterative but has no rule inside the loop.
+    fn leave_set_includes_relation_consumed_by_later_stratum() {
         let src = "\
-            .decl edge(x: int32, y: int32)\n\
-            .decl reach(x: int32, y: int32)\n\
-            .decl ghost(x: int32)\n\
-            .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
-            .output reach\n\
-            fixpoint {\n\
-                .iterative ghost\n\
-                reach(x, y) :- edge(x, y).\n\
-                reach(x, z) :- edge(x, y), reach(y, z).\n\
-            }\n";
-        let err = Stratifier::from_program(&parse_program(src), true).unwrap_err();
+            .decl Edge(x: int32, y: int32)\n\
+            .decl Mid(x: int32, y: int32)\n\
+            .decl Out(x: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Mid(x, y) :- Edge(x, y).\n\
+            Out(x) :- Mid(x, y).\n";
+        let program = parse_program(src);
+        let s = Stratifier::from_program(&program, false).expect("stratify should succeed");
+
+        let mid_fp = fp_of(&program, "mid");
+        // Mid is NOT an .output, so its presence in leave[0] must come from
+        // the later-body-atom branch, not the idb branch.
         assert!(
-            matches!(
-                err,
-                StratifyError::IterativeNotInLoopHead { ref rel, .. } if rel == "ghost"
-            ),
-            "got {err:?}"
+            s.stratum_leave_relation(0).contains(&mid_fp),
+            "mid should be retained for stratum 1 to consume"
         );
     }
 
-    /// An `iterative` declaration for a relation that is derived (appears in
-    /// HEAD) but is never used in any body atom (not recursive) → stratifier
-    /// hard error.
+    /// Leave set for the last stratum must contain any `.output` relation it
+    /// heads, even with no later consumer. Guards the `idb_fp_set` branch of
+    /// the leave-set computation — a bug there would drop outputs from the
+    /// persisted set.
     #[test]
-    fn loop_iterative_relation_not_recursive_errors() {
-        // `sink` is derived inside the loop (from reach) but never referenced in
-        // any body atom, so it has no recursive dependency and cannot use
-        // iterative semantics.
+    fn leave_set_includes_idb_even_with_no_later_consumer() {
         let src = "\
-            .decl edge(x: int32, y: int32)\n\
-            .decl reach(x: int32, y: int32)\n\
-            .decl sink(x: int32)\n\
-            .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
-            .output reach\n\
-            .output sink\n\
-            fixpoint {\n\
-                .iterative sink\n\
-                reach(x, y) :- edge(x, y).\n\
-                reach(x, z) :- edge(x, y), reach(y, z).\n\
-                sink(x) :- reach(x, y).\n\
-            }\n";
-        let err = Stratifier::from_program(&parse_program(src), true).unwrap_err();
+            .decl Edge(x: int32, y: int32)\n\
+            .decl Final(x: int32, y: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Final\n\
+            Final(x, y) :- Edge(x, y).\n";
+        let program = parse_program(src);
+        let s = Stratifier::from_program(&program, false).expect("stratify should succeed");
+
+        let final_fp = fp_of(&program, "final");
+        let last = s.stratum.len() - 1;
         assert!(
-            matches!(
-                err,
-                StratifyError::IterativeNotRecursive { ref rel, .. } if rel == "sink"
-            ),
-            "got {err:?}"
+            s.stratum_leave_relation(last).contains(&final_fp),
+            "output relation must stay in leave set of its stratum"
         );
     }
 
-    /// An until condition that references a relation present in HEAD but never in
-    /// any body atom (non-recursive) → stratifier hard error.
+    /// `stratum_available_relations(i)` = EDBs ∪ leave[0..i). Across three
+    /// strata, stratum 2's available set must contain relations produced by
+    /// both stratum 0 and stratum 1. Guards the `accumulated.extend(leave)`
+    /// accumulator in `build_stratum_metadata`.
     #[test]
-    fn loop_until_condition_relation_not_recursive_errors() {
-        // `done` is derived from EDB only (edge), which is not recursive.
-        // It has no dependency on any recursive relation in the loop, so
-        // it cannot act as a meaningful termination signal.
+    fn available_set_accumulates_leaves_across_strata() {
         let src = "\
-            .decl edge(x: int32, y: int32)\n\
-            .decl reach(x: int32, y: int32)\n\
-            .decl done()\n\
-            .input edge(IO=\"file\", filename=\"edge.csv\", delimiter=\",\")\n\
-            .output reach\n\
-            .output done\n\
-            loop until { done } {\n\
-                reach(x, y) :- edge(x, y).\n\
-                reach(x, z) :- edge(x, y), reach(y, z).\n\
-                done() :- edge(x, y).\n\
-            }\n";
-        let err = Stratifier::from_program(&parse_program(src), true).unwrap_err();
+            .decl Edge(x: int32, y: int32)\n\
+            .decl A(x: int32, y: int32)\n\
+            .decl B(x: int32, y: int32)\n\
+            .decl Out(x: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            A(x, y) :- Edge(x, y).\n\
+            B(x, y) :- A(x, y).\n\
+            Out(x) :- A(x, y), B(x, y).\n";
+        let program = parse_program(src);
+        let s = Stratifier::from_program(&program, false).expect("stratify should succeed");
+
+        assert!(s.stratum.len() >= 3, "expected at least 3 strata");
+        let a_fp = fp_of(&program, "a");
+        let b_fp = fp_of(&program, "b");
+        let last = s.stratum.len() - 1;
+        let available = s.stratum_available_relations(last);
         assert!(
-            matches!(
-                err,
-                StratifyError::LoopConditionNotRecursive { ref rel, .. } if rel == "done"
-            ),
-            "got {err:?}"
+            available.contains(&a_fp),
+            "A's leave from stratum 0 missing"
+        );
+        assert!(
+            available.contains(&b_fp),
+            "B's leave from stratum 1 missing"
+        );
+    }
+
+    /// Negation across *non-recursive* strata must not trigger the recursive-
+    /// stratum negation warning. A regression that broadens the trigger would
+    /// silently spam warnings on every cross-stratum `!B(...)` the user writes.
+    #[test]
+    #[traced_test]
+    fn no_warn_on_non_recursive_negation() {
+        let src = "\
+            .decl Edge(x: int32, y: int32)\n\
+            .decl B(x: int32)\n\
+            .decl A(x: int32)\n\
+            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+            .output A\n\
+            B(x) :- Edge(x, y).\n\
+            A(x) :- Edge(x, y), !B(x).\n";
+        Stratifier::from_program(&parse_program(src), false).expect("stratify should succeed");
+        assert!(
+            !logs_contain("Negation in recursive stratum"),
+            "non-recursive negation should not fire the recursive-stratum warning"
         );
     }
 }

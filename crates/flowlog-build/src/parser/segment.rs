@@ -23,7 +23,7 @@ use crate::parser::logic::{FlowLogRule, LoopBlock};
 /// out(X) :- rule_b(X).          // ─── Segment::Plain
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Segment {
+pub(crate) enum Segment {
     /// A plain segment of rules evaluated to fixpoint (normal stratification).
     Plain(Vec<FlowLogRule>),
     /// A bounded/conditional loop block (hard evaluation barrier).
@@ -36,7 +36,7 @@ impl Segment {
     /// Rules in this segment. Returns an empty slice for `Loop`/`Fixpoint`
     /// (use [`LoopBlock::rules`] to access rules inside the block).
     #[must_use]
-    pub fn as_rules(&self) -> &[FlowLogRule] {
+    pub(crate) fn as_rules(&self) -> &[FlowLogRule] {
         match self {
             Self::Plain(rules) => rules,
             Self::Loop(_) | Self::Fixpoint(_) => &[],
@@ -45,7 +45,21 @@ impl Segment {
 
     /// The [`LoopBlock`] if this is a `Loop` or `Fixpoint` segment; `None` otherwise.
     #[must_use]
-    pub fn as_loop(&self) -> Option<&LoopBlock> {
+    pub(crate) fn as_loop(&self) -> Option<&LoopBlock> {
+        match self {
+            Self::Loop(block) | Self::Fixpoint(block) => Some(block),
+            Self::Plain(_) => None,
+        }
+    }
+
+    pub(crate) fn as_rules_mut(&mut self) -> &mut [FlowLogRule] {
+        match self {
+            Self::Plain(rules) => rules,
+            Self::Loop(_) | Self::Fixpoint(_) => &mut [],
+        }
+    }
+
+    pub(crate) fn as_loop_mut(&mut self) -> Option<&mut LoopBlock> {
         match self {
             Self::Loop(block) | Self::Fixpoint(block) => Some(block),
             Self::Plain(_) => None,

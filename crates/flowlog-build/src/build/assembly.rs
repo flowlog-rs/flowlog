@@ -13,7 +13,7 @@ use quote::quote;
 
 use crate::common::pretty_print;
 
-use crate::codegen::features::Features;
+use crate::codegen::Features;
 use crate::build::engine::gen_lib_engine;
 use crate::build::imports::gen_lib_imports;
 use crate::build::pipeline::Pipeline;

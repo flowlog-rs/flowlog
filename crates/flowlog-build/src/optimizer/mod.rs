@@ -6,8 +6,7 @@
 //!
 //! All interfaces are intentionally lightweight to allow later extension.
 
-pub mod core;
-pub mod plan_tree;
+pub(crate) mod core;
+pub(crate) mod plan_tree;
 
 pub use self::core::Optimizer;
-pub use plan_tree::PlanTree;

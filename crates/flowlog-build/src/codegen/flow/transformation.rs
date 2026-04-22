@@ -16,9 +16,9 @@ use crate::codegen::arg::{
     compute_join_param_tokens, compute_kv_param_tokens, kv_use_counts, row_pattern_and_fields,
     row_use_counts,
 };
-use crate::codegen::error::CodegenError;
+use crate::codegen::CodegenError;
 use crate::codegen::ident::find_local_ident;
-use crate::codegen::ty::data::data_type_tokens;
+use crate::codegen::data_type_tokens;
 use crate::codegen::CodeGen;
 
 use crate::planner::{StratumPlanner, Transformation};

@@ -18,18 +18,8 @@ use std::path::{Path, PathBuf};
 /// always compares equal to itself and hashes to nothing; `Debug`,
 /// `Clone`, `Copy`, `Default` continue to delegate to `T`.
 ///
-/// # Example
-/// ```
-/// # use flowlog_build::common::source::Ignored;
-/// #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-/// struct Rule { name: String, span: Ignored<(u32, u32)> }
-///
-/// let a = Rule { name: "r".into(), span: Ignored((0, 10)) };
-/// let b = Rule { name: "r".into(), span: Ignored((100, 110)) };
-/// assert_eq!(a, b); // spans differ but the rules are equal
-/// ```
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Ignored<T>(pub T);
+pub(crate) struct Ignored<T>(pub(crate) T);
 
 impl<T> PartialEq for Ignored<T> {
     fn eq(&self, _other: &Self) -> bool {
@@ -45,7 +35,7 @@ impl<T> std::hash::Hash for Ignored<T> {
 ///
 /// `FileId::DUMMY` marks synthesized nodes that have no real source location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FileId(pub u32);
+pub struct FileId(pub(crate) u32);
 
 impl FileId {
     pub const DUMMY: FileId = FileId(u32::MAX);
@@ -57,9 +47,9 @@ impl FileId {
 /// `Span::DUMMY` is the placeholder for synthesized AST nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
-    pub file: FileId,
-    pub start: u32,
-    pub end: u32,
+    pub(crate) file: FileId,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
 }
 
 impl Span {

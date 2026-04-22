@@ -10,7 +10,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::common::compute_fp;
-use crate::common::source::{FileId, Ignored, Span};
+use crate::common::{FileId, Ignored, Span};
 
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,10 +44,11 @@ pub struct Relation {
 }
 
 impl Relation {
-    /// Create a new relation.
+    /// Build a fresh relation. Tests only; production code goes through the parser.
+    #[cfg(test)]
     #[must_use]
     #[inline]
-    pub fn new(name: &str, attributes: Vec<Attribute>) -> Self {
+    pub(crate) fn new(name: &str, attributes: Vec<Attribute>) -> Self {
         let raw_name = name.to_string();
         let name = name.to_lowercase();
         let fingerprint = compute_fp(&name);
@@ -67,7 +68,7 @@ impl Relation {
     /// Source location of this `.decl` declaration.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.span.0
     }
 
@@ -81,22 +82,15 @@ impl Relation {
     /// Original surface-syntax name.
     #[must_use]
     #[inline]
-    pub fn raw_name(&self) -> &str {
+    pub(crate) fn raw_name(&self) -> &str {
         &self.raw_name
     }
 
     /// Relation fingerprint.
     #[must_use]
     #[inline]
-    pub fn fingerprint(&self) -> u64 {
+    pub(crate) fn fingerprint(&self) -> u64 {
         self.fingerprint
-    }
-
-    /// Attributes of the relation.
-    #[must_use]
-    #[inline]
-    pub fn attributes(&self) -> &[Attribute] {
-        &self.attributes
     }
 
     /// Data types of the relation, one per attribute.
@@ -141,21 +135,21 @@ impl Relation {
     /// Whether to print size for this relation.
     #[must_use]
     #[inline]
-    pub fn printsize(&self) -> bool {
+    pub(crate) fn printsize(&self) -> bool {
         self.printsize
     }
 
     /// Whether to output results for this relation.
     #[must_use]
     #[inline]
-    pub fn output(&self) -> bool {
+    pub(crate) fn output(&self) -> bool {
         self.output
     }
 
     /// Check whether this relation has a `.input` directive.
     #[must_use]
     #[inline]
-    pub fn has_input(&self) -> bool {
+    pub(crate) fn has_input(&self) -> bool {
         self.input_params.is_some()
     }
 
@@ -174,22 +168,22 @@ impl Relation {
     /// Notice not every IDB is an output/printsize relation.
     #[must_use]
     #[inline]
-    pub fn is_output_printsize(&self) -> bool {
+    pub(crate) fn is_output_printsize(&self) -> bool {
         self.output || self.printsize
     }
 
     /// Set input parameters for this relation.
-    pub fn set_input_params(&mut self, params: HashMap<String, String>) {
+    pub(crate) fn set_input_params(&mut self, params: HashMap<String, String>) {
         self.input_params = Some(params);
     }
 
     /// Mark relation for output.
-    pub fn set_output(&mut self, output: bool) {
+    pub(crate) fn set_output(&mut self, output: bool) {
         self.output = output;
     }
 
     /// Set output parameters for this relation.
-    pub fn set_output_params(&mut self, params: HashMap<String, String>) {
+    pub(crate) fn set_output_params(&mut self, params: HashMap<String, String>) {
         self.output_params = Some(params);
     }
 
@@ -205,7 +199,7 @@ impl Relation {
 
     /// Get the output row limit, if specified.
     #[must_use]
-    pub fn output_limit(&self) -> Option<usize> {
+    pub(crate) fn output_limit(&self) -> Option<usize> {
         let limit = self
             .output_params
             .as_ref()
@@ -233,7 +227,7 @@ impl Relation {
 
     /// Get the output ordering specification, if specified.
     #[must_use]
-    pub fn output_order_by(&self) -> Option<Vec<(usize, DataType, bool)>> {
+    pub(crate) fn output_order_by(&self) -> Option<Vec<(usize, DataType, bool)>> {
         self.output_params
             .as_ref()
             .and_then(|m| m.get("order_by"))
@@ -279,7 +273,7 @@ impl Relation {
     }
 
     /// Set printsize flag.
-    pub fn set_printsize(&mut self, printsize: bool) {
+    pub(crate) fn set_printsize(&mut self, printsize: bool) {
         self.printsize = printsize;
     }
 
@@ -288,13 +282,6 @@ impl Relation {
     #[inline]
     pub fn arity(&self) -> usize {
         self.attributes.len()
-    }
-
-    /// `true` if no attributes.
-    #[must_use]
-    #[inline]
-    pub fn is_nullary(&self) -> bool {
-        self.attributes.is_empty()
     }
 }
 
