@@ -290,6 +290,9 @@ mod tests {
         assert_eq!(Multiply.to_string(), "*");
         assert_eq!(Divide.to_string(), "/");
         assert_eq!(Modulo.to_string(), "%");
+        // Cat is a named (non-symbolic) operator — a rename like
+        // `Cat => "||"` would break string-concat codegen silently.
+        assert_eq!(Cat.to_string(), "cat");
     }
 
     #[test]
@@ -325,5 +328,20 @@ mod tests {
         let y_str = "y".to_string();
         assert!(set.contains(&x_str));
         assert!(set.contains(&y_str));
+    }
+
+    /// `vars()` preserves order and duplicates; `vars_set()` dedups. The
+    /// two accessors exist because downstream passes need both: variable
+    /// binding passes count occurrences (repeat = join predicate), while
+    /// scope analysis needs the unique set. Collapsing either one into
+    /// the other would silently break one of those callers.
+    #[test]
+    fn vars_preserves_dups_vars_set_dedups() {
+        // x + x + y  →  vars = [x, x, y], vars_set = {x, y}
+        let a = Arithmetic::new(v("x"), vec![(Plus, v("x")), (Plus, v("y"))]);
+        let x = "x".to_string();
+        let y = "y".to_string();
+        assert_eq!(a.vars(), vec![&x, &x, &y]);
+        assert_eq!(a.vars_set().len(), 2);
     }
 }

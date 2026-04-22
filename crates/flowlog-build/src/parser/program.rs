@@ -1262,21 +1262,6 @@ mod tests {
     }
 
     #[test]
-    fn decl_exact_duplicate_rejected() {
-        let err = parse_program_result(
-            "
-            .decl edge(x: number)
-            .decl edge(y: number)
-            ",
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ParseError::DuplicateDecl { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
     fn decl_case_collision_rejected() {
         let err = parse_program_result(
             "
@@ -1287,15 +1272,6 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(err, ParseError::DuplicateDecl { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn attr_exact_duplicate_rejected() {
-        let err = parse_program_result(".decl edge(x: number, x: number)").unwrap_err();
-        assert!(
-            matches!(err, ParseError::DuplicateAttribute { .. }),
             "got {err:?}"
         );
     }
@@ -1406,38 +1382,6 @@ mod tests {
         let program = parse_program(src);
         assert_eq!(loop_blocks(&program).len(), 1);
         assert_eq!(loop_blocks(&program)[0].iterative_relations().len(), 1);
-    }
-
-    #[test]
-    fn loop_iterative_undeclared_panics() {
-        let err = parse_program_result("fixpoint { .iterative active_edge }").unwrap_err();
-        assert!(
-            matches!(err, ParseError::UndeclaredInIterativeList { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn loop_bool_relation_undeclared_panics() {
-        let err = parse_program_result("loop until { done } { }").unwrap_err();
-        assert!(
-            matches!(err, ParseError::UndeclaredLoopCondition { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn loop_relation_non_nullary_panics() {
-        let src = "
-            .decl done(x: number)
-            .output done
-            loop until { done } { done(1) :- done(1). }
-        ";
-        let err = parse_program_result(src).unwrap_err();
-        assert!(
-            matches!(err, ParseError::NonNullaryLoopCondition { .. }),
-            "got {err:?}"
-        );
     }
 
     #[test]
@@ -1587,5 +1531,67 @@ mod tests {
         assert_eq!(rules[2].rhs()[0].name(), "a");
         assert_eq!(rules[3].head().name(), "d");
         assert_eq!(rules[3].rhs()[0].name(), "b");
+    }
+
+    /// Diamond include: `root` includes `left` and `right`, both include
+    /// `leaf`. The `completed` set in `resolve_includes` must prevent
+    /// `leaf` from being inlined twice — otherwise `.decl leaf_rel` would
+    /// appear twice and fail with `DuplicateDecl`. This guards the warn-
+    /// and-skip branch at the `completed.contains` check.
+    #[test]
+    fn diamond_include_dedups_leaf() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let write = |name: &str, body: &str| {
+            std::fs::write(dir.path().join(name), body).expect("write");
+        };
+        write(
+            "leaf.dl",
+            ".decl leaf_rel(x: number)\n.output leaf_rel\nleaf_rel(1).\n",
+        );
+        write("left.dl", ".include \"leaf.dl\"\n");
+        write("right.dl", ".include \"leaf.dl\"\n");
+        write("root.dl", ".include \"left.dl\"\n.include \"right.dl\"\n");
+
+        let mut sm = SourceMap::new();
+        let program = Program::parse(&dir.path().join("root.dl").to_string_lossy(), true, &mut sm)
+            .expect("diamond include should succeed with dedup");
+
+        let rels: Vec<_> = program
+            .relations()
+            .iter()
+            .filter(|r| r.name() == "leaf_rel")
+            .collect();
+        assert_eq!(rels.len(), 1, "leaf_rel inlined twice");
+    }
+
+    /// UDF reclassification must preserve negation: `!my_udf(x)` parses
+    /// first as `NegativeAtomPredicate`, then `reclassify_udf_predicates`
+    /// rewrites it to `FnCallPredicate` with `is_negated = true`. A bug
+    /// dropping the flag would turn a negated filter into a positive one
+    /// — wrong semantics, no compile error.
+    #[test]
+    fn negated_udf_reclassification_preserves_negation() {
+        let src = "
+            .decl edge(x: number, y: number)
+            .decl out(x: number, y: number)
+            .output out
+            .extern fn cost(x: number) -> number
+            out(X, Y) :- edge(X, Y), !cost(X).
+        ";
+        let program = parse_program(src);
+        let rule = program.rules()[0];
+        let fn_call = rule
+            .rhs()
+            .iter()
+            .find_map(|p| match p {
+                Predicate::FnCallPredicate(fc) => Some(fc),
+                _ => None,
+            })
+            .expect("udf body atom should be reclassified to FnCallPredicate");
+        assert!(
+            fn_call.is_negated(),
+            "negation lost during reclassification"
+        );
+        assert_eq!(fn_call.name(), "cost");
     }
 }

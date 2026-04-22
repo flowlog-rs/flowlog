@@ -240,4 +240,45 @@ mod tests {
         assert_eq!(ConstType::Int(42).data_type(), None);
         assert_eq!(ConstType::Float(OrderedFloat(1.5)).data_type(), None);
     }
+
+    /// `pin` is the sole path from polymorphic-literal to concrete width.
+    /// Out-of-range values use `as`-casts (truncating), matching the
+    /// typechecker's contract that range checking is delegated to rustc.
+    #[test]
+    fn pin_truncates_out_of_range_integer() {
+        let mut c = ConstType::Int(256);
+        c.pin(DataType::Int8);
+        assert_eq!(c, ConstType::Int8(0));
+
+        let mut c = ConstType::Int(-1);
+        c.pin(DataType::UInt8);
+        assert_eq!(c, ConstType::UInt8(255));
+
+        let mut c = ConstType::Int(1 << 33);
+        c.pin(DataType::Int32);
+        assert_eq!(c, ConstType::Int32(0));
+    }
+
+    /// Pinning an `Int` to a string-family target must panic — the typechecker
+    /// is required to match literal families before calling `pin`. A silent
+    /// acceptance here would let family-mismatched code reach codegen.
+    #[test]
+    #[should_panic(expected = "family mismatch")]
+    fn pin_int_to_string_panics() {
+        let mut c = ConstType::Int(1);
+        c.pin(DataType::String);
+    }
+
+    /// `pin` on an already-concrete literal is a no-op when the target
+    /// matches; downstream passes may re-run `pin` defensively.
+    #[test]
+    fn pin_already_concrete_is_noop() {
+        let mut c = ConstType::Int32(5);
+        c.pin(DataType::Int32);
+        assert_eq!(c, ConstType::Int32(5));
+
+        let mut c = ConstType::Text("hi".into());
+        c.pin(DataType::String);
+        assert_eq!(c, ConstType::Text("hi".into()));
+    }
 }
