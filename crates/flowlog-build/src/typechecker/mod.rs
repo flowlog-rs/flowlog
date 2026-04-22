@@ -624,11 +624,7 @@ fn pin_arith_literals(
     Ok(())
 }
 
-fn pin_factor(
-    factor: &mut Factor,
-    target: DataType,
-    udfs: &UdfSigs,
-) -> Result<(), TypeCheckError> {
+fn pin_factor(factor: &mut Factor, target: DataType, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
     match factor {
         Factor::Const(c) => {
             if c.is_polymorphic() {
@@ -696,4 +692,203 @@ fn check_and_pin_facts(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests focus on the typechecker's *second* job — pinning every
+    //! polymorphic literal to its concrete width. The 15 integration
+    //! fixtures in `tests/errors/typechecker/` cover the check side;
+    //! pinning outcomes are not observable through those assertions.
+
+    use super::*;
+    use crate::common::SourceMap;
+    use std::io::Write;
+
+    fn parse_and_check(src: &str) -> Program {
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        tmp.write_all(src.as_bytes()).expect("write");
+        let mut sm = SourceMap::new();
+        let mut program =
+            Program::parse(&tmp.path().to_string_lossy(), true, &mut sm).expect("parse failed");
+        check_program(&mut program).expect("check failed");
+        program
+    }
+
+    /// Body-positive atom literal: `Flag(5)` with `.decl Flag(x: int8)` must
+    /// pin `5` to `Int8(5)` via `pin_atom_consts`. If that pass becomes a
+    /// no-op, catalog calls `data_type()` on a polymorphic `Int` and panics.
+    #[test]
+    fn body_atom_const_pinned_to_declared_column_width() {
+        let src = "\
+            .decl Item(x: int8)\n\
+            .decl Flag(x: int8)\n\
+            .decl Out(x: int8)\n\
+            .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+            .input Flag(IO=\"file\", filename=\"Flag.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- Item(x), Flag(5).\n";
+        let program = parse_and_check(src);
+        let rule = program.rules()[0];
+        let flag_atom = match &rule.rhs()[1] {
+            Predicate::PositiveAtomPredicate(a) => a,
+            other => panic!("expected Flag atom, got {other:?}"),
+        };
+        match &flag_atom.arguments()[0] {
+            AtomArg::Const(c) => assert_eq!(c, &ConstType::Int8(5)),
+            other => panic!("expected Const, got {other:?}"),
+        }
+    }
+
+    /// Comparison operand literal: `x > 100` with `x: int16` must pin `100`
+    /// to `Int16(100)` via `pin_arith_literals` inside `check_comparison`.
+    /// Guards the pin-target selection after `merge_lit` unifies left/right.
+    #[test]
+    fn comparison_literal_pinned_to_variable_type() {
+        let src = "\
+            .decl Item(x: int16)\n\
+            .decl Big(x: int16)\n\
+            .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+            .output Big\n\
+            Big(x) :- Item(x), x > 100.\n";
+        let program = parse_and_check(src);
+        let rule = program.rules()[0];
+        let cmp = match &rule.rhs()[1] {
+            Predicate::ComparePredicate(c) => c,
+            other => panic!("expected comparison, got {other:?}"),
+        };
+        match cmp.right().init() {
+            Factor::Const(c) => assert_eq!(c, &ConstType::Int16(100)),
+            other => panic!("expected Const, got {other:?}"),
+        }
+    }
+
+    /// Nested UDF call: in `f(1) + x` where `x: int64` and `f: int8 -> int64`,
+    /// the `1` must be pinned to the UDF's parameter width (`Int8`), NOT the
+    /// enclosing expression's target (`Int64`). A regression using outer
+    /// context inside `pin_fn_call_args` would silently widen the literal.
+    #[test]
+    fn nested_udf_arg_pinned_to_param_type_not_outer_target() {
+        let src = "\
+            .decl Item(x: int64)\n\
+            .decl Flag(x: int64)\n\
+            .input Item(IO=\"file\", filename=\"Item.csv\", delimiter=\",\")\n\
+            .output Flag\n\
+            .extern fn f(a: int8) -> int64\n\
+            Flag(f(1) + x) :- Item(x).\n";
+        let program = parse_and_check(src);
+        let rule = program.rules()[0];
+        let head_arith = match &rule.head().head_arguments()[0] {
+            HeadArg::Arith(a) => a,
+            other => panic!("expected Arith head arg, got {other:?}"),
+        };
+        let fc = match head_arith.init() {
+            Factor::FnCall(fc) => fc,
+            other => panic!("expected FnCall factor, got {other:?}"),
+        };
+        match fc.args()[0].init() {
+            Factor::Const(c) => assert_eq!(
+                c,
+                &ConstType::Int8(1),
+                "UDF arg must pin to param type (Int8), not outer target (Int64)"
+            ),
+            other => panic!("expected Const, got {other:?}"),
+        }
+    }
+
+    /// Fact tuple literal: `P(5)` with `.decl P(x: uint64)` must pin via
+    /// `check_and_pin_facts`. This is a separate code path from rule-body
+    /// pinning — a regression here would leak polymorphic literals into
+    /// `program.facts()` even though all rule literals are concrete.
+    #[test]
+    fn fact_tuple_const_pinned_to_declared_column_width() {
+        let src = "\
+            .decl P(x: uint64)\n\
+            .decl Out(x: uint64)\n\
+            .output Out\n\
+            P(5).\n\
+            Out(x) :- P(x).\n";
+        let program = parse_and_check(src);
+        let p_facts = program.facts().get("p").expect("p facts");
+        let (_, tuple) = &p_facts[0];
+        assert_eq!(tuple[0], ConstType::UInt64(5));
+    }
+
+    /// `merge_lit` is the single source of truth for arithmetic operand
+    /// unification. Integration fixtures exercise the rejection paths by
+    /// watching for `ArithmeticTypeMismatch`, but a regression that silently
+    /// *widened* acceptance (e.g. Int8+Int16 → Int16) would let bad programs
+    /// through and only surface as wrong codegen width. Each row below is a
+    /// specific bug class.
+    #[test]
+    fn merge_lit_table() {
+        use DataType::*;
+        use LitKind::*;
+
+        // Both sides polymorphic: must stay polymorphic so outer context
+        // can still pin. Collapsing to Concrete(Int32) would break
+        // narrow-width columns consuming `1 + 2`.
+        assert_eq!(merge_lit(IntLit, IntLit), Some(IntLit));
+        assert_eq!(merge_lit(FloatLit, FloatLit), Some(FloatLit));
+
+        // Polymorphic meets concrete: concrete wins, picks the exact width.
+        assert_eq!(merge_lit(IntLit, Concrete(Int8)), Some(Concrete(Int8)));
+        assert_eq!(merge_lit(Concrete(UInt16), IntLit), Some(Concrete(UInt16)));
+        assert_eq!(
+            merge_lit(FloatLit, Concrete(Float64)),
+            Some(Concrete(Float64))
+        );
+
+        // Same family, different width: rejects. Any "promote to wider"
+        // rule added here would silently accept type-mismatched programs.
+        assert_eq!(merge_lit(Concrete(Int8), Concrete(Int16)), None);
+        assert_eq!(merge_lit(Concrete(Float32), Concrete(Float64)), None);
+
+        // Cross-family: rejects.
+        assert_eq!(merge_lit(IntLit, FloatLit), None);
+        assert_eq!(merge_lit(Concrete(Int32), Concrete(Float32)), None);
+        assert_eq!(merge_lit(Concrete(Bool), IntLit), None);
+    }
+
+    /// `check_arith_op` controls which types can appear around which operator.
+    /// Integration covers Bool rejection; the `cat` operator corners
+    /// (`String cat String` accept, numeric `cat` reject, string `+` reject)
+    /// have no fixture. A regression in any row would silently flip
+    /// acceptance for real programs.
+    #[test]
+    fn check_arith_op_table() {
+        use ArithmeticOperator::*;
+        use DataType::*;
+        use LitKind::Concrete;
+
+        let span = Span::DUMMY;
+
+        // Positive: numeric with numeric ops is fine.
+        assert!(check_arith_op(Concrete(Int32), &Plus, span).is_ok());
+        assert!(check_arith_op(Concrete(Float64), &Multiply, span).is_ok());
+
+        // Positive: `cat` on strings.
+        assert!(check_arith_op(Concrete(String), &Cat, span).is_ok());
+
+        // Negative: `cat` on numeric → error.
+        assert!(check_arith_op(Concrete(Int32), &Cat, span).is_err());
+
+        // Negative: numeric op on strings → error.
+        assert!(check_arith_op(Concrete(String), &Plus, span).is_err());
+
+        // Negative: Bool rejects everything (numeric ops AND cat).
+        assert!(check_arith_op(Concrete(Bool), &Plus, span).is_err());
+        assert!(check_arith_op(Concrete(Bool), &Cat, span).is_err());
+    }
+
+    /// `report_ty` on polymorphic literals returns the default width used
+    /// both for diagnostic rendering and for pinning orphan all-literal
+    /// expressions (`5 > 10` with no variables). A regression that changed
+    /// these defaults would shift every diagnostic's "expected" type AND
+    /// silently change what width orphan constants get pinned to.
+    #[test]
+    fn report_ty_polymorphic_defaults() {
+        assert_eq!(LitKind::IntLit.report_ty(), DataType::Int32);
+        assert_eq!(LitKind::FloatLit.report_ty(), DataType::Float32);
+    }
 }
