@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="FlowLog.png" alt="FlowLog Logo" width="320"/>
+  <img src="https://raw.githubusercontent.com/flowlog-rs/flowlog/main/FlowLog.png" alt="FlowLog Logo" width="320"/>
 </p>
 
 <p align="center">
