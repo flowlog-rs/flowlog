@@ -12,10 +12,10 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::parser::{DataType, Program, Relation};
+use crate::parser::{Program, Relation};
 
-use crate::codegen::tuple_tokens;
-use crate::build::relation::user::{tuple_to_user_expr, user_to_tuple_expr};
+use super::{needs_conversion, per_position_tuple, user_to_tuple_convert};
+use crate::build::relation::user::tuple_to_user_expr;
 use crate::build::relation::{input_struct_ident, rust_ident, user_struct_ident};
 use crate::{data_type_tokens, gen_drain_block, CodeParts};
 
@@ -376,53 +376,8 @@ fn partition_slots_ident(rel: &Relation) -> Ident {
     format_ident!("{}_parts", rel.name())
 }
 
-/// Per-position conversion only fires for floats (`f32 → OrderedFloat<f32>`)
-/// and, under interning, strings (`String → Spur`). Integer-only relations
-/// have identical user / internal tuples, so we pass the binding through
-/// unchanged instead of emitting a pointless destructure-and-re-tuple.
-fn needs_conversion(rel: &Relation, string_intern: bool) -> bool {
-    rel.data_type().iter().any(|dt| {
-        matches!(dt, DataType::Float32 | DataType::Float64)
-            || (string_intern && matches!(dt, DataType::String))
-    })
-}
-
-/// Shared per-position tuple emission. `identity` is the binding to forward
-/// when no column needs conversion; otherwise we build a tuple literal of
-/// `elem(dt, src(i))` for each column.
-fn per_position_tuple(
-    rel: &Relation,
-    string_intern: bool,
-    identity: TokenStream,
-    mut src: impl FnMut(usize) -> TokenStream,
-    mut elem: impl FnMut(&DataType, TokenStream) -> TokenStream,
-) -> TokenStream {
-    if !needs_conversion(rel, string_intern) {
-        return identity;
-    }
-    tuple_tokens(
-        rel.data_type()
-            .iter()
-            .enumerate()
-            .map(|(i, dt)| elem(dt, src(i))),
-    )
-}
-
-/// User-tuple `item` → internal `Tuple`. Used at insert time.
-fn user_to_tuple_convert(rel: &Relation, string_intern: bool) -> TokenStream {
-    per_position_tuple(
-        rel,
-        string_intern,
-        quote! { item },
-        |i| {
-            let idx = proc_macro2::Literal::usize_unsuffixed(i);
-            quote! { item.#idx }
-        },
-        |dt, src| user_to_tuple_expr(dt, string_intern, src),
-    )
-}
-
-/// Internal `Tuple` `row.0` → user-tuple. Used at drain time.
+/// Internal `Tuple` `row.0` → user-tuple. Used at drain time (batch-only
+/// binding: the shared buffer row is `(Tuple, Ts, i32)`).
 fn tuple_to_user_convert(rel: &Relation, string_intern: bool) -> TokenStream {
     per_position_tuple(
         rel,

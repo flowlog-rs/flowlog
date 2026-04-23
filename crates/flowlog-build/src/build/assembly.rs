@@ -13,18 +13,19 @@ use quote::quote;
 
 use crate::common::pretty_print;
 
-use crate::codegen::Features;
-use crate::build::engine::gen_lib_engine;
+use crate::build::engine::{gen_lib_engine, gen_lib_incremental_engine};
 use crate::build::imports::gen_lib_imports;
 use crate::build::pipeline::Pipeline;
 use crate::build::relation::user::gen_public_rel_module;
-use crate::build::results::gen_batch_results;
+use crate::build::results::{gen_batch_results, gen_incremental_results};
+use crate::codegen::Features;
 
 /// Render the library-mode source file for one compiled program.
 pub(crate) fn assemble(
     pipeline: &Pipeline,
     out_dir: &Path,
     udf_file: Option<&Path>,
+    is_incremental: bool,
 ) -> io::Result<String> {
     let string_intern = pipeline.features.string_intern();
 
@@ -32,8 +33,17 @@ pub(crate) fn assemble(
     let lib_imports = gen_lib_imports(&pipeline.relations, &pipeline.features);
     let type_declarations = &pipeline.parts.type_declarations;
     let rel_module = gen_public_rel_module(&pipeline.program);
-    let batch_results = gen_batch_results(&pipeline.program);
-    let lib_engine = gen_lib_engine(&pipeline.program, string_intern, &pipeline.parts);
+    let (results_struct, lib_engine) = if is_incremental {
+        (
+            gen_incremental_results(&pipeline.program),
+            gen_lib_incremental_engine(&pipeline.program, string_intern, &pipeline.parts),
+        )
+    } else {
+        (
+            gen_batch_results(&pipeline.program),
+            gen_lib_engine(&pipeline.program, string_intern, &pipeline.parts),
+        )
+    };
     let udf_mod = gen_udf_mod(&pipeline.features, udf_file)?;
 
     // `include!()` forbids inner attributes at the call site, so the whole
@@ -62,7 +72,7 @@ pub(crate) fn assemble(
             #lib_imports
             #type_declarations
             #rel_module
-            #batch_results
+            #results_struct
             #udf_mod
             #lib_engine
         }
