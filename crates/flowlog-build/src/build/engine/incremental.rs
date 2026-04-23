@@ -409,6 +409,9 @@ fn gen_worker_closure(
     let local_bufs = &parts.local_bufs;
     let inspectors = &parts.inspectors;
     let flush = &parts.flush;
+    let profile_init = &parts.profile_init;
+    let time_profile_write = &parts.time_profile_write_incremental;
+    let memory_profile_write = &parts.memory_profile_write_incremental;
 
     let inputs_new_args = gen_inputs_new_args(program);
 
@@ -448,6 +451,7 @@ fn gen_worker_closure(
     quote! {
         move |worker| {
             let index = worker.index();
+            #profile_init
             #(#local_bufs)*
 
             let #handle_binding =
@@ -496,6 +500,9 @@ fn gen_worker_closure(
                         while probe.less_than(&time_stamp) {
                             worker.step();
                         }
+
+                        #time_profile_write
+                        #memory_profile_write
 
                         #(#flush)*
 
