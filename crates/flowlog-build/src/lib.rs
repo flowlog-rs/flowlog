@@ -91,8 +91,8 @@ pub use codegen::{
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::common::{emit, BoxError, SourceMap};
 pub use crate::common::ExecutionMode;
+use crate::common::{emit, BoxError, SourceMap};
 
 /// Compile a single `.dl` program with default options.
 ///
@@ -139,9 +139,11 @@ impl Builder {
 
     /// Set the execution mode. Defaults to [`ExecutionMode::DatalogBatch`].
     ///
-    /// Only `DatalogBatch` and `ExtendBatch` are wired into the
-    /// library-mode engine; `DatalogInc` / `ExtendInc` panic at
-    /// compile time.
+    /// Batch modes (`DatalogBatch`, `ExtendBatch`) emit a
+    /// `DatalogBatchEngine` with a single `run()` method. Incremental
+    /// modes (`DatalogInc`, `ExtendInc`) emit a
+    /// `DatalogIncrementalEngine` that maintains state across
+    /// `Transaction`-scoped commits.
     pub fn mode(mut self, mode: ExecutionMode) -> Self {
         self.mode = mode;
         self
@@ -185,16 +187,6 @@ impl Builder {
         out_dir: &Path,
         sm: &mut SourceMap,
     ) -> Result<(), BoxError> {
-        assert!(
-            !matches!(
-                self.mode,
-                ExecutionMode::DatalogInc | ExecutionMode::ExtendInc
-            ),
-            "library mode does not yet support {:?}; only DatalogBatch \
-             and ExtendBatch are wired in",
-            self.mode,
-        );
-
         let stem = program_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -209,8 +201,13 @@ impl Builder {
             })?;
 
         let output = build::Pipeline::build(self, program_path, sm)?;
-        let source = build::assemble(&output, out_dir, self.udf_file.as_deref())
-            .map_err(BuildError::from)?;
+        let source = build::assemble(
+            &output,
+            out_dir,
+            self.udf_file.as_deref(),
+            self.mode.is_incremental(),
+        )
+        .map_err(BuildError::from)?;
         self.emit_semiring_modules(&output, out_dir)
             .map_err(BuildError::from)?;
         std::fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;

@@ -1,6 +1,9 @@
 [package]
 name = "flowlog-runtime"
-version.workspace = true
+# Explicit version (not `version.workspace = true`) because the runtime
+# releases on its own cadence — generated code depends on it by
+# published version, so any additive change ships as an independent bump.
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

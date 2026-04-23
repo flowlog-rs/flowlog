@@ -24,8 +24,8 @@ use std::path::Path;
 use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Value};
 
 use flowlog_build::common::Config;
-use flowlog_build::{CodeParts, Features};
 use flowlog_build::profiler::{with_profiler_ref, Profiler};
+use flowlog_build::{CodeParts, Features};
 
 use crate::Compiler;
 
@@ -129,7 +129,7 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
         deps["timely"] = "0.28".into();
         deps["differential-dataflow"] = "0.22".into();
         deps["mimalloc"] = "0.1".into();
-        deps["flowlog-runtime"] = "0.1".into();
+        deps["flowlog-runtime"] = "0.1.1".into();
 
         if features.string_intern() {
             deps["lasso"] = value(inline_versioned_dep(

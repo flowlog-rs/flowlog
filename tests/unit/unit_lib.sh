@@ -7,20 +7,22 @@ set -euo pipefail
 # directory layout. Instead of compiling a standalone binary that reads
 # CSVs and writes files, this runner:
 #
-#   1. Copies the fixture's `program.dl` and `data/*.csv` into a persistent
-#      runner crate at `target/e2e-lib/runner/`.
-#   2. Synthesizes a `src/main.rs` that reads each input CSV, calls
-#      `engine.insert_<rel>(..)`, runs the engine, and writes
-#      `output/<rel>` files matching the binary-mode convention.
-#   3. Runs `cargo run --release` on the runner crate.
-#   4. Reuses `compare_expected_outputs` from `common.sh` to diff against
-#      `expected/`.
-#
-# Batch-mode categories only — incremental fixtures (with `commands.txt`)
-# are skipped. Extended syntax (loop / fixpoint blocks) is auto-detected
-# by the pipeline, so `datalog-batch` and `extend-batch` share one entry.
+#   1. Copies the fixture's `program.dl`, `data/*.csv`, and (for
+#      incremental fixtures) `commands.txt` into a persistent runner
+#      crate at `target/e2e-lib/runner/`.
+#   2. Synthesizes a `src/main.rs`:
+#      - Batch fixtures → loads each CSV, calls `engine.insert_<rel>(..)`,
+#        runs the engine once, and writes `output/<rel>` files.
+#      - Incremental fixtures → drives a `Transaction`-scoped commit
+#        script from `commands.txt` and emits `<rel>_t<N>` delta files
+#        computed host-side via set diff against the prior snapshot.
+#   3. Builds the runner with `flowlog_build::Builder::mode(...)` set
+#      per the fixture's category (`DatalogBatch`, `DatalogInc`,
+#      `ExtendBatch`).
+#   4. Runs the bare binary and reuses `compare_expected_outputs` from
+#      `common.sh` to diff against `expected/`.
 
-CATEGORIES=(datalog-batch extend-batch)
+CATEGORIES=(datalog-batch datalog-inc extend-batch)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -35,16 +37,23 @@ usage() {
 Usage:
   $(basename "$0") [test_name ...]
 
-Run FlowLog library-mode end-to-end tests against datalog-batch fixtures.
+Run FlowLog library-mode end-to-end tests against the datalog-batch,
+datalog-inc, and extend-batch fixtures. Batch fixtures (CSV in, files
+out) drive a single \`engine.run()\`; incremental fixtures (with
+\`commands.txt\`) drive a commit script on \`DatalogIncrementalEngine\`
+and emit per-epoch \`<rel>_t<N>\` delta files computed host-side from
+successive snapshots.
 
-Each test directory under tests/unit/datalog-batch/<name>/ contains:
+Each test directory under tests/unit/<category>/<name>/ contains:
   program.dl      Datalog source using .input/.output directives
   data/           Input CSV files (filename matches relation name)
-  expected/       Expected output files (one per relation)
+  expected/       Expected output files (one per relation or epoch)
+  commands.txt    Optional — makes the fixture incremental
 
 Examples:
-  $(basename "$0")                     # run all datalog-batch tests
-  $(basename "$0") agg_sum             # run one test
+  $(basename "$0")                     # run every fixture
+  $(basename "$0") agg_sum             # one batch test
+  $(basename "$0") recursive_tc_delta  # one incremental test
 EOF
 }
 
@@ -62,19 +71,19 @@ run_test() {
     ((current++)) || true
     show_progress "$full_name"
 
-    # Skip tests we don't support yet.
-    if [[ -f "$test_dir/commands.txt" ]]; then
-        ((skipped++)) || true
-        return
-    fi
+    # Fixtures with `commands.txt` drive an incremental commit script;
+    # everything else is a single-shot batch run.
+    local incremental=0
+    [[ -f "$test_dir/commands.txt" ]] && incremental=1
 
-    # extend-batch fixtures need `Builder::extended(true)`; plain datalog
-    # fixtures must keep the fast-path `DatalogBatch` mode.
+    # extend-batch fixtures need `Builder::mode(ExtendBatch)`; plain datalog
+    # fixtures keep the default fast-path `DatalogBatch` mode.
     if [[ "$category" == "extend-batch" ]]; then
         LIB_RUNNER_EXTENDED=1
     else
         LIB_RUNNER_EXTENDED=0
     fi
+    LIB_RUNNER_INC=$incremental
 
     # Stage fixture files into the runner crate. Wipe everything except
     # `src/` (synthesized below) and stale lib/ directories.
@@ -88,6 +97,11 @@ run_test() {
     if [[ -d "$test_dir/data" ]]; then
         if compgen -G "$test_dir/data/*" > /dev/null; then
             cp "$test_dir/data/"* "${LIB_RUNNER_DIR}/data/"
+            # Incremental `file <rel> <path>` commands use paths relative
+            # to the runner-crate cwd, matching binary-mode's layout.
+            if (( incremental )); then
+                cp "$test_dir/data/"* "${LIB_RUNNER_DIR}/"
+            fi
         fi
     fi
     # Fixtures with .include directives: copy sibling directories other
@@ -104,7 +118,21 @@ run_test() {
     done
 
     write_build_rs "$test_dir"
-    if ! write_main_rs "${LIB_RUNNER_DIR}/program.dl" 2>"${LIB_RUNNER_DIR}/synth.log"; then
+    # Copy the fixture's commit script into the runner crate so the
+    # synthesized main.rs can read it via relative path.
+    if (( incremental )); then
+        cp "$test_dir/commands.txt" "${LIB_RUNNER_DIR}/commands.txt"
+    else
+        rm -f "${LIB_RUNNER_DIR}/commands.txt"
+    fi
+
+    local synth_ok=1
+    if (( incremental )); then
+        write_main_rs_inc "${LIB_RUNNER_DIR}/program.dl" 2>"${LIB_RUNNER_DIR}/synth.log" || synth_ok=0
+    else
+        write_main_rs "${LIB_RUNNER_DIR}/program.dl" 2>"${LIB_RUNNER_DIR}/synth.log" || synth_ok=0
+    fi
+    if (( ! synth_ok )); then
         local detail
         detail="$(tail -20 "${LIB_RUNNER_DIR}/synth.log" 2>/dev/null | sed 's/^/         /')"
         record_failure "$full_name" "main.rs synthesis failed" "$detail"

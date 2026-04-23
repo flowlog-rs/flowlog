@@ -192,6 +192,7 @@ pub(crate) fn gen_incremental_main(
                     let mut prompt = Prompt::new(rel_words);
 
                     let mut local_txn: TxnState = TxnState::default();
+                    let mut in_txn: bool = false;
 
                     loop {
                         let Some(c) = prompt.next_cmd(time_stamp) else { continue };
@@ -200,33 +201,37 @@ pub(crate) fn gen_incremental_main(
                             Cmd::Help => println!("{}", cmd::help_text()),
 
                             Cmd::Begin => {
-                                local_txn.begin();
+                                in_txn = true;
+                                local_txn.clear_pending();
                                 println!("(txn begin)");
                             }
 
                             Cmd::Abort => {
-                                local_txn.abort();
+                                in_txn = false;
+                                local_txn.clear_pending();
                                 println!("(txn aborted)");
                             }
 
                             Cmd::Put { rel, tuple, diff } => {
-                                if !local_txn.in_txn {
-                                    local_txn.begin();
+                                if !in_txn {
+                                    in_txn = true;
+                                    local_txn.clear_pending();
                                 }
                                 local_txn.enqueue(TxnOp::Put { rel, tuple, diff });
                                 println!("(queued put)");
                             }
 
                             Cmd::File { rel, path, diff } => {
-                                if !local_txn.in_txn {
-                                    local_txn.begin();
+                                if !in_txn {
+                                    in_txn = true;
+                                    local_txn.clear_pending();
                                 }
                                 local_txn.enqueue(TxnOp::File { rel, path, diff });
                                 println!("(queued file)");
                             }
 
                             Cmd::Commit => {
-                                if !local_txn.in_txn {
+                                if !in_txn {
                                     println!("(no active txn)");
                                     continue;
                                 }
@@ -269,7 +274,8 @@ pub(crate) fn gen_incremental_main(
                                     println!("{:?}:\tCommitted & executed", round_timer.elapsed());
                                 }
 
-                                local_txn.abort();
+                                in_txn = false;
+                                local_txn.clear_pending();
 
                                 barrier.wait();
 
@@ -277,7 +283,6 @@ pub(crate) fn gen_incremental_main(
                                     let mut w = shared_txn.write().unwrap();
                                     w.action = TxnAction::None;
                                     w.pending.clear();
-                                    w.in_txn = false;
                                 }
                             }
 

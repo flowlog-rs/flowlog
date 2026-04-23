@@ -15,6 +15,21 @@ FLOWLOG_LIB_SYNTH_COMMON_LOADED=1
 # .dl parsing — single-file reads (caller walks `.include` chains if needed)
 ###############################################################################
 
+# Echo the filename when the relation is declared with `IO="file"`; exit 1
+# (empty stdout) otherwise. Unlike [`input_filename_for`], this never
+# synthesizes a default — callers use it to decide whether to emit a
+# preload epoch for that EDB.
+file_backed_filename() {
+    local dl_file="$1" rel="$2"
+    local line fname
+    line=$(grep -iE "^[[:space:]]*\.input[[:space:]]+${rel}([[:space:]]|\\()" "$dl_file" 2>/dev/null | head -1 || true)
+    [[ -n "$line" ]] || return 1
+    echo "$line" | grep -qE 'IO[[:space:]]*=[[:space:]]*"file"' || return 1
+    fname=$(echo "$line" | grep -oE 'filename[[:space:]]*=[[:space:]]*"[^"]+"' | sed -E 's/.*"([^"]+)"/\1/')
+    [[ -n "$fname" ]] || fname="${rel}.csv"
+    echo "$fname"
+}
+
 # Echo the data filename declared by `.input <Rel>(filename="X.csv", …)` —
 # falls back to `<rel>.csv` when no `filename=` parameter is set.
 input_filename_for() {
