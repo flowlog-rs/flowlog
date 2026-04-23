@@ -19,9 +19,9 @@ use crate::codegen::aggregation::{
     aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce_stmt,
     aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
-use crate::codegen::CodegenError;
 use crate::codegen::ident::find_local_ident;
 use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
 
 // =========================================================================
 // Recursive Flow Generation
@@ -420,7 +420,7 @@ impl CodeGen {
                             );
                         });
 
-                        return Ok(quote! { #next_ident #pre_leave .leave() });
+                        return Ok(quote! { #next_ident #pre_leave .leave(scope) });
                     }
                 }
 
@@ -440,14 +440,14 @@ impl CodeGen {
                 if !iterative_fps.is_empty() {
                     if let Some(recursive_ident) = recursive.get(fp) {
                         if iterative_fps.contains(fp) {
-                            return Ok(quote! { #recursive_ident.leave().consolidate() });
+                            return Ok(quote! { #recursive_ident.leave(scope).consolidate() });
                         } else {
-                            return Ok(quote! { #recursive_ident.leave() });
+                            return Ok(quote! { #recursive_ident.leave(scope) });
                         }
                     }
                 }
 
-                Ok(quote! { #next_ident.leave() })
+                Ok(quote! { #next_ident.leave(scope) })
             })
             .collect::<Result<_, _>>()?;
 
