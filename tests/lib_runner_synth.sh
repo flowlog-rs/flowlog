@@ -159,7 +159,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-flowlog-runtime = { path = "${ROOT_DIR}/crates/flowlog-runtime" }
+flowlog-runtime = "0.1.1"
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
@@ -200,7 +200,20 @@ write_build_rs() {
     local knob_setters=""
     (( ${LIB_RUNNER_SIP:-0} ))        && knob_setters+=$'        .sip(true)\n'
     (( ${LIB_RUNNER_STR_INTERN:-0} )) && knob_setters+=$'        .string_intern(true)\n'
-    (( ${LIB_RUNNER_EXTENDED:-0} ))   && knob_setters+=$'        .mode(flowlog_build::ExecutionMode::ExtendBatch)\n'
+
+    # Pick exactly one mode line. Defaults to `DatalogBatch`; `LIB_RUNNER_INC`
+    # toggles to incremental and combines with `LIB_RUNNER_EXTENDED`.
+    local mode_setter=""
+    if (( ${LIB_RUNNER_INC:-0} )); then
+        if (( ${LIB_RUNNER_EXTENDED:-0} )); then
+            mode_setter=$'        .mode(flowlog_build::ExecutionMode::ExtendInc)\n'
+        else
+            mode_setter=$'        .mode(flowlog_build::ExecutionMode::DatalogInc)\n'
+        fi
+    elif (( ${LIB_RUNNER_EXTENDED:-0} )); then
+        mode_setter=$'        .mode(flowlog_build::ExecutionMode::ExtendBatch)\n'
+    fi
+    knob_setters+="$mode_setter"
 
     local udf_setter=""
     (( has_udf )) && udf_setter=$'        .udf_file("udf.rs")\n'
@@ -421,6 +434,418 @@ ${load_calls}
     let results = engine.run();
 
 ${writer_blocks}
+}
+EOF
+}
+
+###############################################################################
+# Incremental-mode main.rs synthesis
+###############################################################################
+#
+# Reads binary-inc fixtures (`commands.txt` transcript + `<rel>_t<N>`
+# per-epoch delta expected files) and drives `DatalogIncrementalEngine`
+# through typed insert/remove/set/unset calls. Since the library returns
+# full snapshots rather than per-epoch deltas, the synthesized main.rs
+# keeps a host-side mirror of every output relation and diffs it against
+# each new snapshot to reproduce the binary's `<cols>,<+1|-1>` line format.
+
+# Rust parse expression for one CSV column at index `idx` of type `rust_ty`.
+_inc_col_parse() {
+    local idx="$1" rust_ty="$2"
+    if [[ "$rust_ty" == "String" ]]; then
+        printf 'cols[%s].trim().to_string()' "$idx"
+    else
+        printf 'cols[%s].trim().parse::<%s>().expect("bad col")' "$idx" "$rust_ty"
+    fi
+}
+
+# Tuple-literal type for a relation, e.g. `(i32, i32)` or `(String,)`.
+_inc_tuple_ty() {
+    local dl_file="$1" rel="$2"
+    local typed_fields
+    typed_fields=$(parse_decl_typed_fields "$dl_file" "$rel") || return 1
+    [[ -n "$typed_fields" ]] || { echo "()"; return 0; }
+    local tys=""
+    local arity=0 first=1
+    for pair in $typed_fields; do
+        local dltype="${pair#*:}"
+        local ty
+        ty=$(dl_to_rust_type "$dltype")
+        if (( first )); then tys="$ty"; first=0; else tys+=", $ty"; fi
+        arity=$((arity + 1))
+    done
+    if (( arity == 1 )); then
+        printf '(%s,)' "$tys"
+    else
+        printf '(%s)' "$tys"
+    fi
+}
+
+# Format string + accessor list for a tuple with `arity` fields. Used by
+# the delta-emission block to produce `1,2,+1`-style output lines.
+# Echoes one line: `<fmt>|<accessors>`.
+_inc_fmt_and_accessors() {
+    local arity="$1"
+    local fmt="" accessors=""
+    local i
+    for ((i=0; i<arity; i++)); do
+        (( i > 0 )) && { fmt+=","; accessors+=", "; }
+        fmt+="{}"
+        accessors+="t.${i}"
+    done
+    printf '%s|%s' "$fmt" "$accessors"
+}
+
+# Match arm for `put <rel> ...` on a non-nullary relation.
+_inc_put_arm_nonnullary() {
+    local dl_file="$1" rel="$2"
+    local typed_fields arity=0 parse_lines=""
+    typed_fields=$(parse_decl_typed_fields "$dl_file" "$rel") || return 1
+    local i=0
+    for pair in $typed_fields; do
+        local dltype="${pair#*:}"
+        local rust_ty
+        rust_ty=$(dl_to_rust_type "$dltype")
+        local parse_expr
+        parse_expr=$(_inc_col_parse "$i" "$rust_ty")
+        (( arity > 0 )) && parse_lines+=$'\n'
+        parse_lines+="                        ${parse_expr},"
+        arity=$((arity + 1))
+        i=$((i + 1))
+    done
+    local tuple_ty
+    tuple_ty=$(_inc_tuple_ty "$dl_file" "$rel")
+
+    cat <<EOF
+                    "${rel}" => {
+                        let cols: Vec<&str> = tuple_str.split(',').collect();
+                        if cols.len() != ${arity} {
+                            eprintln!("bad ${rel} tuple: {}", tuple_str);
+                            continue;
+                        }
+                        let v: ${tuple_ty} = (
+${parse_lines}
+                        );
+                        if diff > 0 {
+                            engine.insert_${rel}(vec![v]);
+                        } else if diff < 0 {
+                            engine.remove_${rel}(vec![v]);
+                        }
+                    }
+EOF
+}
+
+# Match arm for `put <rel> True|False` on a nullary relation. `diff` is
+# ignored — presence is carried entirely by the True/False token.
+_inc_put_arm_nullary() {
+    local rel="$1"
+    cat <<EOF
+                    "${rel}" => {
+                        let s = tuple_str.trim().to_ascii_lowercase();
+                        if s == "true" {
+                            engine.set_${rel}();
+                        } else if s == "false" {
+                            engine.unset_${rel}();
+                        } else {
+                            eprintln!("nullary ${rel} expects True/False, got: {}", tuple_str);
+                        }
+                    }
+EOF
+}
+
+# Match arm for `file <rel> <path>`. Nullary relations don't support file
+# ingestion in the binary, so we mirror that by emitting an eprintln.
+_inc_file_arm_nonnullary() {
+    local dl_file="$1" rel="$2"
+    local typed_fields arity=0 parse_lines=""
+    typed_fields=$(parse_decl_typed_fields "$dl_file" "$rel") || return 1
+    local i=0
+    for pair in $typed_fields; do
+        local dltype="${pair#*:}"
+        local rust_ty
+        rust_ty=$(dl_to_rust_type "$dltype")
+        local parse_expr
+        parse_expr=$(_inc_col_parse "$i" "$rust_ty")
+        (( arity > 0 )) && parse_lines+=$'\n'
+        parse_lines+="                                ${parse_expr},"
+        arity=$((arity + 1))
+        i=$((i + 1))
+    done
+    local tuple_ty
+    tuple_ty=$(_inc_tuple_ty "$dl_file" "$rel")
+
+    cat <<EOF
+                    "${rel}" => {
+                        let items: Vec<${tuple_ty}> = content
+                            .lines()
+                            .filter(|l| !l.trim().is_empty())
+                            .map(|l| {
+                                let cols: Vec<&str> = l.split(',').collect();
+                                (
+${parse_lines}
+                                )
+                            })
+                            .collect();
+                        if diff > 0 {
+                            engine.insert_${rel}(items);
+                        } else if diff < 0 {
+                            engine.remove_${rel}(items);
+                        }
+                    }
+EOF
+}
+
+_inc_file_arm_nullary() {
+    local rel="$1"
+    cat <<EOF
+                    "${rel}" => {
+                        eprintln!("nullary ${rel} does not support file ingestion");
+                    }
+EOF
+}
+
+# Per-output `let mut prev_<rel>: ...` state declaration.
+_inc_prev_decl() {
+    local dl_file="$1" rel="$2"
+    local fields
+    fields=$(parse_decl_fields "$dl_file" "$rel") || return 1
+    if [[ -z "$fields" ]]; then
+        echo "    let mut prev_${rel}: bool = false;"
+        return 0
+    fi
+    local tuple_ty
+    tuple_ty=$(_inc_tuple_ty "$dl_file" "$rel")
+    echo "    let mut prev_${rel}: HashSet<${tuple_ty}> = HashSet::new();"
+}
+
+# Per-output delta emission block, run inside the "commit" match arm.
+#
+# Non-nullary: diff the new snapshot against `prev_<rel>` and emit one
+# `<cols>,+1` / `<cols>,-1` line per changed tuple, sorted for
+# deterministic output.
+#
+# Nullary: write "True" whenever the bool changes — matches binary
+# behavior where nullary output is written iff at least one diff row
+# fired in that epoch.
+_inc_delta_block() {
+    local dl_file="$1" rel="$2"
+    local fields arity=0
+    fields=$(parse_decl_fields "$dl_file" "$rel") || return 1
+    if [[ -z "$fields" ]]; then
+        cat <<EOF
+                {
+                    let current: bool = results.${rel};
+                    let path = format!("output/${rel}_t{}", commit_num);
+                    let mut f = std::fs::File::create(&path).expect("create");
+                    if current != prev_${rel} {
+                        writeln!(f, "True").unwrap();
+                    }
+                    prev_${rel} = current;
+                }
+EOF
+        return 0
+    fi
+    for _ in $fields; do arity=$((arity + 1)); done
+    local tuple_ty fmt_acc fmt accessors
+    tuple_ty=$(_inc_tuple_ty "$dl_file" "$rel")
+    fmt_acc=$(_inc_fmt_and_accessors "$arity")
+    fmt="${fmt_acc%|*}"
+    accessors="${fmt_acc#*|}"
+
+    cat <<EOF
+                {
+                    let current: HashSet<${tuple_ty}> = results.${rel}
+                        .into_iter()
+                        .collect();
+                    let mut lines: Vec<String> = Vec::new();
+                    for t in current.difference(&prev_${rel}) {
+                        lines.push(format!("${fmt},+1", ${accessors}));
+                    }
+                    for t in prev_${rel}.difference(&current) {
+                        lines.push(format!("${fmt},-1", ${accessors}));
+                    }
+                    lines.sort();
+                    let path = format!("output/${rel}_t{}", commit_num);
+                    let mut f = std::fs::File::create(&path).expect("create");
+                    for line in &lines {
+                        writeln!(f, "{}", line).unwrap();
+                    }
+                    prev_${rel} = current;
+                }
+EOF
+}
+
+# Synthesize an inc-mode `main.rs`. Mirrors `write_main_rs` (batch) in
+# entry-point shape — reads WORKERS from env, stages inputs, and writes
+# to `output/` — but drives `Transaction`-scoped commits from
+# `commands.txt` and emits per-commit delta files keyed to the
+# commit index.
+write_main_rs_inc() {
+    local dl_file="$1"
+    local main_rs="${LIB_RUNNER_DIR}/src/main.rs"
+
+    # Collect per-EDB arms + per-output prev state + delta blocks.
+    local put_arms="" file_arms=""
+    local rel fields
+    while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        fields=$(parse_decl_fields "$dl_file" "$rel") || true
+        if [[ -z "$fields" ]]; then
+            put_arms+=$(_inc_put_arm_nullary "$rel")$'\n'
+            file_arms+=$(_inc_file_arm_nullary "$rel")$'\n'
+        else
+            put_arms+=$(_inc_put_arm_nonnullary "$dl_file" "$rel")$'\n'
+            file_arms+=$(_inc_file_arm_nonnullary "$dl_file" "$rel")$'\n'
+        fi
+    done < <(parse_input_relations "$dl_file")
+
+    local prev_decls="" delta_blocks=""
+    while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        prev_decls+=$(_inc_prev_decl "$dl_file" "$rel")$'\n'
+        delta_blocks+=$(_inc_delta_block "$dl_file" "$rel")$'\n'
+    done < <(parse_output_relations "$dl_file")
+
+    # Preload epoch — generated iff any EDB is declared `IO="file"`.
+    # Binary-mode runs an implicit preload commit before the first user
+    # command (loading the declared file into the engine) and surfaces
+    # the result as `<rel>_t1`. We mirror that here by injecting an
+    # explicit first-commit block so fixture commit indices stay aligned.
+    local preload_inserts="" preload_block=""
+    local any_file_backed=0
+    while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        local fname
+        fname=$(file_backed_filename "$dl_file" "$rel") || continue
+        any_file_backed=1
+        fields=$(parse_decl_fields "$dl_file" "$rel") || true
+        [[ -z "$fields" ]] && continue  # nullary: file ingest not supported
+        local typed_fields
+        typed_fields=$(parse_decl_typed_fields "$dl_file" "$rel")
+        local parse_lines="" i=0
+        for pair in $typed_fields; do
+            local dltype="${pair#*:}"
+            local rust_ty
+            rust_ty=$(dl_to_rust_type "$dltype")
+            local parse_expr
+            parse_expr=$(_inc_col_parse "$i" "$rust_ty")
+            (( i > 0 )) && parse_lines+=$'\n'
+            parse_lines+="                    ${parse_expr},"
+            i=$((i + 1))
+        done
+        local tuple_ty
+        tuple_ty=$(_inc_tuple_ty "$dl_file" "$rel")
+        preload_inserts+=$(cat <<EOF
+        if let Ok(content) = std::fs::read_to_string("${fname}") {
+            let items: Vec<${tuple_ty}> = content
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| {
+                    let cols: Vec<&str> = l.split(',').collect();
+                    (
+${parse_lines}
+                    )
+                })
+                .collect();
+            if !items.is_empty() {
+                engine.insert_${rel}(items);
+            }
+        }
+EOF
+)$'\n'
+    done < <(parse_input_relations "$dl_file")
+
+    if (( any_file_backed )); then
+        preload_block=$(cat <<EOF
+    {
+        engine.begin();
+${preload_inserts}
+        commit_num += 1;
+        let results = engine.commit();
+${delta_blocks}
+    }
+EOF
+)
+    fi
+
+    cat > "$main_rs" <<EOF
+// Auto-generated by tests/lib_runner_synth.sh — do not edit.
+#![allow(unused_imports, dead_code, unused_mut, unused_variables)]
+
+pub mod prog {
+    include!(concat!(env!("OUT_DIR"), "/program.rs"));
+}
+
+use prog::DatalogIncrementalEngine;
+use std::collections::HashSet;
+use std::io::Write;
+
+fn main() {
+    std::fs::create_dir_all("output").expect("mkdir output");
+
+    let workers: usize = std::env::var("WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let mut engine = DatalogIncrementalEngine::new(workers);
+
+${prev_decls}
+
+    let mut commit_num: u32 = 0;
+
+${preload_block}
+
+    let cmds = std::fs::read_to_string("commands.txt").expect("read commands.txt");
+
+    for raw_line in cmds.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() { continue; }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() { continue; }
+        let head = parts[0].to_ascii_lowercase();
+        match head.as_str() {
+            "begin" | "txn" => engine.begin(),
+            "commit" | "done" => {
+                commit_num += 1;
+                let results = engine.commit();
+${delta_blocks}
+            }
+            "abort" | "rollback" => engine.abort(),
+            "put" => {
+                if parts.len() < 3 || parts.len() > 4 {
+                    eprintln!("put: bad args: {}", line);
+                    continue;
+                }
+                let rel = parts[1];
+                let tuple_str = parts[2];
+                let diff: i32 = parts
+                    .get(3)
+                    .map(|s| s.parse().expect("bad diff"))
+                    .unwrap_or(1);
+                match rel {
+${put_arms}                    _ => eprintln!("unknown rel: {}", rel),
+                }
+            }
+            "file" => {
+                if parts.len() < 3 || parts.len() > 4 {
+                    eprintln!("file: bad args: {}", line);
+                    continue;
+                }
+                let rel = parts[1];
+                let path_str = parts[2];
+                let diff: i32 = parts
+                    .get(3)
+                    .map(|s| s.parse().expect("bad diff"))
+                    .unwrap_or(1);
+                let content = std::fs::read_to_string(path_str).expect("read file");
+                match rel {
+${file_arms}                    _ => eprintln!("unknown rel: {}", rel),
+                }
+            }
+            "quit" | "exit" | "q" => break,
+            _ => {}
+        }
+    }
 }
 EOF
 }
