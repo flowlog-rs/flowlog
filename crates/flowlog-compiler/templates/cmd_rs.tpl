@@ -1,8 +1,8 @@
-// cmd.rs template for inremental mode of FlowLog Compiler.
+// cmd.rs template for the incremental-mode REPL driver.
 
 use std::path::PathBuf;
 
-pub type Diff = i32;
+use ::flowlog_runtime::txn::Diff;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cmd {
@@ -21,80 +21,6 @@ pub enum Cmd {
     Abort,  // abort / rollback
     Quit,
     Help,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TxnOp {
-    Put {
-        rel: String,
-        tuple: String,
-        diff: Diff,
-    },
-    File {
-        rel: String,
-        path: PathBuf,
-        diff: Diff,
-    },
-}
-
-/// What workers should do when they observe a new published TxnState.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum TxnAction {
-    /// No action (idle / cleared).
-    #[default]
-    None,
-    /// Execute `pending`, then advance/flush once.
-    Commit,
-    /// Quit all workers.
-    Quit,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct TxnState {
-    /// Broadcast indicator: incremented on each publish so workers can detect "new txn".
-    pub epoch: u32,
-    /// Broadcast indicator: what the workers should do for this epoch.
-    pub action: TxnAction,
-
-    /// Local bookkeeping for worker 0.
-    pub in_txn: bool,
-    pub pending: Vec<TxnOp>,
-}
-
-impl TxnState {
-    pub fn begin(&mut self) {
-        self.in_txn = true;
-        self.pending.clear();
-    }
-
-    pub fn abort(&mut self) {
-        self.in_txn = false;
-        self.pending.clear();
-    }
-
-    pub fn enqueue(&mut self, op: TxnOp) {
-        self.pending.push(op);
-    }
-
-    /// Prepare this TxnState to be broadcast as a COMMIT snapshot.
-    pub fn as_commit_snapshot(&self, next_epoch: u32) -> TxnState {
-        TxnState {
-            epoch: next_epoch,
-            action: TxnAction::Commit,
-            in_txn: true,
-            pending: self.pending.clone(),
-        }
-    }
-
-    /// Prepare this TxnState to be broadcast as QUIT.
-    pub fn as_quit_snapshot(next_epoch: u32) -> TxnState {
-        TxnState {
-            epoch: next_epoch,
-            action: TxnAction::Quit,
-            in_txn: false,
-            pending: Vec::new(),
-        }
-    }
 }
 
 pub fn help_text() -> &'static str {

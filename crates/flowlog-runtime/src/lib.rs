@@ -5,7 +5,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! flowlog-runtime = "0.1"
+//! flowlog-runtime = "0.1.1"
 //!
 //! [build-dependencies]
 //! flowlog-build = "0.1"
@@ -18,6 +18,7 @@
 //! | [`Relation`] | Trait implemented by every generated input struct |
 //! | [`io`] | Byte-range file reader + first-column sharding for parallel ingestion |
 //! | [`intern`] | Thread-safe string interning pool (`lasso`) |
+//! | [`txn`] | Transaction state types shared with incremental drivers |
 //!
 //! The re-exported crates (`timely`, `differential_dataflow`, etc.) are
 //! used internally by the generated code — you should not need to
@@ -26,6 +27,7 @@
 pub mod intern;
 pub mod io;
 pub mod sort;
+pub mod txn;
 
 /// Trait implemented by every generated input relation struct.
 ///
