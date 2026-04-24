@@ -94,7 +94,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-flowlog-runtime = "0.1.1"
+flowlog-runtime = "0.2"
 # Match the compiler-generated binary's allocator (see
 # crates/flowlog-compiler/src/imports.rs). DD allocates per-batch /
 # per-tuple in tight loops; mimalloc is materially faster than glibc here.

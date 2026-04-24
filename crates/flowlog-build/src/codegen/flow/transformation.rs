@@ -16,10 +16,10 @@ use crate::codegen::arg::{
     compute_join_param_tokens, compute_kv_param_tokens, kv_use_counts, row_pattern_and_fields,
     row_use_counts,
 };
-use crate::codegen::CodegenError;
-use crate::codegen::ident::find_local_ident;
 use crate::codegen::data_type_tokens;
+use crate::codegen::ident::find_local_ident;
 use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
 
 use crate::planner::{StratumPlanner, Transformation};
 
@@ -37,7 +37,23 @@ impl CodeGen {
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<TokenStream, CodegenError> {
-        let transformation_name = format!("{transformation}");
+        let atom_labels = stratum.atom_labels();
+        let edb_atoms = transformation
+            .input_fingerprints()
+            .into_iter()
+            .filter_map(|fp| atom_labels.get(&fp).map(String::as_str))
+            .collect::<Vec<_>>();
+        let edb_suffix = if edb_atoms.is_empty() {
+            String::new()
+        } else {
+            format!(" ← {}", edb_atoms.join(", "))
+        };
+        let transformation_name = format!(
+            "{} {}{}",
+            transformation.operation_name(),
+            transformation.flow(),
+            edb_suffix,
+        );
         let si = self.features.string_intern();
 
         // Mark UDF import needed if any fn_call predicate is present

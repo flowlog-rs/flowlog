@@ -28,10 +28,12 @@ pub(crate) fn assemble(
     is_incremental: bool,
 ) -> io::Result<String> {
     let string_intern = pipeline.features.string_intern();
+    let profile = pipeline.profiler.is_some();
 
     let semiring_mod = gen_semiring_mod(pipeline, out_dir);
-    let lib_imports = gen_lib_imports(&pipeline.relations, &pipeline.features);
+    let lib_imports = gen_lib_imports(&pipeline.relations, &pipeline.features, profile);
     let type_declarations = &pipeline.parts.type_declarations;
+    let profile_structs = &pipeline.parts.profile_structs;
     let rel_module = gen_public_rel_module(&pipeline.program);
     let (results_struct, lib_engine) = if is_incremental {
         (
@@ -71,6 +73,7 @@ pub(crate) fn assemble(
             #semiring_mod
             #lib_imports
             #type_declarations
+            #profile_structs
             #rel_module
             #results_struct
             #udf_mod

@@ -5,7 +5,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! flowlog-runtime = "0.1.1"
+//! flowlog-runtime = "0.2"
 //!
 //! [build-dependencies]
 //! flowlog-build = "0.1"

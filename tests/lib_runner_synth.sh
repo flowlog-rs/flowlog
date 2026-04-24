@@ -159,7 +159,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-flowlog-runtime = "0.1.1"
+flowlog-runtime = "0.2"
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]

@@ -184,6 +184,9 @@ fn gen_run_body(
     let flush = &parts.flush;
     let size_cell_decls = &parts.size_cell_decls;
     let size_cell_clones = &parts.size_cell_clones;
+    let profile_init = &parts.profile_init;
+    let time_profile_write = &parts.time_profile_write_batch;
+    let memory_profile_write = &parts.memory_profile_write_batch;
 
     let (host_partitions, worker_partition_clones) = gen_host_partitions(edbs);
     let inputs_new_args = gen_inputs_new_args(edbs);
@@ -207,6 +210,7 @@ fn gen_run_body(
 
             move |worker| {
                 let index = worker.index();
+                #profile_init
                 #(#local_bufs)*
 
                 let #handle_binding =
@@ -226,6 +230,9 @@ fn gen_run_body(
 
                 #(#flush)*
                 barrier.wait();
+
+                #time_profile_write
+                #memory_profile_write
             }
         })
         .expect("timely::execute failed");

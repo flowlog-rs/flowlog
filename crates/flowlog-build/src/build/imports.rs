@@ -13,7 +13,11 @@ use crate::codegen::Features;
 /// Emit every import the generated library-mode module needs, including the
 /// private `mod relops { … }` wrapper that encapsulates the input-handler
 /// types.
-pub(crate) fn gen_lib_imports(relops_body: &TokenStream, features: &Features) -> TokenStream {
+pub(crate) fn gen_lib_imports(
+    relops_body: &TokenStream,
+    features: &Features,
+    profile: bool,
+) -> TokenStream {
     let ordered_float_import = if features.ordered_float() {
         quote! { use ::flowlog_runtime::ordered_float; }
     } else {
@@ -49,7 +53,28 @@ pub(crate) fn gen_lib_imports(relops_body: &TokenStream, features: &Features) ->
         out.push(quote! { use ::flowlog_runtime::ordered_float::OrderedFloat; });
     }
 
+    out.push(profile_imports(profile));
+
     quote! { #(#out)* }
+}
+
+/// Items the generated `OpStats` / `DdArrangeStats` structs and their
+/// loggers reference unqualified — kept conditional so non-profile builds
+/// don't drag in `HashMap` / `File` / timely+DD logging for nothing.
+fn profile_imports(profile: bool) -> TokenStream {
+    if !profile {
+        return quote! {};
+    }
+    quote! {
+        use std::collections::HashMap;
+        use std::fs::File;
+        use std::io::{BufWriter, Write};
+        use std::time::Duration;
+        use ::flowlog_runtime::timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
+        use ::flowlog_runtime::differential_dataflow::logging::{
+            DifferentialEvent, DifferentialEventBuilder,
+        };
+    }
 }
 
 /// DD + timely `use` lines, conditioned on which features the generated
@@ -71,7 +96,6 @@ fn dd_imports(f: &Features) -> TokenStream {
     if f.recursive() {
         out.push(quote! {
             use ::flowlog_runtime::differential_dataflow::operators::iterate::Variable;
-            use ::flowlog_runtime::timely::dataflow::Scope;
         });
     }
     if f.aggregation() {
