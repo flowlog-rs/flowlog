@@ -87,7 +87,7 @@ impl RulePlanner {
             return debug_info_map;
         }
 
-        let atom_info = self.collect_atom_debug_info();
+        let atom_labels = self.rhs_atom_labels();
 
         let transformations: Vec<Transformation> = self
             .transformation_infos
@@ -108,35 +108,29 @@ impl RulePlanner {
         }
 
         for child_fp in referenced_children {
-            debug_info_map.entry(child_fp).or_insert_with(|| {
-                let (name, args) = atom_info.get(&child_fp).unwrap();
-                let values = args.join(", ");
-                (format!("{}({})", name, values), Vec::new())
-            });
+            debug_info_map
+                .entry(child_fp)
+                .or_insert_with(|| (atom_labels[&child_fp].clone(), Vec::new()));
         }
 
         debug_info_map
     }
 
-    fn collect_atom_debug_info(&self) -> HashMap<u64, (String, Vec<String>)> {
-        let mut atom_info = HashMap::new();
+    /// Map of atom fingerprint → formatted `"name(arg1, ..., argN)"` label
+    /// for every positive or negative atom on the rule's rhs, derived from
+    /// `Atom`'s `Display` impl. Consumed by the plan-tree debug map and by
+    /// codegen (via [`StratumPlanner::atom_labels`]) to annotate operator
+    /// names with the EDB atom they consume.
+    pub(crate) fn rhs_atom_labels(&self) -> HashMap<u64, String> {
+        let mut labels = HashMap::new();
         for predicate in self.rule.rhs() {
-            if let Some((fp, info)) = match predicate {
-                Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
-                    Some((
-                        atom.fingerprint(),
-                        (
-                            atom.name().to_string(),
-                            atom.arguments().iter().map(|arg| arg.to_string()).collect(),
-                        ),
-                    ))
-                }
-                _ => None,
-            } {
-                atom_info.insert(fp, info);
+            if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = predicate {
+                labels
+                    .entry(atom.fingerprint())
+                    .or_insert_with(|| atom.to_string());
             }
         }
-        atom_info
+        labels
     }
 
     fn build_transformation_debug_entry(tx: &Transformation) -> (String, Vec<u64>) {
