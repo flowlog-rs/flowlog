@@ -10,8 +10,8 @@ use quote::{format_ident, quote};
 
 use crate::parser::{AggregationOperator, DataType};
 
-use crate::codegen::CodegenError;
 use crate::codegen::tuple_tokens;
+use crate::codegen::CodegenError;
 
 // ==================================================
 // Semiring constructor helpers
@@ -477,9 +477,13 @@ pub(crate) fn aggregation_reduce_stmt(
         (quote! { reduce_core }, aggregation_reduce(op, agg_type)?)
     };
     Ok(quote! {
-        .#combinator::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(
+        .#combinator::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>,_>(
             "aggregation",
-            #reduce_logic
+            #reduce_logic,
+            |vec, key, upds| {
+                vec.clear();
+                vec.extend(upds.drain(..).map(|(v, t, r)| ((key.clone(), v), t, r)));
+            },
         )
     })
 }

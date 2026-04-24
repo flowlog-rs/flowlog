@@ -17,6 +17,7 @@ use crate::common::{Config, SourceMap};
 use crate::optimizer::Optimizer;
 use crate::parser::Program;
 use crate::planner::StratumPlanner;
+use crate::profiler::Profiler;
 use crate::stratifier::Stratifier;
 
 use crate::build::relation::gen_input_module;
@@ -30,6 +31,7 @@ pub(crate) struct Pipeline {
     /// Library-mode relation module: `{Name}Input` handlers + `Inputs` container.
     pub(crate) relations: TokenStream,
     pub(crate) features: Features,
+    pub(crate) profiler: Option<Profiler>,
 }
 
 impl Pipeline {
@@ -48,9 +50,11 @@ impl Pipeline {
         let config = build_config(builder, program_str);
         let mut program = parse(&config, &builder.include_dirs, sm)?;
         crate::typechecker::check_program(&mut program)?;
-        let strata = plan(&config, &program)?;
+        let mut profiler = config
+            .profiling_enabled()
+            .then(|| Profiler::new(config.mode()));
+        let strata = plan(&config, &program, &mut profiler)?;
 
-        let mut profiler = None;
         let mut cg = CodeGen::new(config, program.clone());
         let parts = cg.generate(&strata, &mut profiler)?;
         let features = cg.features().clone();
@@ -61,6 +65,7 @@ impl Pipeline {
             program,
             relations,
             features,
+            profiler,
         })
     }
 }
@@ -75,25 +80,21 @@ fn parse(
         .map_err(Into::into)
 }
 
-fn plan(config: &Config, program: &Program) -> Result<Vec<StratumPlanner>, BoxError> {
+fn plan(
+    config: &Config,
+    program: &Program,
+    profiler: &mut Option<Profiler>,
+) -> Result<Vec<StratumPlanner>, BoxError> {
     let stratifier = Stratifier::from_program(program, config.is_extended())?;
     let mut optimizer = Optimizer::new();
-    let mut profiler = None;
     stratifier
         .stratum()
         .iter()
         .enumerate()
         .map(|(idx, rule_refs)| {
             let rules: Vec<_> = rule_refs.iter().copied().cloned().collect();
-            StratumPlanner::from_rules(
-                config,
-                &rules,
-                &mut optimizer,
-                &mut profiler,
-                &stratifier,
-                idx,
-            )
-            .map_err(Into::into)
+            StratumPlanner::from_rules(config, &rules, &mut optimizer, profiler, &stratifier, idx)
+                .map_err(Into::into)
         })
         .collect()
 }
@@ -109,7 +110,7 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         executable_path: None,
         output_dir: None,
         mode: builder.mode,
-        profile: false,
+        profile: builder.profile,
         sip: builder.sip,
         str_intern: builder.string_intern,
         udf_file: builder

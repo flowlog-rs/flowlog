@@ -202,7 +202,6 @@ fn dd_core_imports(f: &Features) -> TokenStream {
     if f.recursive() {
         out.push(quote! {
             use differential_dataflow::operators::iterate::Variable;
-            use timely::dataflow::Scope;
         });
     }
     if f.aggregation() {

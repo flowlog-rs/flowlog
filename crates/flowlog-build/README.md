@@ -37,7 +37,7 @@ integration, see the `flowlog-compiler` binary in the
 ```toml
 # Cargo.toml
 [dependencies]
-flowlog-runtime = "0.1"
+flowlog-runtime = "0.2"
 
 [build-dependencies]
 flowlog-build = "0.1"

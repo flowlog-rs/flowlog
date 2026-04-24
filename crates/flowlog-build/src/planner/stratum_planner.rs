@@ -69,6 +69,11 @@ pub struct StratumPlanner {
     /// Loop condition for this stratum, if it was declared as a loop block.
     /// `None` for plain strata (which run to fixpoint implicitly).
     loop_condition: Option<LoopCondition>,
+
+    /// Atom fingerprint → `"name(args)"` label, unioned across every rule's
+    /// rhs. Computed once at stratum construction so codegen can annotate
+    /// operator names without re-walking the rule planners per transformation.
+    atom_labels: HashMap<u64, String>,
 }
 
 impl StratumPlanner {
@@ -165,6 +170,13 @@ impl StratumPlanner {
 
         // Phase 6: Materialize deduplicated transformations
         // this phase also do sharing optimization across rules
+        let atom_labels = rule_planners
+            .iter()
+            .flat_map(RulePlanner::rhs_atom_labels)
+            .fold(HashMap::new(), |mut acc, (fp, label)| {
+                acc.entry(fp).or_insert(label);
+                acc
+            });
         let mut stratum_planner = Self {
             rule_planners,
             is_recursive,
@@ -183,6 +195,7 @@ impl StratumPlanner {
             head_to_idb_map: HashMap::new(),
             idb_to_aggregation_map: HashMap::new(),
             loop_condition: stratifier.loop_condition(stratum_idx).cloned(),
+            atom_labels,
         };
         stratum_planner.materialize_transformations();
 
@@ -273,6 +286,16 @@ impl StratumPlanner {
     #[inline]
     pub(crate) fn loop_condition(&self) -> Option<&LoopCondition> {
         self.loop_condition.as_ref()
+    }
+
+    /// Map of atom fingerprint → `"name(arg1, ..., argN)"` label for every
+    /// positive/negative atom on any rule's rhs in this stratum. Used by
+    /// codegen to annotate operator names with the EDB atom they consume so
+    /// the profiler/visualizer can show `[Row -> KV] K:(V0) arc(x, y)` without
+    /// any downstream knowledge of atoms.
+    #[inline]
+    pub(crate) fn atom_labels(&self) -> &HashMap<u64, String> {
+        &self.atom_labels
     }
 
     /// Check if this stratum is recursive.

@@ -3,7 +3,7 @@ name = "flowlog-runtime"
 # Explicit version (not `version.workspace = true`) because the runtime
 # releases on its own cadence — generated code depends on it by
 # published version, so any additive change ships as an independent bump.
-version = "0.1.1"
+version = "0.2.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -14,8 +14,8 @@ keywords = ["datalog", "dataflow", "differential", "timely"]
 categories = ["database", "compilers"]
 
 [dependencies]
-timely = "0.28"
-differential-dataflow = "0.22"
+timely = "0.29"
+differential-dataflow = "0.23"
 ordered-float = { version = "5", features = ["serde"] }
 lasso = { version = "0.7", features = ["multi-threaded", "serialize"] }
 serde = { workspace = true }

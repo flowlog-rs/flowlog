@@ -119,6 +119,7 @@ pub struct Builder {
     pub(crate) sip: bool,
     pub(crate) string_intern: bool,
     pub(crate) mode: ExecutionMode,
+    pub(crate) profile: bool,
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
 }
@@ -153,6 +154,19 @@ impl Builder {
     /// generated module. Generated code calls UDFs as `udf::<fn_name>(…)`.
     pub fn udf_file(mut self, path: impl AsRef<Path>) -> Self {
         self.udf_file = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Enable operator-level profiling. When set:
+    /// - a static plan graph is written to `$OUT_DIR/log/ops.json` at build time;
+    /// - the generated engine registers timely + DD arrangement loggers
+    ///   and writes `log/time/*.log` and `log/memory/*.log` cwd-relative
+    ///   at runtime (batch: once at end; incremental: per commit).
+    ///
+    /// Not supported under `ExtendBatch` / `ExtendInc`; compilation
+    /// panics if the combination is requested.
+    pub fn profile(mut self, enabled: bool) -> Self {
+        self.profile = enabled;
         self
     }
 
@@ -211,8 +225,20 @@ impl Builder {
         self.emit_semiring_modules(&output, out_dir)
             .map_err(BuildError::from)?;
         std::fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;
+        self.emit_ops_json(&output, out_dir)
+            .map_err(BuildError::from)?;
         self.emit_rerun_if_changed(program_path);
         Ok(())
+    }
+
+    /// Write the static plan-graph profiler JSON to `$OUT_DIR/log/ops.json`.
+    fn emit_ops_json(&self, output: &build::Pipeline, out_dir: &Path) -> io::Result<()> {
+        let Some(profiler) = output.profiler.as_ref() else {
+            return Ok(());
+        };
+        let log_dir = out_dir.join("log");
+        std::fs::create_dir_all(&log_dir)?;
+        profiler.write_json(log_dir.join("ops.json"))
     }
 
     /// Write aggregation-specific semiring modules to `$OUT_DIR/semiring/`.
