@@ -119,7 +119,7 @@ impl StratumPlanner {
         if config.sip_enabled() {
             for (i, planner) in rule_planners.iter_mut().enumerate() {
                 debug!("rule[{i}] SIP");
-                planner.apply_sip(&mut catalogs[i]);
+                planner.apply_sip(&mut catalogs[i], config.sip_approx_enabled());
             }
         }
 

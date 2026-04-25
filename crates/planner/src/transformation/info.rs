@@ -21,6 +21,7 @@ use catalog::{
 };
 use common::compute_fp;
 use parser::ConstType;
+use tracing::debug;
 
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
@@ -505,6 +506,8 @@ impl TransformationInfo {
                     .collect();
 
                 let remap = |indices: &[usize]| -> Vec<ArithmeticPos> {
+                    debug!("indices: {:?}", indices);
+                    debug!("all_positions: {:?}", all_positions);
                     indices
                         .iter()
                         .map(|idx| {
