@@ -1,0 +1,126 @@
+name: Release flowlog-compiler
+
+# Auto-detect a flowlog-compiler version bump on push to main, build the
+# binary on Linux + macOS, and publish a GitHub Release with the binaries
+# attached. Mirrors the crates.io publish flow's "skip if already exists"
+# guard so re-runs / unrelated pushes are no-ops.
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ⚙️ Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: 🔍 Compare local version against GitHub Releases
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          LOCAL_VERSION=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "flowlog-compiler") | .version')
+          if [[ -z "${LOCAL_VERSION}" || "${LOCAL_VERSION}" == "null" ]]; then
+            echo "Could not resolve flowlog-compiler version" >&2
+            exit 1
+          fi
+          TAG="flowlog-compiler-v${LOCAL_VERSION}"
+          echo "Local version: ${LOCAL_VERSION}"
+          echo "Target tag:    ${TAG}"
+
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "✅ Release ${TAG} already exists — skipping."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "🚀 New release ${TAG}"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "version=${LOCAL_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ⚙️ Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: 🔨 Build flowlog-compiler (release)
+        run: cargo build --release -p flowlog-compiler --target ${{ matrix.target }}
+
+      - name: 📦 Package binary + checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="flowlog-compiler-${{ needs.detect.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "${STAGE}"
+          cp "target/${{ matrix.target }}/release/flowlog-compiler" "${STAGE}/"
+          cp LICENSE "${STAGE}/" 2>/dev/null || true
+          cp README.md "${STAGE}/" 2>/dev/null || true
+          tar -czf "${STAGE}.tar.gz" "${STAGE}"
+          shasum -a 256 "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          echo "ASSET_TARBALL=${STAGE}.tar.gz" >> "$GITHUB_ENV"
+          echo "ASSET_CHECKSUM=${STAGE}.tar.gz.sha256" >> "$GITHUB_ENV"
+
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowlog-compiler-${{ matrix.target }}
+          path: |
+            ${{ env.ASSET_TARBALL }}
+            ${{ env.ASSET_CHECKSUM }}
+          if-no-files-found: error
+
+  release:
+    needs: [detect, build]
+    if: needs.detect.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 📥 Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 🚀 Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ needs.detect.outputs.tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "flowlog-compiler v${{ needs.detect.outputs.version }}" \
+            --generate-notes \
+            --target "${{ github.sha }}" \
+            artifacts/*
