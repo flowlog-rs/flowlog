@@ -26,14 +26,14 @@
 //! as a hard boundary between strata groups.
 
 use super::{
+    ConstType, FlowLogParser, Lexeme, Rule,
     declaration::{ExternFn, InputDirective, OutputDirective, PrintSizeDirective, Relation},
-    error::{grammar_bug, DirectiveKind, ParseError},
+    error::{DirectiveKind, ParseError, grammar_bug},
     logic::{Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, LoopBlock, Predicate},
     segment::Segment,
-    ConstType, FlowLogParser, Lexeme, Rule,
 };
 use crate::common::{FileId, SourceMap, Span};
-use pest::{iterators::Pair, Parser};
+use pest::{Parser, iterators::Pair};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::{fmt, fs};
@@ -708,15 +708,13 @@ impl Program {
                     });
                 }
                 for pred in rule.rhs() {
-                    if let Predicate::PositiveAtom(atom)
-                    | Predicate::NegativeAtom(atom) = pred
+                    if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred
+                        && !declared.contains(atom.name())
                     {
-                        if !declared.contains(atom.name()) {
-                            return Err(ParseError::UndeclaredInRule {
-                                span: atom.span(),
-                                name: atom.name().to_string(),
-                            });
-                        }
+                        return Err(ParseError::UndeclaredInRule {
+                            span: atom.span(),
+                            name: atom.name().to_string(),
+                        });
                     }
                 }
             }
@@ -921,8 +919,7 @@ impl Program {
             let mut new_rhs = Vec::with_capacity(rule.rhs().len());
             for pred in rule.rhs() {
                 new_rhs.push(match pred {
-                    Predicate::PositiveAtom(atom)
-                    | Predicate::NegativeAtom(atom)
+                    Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom)
                         if udf_names.contains(atom.name()) =>
                     {
                         let mut args = Vec::with_capacity(atom.arguments().len());
@@ -1083,8 +1080,7 @@ impl Program {
                     .rhs()
                     .iter()
                     .filter_map(|pred| match pred {
-                        Predicate::PositiveAtom(a)
-                        | Predicate::NegativeAtom(a) => Some(a.name()),
+                        Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) => Some(a.name()),
                         _ => None,
                     })
                     .flat_map(|atom_name| {

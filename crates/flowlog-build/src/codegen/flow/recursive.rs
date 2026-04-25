@@ -10,8 +10,10 @@ use quote::{format_ident, quote};
 
 use crate::parser::{AggregationOperator, LoopCondition, LoopConnective};
 use crate::planner::StratumPlanner;
-use crate::profiler::{with_profiler, Profiler};
+use crate::profiler::{Profiler, with_profiler};
 
+use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
 use crate::codegen::aggregation::{
     aggregation_avg_optimize, aggregation_avg_post_leave, aggregation_avg_pre_leave,
     aggregation_count_optimize, aggregation_count_pre_leave, aggregation_max_optimize,
@@ -20,8 +22,6 @@ use crate::codegen::aggregation::{
     aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
 use crate::codegen::ident::find_local_ident;
-use crate::codegen::CodeGen;
-use crate::codegen::CodegenError;
 
 // =========================================================================
 // Recursive Flow Generation
@@ -232,10 +232,10 @@ impl CodeGen {
 
             // Iterative relations use replacement semantics: the EDB base is
             // seeded via Variable::new_from, so we must not re-union it here.
-            if !iterative_fps.contains(idb_fp) {
-                if let Some(entered) = enter_bindings.get(idb_fp) {
-                    sources.push(entered.clone());
-                }
+            if !iterative_fps.contains(idb_fp)
+                && let Some(entered) = enter_bindings.get(idb_fp)
+            {
+                sources.push(entered.clone());
             }
 
             // Build concatenation expression for all sources.
@@ -391,37 +391,37 @@ impl CodeGen {
                 // For aggregated relations (min/max/sum/count/avg) in datalog-batch mode:
                 // convert to semiring diff before leave() so cross-iteration aggregates
                 // are computed by consolidation after leave.
-                if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp) {
-                    if self.config.is_datalog_batch() {
-                        let agg_type = self.agg_column_type(*fp, *agg_pos)?;
-                        let pre_leave = match agg_op {
-                            AggregationOperator::Min => {
-                                aggregation_min_pre_leave(*agg_arity, *agg_pos, agg_type)
-                            }
-                            AggregationOperator::Max => {
-                                aggregation_max_pre_leave(*agg_arity, *agg_pos, agg_type)
-                            }
-                            AggregationOperator::Sum => {
-                                aggregation_sum_pre_leave(*agg_arity, *agg_pos, agg_type)
-                            }
-                            AggregationOperator::Count => {
-                                aggregation_count_pre_leave(*agg_arity, *agg_pos, agg_type)
-                            }
-                            AggregationOperator::Avg => {
-                                aggregation_avg_pre_leave(*agg_arity, *agg_pos, agg_type)
-                            }
-                        };
+                if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
+                    && self.config.is_datalog_batch()
+                {
+                    let agg_type = self.agg_column_type(*fp, *agg_pos)?;
+                    let pre_leave = match agg_op {
+                        AggregationOperator::Min => {
+                            aggregation_min_pre_leave(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Max => {
+                            aggregation_max_pre_leave(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Sum => {
+                            aggregation_sum_pre_leave(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Count => {
+                            aggregation_count_pre_leave(*agg_arity, *agg_pos, agg_type)
+                        }
+                        AggregationOperator::Avg => {
+                            aggregation_avg_pre_leave(*agg_arity, *agg_pos, agg_type)
+                        }
+                    };
 
-                        with_profiler(profiler, |profiler| {
-                            profiler.recursive_pre_leave_opt_aggregate_operator(
-                                target.to_string(),
-                                next_ident.to_string(),
-                                next_ident.to_string(),
-                            );
-                        });
+                    with_profiler(profiler, |profiler| {
+                        profiler.recursive_pre_leave_opt_aggregate_operator(
+                            target.to_string(),
+                            next_ident.to_string(),
+                            next_ident.to_string(),
+                        );
+                    });
 
-                        return Ok(quote! { #next_ident #pre_leave .leave(scope) });
-                    }
+                    return Ok(quote! { #next_ident #pre_leave .leave(scope) });
                 }
 
                 // Mixed loop: all recursive relations leave via recursive_X, not next_X.
@@ -437,13 +437,13 @@ impl CodeGen {
                 //
                 // Pure accumulative loops (iterative_fps empty) use next_X.leave() since
                 // next_X == recursive_X at fixpoint with no retractions.
-                if !iterative_fps.is_empty() {
-                    if let Some(recursive_ident) = recursive.get(fp) {
-                        if iterative_fps.contains(fp) {
-                            return Ok(quote! { #recursive_ident.leave(scope).consolidate() });
-                        } else {
-                            return Ok(quote! { #recursive_ident.leave(scope) });
-                        }
+                if !iterative_fps.is_empty()
+                    && let Some(recursive_ident) = recursive.get(fp)
+                {
+                    if iterative_fps.contains(fp) {
+                        return Ok(quote! { #recursive_ident.leave(scope).consolidate() });
+                    } else {
+                        return Ok(quote! { #recursive_ident.leave(scope) });
                     }
                 }
 
@@ -481,27 +481,25 @@ impl CodeGen {
         // convert the semiring diff back to a Present multiplicity.
         let mut post_leave_stmts = Vec::new();
         for (fp, target) in leave_fps.iter().zip(targets.iter()) {
-            if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp) {
-                if self.config.is_datalog_batch() {
-                    let post_leave = match agg_op {
-                        AggregationOperator::Avg => {
-                            aggregation_avg_post_leave(*agg_arity, *agg_pos)
-                        }
-                        _ => aggregation_opt_post_leave(*agg_arity, *agg_pos),
-                    };
+            if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
+                && self.config.is_datalog_batch()
+            {
+                let post_leave = match agg_op {
+                    AggregationOperator::Avg => aggregation_avg_post_leave(*agg_arity, *agg_pos),
+                    _ => aggregation_opt_post_leave(*agg_arity, *agg_pos),
+                };
 
-                    with_profiler(profiler, |profiler| {
-                        profiler.recursive_post_leave_opt_aggregate_operator(
-                            target.to_string(),
-                            target.to_string(),
-                            target.to_string(),
-                        );
-                    });
+                with_profiler(profiler, |profiler| {
+                    profiler.recursive_post_leave_opt_aggregate_operator(
+                        target.to_string(),
+                        target.to_string(),
+                        target.to_string(),
+                    );
+                });
 
-                    post_leave_stmts.push(quote! {
-                        let #target = #target #post_leave;
-                    });
-                }
+                post_leave_stmts.push(quote! {
+                    let #target = #target #post_leave;
+                });
             }
         }
 

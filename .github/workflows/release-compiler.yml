@@ -1,9 +1,9 @@
 name: Release flowlog-compiler
 
 # Auto-detect a flowlog-compiler version bump on push to main, build the
-# binary on Linux + macOS, and publish a GitHub Release with the binaries
-# attached. Mirrors the crates.io publish flow's "skip if already exists"
-# guard so re-runs / unrelated pushes are no-ops.
+# binary on Linux + macOS + Windows, and publish a GitHub Release with the
+# binaries attached. Mirrors the crates.io publish flow's "skip if already
+# exists" guard so re-runs / unrelated pushes are no-ops.
 
 on:
   push:
@@ -61,10 +61,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-13
-            target: x86_64-apple-darwin
+            bin_suffix: ""
           - os: macos-latest
             target: aarch64-apple-darwin
+            bin_suffix: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_suffix: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -75,17 +78,25 @@ jobs:
       - name: 🔨 Build flowlog-compiler (release)
         run: cargo build --release -p flowlog-compiler --target ${{ matrix.target }}
 
+      # Bash + tar + sha256sum/shasum are available on all three runners
+      # (Windows includes Git Bash + bsdtar via the system PATH), so a
+      # single bash step packages every platform identically — only the
+      # binary suffix differs between matrix entries.
       - name: 📦 Package binary + checksum
         shell: bash
         run: |
           set -euo pipefail
           STAGE="flowlog-compiler-${{ needs.detect.outputs.version }}-${{ matrix.target }}"
           mkdir -p "${STAGE}"
-          cp "target/${{ matrix.target }}/release/flowlog-compiler" "${STAGE}/"
+          cp "target/${{ matrix.target }}/release/flowlog-compiler${{ matrix.bin_suffix }}" "${STAGE}/"
           cp LICENSE "${STAGE}/" 2>/dev/null || true
           cp README.md "${STAGE}/" 2>/dev/null || true
           tar -czf "${STAGE}.tar.gz" "${STAGE}"
-          shasum -a 256 "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          else
+            shasum -a 256 "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          fi
           echo "ASSET_TARBALL=${STAGE}.tar.gz" >> "$GITHUB_ENV"
           echo "ASSET_CHECKSUM=${STAGE}.tar.gz.sha256" >> "$GITHUB_ENV"
 

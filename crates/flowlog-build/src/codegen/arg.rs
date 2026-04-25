@@ -18,9 +18,9 @@ use crate::planner::{
     FnCallPredicateArgument, TransformationArgument,
 };
 
+use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
 use crate::codegen::tuple_tokens;
-use crate::codegen::CodeGen;
 
 // ==================================================
 // Row pattern + field identifiers for RowToX transformations
@@ -172,10 +172,10 @@ fn compute_row_params_tokens(
     let mut used = vec![false; arity];
 
     let mut mark = |arg: &TransformationArgument| {
-        if let TransformationArgument::KV((_, idx)) = arg {
-            if let Some(slot) = used.get_mut(*idx) {
-                *slot = true;
-            }
+        if let TransformationArgument::KV((_, idx)) = arg
+            && let Some(slot) = used.get_mut(*idx)
+        {
+            *slot = true;
         }
     };
 
@@ -627,7 +627,7 @@ pub fn const_to_token(
             return Err(CodegenError::internal(format!(
                 "polymorphic literal {constant:?} reached codegen; \
                  typechecker should have pinned it"
-            )))
+            )));
         }
         ConstType::Int8(n) => {
             let lit = proc_macro2::Literal::i8_unsuffixed(*n);
@@ -741,7 +741,7 @@ fn numeric_arithmetic_op_tokens(op: &ArithmeticOperator) -> Result<TokenStream, 
         _ => {
             return Err(CodegenError::internal(format!(
                 "string operator `{op}` reached numeric arithmetic builder"
-            )))
+            )));
         }
     })
 }

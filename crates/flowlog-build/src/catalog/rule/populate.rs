@@ -130,16 +130,16 @@ impl Catalog {
         let rule_span = self.rule.span();
         for atom in &negative_atoms {
             for arg in atom.arguments() {
-                if let AtomArg::Var(v) = arg {
-                    if !is_safe_set.contains(v) {
-                        return Err(CatalogError::UnsafeVariable {
-                            kind: UnsafePredicateKind::Negation,
-                            predicate: format!("!{atom}"),
-                            predicate_span: atom.span(),
-                            rule_span,
-                            var: v.clone(),
-                        });
-                    }
+                if let AtomArg::Var(v) = arg
+                    && !is_safe_set.contains(v)
+                {
+                    return Err(CatalogError::UnsafeVariable {
+                        kind: UnsafePredicateKind::Negation,
+                        predicate: format!("!{atom}"),
+                        predicate_span: atom.span(),
+                        rule_span,
+                        var: v.clone(),
+                    });
                 }
             }
         }

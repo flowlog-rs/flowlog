@@ -242,16 +242,16 @@ fn check_atom_uses(
         let col_ty = resolve_atom_column(atom, i, decls)?;
         match arg {
             AtomArg::Var(v) => {
-                if let Some(&(bound_ty, bound_span)) = bindings.get(v) {
-                    if bound_ty != col_ty {
-                        return Err(TypeCheckError::TypeMismatch {
-                            var: v.clone(),
-                            first_ty: bound_ty,
-                            first_span: bound_span,
-                            later_ty: col_ty,
-                            later_span: atom.span(),
-                        });
-                    }
+                if let Some(&(bound_ty, bound_span)) = bindings.get(v)
+                    && bound_ty != col_ty
+                {
+                    return Err(TypeCheckError::TypeMismatch {
+                        var: v.clone(),
+                        first_ty: bound_ty,
+                        first_span: bound_span,
+                        later_ty: col_ty,
+                        later_span: atom.span(),
+                    });
                 }
             }
             AtomArg::Const(c) => {
@@ -283,10 +283,10 @@ fn pin_atom_consts(atom: &mut Atom, decls: &DeclTypes) -> Result<(), TypeCheckEr
         decl.clone()
     };
     for (arg, col_ty) in atom.arguments_mut().iter_mut().zip(col_types.iter()) {
-        if let AtomArg::Const(c) = arg {
-            if c.is_polymorphic() {
-                c.pin(*col_ty);
-            }
+        if let AtomArg::Const(c) = arg
+            && c.is_polymorphic()
+        {
+            c.pin(*col_ty);
         }
     }
     Ok(())
@@ -320,29 +320,28 @@ fn check_comparison(
     let op = cmp.operator().clone();
     let span = cmp.span();
 
-    if let (Some(l), Some(r)) = (left, right) {
-        if merge_lit(l, r).is_none() {
-            return Err(TypeCheckError::ComparisonTypeMismatch {
-                span,
-                op,
-                left: l.report_ty(),
-                right: r.report_ty(),
-            });
-        }
+    if let (Some(l), Some(r)) = (left, right)
+        && merge_lit(l, r).is_none()
+    {
+        return Err(TypeCheckError::ComparisonTypeMismatch {
+            span,
+            op,
+            left: l.report_ty(),
+            right: r.report_ty(),
+        });
     }
 
     // Ordering comparisons additionally require an ordered type.
-    if !matches!(op, ComparisonOperator::Equal | ComparisonOperator::NotEqual) {
-        if let Some(kind) = left.or(right) {
-            let is_ordered =
-                kind.is_numeric() || matches!(kind, LitKind::Concrete(DataType::String));
-            if !is_ordered {
-                return Err(TypeCheckError::ComparisonOpNotAllowed {
-                    span,
-                    op,
-                    ty: kind.report_ty(),
-                });
-            }
+    if !matches!(op, ComparisonOperator::Equal | ComparisonOperator::NotEqual)
+        && let Some(kind) = left.or(right)
+    {
+        let is_ordered = kind.is_numeric() || matches!(kind, LitKind::Concrete(DataType::String));
+        if !is_ordered {
+            return Err(TypeCheckError::ComparisonOpNotAllowed {
+                span,
+                op,
+                ty: kind.report_ty(),
+            });
         }
     }
 
@@ -395,23 +394,23 @@ fn check_head(
         match arg {
             HeadArg::Aggregation(agg) => check_aggregation(agg, expected, udfs, bindings)?,
             HeadArg::Var(v) => {
-                if let Some(&(found, _)) = bindings.get(v) {
-                    if found != expected {
-                        return Err(TypeCheckError::HeadColumnType {
-                            span: head_span,
-                            rel: rel_name.clone(),
-                            col,
-                            expected,
-                            found,
-                        });
-                    }
+                if let Some(&(found, _)) = bindings.get(v)
+                    && found != expected
+                {
+                    return Err(TypeCheckError::HeadColumnType {
+                        span: head_span,
+                        rel: rel_name.clone(),
+                        col,
+                        expected,
+                        found,
+                    });
                 }
             }
             HeadArg::Arith(a) => {
-                if let Some(kind) = infer_expr_type(a, bindings, udfs)? {
-                    if !kind.fits(expected) {
-                        return Err(head_or_literal_mismatch(a, &rel_name, col, expected, kind));
-                    }
+                if let Some(kind) = infer_expr_type(a, bindings, udfs)?
+                    && !kind.fits(expected)
+                {
+                    return Err(head_or_literal_mismatch(a, &rel_name, col, expected, kind));
                 }
                 pin_arith_literals(a, expected, udfs)?;
             }
