@@ -1,6 +1,6 @@
 [package]
 name = "flowlog-build"
-version.workspace = true
+version = "0.2.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

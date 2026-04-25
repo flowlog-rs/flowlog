@@ -40,7 +40,7 @@ integration, see the `flowlog-compiler` binary in the
 flowlog-runtime = "0.2"
 
 [build-dependencies]
-flowlog-build = "0.1"
+flowlog-build = "0.2"
 ```
 
 ```rust,no_run
