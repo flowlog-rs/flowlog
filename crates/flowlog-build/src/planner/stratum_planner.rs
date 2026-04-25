@@ -70,10 +70,11 @@ pub struct StratumPlanner {
     /// `None` for plain strata (which run to fixpoint implicitly).
     loop_condition: Option<LoopCondition>,
 
-    /// Atom fingerprint → `"name(args)"` label, unioned across every rule's
-    /// rhs. Computed once at stratum construction so codegen can annotate
-    /// operator names without re-walking the rule planners per transformation.
-    atom_labels: HashMap<u64, String>,
+    /// Atom fingerprint → relation name, unioned across every rule's rhs.
+    /// Computed once at stratum construction so codegen can annotate
+    /// operator labels with the EDB they consume without re-walking the
+    /// rule planners per transformation.
+    atom_names: HashMap<u64, String>,
 }
 
 impl StratumPlanner {
@@ -170,11 +171,11 @@ impl StratumPlanner {
 
         // Phase 6: Materialize deduplicated transformations
         // this phase also do sharing optimization across rules
-        let atom_labels = rule_planners
+        let atom_names = rule_planners
             .iter()
-            .flat_map(RulePlanner::rhs_atom_labels)
-            .fold(HashMap::new(), |mut acc, (fp, label)| {
-                acc.entry(fp).or_insert(label);
+            .flat_map(RulePlanner::rhs_atom_names)
+            .fold(HashMap::new(), |mut acc, (fp, name)| {
+                acc.entry(fp).or_insert(name);
                 acc
             });
         let mut stratum_planner = Self {
@@ -195,7 +196,7 @@ impl StratumPlanner {
             head_to_idb_map: HashMap::new(),
             idb_to_aggregation_map: HashMap::new(),
             loop_condition: stratifier.loop_condition(stratum_idx).cloned(),
-            atom_labels,
+            atom_names,
         };
         stratum_planner.materialize_transformations();
 
@@ -278,7 +279,9 @@ impl StratumPlanner {
     /// Returns tuples of `(AggregationOperator, position in output relation,
     /// output arity)`.
     #[inline]
-    pub(crate) fn idb_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
+    pub(crate) fn idb_to_aggregation_map(
+        &self,
+    ) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
         &self.idb_to_aggregation_map
     }
 
@@ -294,8 +297,8 @@ impl StratumPlanner {
     /// the profiler/visualizer can show `[Row -> KV] K:(V0) arc(x, y)` without
     /// any downstream knowledge of atoms.
     #[inline]
-    pub(crate) fn atom_labels(&self) -> &HashMap<u64, String> {
-        &self.atom_labels
+    pub(crate) fn atom_names(&self) -> &HashMap<u64, String> {
+        &self.atom_names
     }
 
     /// Check if this stratum is recursive.

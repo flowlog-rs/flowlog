@@ -215,30 +215,12 @@ impl Builder {
             })?;
 
         let output = build::Pipeline::build(self, program_path, sm)?;
-        let source = build::assemble(
-            &output,
-            out_dir,
-            self.udf_file.as_deref(),
-            self.mode.is_incremental(),
-        )
-        .map_err(BuildError::from)?;
+        let source = build::assemble(&output, out_dir).map_err(BuildError::from)?;
         self.emit_semiring_modules(&output, out_dir)
             .map_err(BuildError::from)?;
         std::fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;
-        self.emit_ops_json(&output, out_dir)
-            .map_err(BuildError::from)?;
         self.emit_rerun_if_changed(program_path);
         Ok(())
-    }
-
-    /// Write the static plan-graph profiler JSON to `$OUT_DIR/log/ops.json`.
-    fn emit_ops_json(&self, output: &build::Pipeline, out_dir: &Path) -> io::Result<()> {
-        let Some(profiler) = output.profiler.as_ref() else {
-            return Ok(());
-        };
-        let log_dir = out_dir.join("log");
-        std::fs::create_dir_all(&log_dir)?;
-        profiler.write_json(log_dir.join("ops.json"))
     }
 
     /// Write aggregation-specific semiring modules to `$OUT_DIR/semiring/`.

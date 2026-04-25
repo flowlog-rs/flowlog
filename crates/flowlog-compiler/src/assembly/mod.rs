@@ -38,11 +38,13 @@ impl Compiler {
 
         let type_declarations = &parts.type_declarations;
         let profile_structs = &parts.profile_structs;
+        let profile_ops = &parts.profile_ops;
 
         let file_ts = quote! {
             #imports
             #type_declarations
             #profile_structs
+            #profile_ops
             #worker_helpers
             #main_fn
         };

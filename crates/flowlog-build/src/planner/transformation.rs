@@ -181,6 +181,32 @@ impl Transformation {
             Transformation::NJnToKv { .. } => "[AntiJoin -> KV]",
         }
     }
+
+    /// Simplified operation label for profiler / visualizer output.
+    pub(crate) fn profile_operation_name(&self) -> &'static str {
+        match self {
+            Self::RowToRow { .. } => "Map",
+            Self::RowToKv { .. } => "Arrange",
+            Self::KvToRow { .. } => "Flatten",
+            Self::KvToKv { .. } => "Transform",
+            Self::JnToRow { input, .. } => {
+                if input.0.is_k_only() {
+                    "SemiJoin"
+                } else {
+                    "Join"
+                }
+            }
+            Self::JnToKv { input, .. } => {
+                if input.0.is_k_only() {
+                    "SemiJoinMap"
+                } else {
+                    "JoinMap"
+                }
+            }
+            Self::NJnToRow { .. } => "AntiJoin",
+            Self::NJnToKv { .. } => "AntiJoinMap",
+        }
+    }
 }
 
 // ========================
