@@ -7,9 +7,10 @@ use std::collections::HashSet;
 use crate::planner::StratumPlanner;
 use crate::profiler::{with_profiler, Profiler};
 
-use crate::codegen::CodegenError;
 use crate::codegen::idb_buffers::InspectorCodegen;
+use crate::codegen::profile::render_profile_ops_const;
 use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
 
 /// Token-stream fragments and rendered source files produced by
 /// [`CodeGen::generate`]. All fields are `pub` so consumers can
@@ -41,9 +42,12 @@ pub struct CodeParts {
     /// Size cell clones moved into the worker closure.
     pub size_cell_clones: Vec<TokenStream>,
 
-    // -- profiling --
+    // -- profiling — all fields below are empty when `--profile` is off.
     /// Struct definitions for profiling (emitted at file level).
     pub profile_structs: TokenStream,
+    /// `const __FLOWLOG_OPS_JSON: &str = "..."` — static plan graph baked
+    /// in; worker 0 writes it to `<stem>_log/ops.json` at startup.
+    pub profile_ops: TokenStream,
     /// Logger registration code (emitted inside worker closure).
     pub profile_init: TokenStream,
     /// Time profiling write-out code for batch mode.
@@ -140,6 +144,10 @@ impl CodeGen {
         let memory_profile_write_batch = self.gen_memory_profile_write_batch();
         let memory_profile_write_incremental = self.gen_memory_profile_write_incremental();
 
+        // Rendered after the codegen loop so the profiler is fully
+        // populated. Empty when profile is off.
+        let profile_ops = render_profile_ops_const(profiler.as_ref());
+
         let type_declarations = self.gen_type_declarations();
         let semiring_modules = self.render_semiring_modules();
 
@@ -156,6 +164,7 @@ impl CodeGen {
             size_cell_decls,
             size_cell_clones,
             profile_structs,
+            profile_ops,
             profile_init,
             time_profile_write_batch,
             time_profile_write_incremental,

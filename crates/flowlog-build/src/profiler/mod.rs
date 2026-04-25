@@ -70,8 +70,15 @@ impl Profiler {
 
     /// Serialize profiler data to a pretty JSON file.
     pub fn write_json<P: AsRef<std::path::Path>>(&self, path: P) -> io::Result<()> {
-        let json = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
-        std::fs::write(path, json)
+        std::fs::write(path, self.to_json_string())
+    }
+
+    /// Serialize profiler data to a pretty JSON string. Used by codegen to
+    /// bake the static plan-graph as a `const &str` in generated source so
+    /// the engine can drop it next to its runtime profile logs.
+    pub fn to_json_string(&self) -> String {
+        serde_json::to_string_pretty(self)
+            .expect("Profiler is Serialize-derived; serialization is infallible")
     }
 
     /// Insert a rule using raw plan tree info; the plan tree is rendered internally.

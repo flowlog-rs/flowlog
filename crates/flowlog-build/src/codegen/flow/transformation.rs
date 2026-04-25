@@ -37,20 +37,20 @@ impl CodeGen {
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<TokenStream, CodegenError> {
-        let atom_labels = stratum.atom_labels();
-        let edb_atoms = transformation
+        let atom_names = stratum.atom_names();
+        let edb_names = transformation
             .input_fingerprints()
             .into_iter()
-            .filter_map(|fp| atom_labels.get(&fp).map(String::as_str))
+            .filter_map(|fp| atom_names.get(&fp).map(String::as_str))
             .collect::<Vec<_>>();
-        let edb_suffix = if edb_atoms.is_empty() {
+        let edb_suffix = if edb_names.is_empty() {
             String::new()
         } else {
-            format!(" ← {}", edb_atoms.join(", "))
+            format!(" ← {}", edb_names.join(", "))
         };
         let transformation_name = format!(
-            "{} {}{}",
-            transformation.operation_name(),
+            "{}: {}{}",
+            transformation.profile_operation_name(),
             transformation.flow(),
             edb_suffix,
         );

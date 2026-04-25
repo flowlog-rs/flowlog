@@ -24,7 +24,6 @@ use std::path::Path;
 use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Value};
 
 use flowlog_build::common::Config;
-use flowlog_build::profiler::{with_profiler_ref, Profiler};
 use flowlog_build::{CodeParts, Features};
 
 use crate::Compiler;
@@ -38,8 +37,8 @@ impl Compiler {
     ///
     /// Arguments are pre-rendered file contents; this function only decides
     /// _where_ they go and creates intermediate directories. Optional files
-    /// (incremental-mode shell, semiring modules, UDF stub, profiler log)
-    /// are written only when the program needs them.
+    /// (incremental-mode shell, semiring modules, UDF stub) are written
+    /// only when the program needs them.
     pub(crate) fn write_project(
         &self,
         parts: &CodeParts,
@@ -47,7 +46,6 @@ impl Compiler {
         relation_rs: &str,
         cargo_toml: &str,
         cargo_config: &str,
-        profiler: &Option<Profiler>,
     ) -> io::Result<()> {
         let config = &self.config;
         let root = config.build_dir();
@@ -86,14 +84,6 @@ impl Compiler {
             })?;
             write_file(&src_dir.join("udf.rs"), content.trim_start())?;
         }
-
-        // Profiler log sibling-directory to the executable, written only when
-        // `--profile` was requested.
-        with_profiler_ref(profiler, |profiler| {
-            let log_dir = config.executable_path().with_file_name("log");
-            ensure_dir(&log_dir)?;
-            profiler.write_json(log_dir.join("ops.json"))
-        })?;
 
         Ok(())
     }

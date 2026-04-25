@@ -21,21 +21,21 @@ use crate::build::results::{gen_batch_results, gen_incremental_results};
 use crate::codegen::Features;
 
 /// Render the library-mode source file for one compiled program.
-pub(crate) fn assemble(
-    pipeline: &Pipeline,
-    out_dir: &Path,
-    udf_file: Option<&Path>,
-    is_incremental: bool,
-) -> io::Result<String> {
+pub(crate) fn assemble(pipeline: &Pipeline, out_dir: &Path) -> io::Result<String> {
+    let config = &pipeline.config;
     let string_intern = pipeline.features.string_intern();
-    let profile = pipeline.profiler.is_some();
 
     let semiring_mod = gen_semiring_mod(pipeline, out_dir);
-    let lib_imports = gen_lib_imports(&pipeline.relations, &pipeline.features, profile);
+    let lib_imports = gen_lib_imports(
+        &pipeline.relations,
+        &pipeline.features,
+        config.profiling_enabled(),
+    );
     let type_declarations = &pipeline.parts.type_declarations;
     let profile_structs = &pipeline.parts.profile_structs;
+    let profile_ops = &pipeline.parts.profile_ops;
     let rel_module = gen_public_rel_module(&pipeline.program);
-    let (results_struct, lib_engine) = if is_incremental {
+    let (results_struct, lib_engine) = if config.is_incremental() {
         (
             gen_incremental_results(&pipeline.program),
             gen_lib_incremental_engine(&pipeline.program, string_intern, &pipeline.parts),
@@ -46,7 +46,7 @@ pub(crate) fn assemble(
             gen_lib_engine(&pipeline.program, string_intern, &pipeline.parts),
         )
     };
-    let udf_mod = gen_udf_mod(&pipeline.features, udf_file)?;
+    let udf_mod = gen_udf_mod(&pipeline.features, config.udf_file().map(Path::new))?;
 
     // `include!()` forbids inner attributes at the call site, so the whole
     // body lives in an inner module carrying a blanket `#[allow(..)]`, then
@@ -74,6 +74,7 @@ pub(crate) fn assemble(
             #lib_imports
             #type_declarations
             #profile_structs
+            #profile_ops
             #rel_module
             #results_struct
             #udf_mod

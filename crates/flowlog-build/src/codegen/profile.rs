@@ -1,6 +1,6 @@
 //! Profiling code generation for FlowLog.
 //!
-//! This module emits optional profiling support into the generated `main.rs`.
+//! This module emits optional profiling support into the generated source.
 //!
 //! **Time profiling** (timely dataflow level):
 //! Registers a timely logger to aggregate per-operator active time and
@@ -10,20 +10,33 @@
 //! Registers a differential dataflow arrangement logger to track batch,
 //! merge, drop, and batcher events per operator (arrangement memory usage).
 //!
-//! Generated artifacts (time profiling):
-//! - Batch mode: `log/time/time_worker_t0_{index}.log`
-//! - Incremental mode: `log/time/time_worker_t{time_stamp}_{index}.log`
+//! Output layout — all paths are cwd-relative at runtime, namespaced by
+//! the program stem so multiple compiled programs don't collide:
 //!
-//! Generated artifacts (memory profiling):
-//! - Batch mode: `log/memory/memory_worker_t0_{index}.log`
-//! - Incremental mode: `log/memory/memory_worker_t{time_stamp}_{index}.log`
+//! - `<stem>_log/ops.json`                                 (static plan graph)
+//! - `<stem>_log/time/time_worker_t0_{index}.log`          (batch)
+//! - `<stem>_log/time/time_worker_t{time_stamp}_{index}.log`  (incremental)
+//! - `<stem>_log/memory/memory_worker_t0_{index}.log`      (batch)
+//! - `<stem>_log/memory/memory_worker_t{time_stamp}_{index}.log` (incremental)
+//!
+//! `ops.json` is baked into the generated source as a `const &str` and
+//! written on engine startup by worker 0, so it lands in the same folder
+//! as the runtime logs without any compile-time disk write.
 
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::codegen::CodeGen;
+use crate::profiler::Profiler;
 
 impl CodeGen {
+    /// Top-level profiler directory for this program — `<stem>_log`. Used
+    /// by both compile-time path-string formatting and runtime ops.json
+    /// emission. Stem disambiguates multiple programs sharing a process.
+    fn profile_log_dir(&self) -> String {
+        format!("{}_log", self.config.program_name())
+    }
+
     // =================================================================
     // Time profiling (timely dataflow level)
     // =================================================================
@@ -61,6 +74,10 @@ impl CodeGen {
     /// - `Operates` events (operator name + address)
     /// - `Schedule` events (Start/Stop pairs → total active time + activation count)
     ///
+    /// Worker 0 also drops `<stem>_log/ops.json` (the static plan graph baked
+    /// in as `__FLOWLOG_OPS_JSON`) so the visualizer finds it next to the
+    /// runtime logs.
+    ///
     /// Notes:
     /// - This is worker-local aggregation: each worker maintains its own `HashMap<operator_id, OpStats>`.
     /// - Timely's log callback may deliver multiple events per batch; we fold them into aggregates.
@@ -69,11 +86,21 @@ impl CodeGen {
             return quote! {};
         }
 
+        let log_dir = self.profile_log_dir();
+        let ops_path = format!("{log_dir}/ops.json");
+
         quote! {
             // Per-operator aggregate stats, keyed by operator id (worker-local).
             let op_stats: Rc<RefCell<HashMap<usize, OpStats>>> =
                 Rc::new(RefCell::new(HashMap::new()));
             let op_stats_in_log = Rc::clone(&op_stats);
+
+            // Worker 0 plants the static plan graph beside the runtime logs.
+            // Best-effort — a write failure here shouldn't take down the dataflow.
+            if worker.index() == 0 {
+                let _ = std::fs::create_dir_all(#log_dir);
+                let _ = std::fs::write(#ops_path, __FLOWLOG_OPS_JSON);
+            }
 
             // Register a logger that receives timely events and folds them into `op_stats`.
             worker
@@ -127,30 +154,31 @@ impl CodeGen {
 
     /// Emits time profiling write-out logic for **batch** mode.
     ///
-    /// Writes one file per worker under `log/time/`:
-    /// `log/time/time_worker_t0_{index}.log`
+    /// Writes one file per worker under `<stem>_log/time/`:
+    /// `<stem>_log/time/time_worker_t0_{index}.log`
     pub(crate) fn gen_time_profile_write_batch(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
-        gen_time_profile_write_core(quote! {
-            format!("log/time/time_worker_t0_{}.log", index)
-        })
+        let dir = format!("{}/time", self.profile_log_dir());
+        let path_fmt = format!("{dir}/time_worker_t0_{{}}.log");
+        gen_time_profile_write_core(&dir, quote! { format!(#path_fmt, index) })
     }
 
     /// Emits time profiling write-out logic for **incremental** mode.
     ///
     /// Writes one file per worker per committed transaction time:
-    /// `log/time/time_worker_t{time_stamp}_{index}.log`
+    /// `<stem>_log/time/time_worker_t{time_stamp}_{index}.log`
     pub(crate) fn gen_time_profile_write_incremental(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
-        let write = gen_time_profile_write_core(quote! {
-            format!("log/time/time_worker_t{}_{}.log", time_stamp - 1, index)
-        });
+        let dir = format!("{}/time", self.profile_log_dir());
+        let path_fmt = format!("{dir}/time_worker_t{{}}_{{}}.log");
+        let write =
+            gen_time_profile_write_core(&dir, quote! { format!(#path_fmt, time_stamp - 1, index) });
 
         // Reset timing counters after each write so stats are per-transaction,
         // but keep operator metadata (name, addr) for the next round.
@@ -270,28 +298,31 @@ impl CodeGen {
 
     /// Emits memory profiling write-out logic for **batch** mode.
     ///
-    /// Writes `log/memory/memory_worker_t0_{index}.log` per worker.
+    /// Writes `<stem>_log/memory/memory_worker_t0_{index}.log` per worker.
     pub(crate) fn gen_memory_profile_write_batch(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
-        gen_memory_profile_write_core(quote! {
-            format!("log/memory/memory_worker_t0_{}.log", index)
-        })
+        let dir = format!("{}/memory", self.profile_log_dir());
+        let path_fmt = format!("{dir}/memory_worker_t0_{{}}.log");
+        gen_memory_profile_write_core(&dir, quote! { format!(#path_fmt, index) })
     }
 
     /// Emits memory profiling write-out logic for **incremental** mode.
     ///
-    /// Writes `log/memory/memory_worker_t{time_stamp}_{index}.log` per worker per txn.
+    /// Writes `<stem>_log/memory/memory_worker_t{time_stamp}_{index}.log` per worker per txn.
     pub(crate) fn gen_memory_profile_write_incremental(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
-        let write = gen_memory_profile_write_core(quote! {
-            format!("log/memory/memory_worker_t{}_{}.log", time_stamp - 1, index)
-        });
+        let dir = format!("{}/memory", self.profile_log_dir());
+        let path_fmt = format!("{dir}/memory_worker_t{{}}_{{}}.log");
+        let write = gen_memory_profile_write_core(
+            &dir,
+            quote! { format!(#path_fmt, time_stamp - 1, index) },
+        );
 
         // Reset memory counters after each write so stats are per-transaction.
         quote! {
@@ -308,8 +339,25 @@ impl CodeGen {
 // Private helper functions (not tied to CodeGen state)
 // =================================================================
 
+/// Render the static plan-graph profiler as a `const &str` baked into the
+/// generated module. Worker 0 writes it to `<stem>_log/ops.json` on
+/// startup (see [`CodeGen::gen_time_profile_init`]).
+///
+/// `None` profiler → empty token stream so non-profile builds carry no
+/// dead const.
+pub(crate) fn render_profile_ops_const(profiler: Option<&Profiler>) -> TokenStream {
+    let Some(profiler) = profiler else {
+        return quote! {};
+    };
+    let json = profiler.to_json_string();
+    quote! {
+        const __FLOWLOG_OPS_JSON: &str = #json;
+    }
+}
+
 /// Shared implementation for writing time profiling stats to a file.
-fn gen_time_profile_write_core(file_path_expr: TokenStream) -> TokenStream {
+fn gen_time_profile_write_core(dir: &str, file_path_expr: TokenStream) -> TokenStream {
+    let create_msg = format!("failed to create {dir} directory");
     quote! {
         // Snapshot + sort for deterministic output.
         let map = op_stats.borrow();
@@ -317,7 +365,7 @@ fn gen_time_profile_write_core(file_path_expr: TokenStream) -> TokenStream {
             map.iter().map(|(id, st)| (*id, st.clone())).collect();
         rows.sort_by_key(|(id, _st)| *id);
 
-        std::fs::create_dir_all("log/time").expect("failed to create log/time directory");
+        std::fs::create_dir_all(#dir).expect(#create_msg);
 
         let stats_file = File::create(#file_path_expr)
             .expect("failed to create operator stats log file");
@@ -347,7 +395,8 @@ fn gen_time_profile_write_core(file_path_expr: TokenStream) -> TokenStream {
 }
 
 /// Shared implementation for writing memory profiling stats to a file.
-fn gen_memory_profile_write_core(file_path_expr: TokenStream) -> TokenStream {
+fn gen_memory_profile_write_core(dir: &str, file_path_expr: TokenStream) -> TokenStream {
+    let create_msg = format!("failed to create {dir} directory");
     quote! {
         // --- DD arrangement stats write-out ---
         {
@@ -377,7 +426,7 @@ fn gen_memory_profile_write_core(file_path_expr: TokenStream) -> TokenStream {
             // Sort numerically by address components
             rows.sort_by(|a, b| a.0.cmp(&b.0));
 
-            std::fs::create_dir_all("log/memory").expect("failed to create log/memory directory");
+            std::fs::create_dir_all(#dir).expect(#create_msg);
 
             let dd_file = File::create(#file_path_expr)
                 .expect("failed to create DD arrange stats log file");

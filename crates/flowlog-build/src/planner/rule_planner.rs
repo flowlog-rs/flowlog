@@ -118,9 +118,8 @@ impl RulePlanner {
 
     /// Map of atom fingerprint → formatted `"name(arg1, ..., argN)"` label
     /// for every positive or negative atom on the rule's rhs, derived from
-    /// `Atom`'s `Display` impl. Consumed by the plan-tree debug map and by
-    /// codegen (via [`StratumPlanner::atom_labels`]) to annotate operator
-    /// names with the EDB atom they consume.
+    /// `Atom`'s `Display` impl. Consumed by the plan-tree developer-debug
+    /// walker so the leaf nodes show full binding context.
     pub(crate) fn rhs_atom_labels(&self) -> HashMap<u64, String> {
         let mut labels = HashMap::new();
         for predicate in self.rule.rhs() {
@@ -131,6 +130,20 @@ impl RulePlanner {
             }
         }
         labels
+    }
+
+    /// Atom fingerprint → relation name (no args). Consumed by codegen to
+    /// label operators with the EDB they read from.
+    pub(crate) fn rhs_atom_names(&self) -> HashMap<u64, String> {
+        let mut names = HashMap::new();
+        for predicate in self.rule.rhs() {
+            if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = predicate {
+                names
+                    .entry(atom.fingerprint())
+                    .or_insert_with(|| atom.name().to_string());
+            }
+        }
+        names
     }
 
     fn build_transformation_debug_entry(tx: &Transformation) -> (String, Vec<u64>) {

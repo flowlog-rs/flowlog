@@ -55,15 +55,8 @@ impl Compiler {
         let cargo_toml = scaffold::render_cargo_toml(&self.config, features);
         let cargo_config = scaffold::render_cargo_config();
 
-        self.write_project(
-            &parts,
-            &main_rs,
-            &relation_rs,
-            &cargo_toml,
-            &cargo_config,
-            profiler,
-        )
-        .map_err(crate::CompilerError::from)?;
+        self.write_project(&parts, &main_rs, &relation_rs, &cargo_toml, &cargo_config)
+            .map_err(crate::CompilerError::from)?;
         Ok(())
     }
 

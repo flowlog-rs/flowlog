@@ -26,12 +26,12 @@ use crate::{BuildError, Builder, CodeGen, CodeParts};
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
 pub(crate) struct Pipeline {
+    pub(crate) config: Config,
     pub(crate) parts: CodeParts,
     pub(crate) program: Program,
     /// Library-mode relation module: `{Name}Input` handlers + `Inputs` container.
     pub(crate) relations: TokenStream,
     pub(crate) features: Features,
-    pub(crate) profiler: Option<Profiler>,
 }
 
 impl Pipeline {
@@ -55,17 +55,17 @@ impl Pipeline {
             .then(|| Profiler::new(config.mode()));
         let strata = plan(&config, &program, &mut profiler)?;
 
-        let mut cg = CodeGen::new(config, program.clone());
+        let mut cg = CodeGen::new(config.clone(), program.clone());
         let parts = cg.generate(&strata, &mut profiler)?;
         let features = cg.features().clone();
         let relations = gen_input_module(&program, &features)?;
 
         Ok(Self {
+            config,
             parts,
             program,
             relations,
             features,
-            profiler,
         })
     }
 }
