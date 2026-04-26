@@ -604,29 +604,32 @@ _inc_file_arm_nullary() {
 EOF
 }
 
-# Per-output `let mut prev_<rel>: ...` state declaration.
+# Per-output running-count state declaration. The engine returns raw
+# DD multiplicity deltas, so the runner tracks counts itself to recover
+# set-membership transitions for the expected fixture format.
 _inc_prev_decl() {
     local dl_file="$1" rel="$2"
     local fields
     fields=$(parse_decl_fields "$dl_file" "$rel") || return 1
     if [[ -z "$fields" ]]; then
-        echo "    let mut prev_${rel}: bool = false;"
+        echo "    let mut prev_count_${rel}: i64 = 0;"
         return 0
     fi
     local tuple_ty
     tuple_ty=$(_inc_tuple_ty "$dl_file" "$rel")
-    echo "    let mut prev_${rel}: HashSet<${tuple_ty}> = HashSet::new();"
+    echo "    let mut prev_counts_${rel}: HashMap<${tuple_ty}, i64> = HashMap::new();"
 }
 
 # Per-output delta emission block, run inside the "commit" match arm.
 #
-# Non-nullary: diff the new snapshot against `prev_<rel>` and emit one
-# `<cols>,+1` / `<cols>,-1` line per changed tuple, sorted for
-# deterministic output.
+# Non-nullary: fold this commit's `Vec<(tuple, i32)>` into per-tuple
+# diffs, then for each tuple compare prev count vs new count to detect
+# set-membership transitions. Emit `<cols>,+1` for 0→positive and
+# `<cols>,-1` for positive→0; suppress count-only changes that don't
+# cross zero. Sorted for deterministic output.
 #
-# Nullary: write "True" whenever the bool changes — matches binary
-# behavior where nullary output is written iff at least one diff row
-# fired in that epoch.
+# Nullary: same logic over a single running count — write "True"
+# whenever the unit fact crosses 0, matching binary-mode behavior.
 _inc_delta_block() {
     local dl_file="$1" rel="$2"
     local fields arity=0
@@ -634,13 +637,16 @@ _inc_delta_block() {
     if [[ -z "$fields" ]]; then
         cat <<EOF
                 {
-                    let current: bool = results.${rel};
+                    let diff = results.${rel} as i64;
+                    let new_count = prev_count_${rel} + diff;
+                    let was_true = prev_count_${rel} > 0;
+                    let is_true = new_count > 0;
                     let path = format!("output/${rel}_t{}", commit_num);
                     let mut f = std::fs::File::create(&path).expect("create");
-                    if current != prev_${rel} {
+                    if was_true != is_true {
                         writeln!(f, "True").unwrap();
                     }
-                    prev_${rel} = current;
+                    prev_count_${rel} = new_count;
                 }
 EOF
         return 0
@@ -654,15 +660,26 @@ EOF
 
     cat <<EOF
                 {
-                    let current: HashSet<${tuple_ty}> = results.${rel}
-                        .into_iter()
-                        .collect();
-                    let mut lines: Vec<String> = Vec::new();
-                    for t in current.difference(&prev_${rel}) {
-                        lines.push(format!("${fmt},+1", ${accessors}));
+                    let mut commit_diffs: HashMap<${tuple_ty}, i64> = HashMap::new();
+                    for (t, d) in results.${rel}.into_iter() {
+                        *commit_diffs.entry(t).or_insert(0) += d as i64;
                     }
-                    for t in prev_${rel}.difference(&current) {
-                        lines.push(format!("${fmt},-1", ${accessors}));
+                    let mut lines: Vec<String> = Vec::new();
+                    for (t, dc) in commit_diffs {
+                        let prev_count = prev_counts_${rel}.get(&t).copied().unwrap_or(0i64);
+                        let new_count = prev_count + dc;
+                        let was_in = prev_count > 0;
+                        let is_in = new_count > 0;
+                        if !was_in && is_in {
+                            lines.push(format!("${fmt},+1", ${accessors}));
+                        } else if was_in && !is_in {
+                            lines.push(format!("${fmt},-1", ${accessors}));
+                        }
+                        if new_count == 0 {
+                            prev_counts_${rel}.remove(&t);
+                        } else {
+                            prev_counts_${rel}.insert(t, new_count);
+                        }
                     }
                     lines.sort();
                     let path = format!("output/${rel}_t{}", commit_num);
@@ -670,7 +687,6 @@ EOF
                     for line in &lines {
                         writeln!(f, "{}", line).unwrap();
                     }
-                    prev_${rel} = current;
                 }
 EOF
 }
@@ -777,7 +793,7 @@ pub mod prog {
 }
 
 use prog::DatalogIncrementalEngine;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
 fn main() {

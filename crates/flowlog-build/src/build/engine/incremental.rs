@@ -9,8 +9,8 @@
 //!   idle, then append to the per-worker staging buckets.
 //! - `abort()` — mark "not in txn" + clear staged.
 //! - `commit()` — **panics** if called without an active txn; else
-//!   flushes the staged batch as one epoch and returns an
-//!   [`IncrementalResults`] snapshot.
+//!   flushes the staged batch as one epoch and returns the
+//!   [`IncrementalResults`] *delta* produced by that epoch.
 //!
 //! Threading model:
 //!
@@ -34,7 +34,7 @@ use crate::parser::{Program, Relation};
 use super::{needs_conversion, per_position_tuple, user_to_tuple_convert};
 use crate::build::relation::user::tuple_to_user_expr;
 use crate::build::relation::{input_struct_ident, rust_ident, user_struct_ident};
-use crate::{data_type_tokens, CodeParts};
+use crate::{CodeParts, data_type_tokens};
 
 pub(crate) fn gen_lib_incremental_engine(
     program: &Program,
@@ -85,8 +85,8 @@ pub(crate) fn gen_lib_incremental_engine(
 
             /// Apply all staged updates as one epoch. Panics if no
             /// transaction is active — call `begin()` or any
-            /// `insert_*` / `remove_*` method first. Returns a
-            /// snapshot of every output relation's current state.
+            /// `insert_*` / `remove_*` method first. Returns the
+            /// per-output deltas produced by this epoch.
             pub fn commit(&mut self) -> IncrementalResults {
                 assert!(
                     self.in_txn,
@@ -131,9 +131,9 @@ fn gen_imports() -> TokenStream {
 }
 
 // =========================================================================
-// Engine struct — carries both the shared runtime handles (slots, bufs,
-// accumulators) and the host-side staging buffers (one Vec per worker
-// for non-nullary EDBs, one Option<i32> for nullary).
+// Engine struct — carries the shared runtime handles (slots, bufs, size
+// cells) and the host-side staging buffers (one Vec per worker for
+// non-nullary EDBs, one Option<i32> for nullary).
 // =========================================================================
 
 fn gen_engine_struct(
@@ -203,22 +203,6 @@ fn gen_engine_struct(
         })
         .collect();
 
-    let acc_fields: Vec<TokenStream> = program
-        .output_idbs()
-        .iter()
-        .map(|rel| {
-            let ident = acc_ident(rel);
-            if rel.arity() == 0 {
-                quote! { #ident: i64 }
-            } else {
-                let tuple_ty = data_type_tokens(&rel.data_type(), string_intern);
-                quote! {
-                    #ident: ::std::collections::HashMap<#tuple_ty, i64>
-                }
-            }
-        })
-        .collect();
-
     quote! {
         pub struct DatalogIncrementalEngine {
             workers: usize,
@@ -236,8 +220,6 @@ fn gen_engine_struct(
 
             #(#output_buf_fields,)*
             #(#size_cell_fields,)*
-
-            #(#acc_fields,)*
 
             worker_thread: Option<::std::thread::JoinHandle<()>>,
         }
@@ -334,19 +316,6 @@ fn gen_new_body(
         })
         .collect();
 
-    let acc_self_inits: Vec<TokenStream> = program
-        .output_idbs()
-        .iter()
-        .map(|rel| {
-            let ident = acc_ident(rel);
-            if rel.arity() == 0 {
-                quote! { #ident: 0_i64 }
-            } else {
-                quote! { #ident: ::std::collections::HashMap::new() }
-            }
-        })
-        .collect();
-
     let worker_closure = gen_worker_closure(program, non_nullary_edbs, nullary_edbs, parts);
 
     quote! {
@@ -386,7 +355,6 @@ fn gen_new_body(
             barrier,
             #(#output_buf_self_inits,)*
             #(#size_cell_self_inits,)*
-            #(#acc_self_inits,)*
             worker_thread: Some(worker_thread),
         }
     }
@@ -610,39 +578,8 @@ fn gen_commit_body(
         })
         .collect();
 
-    let drain_accumulate: Vec<TokenStream> = program
-        .output_idbs()
-        .iter()
-        .map(|rel| {
-            let buf = buf_ident(rel);
-            let acc = acc_ident(rel);
-            if rel.arity() == 0 {
-                quote! {
-                    {
-                        let mut guard = self.#buf.lock().expect("output buffer poisoned");
-                        for worker_buf in guard.drain(..) {
-                            for (_tuple, _time, diff) in worker_buf {
-                                self.#acc += diff as i64;
-                            }
-                        }
-                    }
-                }
-            } else {
-                quote! {
-                    {
-                        let mut guard = self.#buf.lock().expect("output buffer poisoned");
-                        for worker_buf in guard.drain(..) {
-                            for (tuple, _time, diff) in worker_buf {
-                                *self.#acc.entry(tuple).or_insert(0) += diff as i64;
-                            }
-                        }
-                    }
-                }
-            }
-        })
-        .collect();
-
-    let result_fields = gen_result_materialization(program, string_intern);
+    let drain_blocks = gen_drain_blocks(program, string_intern);
+    let result_field_names = gen_result_field_names(program);
 
     quote! {
         #(#stage_moves)*
@@ -658,37 +595,57 @@ fn gen_commit_body(
         self.barrier.wait();
         self.barrier.wait();
 
-        #(#drain_accumulate)*
+        #(#drain_blocks)*
 
         IncrementalResults {
-            #result_fields
+            #(#result_field_names),*
         }
     }
 }
 
-/// Struct-literal field initializers for `IncrementalResults` — reads
-/// from host-side accumulators / size cells populated by `commit()`.
-fn gen_result_materialization(program: &Program, string_intern: bool) -> TokenStream {
-    let mut inits: Vec<TokenStream> = Vec::new();
+/// Per-output drain block: pulls this commit's output rows from the
+/// shared buffer and binds a typed local — `Vec<(rel::Foo, i32)>` for
+/// non-nullary outputs, `i32` net diff for nullary, and the raw size
+/// delta for `.printsize` cells. The engine no longer folds across
+/// commits; callers maintain a snapshot if they need one.
+fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> {
+    let mut blocks = Vec::new();
 
     for rel in program.output_idbs() {
         let field = rust_ident(rel.name());
-        let acc = acc_ident(rel);
+        let buf = buf_ident(rel);
         if rel.arity() == 0 {
-            inits.push(quote! { #field: self.#acc > 0 });
+            blocks.push(quote! {
+                let #field: i32 = {
+                    let drained: Vec<Vec<_>> = ::std::mem::take(
+                        &mut *self.#buf.lock().expect("output buffer poisoned"),
+                    );
+                    let mut net: i32 = 0;
+                    for worker_buf in drained {
+                        for (_tuple, _time, diff) in worker_buf {
+                            net += diff;
+                        }
+                    }
+                    net
+                };
+            });
         } else {
             let struct_ident = user_struct_ident(rel);
-            let user_tuple = tuple_to_user_from_key(rel, string_intern);
-            inits.push(quote! {
-                #field: {
-                    let mut out: Vec<rel::#struct_ident> = Vec::with_capacity(self.#acc.len());
-                    for (key, count) in self.#acc.iter() {
-                        if *count <= 0 { continue; }
-                        let key = key.clone();
-                        out.push(#user_tuple);
+            let user_tuple = tuple_to_user_from_row(rel, string_intern);
+            blocks.push(quote! {
+                let #field: Vec<(rel::#struct_ident, i32)> = {
+                    let drained: Vec<Vec<_>> = ::std::mem::take(
+                        &mut *self.#buf.lock().expect("output buffer poisoned"),
+                    );
+                    let cap: usize = drained.iter().map(|w| w.len()).sum();
+                    let mut out: Vec<(rel::#struct_ident, i32)> = Vec::with_capacity(cap);
+                    for worker_buf in drained {
+                        for row in worker_buf {
+                            out.push((#user_tuple, row.2));
+                        }
                     }
                     out
-                }
+                };
             });
         }
     }
@@ -696,15 +653,28 @@ fn gen_result_materialization(program: &Program, string_intern: bool) -> TokenSt
     for rel in program.printsize_idbs() {
         let field = format_ident!("{}_size", rel.name());
         let cell = size_cell_ident(rel);
-        inits.push(quote! {
-            #field: {
+        blocks.push(quote! {
+            let #field: i32 = {
                 let (_, raw) = *self.#cell.lock().expect("size cell poisoned");
-                if raw < 0 { 0 } else { raw as usize }
-            }
+                raw
+            };
         });
     }
 
-    quote! { #(#inits),* }
+    blocks
+}
+
+fn gen_result_field_names(program: &Program) -> Vec<TokenStream> {
+    let mut names = Vec::new();
+    for rel in program.output_idbs() {
+        let field = rust_ident(rel.name());
+        names.push(quote! { #field });
+    }
+    for rel in program.printsize_idbs() {
+        let field = format_ident!("{}_size", rel.name());
+        names.push(quote! { #field });
+    }
+    names
 }
 
 // =========================================================================
@@ -825,16 +795,17 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
     }
 }
 
-/// Accumulator-key → user-tuple. The `key` binding is already owned (we
-/// clone before calling this), so no inner `.clone()` is needed on slots.
-fn tuple_to_user_from_key(rel: &Relation, string_intern: bool) -> TokenStream {
+/// Output-row tuple → user-tuple. The drain consumes each row by value
+/// (`for row in worker_buf`), so the tuple at `row.0` and its fields
+/// can be moved out without cloning.
+fn tuple_to_user_from_row(rel: &Relation, string_intern: bool) -> TokenStream {
     per_position_tuple(
         rel,
         string_intern,
-        quote! { key },
+        quote! { row.0 },
         |i| {
             let idx = proc_macro2::Literal::usize_unsuffixed(i);
-            quote! { key.#idx }
+            quote! { row.0.#idx }
         },
         |dt, src| tuple_to_user_expr(dt, string_intern, src),
     )
@@ -858,8 +829,4 @@ fn buf_ident(rel: &Relation) -> Ident {
 
 fn size_cell_ident(rel: &Relation) -> Ident {
     format_ident!("size_{}", rel.name())
-}
-
-fn acc_ident(rel: &Relation) -> Ident {
-    format_ident!("acc_{}", rel.name())
 }
