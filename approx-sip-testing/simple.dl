@@ -1,0 +1,12 @@
+.extern fn hash(x: int64) -> int64
+
+.decl RelA(x: int64, y: int64)
+.input RelA(IO="file", filename="RelA.csv", delimiter=",")
+
+.decl RelB(x: int64, y: int64)
+.input RelB(IO="file", filename="RelB.csv", delimiter=",")
+
+.decl RelO(x: int64, y: int64)
+.output RelO
+
+RelO(x, y) :- RelA(x, w1), RelB(w1, y).

@@ -314,7 +314,7 @@ impl RulePlanner {
                 let sig = binding
                     .first()
                     .expect("fncall key must contain at least one variable");
-                let new_sig = AtomArgumentSignature::new(*sig.atom_signature(), idx);
+                let new_sig = AtomArgumentSignature::new(*sig.atom_signature(), idx + 1);
                 ArithmeticPos::from_var_signature(new_sig)
             })
             .collect();
@@ -338,6 +338,20 @@ impl RulePlanner {
 
         debug!("semijoin_fp: {:x}", semijoin_fp);
         debug!("semijoin_idx: {:?}", next_idx);
+
+        let rhs_new_vals: Vec<ArithmeticPos> = rhs_new_vals
+            .iter()
+            .enumerate()
+            .map(|(idx, pos)| {
+                let binding = pos
+                    .signatures();
+                let sig = binding
+                    .first()
+                    .expect("fncall key must contain at least one variable");
+                let new_sig = AtomArgumentSignature::new(*sig.atom_signature(), idx);
+                ArithmeticPos::from_var_signature(new_sig)
+            })
+            .collect();
 
         // Replace the RHS atom in the catalog with the filtered version.
         let new_arguments_list = rhs_new_vals
