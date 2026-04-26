@@ -273,12 +273,58 @@ impl RulePlanner {
         self.insert_consumer(originals, lhs_hmap_fp, next_idx);
         self.insert_consumer(originals, rhs_hmap_fp, next_idx);
 
+        let pre_join_lhs_key = vec![lhs_hash_key.clone()];
+        let pre_join_rhs_key = vec![rhs_hash_key.clone()];
+        let pre_join_rhs_vals = rhs_kv.clone();
+
+        let lhs_new_keys: Vec<ArithmeticPos> = pre_join_lhs_key
+            .iter()
+            .enumerate()
+            .map(|(idx, pos)| {
+                let binding = pos
+                    .signatures();
+                let sig = binding
+                    .first()
+                    .expect("fncall key must contain at least one variable");
+                let new_sig = AtomArgumentSignature::new(*sig.atom_signature(), idx);
+                ArithmeticPos::from_var_signature(new_sig)
+            })
+            .collect();
+
+        let rhs_new_keys: Vec<ArithmeticPos> = pre_join_rhs_key
+            .iter()
+            .enumerate()
+            .map(|(idx, pos)| {
+                let binding = pos
+                    .signatures();
+                let sig = binding
+                    .first()
+                    .expect("fncall key must contain at least one variable");
+                let new_sig = AtomArgumentSignature::new(*sig.atom_signature(), idx);
+                ArithmeticPos::from_var_signature(new_sig)
+            })
+            .collect();
+
+        let rhs_new_vals: Vec<ArithmeticPos> = pre_join_rhs_vals
+            .iter()
+            .enumerate()
+            .map(|(idx, pos)| {
+                let binding = pos
+                    .signatures();
+                let sig = binding
+                    .first()
+                    .expect("fncall key must contain at least one variable");
+                let new_sig = AtomArgumentSignature::new(*sig.atom_signature(), idx);
+                ArithmeticPos::from_var_signature(new_sig)
+            })
+            .collect();
+
         let semijoin_tx = TransformationInfo::join_to_kv(
             lhs_hmap_fp,
             rhs_hmap_fp,
-            KeyValueLayout::new(vec![lhs_hash_key.clone()], vec![]),
-            KeyValueLayout::new(vec![rhs_hash_key.clone()], rhs_kv.clone()),
-            KeyValueLayout::new(vec![], rhs_kv.clone()),
+            KeyValueLayout::new(lhs_new_keys, vec![]),
+            KeyValueLayout::new(rhs_new_keys, rhs_new_vals.clone()),
+            KeyValueLayout::new(vec![], rhs_new_vals.clone()),
             JoinPredicates::default(),
         );
         let semijoin_fp = semijoin_tx.output_info_fp();
@@ -294,7 +340,7 @@ impl RulePlanner {
         debug!("semijoin_idx: {:?}", next_idx);
 
         // Replace the RHS atom in the catalog with the filtered version.
-        let new_arguments_list = rhs_kv
+        let new_arguments_list = rhs_new_vals
             .iter()
             .map(|pos| pos.init().as_var_signature().unwrap())
             .cloned()
