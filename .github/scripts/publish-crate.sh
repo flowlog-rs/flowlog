@@ -8,16 +8,11 @@ set -euo pipefail
 
 CRATE_NAME="${1:?crate name required}"
 CRATE_PATH="${2:?crate path required}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "::group::Resolve versions for ${CRATE_NAME}"
 
-LOCAL_VERSION="$(cargo metadata --no-deps --format-version 1 \
-    | jq -r --arg name "${CRATE_NAME}" '.packages[] | select(.name == $name) | .version')"
-
-if [[ -z "${LOCAL_VERSION}" || "${LOCAL_VERSION}" == "null" ]]; then
-    echo "Could not resolve local version for ${CRATE_NAME}" >&2
-    exit 1
-fi
+LOCAL_VERSION="$("${SCRIPT_DIR}/crate-version.sh" "${CRATE_NAME}")"
 
 curl -sSf \
     -H 'User-Agent: flowlog-publish-workflow (https://github.com/flowlog-rs/flowlog)' \

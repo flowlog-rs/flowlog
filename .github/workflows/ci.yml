@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "main-next"]
+  pull_request:
+    branches: ["main", "main-next"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ⚙️ Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: 📎 Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: 🧪 Unit tests
+        run: cargo test
+
+      - name: 🏁 End-to-end tests
+        run: |
+          bash tests/unit/unit_compiler.sh
+          bash tests/unit/unit_lib.sh
