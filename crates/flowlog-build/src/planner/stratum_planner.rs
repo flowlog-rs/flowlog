@@ -5,9 +5,9 @@ use tracing::{debug, trace};
 
 use crate::catalog::Catalog;
 use crate::common::Config;
-use crate::optimizer::Optimizer;
+use crate::optimizer::cyclic_core_join_pair;
 use crate::parser::{AggregationOperator, FlowLogRule, HeadArg, LoopCondition};
-use crate::profiler::{with_profiler, Profiler};
+use crate::profiler::{Profiler, with_profiler};
 use crate::stratifier::Stratifier;
 
 use crate::planner::{PlanError, RulePlanner, Transformation, TransformationInfo};
@@ -82,7 +82,6 @@ impl StratumPlanner {
     pub fn from_rules(
         config: &Config,
         stratum: &[FlowLogRule],
-        optimizer: &mut Optimizer,
         profiler: &mut Option<Profiler>,
         stratifier: &Stratifier,
         stratum_idx: usize,
@@ -123,27 +122,32 @@ impl StratumPlanner {
 
         // Phase 3: Core planning with optimizer guidance
         // this phase may introduce exponential blowup in intermediate results if not guided properly
-        while !catalogs.iter().all(|c| c.is_planned()) {
-            let join_decisions = optimizer.plan_stratum(&catalogs);
-
-            for ((planner, catalog), join_decision) in rule_planners
-                .iter_mut()
-                .zip(catalogs.iter_mut())
-                .zip(join_decisions)
-            {
-                if let Some(join_tuple_index) = join_decision {
+        // Loop until no rule's catalog has a cyclic core left to break.
+        loop {
+            let mut made_progress = false;
+            for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
+                if let Some(join_tuple_index) = cyclic_core_join_pair(catalog) {
                     planner.core(catalog, join_tuple_index)?;
+                    made_progress = true;
                 }
+            }
+            if !made_progress {
+                break;
             }
         }
 
-        // Phase 4: Fusion
+        // Phase 4: Yannakakis Plus solve acyclic query
+        for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
+            planner.yannakakis_plus(catalog)?;
+        }
+
+        // Phase 5: Fusion
         // to combine transformations and optimize execution
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
             planner.fuse(catalog.original_atom_fingerprints())?;
         }
 
-        // Phase 5: Post-processing
+        // Phase 6: Post-processing
         // align final output to the rule head (vars and arithmetic)
         // to apply final adjustments after fusion, e.g. convert to row type
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
@@ -387,13 +391,23 @@ impl StratumPlanner {
 
     /// Flatten and deduplicate transformation infos from all rules.
     /// Returns references to unique transformation infos (first occurrence wins).
+    ///
+    /// Dedup keys on `output_info_fp` rather than on the whole struct's
+    /// derived `Eq`. Two transformations with the same fingerprint but
+    /// different display-only fields (`input_name`, `output_name`,
+    /// `is_row_input`, `is_sip_projection`) would otherwise both survive,
+    /// then codegen — which names emitted bindings as `t_{fp}` — would
+    /// emit two `let t_{fp}_arr = …` in the same scope, the first
+    /// shadowed by the second, and `-Dunused_variables` rejects the build.
+    /// The fingerprint is the canonical identity for codegen, so that's
+    /// what dedup must use.
     fn deduplicate_transformation_infos(&self) -> Vec<&TransformationInfo> {
         let mut seen = HashSet::new();
         let mut unique_infos = Vec::new();
 
         for planner in &self.rule_planners {
             for info in planner.transformation_infos() {
-                if seen.insert(info) {
+                if seen.insert(info.output_info_fp()) {
                     unique_infos.push(info);
                 }
             }

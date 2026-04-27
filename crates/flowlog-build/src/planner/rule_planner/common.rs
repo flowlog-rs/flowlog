@@ -1024,3 +1024,19 @@ pub(super) fn test_setup(src: &str) -> (RulePlanner, Catalog) {
     let planner = RulePlanner::new(rule);
     (planner, catalog)
 }
+
+/// Drive the production pipeline up through Yannakakis+ — same shape
+/// stratum_planner runs in Phase 3 + Phase 4. Used by tests of phases
+/// downstream of yannakakis_plus (fuse, post) so they don't paste the
+/// `cyclic_core_join_pair` loop and `yannakakis_plus` call into every
+/// test body. SIP is omitted because it's optional in production
+/// (`config.sip_enabled()`); call `apply_sip` separately before this if
+/// the test rule needs it.
+#[cfg(test)]
+pub(super) fn run_pipeline_through_yannakakis(planner: &mut RulePlanner, catalog: &mut Catalog) {
+    use crate::optimizer::cyclic_core_join_pair;
+    while let Some(pair) = cyclic_core_join_pair(catalog) {
+        planner.core(catalog, pair).expect("core");
+    }
+    planner.yannakakis_plus(catalog).expect("yannakakis_plus");
+}

@@ -189,36 +189,6 @@ impl Catalog {
         self.signature_to_argument_str_map.get(sig).unwrap()
     }
 
-    /// Get the core atom count for rules with no supersets or filters.
-    ///
-    /// # Panics
-    /// Panics if the rule has any supersets or filters, as this method
-    /// is only valid for "core" rules without optimization opportunities.
-    #[inline]
-    pub(crate) fn core_atom_number(&self) -> usize {
-        assert!(
-            self.positive_supersets.iter().all(|s| s.is_empty()),
-            "Rule has positive supersets - not a core rule"
-        );
-        assert!(
-            self.negative_supersets.iter().all(|s| s.is_empty()),
-            "Rule has negative supersets - not a core rule"
-        );
-        assert!(
-            self.comparison_supersets.iter().all(|s| s.is_empty()),
-            "Rule has comparison supersets - not a core rule"
-        );
-        assert!(
-            self.fn_call_supersets.iter().all(|s| s.is_empty()),
-            "Rule has fn_call supersets - not a core rule"
-        );
-        assert!(
-            self.filters.is_empty(),
-            "Rule has filters - not a core rule"
-        );
-        self.positive_atom_fingerprints.len()
-    }
-
     // Get original atom fingerprints
     #[inline]
     pub(crate) fn original_atom_fingerprints(&self) -> &HashSet<u64> {
@@ -256,7 +226,10 @@ impl Catalog {
 
     /// Get the argument signatures for a positive atom by its index.
     #[inline]
-    pub(crate) fn positive_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
+    pub(crate) fn positive_atom_argument_signature(
+        &self,
+        index: usize,
+    ) -> &Vec<AtomArgumentSignature> {
         &self.positive_atom_argument_signatures[index]
     }
 
@@ -282,6 +255,11 @@ impl Catalog {
         !left_vars.is_disjoint(right_vars)
     }
 
+    #[inline]
+    pub(crate) fn positive_atom_argument_vars_str_set(&self, index: usize) -> &HashSet<String> {
+        &self.positive_atom_argument_vars_str_sets[index]
+    }
+
     // === Negative Atoms ===
     /// Get the fingerprint of a negative atom by its index.
     #[inline]
@@ -303,7 +281,10 @@ impl Catalog {
 
     /// Get the argument signatures for a negative atom by its index.
     #[inline]
-    pub(crate) fn negative_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
+    pub(crate) fn negative_atom_argument_signature(
+        &self,
+        index: usize,
+    ) -> &Vec<AtomArgumentSignature> {
         &self.negative_atom_argument_signatures[index]
     }
 
@@ -491,18 +472,10 @@ impl Catalog {
 
     /// Get unused arguments grouped by atom signature.
     #[inline]
-    pub(crate) fn unused_arguments_per_atom(&self) -> &HashMap<AtomSignature, Vec<AtomArgumentSignature>> {
+    pub(crate) fn unused_arguments_per_atom(
+        &self,
+    ) -> &HashMap<AtomSignature, Vec<AtomArgumentSignature>> {
         &self.unused_arguments_per_atom
-    }
-
-    // === Plan Logic ===
-    /// Check if current rule planning is done.
-    pub(crate) fn is_planned(&self) -> bool {
-        self.positive_atom_fingerprints.len() == 1
-            && self.negative_atom_fingerprints.is_empty()
-            && self.filters.is_empty()
-            && self.comparison_predicates.is_empty()
-            && self.fn_call_predicates.is_empty()
     }
 }
 

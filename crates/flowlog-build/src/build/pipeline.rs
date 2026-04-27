@@ -14,7 +14,6 @@ use proc_macro2::TokenStream;
 
 use crate::common::BoxError;
 use crate::common::{Config, SourceMap};
-use crate::optimizer::Optimizer;
 use crate::parser::Program;
 use crate::planner::StratumPlanner;
 use crate::profiler::Profiler;
@@ -86,14 +85,13 @@ fn plan(
     profiler: &mut Option<Profiler>,
 ) -> Result<Vec<StratumPlanner>, BoxError> {
     let stratifier = Stratifier::from_program(program, config.is_extended())?;
-    let mut optimizer = Optimizer::new();
     stratifier
         .stratum()
         .iter()
         .enumerate()
         .map(|(idx, rule_refs)| {
             let rules: Vec<_> = rule_refs.iter().copied().cloned().collect();
-            StratumPlanner::from_rules(config, &rules, &mut optimizer, profiler, &stratifier, idx)
+            StratumPlanner::from_rules(config, &rules, profiler, &stratifier, idx)
                 .map_err(Into::into)
         })
         .collect()

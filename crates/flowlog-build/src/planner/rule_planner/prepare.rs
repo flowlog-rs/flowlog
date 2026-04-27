@@ -448,6 +448,6 @@ mod tests {
             catalog.filters().is_empty(),
             "all filters must be consumed after fixed-point prepare"
         );
-        assert!(catalog.is_planned());
+        assert_eq!(catalog.positive_atom_number(), 1);
     }
 }

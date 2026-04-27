@@ -41,8 +41,7 @@ impl RulePlanner {
                     if catalog.check_sip_pair(left_atom_idx, right_atom_idx) {
                         trace!(
                             "SIP: forward atom_pos{} -> atom_pos{}",
-                            left_atom_idx,
-                            right_atom_idx
+                            left_atom_idx, right_atom_idx
                         );
                         self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx))?;
                         self.apply_sip_projection_semijoin(catalog, left_atom_idx, right_atom_idx)?;
@@ -58,8 +57,7 @@ impl RulePlanner {
                     if catalog.check_sip_pair(left_atom_idx, right_atom_idx) {
                         trace!(
                             "SIP: backward atom_pos{} -> atom_pos{}",
-                            left_atom_idx,
-                            right_atom_idx
+                            left_atom_idx, right_atom_idx
                         );
                         self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx))?;
                         self.apply_sip_projection_semijoin(catalog, left_atom_idx, right_atom_idx)?;
@@ -78,7 +76,7 @@ impl RulePlanner {
 
     /// Ensures that EDB atoms referenced by a SIP pair have identity premap
     /// transformations so they present a proper key/value layout.
-    fn apply_sip_premaps(
+    pub(super) fn apply_sip_premaps(
         &mut self,
         catalog: &mut Catalog,
         sip_pair: (usize, usize),
@@ -106,7 +104,7 @@ impl RulePlanner {
     ///
     /// After this method returns, the RHS atom in `catalog` has been replaced
     /// by the semijoin result (same arguments, new fingerprint).
-    fn apply_sip_projection_semijoin(
+    pub(super) fn apply_sip_projection_semijoin(
         &mut self,
         catalog: &mut Catalog,
         lhs_pos_idx: usize,
@@ -237,6 +235,14 @@ impl RulePlanner {
 
 #[cfg(test)]
 mod tests {
+    // These tests deliberately call `apply_sip` *without* `prepare` first.
+    // Prepare's `apply_semijoin` would alpha-eliminate atoms whose vars are
+    // subsets of others — exactly the structural relationships these test
+    // rules use to set up SIP scenarios. Running prepare would leave 0–1
+    // atoms behind, defeating the SIP behavior under test. Production
+    // pipelines that go further (fuse/post) include prepare; SIP-isolated
+    // tests skip it on purpose.
+
     use super::super::common::test_setup;
 
     /// Two-atom rule falls below the `positive_atom_numbers > 2` gate in
