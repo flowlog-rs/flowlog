@@ -1,0 +1,54 @@
+// Value-flow analysis (CFL-reachability formulation)
+//
+// Indexed-label encoding: forward/reverse assignments `a`/`abar`, indexed
+// dereferences `d`/`dbar`, and indexed field accesses `f_i`/`fbar_i`.
+// Computes value-flow `V`, alias-derived `MatchA`/`MatchAbar`, and field-aliased
+// auxiliaries `FV_i`, `M`, `DV`.
+
+.decl a(x: int32, y: int32, i: int32)
+.input a(IO="file", filename="a.csv", delimiter=",")
+.decl abar(x: int32, y: int32, i: int32)
+.input abar(IO="file", filename="abar.csv", delimiter=",")
+.decl d(x: int32, y: int32, i: int32)
+.input d(IO="file", filename="d.csv", delimiter=",")
+.decl dbar(x: int32, y: int32, i: int32)
+.input dbar(IO="file", filename="dbar.csv", delimiter=",")
+.decl f_i(x: int32, y: int32, i: int32)
+.input f_i(IO="file", filename="f_i.csv", delimiter=",")
+.decl fbar_i(x: int32, y: int32, i: int32)
+.input fbar_i(IO="file", filename="fbar_i.csv", delimiter=",")
+
+.decl M(x: int32, y: int32, i: int32)
+.decl V(x: int32, y: int32, i: int32)
+.decl MatchA(x: int32, y: int32, i: int32)
+.decl MatchAbar(x: int32, y: int32, i: int32)
+.decl FV_i(x: int32, y: int32, i: int32)
+.decl DV(x: int32, y: int32, i: int32)
+
+.decl ids(x: int32)
+
+ids(x) :- a(x, _, _).
+ids(x) :- abar(x, _, _).
+ids(x) :- d(x, _, _).
+ids(x) :- dbar(x, _, _).
+ids(x) :- f_i(x, _, _).
+ids(x) :- fbar_i(x, _, _).
+
+DV(x, y, 0) :- dbar(x, w, _), V(w, y, _).
+M(x, y, 0) :- DV(x, z, _), d(z, y, _).
+
+FV_i(x, y, i) :- fbar_i(x, z, i), V(z, y, _).
+V(x, y, 0) :- FV_i(x, z, i), f_i(z, y, i).
+V(x, x, 0) :- ids(x).
+V(x, y, 0) :- M(x, y, _).
+V(x, y, 0) :- MatchAbar(x, z, _), V(z, y, _).
+V(x, y, 0) :- V(x, z, _), MatchA(z, y, _).
+
+MatchA(x, y, 0) :- a(x, z, _), M(z, y, _).
+MatchA(x, y, 0) :- a(x, y, _).
+
+MatchAbar(x, y, 0) :- M(x, z, _), abar(z, y, _).
+MatchAbar(x, y, 0) :- abar(x, y, _).
+
+.printsize V
+.printsize M

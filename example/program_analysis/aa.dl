@@ -1,0 +1,59 @@
+// Alias analysis (CFL-reachability formulation)
+//
+// Indexed-label encoding: each edge is (src, dst, label_index). EDB relations
+// `a`/`ra` (assign and reverse-assign), `new`/`rnew` (allocation and reverse),
+// `load_i`/`rload_i` (load and reverse-load with label index), and
+// `store_i`/`rstore_i` (store and reverse-store with label index) are loaded
+// from per-label CSV files produced from a CFL graph (see
+// `tools/transfer_facts.py` style preprocessing).
+
+.decl a(x: int32, y: int32, i: int32)
+.input a(IO="file", filename="a.csv", delimiter=",")
+.decl ra(x: int32, y: int32, i: int32)
+.input ra(IO="file", filename="ra.csv", delimiter=",")
+
+.decl new(x: int32, y: int32, i: int32)
+.input new(IO="file", filename="new.csv", delimiter=",")
+.decl rnew(x: int32, y: int32, i: int32)
+.input rnew(IO="file", filename="rnew.csv", delimiter=",")
+
+.decl load_i(x: int32, y: int32, i: int32)
+.input load_i(IO="file", filename="load_i.csv", delimiter=",")
+.decl rload_i(x: int32, y: int32, i: int32)
+.input rload_i(IO="file", filename="rload_i.csv", delimiter=",")
+
+.decl store_i(x: int32, y: int32, i: int32)
+.input store_i(IO="file", filename="store_i.csv", delimiter=",")
+.decl rstore_i(x: int32, y: int32, i: int32)
+.input rstore_i(IO="file", filename="rstore_i.csv", delimiter=",")
+
+.decl FlowsTo(x: int32, y: int32, i: int32)
+.decl RFlowsTo(x: int32, y: int32, i: int32)
+
+.decl Assign(x: int32, y: int32, i: int32)
+.decl RAssign(x: int32, y: int32, i: int32)
+
+.decl Alias(x: int32, y: int32, i: int32)
+
+.decl SA_i(x: int32, y: int32, i: int32)
+.decl RSA_i(x: int32, y: int32, i: int32)
+
+FlowsTo(x, y, 0) :- new(x, y, _).
+RFlowsTo(x, y, 0) :- rnew(x, y, _).
+
+FlowsTo(x, y, 0) :- FlowsTo(x, z, _), Assign(z, y, _).
+RFlowsTo(x, y, 0) :- RAssign(x, z, _), RFlowsTo(z, y, _).
+
+Assign(x, y, 0) :- a(x, y, _).
+RAssign(x, y, 0) :- ra(x, y, _).
+
+SA_i(x, y, i) :- store_i(x, z, i), Alias(z, y, _).
+Assign(x, y, 0) :- SA_i(x, z, i), load_i(z, y, i).
+
+RSA_i(x, y, i) :- Alias(x, z, _), rstore_i(z, y, i).
+RAssign(x, y, 0) :- rload_i(x, z, i), RSA_i(z, y, i).
+
+Alias(x, y, 0) :- RFlowsTo(x, z, _), FlowsTo(z, y, _).
+
+.printsize Alias
+.printsize FlowsTo

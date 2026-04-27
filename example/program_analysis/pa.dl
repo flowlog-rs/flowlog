@@ -1,0 +1,46 @@
+// Points-to analysis for Java (CFL-reachability formulation)
+//
+// Indexed-label encoding: assignments `a`, indexed calls `call_i` and indexed
+// returns `ret_i`. Computes the matched-parenthesis closure `MatchA` together with
+// auxiliary relations `B`, `S`, `P`, and `CA_i` (calls matched with returns).
+
+.decl a(x: int32, y: int32, i: int32)
+.input a(IO="file", filename="a.csv", delimiter=",")
+
+.decl call_i(x: int32, y: int32, i: int32)
+.input call_i(IO="file", filename="call_i.csv", delimiter=",")
+
+.decl ret_i(x: int32, y: int32, i: int32)
+.input ret_i(IO="file", filename="ret_i.csv", delimiter=",")
+
+.decl ids(x: int32)
+
+.decl MatchA(x: int32, y: int32, i: int32)
+.decl B(x: int32, y: int32, i: int32)
+.decl S(x: int32, y: int32, i: int32)
+.decl P(x: int32, y: int32, i: int32)
+.decl CA_i(x: int32, y: int32, i: int32)
+
+ids(x) :- a(x, _, 0).
+ids(x) :- a(_, x, 0).
+ids(x) :- call_i(x, _, _).
+ids(x) :- call_i(_, x, _).
+ids(x) :- ret_i(x, _, _).
+ids(x) :- ret_i(_, x, _).
+
+MatchA(x, x, 0) :- ids(x).
+MatchA(x, y, 0) :- MatchA(x, z, _), MatchA(z, y, _).
+MatchA(x, y, 0) :- a(x, y, _).
+MatchA(x, y, 0) :- CA_i(x, m, i), ret_i(m, y, i).
+CA_i(x, y, i) :- call_i(x, m, i), MatchA(m, y, _).
+
+P(x, x, 0) :- ids(x).
+P(x, y, 0) :- MatchA(x, z, _), P(z, y, _).
+P(x, y, 0) :- ret_i(x, z, _), P(z, y, _).
+
+S(x, y, 0) :- P(x, y, _).
+S(x, y, 0) :- S(x, z, _), MatchA(z, y, _).
+S(x, y, 0) :- S(x, z, _), call_i(z, y, _).
+
+.printsize MatchA
+.printsize S

@@ -1,0 +1,31 @@
+// Context-insensitive value-flow analysis (CFL-reachability formulation)
+//
+// Indexed-label encoding: assignment edges `a` and indexed call/return edges
+// `call_i`/`ret_i`. Computes the symmetric closure `MatchA` over assignments and
+// call/return matching is collapsed (context-insensitive).
+
+.decl a(x: int32, y: int32, i: int32)
+.input a(IO="file", filename="a.csv", delimiter=",")
+
+.decl call_i(x: int32, y: int32, i: int32)
+.input call_i(IO="file", filename="call_i.csv", delimiter=",")
+
+.decl ret_i(x: int32, y: int32, i: int32)
+.input ret_i(IO="file", filename="ret_i.csv", delimiter=",")
+
+.decl ids(x: int32)
+.decl MatchA(x: int32, y: int32, i: int32)
+
+ids(x) :- a(x, _, 0).
+ids(x) :- a(_, x, 0).
+ids(x) :- call_i(x, _, _).
+ids(x) :- call_i(_, x, _).
+ids(x) :- ret_i(x, _, _).
+ids(x) :- ret_i(_, x, _).
+
+MatchA(x, x, 0) :- ids(x).
+MatchA(x, y, 0) :- MatchA(x, z, _), call_i(z, y, _).
+MatchA(x, y, 0) :- MatchA(x, z, _), ret_i(z, y, _).
+MatchA(x, y, 0) :- MatchA(x, z, _), a(z, y, _).
+
+.printsize MatchA
