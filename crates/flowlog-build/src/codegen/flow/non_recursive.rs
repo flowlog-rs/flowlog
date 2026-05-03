@@ -13,17 +13,15 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use tracing::trace;
 
-use crate::parser::AggregationOperator;
-use crate::planner::StratumPlanner;
-use crate::profiler::{with_profiler, Profiler};
-
 use crate::codegen::aggregation::{
     aggregation_avg_optimize, aggregation_count_optimize, aggregation_max_optimize,
     aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce_stmt, aggregation_row_chop,
     aggregation_sum_optimize,
 };
-use crate::codegen::CodegenError;
-use crate::codegen::CodeGen;
+use crate::codegen::{CodeGen, CodegenError};
+use crate::parser::AggregationOperator;
+use crate::planner::StratumPlanner;
+use crate::profiler::{Profiler, with_profiler};
 
 // =========================================================================
 // Non-Recursive Flow Generation
@@ -39,9 +37,10 @@ impl CodeGen {
         let mut flows = Vec::new();
         // Stratum-scoped cache of arrangements; emit arrange_by_key just before first use.
         let mut non_recursive_arranged_map: HashMap<u64, Ident> = HashMap::new();
+        // Snapshot the global ident map once; `gen_transformation` does not mutate it.
+        let global_fp_to_ident = self.global_fp_to_ident.clone();
 
         for transformation in stratum.non_recursive_transformations() {
-            let global_fp_to_ident = self.global_fp_to_ident.clone();
             flows.push(self.gen_transformation(
                 &global_fp_to_ident,
                 transformation,

@@ -17,7 +17,7 @@ use crate::parser::{Atom, AtomArg, FlowLogRule, Predicate};
 /// Public API for modifying rules and updating catalog metadata accordingly.
 impl Catalog {
     /// Map an EDB atom to a required key/value layout.
-    /// This function do not change the arity of the atom.
+    /// This function does not change the arity of the atom.
     /// Only premap of an original atom should use this function.
     pub(crate) fn map_modify(
         &mut self,
