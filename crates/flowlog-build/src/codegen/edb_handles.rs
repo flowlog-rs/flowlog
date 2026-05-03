@@ -85,10 +85,6 @@ impl CodeGen {
             let probe = format_ident!("probe");
             match hs.len() {
                 0 => (quote! { ( #probe, ) }, quote! { #probe }),
-                1 => {
-                    let h = &hs[0];
-                    (quote! { ( #h, #probe ) }, quote! { ( #h, #probe ) })
-                }
                 _ => (
                     quote! { ( #(#hs),*, #probe ) },
                     quote! { ( #(#hs),*, #probe ) },

@@ -176,27 +176,20 @@ impl RulePlanner {
 
         let mut out = Vec::with_capacity(head_args.len());
         for arg in head_args {
-            match arg {
+            let arith = match arg {
                 HeadArg::Var(var) => {
                     out.push(ArithmeticPos::from_var_signature(sig_of(var.as_str())?));
+                    continue;
                 }
-                HeadArg::Arith(arith) => {
-                    let var_sigs: Vec<_> = arith
-                        .vars()
-                        .iter()
-                        .map(|v| sig_of(v.as_str()))
-                        .collect::<Result<_, _>>()?;
-                    out.push(ArithmeticPos::from_arithmetic(arith, &var_sigs));
-                }
-                HeadArg::Aggregation(agg) => {
-                    let var_sigs: Vec<_> = agg
-                        .vars()
-                        .iter()
-                        .map(|v| sig_of(v.as_str()))
-                        .collect::<Result<_, _>>()?;
-                    out.push(ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs));
-                }
-            }
+                HeadArg::Arith(arith) => arith,
+                HeadArg::Aggregation(agg) => agg.arithmetic(),
+            };
+            let var_sigs: Vec<_> = arith
+                .vars()
+                .iter()
+                .map(|v| sig_of(v.as_str()))
+                .collect::<Result<_, _>>()?;
+            out.push(ArithmeticPos::from_arithmetic(arith, &var_sigs));
         }
         Ok(out)
     }
