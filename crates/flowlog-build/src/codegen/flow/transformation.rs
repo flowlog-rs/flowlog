@@ -4,31 +4,28 @@
 //! such as Row-to-Row, Row-to-KV, KV-to-KV, KV-to-Row, Joins, and Antijoins
 //! in the differential dataflow pipelines.
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::profiler::{with_profiler, Profiler};
+use proc_macro2::{Ident, TokenStream};
+use quote::{format_ident, quote};
 
 use crate::codegen::arg::{
     build_kv_constraints_predicate, build_row_constraints_predicate, combine_predicates,
     compute_join_param_tokens, compute_kv_param_tokens, kv_use_counts, row_pattern_and_fields,
     row_use_counts,
 };
-use crate::codegen::data_type_tokens;
 use crate::codegen::ident::find_local_ident;
-use crate::codegen::CodeGen;
-use crate::codegen::CodegenError;
-
+use crate::codegen::{CodeGen, CodegenError, data_type_tokens};
 use crate::planner::{StratumPlanner, Transformation};
+use crate::profiler::{Profiler, with_profiler};
 
-/// Generate differential dataflow pipelines for a single transformation.
-///
-/// For non-recursive transformations, we use the global fingerprint-to-ident map.
-/// For recursive transformations, we use the local fingerprint-to-ident map.
-/// This function accepts the map as `local_fp_to_ident` to keep the interface unified.
 impl CodeGen {
+    /// Generate differential dataflow pipelines for a single transformation.
+    ///
+    /// For non-recursive transformations, we use the global fingerprint-to-ident map.
+    /// For recursive transformations, we use the local fingerprint-to-ident map.
+    /// This function accepts the map as `local_fp_to_ident` to keep the interface unified.
     pub(super) fn gen_transformation(
         &mut self,
         local_fp_to_ident: &HashMap<u64, Ident>,
