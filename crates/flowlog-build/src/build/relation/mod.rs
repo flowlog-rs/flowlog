@@ -15,10 +15,8 @@ pub(crate) mod user;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 
+use crate::codegen::{CodegenError, Features};
 use crate::parser::{Program, Relation};
-
-use crate::codegen::CodegenError;
-use crate::codegen::Features;
 
 /// Emit the body of the library-mode `relops` module — EDB input handlers
 /// + the `Inputs` container — plus the `use` lines they depend on.
