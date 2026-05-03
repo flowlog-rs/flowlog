@@ -61,22 +61,19 @@ impl Collection {
     }
 }
 
+fn join_signatures(sigs: &[ArithmeticPos]) -> String {
+    sigs.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl fmt::Display for Collection {
     /// Canonical form: `<name> [0x{:016x}], key:(..), value:(..)`.
     /// When `name` is empty (internal placeholder), only the hex form appears.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let k = self
-            .key_argument_signatures
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let v = self
-            .value_argument_signatures
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
+        let k = join_signatures(&self.key_argument_signatures);
+        let v = join_signatures(&self.value_argument_signatures);
         if self.name.is_empty() {
             write!(f, "0x{:016x}, key:({}), value:({})", self.fingerprint, k, v)
         } else {
