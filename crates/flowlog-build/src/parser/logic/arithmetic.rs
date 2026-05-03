@@ -4,15 +4,16 @@
 //! - [`Factor`]: variables or constants
 //! - [`Arithmetic`]: `factor (op, factor)*`
 
-use super::FnCall;
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::primitive::ConstType;
-use crate::parser::{span_of, Lexeme, Rule};
-
-use crate::common::{FileId, Ignored, Span};
-use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
+
+use pest::iterators::Pair;
+
+use super::FnCall;
+use crate::common::{FileId, Ignored, Span};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::primitive::ConstType;
+use crate::parser::{span_of, Lexeme, Rule};
 
 /// Arithmetic operator.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
