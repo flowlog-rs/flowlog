@@ -53,12 +53,12 @@ impl FactorPos {
 impl fmt::Display for FactorPos {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            FactorPos::Var(sig) => write!(f, "{}", sig),
-            FactorPos::Const(c) => write!(f, "{}", c),
+            FactorPos::Var(sig) => write!(f, "{sig}"),
+            FactorPos::Const(c) => write!(f, "{c}"),
             FactorPos::FnCall { name, args } => {
                 let args_str = args
                     .iter()
-                    .map(|a| a.to_string())
+                    .map(ArithmeticPos::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "{name}({args_str})")
@@ -176,7 +176,7 @@ impl fmt::Display for ArithmeticPos {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.init)?;
         for (op, factor) in &self.rest {
-            write!(f, " {} {}", op, factor)?;
+            write!(f, " {op} {factor}")?;
         }
         Ok(())
     }
