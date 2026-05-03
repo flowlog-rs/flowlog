@@ -12,9 +12,9 @@ use std::fmt;
 
 /// Supported aggregation operators.
 ///
-/// Declared `pub` because `Features::agg_semirings()` returns
-/// `&[(AggregationOperator, DataType)]` which `flowlog-compiler` iterates
-/// over and calls [`Self::semiring_mod`] / [`Self::semiring_prefix`] on.
+/// Declared `pub` because `Features::agg_semirings()` exposes an
+/// `AggSemiringNeeds` whose entries `flowlog-compiler` iterates over,
+/// calling [`Self::semiring_mod`] / [`Self::semiring_prefix`] on each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AggregationOperator {
     Min,
