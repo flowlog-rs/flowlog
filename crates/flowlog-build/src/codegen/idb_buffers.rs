@@ -6,15 +6,14 @@
 //! Buffers store `(data, time, diff)` triples. Batch mode hardcodes
 //! `diff = 1` (DD uses `Present`, not `i32`). Sort operates on data only.
 
-use crate::codegen::ty::tuple_type;
-use crate::codegen::CodeGen;
-
-use crate::parser::{DataType, Relation};
-use crate::profiler::{with_profiler, Profiler};
-
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::Index;
+
+use crate::codegen::CodeGen;
+use crate::codegen::ty::tuple_type;
+use crate::parser::{DataType, Relation};
+use crate::profiler::{Profiler, with_profiler};
 
 // =========================================================================
 // Output struct
@@ -78,9 +77,7 @@ impl CodeGen {
 
                 self.features.mark_output_buffers();
 
-                let to_stdout = self.config.output_to_stdout();
-
-                if to_stdout {
+                if self.config.output_to_stdout() {
                     with_profiler(profiler, |p| {
                         p.inspect_content_terminal_operator(name.to_string(), name.to_string());
                     });
