@@ -32,32 +32,29 @@ impl RulePlanner {
     /// The loop stops when a full iteration makes no changes.
     pub(crate) fn prepare(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let mut step = 0;
+        let mut trace_step = |what: &str, catalog: &Catalog| {
+            step += 1;
+            trace!("Prepare Step {}: {}", step, what);
+            trace!("Catalog:\n{}", catalog);
+            trace!("{}", "-".repeat(60));
+        };
 
         loop {
             // 1) Try filters first to maximize early pruning and simplify later steps.
             if self.apply_filter(catalog)? {
-                step += 1;
-                trace!("Prepare Step {}: filter applied", step);
-                trace!("Catalog:\n{}", catalog);
-                trace!("{}", "-".repeat(60));
+                trace_step("filter applied", catalog);
                 continue;
             }
 
             // 2) Then (anti-)semijoins and comparison pushdown.
             if self.apply_semijoin(catalog)? {
-                step += 1;
-                trace!("Prepare Step {}: semijoin applied", step);
-                trace!("Catalog:\n{}", catalog);
-                trace!("{}", "-".repeat(60));
+                trace_step("semijoin applied", catalog);
                 continue;
             }
 
             // 3) Finally, remove any arguments that no longer contribute to outputs.
             if self.remove_unused_arguments(catalog)? {
-                step += 1;
-                trace!("Prepare Step {}: unused arguments removed", step);
-                trace!("Catalog:\n{}", catalog);
-                trace!("{}", "-".repeat(60));
+                trace_step("unused arguments removed", catalog);
                 continue;
             }
 
