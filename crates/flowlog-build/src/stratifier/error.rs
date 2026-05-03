@@ -7,10 +7,20 @@
 //! fire. Each variant carries at least one [`Span`] so the renderer can
 //! point at the offending source.
 
-use crate::common::{primary_label, Diagnostic};
-use crate::common::{FileId, Span};
-use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
+use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
 use thiserror::Error;
+
+use crate::common::{Diagnostic, FileId, Span, primary_label};
+
+/// Build one primary label per rule, annotated with `rule {id}`.
+fn rule_labels(rules: &[(usize, Span)]) -> Vec<Label<FileId>> {
+    rules
+        .iter()
+        .filter_map(|(rid, span)| {
+            primary_label(*span).map(|l| l.with_message(format!("rule {rid}")))
+        })
+        .collect()
+}
 
 /// Errors raised while stratifying a FlowLog program.
 #[non_exhaustive]
@@ -98,15 +108,9 @@ impl Diagnostic for StratifyError {
     fn to_diagnostic(&self) -> CsDiagnostic<FileId> {
         let base = CsDiagnostic::error().with_message(self.to_string());
         match self {
-            StratifyError::RecursionOutsideLoop { rules, hint } => {
-                let labels: Vec<_> = rules
-                    .iter()
-                    .filter_map(|(rid, span)| {
-                        primary_label(*span).map(|l| l.with_message(format!("rule {rid}")))
-                    })
-                    .collect();
-                base.with_labels(labels).with_notes(vec![hint.to_string()])
-            }
+            StratifyError::RecursionOutsideLoop { rules, hint } => base
+                .with_labels(rule_labels(rules))
+                .with_notes(vec![hint.to_string()]),
 
             StratifyError::IterativeNotInLoopHead { decl_span, .. } => base
                 .with_labels(primary_label(*decl_span).into_iter().collect())
@@ -132,13 +136,7 @@ impl Diagnostic for StratifyError {
                 )]),
 
             StratifyError::RecursiveStratumEmpty { rules, .. } => {
-                let labels: Vec<_> = rules
-                    .iter()
-                    .filter_map(|(rid, span)| {
-                        primary_label(*span).map(|l| l.with_message(format!("rule {rid}")))
-                    })
-                    .collect();
-                base.with_labels(labels).with_notes(vec![
+                base.with_labels(rule_labels(rules)).with_notes(vec![
                     "a `loop`/`fixpoint` block must contain at least one rule whose \
                      head relation also appears in a body atom within the same block"
                         .into(),
