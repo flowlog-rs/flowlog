@@ -3,13 +3,14 @@
 //! - [`HeadArg`]: `Var | Arith | Aggregation`
 //! - [`Head`]: `rel(arg1, ..., argN)`
 
-use super::{Aggregation, Arithmetic};
-use crate::common::compute_fp;
-use crate::common::{FileId, Ignored, Span};
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::{span_of, Lexeme, Rule};
-use pest::iterators::Pair;
 use std::fmt;
+
+use pest::iterators::Pair;
+
+use super::{Aggregation, Arithmetic};
+use crate::common::{FileId, Ignored, Span, compute_fp};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::{Lexeme, Rule, span_of};
 
 /// Argument in a rule head.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -146,12 +147,10 @@ impl Head {
 impl fmt::Display for Head {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}(", self.name)?;
-        let mut first = true;
-        for arg in &self.head_arguments {
-            if !first {
+        for (i, arg) in self.head_arguments.iter().enumerate() {
+            if i > 0 {
                 write!(f, ", ")?;
             }
-            first = false;
             write!(f, "{arg}")?;
         }
         write!(f, ")")
@@ -170,17 +169,15 @@ impl Lexeme for Head {
         let name = name_pair.as_str().to_lowercase();
         let head_fingerprint = compute_fp(&name);
 
-        let mut args = Vec::new();
-        for pair in inner {
-            if pair.as_rule() == Rule::head_arg {
-                args.push(HeadArg::from_parsed_rule(pair, file)?);
-            }
-        }
+        let head_arguments: Vec<HeadArg> = inner
+            .filter(|pair| pair.as_rule() == Rule::head_arg)
+            .map(|pair| HeadArg::from_parsed_rule(pair, file))
+            .collect::<Result<_, _>>()?;
 
         Ok(Self {
             name,
             head_fingerprint,
-            head_arguments: args,
+            head_arguments,
             span: Ignored(span),
         })
     }
