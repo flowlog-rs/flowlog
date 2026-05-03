@@ -14,8 +14,7 @@ use crate::planner::{
     ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
 };
 
-use crate::codegen::CodeGen;
-use crate::codegen::CodegenError;
+use crate::codegen::{CodeGen, CodegenError};
 
 /// `(key_types, value_types)` — a relation's shape in key++value form.
 pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
