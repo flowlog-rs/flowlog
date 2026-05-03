@@ -42,8 +42,8 @@ pub(crate) fn with_profiler<F>(profiler: &mut Option<Profiler>, f: F)
 where
     F: FnOnce(&mut Profiler),
 {
-    if let Some(profiler) = profiler.as_mut() {
-        f(profiler);
+    if let Some(p) = profiler.as_mut() {
+        f(p);
     }
 }
 
@@ -52,8 +52,8 @@ pub fn with_profiler_ref<F, E>(profiler: &Option<Profiler>, f: F) -> Result<(), 
 where
     F: FnOnce(&Profiler) -> Result<(), E>,
 {
-    if let Some(profiler) = profiler.as_ref() {
-        f(profiler)
+    if let Some(p) = profiler.as_ref() {
+        f(p)
     } else {
         Ok(())
     }

@@ -24,43 +24,6 @@ pub(super) struct NodeProfile {
     parents: Vec<usize>,
 }
 
-impl NodeProfile {
-    /// Update the node id.
-    fn update_id(&mut self, new_id: usize) {
-        self.id = new_id;
-    }
-
-    /// Update the node name.
-    fn update_name(&mut self, new_name: String) {
-        self.name = new_name;
-    }
-
-    /// Update the block label.
-    fn update_block(&mut self, new_block: String) {
-        self.block = new_block;
-    }
-
-    /// Set the fingerprint from a raw u64 value.
-    fn update_fingerprint(&mut self, fingerprint: u64) {
-        self.fingerprint = Some(format!("0x{:016x}", fingerprint));
-    }
-
-    /// Add a tag to the node.
-    fn add_tag(&mut self, tag: String) {
-        self.tags.push(tag);
-    }
-
-    /// Append operator addresses.
-    fn add_operators(&mut self, operator_addrs: Vec<Addr>) {
-        self.operators.extend(operator_addrs);
-    }
-
-    /// Append parent node ids.
-    fn add_parents(&mut self, parent_ids: Vec<usize>) {
-        self.parents.extend(parent_ids);
-    }
-}
-
 /// Internal nodes manager that tracks ids, scope addresses, and dependencies.
 #[derive(Debug, Clone, Default)]
 pub(super) struct NodeManager {
@@ -112,22 +75,20 @@ impl NodeManager {
         operator_steps: u32,
         fingerprint: Option<u64>,
     ) -> NodeProfile {
-        let mut node = NodeProfile::default();
-
-        let parent_ids = input_variable_names
+        let parent_ids: Vec<usize> = input_variable_names
             .iter()
             .filter_map(|variable_name| self.node_map.get(variable_name).copied())
             .collect();
 
-        node.update_id(self.id_cnt);
-        node.update_name(name);
-        node.update_block(self.block.clone());
-        if let Some(fingerprint) = fingerprint {
-            node.update_fingerprint(fingerprint);
-        }
-        node.add_tag(tag.to_string());
-        node.add_operators(self.addr_cnt.advance(operator_steps));
-        node.add_parents(parent_ids);
+        let node = NodeProfile {
+            id: self.id_cnt,
+            name,
+            block: self.block.clone(),
+            fingerprint: fingerprint.map(|fp| format!("0x{:016x}", fp)),
+            tags: vec![tag.to_string()],
+            operators: self.addr_cnt.advance(operator_steps),
+            parents: parent_ids,
+        };
 
         if let Some(output_variable_name) = output_variable_name {
             self.node_map.insert(output_variable_name, self.id_cnt);
