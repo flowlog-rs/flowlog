@@ -1,10 +1,12 @@
 //! Input/Output directive types for FlowLog Datalog programs.
 
-use crate::common::{FileId, Ignored, Span};
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::{span_of, Lexeme, Rule};
-use pest::iterators::Pair;
 use std::collections::HashMap;
+
+use pest::iterators::Pair;
+
+use crate::common::{FileId, Ignored, Span};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::{Lexeme, Rule, span_of};
 
 /// Represents an input directive (EDB source + parameters like file path)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,23 +43,21 @@ fn parse_io_params<'i>(
     inner: impl Iterator<Item = pest::iterators::Pair<'i, Rule>>,
 ) -> Result<HashMap<String, String>, ParseError> {
     let mut parameters = HashMap::new();
-    for node in inner {
-        if node.as_rule() == Rule::io_params {
-            for io_param in node.into_inner() {
-                let mut kv = io_param.into_inner();
-                let key = kv
-                    .next()
-                    .ok_or_else(|| grammar_bug("io parameter missing name"))?
-                    .as_str()
-                    .to_string();
-                let value = kv
-                    .next()
-                    .ok_or_else(|| grammar_bug("io parameter missing value"))?
-                    .as_str()
-                    .trim_matches('"')
-                    .to_string();
-                parameters.insert(key, value);
-            }
+    for node in inner.filter(|n| n.as_rule() == Rule::io_params) {
+        for io_param in node.into_inner() {
+            let mut kv = io_param.into_inner();
+            let key = kv
+                .next()
+                .ok_or_else(|| grammar_bug("io parameter missing name"))?
+                .as_str()
+                .to_string();
+            let value = kv
+                .next()
+                .ok_or_else(|| grammar_bug("io parameter missing value"))?
+                .as_str()
+                .trim_matches('"')
+                .to_string();
+            parameters.insert(key, value);
         }
     }
     Ok(parameters)

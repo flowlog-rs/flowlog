@@ -5,6 +5,15 @@ use std::fmt;
 use crate::catalog::{AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos};
 use crate::parser::ConstType;
 
+/// Writes `" and "` before every item except the first. Toggles `first` to `false`.
+fn write_and_sep(f: &mut fmt::Formatter<'_>, first: &mut bool) -> fmt::Result {
+    if !*first {
+        f.write_str(" and ")?;
+    }
+    *first = false;
+    Ok(())
+}
+
 /// Predicate filters for a Join (or Anti-Join) to Key-Value transformation.
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct JoinPredicates {
@@ -23,18 +32,12 @@ impl fmt::Display for JoinPredicates {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut first = true;
         for c in &self.compare_exprs {
-            if !first {
-                write!(f, " and ")?;
-            }
+            write_and_sep(f, &mut first)?;
             write!(f, "{}", c)?;
-            first = false;
         }
         for fc in &self.fn_call_preds {
-            if !first {
-                write!(f, " and ")?;
-            }
+            write_and_sep(f, &mut first)?;
             write!(f, "{}", fc)?;
-            first = false;
         }
         Ok(())
     }
@@ -63,32 +66,20 @@ impl fmt::Display for KvPredicates {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut first = true;
         for (sig, c) in &self.const_eq {
-            if !first {
-                write!(f, " and ")?;
-            }
+            write_and_sep(f, &mut first)?;
             write!(f, "{} = {:?}", sig, c)?;
-            first = false;
         }
         for (l, r) in &self.var_eq {
-            if !first {
-                write!(f, " and ")?;
-            }
+            write_and_sep(f, &mut first)?;
             write!(f, "{} = {}", l, r)?;
-            first = false;
         }
         for c in &self.compare_exprs {
-            if !first {
-                write!(f, " and ")?;
-            }
+            write_and_sep(f, &mut first)?;
             write!(f, "{}", c)?;
-            first = false;
         }
         for fc in &self.fn_call_preds {
-            if !first {
-                write!(f, " and ")?;
-            }
+            write_and_sep(f, &mut first)?;
             write!(f, "{}", fc)?;
-            first = false;
         }
         Ok(())
     }
