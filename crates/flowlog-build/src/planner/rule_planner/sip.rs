@@ -15,14 +15,11 @@
 //! > general SIP framework (e.g. sideways information-passing strategies for
 //! > full rules) is left for future work.
 
-use crate::planner::{KeyValueLayout, TransformationInfo};
-
 use super::RulePlanner;
 use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
 };
-use crate::planner::PlanError;
-
+use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
 use tracing::trace;
 
 // =========================================================================
@@ -31,44 +28,49 @@ use tracing::trace;
 impl RulePlanner {
     /// Entry point for applying SIP optimizations to the current rule plan.
     pub(crate) fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
-        let positive_atom_numbers = catalog.positive_atom_number();
+        let n = catalog.positive_atom_number();
 
-        // Only apply SIP if there are at least 3 positive atoms
-        if positive_atom_numbers > 2 {
-            // Left -> Right foward pass.
-            for left_atom_idx in 0..positive_atom_numbers {
-                for right_atom_idx in (left_atom_idx + 1)..positive_atom_numbers {
-                    if catalog.check_sip_pair(left_atom_idx, right_atom_idx) {
-                        trace!(
-                            "SIP: forward atom_pos{} -> atom_pos{}",
-                            left_atom_idx,
-                            right_atom_idx
-                        );
-                        self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx))?;
-                        self.apply_sip_projection_semijoin(catalog, left_atom_idx, right_atom_idx)?;
-                        trace!("Catalog:\n{}", catalog);
-                        trace!("{}", "-".repeat(60));
-                    }
-                }
-            }
+        // SIP only pays off once there's a third atom that can benefit from
+        // the filtered result — for 2-atom rules a semijoin would just
+        // duplicate the join itself.
+        if n <= 2 {
+            return Ok(());
+        }
 
-            // Right -> Left backward pass.
-            for left_atom_idx in (0..positive_atom_numbers).rev() {
-                for right_atom_idx in (0..left_atom_idx).rev() {
-                    if catalog.check_sip_pair(left_atom_idx, right_atom_idx) {
-                        trace!(
-                            "SIP: backward atom_pos{} -> atom_pos{}",
-                            left_atom_idx,
-                            right_atom_idx
-                        );
-                        self.apply_sip_premaps(catalog, (left_atom_idx, right_atom_idx))?;
-                        self.apply_sip_projection_semijoin(catalog, left_atom_idx, right_atom_idx)?;
-                        trace!("Catalog:\n{}", catalog);
-                        trace!("{}", "-".repeat(60));
-                    }
-                }
+        // Forward pass: each atom filters every later atom it shares vars with.
+        for left in 0..n {
+            for right in (left + 1)..n {
+                self.try_apply_sip_pair(catalog, left, right, "forward")?;
             }
         }
+
+        // Backward pass: every later atom gets to filter every earlier one.
+        for left in (0..n).rev() {
+            for right in (0..left).rev() {
+                self.try_apply_sip_pair(catalog, left, right, "backward")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// If `(left, right)` shares variables, run premaps + projection-semijoin
+    /// for the pair; otherwise no-op. `direction` is purely for trace output.
+    fn try_apply_sip_pair(
+        &mut self,
+        catalog: &mut Catalog,
+        left: usize,
+        right: usize,
+        direction: &str,
+    ) -> Result<(), PlanError> {
+        if !catalog.check_sip_pair(left, right) {
+            return Ok(());
+        }
+        trace!("SIP: {direction} atom_pos{} -> atom_pos{}", left, right);
+        self.apply_sip_premaps(catalog, (left, right))?;
+        self.apply_sip_projection_semijoin(catalog, left, right)?;
+        trace!("Catalog:\n{}", catalog);
+        trace!("{}", "-".repeat(60));
         Ok(())
     }
 
