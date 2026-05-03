@@ -63,18 +63,30 @@ fn parse_io_params<'i>(
     Ok(parameters)
 }
 
+/// Parse an IO directive: extract relation name and parameters.
+fn parse_io_directive_parts(
+    parsed_rule: Pair<Rule>,
+    file: FileId,
+    error_context: &str,
+) -> Result<(String, HashMap<String, String>, Ignored<Span>), ParseError> {
+    let mut inner = parsed_rule.into_inner();
+    let name_pair = inner
+        .next()
+        .ok_or_else(|| grammar_bug(format!("{error_context} missing relation name")))?;
+    let span = span_of(&name_pair, file);
+    let relation_name = name_pair.as_str().to_lowercase();
+    let parameters = parse_io_params(inner)?;
+    Ok((relation_name, parameters, Ignored(span)))
+}
+
 impl Lexeme for InputDirective {
     fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
-        let mut inner = parsed_rule.into_inner();
-        let name_pair = inner
-            .next()
-            .ok_or_else(|| grammar_bug("input directive missing relation name"))?;
-        let span = span_of(&name_pair, file);
-        let relation_name = name_pair.as_str().to_lowercase();
+        let (relation_name, parameters, span) =
+            parse_io_directive_parts(parsed_rule, file, "input directive")?;
         Ok(Self {
             relation_name,
-            parameters: parse_io_params(inner)?,
-            span: Ignored(span),
+            parameters,
+            span,
         })
     }
 }
@@ -110,16 +122,12 @@ impl OutputDirective {
 
 impl Lexeme for OutputDirective {
     fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
-        let mut inner = parsed_rule.into_inner();
-        let name_pair = inner
-            .next()
-            .ok_or_else(|| grammar_bug("output directive missing relation name"))?;
-        let span = span_of(&name_pair, file);
-        let relation_name = name_pair.as_str().to_lowercase();
+        let (relation_name, parameters, span) =
+            parse_io_directive_parts(parsed_rule, file, "output directive")?;
         Ok(Self {
             relation_name,
-            parameters: parse_io_params(inner)?,
-            span: Ignored(span),
+            parameters,
+            span,
         })
     }
 }
