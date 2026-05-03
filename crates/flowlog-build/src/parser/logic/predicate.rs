@@ -6,12 +6,15 @@
 //!
 //! Predicates form the antecedent of rules: `head(...) :- p1, !p2, X > Y.`
 
-use super::{Atom, ComparisonExpr, FnCall};
+use std::fmt;
+
+use pest::iterators::Pair;
+
 use crate::common::FileId;
 use crate::parser::error::{grammar_bug, ParseError};
 use crate::parser::{Lexeme, Rule};
-use pest::iterators::Pair;
-use std::fmt;
+
+use super::{Atom, ComparisonExpr, FnCall};
 
 /// A predicate in a rule body.
 #[derive(Clone, PartialEq, Eq, Hash)]
