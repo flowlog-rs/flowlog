@@ -53,7 +53,7 @@ impl CodeGen {
             return Vec::new();
         }
 
-        let s = self.features.agg_semirings();
+        let semirings = self.features.agg_semirings();
 
         // Int/uint type table: (suffix, rust_type)
         const INT_TYPES: [(&str, &str); 8] = [
@@ -82,11 +82,11 @@ impl CodeGen {
             let kind_str = op.semiring_mod();
             let pfx = op.semiring_prefix();
 
-            let int_needs = s.int_needs(op);
-            let float_needs = s.float_needs(op);
+            let int_needs = semirings.int_needs(op);
+            let float_needs = semirings.float_needs(op);
 
             // Int/uint file
-            if int_needs.iter().any(|n| *n) {
+            if int_needs.iter().any(|&n| n) {
                 let mut rendered = int_tmpl.to_string();
                 for (i, (suffix, ty)) in INT_TYPES.iter().enumerate() {
                     if int_needs[i] {
@@ -97,16 +97,15 @@ impl CodeGen {
                         }
                     }
                 }
-                let file_name = format!("{kind_str}_int.rs");
                 files.push((
-                    format!("semiring/{file_name}"),
+                    format!("semiring/{kind_str}_int.rs"),
                     rendered.trim_start().to_string(),
                 ));
                 modules.push(format!("{kind_str}_int"));
             }
 
             // Float file
-            if float_needs.iter().any(|n| *n) {
+            if float_needs.iter().any(|&n| n) {
                 let mut rendered = float_tmpl.to_string();
                 for (i, (suffix, inner)) in FLOAT_TYPES.iter().enumerate() {
                     if float_needs[i] {
@@ -127,9 +126,8 @@ impl CodeGen {
                         }
                     }
                 }
-                let file_name = format!("{kind_str}_float.rs");
                 files.push((
-                    format!("semiring/{file_name}"),
+                    format!("semiring/{kind_str}_float.rs"),
                     rendered.trim_start().to_string(),
                 ));
                 modules.push(format!("{kind_str}_float"));
