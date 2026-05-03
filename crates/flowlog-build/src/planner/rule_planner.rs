@@ -17,11 +17,11 @@
 //! The planner maintains a vector of transformation descriptors along with
 //! dependency analyses.
 
-use crate::planner::{Transformation, TransformationInfo};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::parser::{FlowLogRule, Predicate};
+use crate::planner::{Transformation, TransformationInfo};
 
 mod common; // small utilities shared by planner phases
 mod core; // core join, plus fixed-point of semijoin/pushdown and projection removal
@@ -39,7 +39,7 @@ pub(crate) struct RulePlanner {
     /// Linear list of planned transformation infos for the current rule.
     transformation_infos: Vec<TransformationInfo>,
 
-    /// Mapping from an fingerprint to its producer indices and optional
+    /// Mapping from a fingerprint to its producer indices and optional
     /// list of consumer indices.
     ///
     /// Note:
@@ -219,15 +219,13 @@ impl<'a> Walker<'a> {
     fn node_title(&self, id: u64) -> &str {
         self.debug_info_map
             .get(&id)
-            .map(|(lbl, _)| lbl.as_str())
-            .unwrap_or("<unknown>")
+            .map_or("<unknown>", |(lbl, _)| lbl.as_str())
     }
 
     fn children(&self, id: u64) -> &[u64] {
         self.debug_info_map
             .get(&id)
-            .map(|(_, kids)| kids.as_slice())
-            .unwrap_or(&[])
+            .map_or(&[], |(_, kids)| kids.as_slice())
     }
 
     fn get_id(&mut self, node: u64) -> usize {
