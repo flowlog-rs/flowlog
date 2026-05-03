@@ -213,11 +213,10 @@ impl Transformation {
 // Constructors
 // ========================
 impl Transformation {
-    /// Creates a key-value to key-value transformation.
+    /// Creates a unary transformation between row/key-value layouts.
     ///
     /// This method analyzes the input and output layouts to determine the specific
-    /// transformation type needed (RowToRow, RowToK, RowToKv, KvToKv, KvToK, or KvToRow).
-    /// It automatically detects whether the transformation is a no-op optimization.
+    /// transformation type needed (`RowToRow`, `RowToKv`, `KvToRow`, or `KvToKv`).
     ///
     /// # Arguments
     ///
@@ -225,13 +224,11 @@ impl Transformation {
     ///
     /// # Returns
     ///
-    /// A Transformation variant appropriate for the input/output layout combination:
+    /// A unary Transformation variant appropriate for the input/output layout combination:
     /// - `RowToRow`: Row input → Row output (filtering/projection)
-    /// - `RowToK`: Row input → Key-only output (key extraction)
     /// - `RowToKv`: Row input → Key-value output (structuring)
-    /// - `KvToKv`: Key-value input → Key-value output (transformation)
-    /// - `KvToK`: Key-value input → Key-only output (key extraction)
     /// - `KvToRow`: Key-value input → Row output (flattening)
+    /// - `KvToKv`: Key-value input → Key-value output (transformation)
     pub(crate) fn kv_to_kv(info: &TransformationInfo) -> Self {
         trace!("Creating kv_to_kv transformation with info:\n{}", info);
         // Create the transformation flow that defines how data moves through the operation
@@ -265,13 +262,13 @@ impl Transformation {
                 output,
                 flow,
             },
-            // Row input -> Key-only output: extract keys from row data
+            // Row input -> Key-value output: structure row data into key-value pairs
             (true, false) => Self::RowToKv {
                 input,
                 output,
                 flow,
             },
-            // Row input -> Key-value output: structure row data into key-value pairs
+            // Key-value input -> Row output: flatten key-value pairs back into rows
             (false, true) => Self::KvToRow {
                 input,
                 output,
@@ -298,12 +295,9 @@ impl Transformation {
     ///
     /// # Returns
     ///
-    /// A binary Transformation variant based on the input collection types:
-    /// - `JnKK`: Key-only ⋈ Key-only join
-    /// - `JnKKv`: Key-only ⋈ Key-value join (right has values)
-    /// - `JnKvK`: Key-value ⋈ Key-only join (left has values)
-    /// - `JnKvKv`: Key-value ⋈ Key-value join (both have values)
-    /// - `Cartesian`: Cartesian product (no join keys)
+    /// A binary Transformation variant based on the output collection type:
+    /// - `JnToRow`: Key-value ⋈ Key-value join with Row output
+    /// - `JnToKv`: Key-value ⋈ Key-value join with Key-value output
     pub(crate) fn join(info: &TransformationInfo) -> Self {
         // Create transformation flow that defines how the join operation processes data
         let flow = TransformationFlow::join_to_kv(
@@ -367,8 +361,8 @@ impl Transformation {
     /// # Returns
     ///
     /// A binary antijoin Transformation variant:
-    /// - `NjKK`: Key-only ¬⋈ Key-only antijoin
-    /// - `NjKvK`: Key-value ¬⋈ Key-only antijoin
+    /// - `NJnToRow`: Key-only ¬⋈ Key-value antijoin with Row output
+    /// - `NJnToKv`: Key-only ¬⋈ Key-value antijoin with Key-value output
     ///
     /// # Panics
     ///

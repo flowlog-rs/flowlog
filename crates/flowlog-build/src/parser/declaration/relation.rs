@@ -1,16 +1,16 @@
 //! Relation declaration types for FlowLog Datalog programs.
 
-use super::Attribute;
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::primitive::DataType;
-use crate::parser::{span_of, Lexeme, Rule};
-use pest::iterators::Pair;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::common::compute_fp;
-use crate::common::{FileId, Ignored, Span};
+use pest::iterators::Pair;
+
+use super::Attribute;
+use crate::common::{FileId, Ignored, Span, compute_fp};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::primitive::DataType;
+use crate::parser::{Lexeme, Rule, span_of};
 
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,29 +200,20 @@ impl Relation {
     /// Get the output row limit, if specified.
     #[must_use]
     pub(crate) fn output_limit(&self) -> Option<usize> {
-        let limit = self
-            .output_params
-            .as_ref()
-            .and_then(|m| m.get("limit"))
-            .map(|v| {
-                v.parse::<usize>().unwrap_or_else(|_| {
-                    panic!(
-                        "Parser error: invalid limit '{}' for relation '{}', expected a non-negative integer",
-                        v, self.name
-                    )
-                })
-            });
-        if limit.is_some() {
-            assert!(
-                self.output_params
-                    .as_ref()
-                    .and_then(|m| m.get("order_by"))
-                    .is_some(),
-                "Parser error: limit requires order_by for relation '{}'",
-                self.name
-            );
-        }
-        limit
+        let params = self.output_params.as_ref()?;
+        let raw = params.get("limit")?;
+        let limit = raw.parse::<usize>().unwrap_or_else(|_| {
+            panic!(
+                "Parser error: invalid limit '{}' for relation '{}', expected a non-negative integer",
+                raw, self.name
+            )
+        });
+        assert!(
+            params.contains_key("order_by"),
+            "Parser error: limit requires order_by for relation '{}'",
+            self.name
+        );
+        Some(limit)
     }
 
     /// Get the output ordering specification, if specified.
