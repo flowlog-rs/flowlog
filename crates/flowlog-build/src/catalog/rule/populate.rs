@@ -59,29 +59,24 @@ impl Catalog {
         let mut local_placeholder_set = HashSet::new();
 
         // Partition RHS predicates into positive atoms, negative atoms, comparisons, and fn_call predicates
-        let (positive_atoms, negative_atoms, comparison_predicates, fn_call_predicates): (
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-        ) = self.rule.rhs().iter().enumerate().fold(
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
-            |(mut pos, mut neg, mut comp, mut fncalls), (i, p)| {
-                match p {
-                    Predicate::PositiveAtom(a) => {
-                        pos.push(a);
-                        self.positive_atom_rhs_ids.push(i);
-                    }
-                    Predicate::NegativeAtom(a) => {
-                        neg.push(a);
-                        self.negative_atom_rhs_ids.push(i);
-                    }
-                    Predicate::Compare(expr) => comp.push(expr.clone()),
-                    Predicate::FnCall(fc) => fncalls.push(fc.clone()),
-                };
-                (pos, neg, comp, fncalls)
-            },
-        );
+        let mut positive_atoms = Vec::new();
+        let mut negative_atoms = Vec::new();
+        let mut comparison_predicates = Vec::new();
+        let mut fn_call_predicates = Vec::new();
+        for (i, p) in self.rule.rhs().iter().enumerate() {
+            match p {
+                Predicate::PositiveAtom(a) => {
+                    positive_atoms.push(a);
+                    self.positive_atom_rhs_ids.push(i);
+                }
+                Predicate::NegativeAtom(a) => {
+                    negative_atoms.push(a);
+                    self.negative_atom_rhs_ids.push(i);
+                }
+                Predicate::Compare(expr) => comparison_predicates.push(expr.clone()),
+                Predicate::FnCall(fc) => fn_call_predicates.push(fc.clone()),
+            }
+        }
 
         // Process positive atoms: record fingerprints, build argument signatures, record var/const/placeholder, collect var set
         for (pos_rhs_id, atom) in positive_atoms.iter().enumerate() {
@@ -261,34 +256,25 @@ impl Catalog {
     /// Variables that appear only once in the rule body (excluding the head) can be
     /// considered unused and potentially pruned for optimization purposes.
     fn populate_unused_arguments(&mut self) {
-        let mut variable_counts = HashMap::new();
+        let mut variable_counts: HashMap<String, u32> = HashMap::new();
+        let mut bump = |v: &String| {
+            *variable_counts.entry(v.clone()).or_insert(0) += 1;
+        };
 
-        // Count occurrences in positive atoms
         for vars_set in &self.positive_atom_argument_vars_str_sets {
-            for variable in vars_set {
-                *variable_counts.entry(variable.clone()).or_insert(0) += 1;
-            }
+            vars_set.iter().for_each(&mut bump);
         }
-
-        // Count occurrences in negative atoms
         for vars_set in &self.negative_atom_argument_vars_str_sets {
-            for variable in vars_set {
-                *variable_counts.entry(variable.clone()).or_insert(0) += 1;
-            }
+            vars_set.iter().for_each(&mut bump);
         }
-
-        // Count occurrences in comparison predicates
         for comparison_predicate in &self.comparison_predicates {
-            for variable in comparison_predicate.vars_set() {
-                *variable_counts.entry(variable.clone()).or_insert(0) += 1;
-            }
+            comparison_predicate
+                .vars_set()
+                .into_iter()
+                .for_each(&mut bump);
         }
-
-        // Count occurrences in fn_call predicates
         for fn_call_predicate in &self.fn_call_predicates {
-            for variable in fn_call_predicate.vars() {
-                *variable_counts.entry(variable.clone()).or_insert(0) += 1;
-            }
+            fn_call_predicate.vars().into_iter().for_each(&mut bump);
         }
 
         // Collect all head variables (never considered unused, even if single-occurrence)
@@ -313,58 +299,41 @@ impl Catalog {
     fn populate_supersets(&mut self) {
         let pos_var_sets = &self.positive_atom_argument_vars_str_sets;
 
-        // For each positive atom: list indices of other positive atoms whose var set is a superset
+        // Indices of positive atoms whose var set is a superset of `needle`,
+        // optionally excluding one self-index.
+        let pos_supersets_of = |needle: &HashSet<String>, exclude: Option<usize>| -> Vec<usize> {
+            pos_var_sets
+                .iter()
+                .enumerate()
+                .filter(|(j, ps)| Some(*j) != exclude && needle.is_subset(ps))
+                .map(|(j, _)| j)
+                .collect()
+        };
+
+        // For each positive atom: other positive atoms whose var set is a superset
         self.positive_supersets = (0..pos_var_sets.len())
-            .map(|i| {
-                pos_var_sets
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, set)| i != *j && pos_var_sets[i].is_subset(set))
-                    .map(|(j, _)| j)
-                    .collect()
-            })
+            .map(|i| pos_supersets_of(&pos_var_sets[i], Some(i)))
             .collect();
 
-        // For each negative atom: list indices of positive atoms that contain all its vars
+        // For each negative atom: positive atoms that contain all its vars
         self.negative_supersets = self
             .negative_atom_argument_vars_str_sets
             .iter()
-            .map(|set| {
-                pos_var_sets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, ps)| set.is_subset(ps))
-                    .map(|(j, _)| j)
-                    .collect()
-            })
+            .map(|set| pos_supersets_of(set, None))
             .collect();
 
         // For each comparison predicate: positive atoms whose var set covers it
         self.comparison_supersets = self
             .comparison_predicates_vars_str_set
             .iter()
-            .map(|set| {
-                pos_var_sets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, ps)| set.is_subset(ps))
-                    .map(|(j, _)| j)
-                    .collect()
-            })
+            .map(|set| pos_supersets_of(set, None))
             .collect();
 
         // For each fn_call predicate: positive atoms whose var set covers it
         self.fn_call_supersets = self
             .fn_call_predicates_vars_str_set
             .iter()
-            .map(|set| {
-                pos_var_sets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, ps)| set.is_subset(ps))
-                    .map(|(j, _)| j)
-                    .collect()
-            })
+            .map(|set| pos_supersets_of(set, None))
             .collect();
     }
 }
