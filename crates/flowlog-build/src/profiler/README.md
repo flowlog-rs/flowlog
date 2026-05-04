@@ -6,6 +6,14 @@ compile time and lines it up with **timely's runtime operator logs** at run
 time, so each operator a tuple flows through can be attributed to the FlowLog
 construct that emitted it.
 
+> **🚧 Datalog modes only.** `--profile` combined with `extend-batch` or
+> `extend-inc` panics with `unimplemented!` in
+> [`common/config.rs`](../common/config.rs) — the operator step counts in
+> [`steps.rs`](steps.rs) have only been verified for `DatalogBatch` and
+> `DatalogInc`, and extended-semantics operators (loop conditions, UDF
+> pipelines) aren't tracked yet. Tracking extended modes here is a clean
+> follow-up.
+
 ```
 parser ──▶ typechecker ──▶ stratifier ──▶ planner ──▶ codegen ──▶ executable
                                                        │           │
@@ -49,11 +57,6 @@ operators each codegen call will create — that's the
 [`steps`](steps.rs) module — and advances [`Addr`](addr.rs) by that count.
 At runtime the visualiser maps an actual log address back to the FlowLog
 construct that owns it.
-
-> ⚠ Step counts have been verified for `DatalogBatch` / `DatalogInc` only.
-> Extended modes may generate additional operators that aren't yet tracked
-> — using `-P` with `ExtendBatch` / `ExtendInc` may produce incorrect
-> address mappings.
 
 ## Submodule map
 
