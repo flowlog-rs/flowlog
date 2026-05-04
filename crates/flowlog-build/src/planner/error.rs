@@ -9,11 +9,12 @@
 //! file a bug" ICE instead of a process abort.
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use crate::common::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
-use crate::common::{FileId, Span};
 use thiserror::Error;
 
 use crate::catalog::CatalogError;
+use crate::common::{
+    BUG_URL, Diagnostic, FileId, InternalError, Span, primary_label, secondary_label,
+};
 use crate::parser::AggregationOperator;
 
 #[non_exhaustive]

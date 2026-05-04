@@ -36,6 +36,22 @@ impl InputDirective {
     }
 }
 
+/// Parse the leading relation-name token plus any `io_params` children of an
+/// I/O directive. Shared by [`InputDirective`] and [`OutputDirective`], which
+/// differ only in the "missing relation name" diagnostic.
+fn parse_io_directive(
+    parsed_rule: Pair<Rule>,
+    file: FileId,
+    missing_name_msg: &'static str,
+) -> Result<(String, HashMap<String, String>, Span), ParseError> {
+    let mut inner = parsed_rule.into_inner();
+    let name_pair = inner.next().ok_or_else(|| grammar_bug(missing_name_msg))?;
+    let span = span_of(&name_pair, file);
+    let relation_name = name_pair.as_str().to_lowercase();
+    let parameters = parse_io_params(inner)?;
+    Ok((relation_name, parameters, span))
+}
+
 /// Parse `io_params` children from a directive's inner pairs into a key→value map.
 fn parse_io_params<'i>(
     inner: impl Iterator<Item = pest::iterators::Pair<'i, Rule>>,
@@ -65,15 +81,11 @@ fn parse_io_params<'i>(
 
 impl Lexeme for InputDirective {
     fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
-        let mut inner = parsed_rule.into_inner();
-        let name_pair = inner
-            .next()
-            .ok_or_else(|| grammar_bug("input directive missing relation name"))?;
-        let span = span_of(&name_pair, file);
-        let relation_name = name_pair.as_str().to_lowercase();
+        let (relation_name, parameters, span) =
+            parse_io_directive(parsed_rule, file, "input directive missing relation name")?;
         Ok(Self {
             relation_name,
-            parameters: parse_io_params(inner)?,
+            parameters,
             span: Ignored(span),
         })
     }
@@ -110,15 +122,11 @@ impl OutputDirective {
 
 impl Lexeme for OutputDirective {
     fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
-        let mut inner = parsed_rule.into_inner();
-        let name_pair = inner
-            .next()
-            .ok_or_else(|| grammar_bug("output directive missing relation name"))?;
-        let span = span_of(&name_pair, file);
-        let relation_name = name_pair.as_str().to_lowercase();
+        let (relation_name, parameters, span) =
+            parse_io_directive(parsed_rule, file, "output directive missing relation name")?;
         Ok(Self {
             relation_name,
-            parameters: parse_io_params(inner)?,
+            parameters,
             span: Ignored(span),
         })
     }
