@@ -213,11 +213,10 @@ impl Transformation {
 // Constructors
 // ========================
 impl Transformation {
-    /// Creates a key-value to key-value transformation.
+    /// Creates a unary transformation from input/output key-value layouts.
     ///
     /// This method analyzes the input and output layouts to determine the specific
-    /// transformation type needed (RowToRow, RowToK, RowToKv, KvToKv, KvToK, or KvToRow).
-    /// It automatically detects whether the transformation is a no-op optimization.
+    /// transformation type needed (RowToRow, RowToKv, KvToRow, or KvToKv).
     ///
     /// # Arguments
     ///
@@ -226,12 +225,10 @@ impl Transformation {
     /// # Returns
     ///
     /// A Transformation variant appropriate for the input/output layout combination:
-    /// - `RowToRow`: Row input → Row output (filtering/projection)
-    /// - `RowToK`: Row input → Key-only output (key extraction)
-    /// - `RowToKv`: Row input → Key-value output (structuring)
-    /// - `KvToKv`: Key-value input → Key-value output (transformation)
-    /// - `KvToK`: Key-value input → Key-only output (key extraction)
-    /// - `KvToRow`: Key-value input → Row output (flattening)
+    /// - `RowToRow`: Row input → Row output (filtering/projection on flat rows)
+    /// - `RowToKv`: Row input → Key-value output (structuring rows into KV pairs)
+    /// - `KvToRow`: Key-value input → Row output (flattening KV pairs into rows)
+    /// - `KvToKv`: Key-value input → Key-value output (re-keying / re-structuring)
     pub(crate) fn kv_to_kv(info: &TransformationInfo) -> Self {
         trace!("Creating kv_to_kv transformation with info:\n{}", info);
         // Create the transformation flow that defines how data moves through the operation
@@ -241,8 +238,8 @@ impl Transformation {
             info.kv_predicates(),
         );
 
-        let is_row_in = info.is_row_input(); // Input is Row
-        let is_row_out = info.is_row_output(); // Output is Row
+        let is_row_in = info.is_row_input();
+        let is_row_out = info.is_row_output();
 
         let input = Arc::new(Collection::new(
             info.input_info_fp().0,
@@ -259,25 +256,25 @@ impl Transformation {
         ));
 
         match (is_row_in, is_row_out) {
-            // Row input -> Row output: filtering, projection, or aggregation on row data
+            // Row in, Row out: filtering, projection, or aggregation on flat rows.
             (true, true) => Self::RowToRow {
                 input,
                 output,
                 flow,
             },
-            // Row input -> Key-only output: extract keys from row data
+            // Row in, KV out: structure flat rows into key-value pairs.
             (true, false) => Self::RowToKv {
                 input,
                 output,
                 flow,
             },
-            // Row input -> Key-value output: structure row data into key-value pairs
+            // KV in, Row out: flatten key-value pairs back into rows.
             (false, true) => Self::KvToRow {
                 input,
                 output,
                 flow,
             },
-            // Key-value input -> Key-value output: transform existing key-value structure
+            // KV in, KV out: re-key or re-structure an existing KV layout.
             (false, false) => Self::KvToKv {
                 input,
                 output,
@@ -298,12 +295,9 @@ impl Transformation {
     ///
     /// # Returns
     ///
-    /// A binary Transformation variant based on the input collection types:
-    /// - `JnKK`: Key-only ⋈ Key-only join
-    /// - `JnKKv`: Key-only ⋈ Key-value join (right has values)
-    /// - `JnKvK`: Key-value ⋈ Key-only join (left has values)
-    /// - `JnKvKv`: Key-value ⋈ Key-value join (both have values)
-    /// - `Cartesian`: Cartesian product (no join keys)
+    /// A binary join Transformation variant chosen by the output layout:
+    /// - `JnToRow`: Key-value ⋈ Key-value producing a flat row output
+    /// - `JnToKv`:  Key-value ⋈ Key-value producing a key-value output
     pub(crate) fn join(info: &TransformationInfo) -> Self {
         // Create transformation flow that defines how the join operation processes data
         let flow = TransformationFlow::join_to_kv(
@@ -313,7 +307,7 @@ impl Transformation {
             info.join_predicates(),
         );
 
-        let is_row_output = info.is_row_output(); // Output is Row
+        let is_row_output = info.is_row_output();
 
         let input = (
             Arc::new(Collection::new(
@@ -338,14 +332,12 @@ impl Transformation {
         ));
 
         if is_row_output {
-            // Key-value ⋈ Key-value to Row
             Self::JnToRow {
                 input,
                 output,
                 flow,
             }
         } else {
-            // Key-value ⋈ Key-value to Key-value
             Self::JnToKv {
                 input,
                 output,
@@ -366,9 +358,9 @@ impl Transformation {
     ///
     /// # Returns
     ///
-    /// A binary antijoin Transformation variant:
-    /// - `NjKK`: Key-only ¬⋈ Key-only antijoin
-    /// - `NjKvK`: Key-value ¬⋈ Key-only antijoin
+    /// A binary antijoin Transformation variant chosen by the output layout:
+    /// - `NJnToRow`: Key-only ¬⋈ Key-only producing a flat row output
+    /// - `NJnToKv`:  Key-only ¬⋈ Key-only producing a key-value output
     ///
     /// # Panics
     ///
@@ -390,7 +382,7 @@ impl Transformation {
         );
 
         // Determine antijoin type based on output collection characteristics
-        let is_row_output = info.is_row_output(); // Output is Row
+        let is_row_output = info.is_row_output();
 
         let input = (
             Arc::new(Collection::new(
@@ -415,14 +407,12 @@ impl Transformation {
         ));
 
         if is_row_output {
-            // Key-only ¬⋈ Key-only to Row
             Self::NJnToRow {
                 input,
                 output,
                 flow,
             }
         } else {
-            // Key-only ¬⋈ Key-value to Key-value
             Self::NJnToKv {
                 input,
                 output,
