@@ -44,8 +44,9 @@ impl Compiler {
             )
         } else {
             let base_dir = self.config.output_dir().ok_or_else(|| {
-                CompilerError::internal(
-                    "binary mode writing IDB output to files but `output_dir` is unset",
+                CompilerError::config(
+                    "program declares `.output` directives but no output directory was given. \
+                     pass `-D <dir>` to write outputs to files, or `-D -` to print to stderr",
                 )
             })?;
             (

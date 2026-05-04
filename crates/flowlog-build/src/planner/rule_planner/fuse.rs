@@ -84,8 +84,7 @@ impl RulePlanner {
             if original_atom_fp.contains(input_info_fp) {
                 trace!(
                     "[fuse_map] skip at idx {}: input is original atom {:#018x}",
-                    index,
-                    *input_info_fp
+                    index, *input_info_fp
                 );
                 continue;
             }
@@ -114,10 +113,7 @@ impl RulePlanner {
 
                 trace!(
                     "[fuse_map] fuse at idx {}: input {:#018x} -> output {:#018x}; producer idx {}",
-                    index,
-                    input_fp,
-                    output_fp,
-                    input_producer_index
+                    index, input_fp, output_fp, input_producer_index
                 );
 
                 // Extract output key/value argument ids from ArithmeticPos expressions
@@ -125,8 +121,7 @@ impl RulePlanner {
                     out_kv_layout.extract_argument_ids_from_layout();
                 trace!(
                     "[fuse_map]   -> key ids: {:?}, value ids: {:?}",
-                    key_argument_ids,
-                    value_argument_ids
+                    key_argument_ids, value_argument_ids
                 );
 
                 // Apply fused layout + comparisons + fn_call predicates to producer, and get new output fp
@@ -154,8 +149,7 @@ impl RulePlanner {
                 )?;
                 trace!(
                     "[fuse_map]   -> updated consumer idx {} to input {:#018x}",
-                    output_consumer_index,
-                    input_producer_output_fp
+                    output_consumer_index, input_producer_output_fp
                 );
                 // Note: No need to update the input key-value layout of consumers here.
                 // They will be updated when processed as join producers in later iterations.
@@ -218,10 +212,7 @@ impl RulePlanner {
             {
                 trace!(
                     "[fuse_kv_layout] fuse at producer fp {:#018x} -> consumers {:?}; key ids: {:?}, value ids: {:?}",
-                    tx_fp,
-                    consumers,
-                    key_indices,
-                    value_indices
+                    tx_fp, consumers, key_indices, value_indices
                 );
                 // Update producer layout and fingerprint
                 let mut new_output_fp = 0u64;
@@ -492,8 +483,7 @@ impl RulePlanner {
             self.insert_producer(output_fp, index);
             trace!(
                 "[rebuild_producer_consumer] producer: idx {} -> fp {:#018x}",
-                index,
-                output_fp
+                index, output_fp
             );
         }
 
@@ -514,9 +504,7 @@ impl RulePlanner {
         for (fp, (prod_idx, consumers)) in &self.producer_consumer {
             trace!(
                 "[rebuild_producer_consumer] mapping: fp {:#018x} -> producer {:?}, consumers {:?}",
-                fp,
-                prod_idx,
-                consumers
+                fp, prod_idx, consumers
             );
         }
 
@@ -698,7 +686,7 @@ impl RulePlanner {
 
 #[cfg(test)]
 mod tests {
-    use super::super::common::test_setup;
+    use super::super::common::{run_pipeline_through_yannakakis, test_setup};
 
     /// A filter whose input is an EDB atom must survive fuse — the EDB
     /// guard at fuse.rs:84 blocks fusion into something that has no
@@ -715,6 +703,7 @@ mod tests {
             Out(x) :- A(x, 5).\n",
         );
         planner.prepare(&mut catalog).expect("prepare");
+        run_pipeline_through_yannakakis(&mut planner, &mut catalog);
         let before = planner.transformation_infos().len();
         assert!(
             before >= 1,
@@ -754,9 +743,7 @@ mod tests {
         );
         planner.prepare(&mut catalog).expect("prepare");
         planner.apply_sip(&mut catalog).expect("sip");
-        while !catalog.is_planned() {
-            planner.core(&mut catalog, (0, 1)).expect("core");
-        }
+        run_pipeline_through_yannakakis(&mut planner, &mut catalog);
 
         let sip_before = planner
             .transformation_infos()

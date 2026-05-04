@@ -1,7 +1,6 @@
 mod errors;
 
 use flowlog_build::common::{Config, SourceMap};
-use flowlog_build::optimizer::Optimizer;
 use flowlog_build::parser::Program;
 use flowlog_build::planner::{PlanError, StratumPlanner};
 use flowlog_build::stratifier::Stratifier;
@@ -20,19 +19,12 @@ fn plan_fixture(name: &str) -> (Result<(), PlanError>, SourceMap) {
         output_dir: Some("-".into()),
         ..Default::default()
     };
-    let mut optimizer = Optimizer::new();
     let mut profiler = None;
 
     for (idx, rule_refs) in stratifier.stratum().iter().enumerate() {
         let rules: Vec<_> = rule_refs.iter().map(|&r| r.clone()).collect();
-        if let Err(e) = StratumPlanner::from_rules(
-            &config,
-            &rules,
-            &mut optimizer,
-            &mut profiler,
-            &stratifier,
-            idx,
-        ) {
+        if let Err(e) = StratumPlanner::from_rules(&config, &rules, &mut profiler, &stratifier, idx)
+        {
             return (Err(e), sm);
         }
     }

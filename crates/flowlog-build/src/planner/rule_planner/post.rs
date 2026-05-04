@@ -204,7 +204,7 @@ impl RulePlanner {
 
 #[cfg(test)]
 mod tests {
-    use super::super::common::test_setup;
+    use super::super::common::{run_pipeline_through_yannakakis, test_setup};
 
     /// `Out(y, x) :- A(x, y).` — post must reorder the final layout so
     /// output values map to head order, not source order. A no-op post
@@ -220,6 +220,7 @@ mod tests {
             Out(y, x) :- A(x, y).\n",
         );
         planner.prepare(&mut catalog).expect("prepare");
+        run_pipeline_through_yannakakis(&mut planner, &mut catalog);
         planner
             .fuse(catalog.original_atom_fingerprints())
             .expect("fuse");
@@ -255,6 +256,7 @@ mod tests {
             Out(x + 1) :- A(x).\n",
         );
         planner.prepare(&mut catalog).expect("prepare");
+        run_pipeline_through_yannakakis(&mut planner, &mut catalog);
         planner
             .fuse(catalog.original_atom_fingerprints())
             .expect("fuse");

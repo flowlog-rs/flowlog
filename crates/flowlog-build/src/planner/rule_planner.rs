@@ -8,6 +8,10 @@
 //!   arguments to simplify the rule before joining.
 //! - `core`: performs the core join between two selected positive atoms and
 //!   then iterates semijoin/pushdown and projection removal to a fixed point.
+//!   Driven from the stratum planner only when a cyclic core has to be broken.
+//! - `yannakakis_plus`: for the α-acyclic remainder, runs the Yannakakis+
+//!   bottom-up semijoin pass followed by the top-down Algorithm 2 + Lemma 3.14
+//!   reduction loop, collapsing the catalog down to a single atom.
 //! - `fuse`: merges compatible KV-to-KV map steps into their producers and
 //!   propagates key/value layout requirements upstream.
 //! - `post`: aligns the final pipeline output with the rule head (variables and
@@ -29,6 +33,7 @@ mod fuse; // fuse KV-to-KV maps and propagate key/value layout constraints upstr
 mod post; // align final output to the rule head (vars and arithmetic)
 mod prepare; // local filters, semi-join and comparison before the core join
 mod sip; // Side Information Passing (SIP) optimization for pushing down filters
+mod yannakakis_plus; // Yannakakis+ bottom-up semijoin + top-down reduction for α-acyclic rules
 
 /// Planner state for a single rule.
 #[derive(Debug)]

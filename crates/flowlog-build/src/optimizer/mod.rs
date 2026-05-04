@@ -6,7 +6,8 @@
 //!
 //! All interfaces are intentionally lightweight to allow later extension.
 
-pub(crate) mod core;
-pub(crate) mod plan_tree;
+mod core;
+mod join_tree;
 
-pub use self::core::Optimizer;
+pub(crate) use core::cyclic_core_join_pair;
+pub(crate) use join_tree::JoinTree;
