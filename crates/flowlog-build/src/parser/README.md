@@ -46,9 +46,9 @@ Every public AST type implements it, so adding a new grammar production is
 
 | Submodule | Holds |
 |---|---|
-| [`primitive/`](primitive/) | `DataType` (Int8…UInt64, Float32/64, Bool, String, Symbol) and `ConstType` literal nodes — including the polymorphic `Int(_)`/`Float(_)` placeholders that `typechecker::pin` later collapses to a concrete width. |
+| [`primitive/`](primitive/) | `DataType` (Int8…UInt64, Float32/64, Bool, String — with `"symbol"` accepted as an alias for `"string"`) and `ConstType` literal nodes — including the polymorphic `Int(_)`/`Float(_)` placeholders that `typechecker::pin` later collapses to a concrete width. |
 | [`declaration/`](declaration/) | `.decl` relations, `.input`/`.output`/`.printsize` directives, attributes, and `.extern fn` UDF declarations. |
-| [`logic/`](logic/) | The body of a rule: `Atom`, `Predicate`, `Arithmetic`, `Comparison`, `FnCall`, `Aggregation`, `Head`, `Rule`, plus `LoopBlock` for extended-mode `loop`/`fixpoint` regions. |
+| [`logic/`](logic/) | The body of a rule: `Atom`, `Predicate`, `Arithmetic`, `ComparisonExpr`, `FnCall`, `Aggregation`, `Head`, `FlowLogRule`, plus `LoopBlock` for extended-mode `loop`/`fixpoint` regions. |
 | [`program.rs`](program.rs) | The `Program` root: relations + ordered `Vec<Segment>` + UDFs + inline facts. Owns the file-loading entry point and `.include` resolution. |
 | [`segment.rs`](segment.rs) | `Segment::{Plain, Loop, Fixpoint}` — the ordered unit downstream stages walk. Loop/Fixpoint segments are **hard barriers**: the stratifier may not move rules across them. |
 | [`error.rs`](error.rs) | `ParseError` with span-anchored variants. `ParseError::Internal` covers grammar-contract violations the grammar should have made unreachable. |
