@@ -58,11 +58,12 @@ Two things drive most of the design:
 ## Range-restriction (the one rule we *enforce*)
 
 The catalog isn't just a passive cache: as it walks the body, it checks that
-every variable in a comparison, arithmetic, or UDF call is **bound by some
-positive atom**. If not, it returns `CatalogError::UnsafePredicate`. This is
-the place range-restriction is checked — the typechecker leaves it alone,
-because it depends on RHS shape that only becomes obvious once you've sorted
-positive-vs-negative.
+every variable in a **negated atom**, comparison, or UDF call is **bound by
+some positive atom**. If not, it returns `CatalogError::UnsafeVariable` (the
+`UnsafePredicateKind` field — `Negation` / `Comparison` / `FnCall` — names
+*where* the unbound variable was found). This is the place range-restriction
+is checked — the typechecker leaves it alone, because it depends on RHS shape
+that only becomes obvious once you've sorted positive-vs-negative.
 
 ## Reading order
 
