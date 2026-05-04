@@ -60,13 +60,18 @@ flowchart LR
 
 `assembly/` picks the right assembler based on `Config::mode()`:
 
-|              | **Batch** *(`run()` once)* | **Incremental** *(REPL loop)* |
-|--------------|----------------------------|--------------------------------|
-| **Datalog**  | `batch::gen_batch_main`    | `inc::gen_incremental_main`    |
-| **Extended** | same `batch::…`            | same `inc::…`                  |
+|              | **Batch** *(`run()` once)*  | **Incremental** *(REPL loop)* |
+|--------------|-----------------------------|--------------------------------|
+| **Datalog**  | `batch::gen_batch_main` ✅  | `inc::gen_incremental_main` ✅ |
+| **Extended** | same `batch::…` 🚧          | same `inc::…` 🚧               |
 
-Extended modes only differ in the planner/codegen stages (allowed `loop {}`
-blocks); the assembled shell is identical.
+Extended modes share the same assembled shell as their datalog counterpart;
+the differences live upstream in the planner / codegen stages (handling of
+`loop {}` and `fixpoint {}` blocks). Extended-mode codegen is a
+**work-in-progress** — see the top-level [`README`](../../README.md#tldr) for
+which extended sub-modes have unit fixtures vs are still experimental. This
+crate itself doesn't gate on mode; whatever the upstream pipeline accepts,
+`assembly/` will assemble.
 
 ## Where to look first
 
