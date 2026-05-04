@@ -25,12 +25,7 @@
 
 You write Datalog (`.dl`); FlowLog compiles it into a **standalone Rust executable** on top of [Timely](https://github.com/TimelyDataflow/timely-dataflow) + [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow).
 
-|              | Batch *(run once)*           | Incremental *(maintain)*       |
-|--------------|------------------------------|--------------------------------|
-| **Datalog**  | `datalog-batch` *(default)* ✅ | `datalog-inc` ✅                |
-| **Extended** | `extend-batch` 🚧             | `extend-inc` 🚧                 |
-
-✅ supported · 🚧 work-in-progress (Extended modes accept `loop { … }` / `fixpoint { … }` syntax for explicit recursion control; `extend-inc` has no test fixtures yet, and `--profile` panics under either Extended sub-mode).
+There are four execution modes, picked with `--mode`. Two are supported today: `datalog-batch` *(default)* runs the program once and returns the fixpoint, and `datalog-inc` maintains results across incremental updates. Two are still **work-in-progress**: `extend-batch` and `extend-inc` add explicit `loop { … }` / `fixpoint { … }` blocks for fine-grained control over recursion. The parser, planner and codegen accept the Extended syntax and `extend-batch` has six unit fixtures, but `extend-inc` has no test fixtures yet, and `--profile` panics under either Extended sub-mode.
 
 ## Quick start
 
@@ -66,7 +61,7 @@ More examples and incremental usage: <https://www.flowlog-rs.com/>.
 
 ## Architecture
 
-A `.dl` program flows through five sequential stages, with three support modules feeding into the planner and codegen.
+A `.dl` program flows through five sequential stages, with three support modules feeding into the planner and codegen:
 
 ```mermaid
 flowchart LR
@@ -77,35 +72,27 @@ flowchart LR
     classDef side fill:#fff8e1,stroke:#a80,stroke-dasharray:3 3
 ```
 
-### Pipeline stages
+### The five pipeline stages
 
-| Stage | What it does | Key types |
-|---|---|---|
-| **parser** | Pest grammar → typed AST. Resolves `.include` directives at the text level. | `Program`, `FlowLogRule`, `Segment`, `Lexeme` trait |
-| **typechecker** | Rejects ill-typed programs and **pins** every polymorphic literal (`Int(_)`, `Float(_)`) to a concrete width. | `check_program`, `TypeCheckError` |
-| **stratifier** | SCC-based scheduling. `loop` / `fixpoint` blocks become hard barriers, each producing one recursive stratum. | `Stratifier`, `StratifyError` |
-| **planner** | Per-rule pipeline (`prepare → SIP* → core → fuse → post`) plus stratum-level dedup, recursive/non-recursive split, and aggregation metadata. | `StratumPlanner`, `RulePlanner`, `Transformation`, `Collection` |
-| **codegen** | Emits Timely + DD operator chains as `CodeParts` token streams. | `CodeGen`, `CodeParts`, `Features` |
+The **parser** turns `.dl` source into a typed AST. It uses Pest as the grammar engine, resolves `.include` directives at the text level (so the parser itself never has to merge two parse trees), and produces a `Program` containing relation declarations, segments, UDFs and inline facts. Every AST node carries a `Span` so later stages can produce diagnostics that point at the user's source.
+
+The **typechecker** runs in one pass over the AST. It rejects programs whose types don't line up (conflicting variable bindings, mixed-width arithmetic, head-vs-`.decl` mismatch, malformed UDF calls, aggregations over non-numeric inputs) and **pins** every polymorphic literal — `ConstType::Int(_)` and `ConstType::Float(_)` placeholders left by the parser — to the concrete width derived from its surrounding context. After it returns `Ok`, no polymorphic literal survives anywhere in the program, so every downstream stage can call `data_type()` unconditionally.
+
+The **stratifier** decides the order in which rule groups must run so every rule's dependencies are computed before it fires. Each `Plain` segment of the program goes through a per-segment dependency graph, Tarjan's SCC algorithm, and a topological sort; each `loop` / `fixpoint` block becomes exactly one recursive stratum, regardless of how many rules it contains. In Extended mode, plain-rule recursion is rejected outright (`StratifyError::RecursionOutsideLoop`); in Datalog mode it's handled implicitly via SCC detection.
+
+The **planner** is the largest module. For each rule it runs a five-phase pipeline — `prepare` (push down local filters, semi-joins, comparison sites), an optional `SIP` pass (push binding constraints from heads into bodies, when `--sip` is set), `core` (join two positive atoms then iterate semi-join + projection to a fixed point), `fuse` (merge KV-to-KV maps), and `post` (align the final pipeline output to the rule head). Then at the stratum level it deduplicates transformations across rules so DD can share arrangements, splits EDB-only work from IDB-dependent work, and records aggregation metadata for codegen.
+
+The **codegen** stage takes the planner's output and emits Timely + Differential Dataflow operator chains as `proc_macro2::TokenStream` fragments bundled into a `CodeParts` struct. Per stratum it emits the non-recursive head first, then either a recursive block (`.iterate(...)` for batch, `Variable`-scoped for incremental) or the non-recursive post-flows. The bundle is intentionally flat so each frontend can pick the subset it needs.
 
 ### Support modules
 
-| Module | Role |
-|---|---|
-| **catalog** | Per-rule metadata (signatures, supersets, filters) + range-restriction check. Built per-rule **inside** the planner. |
-| **optimizer** | EDB cardinalities + plan tree (today: left-deep, source order — cost-based ordering is future work). Consulted by the planner's core phase. |
-| **profiler** | Operator-level trace; build-time predictions + run-time logs. Datalog modes only — panics under `extend-*`. |
-| **common** | Source spans, diagnostics, `Config`, fingerprints. Used by every stage. |
+Three modules feed in to the spine rather than sit on it. The **catalog** is built per rule **inside** the planner; it precomputes atom signatures, positive/negative variable maps, "supersets" (which positive atoms cover the variables of each comparison/UDF/predicate), and local filters. It's also the place where **range-restriction** is enforced: a variable in a negated atom, comparison or UDF call must be bound by some positive atom, otherwise `CatalogError::UnsafeVariable` fires. The **optimizer** stores per-relation cardinalities and emits a per-rule plan tree consulted during the planner's `core` phase; today it produces a left-deep chain in source order, with cost-based ordering as future work. The **profiler** is optional (`-P` / `--profile`) and records a static plan graph at compile time alongside Timely's runtime operator logs at run time, so each operator a tuple flows through can be attributed back to the FlowLog construct that emitted it. Profiling is **Datalog-modes-only** — combining `--profile` with `extend-batch` or `extend-inc` panics. A small **common** module supplies what every stage uses: `FileId` / `Span` / `SourceMap` for source anchoring, the `Diagnostic` trait + `BoxError` for error rendering, the `Config` struct, and a `compute_fp` helper for the `u64` fingerprints that thread through `catalog → planner → codegen` to enable arrangement sharing.
 
 ### Two output paths
 
-`CodeParts` is consumed by either of two frontends:
+After codegen there are two frontends that share the same `CodeParts`. **Library mode** lives in `crates/flowlog-build/src/build/`; it stitches the fragments into a single `.rs` file written to `$OUT_DIR/<stem>.rs`, which your crate `include!`s. It's driven from your `build.rs` via `flowlog_build::compile()`, exposes inherent methods on `{Name}Input` structs (no `Relation` trait at the user surface), and returns `BatchResults` or `IncrementalResults` from the engine call. **Binary mode** lives in `crates/flowlog-compiler/`; it scaffolds a complete Cargo project under a `.<stem>.build/` directory, runs `cargo build --release`, and copies the binary to `-o <PATH>`. It's the path the `flowlog-compiler` CLI takes; it uses a `Relation` trait + per-EDB `Rel{Name}` handlers, drives Timely from a generated `main.rs`, and writes output relations to files (or stderr with `-D -`).
 
-| Path | Where | Output |
-|---|---|---|
-| **Library mode** | `flowlog-build/src/build/` | `$OUT_DIR/<stem>.rs` for `include!()` from your crate. Driven by `flowlog_build::compile()` in your `build.rs`. |
-| **Binary mode** | `flowlog-compiler/` | A scaffolded Cargo project + `cargo build --release` + a binary copied to `-o <PATH>`. Driven by the `flowlog-compiler` CLI. |
-
-The runtime crate `flowlog-runtime` supplies what generated code calls into: thread-safe string interning, file-IO sharding, `k_way_merge` / `topk` for `ORDER BY` / `LIMIT` drains, and `Transaction` state types used by incremental drivers.
+The runtime crate `flowlog-runtime` supplies what generated code calls into: thread-safe string interning (`lasso::ThreadedRodeo`), file-IO sharding for parallel ingest, `k_way_merge` and `topk` for `ORDER BY` / `LIMIT` drains, and the `Transaction` state types used by incremental drivers.
 
 ### Workspace layout
 
@@ -121,17 +108,6 @@ flowlog/
 │                              ldbc_snb, program_analysis, extended)
 └── tests/                     unit / complex / ldbc end-to-end suites
 ```
-
-### Mode → stage interactions
-
-`Config::mode` flows through to:
-
-- **stratifier** rejects non-loop recursion under Extended mode (`StratifyError::RecursionOutsideLoop`);
-- **codegen** picks `Diff = Present` for `datalog-batch` and `Diff = i32` everywhere else;
-- **codegen** wraps recursive strata in `.iterate(...)` (batch) or `Variable`-scoped logic (incremental);
-- **build** assemblers (`engine/batch.rs`, `engine/incremental.rs`) emit either a `DatalogBatchEngine` with a single `.run()` or a `DatalogIncrementalEngine` driven by `Transaction::commit()`.
-
-A `u64` fingerprint threads through `catalog → planner → codegen` so the same logical collection is arranged once and shared across rules.
 
 ## CLI
 
@@ -156,19 +132,21 @@ flowlog-compiler <PROGRAM> [OPTIONS]
 
 ## Tests
 
-| Suite | Coverage | Runner |
-|---|---|---|
-| `tests/unit/` — fast end-to-end fixtures | `datalog-batch`, `datalog-inc`, `extend-batch` | `unit_compiler.sh` (binary), `unit_lib.sh` (library) |
-| `tests/complex/` — diff against [Souffle](https://souffle-lang.github.io/) reference (network on first run) | `datalog-batch` | `datalog_batch_compiler.sh`, `datalog_batch_lib.sh` |
-| `tests/ldbc/` — LDBC SNB queries | `datalog-batch` | `ldbc.sh` |
+End-to-end tests live in `tests/`, in three suites of increasing depth.
+
+`tests/unit/` is the inner-loop check: per-fixture programs run end-to-end and the output is diffed against `expected/`. It covers `datalog-batch`, `datalog-inc` and `extend-batch` (no `extend-inc` fixtures yet), and is invoked through `tests/unit/unit_compiler.sh` for the binary path or `tests/unit/unit_lib.sh` for the library path. Each runner accepts named fixtures or runs every fixture when called without arguments.
+
+`tests/complex/` runs larger programs and diffs the output against a [Souffle](https://souffle-lang.github.io/) reference fetched from HuggingFace — slow (several minutes per dataset, network on first run) and `datalog-batch`-only today, invoked via `tests/complex/datalog_batch_compiler.sh` or `tests/complex/datalog_batch_lib.sh`.
+
+`tests/ldbc/` runs LDBC SNB queries on canonical graph datasets via `tests/ldbc/ldbc.sh`, also `datalog-batch`-only.
 
 ```bash
-bash tests/unit/unit_compiler.sh                # run every fixture (binary mode)
-bash tests/unit/unit_lib.sh agg_avg agg_count   # run named fixtures (library mode)
+bash tests/unit/unit_compiler.sh                # every fixture, binary mode
+bash tests/unit/unit_lib.sh agg_avg agg_count   # named fixtures, library mode
 bash tests/complex/datalog_batch_compiler.sh    # full Souffle correctness sweep
 ```
 
-A fixture is a directory with `program.dl`, optional `data/` (CSVs), `expected/` (one file per `.output`), plus optional `commands.txt` / `runtime_flags`.
+A fixture is a directory with `program.dl`, optional `data/` (CSVs), `expected/` (one file per `.output`), plus optional `commands.txt` (incremental transcripts) / `runtime_flags`.
 
 ## Background reading
 
