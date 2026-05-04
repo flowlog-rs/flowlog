@@ -777,20 +777,20 @@ setup_souffle() {
 # Run Souffle on (prog, dataset) NUM_RUNS times.
 #
 # Souffle has TWO execution modes:
-#   1. INTERPRETED — `souffle prog.dl -F facts -D out` walks the AST. The
-#      `-j N` flag is accepted but does NOT enable runtime parallelism;
-#      the interpreter is effectively single-threaded.
-#   2. COMPILED  — `souffle -c -j N -o bin prog.dl` generates and
-#      compiles a C++ executable with OpenMP `#pragma omp parallel`
-#      directives baked in at codegen time. The resulting binary is
-#      then run with `bin -F facts -D out -j N` for true parallelism.
+#   1. INTERPRETED — `souffle prog.dl -F facts -D out` walks the AST.
+#      The `-j N` flag is accepted but does NOT enable runtime
+#      parallelism; the interpreter is effectively single-threaded.
+#   2. COMPILED — `souffle -c -j N -F facts -o bin prog.dl` generates
+#      and compiles a parallel C++ executable; -j N at codegen is
+#      what wires the parallelism in. The resulting binary is then
+#      run with `bin -F facts -D out -j N` for true parallelism.
 #
 # Mode 2 is what the FlowLog VLDB paper / FlowLog-Reproduction
 # benchmark uses, and it's the only fair comparison against FlowLog's
 # Differential Dataflow runtime. We use it here:
 #
 #   - One compile per program (cached at $sf_bin so we don't rebuild
-#     for repeated runs or for the same program against multiple
+#     for repeated runs or for the same program across multiple
 #     datasets). Compile time is NOT timed (it's a one-off).
 #   - Each timed run wraps `bin -F <facts> -D <out> -j $WORKERS`
 #     in /usr/bin/time -v for wall-time + peak RSS.
@@ -814,14 +814,15 @@ run_souffle() {
     fi
 
     # Compile once per program (cached). The -j flag at compile time
-    # is what enables OpenMP in the generated C++; passing it again at
-    # run-time is the standard idiom and matches the paper. Souffle's
-    # compile step also validates `.input` directives by trying to
-    # load the dataset, so -F has to be present at compile time too —
-    # we use the first dataset for this program as the "schema" sample.
+    # is what wires Souffle's parallelism into the generated C++;
+    # passing it again at run-time is the standard idiom and matches
+    # the paper. Souffle's compile step also validates `.input`
+    # directives by trying to load the dataset, so -F has to be
+    # present at compile time too — we use the dataset for this pair
+    # as the schema sample.
     if [[ ! -x "$sf_bin" ]]; then
         log "$BLUE" "BUILD" \
-            "Souffle: compiling $stem with $WORKERS-way OpenMP (one-off)"
+            "Souffle: compiling $stem with -j $WORKERS (one-off)"
         mkdir -p "$(dirname "$sf_bin")"
         if ! "$SOUFFLE_BIN" -c -j "$WORKERS" -F "$fact_path" -o "$sf_bin" "$sf_src" \
                 > "${sf_bin}.compile.log" 2>&1; then
