@@ -45,10 +45,10 @@ exactly one recursive stratum, regardless of how many rules it contains.
 
 ## Two semantic modes
 
-| `extended` | Plain-rule recursion | Loop-block recursion |
-|---|---|---|
-| `false` (Datalog mode) | **Allowed** — handled implicitly via SCC detection (classic stratified-Datalog semantics). | Allowed; one stratum per block. |
-| `true`  (Extended mode) | **Hard error** (`StratifyError`). Recursion *must* be expressed via `loop`/`fixpoint` blocks. | The only place recursion is allowed. |
+| `extended` | Plain-rule recursion | Loop-block recursion | Status |
+|---|---|---|---|
+| `false` (Datalog mode) | **Allowed** — handled implicitly via SCC detection (classic stratified-Datalog semantics). | Allowed; one stratum per block. | ✅ supported |
+| `true`  (Extended mode) | **Hard error** (`StratifyError::RecursionOutsideLoop`). Recursion *must* be expressed via `loop`/`fixpoint` blocks. | The only place recursion is allowed. | 🚧 partial — `extend-batch` has unit fixtures; `extend-inc` has no fixtures yet and `--profile` panics under either. |
 
 This is the lever the user pulls with `--mode extend-batch` / `--mode extend-inc`.
 
