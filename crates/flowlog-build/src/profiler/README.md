@@ -83,7 +83,9 @@ with_profiler(profiler, |p| p.leave_scope());                   // after .iterat
 | File | When | What |
 |---|---|---|
 | `<stem>_log/ops.json` | written by worker 0 at engine startup | the static plan graph baked in as `__FLOWLOG_OPS_JSON` |
-| `<stem>_log/time/<worker>.log` | end of run (batch) / per commit (incremental) | timely operator timing |
-| `<stem>_log/memory/<worker>.log` | end of run / per commit | DD arrangement memory |
+| `<stem>_log/time/time_worker_t0_<i>.log` *(batch)* | end of run | timely operator timing, one file per worker |
+| `<stem>_log/time/time_worker_t<ts>_<i>.log` *(incremental)* | per commit | timely operator timing, one file per (timestamp, worker) |
+| `<stem>_log/memory/memory_worker_t0_<i>.log` *(batch)* | end of run | DD arrangement memory, one file per worker |
+| `<stem>_log/memory/memory_worker_t<ts>_<i>.log` *(incremental)* | per commit | DD arrangement memory, one file per (timestamp, worker) |
 
 These are picked up by the external profile-visualizer tool (separate repo).
