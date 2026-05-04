@@ -491,6 +491,36 @@ impl TransformationFlow {
 
 impl fmt::Display for TransformationFlow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Comma-joined `to_string` of each item, used for K:(...), V:(...) and
+        // for the inner pieces of F:(...).
+        fn join_display<T: fmt::Display>(items: &[T]) -> String {
+            items
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+
+        // Render the standard `K:(...), V:(...), F:(if ... and ...)` triple,
+        // omitting any section whose source is empty.
+        fn format_kv_parts(
+            key: &[ArithmeticArgument],
+            value: &[ArithmeticArgument],
+            filter_parts: &[String],
+        ) -> String {
+            let mut parts: Vec<String> = Vec::new();
+            if !key.is_empty() {
+                parts.push(format!("K:({})", join_display(key)));
+            }
+            if !value.is_empty() {
+                parts.push(format!("V:({})", join_display(value)));
+            }
+            if !filter_parts.is_empty() {
+                parts.push(format!("F:(if {})", filter_parts.join(" and ")));
+            }
+            parts.join(", ")
+        }
+
         match self {
             Self::KVToKV {
                 key,
@@ -501,55 +531,15 @@ impl fmt::Display for TransformationFlow {
             } => {
                 let mut filter_parts: Vec<String> = Vec::new();
                 if !constraints.is_empty() {
-                    filter_parts.push(format!("{}", constraints));
+                    filter_parts.push(constraints.to_string());
                 }
                 if !compares.is_empty() {
-                    filter_parts.push(
-                        compares
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    );
+                    filter_parts.push(join_display(compares));
                 }
                 if !fn_call_preds.is_empty() {
-                    filter_parts.push(
-                        fn_call_preds
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    );
+                    filter_parts.push(join_display(fn_call_preds));
                 }
-                let filters_str = if filter_parts.is_empty() {
-                    String::new()
-                } else {
-                    format!("if {}", filter_parts.join(" and "))
-                };
-
-                let key_str = key
-                    .iter()
-                    .map(|k| format!("{}", k))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let value_str = value
-                    .iter()
-                    .map(|v| format!("{}", v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                let mut parts: Vec<String> = Vec::new();
-                if !key.is_empty() {
-                    parts.push(format!("K:({})", key_str));
-                }
-                if !value.is_empty() {
-                    parts.push(format!("V:({})", value_str));
-                }
-                if !filters_str.is_empty() {
-                    parts.push(format!("F:({})", filters_str));
-                }
-
-                write!(f, "{}", parts.join(", "))
+                write!(f, "{}", format_kv_parts(key, value, &filter_parts))
             }
 
             Self::JnToKV {
@@ -560,52 +550,12 @@ impl fmt::Display for TransformationFlow {
             } => {
                 let mut filter_parts: Vec<String> = Vec::new();
                 if !compares.is_empty() {
-                    filter_parts.push(
-                        compares
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    );
+                    filter_parts.push(join_display(compares));
                 }
                 if !fn_call_preds.is_empty() {
-                    filter_parts.push(
-                        fn_call_preds
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    );
+                    filter_parts.push(join_display(fn_call_preds));
                 }
-                let filters_str = if filter_parts.is_empty() {
-                    String::new()
-                } else {
-                    format!("if {}", filter_parts.join(" and "))
-                };
-
-                let key_str = key
-                    .iter()
-                    .map(|k| format!("{}", k))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let value_str = value
-                    .iter()
-                    .map(|v| format!("{}", v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                let mut parts: Vec<String> = Vec::new();
-                if !key.is_empty() {
-                    parts.push(format!("K:({})", key_str));
-                }
-                if !value.is_empty() {
-                    parts.push(format!("V:({})", value_str));
-                }
-                if !filters_str.is_empty() {
-                    parts.push(format!("F:({})", filters_str));
-                }
-
-                write!(f, "{}", parts.join(", "))
+                write!(f, "{}", format_kv_parts(key, value, &filter_parts))
             }
         }
     }

@@ -75,44 +75,34 @@ impl CodeGen {
                 .collect();
 
             // Union the per-head collections left-to-right.
-            let head = outs[0].clone();
-            let tail = &outs[1..];
+            let head = &outs[0];
             let mut expr: TokenStream = quote! { #head.clone() };
-            for t in tail {
+            for t in &outs[1..] {
                 expr = quote! { #expr.concat(#t.clone()) };
             }
 
             // Output already produced in an earlier stratum: fold the new
             // heads into the existing collection before deduping.
-            let mut block = if calculated_output_fps.contains(idb_fp) {
-                with_profiler(profiler, |profiler| {
-                    profiler.concat_dedup_operator(
-                        output.to_string(),
-                        outs.iter().map(|id| id.to_string()).collect(),
-                        output.to_string(),
-                        outs.len() as u32,
-                        false,
-                    );
-                });
-                quote! {
-                    let #output = #output
-                        .concat(#expr)
-                        #dedup_stats;
-                }
+            let already_calculated = calculated_output_fps.contains(idb_fp);
+            let (concat_expr, concat_count) = if already_calculated {
+                (quote! { #output.concat(#expr) }, outs.len() as u32)
             } else {
-                with_profiler(profiler, |profiler| {
-                    profiler.concat_dedup_operator(
-                        output.to_string(),
-                        outs.iter().map(|id| id.to_string()).collect(),
-                        output.to_string(),
-                        outs.len() as u32 - 1,
-                        false,
-                    );
-                });
-                quote! {
-                    let #output = #expr
-                        #dedup_stats;
-                }
+                (expr, outs.len() as u32 - 1)
+            };
+
+            with_profiler(profiler, |profiler| {
+                profiler.concat_dedup_operator(
+                    output.to_string(),
+                    outs.iter().map(|id| id.to_string()).collect(),
+                    output.to_string(),
+                    concat_count,
+                    false,
+                );
+            });
+
+            let mut block = quote! {
+                let #output = #concat_expr
+                    #dedup_stats;
             };
 
             if let Some((agg_op, agg_pos, agg_arity)) = stratum.idb_to_aggregation_map().get(idb_fp)
