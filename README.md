@@ -27,7 +27,7 @@
 
 ## TL;DR
 
-You write Datalog (`.dl`). FlowLog **compiles** it — through a parser, type checker, stratifier, optimizer, planner, and code generator — into a **standalone Rust executable** that runs on top of [Timely](https://github.com/TimelyDataflow/timely-dataflow) + [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow). You get four execution modes out of the box:
+You write Datalog (`.dl`). FlowLog **compiles** it through a multi-stage pipeline (parse → type-check → stratify → plan → codegen) into a **standalone Rust executable** that runs on top of [Timely](https://github.com/TimelyDataflow/timely-dataflow) + [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow). You get four execution modes out of the box:
 
 |                | **Batch** (run-once) | **Incremental** (maintain) |
 |----------------|----------------------|-----------------------------|
@@ -42,7 +42,8 @@ You write Datalog (`.dl`). FlowLog **compiles** it — through a parser, type ch
 # 1. install toolchain + helpers
 bash tools/env/env.sh
 
-# 2. build the workspace
+# 2. build the workspace; the compiler binary lands at
+#    target/release/flowlog-compiler
 cargo build --release
 
 # 3. compile and run the canonical reachability example
@@ -50,27 +51,25 @@ mkdir -p reach
 printf '1\n'             > reach/Source.csv
 printf '1,2\n2,3\n'      > reach/Arc.csv
 
-# the binary is at target/release/flowlog-compiler — alias it as `flowlog`
-# if you like, or invoke it directly:
 target/release/flowlog-compiler example/graph_analysis/reach.dl \
-    -F reach -o reach_bin -D -          # compile
+    -F reach -o reach_bin -D -          # compile (-D - prints to stderr)
 ./reach_bin -w 4                        # run on 4 workers
 ```
 
-That's it. The Datalog program itself:
+That's it. The Datalog program itself ([`example/graph_analysis/reach.dl`](example/graph_analysis/reach.dl)):
 
 ```datalog
-.decl Source(id: number)
+.decl Source(id: int32)
 .input Source(IO="file", filename="Source.csv", delimiter=",")
-
-.decl Arc(x: number, y: number)
+.decl Arc(x: int32, y: int32)
 .input Arc(IO="file", filename="Arc.csv", delimiter=",")
 
-.decl Reach(id: number)
-.printsize Reach
+.decl Reach(id: int32)
 
 Reach(y) :- Source(y).
-Reach(y) :- Reach(x), Arc(x, y).
+Reach(y) :- Reach(x), Arc(x,y).
+
+.printsize Reach
 ```
 
 For incremental mode, profiler usage, and richer examples see <https://www.flowlog-rs.com/>.
@@ -122,7 +121,7 @@ flowlog-compiler <PROGRAM> [OPTIONS]
 | `--udf-file <PATH>` | optional | Rust source defining UDFs declared via `.extern fn`. |
 | `--save-temps` | optional | Keep the intermediate generated crate (otherwise removed after build). |
 | `-P, --profile` | optional | Enable operator-level profiling (writes `<stem>_log/` next to the executable). |
-| `-h, --help` | — | Full Clap help with examples and env vars. |
+| `-h, --help` | — | Print Clap-generated help. |
 
 ## Tests
 
