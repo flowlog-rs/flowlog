@@ -51,6 +51,16 @@ SMOKE=0
 SKIP_L3=0
 INCLUDE_LDBC=0
 KEEP_GOING=0
+# L3-baseline forwarder: passed verbatim to compare.sh's --baseline= flag.
+# Default "interpreter" preserves prior behaviour. Common values:
+#   interpreter            time vs vldb26 interpreter (default)
+#   souffle                time vs canonical Souffle programs only
+#   interpreter,souffle    both side-by-side
+L3_BASELINE="${L3_BASELINE:-interpreter}"
+# NUM_RUNS forwarder: how many timed runs per (engine, pair). Inherited
+# by compare.sh / datalog_batch_*.sh via the env. Default unset → each
+# tool keeps its own default (compare.sh: 5; per-iter perf gates: 3).
+L3_NUM_RUNS="${NUM_RUNS:-}"
 
 # WORKERS controls thread count for EVERY engine (interpreter / compiler /
 # library / souffle), so all baselines compete with the same parallelism.
@@ -69,6 +79,9 @@ while [[ $# -gt 0 ]]; do
         --include-ldbc)  INCLUDE_LDBC=1; shift ;;
         --keep-going)    KEEP_GOING=1; shift ;;
         --workers)       WORKERS="$2"; shift 2 ;;
+        --baseline=*)    L3_BASELINE="${1#--baseline=}"; shift ;;
+        --baseline)      L3_BASELINE="$2"; shift 2 ;;
+        --num-runs)      L3_NUM_RUNS="$2"; shift 2 ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
@@ -99,6 +112,8 @@ HEAD        : $GIT_HEAD
 branch      : $GIT_BRANCH
 started     : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 WORKERS     : $WORKERS
+NUM_RUNS    : ${L3_NUM_RUNS:-(default: 5)}
+L3_BASELINE : $L3_BASELINE
 smoke       : $SMOKE
 skip-l3     : $SKIP_L3
 include-ldbc: $INCLUDE_LDBC
@@ -375,6 +390,12 @@ run_step "L2 datalog_batch_lib"        "21-complex-lib"      0 -- \
 # ----------------------------------------------------------------------
 # L3 - perf compare (records both timing AND peak RSS in CSV)
 # ----------------------------------------------------------------------
+# Pre-build the env-prefix and the --baseline flag so the same string is
+# echoed in the diagnosis logs for reproducibility.
+_L3_ENV="WORKERS=$WORKERS"
+[[ -n "$L3_NUM_RUNS" ]] && _L3_ENV="$_L3_ENV NUM_RUNS=$L3_NUM_RUNS"
+_L3_BASELINE_FLAG="--baseline=$L3_BASELINE"
+
 if [[ "$SKIP_L3" == "1" ]]; then
     run_step "L3 benchmark/compare"    "30-bench-compare"    1 -- :
 elif [[ "$SMOKE" == "1" ]]; then
@@ -384,11 +405,11 @@ graph_analysis/tc.dl=G5K-0.001
 knowledge_reasoning/crdt.dl=crdt
 EOF
     run_step "L3 benchmark/compare (smoke)" "30-bench-compare" 0 -- \
-        bash -c "WORKERS=$WORKERS bash tools/benchmark/compare.sh $L3_CFG"
+        bash -c "$_L3_ENV bash tools/benchmark/compare.sh --fresh $_L3_BASELINE_FLAG $L3_CFG"
     rm -f "$L3_CFG"
 else
     run_step "L3 benchmark/compare"    "30-bench-compare"    0 -- \
-        bash -c "WORKERS=$WORKERS bash tools/benchmark/compare.sh"
+        bash -c "$_L3_ENV bash tools/benchmark/compare.sh --fresh $_L3_BASELINE_FLAG"
 fi
 
 # ----------------------------------------------------------------------

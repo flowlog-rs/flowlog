@@ -127,7 +127,7 @@ SOUFFLE_BIN="${SOUFFLE_BIN:-/usr/bin/souffle}"
 SOUFFLE_PROG_DIR="${ROOT_DIR}/tools/benchmark/souffle-programs"
 
 DATASET_URL="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/dataset/csv"
-NUM_RUNS=5
+NUM_RUNS="${NUM_RUNS:-5}"
 
 CSV_FILE="${LOG_DIR}/comparison_results.csv"
 
