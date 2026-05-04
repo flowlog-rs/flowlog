@@ -96,9 +96,3 @@ If you want to understand how a `.dl` becomes an executable:
 5. [`codegen/`](crates/flowlog-build/src/codegen/README.md) — IR → Rust + Timely + DD code.
 6. Pick one of [`build/`](crates/flowlog-build/src/build/README.md) or [`flowlog-compiler/`](crates/flowlog-compiler/README.md) for the final-output side.
 7. [`common/`](crates/flowlog-build/src/common/README.md) and [`profiler/`](crates/flowlog-build/src/profiler/README.md) — look up as needed.
-
-## Background reading
-
-> **FlowLog: Efficient and Extensible Datalog via Incrementality** \
-> Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris \
-> VLDB 2026 — [pVLDB](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf) · [artifacts](https://github.com/flowlog-rs/vldb26-artifact)
