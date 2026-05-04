@@ -11,11 +11,7 @@ flowchart LR
     TC --> AST2["Program<br/>(every literal pinned<br/>to a concrete type)"]
     AST2 --> S[stratifier]:::stage
     S --> STRATA["Vec&lt;Vec&lt;&amp;FlowLogRule&gt;&gt;<br/>(topo-ordered strata,<br/>recursive vs non-recursive)"]
-    STRATA --> CAT[catalog]:::stage
-    CAT --> CATALOGS["Vec&lt;Catalog&gt;<br/>(per-rule metadata:<br/>signatures, supersets,<br/>filters)"]
-    CATALOGS --> OPT[optimizer]:::stage
-    OPT --> CHOSEN["join-tuple choices<br/>(today: left-deep<br/>source order)"]
-    CHOSEN --> PL[planner]:::stage
+    STRATA --> PL[planner]:::stage
     PL --> TX["Vec&lt;StratumPlanner&gt;<br/>(deduplicated DAG of<br/>Transformations + Collections)"]
     TX --> CG[codegen]:::stage
     CG --> CP["CodeParts<br/>(TokenStream fragments:<br/>flows, EDB decls,<br/>output drain, profiling)"]
@@ -24,24 +20,31 @@ flowchart LR
     LIB --> LIBOUT["\$OUT_DIR/&lt;stem&gt;.rs<br/>(library mode, include!()d)"]
     BIN --> BINOUT["./your_program<br/>(binary mode, cargo build)"]
 
+    CAT[catalog]:::side -.per-rule metadata.-> PL
+    OPT[optimizer]:::side -.cardinalities + join order.-> PL
+    PROF[profiler]:::side -.optional trace.-> CG
+
     classDef stage fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
     classDef tail fill:#fff3e0,stroke:#e65100,stroke-width:2px
     classDef edge fill:#f5f5f5,stroke:#616161
+    classDef side fill:#fff8e1,stroke:#a80,stroke-dasharray:3 3
 ```
 
-Every stage above links to its README:
+Five **sequential** pipeline stages, plus three **support** modules
+(catalog and optimizer are consulted *inside* the planner; profiler is fed
+*inside* codegen):
 
 | # | Stage | What it does | README |
 |---|---|---|---|
 | 1 | **parser**       | Pest grammar → typed AST; resolves `.include` directives at the text level. | [parser/](crates/flowlog-build/src/parser/README.md) |
 | 2 | **typechecker**  | Reject ill-typed programs; **pin** every polymorphic literal to a concrete width. | [typechecker/](crates/flowlog-build/src/typechecker/README.md) |
 | 3 | **stratifier**   | SCC-based scheduling; loop/fixpoint blocks become hard barriers. | [stratifier/](crates/flowlog-build/src/stratifier/README.md) |
-| 4 | **catalog**      | Per-rule metadata (signatures, supersets, filters) + range-restriction check. | [catalog/](crates/flowlog-build/src/catalog/README.md) |
-| 5 | **optimizer**    | EDB cardinalities + per-rule plan tree (today: left-deep, source order). | [optimizer/](crates/flowlog-build/src/optimizer/README.md) |
-| 6 | **planner**      | Per-rule pipeline (`prepare → SIP* → core → fuse → post`) plus stratum-level dedup, recursive/non-recursive split, and aggregation metadata. | [planner/](crates/flowlog-build/src/planner/README.md) |
-| 7 | **codegen**      | Emit Timely + DD operator chains as `CodeParts` token streams. | [codegen/](crates/flowlog-build/src/codegen/README.md) |
-| — | *foundation*     | Source spans, diagnostics, `Config`, fingerprints — used by every stage. | [common/](crates/flowlog-build/src/common/README.md) |
-| — | *side-channel*   | Optional operator-level profiling. Build-time predictions + run-time logs. | [profiler/](crates/flowlog-build/src/profiler/README.md) |
+| 4 | **planner**      | Per-rule pipeline (`prepare → SIP* → core → fuse → post`) plus stratum-level dedup, recursive/non-recursive split, and aggregation metadata. Builds a `Catalog` per rule and consults the `Optimizer` for join order. | [planner/](crates/flowlog-build/src/planner/README.md) |
+| 5 | **codegen**      | Emit Timely + DD operator chains as `CodeParts` token streams. | [codegen/](crates/flowlog-build/src/codegen/README.md) |
+| — | *catalog*        | Per-rule metadata (signatures, supersets, filters) + range-restriction check. Built per-rule by the planner. | [catalog/](crates/flowlog-build/src/catalog/README.md) |
+| — | *optimizer*      | EDB cardinalities + per-rule plan tree (today: left-deep, source order). Consulted by the planner's core phase. | [optimizer/](crates/flowlog-build/src/optimizer/README.md) |
+| — | *profiler*       | Optional operator-level profiling. Build-time predictions + run-time logs. **Datalog modes only — panics under `extend-batch` / `extend-inc`.** | [profiler/](crates/flowlog-build/src/profiler/README.md) |
+| — | *common*         | Source spans, diagnostics, `Config`, fingerprints — used by every stage. | [common/](crates/flowlog-build/src/common/README.md) |
 
 After codegen there are **two output paths** that share the same `CodeParts`:
 
@@ -59,17 +62,20 @@ state types used by incremental drivers.
 
 The compile pipeline above runs once and produces code parameterised on:
 
-|            | **Batch** *(run once)*                    | **Incremental** *(maintain across commits)* |
-|------------|-------------------------------------------|----------------------------------------------|
-| **Datalog**     | `datalog-batch` *(default)*               | `datalog-inc`                                |
-| **Extended**\*  | `extend-batch`                            | `extend-inc`                                 |
+|              | **Batch** *(run once, return)*   | **Incremental** *(maintain across commits)* |
+|--------------|----------------------------------|----------------------------------------------|
+| **Datalog**  | `datalog-batch` *(default)* ✅   | `datalog-inc` ✅                              |
+| **Extended**\* | `extend-batch` 🚧 *(partial)*  | `extend-inc` 🚧 *(experimental)*              |
 
 \* Extended adds explicit `loop { … }` / `fixpoint { … }` blocks for
-fine-grained control over recursion. In Extended mode any recursive dependency
-*outside* such a block is a hard error (see [stratifier/README](crates/flowlog-build/src/stratifier/README.md)).
+fine-grained control over recursion. **Status today:** the parser, planner
+and codegen accept extended-mode programs and `tests/unit/extend-batch/` has
+six fixtures; `extend-inc` has the codegen plumbing but no test fixtures yet
+(`tests/unit/extend-inc/` doesn't exist), and `--profile` panics with
+`unimplemented!` under either extended mode.
 
 The choice flows through `Config::mode` to several stages — most visibly:
-- the **stratifier** rejects non-loop recursion under Extended mode;
+- the **stratifier** rejects non-loop recursion under Extended mode (`StratifyError::RecursionOutsideLoop`);
 - **codegen** picks `Diff = Present` for `datalog-batch` and `Diff = i32` everywhere else;
 - **codegen** wraps recursive strata in `.iterate(...)` (batch) or `Variable`-scoped logic (incremental);
 - the two **build** assemblers (`engine/batch.rs`, `engine/incremental.rs`) emit
@@ -81,16 +87,18 @@ The choice flows through `Config::mode` to several stages — most visibly:
 The arrows in the pipeline carry *data*; here's what each looks like.
 
 ```
-                                             pinned to concrete       arranged into shared
-   raw text         AST tree                 widths (no Int(_),       DD arrangements,
-   .dl + facts      with Spans               no Float(_) left)        deduplicated
-       │                │                          │                         │
-       ▼                ▼                          ▼                         ▼
-       parser ───── typechecker ──── stratifier ── catalog ── optimizer ── planner ── codegen
-                                          │           │           │            │
-                                          ▼           ▼           ▼            ▼
-                                    SCC-grouped    per-rule    join-tuple    Vec<Transformation>
-                                    rules          metadata    choices       (the DD-ish IR)
+                                            pinned to                  per-rule Catalogs +
+   raw text          AST tree               concrete widths            optimizer-chosen joins
+   .dl + facts       with Spans             (no Int(_), Float(_))      live INSIDE the planner
+       │                 │                          │                            │
+       ▼                 ▼                          ▼                            ▼
+       parser ────► typechecker ─────► stratifier ─────────► planner ──────► codegen
+                                            │                   │
+                                            ▼                   ▼
+                                   Vec<Vec<&FlowLogRule>>   Vec<Transformation>
+                                   (topo strata,            (the DD-ish IR;
+                                    recursive flagged)       fingerprints enable
+                                                             arrangement sharing)
 ```
 
 A single fingerprint (`u64`, see [common/](crates/flowlog-build/src/common/README.md))
@@ -149,20 +157,18 @@ pipeline in order. Each step ≈ 5–10 minutes:
    the **pin** mechanic is small but important.
 3. [`stratifier/README.md`](crates/flowlog-build/src/stratifier/README.md) —
    what makes a stratum recursive, and how loop blocks force the issue.
-4. [`catalog/README.md`](crates/flowlog-build/src/catalog/README.md) — the
-   metadata vocabulary the planner depends on.
-5. [`optimizer/README.md`](crates/flowlog-build/src/optimizer/README.md) —
-   short stub today; read for the data model only.
-6. [`planner/README.md`](crates/flowlog-build/src/planner/README.md) — the
+4. [`planner/README.md`](crates/flowlog-build/src/planner/README.md) — the
    biggest module; covers the `Transformation` IR and the per-rule
    `prepare → SIP → core → fuse → post` pipeline plus the stratum-level
-   `materialize + dedup` phase.
-7. [`codegen/README.md`](crates/flowlog-build/src/codegen/README.md) — how the
+   `materialize + dedup` phase. Reference [`catalog/README.md`](crates/flowlog-build/src/catalog/README.md)
+   and [`optimizer/README.md`](crates/flowlog-build/src/optimizer/README.md)
+   alongside as needed — they're the helpers the planner consults.
+5. [`codegen/README.md`](crates/flowlog-build/src/codegen/README.md) — how the
    IR becomes Rust + Timely + DD code.
-8. Pick **one** of [`build/`](crates/flowlog-build/src/build/README.md) (library
+6. Pick **one** of [`build/`](crates/flowlog-build/src/build/README.md) (library
    mode) or [`flowlog-compiler/`](crates/flowlog-compiler/README.md) (binary
    mode) depending on which output you care about — they share most ideas.
-9. [`common/README.md`](crates/flowlog-build/src/common/README.md) and
+7. [`common/README.md`](crates/flowlog-build/src/common/README.md) and
    [`profiler/README.md`](crates/flowlog-build/src/profiler/README.md) when
    you need them — both are "look up" rather than "read first".
 
