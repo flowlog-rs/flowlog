@@ -591,6 +591,12 @@ run_compiler() {
         cp "$median_log" "$best_log"
         cp "${median_log}.rss" "${best_log}.rss" 2>/dev/null || true
         echo "$median_rss" > "${best_log}.median_rss_kb"
+        # Cheap cross-validation hook: extract per-relation sizes from
+        # the median log (FlowLog compiler emits "[size][<rel>] t=() size=N")
+        # so they can be diff'd against Souffle's own .printsize output.
+        grep -oE '\[size\]\[[^]]+\] t=\(\) size=[0-9]+' "$median_log" 2>/dev/null \
+            | sed -E 's/^\[size\]\[([^]]+)\] t=\(\) size=([0-9]+)$/\1\t\2/' \
+            > "${best_log}.sizes" 2>/dev/null
         log "$GREEN" "DONE" \
             "Compiler:  $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
     else
@@ -777,6 +783,8 @@ run_souffle() {
 
     local entries=""
     local rss_values=""
+    local sizes_sidecar="${best_log}.sizes"
+    : > "$sizes_sidecar"
     for run in $(seq 1 "$NUM_RUNS"); do
         local run_log="${LOG_DIR}/${stem}_${dataset_name}_souffle_run${run}.log"
         local rss_log="${run_log}.rss"
@@ -795,6 +803,29 @@ run_souffle() {
                 continue
             }
         t_end=$(date +%s.%N)
+
+        # Cheap cross-validation hook: record one row per output relation
+        # ("<lowercased_name> <count>") to the sizes sidecar while we still
+        # have the produced .csv files in $out_dir. Only need to capture this
+        # once per pair (re-runs are deterministic), so populate on first
+        # successful run only. .printsize relations don't write CSVs in
+        # Souffle, so we also pick up their sizes from the run log
+        # ("RelationName\tN" lines) as a fallback.
+        if [[ ! -s "$sizes_sidecar" ]]; then
+            for csv in "$out_dir"/*.csv; do
+                [[ -f "$csv" ]] || continue
+                local rel=$(basename "$csv" .csv)
+                local rows=$(wc -l < "$csv")
+                printf '%s\t%s\n' "${rel,,}" "$rows" >> "$sizes_sidecar"
+            done
+            # Souffle .printsize lines: "RelationName\tN" on stdout (no path).
+            grep -E '^[A-Za-z][A-Za-z0-9_]*\s+[0-9]+$' "$run_log" 2>/dev/null \
+                | awk -v IGNORECASE=1 '{ printf "%s\t%s\n", tolower($1), $2 }' \
+                >> "$sizes_sidecar"
+            # De-dup: prefer one entry per relation.
+            sort -u -k1,1 -o "$sizes_sidecar" "$sizes_sidecar" 2>/dev/null || true
+        fi
+
         rm -rf "$out_dir"
 
         local t r
@@ -842,7 +873,49 @@ run_souffle() {
 #
 # Memory columns sit at the end so existing CSV consumers (groomer carve /
 # dashboards) keep working unchanged when they ignore unknown trailing columns.
-CSV_HEADER="Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup,Lib_Exec,Lib_vs_Interp_Exec,Lib_vs_Compiler_Exec,Interp_PeakRss_MB,Compiler_PeakRss_MB,Lib_PeakRss_MB,Lib_vs_Compiler_Mem,Souffle_Total,Souffle_PeakRss_MB,Souffle_vs_Compiler_Total"
+CSV_HEADER="Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup,Lib_Exec,Lib_vs_Interp_Exec,Lib_vs_Compiler_Exec,Interp_PeakRss_MB,Compiler_PeakRss_MB,Lib_PeakRss_MB,Lib_vs_Compiler_Mem,Souffle_Total,Souffle_PeakRss_MB,Souffle_vs_Compiler_Total,Crosscheck_Souffle"
+
+# Cross-validate compiler-vs-Souffle row counts.
+#
+# Both engines write a `<best_log>.sizes` sidecar with one
+# `<lowercased_relation>\t<count>` line per output relation; FlowLog's
+# is parsed from "[size][rel] t=() size=N" log lines (run_compiler),
+# Souffle's from the per-relation .csv files plus .printsize lines in
+# its run log (run_souffle).
+#
+# A pair passes when, for every relation present in BOTH sidecars, the
+# counts match. Returns one of:
+#   "match"    — every shared relation has equal counts
+#   "MISMATCH:<rel>=<flowlog>vs<souffle>(+more)" — first divergence(s)
+#   "n/a"      — one or both sidecars empty (e.g. --baseline did not
+#                include souffle, or the program lacks a canonical
+#                Souffle .dl). The cell is the literal string "n/a".
+crosscheck_compiler_vs_souffle() {
+    local comp_sizes="$1" sf_sizes="$2"
+    [[ -s "$comp_sizes" && -s "$sf_sizes" ]] || { echo "n/a"; return; }
+    python3 - "$comp_sizes" "$sf_sizes" <<'PY'
+import sys
+def load(path):
+    out = {}
+    for line in open(path):
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            out[parts[0].lower()] = int(parts[1])
+    return out
+fl, sf = load(sys.argv[1]), load(sys.argv[2])
+shared = set(fl) & set(sf)
+if not shared:
+    print("n/a")
+    sys.exit(0)
+mismatches = [(r, fl[r], sf[r]) for r in sorted(shared) if fl[r] != sf[r]]
+if not mismatches:
+    print(f"match({len(shared)})")
+else:
+    head = ";".join(f"{r}={fl[r]}vs{sf[r]}" for r, _, _ in mismatches[:3])
+    suffix = f"+{len(mismatches)-3}more" if len(mismatches) > 3 else ""
+    print(f"MISMATCH:{head}{suffix}")
+PY
+}
 
 # Write the CSV header if the file is missing or empty. Preserves existing
 # rows so a killed run can resume without losing completed pairs. Lib only
@@ -909,7 +982,22 @@ append_csv_row() {
         sf_vs_comp_total=$(raw_speedup "$sf_total" "$c_total")
     fi
 
-    echo "${stem},${dataset},${i_load},${c_load},${rs_load},${i_exec},${c_exec},${rs_exec},${i_total},${c_total},${rs_total},${l_exec},${lib_vs_interp},${lib_vs_comp},${i_rss_mb},${c_rss_mb},${l_rss_mb},${lib_vs_comp_mem},${sf_total},${sf_rss_mb},${sf_vs_comp_total}" \
+    # Cross-check compiler vs Souffle on per-relation row counts. Free
+    # because both engines already wrote a `.sizes` sidecar this pair.
+    # Reports "match(N)" when every shared relation agrees, "MISMATCH:..."
+    # with the first divergent relations on disagreement, "n/a" when one
+    # side is missing (no souffle baseline run, or no canonical .dl).
+    local crosscheck="n/a"
+    if [[ "$sf_total" != "N/A" ]]; then
+        crosscheck=$(crosscheck_compiler_vs_souffle "${comp_log}.sizes" "${sf_log}.sizes")
+        if [[ "$crosscheck" == match* ]]; then
+            log "$GREEN" "XCHECK" "compiler vs souffle: $crosscheck"
+        elif [[ "$crosscheck" == MISMATCH* ]]; then
+            log "$RED" "XCHECK" "compiler vs souffle: $crosscheck"
+        fi
+    fi
+
+    echo "${stem},${dataset},${i_load},${c_load},${rs_load},${i_exec},${c_exec},${rs_exec},${i_total},${c_total},${rs_total},${l_exec},${lib_vs_interp},${lib_vs_comp},${i_rss_mb},${c_rss_mb},${l_rss_mb},${lib_vs_comp_mem},${sf_total},${sf_rss_mb},${sf_vs_comp_total},${crosscheck}" \
         >> "$CSV_FILE"
 
     log "$GREEN" "CSV" "Appended ${stem}_${dataset} to $CSV_FILE"
