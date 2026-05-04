@@ -10,8 +10,7 @@ use quote::{format_ident, quote};
 
 use crate::parser::{AggregationOperator, DataType};
 
-use crate::codegen::tuple_tokens;
-use crate::codegen::CodegenError;
+use crate::codegen::{CodegenError, tuple_tokens};
 
 // ==================================================
 // Semiring constructor helpers

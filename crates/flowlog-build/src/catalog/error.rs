@@ -3,9 +3,11 @@
 use std::fmt;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use crate::common::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
-use crate::common::{FileId, Span};
 use thiserror::Error;
+
+use crate::common::{
+    BUG_URL, Diagnostic, FileId, InternalError, Span, primary_label, secondary_label,
+};
 
 /// Which body predicate carried an unsafe variable. Only affects the
 /// rendered wording; all three kinds share the same range-restriction rule.
@@ -62,17 +64,17 @@ impl Diagnostic for CatalogError {
                 var,
                 ..
             } => {
-                let mut label_vec = Vec::new();
+                let mut labels = Vec::new();
                 if let Some(l) = primary_label(*predicate_span) {
-                    label_vec
+                    labels
                         .push(l.with_message(format!("`{var}` is never bound in a positive atom")));
                 }
                 if let Some(l) = secondary_label(*rule_span) {
-                    label_vec.push(l.with_message("in this rule"));
+                    labels.push(l.with_message("in this rule"));
                 }
                 CsDiagnostic::error()
                     .with_message(self.to_string())
-                    .with_labels(label_vec)
+                    .with_labels(labels)
                     .with_notes(vec![
                         "every variable in a body predicate must also appear in a \
                          positive atom, so the set of tuples it ranges over is finite"
