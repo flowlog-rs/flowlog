@@ -9,7 +9,7 @@
 <p align="center">
   <a href="#tldr">TL;DR</a> •
   <a href="#quick-start">Quick Start</a> •
-  <a href="#architecture">Architecture</a> •
+  <a href="ARCHITECTURE.md">Architecture</a> •
   <a href="#cli">CLI</a> •
   <a href="#tests">Tests</a> •
   <a href="https://www.vldb.org/pvldb/vol19/p361-zhao.pdf">Paper</a>
@@ -101,7 +101,7 @@ The repository is a small Cargo workspace of three crates plus example programs 
 | **`flowlog-compiler`** | The standalone `flowlog-compiler` binary — calls into `flowlog-build`, then scaffolds and `cargo build`s a self-contained executable. |
 | **`flowlog-runtime`** | Tiny runtime consumed by generated code: string interning, file IO sharding, sort/merge helpers, and incremental-transaction state. |
 
-Each module under `flowlog-build/src/` has its own `README.md` describing purpose, design, and key types — start there when you need to understand or modify a stage.
+Each module under `flowlog-build/src/` has its own `README.md` describing purpose, design, and key types — start there when you need to understand or modify a stage. For the big-picture map of the whole pipeline (with hyperlinks to every per-module README and a stage-by-stage walkthrough), see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## CLI
 
