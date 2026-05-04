@@ -40,7 +40,7 @@ You write Datalog (`.dl`). FlowLog **compiles** it — through a parser, type ch
 
 ```bash
 # 1. install toolchain + helpers
-bash tools/env.sh
+bash tools/env/env.sh
 
 # 2. build the workspace
 cargo build --release
@@ -50,8 +50,11 @@ mkdir -p reach
 printf '1\n'             > reach/Source.csv
 printf '1,2\n2,3\n'      > reach/Arc.csv
 
-flowlog example/reach.dl -F reach -o reach_bin -D -   # compile
-./reach_bin -w 4                                      # run on 4 workers
+# the binary is at target/release/flowlog-compiler — alias it as `flowlog`
+# if you like, or invoke it directly:
+target/release/flowlog-compiler example/graph_analysis/reach.dl \
+    -F reach -o reach_bin -D -          # compile
+./reach_bin -w 4                        # run on 4 workers
 ```
 
 That's it. The Datalog program itself:
@@ -95,7 +98,7 @@ The repository is a small Cargo workspace of three crates plus example programs 
 | Crate | Role |
 |---|---|
 | **`flowlog-build`** | The whole pipeline as a library — used from `build.rs` to bake a Datalog program into your Rust crate. Houses `parser`, `typechecker`, `catalog`, `stratifier`, `optimizer`, `planner`, `codegen`, and `profiler` as submodules. |
-| **`flowlog-compiler`** | The standalone `flowlog` binary — calls into `flowlog-build`, then scaffolds and `cargo build`s a self-contained executable. |
+| **`flowlog-compiler`** | The standalone `flowlog-compiler` binary — calls into `flowlog-build`, then scaffolds and `cargo build`s a self-contained executable. |
 | **`flowlog-runtime`** | Tiny runtime consumed by generated code: string interning, file IO sharding, sort/merge helpers, and incremental-transaction state. |
 
 Each module under `flowlog-build/src/` has its own `README.md` describing purpose, design, and key types — start there when you need to understand or modify a stage.
@@ -103,7 +106,7 @@ Each module under `flowlog-build/src/` has its own `README.md` describing purpos
 ## CLI
 
 ```bash
-flowlog <PROGRAM> [OPTIONS]
+flowlog-compiler <PROGRAM> [OPTIONS]
 ```
 
 | Flag | Required when… | What it does |
@@ -113,26 +116,34 @@ flowlog <PROGRAM> [OPTIONS]
 | `-o <PATH>` | optional | Output executable path; defaults to the program stem (`reach.dl` → `./reach`). |
 | `-D, --output-dir <DIR>` | any `.output` is used | Where to materialize output relations. Pass `-` to print tuples to stderr instead. |
 | `--mode <MODE>` | optional | `datalog-batch` *(default)* \| `datalog-inc` \| `extend-batch` \| `extend-inc`. |
-| `-P, --profile` | optional | Enable operator-level profiling (writes `log/` next to the executable). |
+| `--sip` | optional | Enable Sideways Information Passing (push binding constraints into body atoms). |
+| `--str-intern` | optional | Intern string columns at load time for faster joins / lower memory. |
+| `-I, --include-dir <DIR>` | optional, repeatable | Extra search directory for `.include` directives. |
+| `--udf-file <PATH>` | optional | Rust source defining UDFs declared via `.extern fn`. |
+| `--save-temps` | optional | Keep the intermediate generated crate (otherwise removed after build). |
+| `-P, --profile` | optional | Enable operator-level profiling (writes `<stem>_log/` next to the executable). |
 | `-h, --help` | — | Full Clap help with examples and env vars. |
 
 ## Tests
 
-End-to-end tests live in `tests/`, organised by execution mode:
+End-to-end tests live in `tests/`. Two complementary suites:
 
-| Directory | Mode |
-|---|---|
-| `tests/datalog-batch/` | Standard batch Datalog *(default)* |
-| `tests/datalog-inc/` | Incremental Datalog |
-| `tests/extend-batch/` | Extended batch (explicit loops) |
-| `tests/extend-inc/` | Extended incremental |
+| Path | Suite | Entry point |
+|---|---|---|
+| `tests/unit/datalog-batch/`<br/>`tests/unit/datalog-inc/`<br/>`tests/unit/extend-batch/` | Per-fixture programs run end-to-end. Three categories today (no `extend-inc` fixtures yet). | `tests/unit/unit_compiler.sh` (binary mode)<br/>`tests/unit/unit_lib.sh` (library mode) |
+| `tests/complex/` | Larger programs diffed against a [Souffle](https://souffle-lang.github.io/) reference fetched from HuggingFace. | `tests/complex/datalog_batch_compiler.sh`<br/>`tests/complex/datalog_batch_lib.sh` |
+| `tests/ldbc/` | LDBC SNB queries on canonical graph datasets. | `tests/ldbc/ldbc.sh` |
 
 ```bash
-bash tests/run.sh                       # full suite
-bash tests/run.sh loop_fixpoint negation # selected tests
+# unit-level — fast, runs every fixture for every mode in <category>:
+bash tests/unit/unit_compiler.sh                  # binary-mode runner, all fixtures
+bash tests/unit/unit_lib.sh agg_avg agg_count     # library-mode runner, named fixtures
+
+# correctness vs Souffle — slow, requires network for first dataset fetch:
+bash tests/complex/datalog_batch_compiler.sh
 ```
 
-Each test directory contains `program.dl`, optional `data/` (CSV facts), `expected/` (one file per `.output` relation), and an optional `commands.txt` (incremental transcripts) / `runtime_flags`.
+Each fixture is a directory with `program.dl`, optional `data/` (CSV facts), `expected/` (one file per `.output` relation), and an optional `commands.txt` (incremental transcripts) / `runtime_flags`.
 
 ## Background Reading
 
@@ -142,4 +153,4 @@ Each test directory contains `program.dl`, optional `data/` (CSV facts), `expect
 
 ## Contributing
 
-Issues and pull requests welcome. Before submitting, please run `cargo test` and `bash tests/run.sh` and confirm both pass on your change.
+Issues and pull requests welcome. Before submitting, please run `cargo test` plus the unit-level suites (`bash tests/unit/unit_compiler.sh` and `bash tests/unit/unit_lib.sh`) and confirm both pass on your change.
