@@ -12,16 +12,14 @@ use std::path::{Path, PathBuf};
 
 use proc_macro2::TokenStream;
 
-use crate::common::BoxError;
-use crate::common::{Config, SourceMap};
+use crate::build::relation::gen_input_module;
+use crate::codegen::Features;
+use crate::common::{BoxError, Config, SourceMap};
 use crate::optimizer::Optimizer;
 use crate::parser::Program;
 use crate::planner::StratumPlanner;
 use crate::profiler::Profiler;
 use crate::stratifier::Stratifier;
-
-use crate::build::relation::gen_input_module;
-use crate::codegen::Features;
 use crate::{BuildError, Builder, CodeGen, CodeParts};
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.

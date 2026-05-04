@@ -13,9 +13,7 @@ use quote::quote;
 use crate::common::Span;
 use crate::parser::{ConstType, Relation};
 
-use crate::codegen::const_to_token;
-use crate::codegen::CodegenError;
-use crate::codegen::tuple_tokens;
+use crate::codegen::{CodegenError, const_to_token, tuple_tokens};
 use crate::data_type_tokens;
 
 use super::input_struct_ident;
