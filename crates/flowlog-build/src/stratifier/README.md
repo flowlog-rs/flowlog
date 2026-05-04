@@ -24,12 +24,13 @@ parser ──▶ typechecker ──▶ stratifier ──▶ planner ──▶ co
 ```mermaid
 flowchart TD
     PROG["Program<br/>(Vec&lt;Segment&gt;)"] --> SEG{"per Segment"}
-    SEG -->|"Plain"| DG["build dependency graph<br/>(intra-segment edges only)"]
+    SEG -->|"Plain"| DG["build dependency graph<br/>(intra-segment edges only,<br/>negation edges tracked separately)"]
     SEG -->|"Loop / Fixpoint"| FORCE["force into ONE<br/>recursive stratum<br/>+ LoopCondition"]
     DG --> SCC["Tarjan SCC<br/>+ topo sort"]
-    SCC --> CHECK{"any negation<br/>through recursion?"}
-    CHECK -->|"yes"| ERR(["StratifyError::<br/>UnstratifiableNegation"])
-    CHECK -->|"no"| EM["emit strata in topo order"]
+    SCC --> NEGCHK{"extended mode AND<br/>recursive SCC<br/>in plain rules?"}
+    NEGCHK -->|"yes"| ERR(["StratifyError::<br/>RecursionOutsideLoop"])
+    NEGCHK -->|"no"| WARN["log a warning per<br/>negation-through-recursion edge<br/>(advisory, not fatal)"]
+    WARN --> EM["emit strata in topo order"]
     FORCE --> EM
     EM --> OUT["Stratifier::stratum()<br/>= Vec&lt;Vec&lt;&amp;FlowLogRule&gt;&gt;"]
 
@@ -53,10 +54,21 @@ This is the lever the user pulls with `--mode extend-batch` / `--mode extend-inc
 
 ## Negation safety
 
-A negation edge that closes a cycle is unstratifiable (`!p :- q`, `q :- p`).
-The dependency graph tracks `negative_edges` separately so an error like
-`negation through recursion: q → ¬p → … → q` can be reported with the exact
-edge that broke things — sorted in `BTreeSet` order for deterministic output.
+A negation edge that closes a cycle is *classically* unstratifiable
+(`!p :- q`, `q :- p`). The dependency graph tracks `negative_edges`
+separately, and the stratifier currently **logs a `warn!` per such edge**
+(see `warn_negation_edges` in [`core.rs`](core.rs)) so the user sees
+`negation through recursion: q → ¬p → … → q` printed during compilation —
+sorted in `BTreeSet` order for deterministic output. It is **advisory only
+today**, not a hard error; programs with negation-through-recursion still
+compile. Tightening this into a `StratifyError` variant is a clean future
+extension.
+
+The hard errors the stratifier *does* raise are listed in
+[`error.rs`](error.rs) — most notably `RecursionOutsideLoop` (extended-mode
+plain-rule recursion), `IterativeNotInLoopHead` / `IterativeNotRecursive`
+(misused `.iterative` directive), `ForwardReference`, and the empty / malformed
+loop variants.
 
 ## Layout
 
