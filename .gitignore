@@ -12,3 +12,6 @@
 
 # Test folder
 /test
+
+# macOS Finder metadata
+.DS_Store
