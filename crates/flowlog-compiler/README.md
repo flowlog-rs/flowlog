@@ -1,82 +1,66 @@
 # flowlog-compiler
 
-The **binary-mode** front-end of FlowLog. Produces a standalone Rust executable
-from a `.dl` program. This crate is **not published** — it lives in this
-workspace and is invoked by the `flowlog` CLI.
+The **binary-mode** front-end of FlowLog. Produces a standalone Rust executable from a `.dl` program. **Not published** — it lives in this workspace and is invoked by the `flowlog-compiler` CLI.
 
-> Library mode (compile a `.dl` into your own crate from `build.rs`) is in the
-> sister crate [`flowlog-build`](../flowlog-build/). Most of the heavy lifting
-> — parser, type checker, stratifier, planner, codegen — lives there. This
-> crate only owns the **binary-specific scaffolding**.
-
-## What this crate does
+> Most of the heavy lifting lives upstream in [`flowlog-build`](../flowlog-build/) (parse → plan → codegen). This crate only owns the binary-specific scaffolding.
 
 ```mermaid
 flowchart LR
-    DL[".dl source"] --> FB["flowlog-build<br/>(parse → plan → CodeParts)"]
-    FB --> CMP["Compiler::compile"]
-    subgraph this_crate["flowlog-compiler"]
-        CMP --> EM["emit_sources<br/>(scaffold a Cargo crate)"]
-        EM --> CB["build<br/>(cargo build --release)"]
-        CB --> INST["install_binary<br/>(copy to -o &lt;path&gt;)"]
+    dl[".dl"] --> fb["flowlog-build<br/>parse → plan → CodeParts"] --> cmp[Compiler::compile]
+    subgraph this["flowlog-compiler"]
+        cmp --> em[emit_sources<br/>scaffold a Cargo crate]
+        em --> cb[build<br/>cargo build --release]
+        cb --> inst[install_binary<br/>copy to -o &lt;path&gt;]
     end
-    INST --> EXE["./your_program"]
+    inst --> exe[./your_program]
 ```
 
-`Compiler::compile` is a two-stage pipeline:
+`Compiler::compile` is two stages:
 
-1. **`emit_sources`** — call `flowlog_build::CodeGen` once, then write a
-   complete Cargo project under `Config::build_dir`:
-   ```text
-   <build_dir>/
-   ├── Cargo.toml          # rendered from Features (deps gated by what's used)
-   ├── .cargo/config.toml  # -Dwarnings so generated code stays clean
-   └── src/
-       ├── main.rs         # dataflow scope + timely::execute + drain
-       ├── relation.rs     # Relation trait + per-EDB input handlers
-       ├── cmd.rs / prompt.rs   # incremental-mode REPL only
-       ├── udf.rs          # optional, copied from --udf-file
-       └── semiring/…      # one file per semiring variant the program uses
-   ```
-2. **`build`** — shell out to `cargo build --release` in that directory, copy
-   the resulting binary to the user-requested `-o <PATH>` (appending `.exe` on
-   Windows), and remove the intermediate crate unless `--save-temps`.
+1. **`emit_sources`** — call `flowlog_build::CodeGen` once, then write a complete Cargo project under `Config::build_dir`:
 
-## Module layout
+    ```text
+    <build_dir>/
+    ├── Cargo.toml          rendered from Features (deps gated by what's used)
+    ├── .cargo/config.toml  -Dwarnings so generated code stays clean
+    └── src/
+        ├── main.rs         dataflow scope + timely::execute + drain
+        ├── relation.rs     Relation trait + per-EDB input handlers
+        ├── cmd.rs / prompt.rs   incremental-mode REPL only
+        ├── udf.rs          optional, copied from --udf-file
+        └── semiring/…      one file per semiring variant
+    ```
+
+2. **`build`** — shell out to `cargo build --release`, copy the binary to `-o <PATH>` (appending `.exe` on Windows), and remove the intermediate crate unless `--save-temps`.
+
+## Layout
 
 | Module | Role |
 |---|---|
-| `lib.rs` | `Compiler` struct + the `pub fn compile` entry point. |
-| `build.rs` | The two-stage pipeline above (`emit_sources` + `build`). |
+| `lib.rs` | `Compiler` struct + the public `compile` entry point. |
+| `build.rs` | The two-stage pipeline (`emit_sources` + `build`). |
 | `scaffold.rs` | Disk layout of the emitted crate; renders `Cargo.toml` and `.cargo/config.toml` from `Features`. |
-| `assembly/` | Final assembly of `main.rs` from the `CodeParts` token-stream bundle. Two assemblers: `batch` (run-once) and `inc` (interactive REPL). |
-| `relation.rs` | Renders `src/relation.rs` — the `Relation` trait and per-EDB `Rel{Name}` handlers (input wiring + ingest). |
-| `imports.rs` | Computes the `use` block for the emitted `main.rs` based on the program's `Features`. |
-| `io/` | Input/output binding helpers used during codegen of the binary's drain path. |
-| `main.rs` | The `flowlog-compiler` CLI itself: Clap parsing, then `Compiler::new(...).compile(...)`. |
-| `error.rs` | `CompilerError` (wraps `BoxError` + IO failures with friendly hints). |
+| `assembly/` | Final assembly of `main.rs` from `CodeParts`. Two assemblers: `batch` (run-once) and `inc` (interactive REPL). |
+| `relation.rs` | Renders `src/relation.rs` — the `Relation` trait + per-EDB `Rel{Name}` handlers. |
+| `imports.rs` | Computes the `use` block for the emitted `main.rs` based on `Features`. |
+| `io/` | I/O binding helpers used during codegen of the binary's drain path. |
+| `main.rs` | The `flowlog-compiler` CLI itself: Clap parsing → `Compiler::new(...).compile(...)`. |
+| `error.rs` | `CompilerError` — wraps `BoxError` + IO failures with friendly hints. |
 
 ## Mode matrix
 
-`assembly/` picks the right assembler based on `Config::mode()`:
+`assembly/` picks the assembler from `Config::mode()`:
 
-|              | **Batch** *(`run()` once)*  | **Incremental** *(REPL loop)* |
-|--------------|-----------------------------|--------------------------------|
-| **Datalog**  | `batch::gen_batch_main` ✅  | `inc::gen_incremental_main` ✅ |
-| **Extended** | same `batch::…` 🚧          | same `inc::…` 🚧               |
+|              | Batch *(`run()` once)*       | Incremental *(REPL loop)*       |
+|--------------|------------------------------|---------------------------------|
+| **Datalog**  | `batch::gen_batch_main` ✅   | `inc::gen_incremental_main` ✅  |
+| **Extended** | same `batch::…` 🚧           | same `inc::…` 🚧                |
 
-Extended modes share the same assembled shell as their datalog counterpart;
-the differences live upstream in the planner / codegen stages (handling of
-`loop {}` and `fixpoint {}` blocks). Extended-mode codegen is a
-**work-in-progress** — see the top-level [`README`](../../README.md#tldr) for
-which extended sub-modes have unit fixtures vs are still experimental. This
-crate itself doesn't gate on mode; whatever the upstream pipeline accepts,
-`assembly/` will assemble.
+This crate doesn't gate on mode — the partial / experimental status of extended modes lives upstream (see the [top-level README](../../README.md#what-is-it)). Whatever the upstream pipeline accepts, `assembly/` will assemble.
 
 ## Where to look first
 
-- Adding a CLI flag → `src/main.rs` (Clap struct).
+- Adding a CLI flag → `src/main.rs`.
 - Changing the emitted project layout → `src/scaffold.rs`.
-- Changing how `main.rs` is stitched together → `src/assembly/{batch,inc}.rs`.
-- Anything about *what* code is generated → upstream in
-  [`crates/flowlog-build/src/codegen/`](../flowlog-build/src/codegen/).
+- Changing `main.rs` stitching → `src/assembly/{batch,inc}.rs`.
+- *What* code is generated → upstream in [`crates/flowlog-build/src/codegen/`](../flowlog-build/src/codegen/).

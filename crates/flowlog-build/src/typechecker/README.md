@@ -1,77 +1,52 @@
 # `typechecker/` — type checking + const-type inference
 
-Runs **after** parse, **before** stratification. Single public entry point:
-`check_program(&mut Program) -> Result<(), TypeCheckError>`.
+Runs after parse, before stratify. One public entry point:
 
-```
-parser ──▶ typechecker ──▶ stratifier ──▶ planner ──▶ codegen
-            ^^^^^^^^^^^
-            you are here
+```rust
+pub fn check_program(program: &mut Program) -> Result<(), TypeCheckError>;
 ```
 
 ## Two jobs in one pass
 
 ```mermaid
 flowchart LR
-    AST["Program<br/>(literals may be<br/>ConstType::Int(_), Float(_))"] --> CHK
-    CHK[["Job 1: CHECK<br/>reject programs whose<br/>types don't line up"]] -->|ok| PIN
-    PIN[["Job 2: PIN<br/>rewrite every polymorphic<br/>literal in place"]]
-    PIN --> OUT["Program<br/>(every ConstType is concrete:<br/>Int32(5), Float64(0.5), …)"]
-    CHK -.fail.-> ERR["TypeCheckError<br/>(span-anchored)"]
-
-    classDef job fill:#e3f2fd,stroke:#039
-    class CHK,PIN job
+    in["Program<br/>(Int(_), Float(_)<br/>literals)"] --> chk[Job 1: CHECK]
+    chk -->|ok| pin[Job 2: PIN]
+    pin --> out["Program<br/>(every literal concrete)"]
+    chk -.fail.-> err[TypeCheckError]
 ```
 
-After `Ok(())`, **no polymorphic literal survives anywhere in the program** —
-catalog, planner, and codegen can call `data_type()` unconditionally. Spans
-come from the AST so diagnostics point at the offending expression, not the
-enclosing rule.
+After `Ok(())`, no polymorphic literal survives — catalog, planner and codegen call `data_type()` unconditionally. Spans come from the AST, so diagnostics point at the offending expression.
 
-## Walk
+For each segment → each rule (incl. inside `loop`/`fixpoint`) → each fact:
 
-For each segment → each rule (and each rule inside a `loop`/`fixpoint` block) →
-each fact:
+1. Bind variable types from positive-atom columns against `.decl`.
+2. Check every body site (atoms, arithmetic, comparisons, UDF calls, aggregations).
+3. **Pin** each `ConstType::Int(_)` / `Float(_)` to the concrete type from context, via `ConstType::pin`.
+4. Check head arity and per-column types against `.decl`.
 
-1. Bind variable types from **positive-atom columns** against the relation's
-   `.decl` (`DeclTypes`).
-2. Visit every body site (atoms, arithmetic, comparisons, UDF calls,
-   aggregations) and check it against that binding map.
-3. **Pin** each `ConstType::Int(_)` / `Float(_)` placeholder to the concrete
-   type derived from its surrounding context (via `ConstType::pin`).
-4. Visit the head and check head arity + per-column types against the
-   relation's `.decl`.
-
-## What we reject
+## What gets rejected
 
 | Category | Example |
 |---|---|
-| Conflicting variable types | `A(x, _), B(x, _)` where `A`/`B` disagree on column 0 |
-| Mixed concrete arithmetic | `Int32 + Float64`, `x = s` where `x: Int32`, `s: String` |
-| Operator/type mismatch | `+ - * / %` on `Bool`/`String`, `cat` on non-string, `< >` on `Bool` |
-| Constant-family clash | `5.0` into `Int32`, `"x"` into `Bool` |
-| UDF errors | undeclared name, wrong arity, arg of wrong family |
-| Aggregation errors | `sum`/`avg`/`min`/`max` over non-numeric input, output type contradicting op |
+| Conflicting variable types | `A(x, _), B(x, _)` where columns disagree |
+| Mixed concrete arithmetic | `Int32 + Float64`; `x = s` where `x: Int32`, `s: String` |
+| Operator/type mismatch | `+ - * / %` on `Bool`/`String`; `cat` on non-string; `< >` on `Bool` |
+| Constant-family clash | `5.0` into `Int32`; `"x"` into `Bool` |
+| UDF errors | undeclared, wrong arity, arg of wrong family |
+| Aggregation errors | `sum`/`avg`/`min`/`max` on non-numeric; declared output ≠ op |
 | Head mismatch | head arity or column type ≠ relation `.decl` |
 
-## What we allow (deliberately)
+## What we deliberately allow
 
-- **Integer width is contextual.** `5` matches any `Int8…UInt64` column;
-  context fixes the width and `pin` writes it back.
-- **Float width is contextual.** Same pattern for `Float32`/`Float64`.
-- **No range checking.** `300` into `UInt8` passes here and is caught later
-  by `rustc` on the generated code.
-- **Unbound variables in negated atoms / comparisons / UDF calls** — those are
-  reported by the *range-restriction* pass, not here.
+- **Contextual integer width.** `5` matches any `Int8…UInt64` column; `pin` writes back the concrete width.
+- **Contextual float width.** Same idea for `Float32`/`Float64`.
+- **No range checking.** `300` into `UInt8` passes here; `rustc` catches it on the generated code.
+- **Unbound variables in negated atoms / comparisons / UDF calls.** Reported by the range-restriction pass in [`catalog/`](../catalog/), not here.
 
 ## Layout
 
 | File | Holds |
 |---|---|
-| `mod.rs` | `check_program`, `check_rule`, `check_and_pin_facts`, the type-binding map. |
-| `error.rs` | `TypeCheckError` — every variant carries a `Span`, plus the conflicting types where applicable. |
-
-This module has no submodules — the whole pass is short enough to live in
-`mod.rs`. If it grows, candidates for splitting are: variable-binding,
-expression checking (atoms/arith/compare), aggregation checking, head
-checking, and fact pinning.
+| [`mod.rs`](mod.rs) | `check_program`, `check_rule`, `check_and_pin_facts`. |
+| [`error.rs`](error.rs) | `TypeCheckError` — every variant carries a `Span`. |
