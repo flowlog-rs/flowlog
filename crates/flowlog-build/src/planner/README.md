@@ -16,24 +16,34 @@ parser ──▶ typechecker ──▶ stratifier ──▶ catalog ──▶ op
 ```mermaid
 flowchart TD
     STRATA["Stratifier output<br/>Vec&lt;Vec&lt;FlowLogRule&gt;&gt;"] --> SP
-    SP[["StratumPlanner<br/>(per stratum)"]] -->|"per rule"| RP
-    RP[["RulePlanner<br/>4 phases"]] --> P1["1. prepare<br/>local filters,<br/>(anti-)semijoins,<br/>comparison pushdown"]
-    P1 --> P2["2. core<br/>join two positive atoms,<br/>then fixed-point of<br/>semijoin/projection"]
-    P2 --> P3["3. fuse<br/>merge KV→KV maps,<br/>propagate layout upstream"]
-    P3 --> P4["4. post<br/>align output to rule head<br/>(vars + arithmetic)"]
-    P4 --> TXS["Vec&lt;Transformation&gt;<br/>(per rule)"]
-    TXS --> SP
-    SP --> OUT["StratumPlanner<br/>(deduplicated +<br/>recursive/non-recursive split +<br/>aggregation metadata)"]
+    SP[["StratumPlanner<br/>(per stratum, 6 phases)"]] -->|"per rule"| RP
+    RP[["RulePlanner<br/>per-rule phases"]] --> P1["Phase 1: prepare<br/>local filters,<br/>(anti-)semijoins,<br/>comparison pushdown"]
+    P1 --> P2{"Phase 2: SIP<br/>(only if<br/>config.sip_enabled())"}
+    P2 -->|"on"| SIP["push binding constraints<br/>from heads into bodies"]
+    P2 -->|"off"| P3
+    SIP --> P3
+    P3["Phase 3: core<br/>join two positive atoms,<br/>then fixed-point of<br/>semijoin/projection"] --> P4
+    P4["Phase 4: fuse<br/>merge KV→KV maps,<br/>propagate layout upstream"] --> P5
+    P5["Phase 5: post<br/>align output to rule head<br/>(vars + arithmetic)"] --> TXS
+    TXS["Vec&lt;Transformation&gt;<br/>(per rule)"] --> SP
+    SP --> P6["Phase 6: materialize<br/>+ dedup across rules<br/>+ recursive/non-recursive split<br/>+ aggregation metadata"]
+    P6 --> OUT["StratumPlanner<br/>(populated)"]
 
     classDef phase fill:#e8f5e9,stroke:#2e7d32
-    class P1,P2,P3,P4 phase
+    class P1,P3,P4,P5,P6 phase
+    classDef cond fill:#fff8e1,stroke:#a80
+    class P2,SIP cond
 ```
 
-`StratumPlanner` owns multiple `RulePlanner`s. After every rule plans
-independently, the stratum planner **deduplicates** transformations across
-rules (DD's job is easier when shared sub-plans are shared) and **separates
-EDB-only work from IDB-dependent work** so the recursive part of a stratum
-runs inside a `Variable` / `iterate` and the non-recursive part runs outside.
+`StratumPlanner` owns multiple `RulePlanner`s. Phases 1–5 run **per rule**;
+Phase 2 (SIP) is conditional on `config.sip_enabled()`. The internal
+`RulePlanner` rustdoc names only four phases (prepare/core/fuse/post) because
+SIP is invoked separately by the orchestrator. Phase 6 happens **once at the
+stratum level**: after every rule plans independently, the stratum planner
+**deduplicates** transformations across rules (DD's job is easier when shared
+sub-plans are shared), **separates EDB-only work from IDB-dependent work** so
+the recursive part of a stratum runs inside a `Variable` / `iterate` and the
+non-recursive part runs outside, and records aggregation metadata for codegen.
 
 ## Transformation alphabet
 
