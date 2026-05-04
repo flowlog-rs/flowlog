@@ -426,7 +426,7 @@ collect_times() {
 
 # Print a per-pair summary block to the console.
 print_pair_summary() {
-    local label="$1" interp_log="$2" comp_log="$3" lib_log="$4"
+    local label="$1" interp_log="$2" comp_log="$3" lib_log="$4" sf_log="${5:-}"
 
     read -r i_total i_load i_exec <<< "$(collect_times "$interp_log")"
     read -r c_total c_load c_exec <<< "$(collect_times "$comp_log")"
@@ -438,6 +438,12 @@ print_pair_summary() {
     c_rss_mb=$(fmt_rss_mb "$(cat "${comp_log}.median_rss_kb"   2>/dev/null || echo)")
     l_rss_mb=$(fmt_rss_mb "$(cat "${lib_log}.median_rss_kb"    2>/dev/null || echo)")
 
+    local sf_total="" sf_rss_mb=""
+    if [[ -n "$sf_log" && -s "${sf_log}.median_total_s" ]]; then
+        sf_total=$(cat "${sf_log}.median_total_s")
+        sf_rss_mb=$(fmt_rss_mb "$(cat "${sf_log}.median_rss_kb" 2>/dev/null || echo)")
+    fi
+
     echo "----------------------------------------"
     log "$GREEN" "RESULT" "$label"
     log "$GREEN" "  LOAD" \
@@ -448,6 +454,10 @@ print_pair_summary() {
         "Interpreter=${i_total}s  Compiler=${c_total}s  Speedup=$(fmt_speedup "$i_total" "$c_total")"
     log "$GREEN" "   MEM" \
         "Interpreter=${i_rss_mb}MB  Compiler=${c_rss_mb}MB  Lib=${l_rss_mb}MB  Lib/Compiler=$(fmt_speedup "$c_rss_mb" "$l_rss_mb")"
+    if [[ -n "$sf_total" ]]; then
+        log "$GREEN" "SOUFFLE" \
+            "Total=${sf_total}s  PeakRss=${sf_rss_mb}MB  Souffle/Compiler=$(fmt_speedup "$sf_total" "$c_total")"
+    fi
     echo "----------------------------------------"
 }
 
@@ -1040,7 +1050,7 @@ main() {
             log "$YELLOW" "SKIP" "Souffle: $PROG_NAME + $DATASET_NAME (per [souffle:skip] tag)"
         fi
 
-        print_pair_summary "$lbl" "$interp_log" "$comp_log" "$lib_log"
+        print_pair_summary "$lbl" "$interp_log" "$comp_log" "$lib_log" "$sf_log"
 
         # Append this pair's results to CSV incrementally.
         append_csv_row "$display_stem" "$DATASET_NAME" "$interp_log" "$comp_log" "$lib_log" "$sf_log"
