@@ -4,7 +4,6 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::CodeGen;
-
 use crate::parser::DataType;
 use crate::profiler::{with_profiler, Profiler};
 
@@ -33,8 +32,8 @@ impl CodeGen {
         }
 
         if edbs.iter().any(|rel| {
-            rel.data_type().contains(&DataType::Float32)
-                || rel.data_type().contains(&DataType::Float64)
+            let dt = rel.data_type();
+            dt.contains(&DataType::Float32) || dt.contains(&DataType::Float64)
         }) {
             self.features.mark_ordered_float();
         }

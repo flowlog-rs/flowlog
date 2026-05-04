@@ -426,12 +426,9 @@ impl Catalog {
     ) -> Result<(), CatalogError> {
         let mut new_rhs = self.rule.rhs().to_vec();
 
-        global_rhs_indices_to_update
-            .iter()
-            .enumerate()
-            .for_each(|(i, idx)| {
-                new_rhs[*idx] = new_predicates[i].clone();
-            });
+        for (idx, pred) in global_rhs_indices_to_update.into_iter().zip(new_predicates) {
+            new_rhs[idx] = pred;
+        }
         new_rhs.remove(global_rhs_index_to_remove);
 
         let new_rule = FlowLogRule::new(self.rule.head().clone(), new_rhs);

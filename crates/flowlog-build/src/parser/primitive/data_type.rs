@@ -51,19 +51,7 @@ pub enum DataType {
 impl DataType {
     /// Returns `true` for all integer and floating-point types.
     pub(crate) fn is_numeric(&self) -> bool {
-        matches!(
-            self,
-            Self::Int8
-                | Self::Int16
-                | Self::Int32
-                | Self::Int64
-                | Self::UInt8
-                | Self::UInt16
-                | Self::UInt32
-                | Self::UInt64
-                | Self::Float32
-                | Self::Float64
-        )
+        self.is_integer() || self.is_float()
     }
 
     /// Returns `true` for integer types only (excludes floats, strings, bools).

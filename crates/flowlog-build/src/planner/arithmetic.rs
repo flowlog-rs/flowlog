@@ -75,9 +75,9 @@ impl ArithmeticArgument {
         ) -> FactorArgument {
             match factor {
                 FactorPos::Var(_) => {
-                    let var_signature = &var_arguments[*var_id];
+                    let var = var_arguments[*var_id];
                     *var_id += 1;
-                    FactorArgument::Var(*var_signature)
+                    FactorArgument::Var(var)
                 }
                 FactorPos::Const(constant) => FactorArgument::Const(constant.clone()),
                 FactorPos::FnCall { name, args } => {

@@ -196,10 +196,7 @@ impl RulePlanner {
 
         for tx_fp in tx_fps {
             // Copy out the producer index and current consumers (if any), then mutate
-            let Some((producer_indices, consumers)) = self
-                .producer_consumer
-                .get(&tx_fp)
-                .map(|(p, c)| (p.clone(), c.clone()))
+            let Some((producer_indices, consumers)) = self.producer_consumer.get(&tx_fp).cloned()
             else {
                 // No producer found - likely an original atom; ignore
                 continue;
@@ -307,16 +304,11 @@ impl RulePlanner {
     // Collect all output positions (keys + values) from an upstream transformation.
     #[inline]
     fn collect_output_positions(&self, producer_idx: usize) -> Vec<ArithmeticPos> {
-        self.transformation_infos[producer_idx]
-            .output_kv_layout()
+        let layout = self.transformation_infos[producer_idx].output_kv_layout();
+        layout
             .key()
             .iter()
-            .chain(
-                self.transformation_infos[producer_idx]
-                    .output_kv_layout()
-                    .value()
-                    .iter(),
-            )
+            .chain(layout.value().iter())
             .cloned()
             .collect()
     }
@@ -499,12 +491,7 @@ impl RulePlanner {
 
         // Second pass: register all consumers for each input fingerprint
         for index in 0..count {
-            let (left_fp, right_fp_opt) = {
-                let tx = &self.transformation_infos[index];
-                let (left_fp, right_fp_opt) = tx.input_info_fp();
-                (left_fp, right_fp_opt)
-            };
-
+            let (left_fp, right_fp_opt) = self.transformation_infos[index].input_info_fp();
             for input_fp in [Some(left_fp), right_fp_opt].into_iter().flatten() {
                 self.insert_consumer(original_atom_fp, input_fp, index)?;
             }

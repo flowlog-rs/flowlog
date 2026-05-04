@@ -197,9 +197,8 @@ impl CodeGen {
             });
 
             // Preserve arranged bindings for recursive paths.
-            if non_recursive_arranged_map.contains_key(fp) {
-                let entered_arr =
-                    format_ident!("in_{}", non_recursive_arranged_map.get(fp).unwrap());
+            if let Some(arranged) = non_recursive_arranged_map.get(fp) {
+                let entered_arr = format_ident!("in_{}", arranged);
                 recursive_arranged.insert(*fp, entered_arr);
             }
         }
@@ -260,23 +259,15 @@ impl CodeGen {
 
             with_profiler(profiler, |profiler| {
                 let output_name = self.find_global_ident(*idb_fp).to_string();
-                if sources.len() > 1 {
-                    profiler.concat_dedup_operator(
-                        output_name,
-                        sources.iter().map(|id| id.to_string()).collect(),
-                        next_ident.to_string(),
-                        sources.len() as u32 - 1,
-                        true,
-                    );
-                } else {
-                    profiler.concat_dedup_operator(
-                        output_name,
-                        vec![sources[0].to_string()],
-                        next_ident.to_string(),
-                        0,
-                        true,
-                    );
-                }
+                let source_names: Vec<String> = sources.iter().map(|id| id.to_string()).collect();
+                let concat_count = (sources.len() as u32).saturating_sub(1);
+                profiler.concat_dedup_operator(
+                    output_name,
+                    source_names,
+                    next_ident.to_string(),
+                    concat_count,
+                    true,
+                );
             });
 
             // ----------------------------------------------------------------

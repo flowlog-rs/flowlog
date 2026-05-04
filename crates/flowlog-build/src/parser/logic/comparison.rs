@@ -121,11 +121,9 @@ impl ComparisonExpr {
     /// Unique variables referenced on either side (deduplicated).
     #[must_use]
     pub(crate) fn vars_set(&self) -> HashSet<&String> {
-        self.left
-            .vars_set()
-            .union(&self.right.vars_set())
-            .cloned()
-            .collect()
+        let mut vars = self.left.vars_set();
+        vars.extend(self.right.vars_set());
+        vars
     }
 }
 
