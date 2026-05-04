@@ -4,9 +4,9 @@
 //! compilation unit so that downstream passes (imports, scaffold, type
 //! declarations) emit only what is required.
 
-use crate::parser::{AggregationOperator, DataType};
-
 use std::collections::HashSet;
+
+use crate::parser::{AggregationOperator, DataType};
 
 // =========================================================================
 // AggSemiringNeeds
