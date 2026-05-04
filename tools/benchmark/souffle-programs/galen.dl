@@ -1,0 +1,23 @@
+.decl OutP(X: number, Z: number)
+.decl OutQ(X: number, Y: number, Z: number)
+.decl R(R: number, P: number, E: number)
+.decl C(Y: number, Z: number, W: number)
+.decl U(R: number, Z: number, W: number)
+.decl S(R: number, P: number)
+
+.input OutP(IO="file", filename="P.csv", delimiter=",")
+.input OutQ(IO="file", filename="Q.csv", delimiter=",")
+.input R(IO="file", filename="R.csv", delimiter=",")
+.input C(IO="file", filename="C.csv", delimiter=",")
+.input U(IO="file", filename="U.csv", delimiter=",")
+.input S(IO="file", filename="S.csv", delimiter=",")
+
+OutP(?x,?z) :- OutP(?x,?y), OutP(?y,?z).
+OutQ(?x,?r,?z) :- OutP(?x,?y), OutQ(?y,?r,?z).
+OutP(?x,?z) :- OutP(?y,?w), U(?w,?r,?z), OutQ(?x,?r,?y).
+OutP(?x,?z) :- C(?y,?w,?z),OutP(?x,?w), OutP(?x,?y).
+OutQ(?x,?q,?z) :- OutQ(?x,?r,?z),S(?r,?q).
+OutQ(?x,?e,?o) :- OutQ(?x,?y,?z),R(?y,?u,?e),OutQ(?z,?u,?o).
+
+.printsize OutP
+.printsize OutQ

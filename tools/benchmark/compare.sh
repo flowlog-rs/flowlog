@@ -48,15 +48,36 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 # --fresh forces a clean run (wipes logs + CSV). Without it, the script
 # resumes: existing CSV rows are preserved, and any (program, dataset)
 # pair already present in the CSV is skipped.
+#
+# --baseline=<list> picks which extra engine(s) to time alongside the
+# compiler + library mode. Any combination of "interpreter" and "souffle"
+# is accepted (comma-separated). Default: "interpreter" (preserves the
+# original behaviour).
+#
+#   --baseline=interpreter        # default — vldb26 interpreter
+#   --baseline=souffle            # canonical Souffle programs from
+#                                 # tools/benchmark/souffle-programs/
+#   --baseline=interpreter,souffle  # both, side-by-side in the CSV
 FRESH=0
+BASELINES="interpreter"
 POSITIONAL_ARGS=()
 while (( $# )); do
     case "$1" in
-        --fresh) FRESH=1; shift ;;
-        --)      shift; POSITIONAL_ARGS+=("$@"); break ;;
-        *)       POSITIONAL_ARGS+=("$1"); shift ;;
+        --fresh)            FRESH=1; shift ;;
+        --baseline=*)       BASELINES="${1#--baseline=}"; shift ;;
+        --baseline)         BASELINES="$2"; shift 2 ;;
+        --)                 shift; POSITIONAL_ARGS+=("$@"); break ;;
+        *)                  POSITIONAL_ARGS+=("$1"); shift ;;
     esac
 done
+
+# Normalise the baseline list once.
+RUN_INTERPRETER=0
+RUN_SOUFFLE=0
+case ",$BASELINES," in *,interpreter,*) RUN_INTERPRETER=1 ;; esac
+case ",$BASELINES," in *,souffle,*)     RUN_SOUFFLE=1 ;; esac
+[[ $RUN_INTERPRETER -eq 0 && $RUN_SOUFFLE -eq 0 ]] && \
+    die "--baseline must include 'interpreter' and/or 'souffle' (got: $BASELINES)"
 
 CONFIG_FILE="${POSITIONAL_ARGS[0]:-${ROOT_DIR}/tools/benchmark/config.txt}"
 PROG_DIR="${ROOT_DIR}/example"
@@ -77,6 +98,14 @@ COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
 # pair, then run NUM_RUNS times identically to the compiler path.
 LIB_BENCH_RUNNER_DIR="${ROOT_DIR}/target/bench-lib/runner"
 LIB_BENCH_BIN="${LIB_BENCH_RUNNER_DIR}/target/release/flowlog_bench_lib"
+
+# Souffle baseline (--baseline=souffle). The canonical .dl programs come
+# from the FlowLog-Reproduction repo; we keep a vendored copy under
+# tools/benchmark/souffle-programs/ so this script is hermetic.
+# Souffle is invoked at run-time (compile + execute) — unlike L2's
+# correctness oracle which only diffs against pre-baked tarballs.
+SOUFFLE_BIN="${SOUFFLE_BIN:-/usr/bin/souffle}"
+SOUFFLE_PROG_DIR="${ROOT_DIR}/tools/benchmark/souffle-programs"
 
 DATASET_URL="https://huggingface.co/datasets/NemoYuu/flowlog_benchmark/resolve/main/dataset/csv"
 NUM_RUNS=5
@@ -99,8 +128,22 @@ trim() {
     printf '%s' "$s"
 }
 
-# Parse a config line "prog = dataset" and set PROG_NAME / DATASET_NAME.
-# Returns 1 when the line should be skipped (blank, comment, test.dl).
+# Parse a config line "prog = dataset [tag tag ...]" and set
+# PROG_NAME / DATASET_NAME / PAIR_TAGS. Returns 1 when the line should
+# be skipped (blank, comment, test.dl).
+#
+# Per-pair tags follow the dataset in square brackets; multiple tags
+# separated by whitespace. Recognised tags:
+#   [interp:skip]     — skip the interpreter run for this pair (used for
+#                       pairs the vldb26 interpreter can't or won't run:
+#                       OOM on huge graphs, missing arithmetic-head
+#                       support, …). The CSV records "N/A" for the
+#                       interpreter columns; compiler/lib still run.
+#   [souffle:skip]    — skip the Souffle run for this pair (only
+#                       relevant when --baseline=souffle).
+#
+# Tags are stored in PAIR_TAGS as a single space-separated string;
+# helpers `pair_has_tag <tag>` test for membership.
 parse_config_line() {
     local raw="$1"
 
@@ -108,6 +151,13 @@ parse_config_line() {
     local line="${raw%%#*}"
     line="$(trim "$line")"
     [[ -z "$line" ]] && return 1
+
+    # Split off any "[tag] [tag] ..." suffix from the dataset side.
+    PAIR_TAGS=""
+    if [[ "$line" =~ ^(.*[^[:space:]])[[:space:]]+(\[.*\])[[:space:]]*$ ]]; then
+        line="${BASH_REMATCH[1]}"
+        PAIR_TAGS="${BASH_REMATCH[2]}"
+    fi
 
     IFS='=' read -r PROG_NAME DATASET_NAME <<< "$line"
     PROG_NAME="$(trim "${PROG_NAME:-}")"
@@ -117,6 +167,11 @@ parse_config_line() {
     [[ "$PROG_NAME" == "test.dl" ]]              && return 1
 
     return 0
+}
+
+# Test whether the current PAIR_TAGS includes <tag>.
+pair_has_tag() {
+    [[ "${PAIR_TAGS:-}" == *"[$1]"* ]]
 }
 
 ############################################################
@@ -672,6 +727,97 @@ run_lib() {
 }
 
 ############################################################
+# SOUFFLE BASELINE
+############################################################
+
+# Sanity-check Souffle binary + that we have a canonical .dl program for
+# every pair we'd run with --baseline=souffle. Runs once at startup.
+setup_souffle() {
+    [[ -x "$SOUFFLE_BIN" ]] || die "Souffle binary not found at $SOUFFLE_BIN (apt install souffle, or set SOUFFLE_BIN)"
+    [[ -d "$SOUFFLE_PROG_DIR" ]] || die "Souffle program dir not found: $SOUFFLE_PROG_DIR"
+    log "$BLUE" "SETUP" "Souffle: $($SOUFFLE_BIN --version 2>&1 | head -1)"
+}
+
+# Run Souffle on (prog, dataset) NUM_RUNS times, keep median total exec
+# wall time + peak RSS via /usr/bin/time -v. Souffle is invoked as
+# `souffle -F <facts> -D <out> -j <workers>` on the canonical .dl from
+# tools/benchmark/souffle-programs/. Compile and run are timed together
+# as a single number — matches the "Total" column for the other engines.
+run_souffle() {
+    local prog_name="$1" dataset_name="$2"
+    local prog_file
+    prog_file="$(basename "$prog_name")"
+    local stem="${prog_file%.*}"
+
+    local sf_src="${SOUFFLE_PROG_DIR}/${stem}.dl"
+    local fact_path="${FACT_DIR}/${dataset_name}"
+    local best_log="${LOG_DIR}/${stem}_${dataset_name}_souffle.log"
+
+    if [[ ! -f "$sf_src" ]]; then
+        log "$YELLOW" "WARN" \
+            "Souffle: no canonical .dl for $stem at $sf_src — recording N/A"
+        rm -f "${best_log}.median_rss_kb"
+        : > "$best_log"
+        return 1
+    fi
+
+    log "$BLUE" "RUN" \
+        "Souffle:   $prog_file + $dataset_name (canonical, w=$WORKERS, runs=$NUM_RUNS)"
+    mkdir -p "$LOG_DIR"
+
+    local entries=""
+    local rss_values=""
+    for run in $(seq 1 "$NUM_RUNS"); do
+        local run_log="${LOG_DIR}/${stem}_${dataset_name}_souffle_run${run}.log"
+        local rss_log="${run_log}.rss"
+        local out_dir="${LOG_DIR}/sf_${stem}_${dataset_name}_run${run}"
+        mkdir -p "$out_dir"
+
+        log "$YELLOW" "RUN" "  Souffle attempt $run/$NUM_RUNS"
+        local t_start t_end
+        t_start=$(date +%s.%N)
+        "$TIME_BIN" -v -o "$rss_log" \
+            "$SOUFFLE_BIN" -F "$fact_path" -D "$out_dir" -j "$WORKERS" "$sf_src" \
+            > "$run_log" 2>&1 || {
+                log "$RED" "WARN" \
+                    "Souffle run $run failed for $prog_file + $dataset_name (see $run_log)"
+                rm -rf "$out_dir"
+                continue
+            }
+        t_end=$(date +%s.%N)
+        rm -rf "$out_dir"
+
+        local t r
+        t=$(python3 -c "print(f'{${t_end}-${t_start}:.9f}')")
+        r=$(_extract_peak_rss_kb "$rss_log")
+        log "$YELLOW" "TIME" "  Run $run: ${t}s, peak ${r} KiB"
+
+        [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries }${t}:${run_log}"
+        [[ "$r" =~ ^[0-9] ]] && rss_values="${rss_values:+$rss_values }${r}"
+    done
+
+    if [[ -n "$entries" ]]; then
+        local median_entry median_time median_log median_rss
+        median_entry=$(pick_median "$entries")
+        median_time="${median_entry%%:*}"
+        median_log="${median_entry#*:}"
+        median_rss=$(pick_median_rss "$rss_values")
+        cp "$median_log" "$best_log"
+        cp "${median_log}.rss" "${best_log}.rss" 2>/dev/null || true
+        echo "$median_rss" > "${best_log}.median_rss_kb"
+        echo "$median_time" > "${best_log}.median_total_s"
+        log "$GREEN" "DONE" \
+            "Souffle:   $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
+    else
+        log "$RED" "WARN" \
+            "Souffle: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
+        rm -f "${best_log}.median_rss_kb" "${best_log}.median_total_s"
+        : > "$best_log"
+        return 1
+    fi
+}
+
+############################################################
 # RESULT SUMMARY
 ############################################################
 
@@ -686,7 +832,7 @@ run_lib() {
 #
 # Memory columns sit at the end so existing CSV consumers (groomer carve /
 # dashboards) keep working unchanged when they ignore unknown trailing columns.
-CSV_HEADER="Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup,Lib_Exec,Lib_vs_Interp_Exec,Lib_vs_Compiler_Exec,Interp_PeakRss_MB,Compiler_PeakRss_MB,Lib_PeakRss_MB,Lib_vs_Compiler_Mem"
+CSV_HEADER="Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup,Lib_Exec,Lib_vs_Interp_Exec,Lib_vs_Compiler_Exec,Interp_PeakRss_MB,Compiler_PeakRss_MB,Lib_PeakRss_MB,Lib_vs_Compiler_Mem,Souffle_Total,Souffle_PeakRss_MB,Souffle_vs_Compiler_Total"
 
 # Write the CSV header if the file is missing or empty. Preserves existing
 # rows so a killed run can resume without losing completed pairs. Lib only
@@ -710,7 +856,7 @@ pair_already_done() {
 
 # Append one benchmark pair's results to the CSV (called after each pair).
 append_csv_row() {
-    local stem="$1" dataset="$2" interp_log="$3" comp_log="$4" lib_log="$5"
+    local stem="$1" dataset="$2" interp_log="$3" comp_log="$4" lib_log="$5" sf_log="$6"
 
     read -r i_total i_load i_exec <<< "$(collect_times "$interp_log")"
     read -r c_total c_load c_exec <<< "$(collect_times "$comp_log")"
@@ -742,7 +888,18 @@ append_csv_row() {
     l_rss_mb=$(fmt_rss_mb "$l_rss_kb")
     lib_vs_comp_mem=$(raw_speedup "$c_rss_mb" "$l_rss_mb")
 
-    echo "${stem},${dataset},${i_load},${c_load},${rs_load},${i_exec},${c_exec},${rs_exec},${i_total},${c_total},${rs_total},${l_exec},${lib_vs_interp},${lib_vs_comp},${i_rss_mb},${c_rss_mb},${l_rss_mb},${lib_vs_comp_mem}" \
+    # Souffle baseline (optional; columns are "N/A" when --baseline did
+    # not include souffle, or when the program lacks a canonical Souffle
+    # equivalent — e.g. cc / sssp).
+    local sf_total="N/A" sf_rss_mb="N/A" sf_vs_comp_total="N/A"
+    if [[ -n "${sf_log:-}" && -s "${sf_log}.median_total_s" ]]; then
+        sf_total=$(cat "${sf_log}.median_total_s")
+        local sf_rss_kb=$(cat "${sf_log}.median_rss_kb" 2>/dev/null || echo "N/A")
+        sf_rss_mb=$(fmt_rss_mb "$sf_rss_kb")
+        sf_vs_comp_total=$(raw_speedup "$sf_total" "$c_total")
+    fi
+
+    echo "${stem},${dataset},${i_load},${c_load},${rs_load},${i_exec},${c_exec},${rs_exec},${i_total},${c_total},${rs_total},${l_exec},${lib_vs_interp},${lib_vs_comp},${i_rss_mb},${c_rss_mb},${l_rss_mb},${lib_vs_comp_mem},${sf_total},${sf_rss_mb},${sf_vs_comp_total}" \
         >> "$CSV_FILE"
 
     log "$GREEN" "CSV" "Appended ${stem}_${dataset} to $CSV_FILE"
@@ -811,7 +968,8 @@ generate_results() {
 main() {
     log "$BLUE" "START" "FlowLog Version Comparison Benchmark"
     echo "  Compiler repo : $ROOT_DIR"
-    echo "  Interpreter   : $INTERPRETER_DIR"
+    echo "  Interpreter   : $INTERPRETER_DIR  (timed: $RUN_INTERPRETER)"
+    echo "  Souffle       : $SOUFFLE_BIN  (timed: $RUN_SOUFFLE)"
     echo "  Config        : $CONFIG_FILE"
     echo "  Workers       : $WORKERS"
     echo ""
@@ -819,9 +977,10 @@ main() {
     [[ -f "$CONFIG_FILE" ]] || die "Config file not found: $CONFIG_FILE"
 
     # Build all three versions.
-    setup_interpreter
+    [[ $RUN_INTERPRETER -eq 1 ]] && setup_interpreter
     setup_compiler
     setup_lib_runner
+    [[ $RUN_SOUFFLE -eq 1 ]] && setup_souffle
 
     # With --fresh, wipe logs + CSV. Without, keep both so we can resume.
     if (( FRESH )); then
@@ -846,14 +1005,10 @@ main() {
 
         echo ""
         echo "========================================"
-        log "$CYAN" "BENCH" "$PROG_NAME + $DATASET_NAME"
+        log "$CYAN" "BENCH" "$PROG_NAME + $DATASET_NAME${PAIR_TAGS:+  $PAIR_TAGS}"
         echo "========================================"
 
         setup_dataset "$DATASET_NAME"
-
-        run_interpreter "$PROG_NAME" "$DATASET_NAME" || true
-        run_compiler    "$PROG_NAME" "$DATASET_NAME" || true
-        run_lib         "$PROG_NAME" "$DATASET_NAME" || true
 
         local prog_base
         prog_base="$(basename "$PROG_NAME")"
@@ -863,11 +1018,32 @@ main() {
         local interp_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_interpreter.log"
         local comp_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_compiler.log"
         local lib_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_lib.log"
+        local sf_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_souffle.log"
+
+        # Make sure stale RSS/total sidecars from a previous run don't
+        # leak into this iteration's CSV row.
+        rm -f "${interp_log}" "${interp_log}.median_rss_kb" \
+              "${sf_log}" "${sf_log}.median_rss_kb" "${sf_log}.median_total_s"
+
+        if [[ $RUN_INTERPRETER -eq 1 ]] && ! pair_has_tag "interp:skip"; then
+            run_interpreter "$PROG_NAME" "$DATASET_NAME" || true
+        elif pair_has_tag "interp:skip"; then
+            log "$YELLOW" "SKIP" "Interpreter: $PROG_NAME + $DATASET_NAME (per [interp:skip] tag)"
+        fi
+
+        run_compiler    "$PROG_NAME" "$DATASET_NAME" || true
+        run_lib         "$PROG_NAME" "$DATASET_NAME" || true
+
+        if [[ $RUN_SOUFFLE -eq 1 ]] && ! pair_has_tag "souffle:skip"; then
+            run_souffle "$PROG_NAME" "$DATASET_NAME" || true
+        elif pair_has_tag "souffle:skip"; then
+            log "$YELLOW" "SKIP" "Souffle: $PROG_NAME + $DATASET_NAME (per [souffle:skip] tag)"
+        fi
 
         print_pair_summary "$lbl" "$interp_log" "$comp_log" "$lib_log"
 
         # Append this pair's results to CSV incrementally.
-        append_csv_row "$display_stem" "$DATASET_NAME" "$interp_log" "$comp_log" "$lib_log"
+        append_csv_row "$display_stem" "$DATASET_NAME" "$interp_log" "$comp_log" "$lib_log" "$sf_log"
 
         # Cleanup dataset to save disk space
         cleanup_dataset "$DATASET_NAME"

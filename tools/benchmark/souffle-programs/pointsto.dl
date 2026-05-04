@@ -1,0 +1,36 @@
+.decl AssignAlloc(var: number, heap: number)
+.input AssignAlloc(IO="file", filename="AssignAlloc.csv", delimiter=",")
+
+.decl PrimitiveAssign(source: number, dest: number)
+.input PrimitiveAssign(IO="file", filename="PrimitiveAssign.csv", delimiter=",")
+
+.decl Load(base: number, dest: number, field: number)
+.input Load(IO="file", filename="Load.csv", delimiter=",")
+
+.decl Store(source: number, base: number, field: number)
+.input Store(IO="file", filename="Store.csv", delimiter=",")
+
+.decl VarPointsTo(var: number, heap: number)
+.decl Alias(x: number,y: number)
+.decl Assign(source: number, destination: number)
+
+Assign(var1, var2) :- 
+  PrimitiveAssign(var1,var2). 
+
+Alias(instanceVar, iVar) :- 
+  VarPointsTo(instanceVar, instanceHeap), 
+  VarPointsTo(iVar, instanceHeap).
+
+VarPointsTo(var, heap) :-
+  AssignAlloc(var, heap). 
+
+VarPointsTo(var1, heap) :-
+  Assign(var2, var1), 
+  VarPointsTo(var2, heap).
+
+Assign(var1, var2) :- 
+  Store(var1, instanceVar2, field), 
+  Alias(instanceVar2, instanceVar1), 
+  Load(instanceVar1, var2, field).
+
+.printsize Assign
