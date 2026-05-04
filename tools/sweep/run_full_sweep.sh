@@ -51,7 +51,13 @@ SMOKE=0
 SKIP_L3=0
 INCLUDE_LDBC=0
 KEEP_GOING=0
-WORKERS="${WORKERS:-$(nproc)}"
+
+# WORKERS controls thread count for EVERY engine (interpreter / compiler /
+# library / souffle), so all baselines compete with the same parallelism.
+# Defaulting to 64 matches the VLDB paper rig (cloudlab c6525, 64 physical
+# cores) so numbers are reproducible and comparable across machines. On
+# smaller hosts override with `make sweep WORKERS=...` or `--workers N`.
+WORKERS="${WORKERS:-64}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -216,7 +222,7 @@ PY
         echo "run dir           : $RUN_DIR"
         echo "started           : $(grep '^started' "$RUN_DIR/meta.txt" | cut -d: -f2- | xargs)"
         echo "ended             : $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-        echo "WORKERS           : $WORKERS"
+        echo "WORKERS           : $WORKERS  (applied identically to every L3 engine — fairness invariant)"
         echo "smoke             : $SMOKE   skip-l3: $SKIP_L3   include-ldbc: $INCLUDE_LDBC"
         echo
 

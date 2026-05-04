@@ -15,7 +15,14 @@ set -euo pipefail
 #   bash tools/benchmark/compare.sh [config_file]
 #
 # Environment variables:
-#   WORKERS  -- number of worker threads (default: 64)
+#   WORKERS  -- number of worker threads passed to EVERY competitor in
+#              this comparison (interpreter via --workers, compiler via
+#              -w, library mode via WORKERS env, souffle via -j). One
+#              value, four engines — that's the fairness contract: all
+#              baselines get identical parallelism on identical hardware.
+#              Default: 64 (matches the VLDB paper rig). Override e.g.
+#              `WORKERS=16 bash compare.sh` to time on a smaller host;
+#              just keep it the same across runs you compare.
 # ==========================================================================
 
 ############################################################
@@ -1069,7 +1076,7 @@ main() {
     echo "  Interpreter   : $INTERPRETER_DIR  (timed: $RUN_INTERPRETER)"
     echo "  Souffle       : $SOUFFLE_BIN  (timed: $RUN_SOUFFLE)"
     echo "  Config        : $CONFIG_FILE"
-    echo "  Workers       : $WORKERS"
+    echo "  Workers       : $WORKERS  (applied identically to every engine: interp --workers, compiler -w, lib WORKERS, souffle -j)"
     echo ""
 
     [[ -f "$CONFIG_FILE" ]] || die "Config file not found: $CONFIG_FILE"
