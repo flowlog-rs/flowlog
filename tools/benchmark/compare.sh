@@ -771,13 +771,29 @@ setup_souffle() {
     [[ -x "$SOUFFLE_BIN" ]] || die "Souffle binary not found at $SOUFFLE_BIN (apt install souffle, or set SOUFFLE_BIN)"
     [[ -d "$SOUFFLE_PROG_DIR" ]] || die "Souffle program dir not found: $SOUFFLE_PROG_DIR"
     log "$BLUE" "SETUP" "Souffle: $($SOUFFLE_BIN --version 2>&1 | head -1)"
+    mkdir -p "${LOG_DIR}/sf-bin"
 }
 
-# Run Souffle on (prog, dataset) NUM_RUNS times, keep median total exec
-# wall time + peak RSS via /usr/bin/time -v. Souffle is invoked as
-# `souffle -F <facts> -D <out> -j <workers>` on the canonical .dl from
-# tools/benchmark/souffle-programs/. Compile and run are timed together
-# as a single number — matches the "Total" column for the other engines.
+# Run Souffle on (prog, dataset) NUM_RUNS times.
+#
+# Souffle has TWO execution modes:
+#   1. INTERPRETED — `souffle prog.dl -F facts -D out` walks the AST. The
+#      `-j N` flag is accepted but does NOT enable runtime parallelism;
+#      the interpreter is effectively single-threaded.
+#   2. COMPILED  — `souffle -c -j N -o bin prog.dl` generates and
+#      compiles a C++ executable with OpenMP `#pragma omp parallel`
+#      directives baked in at codegen time. The resulting binary is
+#      then run with `bin -F facts -D out -j N` for true parallelism.
+#
+# Mode 2 is what the FlowLog VLDB paper / FlowLog-Reproduction
+# benchmark uses, and it's the only fair comparison against FlowLog's
+# Differential Dataflow runtime. We use it here:
+#
+#   - One compile per program (cached at $sf_bin so we don't rebuild
+#     for repeated runs or for the same program against multiple
+#     datasets). Compile time is NOT timed (it's a one-off).
+#   - Each timed run wraps `bin -F <facts> -D <out> -j $WORKERS`
+#     in /usr/bin/time -v for wall-time + peak RSS.
 run_souffle() {
     local prog_name="$1" dataset_name="$2"
     local prog_file
@@ -787,17 +803,38 @@ run_souffle() {
     local sf_src="${SOUFFLE_PROG_DIR}/${stem}.dl"
     local fact_path="${FACT_DIR}/${dataset_name}"
     local best_log="${LOG_DIR}/${stem}_${dataset_name}_souffle.log"
+    local sf_bin="${LOG_DIR}/sf-bin/${stem}"
 
     if [[ ! -f "$sf_src" ]]; then
         log "$YELLOW" "WARN" \
             "Souffle: no canonical .dl for $stem at $sf_src — recording N/A"
-        rm -f "${best_log}.median_rss_kb"
+        rm -f "${best_log}.median_rss_kb" "${best_log}.median_total_s"
         : > "$best_log"
         return 1
     fi
 
+    # Compile once per program (cached). The -j flag at compile time
+    # is what enables OpenMP in the generated C++; passing it again at
+    # run-time is the standard idiom and matches the paper. Souffle's
+    # compile step also validates `.input` directives by trying to
+    # load the dataset, so -F has to be present at compile time too —
+    # we use the first dataset for this program as the "schema" sample.
+    if [[ ! -x "$sf_bin" ]]; then
+        log "$BLUE" "BUILD" \
+            "Souffle: compiling $stem with $WORKERS-way OpenMP (one-off)"
+        mkdir -p "$(dirname "$sf_bin")"
+        if ! "$SOUFFLE_BIN" -c -j "$WORKERS" -F "$fact_path" -o "$sf_bin" "$sf_src" \
+                > "${sf_bin}.compile.log" 2>&1; then
+            log "$RED" "WARN" \
+                "Souffle: -c compile failed for $stem (see ${sf_bin}.compile.log) — recording N/A"
+            rm -f "${best_log}.median_rss_kb" "${best_log}.median_total_s"
+            : > "$best_log"
+            return 1
+        fi
+    fi
+
     log "$BLUE" "RUN" \
-        "Souffle:   $prog_file + $dataset_name (canonical, w=$WORKERS, runs=$NUM_RUNS)"
+        "Souffle:   $prog_file + $dataset_name (compiled, w=$WORKERS, runs=$NUM_RUNS)"
     mkdir -p "$LOG_DIR"
 
     local entries=""
@@ -814,7 +851,7 @@ run_souffle() {
         local t_start t_end
         t_start=$(date +%s.%N)
         "$TIME_BIN" -v -o "$rss_log" \
-            "$SOUFFLE_BIN" -F "$fact_path" -D "$out_dir" -j "$WORKERS" "$sf_src" \
+            "$sf_bin" -F "$fact_path" -D "$out_dir" -j "$WORKERS" \
             > "$run_log" 2>&1 || {
                 log "$RED" "WARN" \
                     "Souffle run $run failed for $prog_file + $dataset_name (see $run_log)"
@@ -824,12 +861,11 @@ run_souffle() {
         t_end=$(date +%s.%N)
 
         # Cheap cross-validation hook: record one row per output relation
-        # ("<lowercased_name> <count>") to the sizes sidecar while we still
-        # have the produced .csv files in $out_dir. Only need to capture this
-        # once per pair (re-runs are deterministic), so populate on first
-        # successful run only. .printsize relations don't write CSVs in
-        # Souffle, so we also pick up their sizes from the run log
-        # ("RelationName\tN" lines) as a fallback.
+        # ("<lowercased_name>\t<count>") to the sizes sidecar while we
+        # still have the produced .csv files in $out_dir. Populated on
+        # the first successful run only — re-runs are deterministic.
+        # `.printsize` relations don't write a .csv in souffle; pick
+        # them up from "Relation\tN" lines in the run log.
         if [[ ! -s "$sizes_sidecar" ]]; then
             for csv in "$out_dir"/*.csv; do
                 [[ -f "$csv" ]] || continue
@@ -837,11 +873,9 @@ run_souffle() {
                 local rows=$(wc -l < "$csv")
                 printf '%s\t%s\n' "${rel,,}" "$rows" >> "$sizes_sidecar"
             done
-            # Souffle .printsize lines: "RelationName\tN" on stdout (no path).
             grep -E '^[A-Za-z][A-Za-z0-9_]*\s+[0-9]+$' "$run_log" 2>/dev/null \
                 | awk -v IGNORECASE=1 '{ printf "%s\t%s\n", tolower($1), $2 }' \
                 >> "$sizes_sidecar"
-            # De-dup: prefer one entry per relation.
             sort -u -k1,1 -o "$sizes_sidecar" "$sizes_sidecar" 2>/dev/null || true
         fi
 
