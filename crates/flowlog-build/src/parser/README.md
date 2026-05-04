@@ -1,37 +1,15 @@
 # `parser/` — Pest grammar → typed AST
 
-The first stage of the compile pipeline. Reads `.dl` source text, applies
-`.include` directives, runs Pest over `grammar.pest`, and produces a typed
-[`Program`](program.rs) tree the rest of the pipeline operates on.
-
-## Place in the pipeline
-
-```
-.dl source ──▶ parser ──▶ typechecker ──▶ stratifier ──▶ planner ──▶ codegen
-              ^^^^^^
-              you are here
-```
-
-## How parsing works
+The first pipeline stage. Reads `.dl` source, resolves `.include` directives at the text level, runs Pest over [`grammar.pest`](grammar.pest), and produces a typed [`Program`](program.rs).
 
 ```mermaid
-flowchart TD
-    SRC[".dl files<br/>(+ transitive .include)"] --> RESOLVE["resolve_includes<br/>(text-level merge)"]
-    RESOLVE --> PEST["FlowLogParser<br/>(Pest, grammar.pest)"]
-    PEST --> PAIRS["Pair&lt;Rule&gt;<br/>parse tree"]
-    PAIRS --> LEX["Lexeme::from_parsed_rule<br/>(per-AST-node impl)"]
-    LEX --> AST["Program<br/>{relations, segments,<br/>extern_fns, facts}"]
-
-    SM[("SourceMap")]:::side -.span anchoring.-> LEX
-    classDef side fill:#fff8e1,stroke:#a80,stroke-dasharray:3 3
+flowchart LR
+    src[".dl + includes"] --> merge["resolve_includes"] --> pest["FlowLogParser (Pest)"] --> tree["Pair&lt;Rule&gt;"] --> lex["Lexeme impls"] --> ast["Program"]
 ```
 
-`.include` resolution happens **before** parsing, on raw text. The parser
-itself never has to merge two partially-parsed programs — by the time Pest
-runs, there is exactly one combined source string. Each character keeps a
-[`FileId`](../common/source.rs) so diagnostics can still cite the right file.
+`.include`s are merged into a single source string **before** parsing, so the parser never has to stitch two parse trees. Each character keeps a [`FileId`](../common/source.rs) so diagnostics still cite the right file.
 
-The trait that drives the lift from parse-tree to AST is [`Lexeme`](mod.rs):
+The lift from parse tree to AST is driven by one trait:
 
 ```rust
 pub(crate) trait Lexeme: Sized {
@@ -39,51 +17,43 @@ pub(crate) trait Lexeme: Sized {
 }
 ```
 
-Every public AST type implements it, so adding a new grammar production is
-"add a Pest rule + add a `Lexeme` impl".
+Every public AST type implements it. Adding a new construct = "add a Pest rule + add a `Lexeme` impl".
 
-## Submodule map
+## Layout
 
 | Submodule | Holds |
 |---|---|
-| [`primitive/`](primitive/) | `DataType` (Int8…UInt64, Float32/64, Bool, String — with `"symbol"` accepted as an alias for `"string"`) and `ConstType` literal nodes — including the polymorphic `Int(_)`/`Float(_)` placeholders that `typechecker::pin` later collapses to a concrete width. |
-| [`declaration/`](declaration/) | `.decl` relations, `.input`/`.output`/`.printsize` directives, attributes, and `.extern fn` UDF declarations. |
-| [`logic/`](logic/) | The body of a rule: `Atom`, `Predicate`, `Arithmetic`, `ComparisonExpr`, `FnCall`, `Aggregation`, `Head`, `FlowLogRule`, plus `LoopBlock` for extended-mode `loop`/`fixpoint` regions. |
-| [`program.rs`](program.rs) | The `Program` root: relations + ordered `Vec<Segment>` + UDFs + inline facts. Owns the file-loading entry point and `.include` resolution. |
-| [`segment.rs`](segment.rs) | `Segment::{Plain, Loop, Fixpoint}` — the ordered unit downstream stages walk. Loop/Fixpoint segments are **hard barriers**: the stratifier may not move rules across them. |
-| [`error.rs`](error.rs) | `ParseError` with span-anchored variants. `ParseError::Internal` covers grammar-contract violations the grammar should have made unreachable. |
+| [`primitive/`](primitive/) | `DataType` (`Int8…UInt64`, `Float32/64`, `Bool`, `String`; `"symbol"` ≡ `"string"`), `ConstType` literals (incl. polymorphic `Int(_)`/`Float(_)` later collapsed by `typechecker::pin`). |
+| [`declaration/`](declaration/) | `.decl`, `.input`/`.output`/`.printsize`, attributes, `.extern fn`. |
+| [`logic/`](logic/) | Rule body: `Atom`, `Predicate`, `Arithmetic`, `ComparisonExpr`, `FnCall`, `Aggregation`, `Head`, `FlowLogRule`, `LoopBlock`. |
+| [`program.rs`](program.rs) | The `Program` root + file-loading entry point + `.include` resolution. |
+| [`segment.rs`](segment.rs) | `Segment::{Plain, Loop, Fixpoint}` — Loop/Fixpoint are **hard barriers** the stratifier cannot move rules across. |
+| [`error.rs`](error.rs) | `ParseError` (span-anchored). `Internal` covers grammar-contract violations. |
 | [`grammar.pest`](grammar.pest) | The single source of truth for FlowLog syntax. |
 
-## Segment model (a small but load-bearing detail)
+## Segment model
 
-A program is processed as a flat `Vec<Segment>` in source order:
+A program is a flat `Vec<Segment>` walked in source order:
 
 ```text
 .decl ...
-rule_a(X) :- edb(X).             ┐
-rule_b(X) :- rule_a(X).          │ Segment::Plain
-                                 ┘
-fixpoint {                       ┐
-    reach(X, Z) :- edge(X, Y),   │ Segment::Fixpoint
-                   reach(Y, Z).  │ (hard barrier)
-}                                ┘
-out(X) :- rule_b(X).             ─── Segment::Plain
+rule_a(X) :- edb(X).            ┐ Segment::Plain
+rule_b(X) :- rule_a(X).         ┘
+fixpoint {                      ┐ Segment::Fixpoint
+    reach(X, Z) :- edge(X, Y),  │ (hard barrier)
+                   reach(Y, Z). │
+}                               ┘
+out(X) :- rule_b(X).            ── Segment::Plain
 ```
 
-`Plain` segments stratify as usual. `Loop`/`Fixpoint` segments map to **exactly
-one recursive stratum each**, regardless of how many rules they contain — this
-is what gives extended-mode programs explicit control over recursion.
+Each `Loop`/`Fixpoint` segment becomes **exactly one recursive stratum**, regardless of how many rules it contains — that's how extended-mode programs get explicit control over recursion.
 
 ## Adding new syntax
 
-1. Add a Pest rule to `grammar.pest`.
-2. Add the AST node (struct/enum) under the right submodule.
+1. Add a Pest rule in `grammar.pest`.
+2. Add the AST node under the right submodule.
 3. Implement `Lexeme::from_parsed_rule` for it.
-4. Splice it into its parent's `Lexeme::from_parsed_rule` (e.g. `Predicate`,
-   `Rule`, or `Program`).
-5. Add a span-anchored variant to `ParseError` if it can fail with a
-   user-facing message.
+4. Splice it into the parent's `Lexeme::from_parsed_rule` (e.g. `Predicate`, `FlowLogRule`, `Program`).
+5. Add a span-anchored `ParseError` variant if it can fail user-visibly.
 
-After parsing, every AST node carries a [`Span`](../common/source.rs) — that's
-how the typechecker, planner, and codegen produce diagnostics that point at
-the user's source instead of the enclosing rule.
+Every AST node carries a [`Span`](../common/source.rs) so downstream stages can produce source-pointed diagnostics.
