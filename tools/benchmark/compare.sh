@@ -90,7 +90,19 @@ CONFIG_FILE="${POSITIONAL_ARGS[0]:-${ROOT_DIR}/tools/benchmark/config.txt}"
 PROG_DIR="${ROOT_DIR}/example"
 FACT_DIR="${ROOT_DIR}/facts"
 LOG_DIR="${ROOT_DIR}/result/benchmark"
-WORKERS="${WORKERS:-64}"
+# WORKERS is the thread count passed to EVERY engine in this run
+# (interpreter --workers, compiler -w, library WORKERS env, souffle -j).
+# Default = min(64, nproc):
+#   - Caps at 64 to match the VLDB paper rig (cloudlab c6525, 64 cores)
+#     so cross-machine numbers stay comparable on hosts that have at
+#     least 64 cores.
+#   - Auto-shrinks on smaller hardware so a 16-core laptop doesn't
+#     context-switch through a 64-thread storm.
+# Override (e.g. when co-running with an agent that needs cores):
+#   WORKERS=48 bash compare.sh
+# Just keep it the same value across runs you compare.
+_DEFAULT_WORKERS=$(( $(nproc) < 64 ? $(nproc) : 64 ))
+WORKERS="${WORKERS:-$_DEFAULT_WORKERS}"
 
 # Interpreter repo (vldb26-artifact) is expected next to this repo.
 INTERPRETER_DIR="${ROOT_DIR}/../vldb26-artifact"

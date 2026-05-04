@@ -54,10 +54,13 @@ KEEP_GOING=0
 
 # WORKERS controls thread count for EVERY engine (interpreter / compiler /
 # library / souffle), so all baselines compete with the same parallelism.
-# Defaulting to 64 matches the VLDB paper rig (cloudlab c6525, 64 physical
-# cores) so numbers are reproducible and comparable across machines. On
-# smaller hosts override with `make sweep WORKERS=...` or `--workers N`.
-WORKERS="${WORKERS:-64}"
+# Default = min(64, nproc) — caps at the VLDB paper rig (64 cores) on
+# bigger boxes so headline numbers stay paper-comparable, but
+# auto-shrinks on smaller hosts. Override `make sweep WORKERS=...` or
+# `--workers N` when co-running with another heavy job (e.g. an agent
+# that needs cores). Keep the value consistent across runs you compare.
+_DEFAULT_WORKERS=$(( $(nproc) < 64 ? $(nproc) : 64 ))
+WORKERS="${WORKERS:-$_DEFAULT_WORKERS}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
