@@ -163,6 +163,51 @@ run_step() {
 # ----------------------------------------------------------------------
 write_diagnosis() {
     local diag="$RUN_DIR/diagnosis.txt"
+    local csv="${ROOT_DIR}/result/benchmark/comparison_results.csv"
+
+    # ----- Pre-compute the "problems flagged" list from the perf CSV
+    # so the verdict line at the top can mention them. Empty when the
+    # CSV is absent or every row is clean.
+    local flags_file="$RUN_DIR/.flags"
+    : > "$flags_file"
+    if [[ -f "$csv" ]]; then
+        python3 - "$csv" "$flags_file" <<'PY' || true
+import csv, sys
+path, out = sys.argv[1], sys.argv[2]
+def num(x):
+    try: return float(x)
+    except (TypeError, ValueError): return None
+flags = []
+with open(path) as f:
+    for r in csv.DictReader(f):
+        pair = f"{r['Program']}/{r['Dataset']}"
+        # 1. Cross-check mismatches on output row counts.
+        xc = (r.get("Crosscheck_Souffle") or "").strip()
+        if xc.startswith("MISMATCH"):
+            flags.append(f"CROSSCHECK   {pair}: {xc}")
+        # 2. Lib runner more than 20% off compiler exec time (sanity).
+        lvc = num(r.get("Lib_vs_Compiler_Exec"))
+        if lvc is not None and (lvc < 0.7 or lvc > 1.4):
+            flags.append(f"LIB-DRIFT    {pair}: lib/compiler exec ratio = {lvc:.2f}x")
+        # 3. Compiler 1.5x+ slower than Souffle (a real perf regression hint).
+        svc = num(r.get("Souffle_vs_Compiler_Total"))
+        if svc is not None and svc < 0.66:
+            flags.append(f"PERF         {pair}: souffle is {1/svc:.2f}x faster than compiler "
+                         f"(souffle_total/compiler_total = {svc:.2f})")
+        # 4. Compiler used >2x interpreter peak RSS.
+        c_mem = num(r.get("Compiler_PeakRss_MB"))
+        i_mem = num(r.get("Interp_PeakRss_MB"))
+        if c_mem is not None and i_mem is not None and i_mem > 0 and c_mem / i_mem > 2.0:
+            flags.append(f"MEM          {pair}: compiler peak RSS {c_mem:.0f} MB "
+                         f"vs interpreter {i_mem:.0f} MB ({c_mem/i_mem:.2f}x)")
+with open(out, "w") as f:
+    for line in flags:
+        f.write(line + "\n")
+PY
+    fi
+    local n_flags=0
+    [[ -f "$flags_file" ]] && n_flags=$(wc -l < "$flags_file")
+
     {
         echo "FlowLog full-sweep diagnosis"
         echo "============================"
@@ -174,6 +219,18 @@ write_diagnosis() {
         echo "WORKERS           : $WORKERS"
         echo "smoke             : $SMOKE   skip-l3: $SKIP_L3   include-ldbc: $INCLUDE_LDBC"
         echo
+
+        # Top-of-file one-line verdict so an agent or human gets the
+        # answer without scrolling.
+        if (( ANY_FAIL )); then
+            echo "VERDICT: FAIL — at least one suite failed (see steps below)."
+        elif (( n_flags )); then
+            echo "VERDICT: PASS WITH $n_flags FLAG(S) — all suites green; perf/correctness anomalies listed at end."
+        else
+            echo "VERDICT: PASS — every suite green, no anomalies flagged."
+        fi
+        echo
+
         printf "%-32s  %-5s  %8s  %s\n" "Layer / Step" "Stat" "Sec" "Last-line / first-error"
         printf "%-32s  %-5s  %8s  %s\n" "--------------------------------" "-----" "--------" "------------------------"
         local n=${#STEP_NAMES[@]}
@@ -188,7 +245,6 @@ write_diagnosis() {
         echo
 
         # ----- Perf CSV roll-up (if present) -----
-        local csv="${ROOT_DIR}/result/benchmark/comparison_results.csv"
         if [[ -f "$csv" ]]; then
             cp "$csv" "$RUN_DIR/comparison_results.csv"
             echo "Performance CSV ($csv):"
@@ -206,12 +262,13 @@ def num(x):
     try:    return float(x)
     except (TypeError, ValueError): return None
 
-# Wide columns we always print when present.
 cols_time = ["Compiler_Exec", "Lib_Exec", "Exec_Speedup", "Lib_vs_Compiler_Exec"]
 cols_mem  = ["Compiler_PeakRss_MB", "Lib_PeakRss_MB", "Lib_vs_Compiler_Mem"]
+cols_sf   = ["Souffle_Total", "Souffle_PeakRss_MB", "Souffle_vs_Compiler_Total", "Crosscheck_Souffle"]
 have_mem  = any((r.get("Compiler_PeakRss_MB") or "").strip() for r in rows)
+have_sf   = any((r.get("Souffle_Total") or "N/A").strip() not in ("", "N/A") for r in rows)
 
-hdr = ["Program", "Dataset"] + cols_time + (cols_mem if have_mem else [])
+hdr = ["Program", "Dataset"] + cols_time + (cols_mem if have_mem else []) + (cols_sf if have_sf else [])
 widths = [max(len(h), max(len((r.get(h) or "").strip()) for r in rows)) for h in hdr]
 def emit(vals): print("  " + "  ".join(f"{v:<{w}}" for v, w in zip(vals, widths)))
 emit(hdr)
@@ -219,7 +276,7 @@ emit(["-" * w for w in widths])
 for r in rows:
     emit([(r.get(h) or "").strip() for h in hdr])
 
-# Quick aggregates over numeric Compiler_Exec / Compiler_PeakRss_MB.
+# Aggregates.
 times = [num(r.get("Compiler_Exec")) for r in rows]
 times = [t for t in times if t is not None]
 if times:
@@ -231,6 +288,11 @@ if have_mem:
     rss = [v for v in rss if v is not None]
     if rss:
         print(f"  Compiler_PeakRss: min={min(rss):.2f}MB  max={max(rss):.2f}MB")
+if have_sf:
+    n_match    = sum(1 for r in rows if (r.get("Crosscheck_Souffle") or "").startswith("match"))
+    n_mismatch = sum(1 for r in rows if (r.get("Crosscheck_Souffle") or "").startswith("MISMATCH"))
+    n_na       = sum(1 for r in rows if (r.get("Crosscheck_Souffle") or "").strip() in ("", "n/a"))
+    print(f"  Souffle xcheck  : {n_match} match, {n_mismatch} mismatch, {n_na} n/a")
 PY
             echo "----------------------------------------------------------------"
         else
@@ -238,8 +300,19 @@ PY
         fi
 
         echo
-        if [[ $ANY_FAIL -eq 0 ]]; then
-            echo "OVERALL: ALL LAYERS PASSED"
+        # ----- Problems flagged (from the pre-computed flags file) -----
+        if (( n_flags )); then
+            echo "Problems flagged ($n_flags)"
+            echo "----------------------------------------------------------------"
+            cat "$flags_file"
+            echo "----------------------------------------------------------------"
+            echo
+        fi
+
+        if [[ $ANY_FAIL -eq 0 && $n_flags -eq 0 ]]; then
+            echo "OVERALL: ALL LAYERS PASSED — no anomalies flagged."
+        elif [[ $ANY_FAIL -eq 0 ]]; then
+            echo "OVERALL: ALL LAYERS PASSED — but $n_flags anomalie(s) flagged above."
         else
             echo "OVERALL: AT LEAST ONE LAYER FAILED -- see per-step logs above"
         fi
