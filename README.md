@@ -3,14 +3,16 @@
 </p>
 
 <p align="center">
-  <h3 align="center">Composable Datalog engine that compiles programs into efficient and scalable Differential Dataflow executables.</h3>
+  <h3 align="center">A composable Datalog engine that compiles programs into efficient, scalable Differential Dataflow executables.</h3>
 </p>
 
 <p align="center">
-  <a href="#end-to-end-example">Quick Start</a> •
+  <a href="#tldr">TL;DR</a> •
+  <a href="#quick-start">Quick Start</a> •
   <a href="#architecture">Architecture</a> •
-  <a href="#compiler-cli">Compiler CLI</a> •
-  <a href="https://www.vldb.org/pvldb/vol19/p361-zhao.pdf">FlowLog Paper</a>
+  <a href="#cli">CLI</a> •
+  <a href="#tests">Tests</a> •
+  <a href="https://www.vldb.org/pvldb/vol19/p361-zhao.pdf">Paper</a>
 </p>
 
 <p align="center">
@@ -21,68 +23,38 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"/></a>
 </p>
 
-**Status:** FlowLog is under active development; interfaces may change without notice.
+> **Status:** under active development; interfaces may change without notice.
 
-## Architecture
+## TL;DR
 
-A `.dl` program flows through the following pipeline:
+You write Datalog (`.dl`). FlowLog **compiles** it — through a parser, type checker, stratifier, optimizer, planner, and code generator — into a **standalone Rust executable** that runs on top of [Timely](https://github.com/TimelyDataflow/timely-dataflow) + [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow). You get four execution modes out of the box:
 
-```
-.dl source → parser → stratifier → planner → compiler → executable
-                                     ▲  ▲
-                                catalog  optimizer
-```
+|                | **Batch** (run-once) | **Incremental** (maintain) |
+|----------------|----------------------|-----------------------------|
+| **Datalog**    | `datalog-batch` *(default)* | `datalog-inc`               |
+| **Extended**\* | `extend-batch`       | `extend-inc`                |
 
-| Crate | Role |
-|-------|------|
-| `parser` | Pest grammar → AST |
-| `stratifier` | Dependency analysis and SCC-based rule scheduling |
-| `catalog` | Per-rule metadata used during planning |
-| `optimizer` | Heuristic cost model for join ordering |
-| `planner` | Lowers strata into dataflow transformation plans |
-| `compiler` | Generates and builds a Timely / Differential Dataflow executable |
-| `common` | Shared CLI and utility helpers |
-| `profiler` | Optional execution statistics |
+\* Extended adds explicit `loop { … }` / `fixpoint { … }` blocks for fine-grained control over recursion.
 
-## Getting Started
-
-### Prerequisites
+## Quick Start
 
 ```bash
-$ bash tools/env.sh
+# 1. install toolchain + helpers
+bash tools/env.sh
+
+# 2. build the workspace
+cargo build --release
+
+# 3. compile and run the canonical reachability example
+mkdir -p reach
+printf '1\n'             > reach/Source.csv
+printf '1,2\n2,3\n'      > reach/Arc.csv
+
+flowlog example/reach.dl -F reach -o reach_bin -D -   # compile
+./reach_bin -w 4                                      # run on 4 workers
 ```
 
-The bootstrap script installs a stable Rust toolchain and a few helper utilities. At a minimum you need `rustup`, `cargo`, and a compiler capable of building Timely/Differential (Rust 1.80+ recommended).
-
-### Build the Workspace
-
-```bash
-$ cargo build --release
-```
-
-## Compiler CLI
-
-Compile a FlowLog program into a Timely/Differential Dataflow executable.
-
-```bash
-$ flowlog <PROGRAM> [OPTIONS]
-```
-
-| Flag | Description | Required | Notes |
-|------|-------------|----------|-------|
-| `PROGRAM` | Path to a `.dl` file. Accepts `all` or `--all` to iterate over every program in `example/`. | Yes | Parsed relative to the workspace unless absolute. |
-| `-F, --fact-dir <DIR>` | Directory containing input CSVs referenced by `.input` directives. | When `.input` uses relative filenames | Prepends `<DIR>` to each `filename=` parameter; omit to use paths embedded in the program. |
-| `-o <PATH>` | Path for the generated executable. | No | Defaults to the program stem (e.g., `reach.dl` → `./reach`). |
-| `-D, --output-dir <DIR>` | Location for materializing `.output` relations. | Required when any relation uses `.output` | Pass `-` to print tuples to stderr instead of writing files. |
-| `--mode <MODE>` | Choose execution semantics: `datalog-batch` (default), `datalog-inc`, `extend-batch`, or `extend-inc`. | No | `datalog-batch` uses `Present` diff; all other modes use `i32`. Extended modes enable explicit `loop` blocks. |
-| `-P, --profile` | Enable profiling (collect execution statistics). | No | Writes profiler logs. |
-| `-h, --help` | Show full Clap help text. | No | Includes additional examples and environment variables. |
-
-## End-to-End Example
-
-The `example/reach.dl` program computes nodes reachable from a small seed set. Below is the same program for reference.
-
-> Note: The example commands below only show batch-mode parameters. For incremental mode and profiler usage, please refer to the official website: https://www.flowlog-rs.com/
+That's it. The Datalog program itself:
 
 ```datalog
 .decl Source(id: number)
@@ -98,74 +70,76 @@ Reach(y) :- Source(y).
 Reach(y) :- Reach(x), Arc(x, y).
 ```
 
-### 1. Prepare a Tiny Dataset
+For incremental mode, profiler usage, and richer examples see <https://www.flowlog-rs.com/>.
 
-```bash
-$ mkdir -p reach
-$ cat <<'EOF' > reach/Source.csv
-1
-EOF
+## Architecture
 
-$ cat <<'EOF' > reach/Arc.csv
-1,2
-2,3
-EOF
+```mermaid
+flowchart LR
+    SRC[".dl source"] --> P[parser]
+    P --> TC[typechecker]
+    TC --> S[stratifier]
+    S --> PL[planner]
+    PL --> CG[codegen]
+    CG --> EXE["Rust + DD<br/>executable"]
+
+    CAT[catalog]:::side -.per-rule metadata.-> PL
+    OPT[optimizer]:::side -.cost / join order.-> PL
+    PROF[profiler]:::side -.optional trace.-> CG
+
+    classDef side fill:#fff8e1,stroke:#a80,stroke-dasharray:3 3
 ```
 
-### 2. Compile and Run
+The repository is a small Cargo workspace of three crates plus example programs and tests:
+
+| Crate | Role |
+|---|---|
+| **`flowlog-build`** | The whole pipeline as a library — used from `build.rs` to bake a Datalog program into your Rust crate. Houses `parser`, `typechecker`, `catalog`, `stratifier`, `optimizer`, `planner`, `codegen`, and `profiler` as submodules. |
+| **`flowlog-compiler`** | The standalone `flowlog` binary — calls into `flowlog-build`, then scaffolds and `cargo build`s a self-contained executable. |
+| **`flowlog-runtime`** | Tiny runtime consumed by generated code: string interning, file IO sharding, sort/merge helpers, and incremental-transaction state. |
+
+Each module under `flowlog-build/src/` has its own `README.md` describing purpose, design, and key types — start there when you need to understand or modify a stage.
+
+## CLI
 
 ```bash
-# Compile the .dl program into a binary executable
-$ flowlog example/reach.dl -F reach -o reach_bin -D -
-
-# Run the generated executable
-$ ./reach_bin -w 4
+flowlog <PROGRAM> [OPTIONS]
 ```
 
-Key flags:
+| Flag | Required when… | What it does |
+|---|---|---|
+| `PROGRAM` | always | Path to a `.dl` file. Use `all` / `--all` to iterate over `example/`. |
+| `-F, --fact-dir <DIR>` | `.input` uses relative filenames | Prepends `<DIR>` to each `filename=` parameter. |
+| `-o <PATH>` | optional | Output executable path; defaults to the program stem (`reach.dl` → `./reach`). |
+| `-D, --output-dir <DIR>` | any `.output` is used | Where to materialize output relations. Pass `-` to print tuples to stderr instead. |
+| `--mode <MODE>` | optional | `datalog-batch` *(default)* \| `datalog-inc` \| `extend-batch` \| `extend-inc`. |
+| `-P, --profile` | optional | Enable operator-level profiling (writes `log/` next to the executable). |
+| `-h, --help` | — | Full Clap help with examples and env vars. |
 
-- `-F reach` points the compiler at the directory holding `Source.csv` and `Arc.csv`.
-- `-o reach_bin` names the output executable.
-- `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
-- `-w 4` tells the generated executable to use 4 worker threads.
+## Tests
 
-## End-to-End Tests
-
-End-to-end tests live in `tests/`, organized by evaluation semantics:
+End-to-end tests live in `tests/`, organised by execution mode:
 
 | Directory | Mode |
 |---|---|
-| `tests/datalog-batch/` | Standard batch Datalog (default) |
+| `tests/datalog-batch/` | Standard batch Datalog *(default)* |
 | `tests/datalog-inc/` | Incremental Datalog |
-| `tests/extend-batch/` | Extended batch (loops) |
+| `tests/extend-batch/` | Extended batch (explicit loops) |
 | `tests/extend-inc/` | Extended incremental |
 
-Run the full suite with:
-
 ```bash
-$ bash tests/run.sh
+bash tests/run.sh                       # full suite
+bash tests/run.sh loop_fixpoint negation # selected tests
 ```
 
-Or run specific tests by name:
-
-```bash
-$ bash tests/run.sh loop_fixpoint negation
-```
-
-Each test is a directory containing:
-- `program.dl` — Datalog source (must use `.output` directives).
-- `data/` — Optional CSV input facts copied into the test working directory.
-- `expected/` — Expected output files (one per output relation).
-- `commands.txt` — Optional incremental transcript (enables incremental mode).
-- `runtime_flags` — Optional runtime flags (e.g. `-w 4` for multi-worker).
+Each test directory contains `program.dl`, optional `data/` (CSV facts), `expected/` (one file per `.output` relation), and an optional `commands.txt` (incremental transcripts) / `runtime_flags`.
 
 ## Background Reading
 
 > **FlowLog: Efficient and Extensible Datalog via Incrementality**  \
 > Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  \
-> VLDB 2026 (Boston) — [pVLDB](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf) • [VLDB 2026 Artifacts](https://github.com/flowlog-rs/vldb26-artifact)
+> VLDB 2026 (Boston) — [pVLDB](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf) • [Artifacts](https://github.com/flowlog-rs/vldb26-artifact)
 
 ## Contributing
 
-Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have reproduced the change with `cargo test` and `bash tests/run.sh`.
-
+Issues and pull requests welcome. Before submitting, please run `cargo test` and `bash tests/run.sh` and confirm both pass on your change.
