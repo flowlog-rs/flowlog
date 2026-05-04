@@ -25,7 +25,7 @@
 
 ## Architecture
 
-A `.dl` program flows through five sequential stages, with three support modules that feed into the planner and codegen:
+A `.dl` program flows through five sequential stages, supported by three side modules.
 
 ```mermaid
 flowchart LR
@@ -36,17 +36,21 @@ flowchart LR
     classDef side fill:#fff8e1,stroke:#a80,stroke-dasharray:3 3
 ```
 
-The **parser** (Pest grammar) turns `.dl` source into a typed AST anchored to source spans. The **typechecker** rejects ill-typed programs and pins every polymorphic literal to a concrete width, so downstream stages can always call `data_type()` unconditionally. The **stratifier** groups rules into strata via SCC analysis; each `loop`/`fixpoint` block becomes one recursive stratum, and Extended-mode programs reject plain-rule recursion outright. The **planner** runs a per-rule pipeline (`prepare → SIP → core → fuse → post`) that lowers each rule into a sequence of `Transformation` operators, then deduplicates them across rules so DD can share arrangements. The **codegen** stage turns those transformations into Timely + Differential Dataflow operator chains as `proc_macro2::TokenStream` fragments bundled in a `CodeParts` struct.
+- **parser** — Pest grammar → typed AST anchored to source spans.
+- **typechecker** — pins every polymorphic literal to a concrete width.
+- **stratifier** — SCC analysis; each `loop`/`fixpoint` block is one recursive stratum.
+- **planner** — per-rule `prepare → SIP → core → fuse → post`, dedup'd across rules so DD shares arrangements.
+- **codegen** — Timely + Differential Dataflow operator chains as `proc_macro2::TokenStream`.
 
-The support modules sit alongside the spine: the **catalog** is built per-rule **inside** the planner and precomputes signatures, supersets, and local filters (it's also where range-restriction is enforced); the **optimizer** stores EDB cardinalities and is consulted by the planner's core phase for join order (today: left-deep, source order); and the **profiler** is optional (`-P`) and lines up build-time predictions with Timely's runtime operator logs. A small **common** module supplies what every stage uses: source spans, `Diagnostic`-trait error rendering, the `Config` struct, and `u64` fingerprints that thread through `catalog → planner → codegen` to enable arrangement sharing.
+The **catalog** (built per-rule inside the planner) precomputes signatures, supersets, local filters, and enforces range-restriction. The **optimizer** stores EDB cardinalities for join ordering. The **profiler** (`-P`) lines build-time predictions up against Timely's runtime operator logs. A small **common** module supplies source spans, `Diagnostic`-trait errors, and `u64` fingerprints that thread `catalog → planner → codegen` to enable arrangement sharing.
 
-After codegen, the same `CodeParts` is consumed by either of two frontends. **Library mode** (`crates/flowlog-build/src/build/`) stitches the fragments into a single `.rs` file at `$OUT_DIR/<stem>.rs` for your crate to `include!`; it's driven from your `build.rs` via `flowlog_build::compile()`. **Binary mode** (`crates/flowlog-compiler/`) scaffolds a Cargo project, runs `cargo build --release`, and copies the binary to your `-o <PATH>`; it's the path the `flowlog-compiler` CLI takes. Both call into the small `flowlog-runtime` crate at run time for thread-safe interning, file-IO sharding, sort/merge helpers, and incremental-transaction state.
+Codegen output (`CodeParts`) is consumed by either of two frontends: **library mode** (`flowlog-build::compile()` from a `build.rs`) emits a single `.rs` to `$OUT_DIR/<stem>.rs`; **binary mode** (`flowlog-compiler` CLI) scaffolds a Cargo project, builds it, and drops a binary at `-o <PATH>`. Both link `flowlog-runtime` at run time for interning, IO, sort/merge, and incremental-txn state.
 
-| Crate | Role |
-|-------|------|
-| `flowlog-build` | The whole compile pipeline as a library, used from `build.rs`. Houses `parser`, `typechecker`, `catalog`, `stratifier`, `optimizer`, `planner`, `codegen`, `profiler`, and the library-mode `build/` orchestrator. |
-| `flowlog-compiler` | The standalone `flowlog-compiler` binary; calls into `flowlog-build`, then scaffolds and `cargo build`s a self-contained executable. |
-| `flowlog-runtime` | Tiny runtime consumed by generated code (interning, IO, sort, txn). |
+The workspace is split across three crates:
+
+- **`flowlog-build`** — the compile pipeline as a library; houses `parser`, `typechecker`, `catalog`, `stratifier`, `optimizer`, `planner`, `codegen`, `profiler`, and the library-mode `build/` orchestrator.
+- **`flowlog-compiler`** — the `flowlog-compiler` binary; calls `flowlog-build`, scaffolds + `cargo build`s a standalone executable.
+- **`flowlog-runtime`** — tiny runtime consumed by generated code (interning, IO, sort, txn).
 
 ## Getting Started
 
@@ -74,17 +78,16 @@ Compile a FlowLog program into a Timely/Differential Dataflow executable.
 $ flowlog-compiler <PROGRAM> [OPTIONS]
 ```
 
-| Flag | Description | Required | Notes |
-|------|-------------|----------|-------|
-| `PROGRAM` | Path to a `.dl` file. Accepts `all` or `--all` to iterate over every program in `example/`. | Yes | Parsed relative to the workspace unless absolute. |
-| `-F, --fact-dir <DIR>` | Directory containing input CSVs referenced by `.input` directives. | When `.input` uses relative filenames | Prepends `<DIR>` to each `filename=` parameter; omit to use paths embedded in the program. |
-| `-o <PATH>` | Path for the generated executable. | No | Defaults to the program stem (e.g., `reach.dl` → `./reach`). |
-| `-D, --output-dir <DIR>` | Location for materializing `.output` relations. | Required when any relation uses `.output` | Pass `-` to print tuples to stderr instead of writing files. |
-| `--mode <MODE>` | Choose execution semantics: `datalog-batch` (default), `datalog-inc`, `extend-batch`, or `extend-inc`. | No | `datalog-batch` uses `Present` diff; all other modes use `i32`. Extended modes are WIP. |
-| `--sip` | Sideways Information Passing — push binding constraints into body atoms. | No | Off by default. |
-| `--str-intern` | Intern string columns at load for faster joins / lower memory. | No | Off by default. |
-| `-P, --profile` | Enable profiling (collect execution statistics). | No | Datalog modes only — panics under Extended. |
-| `-h, --help` | Show full Clap help text. | No | |
+`<PROGRAM>` is a path to a `.dl` file (or `all` / `--all` to iterate over every program in `example/`). Optional flags:
+
+- `-F, --fact-dir <DIR>` — prepend `<DIR>` to every `filename=` in `.input` directives. Required when `.input` uses relative filenames.
+- `-o <PATH>` — output executable path; defaults to the program stem (e.g. `reach.dl` → `./reach`).
+- `-D, --output-dir <DIR>` — where to materialize `.output` relations. Pass `-` to print tuples to stderr. Required when any relation uses `.output`.
+- `--mode <MODE>` — `datalog-batch` (default; uses `Present` diff), `datalog-inc`, `extend-batch`, or `extend-inc`. Extended modes are WIP.
+- `--sip` — Sideways Information Passing; push binding constraints into body atoms. Off by default.
+- `--str-intern` — intern string columns at load for faster joins / lower memory. Off by default.
+- `-P, --profile` — collect execution statistics. Datalog modes only (panics under Extended).
+- `-h, --help` — full Clap help text.
 
 ## End-to-End Example
 
@@ -129,20 +132,17 @@ Key flags:
 - `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
 - `-w 4` tells the generated executable to use 4 worker threads.
 
-## End-to-End Tests
-
-End-to-end tests live in `tests/`, in three suites of increasing depth:
-
-- `tests/unit/` — fast per-fixture runs, output diffed against `expected/`. Categories: `datalog-batch`, `datalog-inc`, `extend-batch` (no `extend-inc` fixtures yet). Invoked via `tests/unit/unit_compiler.sh` (binary path) or `tests/unit/unit_lib.sh` (library path).
-- `tests/complex/` — larger programs diffed against a [Souffle](https://souffle-lang.github.io/) reference fetched from HuggingFace. `datalog-batch` only. Invoked via `tests/complex/datalog_batch_{compiler,lib}.sh`.
-- `tests/ldbc/` — LDBC SNB queries on canonical graph datasets. `datalog-batch` only. Invoked via `tests/ldbc/ldbc.sh`.
+## Testing & Benchmarking
 
 ```bash
-$ bash tests/unit/unit_compiler.sh                 # every fixture, binary mode
-$ bash tests/unit/unit_lib.sh agg_avg agg_count    # named fixtures, library mode
+$ make smoke   # ~5 min — every suite, tiny subset
+$ make sweep   # full regression sweep (hours)
+$ make perf    # tools/benchmark/compare.sh — timings + peak RSS vs the interpreter
 ```
 
-Each fixture is a directory with `program.dl`, optional `data/` (CSV facts), `expected/` (one file per `.output` relation), plus optional `commands.txt` (incremental transcripts) / `runtime_flags`.
+`make sweep` runs four gated suites — `cargo test`, `tests/unit/` (binary + library), `tests/complex/` (vs a [Souffle](https://souffle-lang.github.io/) oracle), and `tools/benchmark/compare.sh` — and writes a single `result/sweep/<ts>/diagnosis.txt`. See [`tests/README.md`](tests/README.md) for what each suite checks, costs, and a representative perf+memory snapshot.
+
+![FlowLog benchmark snapshot](docs/perf-snapshot.svg)
 
 ## Background Reading
 

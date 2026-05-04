@@ -1,0 +1,7 @@
+Program,Dataset,Interp_Exec,Compiler_Exec,Lib_Exec,Interp_PeakRss_MB,Compiler_PeakRss_MB,Lib_PeakRss_MB
+tc,G5K-0.001,1.733,1.620,1.543,3043.57,1892.96,1857.20
+sg,G5K-0.001,3.433,2.662,2.652,3858.77,3654.50,3628.70
+cc,livejournal,6.770,7.142,6.614,7992.52,8264.54,8132.01
+crdt,crdt,6.944,6.144,5.747,606.56,665.51,658.00
+galen,galen,8.997,6.279,6.176,5518.32,6151.23,6192.32
+cspa,cspa-httpd,15.658,13.108,12.673,15000.14,13443.41,13435.88

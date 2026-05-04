@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/agentic/run_full_sweep.sh
+# tools/sweep/run_full_sweep.sh
 #
 # One ultimate entry point that runs the *entire* FlowLog test/benchmark
 # stack against the current working tree, in dependency order, and emits
@@ -24,11 +24,11 @@
 #   <run-dir>/meta.txt       git head, branch, env, timing
 #
 # Usage:
-#   bash tools/agentic/run_full_sweep.sh                # full sweep
-#   bash tools/agentic/run_full_sweep.sh --smoke        # quick subset
-#   bash tools/agentic/run_full_sweep.sh --skip-l3      # skip the long perf
-#   bash tools/agentic/run_full_sweep.sh --include-ldbc # opt-in L4
-#   bash tools/agentic/run_full_sweep.sh --keep-going   # don't stop on first failure
+#   bash tools/sweep/run_full_sweep.sh                # full sweep
+#   bash tools/sweep/run_full_sweep.sh --smoke        # quick subset
+#   bash tools/sweep/run_full_sweep.sh --skip-l3      # skip the long perf
+#   bash tools/sweep/run_full_sweep.sh --include-ldbc # opt-in L4
+#   bash tools/sweep/run_full_sweep.sh --keep-going   # don't stop on first failure
 #
 # Environment:
 #   WORKERS                  override worker count        (default: nproc)
