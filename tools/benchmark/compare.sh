@@ -207,8 +207,24 @@ download_interpreter_program() {
 }
 
 ############################################################
-# TIME EXTRACTION
+# TIME / MEMORY EXTRACTION
 ############################################################
+
+# /usr/bin/time -v is GNU time. Bash's builtin `time` does NOT support -v;
+# we require the binary so the compiler/lib/interp runs can be wrapped
+# uniformly to capture peak RSS in addition to wall time.
+TIME_BIN="${TIME_BIN:-/usr/bin/time}"
+[[ -x "$TIME_BIN" ]] || die "GNU /usr/bin/time not found (apt install time); set TIME_BIN=<path>"
+
+# Extract peak RSS (kibibytes, integer) from a /usr/bin/time -v sidecar
+# log. Returns "N/A" when the file is missing or doesn't contain the line.
+_extract_peak_rss_kb() {
+    local rss_file="$1"
+    [[ -f "$rss_file" ]] || { echo "N/A"; return; }
+    local val
+    val=$(awk '/Maximum resident set size/ {print $NF; exit}' "$rss_file" 2>/dev/null) || true
+    [[ "$val" =~ ^[0-9]+$ ]] && echo "$val" || echo "N/A"
+}
 
 # Extract the last timestamp matching PATTERN from a log file (in seconds).
 # Handles both "12.345s" and "621.15ms" formats.  Returns "N/A" on failure.
@@ -316,6 +332,32 @@ print(pairs[len(pairs) // 2])
 " 2>/dev/null
 }
 
+# Given space-separated kibibyte values, return the median (integer) or "N/A".
+# RSS distribution is independent from time; we take the median over peaks
+# rather than tracking the peak that came from the median-time run.
+pick_median_rss() {
+    local values="$1"
+    [[ -z "$values" ]] && { echo "N/A"; return; }
+    python3 -c "
+xs = sorted(int(x) for x in '${values}'.split() if x.isdigit())
+if not xs:
+    print('N/A')
+else:
+    n = len(xs)
+    print(xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) // 2)
+"
+}
+
+# Convert kibibytes -> mebibytes (rounded to 2 decimals) for CSV/table.
+fmt_rss_mb() {
+    local kb="$1"
+    if [[ "$kb" =~ ^[0-9]+$ ]]; then
+        python3 -c "print(f'{${kb}/1024:.2f}')"
+    else
+        echo "N/A"
+    fi
+}
+
 # Collect all timing metrics for a single log file.
 # Prints a space-separated triple: "total load exec".
 collect_times() {
@@ -336,6 +378,11 @@ print_pair_summary() {
     local l_exec
     l_exec=$(extract_total_time "$lib_log")
 
+    local i_rss_mb c_rss_mb l_rss_mb
+    i_rss_mb=$(fmt_rss_mb "$(cat "${interp_log}.median_rss_kb" 2>/dev/null || echo)")
+    c_rss_mb=$(fmt_rss_mb "$(cat "${comp_log}.median_rss_kb"   2>/dev/null || echo)")
+    l_rss_mb=$(fmt_rss_mb "$(cat "${lib_log}.median_rss_kb"    2>/dev/null || echo)")
+
     echo "----------------------------------------"
     log "$GREEN" "RESULT" "$label"
     log "$GREEN" "  LOAD" \
@@ -344,6 +391,8 @@ print_pair_summary() {
         "Interpreter=${i_exec}s  Compiler=${c_exec}s  Lib=${l_exec}s  Lib/Compiler=$(fmt_speedup "$c_exec" "$l_exec")"
     log "$GREEN" " TOTAL" \
         "Interpreter=${i_total}s  Compiler=${c_total}s  Speedup=$(fmt_speedup "$i_total" "$c_total")"
+    log "$GREEN" "   MEM" \
+        "Interpreter=${i_rss_mb}MB  Compiler=${c_rss_mb}MB  Lib=${l_rss_mb}MB  Lib/Compiler=$(fmt_speedup "$c_rss_mb" "$l_rss_mb")"
     echo "----------------------------------------"
 }
 
@@ -369,11 +418,14 @@ run_interpreter() {
     mkdir -p "$LOG_DIR"
 
     local entries=""
+    local rss_values=""
     for run in $(seq 1 "$NUM_RUNS"); do
         local run_log="${LOG_DIR}/${stem}_${dataset_name}_interpreter_run${run}.log"
+        local rss_log="${run_log}.rss"
 
         log "$YELLOW" "RUN" "  Interpreter attempt $run/$NUM_RUNS"
-        RUST_LOG=info "$INTERPRETER_BIN" \
+        RUST_LOG=info "$TIME_BIN" -v -o "$rss_log" \
+            "$INTERPRETER_BIN" \
             --program "$prog_path" \
             --facts "$fact_path" \
             --workers "$WORKERS" \
@@ -383,21 +435,26 @@ run_interpreter() {
                 continue
             }
 
-        local t
+        local t r
         t=$(extract_total_time "$run_log")
-        log "$YELLOW" "TIME" "  Run $run: ${t}s"
+        r=$(_extract_peak_rss_kb "$rss_log")
+        log "$YELLOW" "TIME" "  Run $run: ${t}s, peak ${r} KiB"
 
         [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries }${t}:${run_log}"
+        [[ "$r" =~ ^[0-9] ]] && rss_values="${rss_values:+$rss_values }${r}"
     done
 
     if [[ -n "$entries" ]]; then
-        local median_entry median_time median_log
+        local median_entry median_time median_log median_rss
         median_entry=$(pick_median "$entries")
         median_time="${median_entry%%:*}"
         median_log="${median_entry#*:}"
+        median_rss=$(pick_median_rss "$rss_values")
         cp "$median_log" "$best_log"
+        cp "${median_log}.rss" "${best_log}.rss" 2>/dev/null || true
+        echo "$median_rss" > "${best_log}.median_rss_kb"
         log "$GREEN" "DONE" \
-            "Interpreter: $prog_file + $dataset_name (median: ${median_time}s)"
+            "Interpreter: $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
     else
         log "$RED" "WARN" \
             "Interpreter: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
@@ -436,34 +493,41 @@ run_compiler() {
 
     # Run N times.
     local entries=""
+    local rss_values=""
     for run in $(seq 1 "$NUM_RUNS"); do
         local run_log="${LOG_DIR}/${stem}_${dataset_name}_compiler_run${run}.log"
+        local rss_log="${run_log}.rss"
 
         log "$YELLOW" "RUN" "  Compiler attempt $run/$NUM_RUNS"
-        "$binary" -w "$WORKERS" > "$run_log" 2>&1 || {
+        "$TIME_BIN" -v -o "$rss_log" "$binary" -w "$WORKERS" > "$run_log" 2>&1 || {
             log "$RED" "WARN" \
                 "Compiler run $run failed for $prog_file + $dataset_name (see $run_log)"
             continue
         }
 
-        local t
+        local t r
         t=$(extract_total_time "$run_log")
-        log "$YELLOW" "TIME" "  Run $run: ${t}s"
+        r=$(_extract_peak_rss_kb "$rss_log")
+        log "$YELLOW" "TIME" "  Run $run: ${t}s, peak ${r} KiB"
 
         [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries }${t}:${run_log}"
+        [[ "$r" =~ ^[0-9] ]] && rss_values="${rss_values:+$rss_values }${r}"
     done
 
     # Clean up the binary.
     rm -f "$binary"
 
     if [[ -n "$entries" ]]; then
-        local median_entry median_time median_log
+        local median_entry median_time median_log median_rss
         median_entry=$(pick_median "$entries")
         median_time="${median_entry%%:*}"
         median_log="${median_entry#*:}"
+        median_rss=$(pick_median_rss "$rss_values")
         cp "$median_log" "$best_log"
+        cp "${median_log}.rss" "${best_log}.rss" 2>/dev/null || true
+        echo "$median_rss" > "${best_log}.median_rss_kb"
         log "$GREEN" "DONE" \
-            "Compiler:  $prog_file + $dataset_name (median: ${median_time}s)"
+            "Compiler:  $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
     else
         log "$RED" "WARN" \
             "Compiler: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
@@ -566,32 +630,40 @@ run_lib() {
 
     # Run N times with CSV paths + WORKERS in the environment.
     local entries=""
+    local rss_values=""
     for run in $(seq 1 "$NUM_RUNS"); do
         local run_log="${LOG_DIR}/${stem}_${dataset_name}_lib_run${run}.log"
+        local rss_log="${run_log}.rss"
 
         log "$YELLOW" "RUN" "  Lib attempt $run/$NUM_RUNS"
-        env "${csv_envs[@]}" WORKERS="$WORKERS" "$LIB_BENCH_BIN" \
+        env "${csv_envs[@]}" WORKERS="$WORKERS" \
+            "$TIME_BIN" -v -o "$rss_log" "$LIB_BENCH_BIN" \
             > "$run_log" 2>&1 || {
                 log "$RED" "WARN" \
                     "Lib run $run failed for $prog_file + $dataset_name (see $run_log)"
                 continue
             }
 
-        local t
+        local t r
         t=$(extract_total_time "$run_log")
-        log "$YELLOW" "TIME" "  Run $run: ${t}s"
+        r=$(_extract_peak_rss_kb "$rss_log")
+        log "$YELLOW" "TIME" "  Run $run: ${t}s, peak ${r} KiB"
 
         [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries }${t}:${run_log}"
+        [[ "$r" =~ ^[0-9] ]] && rss_values="${rss_values:+$rss_values }${r}"
     done
 
     if [[ -n "$entries" ]]; then
-        local median_entry median_time median_log
+        local median_entry median_time median_log median_rss
         median_entry=$(pick_median "$entries")
         median_time="${median_entry%%:*}"
         median_log="${median_entry#*:}"
+        median_rss=$(pick_median_rss "$rss_values")
         cp "$median_log" "$best_log"
+        cp "${median_log}.rss" "${best_log}.rss" 2>/dev/null || true
+        echo "$median_rss" > "${best_log}.median_rss_kb"
         log "$GREEN" "DONE" \
-            "Lib:       $prog_file + $dataset_name (median: ${median_time}s)"
+            "Lib:       $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
     else
         log "$RED" "WARN" \
             "Lib: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
@@ -604,7 +676,17 @@ run_lib() {
 ############################################################
 
 # Initialise the CSV file with a header row.
-CSV_HEADER="Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup,Lib_Exec,Lib_vs_Interp_Exec,Lib_vs_Compiler_Exec"
+#
+# Columns are grouped by stage:
+#   timing  : *_Load / *_Exec / *_Total / Load_Speedup / Exec_Speedup / Total_Speedup
+#   library : Lib_Exec / Lib_vs_Interp_Exec / Lib_vs_Compiler_Exec
+#   memory  : *_PeakRss_MB (peak RSS in MiB, median over NUM_RUNS;
+#             N/A if /usr/bin/time -v emitted no value) and
+#             Lib_vs_Compiler_Mem (compiler/lib ratio).
+#
+# Memory columns sit at the end so existing CSV consumers (groomer carve /
+# dashboards) keep working unchanged when they ignore unknown trailing columns.
+CSV_HEADER="Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup,Lib_Exec,Lib_vs_Interp_Exec,Lib_vs_Compiler_Exec,Interp_PeakRss_MB,Compiler_PeakRss_MB,Lib_PeakRss_MB,Lib_vs_Compiler_Mem"
 
 # Write the CSV header if the file is missing or empty. Preserves existing
 # rows so a killed run can resume without losing completed pairs. Lib only
@@ -647,7 +729,20 @@ append_csv_row() {
     lib_vs_interp=$(raw_speedup "$i_exec" "$l_exec")
     lib_vs_comp=$(raw_speedup   "$c_exec" "$l_exec")
 
-    echo "${stem},${dataset},${i_load},${c_load},${rs_load},${i_exec},${c_exec},${rs_exec},${i_total},${c_total},${rs_total},${l_exec},${lib_vs_interp},${lib_vs_comp}" \
+    # Pull the median peak-RSS sidecars (written by run_*) and convert
+    # KiB → MiB. raw_speedup is reused as a generic ratio helper for the
+    # lib-vs-compiler memory column.
+    local i_rss_kb c_rss_kb l_rss_kb
+    i_rss_kb=$(cat "${interp_log}.median_rss_kb" 2>/dev/null || echo "N/A")
+    c_rss_kb=$(cat "${comp_log}.median_rss_kb"   2>/dev/null || echo "N/A")
+    l_rss_kb=$(cat "${lib_log}.median_rss_kb"    2>/dev/null || echo "N/A")
+    local i_rss_mb c_rss_mb l_rss_mb lib_vs_comp_mem
+    i_rss_mb=$(fmt_rss_mb "$i_rss_kb")
+    c_rss_mb=$(fmt_rss_mb "$c_rss_kb")
+    l_rss_mb=$(fmt_rss_mb "$l_rss_kb")
+    lib_vs_comp_mem=$(raw_speedup "$c_rss_mb" "$l_rss_mb")
+
+    echo "${stem},${dataset},${i_load},${c_load},${rs_load},${i_exec},${c_exec},${rs_exec},${i_total},${c_total},${rs_total},${l_exec},${lib_vs_interp},${lib_vs_comp},${i_rss_mb},${c_rss_mb},${l_rss_mb},${lib_vs_comp_mem}" \
         >> "$CSV_FILE"
 
     log "$GREEN" "CSV" "Appended ${stem}_${dataset} to $CSV_FILE"
