@@ -23,18 +23,26 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"/></a>
 </p>
 
-> **Status:** under active development; interfaces may change without notice.
+> **Status:** under active development.
+> **`datalog-batch`** and **`datalog-inc`** are the supported modes today.
+> **`extend-batch`** is partially working — it has six unit fixtures under
+> `tests/unit/extend-batch/` and is exercised on every CI run, but profiling
+> is unsupported and the broader test matrix (correctness vs Souffle, LDBC)
+> doesn't yet cover it.
+> **`extend-inc`** is a work-in-progress: the codegen path is wired but there
+> are no fixtures under `tests/unit/extend-inc/` yet, so it should be
+> considered experimental.
 
 ## TL;DR
 
-You write Datalog (`.dl`). FlowLog **compiles** it through a multi-stage pipeline (parse → type-check → stratify → plan → codegen) into a **standalone Rust executable** that runs on top of [Timely](https://github.com/TimelyDataflow/timely-dataflow) + [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow). You get four execution modes out of the box:
+You write Datalog (`.dl`). FlowLog **compiles** it through a multi-stage pipeline (parse → type-check → stratify → plan → codegen) into a **standalone Rust executable** that runs on top of [Timely](https://github.com/TimelyDataflow/timely-dataflow) + [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow). Two axes of execution mode:
 
-|                | **Batch** (run-once) | **Incremental** (maintain) |
-|----------------|----------------------|-----------------------------|
-| **Datalog**    | `datalog-batch` *(default)* | `datalog-inc`               |
-| **Extended**\* | `extend-batch`       | `extend-inc`                |
+|              | **Batch** *(run once, return)*       | **Incremental** *(maintain across commits)* |
+|--------------|--------------------------------------|----------------------------------------------|
+| **Datalog**  | `datalog-batch` *(default)* ✅       | `datalog-inc` ✅                              |
+| **Extended**\* | `extend-batch` 🚧 *(partial)*       | `extend-inc` 🚧 *(experimental)*              |
 
-\* Extended adds explicit `loop { … }` / `fixpoint { … }` blocks for fine-grained control over recursion.
+\* Extended adds explicit `loop { … }` / `fixpoint { … }` blocks for fine-grained control over recursion. It is **a work in progress**: the parser, planner and codegen accept the syntax, but `--profile` panics under extended modes and `extend-inc` has no test coverage yet.
 
 ## Quick Start
 
@@ -114,35 +122,35 @@ flowlog-compiler <PROGRAM> [OPTIONS]
 | `-F, --fact-dir <DIR>` | `.input` uses relative filenames | Prepends `<DIR>` to each `filename=` parameter. |
 | `-o <PATH>` | optional | Output executable path; defaults to the program stem (`reach.dl` → `./reach`). |
 | `-D, --output-dir <DIR>` | any `.output` is used | Where to materialize output relations. Pass `-` to print tuples to stderr instead. |
-| `--mode <MODE>` | optional | `datalog-batch` *(default)* \| `datalog-inc` \| `extend-batch` \| `extend-inc`. |
+| `--mode <MODE>` | optional | Pick the execution semantics (see the matrix in the [TL;DR](#tldr)). `datalog-batch` *(default)* and `datalog-inc` are the supported modes; `extend-batch` is partial and `extend-inc` is experimental. |
 | `--sip` | optional | Enable Sideways Information Passing (push binding constraints into body atoms). |
 | `--str-intern` | optional | Intern string columns at load time for faster joins / lower memory. |
 | `-I, --include-dir <DIR>` | optional, repeatable | Extra search directory for `.include` directives. |
 | `--udf-file <PATH>` | optional | Rust source defining UDFs declared via `.extern fn`. |
 | `--save-temps` | optional | Keep the intermediate generated crate (otherwise removed after build). |
-| `-P, --profile` | optional | Enable operator-level profiling (writes `<stem>_log/` next to the executable). |
+| `-P, --profile` | optional, **datalog modes only** | Operator-level profiling. Writes `<stem>_log/` next to the executable. **Panics if combined with `extend-batch` / `extend-inc`.** |
 | `-h, --help` | — | Print Clap-generated help. |
 
 ## Tests
 
-End-to-end tests live in `tests/`. Two complementary suites:
+End-to-end tests live in `tests/`. Three complementary suites, ordered by how long each takes to run:
 
-| Path | Suite | Entry point |
-|---|---|---|
-| `tests/unit/datalog-batch/`<br/>`tests/unit/datalog-inc/`<br/>`tests/unit/extend-batch/` | Per-fixture programs run end-to-end. Three categories today (no `extend-inc` fixtures yet). | `tests/unit/unit_compiler.sh` (binary mode)<br/>`tests/unit/unit_lib.sh` (library mode) |
-| `tests/complex/` | Larger programs diffed against a [Souffle](https://souffle-lang.github.io/) reference fetched from HuggingFace. | `tests/complex/datalog_batch_compiler.sh`<br/>`tests/complex/datalog_batch_lib.sh` |
-| `tests/ldbc/` | LDBC SNB queries on canonical graph datasets. | `tests/ldbc/ldbc.sh` |
+| Path | Suite | Coverage today | Entry point |
+|---|---|---|---|
+| `tests/unit/<category>/` | Per-fixture programs run end-to-end, output diffed against `expected/`. Fast — typically < 1 min. | `datalog-batch`, `datalog-inc`, `extend-batch` (no `extend-inc` fixtures yet) | `tests/unit/unit_compiler.sh` (binary mode)<br/>`tests/unit/unit_lib.sh` (library mode) |
+| `tests/complex/` | Larger programs, output diffed against a [Souffle](https://souffle-lang.github.io/) reference fetched from HuggingFace. Slow — several minutes per dataset, network required on first run. | `datalog-batch` only | `tests/complex/datalog_batch_compiler.sh`<br/>`tests/complex/datalog_batch_lib.sh` |
+| `tests/ldbc/` | LDBC SNB queries on canonical graph datasets. | `datalog-batch` | `tests/ldbc/ldbc.sh` |
 
 ```bash
-# unit-level — fast, runs every fixture for every mode in <category>:
-bash tests/unit/unit_compiler.sh                  # binary-mode runner, all fixtures
-bash tests/unit/unit_lib.sh agg_avg agg_count     # library-mode runner, named fixtures
+# unit-level — the inner-loop check before any change:
+bash tests/unit/unit_compiler.sh                  # binary mode, every fixture
+bash tests/unit/unit_lib.sh agg_avg agg_count     # library mode, named fixtures
 
-# correctness vs Souffle — slow, requires network for first dataset fetch:
+# correctness vs Souffle — the next-deepest level when touching codegen:
 bash tests/complex/datalog_batch_compiler.sh
 ```
 
-Each fixture is a directory with `program.dl`, optional `data/` (CSV facts), `expected/` (one file per `.output` relation), and an optional `commands.txt` (incremental transcripts) / `runtime_flags`.
+Each fixture is a directory with `program.dl`, optional `data/` (CSV facts), `expected/` (one file per `.output` relation), and an optional `commands.txt` (incremental transcript) / `runtime_flags`.
 
 ## Background Reading
 
