@@ -110,6 +110,17 @@ setup_dataset() {
 cleanup_dataset() {
     local dataset_name="$1"
     local extract_path="${FACT_DIR}/${dataset_name}"
+    # CACHE_PATCH_v2: dataset cache safety guard (symlink-aware).
+    if [[ "${FLOWLOG_KEEP_DATASETS:-0}" = "1" ]]; then
+        log "Cleaning up dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=1)"
+        return
+    fi
+    local _fd_real
+    _fd_real="$(readlink -f "${FACT_DIR}" 2>/dev/null || echo "${FACT_DIR}")"
+    if [[ "${_fd_real}" != "${FACT_DIR}" && "${FLOWLOG_FORCE_CLEANUP:-0}" != "1" ]]; then
+        log "Cleaning up dataset $dataset_name (kept; ${FACT_DIR} → ${_fd_real}; set FLOWLOG_FORCE_CLEANUP=1 to override)"
+        return
+    fi
     log "Cleaning up dataset $dataset_name"
     rm -rf "$extract_path"
 }

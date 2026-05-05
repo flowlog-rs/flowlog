@@ -81,6 +81,17 @@ setup_dataset() {
 cleanup_dataset() {
     local dataset_name="$1"
     local fact_dir="${2:-$FACT_DIR_DEFAULT}"
+    # CACHE_PATCH_v2: dataset cache safety guard (symlink-aware).
+    if [[ "${FLOWLOG_KEEP_DATASETS:-0}" = "1" ]]; then
+        log "$YELLOW" "CLEANUP" "Dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=1)"
+        return
+    fi
+    local _fd_real
+    _fd_real="$(readlink -f "${fact_dir}" 2>/dev/null || echo "${fact_dir}")"
+    if [[ "${_fd_real}" != "${fact_dir}" && "${FLOWLOG_FORCE_CLEANUP:-0}" != "1" ]]; then
+        log "$YELLOW" "CLEANUP" "Dataset $dataset_name (kept; ${fact_dir} → ${_fd_real}; set FLOWLOG_FORCE_CLEANUP=1 to override)"
+        return
+    fi
     log "$YELLOW" "CLEANUP" "Dataset $dataset_name"
     rm -rf "${fact_dir}/${dataset_name}"
 }
@@ -98,7 +109,12 @@ download_souffle_ref() {
 
     mkdir -p "$ref_dir"
     log "$CYAN" "DOWNLOAD" "Souffle reference: $ref_name" >&2
-    wget -q -O "$ref_tar" "$ref_url" || die "Failed to download Souffle reference: $ref_url"
+    # CACHE_PATCH_v1: prefer local tarball cache (loop-local, not for upstream)
+    if [ -f "/datasets/souffle_ref_tarballs/${ref_name}.tar.gz" ]; then
+        cp "/datasets/souffle_ref_tarballs/${ref_name}.tar.gz" "$ref_tar"
+    else
+        wget -q -O "$ref_tar" "$ref_url" || die "Failed to download Souffle reference: $ref_url"
+    fi
     tar xzf "$ref_tar" -C "$ref_dir" || die "Failed to extract Souffle reference: $ref_name"
     rm -f "$ref_tar"
 
