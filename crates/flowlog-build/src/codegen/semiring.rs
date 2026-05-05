@@ -4,43 +4,56 @@
 //! as `(relative_path, content)` pairs, ready for the downstream compiler
 //! to write into the generated project.
 
+use crate::codegen::CodeGen;
 use crate::parser::AggregationOperator;
 
-use crate::codegen::CodeGen;
+/// Embed a `templates/semiring/<name>.tpl` file at this crate's compile time.
+macro_rules! tpl {
+    ($name:literal) => {
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/templates/semiring/",
+            $name,
+            ".tpl"
+        ))
+    };
+}
 
-/// Embedded semiring templates (evaluated at *compile time* of this crate).
-const MIN_INT_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/semiring/min_int.tpl"
-));
-const MIN_FLOAT_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/semiring/min_float.tpl"
-));
-const MAX_INT_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/semiring/max_int.tpl"
-));
-const MAX_FLOAT_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/semiring/max_float.tpl"
-));
-const SUM_INT_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/semiring/sum_int.tpl"
-));
-const SUM_FLOAT_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/semiring/sum_float.tpl"
-));
-const AVG_INT_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/semiring/avg_int.tpl"
-));
-const AVG_FLOAT_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/semiring/avg_float.tpl"
-));
+const MIN_INT_TMPL: &str = tpl!("min_int");
+const MIN_FLOAT_TMPL: &str = tpl!("min_float");
+const MAX_INT_TMPL: &str = tpl!("max_int");
+const MAX_FLOAT_TMPL: &str = tpl!("max_float");
+const SUM_INT_TMPL: &str = tpl!("sum_int");
+const SUM_FLOAT_TMPL: &str = tpl!("sum_float");
+const AVG_INT_TMPL: &str = tpl!("avg_int");
+const AVG_FLOAT_TMPL: &str = tpl!("avg_float");
+
+/// Int/uint type table: `(suffix, rust_type)`. Order must match
+/// `AggSemiringNeeds::int_needs`.
+const INT_TYPES: [(&str, &str); 8] = [
+    ("I8", "i8"),
+    ("I16", "i16"),
+    ("I32", "i32"),
+    ("I64", "i64"),
+    ("U8", "u8"),
+    ("U16", "u16"),
+    ("U32", "u32"),
+    ("U64", "u64"),
+];
+
+/// Float type table: `(suffix, inner_type)`. Order must match
+/// `AggSemiringNeeds::float_needs`.
+const FLOAT_TYPES: [(&str, &str); 2] = [("F32", "f32"), ("F64", "f64")];
+
+/// Translate an integer bound keyword (`MAX` / `MIN`) into the
+/// corresponding float bound keyword used by `f32` / `f64`.
+fn float_bound_kw(int_bound: &str) -> &str {
+    match int_bound {
+        "MAX" => "INFINITY",
+        "MIN" => "NEG_INFINITY",
+        other => other,
+    }
+}
 
 impl CodeGen {
     /// Render semiring modules as `(relative_path, content)` pairs.
@@ -54,20 +67,6 @@ impl CodeGen {
         }
 
         let semirings = self.features.agg_semirings();
-
-        // Int/uint type table: (suffix, rust_type)
-        const INT_TYPES: [(&str, &str); 8] = [
-            ("I8", "i8"),
-            ("I16", "i16"),
-            ("I32", "i32"),
-            ("I64", "i64"),
-            ("U8", "u8"),
-            ("U16", "u16"),
-            ("U32", "u32"),
-            ("U64", "u64"),
-        ];
-        // Float type table: (suffix, inner_type)
-        const FLOAT_TYPES: [(&str, &str); 2] = [("F32", "f32"), ("F64", "f64")];
 
         let mut files: Vec<(String, String)> = Vec::new();
         let mut modules: Vec<String> = Vec::new();
@@ -88,14 +87,12 @@ impl CodeGen {
             // Int/uint file
             if int_needs.iter().any(|&n| n) {
                 let mut rendered = int_tmpl.to_string();
-                for (i, (suffix, ty)) in INT_TYPES.iter().enumerate() {
-                    if int_needs[i] {
-                        match bound_kw {
-                            Some(bk) => rendered
-                                .push_str(&format!("\n{mac}!({pfx}{suffix}, {ty}, {ty}::{bk});\n")),
-                            None => rendered.push_str(&format!("\n{mac}!({pfx}{suffix}, {ty});\n")),
-                        }
-                    }
+                for ((suffix, ty), _) in INT_TYPES.iter().zip(int_needs).filter(|(_, n)| *n) {
+                    let line = match bound_kw {
+                        Some(bk) => format!("\n{mac}!({pfx}{suffix}, {ty}, {ty}::{bk});\n"),
+                        None => format!("\n{mac}!({pfx}{suffix}, {ty});\n"),
+                    };
+                    rendered.push_str(&line);
                 }
                 files.push((
                     format!("semiring/{kind_str}_int.rs"),
@@ -107,24 +104,18 @@ impl CodeGen {
             // Float file
             if float_needs.iter().any(|&n| n) {
                 let mut rendered = float_tmpl.to_string();
-                for (i, (suffix, inner)) in FLOAT_TYPES.iter().enumerate() {
-                    if float_needs[i] {
-                        match bound_kw {
-                            Some(bk) => {
-                                let float_bound_kw = match bk {
-                                    "MAX" => "INFINITY",
-                                    "MIN" => "NEG_INFINITY",
-                                    other => other,
-                                };
-                                rendered.push_str(&format!(
-                                    "\n{mac}!({pfx}{suffix}, OrderedFloat<{inner}>, OrderedFloat({inner}::{float_bound_kw}));\n"
-                                ));
-                            }
-                            None => {
-                                rendered.push_str(&format!("\n{mac}!({pfx}{suffix}, {inner});\n"))
-                            }
+                for ((suffix, inner), _) in FLOAT_TYPES.iter().zip(float_needs).filter(|(_, n)| *n)
+                {
+                    let line = match bound_kw {
+                        Some(bk) => {
+                            let kw = float_bound_kw(bk);
+                            format!(
+                                "\n{mac}!({pfx}{suffix}, OrderedFloat<{inner}>, OrderedFloat({inner}::{kw}));\n"
+                            )
                         }
-                    }
+                        None => format!("\n{mac}!({pfx}{suffix}, {inner});\n"),
+                    };
+                    rendered.push_str(&line);
                 }
                 files.push((
                     format!("semiring/{kind_str}_float.rs"),
