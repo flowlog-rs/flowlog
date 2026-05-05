@@ -50,7 +50,7 @@ writes one `diagnosis.txt` whose first line is a one-shot
 | `--keep-going`                         | Don't abort on first failure; collect all evidence.                      |
 | `--workers N`                          | Override thread budget (default `min(64, nproc)`).                        |
 | `--baseline=interpreter[,souffle]`     | Pick L3 baselines. Default `interpreter`. Forwarded verbatim to compare.sh. |
-| `--num-runs N`                         | Override L3 repetitions (default 5, median kept).                         |
+| `--num-runs N`                         | Override L3 repetitions (default 3, median kept).                         |
 
 ## Environment variables (the contract)
 

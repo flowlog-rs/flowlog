@@ -25,7 +25,7 @@ The 19 program-dataset pairs cover graph analysis (`tc`, `sg`, `reach`, `cc`, `s
 
 ### L3 — performance & memory · `tools/benchmark/compare.sh`
 
-For each pair in `tools/benchmark/config.txt` (~33 pairs at varied scales — small/medium/large datasets), times **three** binaries — the previous interpreter (`vldb26-artifact`), the current compiler (this repo), and a library-mode runner — for `NUM_RUNS=5` repetitions each, then keeps the median. Every run is wrapped in `/usr/bin/time -v` so peak resident set size is captured alongside wall time. Output: `result/benchmark/comparison_results.csv` with `*_Load`, `*_Exec`, `*_Total` (seconds) and `*_PeakRss_MB` (MiB) for all three binaries plus pre-computed speedup ratios.
+For each pair in `tools/benchmark/config.txt` (~33 pairs at varied scales — small/medium/large datasets), times **three** binaries — the previous interpreter (`vldb26-artifact`), the current compiler (this repo), and a library-mode runner — for `NUM_RUNS=3` repetitions each, then keeps the median. Every run is wrapped in `/usr/bin/time -v` so peak resident set size is captured alongside wall time. Output: `result/benchmark/comparison_results.csv` with `*_Load`, `*_Exec`, `*_Total` (seconds) and `*_PeakRss_MB` (MiB) for all three binaries plus pre-computed speedup ratios.
 
 `bench_one.sh` is the per-pair wrapper used by closed-loop perf gates (e.g. Groomer); it prints two contract lines on stdout — `elapsed_seconds` and `peak_rss_kb` — so a regression gate can opt in to memory tracking by switching `extract_token`.
 

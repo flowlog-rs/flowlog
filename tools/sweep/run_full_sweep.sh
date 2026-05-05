@@ -59,7 +59,7 @@ KEEP_GOING=0
 L3_BASELINE="${L3_BASELINE:-interpreter}"
 # NUM_RUNS forwarder: how many timed runs per (engine, pair). Inherited
 # by compare.sh / datalog_batch_*.sh via the env. Default unset → each
-# tool keeps its own default (compare.sh: 5; per-iter perf gates: 3).
+# tool keeps its own default (compare.sh: 3; per-iter perf gates: 3).
 L3_NUM_RUNS="${NUM_RUNS:-}"
 
 # WORKERS controls thread count for EVERY engine (interpreter / compiler /
@@ -112,7 +112,7 @@ HEAD        : $GIT_HEAD
 branch      : $GIT_BRANCH
 started     : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 WORKERS     : $WORKERS
-NUM_RUNS    : ${L3_NUM_RUNS:-(default: 5)}
+NUM_RUNS    : ${L3_NUM_RUNS:-(default: 3)}
 L3_BASELINE : $L3_BASELINE
 smoke       : $SMOKE
 skip-l3     : $SKIP_L3
