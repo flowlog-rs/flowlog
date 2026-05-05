@@ -12,8 +12,8 @@
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 
-use flowlog_build::{field_accessor, gen_drain_block};
 use flowlog_build::parser::Relation;
+use flowlog_build::{field_accessor, gen_drain_block};
 
 use crate::{Compiler, CompilerError};
 
@@ -151,10 +151,7 @@ fn gen_write_row_stderr(idb: &Relation, string_intern: bool) -> TokenStream {
     let fields = data_field_accessors(idb, string_intern);
     // Stderr format shows `Debug` representations for readability; files get
     // `Display` for machine-consumable output.
-    let fmt_cols = (0..idb.arity())
-        .map(|_| "{:?}")
-        .collect::<Vec<_>>()
-        .join(", ");
+    let fmt_cols = vec!["{:?}"; idb.arity()].join(", ");
     let fmt = Literal::string(&format!(
         "[tuple][{prefix}]  t={{:?}}  data=({fmt_cols})  diff={{:+}}"
     ));

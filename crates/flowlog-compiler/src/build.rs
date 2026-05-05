@@ -20,7 +20,7 @@ use flowlog_build::profiler::Profiler;
 use quote::quote;
 use tracing::info;
 
-use crate::{imports, relation, scaffold, Compiler};
+use crate::{Compiler, imports, relation, scaffold};
 
 impl Compiler {
     /// Produce the scaffolded Rust crate in [`Config::build_dir`].
