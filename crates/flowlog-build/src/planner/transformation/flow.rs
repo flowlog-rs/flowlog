@@ -11,15 +11,15 @@ use std::sync::Arc;
 use tracing::trace;
 
 use super::KeyValueLayout;
-use crate::planner::{
-    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
-    FnCallPredicateArgument, TransformationArgument,
-};
 use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, FnCallPredicatePos,
     JoinPredicates, KvPredicates,
 };
-use crate::parser::{ArithmeticOperator, ConstType};
+use crate::parser::ConstType;
+use crate::planner::{
+    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
+    FnCallPredicateArgument, TransformationArgument,
+};
 
 /// Represents data transformation flows in query execution.
 ///
@@ -300,78 +300,92 @@ impl TransformationFlow {
     ) -> Vec<ArithmeticArgument> {
         trace!(
             "flow_over_exprs: input_exprs_map = {:?}, output_exprs = {:?}",
-            input_exprs_map,
-            output_exprs
+            input_exprs_map, output_exprs
         );
 
         output_exprs
             .iter()
             .map(|expr| {
-                // First try to find the entire expression in the map
+                // Fast path: the entire expression matches an input directly,
+                // so emit a single variable reference.
                 if let Some(&trans_arg) = input_exprs_map.get(expr) {
-                    // Found the complete expression - create a simple variable reference
-                    ArithmeticArgument {
+                    return ArithmeticArgument {
                         init: FactorArgument::Var(trans_arg),
                         rest: vec![],
-                    }
-                } else {
-                    // Not found as complete expression — resolve factor by factor.
-                    let resolve_factor = |factor: &FactorPos| -> FactorArgument {
-                        match factor {
-                            FactorPos::Var(sig) => {
-                                let key = ArithmeticPos::from_var_signature(*sig);
-                                let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
-                                    panic!(
-                                        "Planner error: missing variable signature {:?} in input expression map",
-                                        sig
-                                    )
-                                });
-                                FactorArgument::Var(trans_arg)
-                            }
-                            FactorPos::Const(c) => FactorArgument::Const(c.clone()),
-                            FactorPos::FnCall { name, args } => {
-                                let fn_args = args
-                                    .iter()
-                                    .map(|a| {
-                                        let sigs = a.signatures();
-                                        let var_args: Vec<_> = sigs
-                                            .iter()
-                                            .map(|sig| {
-                                                let key = ArithmeticPos::from_var_signature(**sig);
-                                                *input_exprs_map.get(&key).unwrap_or_else(|| {
-                                                    panic!(
-                                                        "Planner error: missing FnCall arg signature {:?}",
-                                                        sig
-                                                    )
-                                                })
+                    };
+                }
+
+                // Otherwise rebuild the expression factor by factor.
+                let resolve_factor = |factor: &FactorPos| -> FactorArgument {
+                    match factor {
+                        FactorPos::Var(sig) => {
+                            let key = ArithmeticPos::from_var_signature(*sig);
+                            let trans_arg = input_exprs_map.get(&key).copied().unwrap_or_else(|| {
+                                panic!(
+                                    "Planner error: missing variable signature {:?} in input expression map",
+                                    sig
+                                )
+                            });
+                            FactorArgument::Var(trans_arg)
+                        }
+                        FactorPos::Const(c) => FactorArgument::Const(c.clone()),
+                        FactorPos::FnCall { name, args } => {
+                            let fn_args = args
+                                .iter()
+                                .map(|a| {
+                                    let var_args: Vec<_> = a
+                                        .signatures()
+                                        .iter()
+                                        .map(|sig| {
+                                            let key = ArithmeticPos::from_var_signature(**sig);
+                                            *input_exprs_map.get(&key).unwrap_or_else(|| {
+                                                panic!(
+                                                    "Planner error: missing FnCall arg signature {:?}",
+                                                    sig
+                                                )
                                             })
-                                            .collect();
-                                        ArithmeticArgument::from_arithmeticpos(a, &var_args)
-                                    })
-                                    .collect();
-                                FactorArgument::FnCall {
-                                    name: name.clone(),
-                                    args: fn_args,
-                                }
+                                        })
+                                        .collect();
+                                    ArithmeticArgument::from_arithmeticpos(a, &var_args)
+                                })
+                                .collect();
+                            FactorArgument::FnCall {
+                                name: name.clone(),
+                                args: fn_args,
                             }
                         }
-                    };
-
-                    let init_factor = resolve_factor(expr.init());
-                    let rest_factors: Vec<(ArithmeticOperator, FactorArgument)> = expr
-                        .rest()
-                        .iter()
-                        .map(|(op, factor)| (op.clone(), resolve_factor(factor)))
-                        .collect();
-
-                    // Create ArithmeticArgument using the operators and factors
-                    ArithmeticArgument {
-                        init: init_factor,
-                        rest: rest_factors,
                     }
-                }
+                };
+
+                let init = resolve_factor(expr.init());
+                let rest = expr
+                    .rest()
+                    .iter()
+                    .map(|(op, factor)| (op.clone(), resolve_factor(factor)))
+                    .collect();
+                ArithmeticArgument { init, rest }
             })
             .collect()
+    }
+
+    /// Resolves a sequence of variable signatures into the corresponding
+    /// `TransformationArgument`s by routing each through `flow_over_exprs`
+    /// and the arithmetic→transformation conversion.
+    fn signatures_to_trans_args<'a, I>(
+        input_expr_map: &HashMap<ArithmeticPos, TransformationArgument>,
+        signatures: I,
+    ) -> Vec<TransformationArgument>
+    where
+        I: IntoIterator<Item = &'a AtomArgumentSignature>,
+    {
+        let exprs: Vec<ArithmeticPos> = signatures
+            .into_iter()
+            .map(|&sig| ArithmeticPos::from_var_signature(sig))
+            .collect();
+        TransformationArgument::from_arithmetic_arguments(Self::flow_over_exprs(
+            input_expr_map,
+            &exprs,
+        ))
     }
 
     /// Helper to construct constant equality constraints: (var = const)
@@ -379,22 +393,14 @@ impl TransformationFlow {
         input_expr_map: &HashMap<ArithmeticPos, TransformationArgument>,
         const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
     ) -> Vec<(TransformationArgument, ConstType)> {
-        let const_exprs: Vec<ArithmeticPos> = const_eq_constraints
-            .iter()
-            .map(|(signature, _)| ArithmeticPos::from_var_signature(*signature))
-            .collect();
-
-        TransformationArgument::from_arithmetic_arguments(Self::flow_over_exprs(
+        let trans_args = Self::signatures_to_trans_args(
             input_expr_map,
-            &const_exprs,
-        ))
-        .into_iter()
-        .zip(
-            const_eq_constraints
-                .iter()
-                .map(|(_, constant)| constant.clone()),
-        )
-        .collect()
+            const_eq_constraints.iter().map(|(sig, _)| sig),
+        );
+        trans_args
+            .into_iter()
+            .zip(const_eq_constraints.iter().map(|(_, c)| c.clone()))
+            .collect()
     }
 
     /// Helper to construct variable equality constraints: (var = var)
@@ -402,25 +408,14 @@ impl TransformationFlow {
         input_expr_map: &HashMap<ArithmeticPos, TransformationArgument>,
         var_eq_constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
     ) -> Vec<(TransformationArgument, TransformationArgument)> {
-        let (left_exprs, right_exprs): (Vec<_>, Vec<_>) = var_eq_constraints
-            .iter()
-            .map(|(left_sig, right_sig)| {
-                (
-                    ArithmeticPos::from_var_signature(*left_sig),
-                    ArithmeticPos::from_var_signature(*right_sig),
-                )
-            })
-            .unzip();
-
-        let left_args = TransformationArgument::from_arithmetic_arguments(Self::flow_over_exprs(
+        let left_args = Self::signatures_to_trans_args(
             input_expr_map,
-            &left_exprs,
-        ));
-        let right_args = TransformationArgument::from_arithmetic_arguments(Self::flow_over_exprs(
+            var_eq_constraints.iter().map(|(left, _)| left),
+        );
+        let right_args = Self::signatures_to_trans_args(
             input_expr_map,
-            &right_exprs,
-        ));
-
+            var_eq_constraints.iter().map(|(_, right)| right),
+        );
         left_args.into_iter().zip(right_args).collect()
     }
 
@@ -432,31 +427,11 @@ impl TransformationFlow {
         compare_exprs
             .iter()
             .map(|comp| {
-                let (left_exprs, right_exprs): (Vec<_>, Vec<_>) = (
-                    comp.left()
-                        .signatures()
-                        .iter()
-                        .map(|&signature| ArithmeticPos::from_var_signature(*signature))
-                        .collect(),
-                    comp.right()
-                        .signatures()
-                        .iter()
-                        .map(|&signature| ArithmeticPos::from_var_signature(*signature))
-                        .collect(),
-                );
-
-                let left_trans_args = TransformationArgument::from_arithmetic_arguments(
-                    Self::flow_over_exprs(input_expr_map, &left_exprs),
-                );
-                let right_trans_args = TransformationArgument::from_arithmetic_arguments(
-                    Self::flow_over_exprs(input_expr_map, &right_exprs),
-                );
-
-                ComparisonExprArgument::from_comparison_expr(
-                    comp,
-                    &left_trans_args,
-                    &right_trans_args,
-                )
+                let left_args =
+                    Self::signatures_to_trans_args(input_expr_map, comp.left().signatures());
+                let right_args =
+                    Self::signatures_to_trans_args(input_expr_map, comp.right().signatures());
+                ComparisonExprArgument::from_comparison_expr(comp, &left_args, &right_args)
             })
             .collect()
     }
@@ -469,20 +444,13 @@ impl TransformationFlow {
         fn_call_preds
             .iter()
             .map(|fc| {
-                let per_arg_trans: Vec<Vec<TransformationArgument>> =
-                    fc.args()
-                        .iter()
-                        .map(|arg_pos| {
-                            let exprs: Vec<ArithmeticPos> = arg_pos
-                                .signatures()
-                                .iter()
-                                .map(|&sig| ArithmeticPos::from_var_signature(*sig))
-                                .collect();
-                            TransformationArgument::from_arithmetic_arguments(
-                                Self::flow_over_exprs(input_expr_map, &exprs),
-                            )
-                        })
-                        .collect();
+                let per_arg_trans: Vec<Vec<TransformationArgument>> = fc
+                    .args()
+                    .iter()
+                    .map(|arg_pos| {
+                        Self::signatures_to_trans_args(input_expr_map, arg_pos.signatures())
+                    })
+                    .collect();
                 FnCallPredicateArgument::from_fn_call_pos(fc, &per_arg_trans)
             })
             .collect()
