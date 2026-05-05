@@ -618,26 +618,23 @@ impl fmt::Display for Catalog {
             }
         }
 
+        // Render the sorted var-set for the i-th predicate, or `[]` if out of range.
+        let fmt_pred_vars = |sets: &[HashSet<String>], i: usize| -> String {
+            let Some(set) = sets.get(i) else {
+                return "vars: []".to_string();
+            };
+            let mut vars: Vec<&str> = set.iter().map(String::as_str).collect();
+            vars.sort();
+            format!("vars: [{}]", vars.join(", "))
+        };
+
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Comparison predicates:")?;
         if self.comparison_predicates.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
             for (i, comp_pred) in self.comparison_predicates.iter().enumerate() {
-                let vars_set = if i < self.comparison_predicates_vars_str_set.len() {
-                    let mut vars: Vec<_> =
-                        self.comparison_predicates_vars_str_set[i].iter().collect();
-                    vars.sort();
-                    format!(
-                        "vars: [{}]",
-                        vars.iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                } else {
-                    "vars: []".to_string()
-                };
+                let vars_set = fmt_pred_vars(&self.comparison_predicates_vars_str_set, i);
                 writeln!(f, "  [{:>2}] {} ({})", i, comp_pred, vars_set)?;
             }
         }
@@ -648,19 +645,7 @@ impl fmt::Display for Catalog {
             writeln!(f, "  (none)")?;
         } else {
             for (i, fn_call_pred) in self.fn_call_predicates.iter().enumerate() {
-                let vars_set = if i < self.fn_call_predicates_vars_str_set.len() {
-                    let mut vars: Vec<_> = self.fn_call_predicates_vars_str_set[i].iter().collect();
-                    vars.sort();
-                    format!(
-                        "vars: [{}]",
-                        vars.iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                } else {
-                    "vars: []".to_string()
-                };
+                let vars_set = fmt_pred_vars(&self.fn_call_predicates_vars_str_set, i);
                 writeln!(f, "  [{:>2}] {} ({})", i, fn_call_pred, vars_set)?;
             }
         }

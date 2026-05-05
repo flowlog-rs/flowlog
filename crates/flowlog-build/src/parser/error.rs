@@ -12,10 +12,12 @@
 
 use std::path::PathBuf;
 
-use crate::common::{primary_label, secondary_label, Diagnostic, InternalError, BUG_URL};
-use crate::common::{FileId, Span};
 use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
 use thiserror::Error;
+
+use crate::common::{
+    BUG_URL, Diagnostic, FileId, InternalError, Span, primary_label, secondary_label,
+};
 
 /// Which `.decl`-style directive is being reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +48,12 @@ fn dup_labels(span: Span, prior: Span, here: &str, first: &str) -> Vec<Label<Fil
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// Single-element label vec for diagnostics that only point at one span.
+/// Returns an empty vec for dummy spans rather than fabricating a location.
+fn primary_only(span: Span) -> Vec<Label<FileId>> {
+    primary_label(span).into_iter().collect()
 }
 
 /// Errors raised while parsing a FlowLog program.
@@ -193,32 +201,32 @@ impl Diagnostic for ParseError {
             )),
 
             ParseError::UndeclaredInDirective { span, name, .. } => base
-                .with_labels(primary_label(*span).into_iter().collect())
+                .with_labels(primary_only(*span))
                 .with_notes(vec![format!(
                     "add a `.decl {name}(...)` before this directive"
                 )]),
 
             ParseError::UndeclaredInIterativeList { span, name } => base
-                .with_labels(primary_label(*span).into_iter().collect())
+                .with_labels(primary_only(*span))
                 .with_notes(vec![format!(
                     "either `.decl {name}(...)` it, or drop `{name}` from the iterative list"
                 )]),
 
             ParseError::UndeclaredLoopCondition { span, name } => base
-                .with_labels(primary_label(*span).into_iter().collect())
+                .with_labels(primary_only(*span))
                 .with_notes(vec![format!(
                     "declare `{name}` as a nullary relation with `.decl {name}()` and derive it inside the loop"
                 )]),
 
             ParseError::UndeclaredInRule { span, name }
             | ParseError::UndeclaredInFact { span, name } => base
-                .with_labels(primary_label(*span).into_iter().collect())
+                .with_labels(primary_only(*span))
                 .with_notes(vec![format!(
                     "add a matching `.decl {name}(...)` declaration, or remove the reference"
                 )]),
 
             ParseError::CircularInclude { span, chain, .. } => {
-                let mut diag = base.with_labels(primary_label(*span).into_iter().collect());
+                let mut diag = base.with_labels(primary_only(*span));
                 if !chain.is_empty() {
                     let shown: Vec<String> = chain.iter().map(|p| p.display().to_string()).collect();
                     diag = diag.with_notes(vec![format!("include chain: {}", shown.join(" → "))]);
@@ -230,9 +238,7 @@ impl Diagnostic for ParseError {
             | ParseError::LoopBlockInStandardMode { span }
             | ParseError::NonNullaryLoopCondition { span, .. }
             | ParseError::PlaceholderInUdf { span, .. }
-            | ParseError::IncludeIo { span, .. } => {
-                base.with_labels(primary_label(*span).into_iter().collect())
-            }
+            | ParseError::IncludeIo { span, .. } => base.with_labels(primary_only(*span)),
 
             ParseError::Internal(_) => unreachable!("handled above"),
         }
