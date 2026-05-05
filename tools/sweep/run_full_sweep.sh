@@ -297,6 +297,13 @@ with open(path) as f:
             flags.append(f"CROSSCHECK   {pair}: {xc}")
         # 2. Lib runner more than 20% off compiler exec time (sanity).
         lvc = num(r.get("Lib_vs_Compiler_Exec"))
+        # 2. Lib runner more than 20% off compiler exec time (sanity).
+        #    Empirical envelope: lib should be within ±30% of compiler
+        #    exec time on the paper rig — both run the same generated
+        #    code; differences come from the lib-runner glue and
+        #    run-to-run noise. Anything outside [0.7×, 1.4×] flags as
+        #    LIB-DRIFT (often noise on tiny workloads — see PARTIAL).
+        lvc = num(r.get("Lib_vs_Compiler_Exec"))
         if lvc is not None and (lvc < 0.7 or lvc > 1.4):
             flags.append(f"LIB-DRIFT    {pair}: lib/compiler exec ratio = {lvc:.2f}x")
         # 3. Compiler 1.5x+ slower than Souffle (a real perf regression hint).

@@ -395,8 +395,10 @@ python3 docs/render_perf_snapshot.py        "$SWEEP_CSV"
 ```
 
 Both render scripts accept either the curated `docs/perf-snapshot.csv`
-schema or the raw 22-column `comparison_results.csv` directly, so the
-chart can be regenerated against any sweep without a hand-rename step.
+schema (10 columns: `Program, Dataset, Compiler_Exec_s, Lib_Exec_s,
+Souffle_Total_s, …, Crosscheck`) or the raw 26-column
+`comparison_results.csv` directly, so the chart can be regenerated against
+any sweep without a hand-rename step.
 
 Last full sweep producing the chart and table above:
 &nbsp;**SHA `408d2dc`**, branch `test-infra/memory-and-sweep`, completed

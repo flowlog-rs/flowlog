@@ -18,9 +18,14 @@ set -euo pipefail
 #                      Default: interpreter.    Examples:
 #                        --baseline=souffle
 #                        --baseline=interpreter,souffle
+#   --target=<prog:ds> Run only one pair, matched by basename stem,
+#                      e.g. --target=cspa:cspa-httpd. Useful when
+#                      iterating on a single program; resume / skip
+#                      semantics still apply.
 #   --fresh            wipe `result/benchmark/` before running
 #                      (otherwise the script resumes — pairs already in
 #                      the CSV are skipped).
+#   -h, --help         print this header block and exit.
 #
 # Environment:
 #   WORKERS=<n>        thread count passed to EVERY engine
@@ -32,6 +37,12 @@ set -euo pipefail
 #                      hosts with ≥ 64 cores.
 #   NUM_RUNS=<n>       timed runs per (engine, pair). Median is kept.
 #                      Default: 3.
+#   FLOWLOG_RUN_TIMEOUT=<seconds>
+#                      SIGTERM cap on a single engine attempt. Default:
+#                      1800 (30 min). A timed-out attempt is treated as
+#                      a failed run, so the fail-closed PARTIAL /
+#                      PAIR-FAIL semantics handle a hung pair without
+#                      stalling the whole sweep.
 #   FLOWLOG_KEEP_DATASETS=<truthy>
 #                      preserve datasets between runs (skip the per-pair
 #                      cleanup). Any non-zero / non-`false` value counts
@@ -95,13 +106,23 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 #   --baseline=interpreter,souffle  # both, side-by-side in the CSV
 FRESH=0
 BASELINES="interpreter"
+TARGET_FILTER=""
 POSITIONAL_ARGS=()
 while (( $# )); do
     case "$1" in
+        -h|--help)
+            awk '/^# =+$/ { sep++; next }
+                 sep==1 || sep==2 { sub(/^# ?/, ""); print }
+                 sep>=3 { exit }' "$0"
+            exit 0
+            ;;
         --fresh)            FRESH=1; shift ;;
         --baseline=*)       BASELINES="${1#--baseline=}"; shift ;;
         --baseline)         BASELINES="$2"; shift 2 ;;
+        --target=*)         TARGET_FILTER="${1#--target=}"; shift ;;
+        --target)           TARGET_FILTER="$2"; shift 2 ;;
         --)                 shift; POSITIONAL_ARGS+=("$@"); break ;;
+        -*)                 die "Unknown option: $1 (try --help)" ;;
         *)                  POSITIONAL_ARGS+=("$1"); shift ;;
     esac
 done
@@ -168,6 +189,15 @@ _DEFAULT_WORKERS=$(( _NPROC < 64 ? _NPROC : 64 ))
 WORKERS="${WORKERS:-$_DEFAULT_WORKERS}"
 [[ "$WORKERS" =~ ^[0-9]+$ ]] && (( WORKERS > 0 )) \
     || die "WORKERS must be a positive integer, got: $WORKERS"
+
+# Per-attempt SIGTERM cap. Default 1800s (30 min) — about 9× headroom
+# above the largest pair under souffle on the paper rig (reach/arabic
+# ~192s). A timed-out attempt becomes a failed run, so bbfb986's
+# fail-closed PARTIAL / PAIR-FAIL semantics handle the result; the
+# sweep no longer stalls on a single regressed pair.
+FLOWLOG_RUN_TIMEOUT="${FLOWLOG_RUN_TIMEOUT:-1800}"
+[[ "$FLOWLOG_RUN_TIMEOUT" =~ ^[0-9]+$ ]] && (( FLOWLOG_RUN_TIMEOUT > 0 )) \
+    || die "FLOWLOG_RUN_TIMEOUT must be a positive integer (seconds), got: $FLOWLOG_RUN_TIMEOUT"
 
 # Interpreter repo (vldb26-artifact) is expected next to this repo.
 INTERPRETER_DIR="${ROOT_DIR}/../vldb26-artifact"
@@ -613,13 +643,20 @@ run_interpreter() {
 
         log "$YELLOW" "RUN" "  Interpreter attempt $run/$NUM_RUNS"
         RUST_LOG=info "$TIME_BIN" -v -o "$rss_log" \
+            timeout "${FLOWLOG_RUN_TIMEOUT}" \
             "$INTERPRETER_BIN" \
             --program "$prog_path" \
             --facts "$fact_path" \
             --workers "$WORKERS" \
             > "$run_log" 2>&1 || {
-                log "$YELLOW" "WARN" \
-                    "Interpreter run $run failed for $prog_file + $dataset_name (see $run_log)"
+                local _rc=$?
+                if (( _rc == 124 )); then
+                    log "$YELLOW" "TIMEOUT" \
+                        "Interpreter run $run hit ${FLOWLOG_RUN_TIMEOUT}s cap on $prog_file + $dataset_name (see $run_log)"
+                else
+                    log "$YELLOW" "WARN" \
+                        "Interpreter run $run failed for $prog_file + $dataset_name (see $run_log)"
+                fi
                 continue
             }
 
@@ -679,11 +716,13 @@ run_compiler() {
 
     # Compile .dl -> standalone executable (once).
     rm -f "$binary"
+    local compile_log="${LOG_DIR}/${stem}_${dataset_name}_compiler_build.log"
     "$COMPILER_BIN" "$prog_path" \
         -F "$dataset_path" \
         -o "$binary" \
         --mode datalog-batch \
-        || die "Compilation failed for $prog_file"
+        > "$compile_log" 2>&1 \
+        || die "Compilation failed for $prog_file (see $compile_log)"
     [[ -x "$binary" ]] || die "Binary not found: $binary"
 
     # Run N times.
@@ -694,9 +733,17 @@ run_compiler() {
         local rss_log="${run_log}.rss"
 
         log "$YELLOW" "RUN" "  Compiler attempt $run/$NUM_RUNS"
-        "$TIME_BIN" -v -o "$rss_log" "$binary" -w "$WORKERS" > "$run_log" 2>&1 || {
-            log "$YELLOW" "WARN" \
-                "Compiler run $run failed for $prog_file + $dataset_name (see $run_log)"
+        "$TIME_BIN" -v -o "$rss_log" \
+            timeout "${FLOWLOG_RUN_TIMEOUT}" \
+            "$binary" -w "$WORKERS" > "$run_log" 2>&1 || {
+            local _rc=$?
+            if (( _rc == 124 )); then
+                log "$YELLOW" "TIMEOUT" \
+                    "Compiler run $run hit ${FLOWLOG_RUN_TIMEOUT}s cap on $prog_file + $dataset_name (see $run_log)"
+            else
+                log "$YELLOW" "WARN" \
+                    "Compiler run $run failed for $prog_file + $dataset_name (see $run_log)"
+            fi
             continue
         }
 
@@ -845,10 +892,18 @@ run_lib() {
 
         log "$YELLOW" "RUN" "  Lib attempt $run/$NUM_RUNS"
         env "${csv_envs[@]}" WORKERS="$WORKERS" \
-            "$TIME_BIN" -v -o "$rss_log" "$LIB_BENCH_BIN" \
+            "$TIME_BIN" -v -o "$rss_log" \
+            timeout "${FLOWLOG_RUN_TIMEOUT}" \
+            "$LIB_BENCH_BIN" \
             > "$run_log" 2>&1 || {
-                log "$YELLOW" "WARN" \
-                    "Lib run $run failed for $prog_file + $dataset_name (see $run_log)"
+                local _rc=$?
+                if (( _rc == 124 )); then
+                    log "$YELLOW" "TIMEOUT" \
+                        "Lib run $run hit ${FLOWLOG_RUN_TIMEOUT}s cap on $prog_file + $dataset_name (see $run_log)"
+                else
+                    log "$YELLOW" "WARN" \
+                        "Lib run $run failed for $prog_file + $dataset_name (see $run_log)"
+                fi
                 continue
             }
 
@@ -1011,10 +1066,17 @@ run_souffle() {
         local t_start t_end
         t_start=$(date +%s.%N)
         "$TIME_BIN" -v -o "$rss_log" \
+            timeout "${FLOWLOG_RUN_TIMEOUT}" \
             "$sf_bin" -F "$fact_path" -D "$out_dir" -j "$WORKERS" \
             > "$run_log" 2>&1 || {
-                log "$YELLOW" "WARN" \
-                    "Souffle run $run failed for $prog_file + $dataset_name (see $run_log)"
+                local _rc=$?
+                if (( _rc == 124 )); then
+                    log "$YELLOW" "TIMEOUT" \
+                        "Souffle run $run hit ${FLOWLOG_RUN_TIMEOUT}s cap on $prog_file + $dataset_name (see $run_log)"
+                else
+                    log "$YELLOW" "WARN" \
+                        "Souffle run $run failed for $prog_file + $dataset_name (see $run_log)"
+                fi
                 rm -rf "$out_dir"
                 continue
             }
@@ -1337,7 +1399,9 @@ main() {
     echo "  Interpreter   : $INTERPRETER_DIR  (timed: $RUN_INTERPRETER)"
     echo "  Souffle       : $SOUFFLE_BIN  (timed: $RUN_SOUFFLE)"
     echo "  Config        : $CONFIG_FILE"
+    [[ -n "$TARGET_FILTER" ]] && echo "  Target filter : $TARGET_FILTER"
     echo "  Workers       : $WORKERS  (applied identically to every engine: interp --workers, compiler -w, lib WORKERS, souffle -j)"
+    echo "  Run timeout   : ${FLOWLOG_RUN_TIMEOUT}s per attempt"
     echo ""
 
     [[ -f "$CONFIG_FILE" ]] || die "Config file not found: $CONFIG_FILE"
@@ -1364,6 +1428,16 @@ main() {
 
         local _prog_base="$(basename "$PROG_NAME")"
         local _display_stem="${PROG_NAME%.*}"
+
+        # --target=<stem>:<dataset> filter. Stem is the .dl basename
+        # without extension (e.g. cspa, andersen, tc). Match exactly.
+        if [[ -n "$TARGET_FILTER" ]]; then
+            local _stem_short="$(basename "$PROG_NAME" .dl)"
+            if [[ "${_stem_short}:${DATASET_NAME}" != "$TARGET_FILTER" ]]; then
+                continue
+            fi
+        fi
+
         if pair_already_done "$_display_stem" "$DATASET_NAME"; then
             log "$YELLOW" "SKIP" "$_display_stem + $DATASET_NAME — already in CSV"
             continue

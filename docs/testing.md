@@ -80,7 +80,7 @@ Each pair runs under up to four engines:
 - **Souffle**     — canonical `.dl` from `tools/benchmark/souffle-programs/`.
 
 Every run is wrapped in `/usr/bin/time -v` (peak RSS alongside wall time).
-Output: `result/benchmark/comparison_results.csv` (22 columns).
+Output: `result/benchmark/comparison_results.csv` (26 columns).
 
 Souffle compile recipe (FlowLog VLDB paper canonical form):
 

@@ -2,7 +2,7 @@
 """Render the FlowLog-vs-Souffle workload bar chart.
 
 Default input: `docs/perf-snapshot.csv` (the curated, committed snapshot).
-Override:      pass a path on the command line, e.g. the raw 22-column
+Override:      pass a path on the command line, e.g. the raw 26-column
                `result/sweep/<ts>/comparison_results.csv` straight from a
                fresh sweep — both schemas are accepted.
 
@@ -26,6 +26,10 @@ import csv
 import math
 import pathlib
 import sys
+
+if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+    print(__doc__)
+    sys.exit(0)
 
 import matplotlib
 
