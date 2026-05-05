@@ -268,9 +268,16 @@ no-ops.
    philosophy as the flowlog repo.
 5. **Comparisons are pluggable.** Adding another engine (DuckDB, etc.) is a
    new file under `scripts/`, not a rewrite of `cross_engine.sh`.
-6. **Reproducibility over cleverness.** Each result CSV records the flowlog
-   commit (resolved to a full SHA, not `main`), corpus revision, host, worker
-   count, and wall-clock time. A run from a year ago must be reconstructable.
+6. **Reproducibility over cleverness.** Every per-run result directory under
+   `results/` ships a `run_info.txt` sidecar that records the flowlog commit
+   (resolved to a full SHA, not `main`), corpus revision (with a dirty flag),
+   config file path + sha256, host, worker count, num-runs, runner-specific
+   knobs (baselines, tolerances, …), and a UTC timestamp. The result CSV/TSV
+   sits next to it so the pair is self-describing. Resume semantics are
+   *enforced* against this manifest — `cross_engine.sh` hard-fails if any
+   identity field changed since the existing CSV was started, telling the
+   caller to either revert or `--fresh`. A run from a year ago must be
+   reconstructable.
 7. **Bench env is heavier than test env, and that's fine.** Soufflé, DuckDB,
    GNU time, larger dataset caches all live with the bench repo's
    `tools/env/`. The flowlog repo's env stays minimal.
