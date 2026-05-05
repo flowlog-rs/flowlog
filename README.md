@@ -142,11 +142,11 @@ $ make perf    # tools/benchmark/compare.sh — timings + peak RSS vs the interp
 
 `make sweep` runs four gated suites — `cargo test`, `tests/unit/` (binary + library), `tests/complex/` (vs a [Souffle](https://souffle-lang.github.io/) oracle), and `tools/benchmark/compare.sh` — and writes a single `result/sweep/<ts>/diagnosis.txt`. See [`tests/README.md`](tests/README.md) for an in-depth guide — per-layer contracts, fairness invariants, the diagnosis schema, and the full results table.
 
-End-to-end runtime, FlowLog compiler vs Souffle compiler (30 workloads, `WORKERS=64`, median of 3 runs):
+<p align="center">
+  <img src="docs/perf-flowlog-vs-souffle.svg" alt="FlowLog vs Souffle — end-to-end compiler runtime, 30 workloads" />
+</p>
 
-![FlowLog vs Souffle](docs/perf-flowlog-vs-souffle.svg)
-
-FlowLog wins on 30 / 30 workloads, geomean speedup **6.33×**, range **1.22× → 60.30×**. Cross-validation: 29 explicit row-count agreements, 0 mismatches.
+End-to-end compiler runtime, FlowLog vs Soufflé (30 workloads, `WORKERS = 64`, median of 3 runs). FlowLog wins **30 / 30**, geomean speedup **6.33×**, range **1.22× → 60.30×**. Cross-validation: 29 explicit row-count agreements, 0 mismatches.
 
 ## Background Reading
 
