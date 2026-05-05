@@ -20,8 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: ⚙️ Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: ⚙️ Install protobuf-compiler + bsdmainutils
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler bsdmainutils
 
       - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -37,7 +37,10 @@ jobs:
       - name: 🧪 Unit tests
         run: cargo test
 
-      - name: 🏁 End-to-end tests
+      - name: 🛡️ Cache-safety regression test
+        run: bash tests/safety/cleanup_dataset_test.sh
+
+      - name: 🏁 End-to-end fixture tests
         run: |
           bash tests/fixtures/run_compiler.sh
           bash tests/fixtures/run_lib.sh
