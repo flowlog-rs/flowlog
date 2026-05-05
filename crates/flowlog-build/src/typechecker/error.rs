@@ -4,13 +4,13 @@
 //! [`codespan_reporting`] diagnostic that points at the offending site
 //! (and, where helpful, a secondary site such as the original binding).
 
-use crate::common::{
-    labels, primary_label, secondary_label, Diagnostic, InternalError, BUG_URL,
-};
-use crate::common::{FileId, Span};
-use crate::parser::{AggregationOperator, ArithmeticOperator, ComparisonOperator, DataType};
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use thiserror::Error;
+
+use crate::common::{
+    BUG_URL, Diagnostic, FileId, InternalError, Span, labels, primary_label, secondary_label,
+};
+use crate::parser::{AggregationOperator, ArithmeticOperator, ComparisonOperator, DataType};
 
 #[derive(Debug, Error)]
 pub enum TypeCheckError {
