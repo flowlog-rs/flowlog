@@ -129,6 +129,17 @@ across `flowlog-parser`, `flowlog-planner`, `flowlog-build`,
 If L0 fails the sweep aborts immediately. No point running fixtures against a
 broken parser.
 
+> [!NOTE]
+> A pre-flight **safety regression test** (`tests/safety/cleanup_dataset_test.sh`)
+> runs ahead of L0 in the sweep — `< 1 s`, 11 assertions. It exercises the
+> `cleanup_dataset` env-var contract (`FLOWLOG_KEEP_DATASETS=1` retains;
+> a symlinked `FACT_DIR` retains unless `FLOWLOG_FORCE_CLEANUP=1`; a plain
+> dir deletes) across all three implementations (L2 / L3 / L4). The guard
+> protects the persistent `/datasets/facts/` cache from being `rm -rf`'d
+> through a `facts → /datasets/facts` symlink — a regression here would
+> silently destroy 100+ GB of cached datasets on the next sweep run, so
+> we want it caught first. Invoke standalone with `make test-safety`.
+
 <br>
 
 ### `L1` &nbsp; Fixture-level end-to-end &nbsp;·&nbsp; `tests/unit/`
@@ -208,7 +219,7 @@ compiler (this repo), a library-mode runner, and (when
 the median. Every run is wrapped in `/usr/bin/time -v` so peak resident-set
 size is captured alongside wall time.
 
-**CSV schema** &nbsp;(`result/benchmark/comparison_results.csv`, 22 columns):
+**CSV schema** &nbsp;(`result/benchmark/comparison_results.csv`, 26 columns):
 
 | Group         | Columns |
 |---------------|---------|
@@ -219,6 +230,16 @@ size is captured alongside wall time.
 | Souffle       | `Souffle_{Load, Exec, Total}`, `Souffle_PeakRss_MB` |
 | Ratios        | `Compiler_vs_Interp_Total`, `Lib_vs_Compiler_Total`, `Souffle_vs_Compiler_Total` |
 | Validation    | `Crosscheck_Souffle` &nbsp;(`match(N)` / `match(N)+aux(M)` / `PARTIAL(N):…` / `MISMATCH:rel=AvsB;…` / `n/a`) |
+| Sample count  | `{Interp, Compiler, Lib, Souffle}_RunsSucceeded` &nbsp;(integer K, `0 < K ≤ NUM_RUNS`; empty when the engine wasn't requested for this pair). The diagnosis writer flags rows where any non-empty count is `< NUM_RUNS` as `PARTIAL`. |
+
+> [!IMPORTANT]
+> A pair where any **required** engine produces zero successful runs is
+> deliberately **not** appended to the CSV. `compare.sh` prints a
+> `[PAIR-FAIL]` line, exits non-zero, and leaves the row missing — so a
+> resume run (`compare.sh` without `--fresh`) retries the pair instead of
+> treating it as permanently complete. Without this gate, a transient
+> failure (e.g. one OOM under heavy load) would mask as a permanent
+> success on resume.
 
 #### Per-pair tags in `config.txt`
 

@@ -248,7 +248,7 @@ cleanup_dataset() {
         return
     fi
     log "$YELLOW" "CLEANUP" "$name"
-    rm -rf "${FACT_DIR}/${name}"
+    rm -rf -- "${FACT_DIR:?FACT_DIR is empty - refusing to rm -rf}/${name:?dataset name is empty - refusing to rm -rf}"
 }
 
 ############################################################
@@ -552,19 +552,26 @@ run_interpreter() {
     done
 
     if [[ -n "$entries" ]]; then
-        local median_entry median_time median_log median_rss
+        local median_entry median_time median_log median_rss n_succeeded
         median_entry=$(pick_median "$entries")
         median_time="${median_entry%%:*}"
         median_log="${median_entry#*:}"
         median_rss=$(pick_median_rss "$rss_values")
+        n_succeeded=$(echo "$entries" | wc -w)
         cp "$median_log" "$best_log"
         cp "${median_log}.rss" "${best_log}.rss" 2>/dev/null || true
         echo "$median_rss" > "${best_log}.median_rss_kb"
+        echo "$n_succeeded" > "${best_log}.n_runs_succeeded"
+        if (( n_succeeded < NUM_RUNS )); then
+            log "$YELLOW" "PARTIAL" \
+                "Interpreter: only $n_succeeded/$NUM_RUNS runs succeeded for $prog_file + $dataset_name (median taken over $n_succeeded)"
+        fi
         log "$GREEN" "DONE" \
-            "Interpreter: $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
+            "Interpreter: $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB, runs=${n_succeeded}/${NUM_RUNS})"
     else
-        log "$YELLOW" "WARN" \
+        log "$RED" "FAIL" \
             "Interpreter: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
+        rm -f "${best_log}.n_runs_succeeded"
         return 1
     fi
 }
@@ -625,25 +632,32 @@ run_compiler() {
     rm -f "$binary"
 
     if [[ -n "$entries" ]]; then
-        local median_entry median_time median_log median_rss
+        local median_entry median_time median_log median_rss n_succeeded
         median_entry=$(pick_median "$entries")
         median_time="${median_entry%%:*}"
         median_log="${median_entry#*:}"
         median_rss=$(pick_median_rss "$rss_values")
+        n_succeeded=$(echo "$entries" | wc -w)
         cp "$median_log" "$best_log"
         cp "${median_log}.rss" "${best_log}.rss" 2>/dev/null || true
         echo "$median_rss" > "${best_log}.median_rss_kb"
+        echo "$n_succeeded" > "${best_log}.n_runs_succeeded"
         # Cheap cross-validation hook: extract per-relation sizes from
         # the median log (FlowLog compiler emits "[size][<rel>] t=() size=N")
         # so they can be diff'd against Souffle's own .printsize output.
         grep -oE '\[size\]\[[^]]+\] t=\(\) size=[0-9]+' "$median_log" 2>/dev/null \
             | sed -E 's/^\[size\]\[([^]]+)\] t=\(\) size=([0-9]+)$/\1\t\2/' \
             > "${best_log}.sizes" 2>/dev/null
+        if (( n_succeeded < NUM_RUNS )); then
+            log "$YELLOW" "PARTIAL" \
+                "Compiler: only $n_succeeded/$NUM_RUNS runs succeeded for $prog_file + $dataset_name (median taken over $n_succeeded)"
+        fi
         log "$GREEN" "DONE" \
-            "Compiler:  $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
+            "Compiler:  $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB, runs=${n_succeeded}/${NUM_RUNS})"
     else
-        log "$YELLOW" "WARN" \
+        log "$RED" "FAIL" \
             "Compiler: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
+        rm -f "${best_log}.n_runs_succeeded" "${best_log}.sizes"
         return 1
     fi
 }
@@ -767,19 +781,26 @@ run_lib() {
     done
 
     if [[ -n "$entries" ]]; then
-        local median_entry median_time median_log median_rss
+        local median_entry median_time median_log median_rss n_succeeded
         median_entry=$(pick_median "$entries")
         median_time="${median_entry%%:*}"
         median_log="${median_entry#*:}"
         median_rss=$(pick_median_rss "$rss_values")
+        n_succeeded=$(echo "$entries" | wc -w)
         cp "$median_log" "$best_log"
         cp "${median_log}.rss" "${best_log}.rss" 2>/dev/null || true
         echo "$median_rss" > "${best_log}.median_rss_kb"
+        echo "$n_succeeded" > "${best_log}.n_runs_succeeded"
+        if (( n_succeeded < NUM_RUNS )); then
+            log "$YELLOW" "PARTIAL" \
+                "Lib: only $n_succeeded/$NUM_RUNS runs succeeded for $prog_file + $dataset_name (median taken over $n_succeeded)"
+        fi
         log "$GREEN" "DONE" \
-            "Lib:       $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
+            "Lib:       $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB, runs=${n_succeeded}/${NUM_RUNS})"
     else
-        log "$YELLOW" "WARN" \
+        log "$RED" "FAIL" \
             "Lib: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
+        rm -f "${best_log}.n_runs_succeeded"
         return 1
     fi
 }
@@ -949,21 +970,27 @@ run_souffle() {
     done
 
     if [[ -n "$entries" ]]; then
-        local median_entry median_time median_log median_rss
+        local median_entry median_time median_log median_rss n_succeeded
         median_entry=$(pick_median "$entries")
         median_time="${median_entry%%:*}"
         median_log="${median_entry#*:}"
         median_rss=$(pick_median_rss "$rss_values")
+        n_succeeded=$(echo "$entries" | wc -w)
         cp "$median_log" "$best_log"
         cp "${median_log}.rss" "${best_log}.rss" 2>/dev/null || true
         echo "$median_rss" > "${best_log}.median_rss_kb"
         echo "$median_time" > "${best_log}.median_total_s"
+        echo "$n_succeeded" > "${best_log}.n_runs_succeeded"
+        if (( n_succeeded < NUM_RUNS )); then
+            log "$YELLOW" "PARTIAL" \
+                "Souffle: only $n_succeeded/$NUM_RUNS runs succeeded for $prog_file + $dataset_name (median taken over $n_succeeded)"
+        fi
         log "$GREEN" "DONE" \
-            "Souffle:   $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
+            "Souffle:   $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB, runs=${n_succeeded}/${NUM_RUNS})"
     else
-        log "$YELLOW" "WARN" \
+        log "$RED" "FAIL" \
             "Souffle: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
-        rm -f "${best_log}.median_rss_kb" "${best_log}.median_total_s"
+        rm -f "${best_log}.median_rss_kb" "${best_log}.median_total_s" "${best_log}.n_runs_succeeded"
         : > "$best_log"
         return 1
     fi
@@ -984,7 +1011,12 @@ run_souffle() {
 #
 # Memory columns sit at the end so existing CSV consumers (groomer carve /
 # dashboards) keep working unchanged when they ignore unknown trailing columns.
-CSV_HEADER="Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup,Lib_Exec,Lib_vs_Interp_Exec,Lib_vs_Compiler_Exec,Interp_PeakRss_MB,Compiler_PeakRss_MB,Lib_PeakRss_MB,Lib_vs_Compiler_Mem,Souffle_Total,Souffle_PeakRss_MB,Souffle_vs_Compiler_Total,Crosscheck_Souffle"
+# *_RunsSucceeded: how many of NUM_RUNS attempts produced a parseable wall
+# time. A value < NUM_RUNS means the median is over fewer samples (the
+# diagnosis writer flags this as PARTIAL); empty means the engine wasn't
+# requested for this pair (e.g. [interp:skip] tag, or --baseline didn't
+# include souffle).
+CSV_HEADER="Program,Dataset,Interp_Load,Compiler_Load,Load_Speedup,Interp_Exec,Compiler_Exec,Exec_Speedup,Interp_Total,Compiler_Total,Total_Speedup,Lib_Exec,Lib_vs_Interp_Exec,Lib_vs_Compiler_Exec,Interp_PeakRss_MB,Compiler_PeakRss_MB,Lib_PeakRss_MB,Lib_vs_Compiler_Mem,Souffle_Total,Souffle_PeakRss_MB,Souffle_vs_Compiler_Total,Crosscheck_Souffle,Interp_RunsSucceeded,Compiler_RunsSucceeded,Lib_RunsSucceeded,Souffle_RunsSucceeded"
 
 # Cross-validate compiler-vs-Souffle row counts.
 #
@@ -1143,7 +1175,16 @@ append_csv_row() {
         fi
     fi
 
-    echo "${stem},${dataset},${i_load},${c_load},${rs_load},${i_exec},${c_exec},${rs_exec},${i_total},${c_total},${rs_total},${l_exec},${lib_vs_interp},${lib_vs_comp},${i_rss_mb},${c_rss_mb},${l_rss_mb},${lib_vs_comp_mem},${sf_total},${sf_rss_mb},${sf_vs_comp_total},${crosscheck}" \
+    # Pull `n_runs_succeeded` sidecars (written by run_*). Empty value
+    # means the engine wasn't executed for this pair; numeric value means
+    # K of NUM_RUNS samples produced a parseable result.
+    local i_n c_n l_n s_n
+    i_n=$(cat "${interp_log}.n_runs_succeeded" 2>/dev/null || true)
+    c_n=$(cat "${comp_log}.n_runs_succeeded"   2>/dev/null || true)
+    l_n=$(cat "${lib_log}.n_runs_succeeded"    2>/dev/null || true)
+    s_n=$(cat "${sf_log}.n_runs_succeeded"     2>/dev/null || true)
+
+    echo "${stem},${dataset},${i_load},${c_load},${rs_load},${i_exec},${c_exec},${rs_exec},${i_total},${c_total},${rs_total},${l_exec},${lib_vs_interp},${lib_vs_comp},${i_rss_mb},${c_rss_mb},${l_rss_mb},${lib_vs_comp_mem},${sf_total},${sf_rss_mb},${sf_vs_comp_total},${crosscheck},${i_n},${c_n},${l_n},${s_n}" \
         >> "$CSV_FILE"
 
     log "$GREEN" "CSV" "Appended ${stem}_${dataset} to $CSV_FILE"
@@ -1264,24 +1305,63 @@ main() {
         local lib_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_lib.log"
         local sf_log="${LOG_DIR}/${file_stem}_${DATASET_NAME}_souffle.log"
 
-        # Make sure stale RSS/total sidecars from a previous run don't
-        # leak into this iteration's CSV row.
-        rm -f "${interp_log}" "${interp_log}.median_rss_kb" \
-              "${sf_log}" "${sf_log}.median_rss_kb" "${sf_log}.median_total_s"
+        # Make sure stale RSS/total/n_runs sidecars from a previous run
+        # don't leak into this iteration's CSV row.
+        rm -f "${interp_log}" "${interp_log}.median_rss_kb" "${interp_log}.n_runs_succeeded" \
+              "${comp_log}.n_runs_succeeded" "${comp_log}.sizes" \
+              "${lib_log}.n_runs_succeeded" \
+              "${sf_log}" "${sf_log}.median_rss_kb" "${sf_log}.median_total_s" "${sf_log}.n_runs_succeeded"
+
+        # Track which engines were attempted and whether they produced at
+        # least one valid sample. An engine that's required-but-failed
+        # disqualifies the pair from being recorded — see the gate below.
+        local rc_interp=0 rc_compiler=0 rc_lib=0 rc_souffle=0
+        local interp_required=0 souffle_required=0
 
         if [[ $RUN_INTERPRETER -eq 1 ]] && ! pair_has_tag "interp:skip"; then
-            run_interpreter "$PROG_NAME" "$DATASET_NAME" || true
+            interp_required=1
+            run_interpreter "$PROG_NAME" "$DATASET_NAME" || rc_interp=$?
         elif pair_has_tag "interp:skip"; then
             log "$YELLOW" "SKIP" "Interpreter: $PROG_NAME + $DATASET_NAME (per [interp:skip] tag)"
         fi
 
-        run_compiler    "$PROG_NAME" "$DATASET_NAME" || true
-        run_lib         "$PROG_NAME" "$DATASET_NAME" || true
+        run_compiler    "$PROG_NAME" "$DATASET_NAME" || rc_compiler=$?
+        run_lib         "$PROG_NAME" "$DATASET_NAME" || rc_lib=$?
 
         if [[ $RUN_SOUFFLE -eq 1 ]] && ! pair_has_tag "souffle:skip"; then
-            run_souffle "$PROG_NAME" "$DATASET_NAME" || true
+            souffle_required=1
+            run_souffle "$PROG_NAME" "$DATASET_NAME" || rc_souffle=$?
         elif pair_has_tag "souffle:skip"; then
             log "$YELLOW" "SKIP" "Souffle: $PROG_NAME + $DATASET_NAME (per [souffle:skip] tag)"
+        fi
+
+        # Gate: a pair is "complete" iff every required engine produced
+        # a valid sample. Otherwise we deliberately do NOT append a CSV
+        # row — pair_already_done would then short-circuit the retry on
+        # resume, masking a transient failure as permanent. Recording
+        # here records the failure to the operator's transcript and lets
+        # the next sweep --fresh=0 retry the pair cleanly.
+        local pair_failed=0
+        local fail_reasons=""
+        if (( rc_compiler != 0 )); then
+            pair_failed=1; fail_reasons="${fail_reasons:+$fail_reasons, }compiler"
+        fi
+        if (( rc_lib != 0 )); then
+            pair_failed=1; fail_reasons="${fail_reasons:+$fail_reasons, }lib"
+        fi
+        if (( interp_required && rc_interp != 0 )); then
+            pair_failed=1; fail_reasons="${fail_reasons:+$fail_reasons, }interpreter"
+        fi
+        if (( souffle_required && rc_souffle != 0 )); then
+            pair_failed=1; fail_reasons="${fail_reasons:+$fail_reasons, }souffle"
+        fi
+
+        if (( pair_failed )); then
+            log "$RED" "PAIR-FAIL" \
+                "$display_stem + $DATASET_NAME — required engine(s) all-runs-failed: ${fail_reasons}. NOT writing CSV row; pair will retry on resume."
+            ANY_PAIR_FAILED=1
+            cleanup_dataset "$DATASET_NAME"
+            continue
         fi
 
         print_pair_summary "$lbl" "$interp_log" "$comp_log" "$lib_log" "$sf_log"
@@ -1294,6 +1374,15 @@ main() {
     done < "$CONFIG_FILE"
 
     generate_results
+
+    # Exit non-zero so the sweep step sees a FAIL and the diagnosis writer
+    # marks L3 as failed — without forcing a `die` mid-loop on the first
+    # bad pair (a 3-hour sweep shouldn't be aborted by one OOM).
+    if (( ${ANY_PAIR_FAILED:-0} )); then
+        log "$RED" "FINISH" \
+            "compare.sh completed with at least one pair-level failure (see PAIR-FAIL above). The CSV does not contain rows for failed pairs; rerun without --fresh to retry."
+        return 1
+    fi
 }
 
 main "$@"

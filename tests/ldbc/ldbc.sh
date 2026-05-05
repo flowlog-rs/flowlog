@@ -125,7 +125,7 @@ cleanup_dataset() {
         return
     fi
     log "Cleaning up dataset $dataset_name"
-    rm -rf "$extract_path"
+    rm -rf -- "${extract_path:?extract_path is empty - refusing to rm -rf}"
 }
 
 # ── Per-param runner ──────────────────────────────────────────────────────────

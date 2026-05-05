@@ -81,14 +81,26 @@ setup_dataset() {
 cleanup_dataset() {
     local dataset_name="$1"
     local fact_dir="${2:-$FACT_DIR_DEFAULT}"
-    # Honor FLOWLOG_KEEP_DATASETS=1 to preserve cached datasets between runs.
-    # Mirrors the L3 (compare.sh) and L4 cache contracts.
+    # Cache contract — must mirror tools/benchmark/compare.sh and
+    # tests/ldbc/ldbc.sh so every layer treats $fact_dir consistently:
+    #   FLOWLOG_KEEP_DATASETS=1   → never delete (highest priority).
+    #   $fact_dir is a symlink    → never delete unless FLOWLOG_FORCE_CLEANUP=1.
+    #                               Protects a persistent /datasets cache from
+    #                               being rm -rf'd through the symlink (the
+    #                               common dev-VM layout — see /datasets/env.sh).
     if [[ "${FLOWLOG_KEEP_DATASETS:-0}" = "1" ]]; then
         log "$YELLOW" "CLEANUP" "Dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=1)"
         return
     fi
+    local _fd_real
+    _fd_real="$(readlink -f "${fact_dir}" 2>/dev/null || echo "${fact_dir}")"
+    if [[ "${_fd_real}" != "${fact_dir}" && "${FLOWLOG_FORCE_CLEANUP:-0}" != "1" ]]; then
+        log "$YELLOW" "CLEANUP" \
+            "Dataset $dataset_name (kept; ${fact_dir} → ${_fd_real}; set FLOWLOG_FORCE_CLEANUP=1 to override)"
+        return
+    fi
     log "$YELLOW" "CLEANUP" "Dataset $dataset_name"
-    rm -rf "${fact_dir}/${dataset_name}"
+    rm -rf -- "${fact_dir:?fact_dir is empty - refusing to rm -rf}/${dataset_name:?dataset_name is empty - refusing to rm -rf}"
 }
 
 ###############################################################################

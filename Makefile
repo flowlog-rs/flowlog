@@ -4,12 +4,13 @@
 # need to remember the full paths. See tests/README.md for the layered
 # regression model and tools/sweep/README.md for runner details.
 
-.PHONY: help build test smoke sweep sweep-no-perf perf clean-sweep
+.PHONY: help build test smoke sweep sweep-no-perf perf clean-sweep test-safety
 
 help:
 	@echo "FlowLog convenience targets"
 	@echo "  make build           cargo build --release --workspace"
 	@echo "  make test            cargo test  --release --workspace  (L0 only)"
+	@echo "  make test-safety     run shell-level safety regression tests (<1s)"
 	@echo "  make smoke           full regression sweep, smoke subset    (~5 min)"
 	@echo "  make sweep           full regression sweep                  (hours)"
 	@echo "  make sweep-no-perf   correctness layers only (skip L3)"
@@ -23,6 +24,9 @@ build:
 
 test:
 	cargo test --release --workspace
+
+test-safety:
+	bash tests/safety/cleanup_dataset_test.sh
 
 smoke:
 	bash tools/sweep/run_full_sweep.sh --smoke

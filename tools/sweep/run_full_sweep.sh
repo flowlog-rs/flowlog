@@ -197,18 +197,51 @@ run_step() {
 }
 
 # ----------------------------------------------------------------------
+# Look up a recorded step's status by glob pattern. Returns the LATEST
+# matching step's status ("OK" / "FAIL" / "SKIP"), or "" if no match.
+# Used by write_diagnosis to gate perf-CSV ingestion on L3's outcome —
+# without this gate, a stale CSV from a prior sweep would be ingested
+# whenever the current sweep skips L3 (--skip-l3) or aborts before L3.
+# ----------------------------------------------------------------------
+step_status() {
+    local pattern="$1"
+    local i
+    for (( i=${#STEP_NAMES[@]}-1; i>=0; i-- )); do
+        # shellcheck disable=SC2053
+        if [[ "${STEP_NAMES[$i]}" == $pattern ]]; then
+            echo "${STEP_STATUS[$i]}"
+            return
+        fi
+    done
+    echo ""
+}
+
+# ----------------------------------------------------------------------
 # Diagnosis writer. Always called at the end (and on early abort).
 # ----------------------------------------------------------------------
 write_diagnosis() {
     local diag="$RUN_DIR/diagnosis.txt"
     local csv="${ROOT_DIR}/result/benchmark/comparison_results.csv"
 
+    # Did L3 actually run successfully THIS sweep? The perf CSV lives at
+    # a fixed path; without this gate the diagnosis would happily ingest
+    # a leftover CSV from a previous sweep even when the current one was
+    # invoked with --skip-l3 (or aborted before L3 even started). Treat
+    # only the explicit OK status as "ingest"; everything else (FAIL,
+    # SKIP, never-recorded) means "do not ingest".
+    local l3_status
+    l3_status="$(step_status 'L3 *')"
+    local ingest_csv=0
+    if [[ "$l3_status" == "OK" && -f "$csv" ]]; then
+        ingest_csv=1
+    fi
+
     # ----- Pre-compute the "problems flagged" list from the perf CSV
     # so the verdict line at the top can mention them. Empty when the
     # CSV is absent or every row is clean.
     local flags_file="$RUN_DIR/.flags"
     : > "$flags_file"
-    if [[ -f "$csv" ]]; then
+    if (( ingest_csv )); then
         python3 - "$csv" "$flags_file" <<'PY' || true
 import csv, sys
 path, out = sys.argv[1], sys.argv[2]
@@ -239,13 +272,20 @@ with open(path) as f:
         if c_mem is not None and i_mem is not None and i_mem > 0 and c_mem / i_mem > 2.0:
             flags.append(f"MEM          {pair}: compiler peak RSS {c_mem:.0f} MB "
                          f"vs interpreter {i_mem:.0f} MB ({c_mem/i_mem:.2f}x)")
+        # 5. Partial samples — fewer than NUM_RUNS runs of an engine
+        #    succeeded for this pair. The median is still recorded but
+        #    over fewer samples, so it's less reliable.
+        for engine in ("Compiler", "Lib", "Souffle", "Interp"):
+            n = (r.get(f"{engine}_RunsSucceeded") or "").strip()
+            if n.isdigit() and int(n) < 3 and int(n) > 0:
+                flags.append(f"PARTIAL      {pair}: {engine} only {n}/3 runs succeeded")
 with open(out, "w") as f:
     for line in flags:
         f.write(line + "\n")
 PY
     fi
     local n_flags=0
-    [[ -f "$flags_file" ]] && n_flags=$(wc -l < "$flags_file")
+    [[ -s "$flags_file" ]] && n_flags=$(wc -l < "$flags_file")
 
     {
         echo "FlowLog full-sweep diagnosis"
@@ -283,8 +323,8 @@ PY
         printf "%-32s  %-5s  %8s\n" "TOTAL" "" "$total"
         echo
 
-        # ----- Perf CSV roll-up (if present) -----
-        if [[ -f "$csv" ]]; then
+        # ----- Perf CSV roll-up (only when L3 ran successfully THIS sweep) -----
+        if (( ingest_csv )); then
             cp "$csv" "$RUN_DIR/comparison_results.csv"
             echo "Performance CSV ($csv):"
             echo "----------------------------------------------------------------"
@@ -335,7 +375,12 @@ if have_sf:
 PY
             echo "----------------------------------------------------------------"
         else
-            echo "(perf CSV not produced — L3 skipped or failed)"
+            case "$l3_status" in
+                "")     echo "(perf CSV not produced — L3 never ran in this sweep)" ;;
+                SKIP)   echo "(perf CSV not produced — L3 was skipped via --skip-l3)" ;;
+                FAIL)   echo "(perf CSV not consumed — L3 failed; any existing CSV may be partial or stale and is intentionally ignored)" ;;
+                *)      echo "(perf CSV not consumed — L3 status: $l3_status)" ;;
+            esac
         fi
 
         echo
@@ -357,6 +402,15 @@ PY
         fi
     } | tee "$diag"
 }
+
+# ----------------------------------------------------------------------
+# Pre-flight - safety regression test for cleanup_dataset across L2/L3/L4.
+# Runs in <1s and trips before L1/L2/L3 if the symlink-protection guard
+# regresses, so a buggy patch can't accidentally rm -rf the persistent
+# /datasets cache through a facts→/datasets/facts symlink.
+# ----------------------------------------------------------------------
+run_step "Pre-flight cleanup safety" "00a-safety-cleanup" 0 -- \
+    bash tests/safety/cleanup_dataset_test.sh
 
 # ----------------------------------------------------------------------
 # L0 - workspace build + Rust unit tests
