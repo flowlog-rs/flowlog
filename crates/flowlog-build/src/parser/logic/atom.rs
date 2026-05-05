@@ -45,7 +45,7 @@ impl Lexeme for AtomArg {
             other => {
                 return Err(grammar_bug(format!(
                     "invalid atom argument rule: {other:?}"
-                )))
+                )));
             }
         })
     }
@@ -125,15 +125,11 @@ impl fmt::Display for Atom {
 }
 
 impl fmt::Debug for Atom {
+    /// Same as [`Display`](fmt::Display), with the fingerprint appended as
+    /// ` [fp: 0x...]` for debugging.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}(", self.name)?;
-        for (i, arg) in self.arguments.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{arg}")?;
-        }
-        write!(f, ") [fp: 0x{:016x}]", self.fingerprint)
+        fmt::Display::fmt(self, f)?;
+        write!(f, " [fp: 0x{:016x}]", self.fingerprint)
     }
 }
 
@@ -150,12 +146,10 @@ impl Lexeme for Atom {
             .to_lowercase();
         let fingerprint = compute_fp(&name);
 
-        let mut arguments = Vec::new();
-        for pair in inner {
-            if pair.as_rule() == Rule::atom_arg {
-                arguments.push(AtomArg::from_parsed_rule(pair, file)?);
-            }
-        }
+        let arguments = inner
+            .filter(|p| p.as_rule() == Rule::atom_arg)
+            .map(|p| AtomArg::from_parsed_rule(p, file))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             name,
