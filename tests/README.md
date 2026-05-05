@@ -233,9 +233,10 @@ compiler (this repo), a library-mode runner, and (when
 | Identity      | `Program`, `Dataset` |
 | Interpreter   | `Interp_{Load, Exec, Total}`, `Interp_PeakRss_MB` |
 | Compiler      | `Compiler_{Load, Exec, Total}`, `Compiler_PeakRss_MB` |
-| Library mode  | `Lib_{Load, Exec, Total}`, `Lib_PeakRss_MB` |
-| Souffle       | `Souffle_{Load, Exec, Total}`, `Souffle_PeakRss_MB` |
-| Ratios        | `Compiler_vs_Interp_Total`, `Lib_vs_Compiler_Total`, `Souffle_vs_Compiler_Total` |
+| Library mode  | `Lib_Exec`, `Lib_PeakRss_MB` &nbsp;(library mode reports a single dataflow timing — no separate load/total split) |
+| Souffle       | `Souffle_Total`, `Souffle_PeakRss_MB` &nbsp;(Soufflé reports one combined wall time) |
+| Speedups      | `Load_Speedup`, `Exec_Speedup`, `Total_Speedup` &nbsp;(compiler vs interpreter, all phases) |
+| Ratios        | `Lib_vs_Interp_Exec`, `Lib_vs_Compiler_Exec`, `Lib_vs_Compiler_Mem`, `Souffle_vs_Compiler_Total` |
 | Validation    | `Crosscheck_Souffle` &nbsp;(`match(N)` / `match(N)+aux(M)` / `PARTIAL(N):…` / `MISMATCH:rel=AvsB;…` / `n/a`) |
 | Sample count  | `{Interp, Compiler, Lib, Souffle}_RunsSucceeded` &nbsp;(integer K, `0 < K ≤ NUM_RUNS`; empty when the engine wasn't requested for this pair). The diagnosis writer flags rows where any non-empty count is `< NUM_RUNS` as `PARTIAL`. |
 

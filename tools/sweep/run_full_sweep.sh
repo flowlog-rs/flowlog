@@ -72,6 +72,11 @@ L3_BASELINE="${L3_BASELINE:-${BASELINE:-interpreter}}"
 # (compare.sh's native name) is a back-compat alias. Default unset →
 # compare.sh keeps its own default (3). Other layers ignore this.
 L3_NUM_RUNS="${L3_NUM_RUNS:-${NUM_RUNS:-}}"
+# Effective NUM_RUNS used by every consumer in this script: the user
+# override if any, else compare.sh's own default (3). Defining once
+# avoids drift between meta.txt, the diagnosis writer's PARTIAL flag,
+# and any future message that needs the actual run count.
+L3_NUM_RUNS_EFFECTIVE="${L3_NUM_RUNS:-3}"
 
 # WORKERS controls thread count for EVERY engine (interpreter / compiler /
 # library / souffle), so all baselines compete with the same parallelism.
@@ -140,7 +145,7 @@ HEAD        : $GIT_HEAD
 branch      : $GIT_BRANCH
 started     : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 WORKERS     : $WORKERS
-NUM_RUNS    : ${L3_NUM_RUNS:-(default: 3)}
+NUM_RUNS    : $L3_NUM_RUNS_EFFECTIVE
 L3_BASELINE : $L3_BASELINE
 smoke       : $SMOKE
 skip-l3     : $SKIP_L3
@@ -280,9 +285,10 @@ write_diagnosis() {
     local flags_file="$RUN_DIR/.flags"
     : > "$flags_file"
     if (( ingest_csv )); then
-        python3 - "$csv" "$flags_file" <<'PY' || true
+        python3 - "$csv" "$flags_file" "$L3_NUM_RUNS_EFFECTIVE" <<'PY' || true
 import csv, sys
 path, out = sys.argv[1], sys.argv[2]
+num_runs = int(sys.argv[3])
 def num(x):
     try: return float(x)
     except (TypeError, ValueError): return None
@@ -295,14 +301,12 @@ with open(path) as f:
         xc = (r.get("Crosscheck_Souffle") or "").strip()
         if xc.startswith("MISMATCH") or xc.startswith("PARTIAL"):
             flags.append(f"CROSSCHECK   {pair}: {xc}")
-        # 2. Lib runner more than 20% off compiler exec time (sanity).
-        lvc = num(r.get("Lib_vs_Compiler_Exec"))
-        # 2. Lib runner more than 20% off compiler exec time (sanity).
-        #    Empirical envelope: lib should be within ±30% of compiler
-        #    exec time on the paper rig — both run the same generated
-        #    code; differences come from the lib-runner glue and
-        #    run-to-run noise. Anything outside [0.7×, 1.4×] flags as
-        #    LIB-DRIFT (often noise on tiny workloads — see PARTIAL).
+        # 2. Lib runner outside [0.7×, 1.4×] of compiler exec time
+        #    (i.e. ≥30% faster or ≥40% slower). Empirical envelope: both
+        #    run the same generated code; differences come from the
+        #    lib-runner glue and run-to-run noise. Anything outside this
+        #    band flags as LIB-DRIFT (often noise on tiny workloads —
+        #    see PARTIAL).
         lvc = num(r.get("Lib_vs_Compiler_Exec"))
         if lvc is not None and (lvc < 0.7 or lvc > 1.4):
             flags.append(f"LIB-DRIFT    {pair}: lib/compiler exec ratio = {lvc:.2f}x")
@@ -319,11 +323,13 @@ with open(path) as f:
                          f"vs interpreter {i_mem:.0f} MB ({c_mem/i_mem:.2f}x)")
         # 5. Partial samples — fewer than NUM_RUNS runs of an engine
         #    succeeded for this pair. The median is still recorded but
-        #    over fewer samples, so it's less reliable.
+        #    over fewer samples, so it's less reliable. Threshold tracks
+        #    the effective NUM_RUNS so a sweep run with --num-runs 5
+        #    correctly flags 4/5 (and reports it as such).
         for engine in ("Compiler", "Lib", "Souffle", "Interp"):
             n = (r.get(f"{engine}_RunsSucceeded") or "").strip()
-            if n.isdigit() and int(n) < 3 and int(n) > 0:
-                flags.append(f"PARTIAL      {pair}: {engine} only {n}/3 runs succeeded")
+            if n.isdigit() and 0 < int(n) < num_runs:
+                flags.append(f"PARTIAL      {pair}: {engine} only {n}/{num_runs} runs succeeded")
 with open(out, "w") as f:
     for line in flags:
         f.write(line + "\n")
@@ -417,10 +423,16 @@ if have_mem:
     if rss:
         print(f"  Compiler_PeakRss: min={min(rss):.2f}MB  max={max(rss):.2f}MB")
 if have_sf:
+    # Buckets must reconcile to len(rows). The crosscheck producer can
+    # emit `match(...)`, `MISMATCH:...`, `PARTIAL(...)` (Souffle reports
+    # relations FlowLog does not — real signal of incomplete output),
+    # or `n/a`. Bucket startswith() patterns are tight ("PARTIAL(")
+    # so a future PARTIAL_FOO variant doesn't silently double-count.
     n_match    = sum(1 for r in rows if (r.get("Crosscheck_Souffle") or "").startswith("match"))
     n_mismatch = sum(1 for r in rows if (r.get("Crosscheck_Souffle") or "").startswith("MISMATCH"))
+    n_partial  = sum(1 for r in rows if (r.get("Crosscheck_Souffle") or "").startswith("PARTIAL("))
     n_na       = sum(1 for r in rows if (r.get("Crosscheck_Souffle") or "").strip() in ("", "n/a"))
-    print(f"  Souffle xcheck  : {n_match} match, {n_mismatch} mismatch, {n_na} n/a")
+    print(f"  Souffle xcheck  : {n_match} match, {n_mismatch} mismatch, {n_partial} partial, {n_na} n/a")
 PY
             echo "----------------------------------------------------------------"
         else
@@ -522,14 +534,17 @@ _L3_BASELINE_FLAG="--baseline=$L3_BASELINE"
 if [[ "$SKIP_L3" == "1" ]]; then
     run_step "L3 benchmark/compare"    "30-bench-compare"    1 -- :
 elif [[ "$SMOKE" == "1" ]]; then
-    L3_CFG="${ROOT_DIR}/tools/benchmark/config-smoke-tmp.txt"
+    # Stage the smoke config inside $RUN_DIR (mirrors L2's oracle-smoke.txt)
+    # so the file is co-located with the run logs and can't pollute the
+    # tracked tree if L3 fails before cleanup runs (KEEP_GOING=0 path
+    # exits via write_diagnosis, never reaching post-step cleanup).
+    L3_CFG="${RUN_DIR}/bench-smoke.txt"
     cat > "$L3_CFG" <<EOF
 graph_analysis/tc.dl=G5K-0.001
 knowledge_reasoning/crdt.dl=crdt
 EOF
     run_step "L3 benchmark/compare (smoke)" "30-bench-compare" 0 -- \
         bash -c "$_L3_ENV bash tools/benchmark/compare.sh --fresh $_L3_BASELINE_FLAG $L3_CFG"
-    rm -f "$L3_CFG"
 else
     run_step "L3 benchmark/compare"    "30-bench-compare"    0 -- \
         bash -c "$_L3_ENV bash tools/benchmark/compare.sh --fresh $_L3_BASELINE_FLAG"
