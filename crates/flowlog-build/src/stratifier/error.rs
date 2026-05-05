@@ -22,6 +22,12 @@ fn rule_labels(rules: &[(usize, Span)]) -> Vec<Label<FileId>> {
         .collect()
 }
 
+/// Single-element label vec for diagnostics that only point at one span.
+/// Returns an empty vec for dummy spans rather than fabricating a location.
+fn primary_only(span: Span) -> Vec<Label<FileId>> {
+    primary_label(span).into_iter().collect()
+}
+
 /// Errors raised while stratifying a FlowLog program.
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -112,24 +118,24 @@ impl Diagnostic for StratifyError {
                 .with_labels(rule_labels(rules))
                 .with_notes(vec![hint.to_string()]),
 
-            StratifyError::IterativeNotInLoopHead { decl_span, .. } => base
-                .with_labels(primary_label(*decl_span).into_iter().collect())
-                .with_notes(vec![
+            StratifyError::IterativeNotInLoopHead { decl_span, .. } => {
+                base.with_labels(primary_only(*decl_span)).with_notes(vec![
                     "every relation declared `iterative` must appear as the head \
                      of at least one rule inside the fixpoint/loop block"
                         .into(),
-                ]),
+                ])
+            }
 
-            StratifyError::IterativeNotRecursive { decl_span, .. } => base
-                .with_labels(primary_label(*decl_span).into_iter().collect())
-                .with_notes(vec![
+            StratifyError::IterativeNotRecursive { decl_span, .. } => {
+                base.with_labels(primary_only(*decl_span)).with_notes(vec![
                     "only relations that feed back into their own derivation can \
                      use iterative (replacement) semantics"
                         .into(),
-                ]),
+                ])
+            }
 
             StratifyError::ForwardReference { span, rel, .. } => base
-                .with_labels(primary_label(*span).into_iter().collect())
+                .with_labels(primary_only(*span))
                 .with_notes(vec![format!(
                     "`{rel}` appears to be defined in a later segment. \
                      Move the rule after the segment that derives `{rel}`."
@@ -143,21 +149,21 @@ impl Diagnostic for StratifyError {
                 ])
             }
 
-            StratifyError::LoopConditionNotDerived { span, .. } => base
-                .with_labels(primary_label(*span).into_iter().collect())
-                .with_notes(vec![
+            StratifyError::LoopConditionNotDerived { span, .. } => {
+                base.with_labels(primary_only(*span)).with_notes(vec![
                     "the until-condition relation must appear as the head of \
                      at least one rule inside the loop block"
                         .into(),
-                ]),
+                ])
+            }
 
-            StratifyError::LoopConditionNotRecursive { span, .. } => base
-                .with_labels(primary_label(*span).into_iter().collect())
-                .with_notes(vec![
+            StratifyError::LoopConditionNotRecursive { span, .. } => {
+                base.with_labels(primary_only(*span)).with_notes(vec![
                     "an until-condition relation must be derived from the loop's \
                      recursive computation to be a meaningful termination signal"
                         .into(),
-                ]),
+                ])
+            }
         }
     }
 }
