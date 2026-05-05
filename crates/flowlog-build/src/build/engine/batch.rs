@@ -17,7 +17,7 @@ use crate::parser::{Program, Relation};
 use super::{needs_conversion, per_position_tuple, user_to_tuple_convert};
 use crate::build::relation::user::tuple_to_user_expr;
 use crate::build::relation::{input_struct_ident, rust_ident, user_struct_ident};
-use crate::{data_type_tokens, gen_drain_block, CodeParts};
+use crate::{CodeParts, data_type_tokens, gen_drain_block};
 
 pub(crate) fn gen_lib_engine(
     program: &Program,
