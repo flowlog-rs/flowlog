@@ -136,7 +136,7 @@ Key flags:
 
 ## Testing
 
-This repo is the **correctness** surface for FlowLog. Performance/benchmarking work lives in the sibling `flowlog-bench` repo — see [`AGENTS.md`](AGENTS.md) for the split rationale.
+This repo is the **correctness** surface for FlowLog. Performance/benchmarking work lives in the sibling [`flowlog-rs/flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench) repo — see [`AGENTS.md`](AGENTS.md) for the split rationale.
 
 ```bash
 $ make doctor          # env health probe (<1s)

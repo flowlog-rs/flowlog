@@ -18,7 +18,7 @@ a "run everything" wrapper, that wrapper belongs in the *consumer*, not here.
 | Engine source        | `crates/`             | Rust workspace                               |
 | Correctness tests    | `tests/`              | Fixtures, oracle outputs, LDBC, safety       |
 | Test env / doctor    | `tools/env*`          | `env.sh`, `env.ps1`, `env_check.sh`          |
-| Performance benches  | **separate repo**     | `flowlog-bench` (sibling, see below)         |
+| Performance benches  | **separate repo**     | [`flowlog-rs/flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench) (bootstrapped from `pre-bench-split`) |
 
 **Functional vs. perf rule.** Several suites (LDBC is the obvious one) have both a
 correctness flavor and a timing flavor. Always split them:
