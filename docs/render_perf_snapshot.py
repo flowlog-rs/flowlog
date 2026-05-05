@@ -15,23 +15,59 @@ Usage:
 from __future__ import annotations
 
 import csv
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 HERE = Path(__file__).parent
-CSV = HERE / "perf-snapshot.csv"
+DEFAULT_CSV = HERE / "perf-snapshot.csv"
 OUT = HERE / "perf-snapshot.svg"
 
 
+def _pick(row, *names):
+    for n in names:
+        v = (row.get(n) or "").strip()
+        if v and v.lower() not in {"n/a", "na", "-", ""}:
+            return v
+    return None
+
+
 def main() -> None:
-    rows = list(csv.DictReader(CSV.open()))
-    labels  = [f"{r['Program']}/{r['Dataset']}" for r in rows]
-    comp_t  = [float(r["Compiler_Exec_s"])     for r in rows]
-    souf_t  = [float(r["Souffle_Total_s"])     for r in rows]
-    comp_m  = [float(r["Compiler_PeakRss_MB"]) / 1024 for r in rows]  # GiB
-    souf_m  = [float(r["Souffle_PeakRss_MB"])  / 1024 for r in rows]
+    src = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_CSV
+    if not src.exists():
+        sys.stderr.write(f"input not found: {src}\n")
+        sys.exit(1)
+
+    rows_raw = list(csv.DictReader(src.open()))
+    rows = []
+    for r in rows_raw:
+        fl_t = _pick(r, "Compiler_Exec_s", "Compiler_Exec")
+        su_t = _pick(r, "Souffle_Total_s", "Souffle_Total")
+        fl_m = _pick(r, "Compiler_PeakRss_MB")
+        su_m = _pick(r, "Souffle_PeakRss_MB")
+        if not (fl_t and su_t and fl_m and su_m):
+            continue
+        try:
+            rows.append({
+                "label": f"{r['Program']}/{r['Dataset']}",
+                "fl_t": float(fl_t),
+                "su_t": float(su_t),
+                "fl_m": float(fl_m) / 1024,
+                "su_m": float(su_m) / 1024,
+            })
+        except ValueError:
+            continue
+    if not rows:
+        sys.stderr.write(f"no usable rows in {src}\n")
+        sys.exit(1)
+
+    labels = [r["label"] for r in rows]
+    comp_t = [r["fl_t"] for r in rows]
+    souf_t = [r["su_t"] for r in rows]
+    comp_m = [r["fl_m"] for r in rows]
+    souf_m = [r["su_m"] for r in rows]
 
     x = np.arange(len(labels))
     width = 0.38

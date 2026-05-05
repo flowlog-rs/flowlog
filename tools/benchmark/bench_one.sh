@@ -157,8 +157,11 @@ for run in $(seq 1 "$NUM_RUNS"); do
     if ! env "${CSV_ENVS[@]}" WORKERS="$WORKERS" \
             "$TIME_BIN" -v -o "$RSS_LOG" "$LIB_BENCH_BIN" \
             > "$RUN_LOG" 2>&1; then
-        log "" "WARN" "run $run failed (see $RUN_LOG); skipping"
-        continue
+        # Fail closed: any single run failure terminates the gate. A perf
+        # gate that quietly drops failed runs and reports the median of
+        # the survivors will mask flakiness exactly when the regression
+        # detector is needed most.
+        die "run $run failed (see $RUN_LOG); failing closed"
     fi
 
     # Pull the "Dataflow executed in <Duration>" line and convert to seconds.

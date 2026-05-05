@@ -826,7 +826,11 @@ run_souffle() {
     local sf_src="${SOUFFLE_PROG_DIR}/${stem}.dl"
     local fact_path="${FACT_DIR}/${dataset_name}"
     local best_log="${LOG_DIR}/${stem}_${dataset_name}_souffle.log"
-    local sf_bin="${LOG_DIR}/sf-bin/${stem}"
+    # Cache key includes WORKERS because Souffle's `pfor` macro is gated
+    # at compile time on `-j N`. Reusing a binary compiled with a
+    # different worker count would silently violate the L3 fairness
+    # invariant.
+    local sf_bin="${LOG_DIR}/sf-bin/${stem}-w${WORKERS}"
 
     if [[ ! -f "$sf_src" ]]; then
         log "$YELLOW" "WARN" \
@@ -995,6 +999,23 @@ crosscheck_compiler_vs_souffle() {
     local comp_sizes="$1" sf_sizes="$2"
     [[ -s "$comp_sizes" && -s "$sf_sizes" ]] || { echo "n/a"; return; }
     python3 - "$comp_sizes" "$sf_sizes" <<'PY'
+# Cross-check semantics:
+#   match(N)           - shared relations all agree, neither side has extras.
+#   match(N)+aux(M)    - shared relations all agree, FlowLog reports M
+#                        additional relation sizes that the canonical Souffle
+#                        .dl does not `.printsize` (e.g. cspa's MemoryAlias /
+#                        ValueAlias are computed by both engines but only
+#                        ValueFlow is printsize'd in the paper recipe). Both
+#                        engines still materialise the same relations; this
+#                        is a reporting artifact, NOT flagged.
+#   PARTIAL(N):...     - Souffle reports relations FlowLog does not (real
+#                        signal that FlowLog's output is incomplete).
+#                        Optionally also lists FlowLog-only auxiliary names.
+#                        Flagged as CROSSCHECK by the diagnosis writer.
+#   MISMATCH:...       - some shared relation has a different row count.
+#                        Flagged as CROSSCHECK.
+#   n/a                - no relations match by name (e.g. galen, where the
+#                        two .dl sources use different output relation names).
 import sys
 def load(path):
     out = {}
@@ -1005,16 +1026,33 @@ def load(path):
     return out
 fl, sf = load(sys.argv[1]), load(sys.argv[2])
 shared = set(fl) & set(sf)
+only_fl = set(fl) - set(sf)
+only_sf = set(sf) - set(fl)
 if not shared:
     print("n/a")
     sys.exit(0)
 mismatches = [(r, fl[r], sf[r]) for r in sorted(shared) if fl[r] != sf[r]]
-if not mismatches:
-    print(f"match({len(shared)})")
-else:
+if mismatches:
     head = ";".join(f"{r}={fl[r]}vs{sf[r]}" for r, _, _ in mismatches[:3])
     suffix = f"+{len(mismatches)-3}more" if len(mismatches) > 3 else ""
     print(f"MISMATCH:{head}{suffix}")
+    sys.exit(0)
+if only_sf:
+    # Real signal: Souffle printsize'd a relation FlowLog did not.
+    parts = []
+    head = ",".join(sorted(only_sf)[:2])
+    parts.append(f"souffle-only={head}{'+more' if len(only_sf) > 2 else ''}")
+    if only_fl:
+        head = ",".join(sorted(only_fl)[:2])
+        parts.append(f"flowlog-only={head}{'+more' if len(only_fl) > 2 else ''}")
+    print(f"PARTIAL({len(shared)}):" + ";".join(parts))
+elif only_fl:
+    # FlowLog reports extra auxiliary sizes that the canonical Souffle .dl
+    # chose not to .printsize. Both engines still materialise the same
+    # relations; this is informational.
+    print(f"match({len(shared)})+aux({len(only_fl)})")
+else:
+    print(f"match({len(shared)})")
 PY
 }
 

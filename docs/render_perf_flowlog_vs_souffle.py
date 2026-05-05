@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""Render the FlowLog-vs-Souffle workload bar chart from docs/perf-snapshot.csv.
+"""Render the FlowLog-vs-Souffle workload bar chart.
+
+Default input: `docs/perf-snapshot.csv` (the curated, committed snapshot).
+Override:      pass a path on the command line, e.g. the raw 22-column
+               `result/sweep/<ts>/comparison_results.csv` straight from a
+               fresh sweep — both schemas are accepted.
 
 Output: docs/perf-flowlog-vs-souffle.svg (also embedded in tests/README.md
 and the top-level README.md).
-Re-run after a fresh L3 sweep: `python3 docs/render_perf_flowlog_vs_souffle.py`.
+
+Re-render after a fresh L3 sweep:
+    python3 docs/render_perf_flowlog_vs_souffle.py \\
+        result/sweep/<UTC-ts>/comparison_results.csv
 
 Design goals:
   * High signal-to-ink: log-scale time, sorted by speedup, no redundant labels.
@@ -28,7 +36,7 @@ from matplotlib import font_manager
 from matplotlib.ticker import LogLocator, NullLocator
 
 ROOT = pathlib.Path(__file__).resolve().parent
-SRC = ROOT / "perf-snapshot.csv"
+DEFAULT_SRC = ROOT / "perf-snapshot.csv"
 OUT = ROOT / "perf-flowlog-vs-souffle.svg"
 
 # Restrained, high-contrast palette.
@@ -56,19 +64,41 @@ plt.rcParams.update({
 })
 
 
+def _pick(row: dict[str, str], *names: str) -> str | None:
+    """Return the first non-empty cell among `names`, or None.
+
+    Lets the renderer accept either the curated snapshot schema
+    (Compiler_Exec_s / Souffle_Total_s) or the raw sweep schema
+    (Compiler_Exec / Souffle_Total).
+    """
+    for n in names:
+        v = (row.get(n) or "").strip()
+        if v and v.lower() not in {"n/a", "na", "-", ""}:
+            return v
+    return None
+
+
 def main() -> int:
+    src = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SRC
+    if not src.exists():
+        print(f"input not found: {src}", file=sys.stderr)
+        return 1
+
     rows: list[tuple[str, float, float]] = []
-    with SRC.open() as f:
+    with src.open() as f:
         for r in csv.DictReader(f):
+            fl_s = _pick(r, "Compiler_Exec_s", "Compiler_Exec")
+            su_s = _pick(r, "Souffle_Total_s", "Souffle_Total")
+            if fl_s is None or su_s is None:
+                continue
             try:
-                fl = float(r["Compiler_Exec_s"])
-                su = float(r["Souffle_Total_s"])
-            except (KeyError, ValueError):
+                fl, su = float(fl_s), float(su_s)
+            except ValueError:
                 continue
             if fl > 0 and su > 0:
                 rows.append((f"{r['Program']}/{r['Dataset']}", fl, su))
     if not rows:
-        print(f"no usable rows in {SRC}", file=sys.stderr)
+        print(f"no usable rows in {src}", file=sys.stderr)
         return 1
 
     rows.sort(key=lambda x: x[2] / x[1], reverse=True)
@@ -78,7 +108,6 @@ def main() -> int:
     speedups = su_vals / fl_vals
     n = len(rows)
 
-    # Geomean for the subtitle line.
     geomean = math.exp(np.mean(np.log(speedups)))
     sp_min, sp_max = speedups.min(), speedups.max()
 
@@ -87,18 +116,17 @@ def main() -> int:
 
     fig, ax = plt.subplots(figsize=(max(15, n * 0.55), 7.8))
 
-    bars_fl = ax.bar(
+    ax.bar(
         x - w / 2, fl_vals, w,
         label="FlowLog (compiler)",
         color=FLOWLOG_BLUE, edgecolor="none", zorder=3,
     )
-    bars_su = ax.bar(
+    ax.bar(
         x + w / 2, su_vals, w,
         label="Soufflé (compiled, -j 64)",
         color=SOUFFLE_AMBER, edgecolor="none", zorder=3,
     )
 
-    # Y axis: log scale with subtle horizontal gridlines only.
     ax.set_yscale("log")
     ax.yaxis.set_major_locator(LogLocator(base=10, numticks=12))
     ax.yaxis.set_minor_locator(NullLocator())
@@ -108,20 +136,17 @@ def main() -> int:
             linestyle="-", zorder=0)
     ax.set_axisbelow(True)
 
-    # X axis: rotated workload labels with subtle gridless look.
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9.5,
                        color=TEXT_DARK)
     ax.tick_params(axis="x", length=0, pad=3)
     ax.tick_params(axis="y", length=4, pad=4)
 
-    # Speedup annotations above each pair, in FlowLog blue (the win).
     for i, (fl, su, sp) in enumerate(zip(fl_vals, su_vals, speedups)):
         ax.text(i, max(fl, su) * 1.18, f"{sp:.1f}×",
                 ha="center", va="bottom",
                 fontsize=8.5, color=FLOWLOG_BLUE, fontweight="600")
 
-    # Title + subtitle with stats. Title is bold dark; subtitle muted.
     ax.set_title(
         "FlowLog vs Soufflé — end-to-end compiler runtime",
         loc="left", color=TEXT_DARK, fontsize=15, fontweight="600", pad=24,
@@ -134,7 +159,6 @@ def main() -> int:
         color=TEXT_MUTED, fontsize=10.5,
     )
 
-    # Legend in the upper-left, frameless.
     leg = ax.legend(
         loc="upper left", frameon=False, fontsize=10.5,
         handlelength=1.4, handleheight=0.9, borderpad=0.6,
@@ -143,12 +167,12 @@ def main() -> int:
     for txt in leg.get_texts():
         txt.set_color(TEXT_DARK)
 
-    # Headroom for labels and annotations.
     ax.set_ylim(top=ax.get_ylim()[1] * 2.4)
 
     fig.tight_layout(rect=(0, 0, 1, 0.93))
     fig.savefig(OUT, bbox_inches="tight", pad_inches=0.25)
-    print(f"wrote {OUT.relative_to(ROOT.parent)} ({n} workloads, geomean {geomean:.2f}×)")
+    print(f"wrote {OUT.relative_to(ROOT.parent)} ({n} workloads, geomean {geomean:.2f}×) "
+          f"from {src}")
     return 0
 
 

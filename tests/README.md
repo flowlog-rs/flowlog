@@ -39,7 +39,7 @@ entry point (`make sweep`) runs them all in order and emits one
   <tr>
     <td align="center" width="33%"><b>30 / 30</b><br/><sub>workloads where FlowLog wins</sub></td>
     <td align="center" width="33%"><b>6.33×</b><br/><sub>geometric-mean speedup</sub></td>
-    <td align="center" width="34%"><b>29 / 0 / 1</b><br/><sub>match · mismatch · n/a (cross-check)</sub></td>
+    <td align="center" width="34%"><b>29 / 0 / 1</b><br/><sub>match · mismatch · n/a (cross-check)<sup>†</sup></sub></td>
   </tr>
 </table>
 
@@ -50,6 +50,13 @@ they are tagged `[souffle:skip]` (no canonical Souffle `.dl` exists for `cc` or
 `sssp`; `reach=twitter` is too slow under Souffle's single-threaded input
 phase). The single `n/a` (galen) is a relation-naming divergence between the
 two `.dl` sources, **not** a correctness defect.
+
+> <sup>†</sup> 26 of the 29 matches are exact agreements; the other 3 (`cspa/*`)
+> are reported as `match(1)+aux(2)` — both engines compute three relations
+> (`ValueFlow`, `MemoryAlias`, `ValueAlias`), but the canonical Soufflé `.dl`
+> only `.printsize`s `ValueFlow` (the paper recipe), so we can only directly
+> compare one row count. The `+aux(N)` notation marks reporting differences;
+> it is **not** a correctness flag.
 
 <details>
   <summary><b>All 30 workload speedups</b> &nbsp;<sub>(click to expand)</sub></summary>
@@ -73,12 +80,12 @@ two `.dl` sources, **not** a correctness defect.
 | 13 | `bipartite/roadNet-CA` |  1.39 |   8.94 |   6.43×    | match(3)  |
 | 14 | `csda/csda-linux`      |  5.84 |  37.10 |   6.35×    | match(1)  |
 | 15 | `z3/z3`                | 15.07 |  90.08 |   5.98×    | match(11) |
-| 16 | `cspa/cspa-postgresql` | 13.13 |  55.52 |   4.23×    | match(1)  |
+| 16 | `cspa/cspa-postgresql` | 13.13 |  55.52 |   4.23×    | match(1)+aux(2) |
 | 17 | `galen/galen`          |  6.54 |  27.50 |   4.20×    | n/a       |
 | 18 | `biojava/biojava`      |  3.46 |  13.33 |   3.86×    | match(19) |
 | 19 | `xalan/xalan`          |  2.60 |   9.36 |   3.60×    | match(19) |
-| 20 | `cspa/cspa-linux`      |  3.46 |  12.31 |   3.56×    | match(1)  |
-| 21 | `cspa/cspa-httpd`      | 13.63 |  46.82 |   3.43×    | match(1)  |
+| 20 | `cspa/cspa-linux`      |  3.46 |  12.31 |   3.56×    | match(1)+aux(2) |
+| 21 | `cspa/cspa-httpd`      | 13.63 |  46.82 |   3.43×    | match(1)+aux(2) |
 | 22 | `zxing/zxing`          |  3.23 |  10.69 |   3.30×    | match(19) |
 | 23 | `batik/batik`          | 11.29 |  33.23 |   2.94×    | match(19) |
 | 24 | `sg/G10K-0.001`        | 17.72 |  50.15 |   2.83×    | match(1)  |
@@ -212,7 +219,7 @@ size is captured alongside wall time.
 | Library mode  | `Lib_{Load, Exec, Total}`, `Lib_PeakRss_MB` |
 | Souffle       | `Souffle_{Load, Exec, Total}`, `Souffle_PeakRss_MB` |
 | Ratios        | `Compiler_vs_Interp_Total`, `Lib_vs_Compiler_Total`, `Souffle_vs_Compiler_Total` |
-| Validation    | `Crosscheck_Souffle` &nbsp;(`match(N)` / `MISMATCH:rel=AvsB;…` / `n/a`) |
+| Validation    | `Crosscheck_Souffle` &nbsp;(`match(N)` / `match(N)+aux(M)` / `PARTIAL(N):…` / `MISMATCH:rel=AvsB;…` / `n/a`) |
 
 #### Per-pair tags in `config.txt`
 
@@ -230,15 +237,18 @@ program_analysis/andersen.dl=large
 #### `bench_one.sh` — closed-loop perf gate wrapper
 
 Used by external regression gates (e.g. the Groomer agent). Prints two
-contract lines on stdout:
+contract lines on stdout — `<token> <median> <min> <max> <n_runs> <workers>`:
 
 ```
-elapsed_seconds: 1.331829567
-peak_rss_kb:     2487436
+elapsed_seconds 1.331829567 1.298745219 1.402938712 3 64
+peak_rss_kb     2487436     2412304     2519872     3 64
 ```
 
-so a gate can opt in to memory tracking by switching `extract_token` between
-the two without changing the parsing harness.
+so a gate can opt in to memory tracking by switching `extract_token`
+between `elapsed_seconds` and `peak_rss_kb` without changing the parsing
+harness. Failures are **fail-closed**: any run whose engine returns
+non-zero terminates the wrapper with a non-zero exit code, so a flaky
+or broken run cannot silently disappear into the median.
 
 #### Souffle compile recipe &nbsp;<sub>(paper-canonical)</sub>
 
@@ -304,9 +314,9 @@ cross-check columns included when L3 ran with a Souffle baseline), and a
 
 | Flag         | Triggers when |
 |--------------|---------------|
-| `CROSSCHECK` | row-count divergence between FlowLog and Souffle |
-| `LIB-DRIFT`  | library mode > 40 % slower than compiler mode (or vice-versa) on the same pair |
-| `PERF`       | compiler runtime regressed > 30 % vs the interpreter |
+| `CROSSCHECK` | row-count divergence between FlowLog and Soufflé, or partial output overlap (one engine produced relations the other didn't) |
+| `LIB-DRIFT`  | library-mode exec time / compiler-mode exec time outside `[0.7, 1.4]` on the same pair |
+| `PERF`       | compiler is **≥ 1.5× slower than Soufflé** on the same pair (`Souffle_vs_Compiler_Total < 0.66`) |
 | `MEM`        | compiler peak RSS > 2× interpreter on a pair where both finished |
 
 Exit code is `0` iff every layer that ran returned `0`.
@@ -336,7 +346,7 @@ bash tools/sweep/run_full_sweep.sh --include-ldbc               # add L4
 bash tools/sweep/run_full_sweep.sh --keep-going                 # don't abort on first fail
 bash tools/sweep/run_full_sweep.sh --workers 32                 # override thread budget
 bash tools/sweep/run_full_sweep.sh --baseline=souffle --num-runs 3   # produced the chart above
-bash tools/sweep/run_full_sweep.sh --baseline=both              # interpreter + Souffle in the same CSV
+bash tools/sweep/run_full_sweep.sh --baseline=interpreter,souffle    # both engines in the same CSV
 ```
 
 <br>
@@ -350,9 +360,16 @@ cd /home/azureuser/flowlog
 source /datasets/env.sh                       # FLOWLOG_KEEP_DATASETS=1
 bash tools/sweep/run_full_sweep.sh \
      --baseline=souffle --num-runs 3 --keep-going
-# wait ~5–7 hours; then:
-python3 docs/render_perf_flowlog_vs_souffle.py
+# wait ~5–7 hours; then point the renderer at the fresh sweep CSV:
+SWEEP_CSV=$(ls -1dt result/sweep/*/comparison_results.csv | head -1)
+cp "$SWEEP_CSV" docs/perf-snapshot.csv      # refresh the committed snapshot
+python3 docs/render_perf_flowlog_vs_souffle.py "$SWEEP_CSV"
+python3 docs/render_perf_snapshot.py        "$SWEEP_CSV"
 ```
+
+Both render scripts accept either the curated `docs/perf-snapshot.csv`
+schema or the raw 22-column `comparison_results.csv` directly, so the
+chart can be regenerated against any sweep without a hand-rename step.
 
 Last full sweep producing the chart and table above:
 &nbsp;**SHA `408d2dc`**, branch `test-infra/memory-and-sweep`, completed

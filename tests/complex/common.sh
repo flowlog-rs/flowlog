@@ -81,7 +81,8 @@ setup_dataset() {
 cleanup_dataset() {
     local dataset_name="$1"
     local fact_dir="${2:-$FACT_DIR_DEFAULT}"
-    # CACHE_PATCH_v1: honor FLOWLOG_KEEP_DATASETS=1 (loop-local).
+    # Honor FLOWLOG_KEEP_DATASETS=1 to preserve cached datasets between runs.
+    # Mirrors the L3 (compare.sh) and L4 cache contracts.
     if [[ "${FLOWLOG_KEEP_DATASETS:-0}" = "1" ]]; then
         log "$YELLOW" "CLEANUP" "Dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=1)"
         return
@@ -103,12 +104,7 @@ download_souffle_ref() {
 
     mkdir -p "$ref_dir"
     log "$CYAN" "DOWNLOAD" "Souffle reference: $ref_name" >&2
-    # CACHE_PATCH_v1: prefer local tarball cache (loop-local, not for upstream)
-    if [ -f "/datasets/souffle_ref_tarballs/${ref_name}.tar.gz" ]; then
-        cp "/datasets/souffle_ref_tarballs/${ref_name}.tar.gz" "$ref_tar"
-    else
-        wget -q -O "$ref_tar" "$ref_url" || die "Failed to download Souffle reference: $ref_url"
-    fi
+    wget -q -O "$ref_tar" "$ref_url" || die "Failed to download Souffle reference: $ref_url"
     tar xzf "$ref_tar" -C "$ref_dir" || die "Failed to extract Souffle reference: $ref_name"
     rm -f "$ref_tar"
 

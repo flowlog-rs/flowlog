@@ -179,7 +179,10 @@ run_step() {
         local dt=$(( $(date +%s) - t0 ))
         STEP_NAMES+=("$name"); STEP_STATUS+=("FAIL"); STEP_ELAPSED+=("$dt")
         local detail
-        detail="$(grep -iE 'fail|error|panicked' "$logfile" | tail -n 1 | tr -d '\r' | cut -c1-120)"
+        # `|| true` is load-bearing: under `set -euo pipefail`, a no-match
+        # grep would otherwise abort the sweep here, swallowing the failure
+        # we are trying to record.
+        detail="$(grep -iE 'fail|error|panicked' "$logfile" 2>/dev/null | tail -n 1 | tr -d '\r' | cut -c1-120 || true)"
         STEP_DETAIL+=("${detail:-rc=$rc}")
         ANY_FAIL=1
         echo "[sweep] [$name] FAIL rc=$rc (${dt}s) — last 30 lines:"
@@ -216,9 +219,10 @@ flags = []
 with open(path) as f:
     for r in csv.DictReader(f):
         pair = f"{r['Program']}/{r['Dataset']}"
-        # 1. Cross-check mismatches on output row counts.
+        # 1. Cross-check mismatches on output row counts (or partial overlap
+        #    where one engine produced relations the other didn't).
         xc = (r.get("Crosscheck_Souffle") or "").strip()
-        if xc.startswith("MISMATCH"):
+        if xc.startswith("MISMATCH") or xc.startswith("PARTIAL"):
             flags.append(f"CROSSCHECK   {pair}: {xc}")
         # 2. Lib runner more than 20% off compiler exec time (sanity).
         lvc = num(r.get("Lib_vs_Compiler_Exec"))
