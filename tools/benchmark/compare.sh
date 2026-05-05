@@ -171,12 +171,15 @@ parse_config_line() {
     line="$(trim "$line")"
     [[ -z "$line" ]] && return 1
 
-    # Split off any "[tag] [tag] ..." suffix from the dataset side.
+    # Repeatedly strip trailing "[tag]" suffixes off the line; collect
+    # them all into PAIR_TAGS. Iterates so that "ds [t1] [t2]" → line=ds,
+    # PAIR_TAGS="[t1] [t2]".
     PAIR_TAGS=""
-    if [[ "$line" =~ ^(.*[^[:space:]])[[:space:]]+(\[.*\])[[:space:]]*$ ]]; then
+    while [[ "$line" =~ ^(.*[^[:space:]])[[:space:]]+(\[[^][]+\])[[:space:]]*$ ]]; do
         line="${BASH_REMATCH[1]}"
-        PAIR_TAGS="${BASH_REMATCH[2]}"
-    fi
+        # Prepend so the order in PAIR_TAGS matches the source order.
+        PAIR_TAGS="${BASH_REMATCH[2]}${PAIR_TAGS:+ }${PAIR_TAGS}"
+    done
 
     IFS='=' read -r PROG_NAME DATASET_NAME <<< "$line"
     PROG_NAME="$(trim "${PROG_NAME:-}")"
