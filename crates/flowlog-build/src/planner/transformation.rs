@@ -4,17 +4,29 @@
 //! through query execution plans. Transformations represent operations like filtering,
 //! projection, joins, and aggregation that convert input collections into output collections.
 
-use crate::planner::Collection;
 use std::fmt;
 use std::sync::Arc;
+
 use tracing::trace;
+
+use crate::catalog::JoinPredicates;
+use crate::planner::Collection;
 
 mod flow;
 mod info;
 
-use crate::catalog::JoinPredicates;
 pub(crate) use flow::TransformationFlow;
 pub(crate) use info::{KeyValueLayout, TransformationInfo};
+
+/// Wraps `Collection::new` plus an `Arc` so call sites stay readable.
+fn arc_collection(fp: u64, name: &str, layout: &KeyValueLayout) -> Arc<Collection> {
+    Arc::new(Collection::new(
+        fp,
+        name.to_string(),
+        layout.key(),
+        layout.value(),
+    ))
+}
 
 /// Represents a data transformation operation in a query execution plan.
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
@@ -26,8 +38,8 @@ pub(crate) enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Row-to-key-value transformation (structure rows into KV pairs)
-    /// This include key-value, key-only, and value-only outputs.
+    /// Row-to-key-value transformation (structure rows into KV pairs).
+    /// Includes key-value, key-only, and value-only outputs.
     RowToKv {
         input: Arc<Collection>,
         output: Arc<Collection>,
@@ -39,8 +51,8 @@ pub(crate) enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Key-value to key-value transformation
-    /// This include key-value, key-only, and value-only outputs.
+    /// Key-value to key-value transformation.
+    /// Includes key-value, key-only, and value-only outputs.
     KvToKv {
         input: Arc<Collection>,
         output: Arc<Collection>,
@@ -54,8 +66,8 @@ pub(crate) enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Join: Key-value ⋈ Key-value to key-value transformation
-    /// This include key-value, key-only, and value-only outputs.
+    /// Join: Key-value ⋈ Key-value to key-value transformation.
+    /// Includes key-value, key-only, and value-only outputs.
     JnToKv {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
@@ -67,8 +79,8 @@ pub(crate) enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Antijoin: Key-only ¬ Key-only to key-value transformation
-    /// This include key-value, key-only, and value-only outputs.
+    /// Antijoin: Key-only ¬ Key-only to key-value transformation.
+    /// Includes key-value, key-only, and value-only outputs.
     NJnToKv {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
@@ -169,16 +181,16 @@ impl Transformation {
     }
 
     /// Return the transformation operation name.
-    pub(crate) fn operation_name(&self) -> &str {
+    pub(crate) fn operation_name(&self) -> &'static str {
         match self {
-            Transformation::RowToRow { .. } => "[Row -> Row]",
-            Transformation::RowToKv { .. } => "[Row -> KV]",
-            Transformation::KvToRow { .. } => "[KV -> Row]",
-            Transformation::KvToKv { .. } => "[KV -> KV]",
-            Transformation::JnToRow { .. } => "[Join -> Row]",
-            Transformation::JnToKv { .. } => "[Join -> KV]",
-            Transformation::NJnToRow { .. } => "[AntiJoin -> Row]",
-            Transformation::NJnToKv { .. } => "[AntiJoin -> KV]",
+            Self::RowToRow { .. } => "[Row -> Row]",
+            Self::RowToKv { .. } => "[Row -> KV]",
+            Self::KvToRow { .. } => "[KV -> Row]",
+            Self::KvToKv { .. } => "[KV -> KV]",
+            Self::JnToRow { .. } => "[Join -> Row]",
+            Self::JnToKv { .. } => "[Join -> KV]",
+            Self::NJnToRow { .. } => "[AntiJoin -> Row]",
+            Self::NJnToKv { .. } => "[AntiJoin -> KV]",
         }
     }
 
@@ -238,24 +250,18 @@ impl Transformation {
             info.kv_predicates(),
         );
 
-        let is_row_in = info.is_row_input();
-        let is_row_out = info.is_row_output();
-
-        let input = Arc::new(Collection::new(
+        let input = arc_collection(
             info.input_info_fp().0,
-            info.input_name().0.to_string(),
-            info.input_kv_layout().0.key(),
-            info.input_kv_layout().0.value(),
-        ));
-
-        let output = Arc::new(Collection::new(
+            info.input_name().0,
+            info.input_kv_layout().0,
+        );
+        let output = arc_collection(
             info.output_info_fp(),
-            info.output_name().to_string(),
-            info.output_kv_layout().key(),
-            info.output_kv_layout().value(),
-        ));
+            info.output_name(),
+            info.output_kv_layout(),
+        );
 
-        match (is_row_in, is_row_out) {
+        match (info.is_row_input(), info.is_row_output()) {
             // Row in, Row out: filtering, projection, or aggregation on flat rows.
             (true, true) => Self::RowToRow {
                 input,
@@ -307,31 +313,26 @@ impl Transformation {
             info.join_predicates(),
         );
 
-        let is_row_output = info.is_row_output();
-
         let input = (
-            Arc::new(Collection::new(
+            arc_collection(
                 info.input_info_fp().0,
-                info.input_name().0.to_string(),
-                info.input_kv_layout().0.key(),
-                info.input_kv_layout().0.value(),
-            )),
-            Arc::new(Collection::new(
+                info.input_name().0,
+                info.input_kv_layout().0,
+            ),
+            arc_collection(
                 info.input_info_fp().1.unwrap(),
-                info.input_name().1.unwrap().to_string(),
-                info.input_kv_layout().1.unwrap().key(),
-                info.input_kv_layout().1.unwrap().value(),
-            )),
+                info.input_name().1.unwrap(),
+                info.input_kv_layout().1.unwrap(),
+            ),
         );
 
-        let output = Arc::new(Collection::new(
+        let output = arc_collection(
             info.output_info_fp(),
-            info.output_name().to_string(),
-            info.output_kv_layout().key(),
-            info.output_kv_layout().value(),
-        ));
+            info.output_name(),
+            info.output_kv_layout(),
+        );
 
-        if is_row_output {
+        if info.is_row_output() {
             Self::JnToRow {
                 input,
                 output,
@@ -381,32 +382,26 @@ impl Transformation {
             &JoinPredicates::default(), // No predicates for antijoins
         );
 
-        // Determine antijoin type based on output collection characteristics
-        let is_row_output = info.is_row_output();
-
         let input = (
-            Arc::new(Collection::new(
+            arc_collection(
                 info.input_info_fp().0,
-                info.input_name().0.to_string(),
-                info.input_kv_layout().0.key(),
-                info.input_kv_layout().0.value(),
-            )),
-            Arc::new(Collection::new(
+                info.input_name().0,
+                info.input_kv_layout().0,
+            ),
+            arc_collection(
                 info.input_info_fp().1.unwrap(),
-                info.input_name().1.unwrap().to_string(),
-                info.input_kv_layout().1.unwrap().key(),
-                info.input_kv_layout().1.unwrap().value(),
-            )),
+                info.input_name().1.unwrap(),
+                info.input_kv_layout().1.unwrap(),
+            ),
         );
 
-        let output = Arc::new(Collection::new(
+        let output = arc_collection(
             info.output_info_fp(),
-            info.output_name().to_string(),
-            info.output_kv_layout().key(),
-            info.output_kv_layout().value(),
-        ));
+            info.output_name(),
+            info.output_kv_layout(),
+        );
 
-        if is_row_output {
+        if info.is_row_output() {
             Self::NJnToRow {
                 input,
                 output,
