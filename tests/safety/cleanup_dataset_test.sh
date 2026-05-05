@@ -5,7 +5,7 @@
 # `tests/oracle/common.sh` is the only `cleanup_dataset` implementation
 # left in this repo (the perf-side copies in `tools/benchmark/compare.sh`
 # and `tests/ldbc/ldbc.sh` moved to the flowlog-bench sibling repo with
-# the perf split — see ../AGENTS.md). The contract it must honour:
+# the perf split — see ../../AGENTS.md). The contract it must honour:
 #
 #   1. FLOWLOG_KEEP_DATASETS truthy   → never delete (highest priority).
 #                                       Truthy = 1 / yes / true / on,

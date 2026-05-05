@@ -1,7 +1,7 @@
 # FlowLog convenience targets.
 #
 # This repo is the **correctness** surface for FlowLog. Performance work
-# lives in the sibling `flowlog-bench` repo (see ../AGENTS.md for the
+# lives in the sibling `flowlog-bench` repo (see AGENTS.md for the
 # split rationale).
 #
 # ----------------------------------------------------------------------
