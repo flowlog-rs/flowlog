@@ -20,6 +20,10 @@ set -euo pipefail
 #   tests/fixtures/run_compiler.sh                          # run all tests
 #   tests/fixtures/run_compiler.sh <test_name> [test_name ...] # run specific tests
 
+# Categories exercised by binary mode. Add `extend-inc` here when the
+# first such fixture lands (binary mode already supports the mode).
+CATEGORIES=(datalog-batch datalog-inc extend-batch)
+
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 readonly COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"

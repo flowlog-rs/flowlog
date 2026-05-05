@@ -22,6 +22,9 @@ set -euo pipefail
 #   4. Runs the bare binary and reuses `compare_expected_outputs` from
 #      `common.sh` to diff against `expected/`.
 
+# Categories exercised by lib mode. extend-inc is intentionally omitted
+# (no fixtures yet AND lib synthesizer doesn't support the mode); add
+# it here when both gaps close.
 CATEGORIES=(datalog-batch datalog-inc extend-batch)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"

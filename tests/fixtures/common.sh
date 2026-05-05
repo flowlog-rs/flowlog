@@ -22,10 +22,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/shared.sh"
 
 readonly TESTS_DIR="${ROOT_DIR}/tests/fixtures"
 
-# Default category list — runner can override before sourcing if needed.
-if [[ -z "${CATEGORIES+x}" ]]; then
-    readonly -a CATEGORIES=(datalog-batch datalog-inc extend-batch extend-inc)
-fi
+# Each runner declares its own CATEGORIES before sourcing this file —
+# common.sh defines no default. extend-inc is intentionally absent from
+# both runners today (no fixtures exist; lib mode doesn't yet support
+# the mode); add it to both runners when those gaps close.
+[[ -n "${CATEGORIES+x}" ]] || die "CATEGORIES must be set by the runner before sourcing common.sh"
+readonly -a CATEGORIES
 
 passed=0
 failed=0
@@ -71,17 +73,6 @@ clear_progress() {
     if (( IS_TTY )); then
         printf "${CLEAR_LINE}\r"
     fi
-}
-
-indent_file() {
-    local file="$1"
-    sed 's/^/         /' "$file"
-}
-
-tail_and_indent() {
-    local file="$1"
-    local lines="${2:-20}"
-    tail -"${lines}" "$file" | sed 's/^/         /'
 }
 
 record_failure() {

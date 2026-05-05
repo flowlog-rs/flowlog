@@ -111,12 +111,9 @@ invoke_compiler() {
     local prog_path="$1" facts_dir="$2" executable="$3" output_dir="$4" extra_flags="$5"
 
     log "$YELLOW" "COMPILE" "$COMPILER_BIN $prog_path -F $facts_dir -D $output_dir -o $executable --mode $MODE ${extra_flags}"
-    if [[ -n "$extra_flags" ]]; then
-        # shellcheck disable=SC2086
-        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" -o "$executable" --mode "$MODE" $extra_flags
-    else
-        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" -o "$executable" --mode "$MODE"
-    fi
+    local extra_arr=()
+    [[ -n "$extra_flags" ]] && read -ra extra_arr <<< "$extra_flags"
+    "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" -o "$executable" --mode "$MODE" "${extra_arr[@]}"
 }
 
 ###############################################################################
@@ -148,7 +145,7 @@ run_test() {
         executable="${ROOT_DIR}/${package_name}"
         log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${MODE}${suffix}.log"
         output_dir="${FLOWLOG_OUT_DIR}/${program_stem}_${dataset_name}${suffix}"
-        prepared_dl="/tmp/flowlog_prepared_$$_${prog_file}"
+        prepared_dl="${STAGE_DIR}/flowlog_prepared_$$_${prog_file}"
 
         mkdir -p "$output_dir"
 

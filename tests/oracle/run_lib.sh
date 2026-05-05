@@ -182,7 +182,7 @@ run_test() {
     local dataset_path
     dataset_path="$(realpath "${FACT_DIR}/${dataset_name}")"
 
-    local prepared_dl="/tmp/flowlog_prepared_$$_${prog_file}"
+    local prepared_dl="${STAGE_DIR}/flowlog_prepared_$$_${prog_file}"
     prepare_dl_file "$prog_path" "$prepared_dl"
 
     for oi in "${!OPT_KNOBS[@]}"; do

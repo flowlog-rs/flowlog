@@ -20,7 +20,7 @@
 #   ensure_runner_crate
 #   write_build_rs "$test_dir"
 #   write_main_rs  "$test_dir/program.dl"
-#   (cd "$LIB_RUNNER_DIR" && cargo run --release -- )
+#   (cd "$LIB_RUNNER_DIR" && cargo run --release)
 #
 # Runtime: the synthesized `main.rs` reads `WORKERS` from the environment
 # and passes it to `DatalogBatchEngine::new(n)`. Unset → workers=1.
@@ -160,7 +160,11 @@ edition = "2021"
 publish = false
 
 [dependencies]
-flowlog-runtime = "0.2"
+# Both flowlog-runtime and flowlog-build are path-pinned to the in-repo
+# crates so a local change to either is exercised by the lib-mode test
+# suites. (Pre-leanness this pinned flowlog-runtime to crates.io 0.2,
+# which silently masked any local-only runtime change.)
+flowlog-runtime = { path = "${ROOT_DIR}/crates/flowlog-runtime" }
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]

@@ -125,8 +125,10 @@ For each `program=dataset` pair in `config_integer.txt` (and
 `config_string.txt` for `--str-intern` programs), runs FlowLog against
 the dataset, then byte-diffs **every `.output` relation** against the
 corresponding pre-computed [Soufflé](https://souffle-lang.github.io/)
-reference output (a tarball auto-fetched from HuggingFace and cached
-locally under `tests/oracle/cache/`).
+reference output (a tarball auto-fetched from HuggingFace into
+`STAGE_DIR` per pair — `/dev/shm` if available, else `${TMPDIR:-/tmp}`
+— and optionally short-circuited by setting `FLOWLOG_SOUFFLE_REF_CACHE`
+to point at a long-lived tarball cache; see below).
 
 > [!TIP]
 > Soufflé being an **independent Datalog engine** is the key — it makes

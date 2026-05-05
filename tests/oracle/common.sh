@@ -230,7 +230,7 @@ verify_output() {
             continue
         fi
 
-        local sorted_fl="/tmp/flowlog_sorted_$$_${ref_stem}"
+        local sorted_fl="${STAGE_DIR}/flowlog_sorted_$$_${ref_stem}"
         local first_line
         first_line="$(head -1 "$fl_file")"
         if [[ "$first_line" =~ ^[-0-9,]+$ ]]; then

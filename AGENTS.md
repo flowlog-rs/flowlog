@@ -56,14 +56,7 @@ Only environment plumbing that the test suite itself needs:
   be called on every run.
 - `tools/env_check.sh`                    — fast (<1 s) read-only health probe
   for per-session / per-checkout state (env vars, `facts/` symlink, dataset
-  cache, tree cleanliness). Wired to `make doctor`.
-
-  > **Status: aspirational past `make doctor`.** The script's docstring claims
-  > CI smoke + closed-loop (groomer) consumers, but today only `make doctor`
-  > calls it. **TODO — validate when a real consumer lands:** confirm the
-  > probe's exit-code contract (0 / 1 / `STRICT=1`) actually matches what
-  > CI/groomer expect. If no real consumer ever lands, fold the few
-  > useful checks back into `env.sh` and delete this file.
+  cache, tree cleanliness). Sole consumer: `make doctor`.
 
 Anything that *measures* belongs in the bench repo, not here.
 

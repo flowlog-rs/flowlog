@@ -6,15 +6,8 @@
 # test stack relies on. Cheap to run (< 1 s); meant as the canonical
 # answer to *"is my dev VM ready to run the test suites?"*.
 #
-# Wired to `make doctor`.
-#
-# > **Status: aspirational past `make doctor`.** This file's docstring
-# > used to claim CI smoke + closed-loop (groomer) consumers, but today
-# > only `make doctor` calls it. **TODO — validate when a real consumer
-# > lands:** confirm the probe's exit-code contract (0 / 1 / `STRICT=1`)
-# > actually matches what CI/groomer expect. If no real consumer ever
-# > lands, fold the few useful checks back into `tools/env/env.sh` and
-# > delete this file. (See AGENTS.md for the full rationale.)
+# Sole consumer: `make doctor`. The exit-code contract below is what
+# `make doctor` documents.
 #
 # Output:
 #   - Per-section coloured findings: ✓ green = OK, ! yellow = warning,
