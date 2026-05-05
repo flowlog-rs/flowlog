@@ -60,10 +60,12 @@ trim() {
 #
 # Returns 0 (true) on common truthy values: 1, yes, y, true, on
 # (case-insensitive). Returns 1 (false) on 0/no/false/off/empty/unset.
-# The cleanup guards in tests/oracle/common.sh, tools/benchmark/compare.sh,
-# and tests/ldbc/ldbc.sh use this to interpret FLOWLOG_KEEP_DATASETS and
-# FLOWLOG_FORCE_CLEANUP, so a user setting `FLOWLOG_KEEP_DATASETS=yes` (a
-# common shell convention) is honoured rather than silently ignored.
+# The cleanup guard in tests/oracle/common.sh uses this to interpret
+# FLOWLOG_KEEP_DATASETS and FLOWLOG_FORCE_CLEANUP, so a user setting
+# `FLOWLOG_KEEP_DATASETS=yes` (a common shell convention) is honoured
+# rather than silently ignored. Kept centrally so future
+# `cleanup_dataset` implementations (here or in flowlog-bench, see
+# ../../AGENTS.md) can reuse the same parser without drifting.
 flowlog_truthy() {
     case "${1:-}" in
         1|y|Y|yes|YES|true|TRUE|True|on|ON|On) return 0 ;;

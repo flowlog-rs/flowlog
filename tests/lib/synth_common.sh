@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 #
-# Helpers shared between the two library-mode runner synthesizers:
+# Helpers used by the library-mode runner synthesizer:
 #   - tests/lib/runner_synth.sh         (fixture + oracle test runners)
-#   - tools/benchmark/lib_runner.sh     (benchmark runner)
 #
-# Both need to: resolve `.input` filenames, find datasets case-insensitively,
-# map FlowLog data types to Rust types, and pascal-case relation names.
+# Used to be shared with tools/benchmark/lib_runner.sh as well; that
+# script left this repo with the perf split (see ../../AGENTS.md). The
+# helpers below are kept as standalone utilities because the perf-side
+# synthesizer in flowlog-bench will want the same primitives — and
+# because `runner_synth.sh` itself benefits from the separation.
+#
+# Resolve `.input` filenames, find datasets case-insensitively, map
+# FlowLog data types to Rust types, and pascal-case relation names.
 # Pure stateless functions — no globals, no side effects.
 
 [[ -n "${FLOWLOG_LIB_SYNTH_COMMON_LOADED:-}" ]] && return 0

@@ -57,10 +57,12 @@ The workspace is split across three crates:
 ### Prerequisites
 
 ```bash
-$ bash tools/env/env.sh
+$ bash tools/env/env.sh         # Linux / macOS — one-time machine setup
+# or, on Windows (elevated PowerShell):
+PS> .\tools\env\env.ps1
 ```
 
-The bootstrap script installs a stable Rust toolchain and a few helper utilities. At a minimum you need `rustup`, `cargo`, and a compiler capable of building Timely/Differential (Rust 1.80+ recommended).
+The bootstrap script installs a stable Rust toolchain and the OS packages the test stack needs (`protobuf-compiler`, `script` from `bsdmainutils`, `python3`, `wget`, `unzip`, `tar`), then runs `cargo check --workspace` as a smoke test. Run it **once** on a fresh dev box / runner image — not on every test run; for that, use `make doctor` (read-only health probe). At a minimum you need `rustup`, `cargo`, and a compiler capable of building Timely/Differential (Rust 1.80+ recommended).
 
 ### Build the Workspace
 
@@ -132,21 +134,20 @@ Key flags:
 - `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
 - `-w 4` tells the generated executable to use 4 worker threads.
 
-## Testing & Benchmarking
+## Testing
+
+This repo is the **correctness** surface for FlowLog. Performance/benchmarking work lives in the sibling `flowlog-bench` repo — see [`AGENTS.md`](AGENTS.md) for the split rationale.
 
 ```bash
-$ make smoke   # ~5 min — every suite, tiny subset
-$ make sweep   # full regression sweep (hours)
-$ make perf    # tools/benchmark/compare.sh — timings + peak RSS vs the interpreter
+$ make doctor          # env health probe (<1s)
+$ make test            # cargo test --release --workspace
+$ make test-safety     # cleanup_dataset symlink-guard regression test (<1s)
+$ make oracle CONFIG=tests/oracle/config_integer.txt [MODE=compiler|lib|both]
+$ bash tests/fixtures/run_compiler.sh
+$ bash tests/fixtures/run_lib.sh
 ```
 
-`make sweep` runs four gated suites — `cargo test`, `tests/fixtures/` (binary + library), `tests/oracle/` (vs a [Souffle](https://souffle-lang.github.io/) oracle), and `tools/benchmark/compare.sh` — and writes a single `result/sweep/<ts>/diagnosis.txt`. See [`tests/README.md`](tests/README.md) for an in-depth guide — per-layer contracts, fairness invariants, the diagnosis schema, and the full results table.
-
-<p align="center">
-  <img src="docs/perf-flowlog-vs-souffle.svg" alt="FlowLog vs Souffle — end-to-end compiler runtime, 30 workloads" />
-</p>
-
-End-to-end compiler runtime, FlowLog vs Soufflé (30 workloads, `WORKERS = 64`, median of 3 runs). FlowLog wins **30 / 30**, geomean speedup **6.33×**, range **1.22× → 60.30×**. Cross-validation: 29 explicit row-count agreements, 0 mismatches.
+See [`tests/README.md`](tests/README.md) for the per-suite contracts and recipes.
 
 ## Background Reading
 

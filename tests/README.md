@@ -1,124 +1,63 @@
-<h1 align="center">FlowLog testing &amp; benchmarking</h1>
+# Testing infrastructure
 
-<p align="center">
-  <em>An in-depth guide to FlowLog's correctness and performance test stack.</em>
-</p>
+This repo is the **correctness** surface for FlowLog. Performance and
+benchmarking work lives in the sibling `flowlog-bench` repo — see
+[`AGENTS.md`](../AGENTS.md) for the split rationale and the
+file-by-file handoff.
 
-<p align="center">
-  <a href="../docs/testing.md"><kbd>Quick overview</kbd></a> &nbsp;·&nbsp;
-  <a href="../tools/sweep/README.md"><kbd>Sweep runner</kbd></a> &nbsp;·&nbsp;
-  <a href="../docs/perf-snapshot.csv"><kbd>Raw numbers (CSV)</kbd></a>
-</p>
+There is **no** top-level "run everything" wrapper. Each script is
+independently runnable with a stable exit code; composing them into a
+full pass is the caller's job (CI, agent pipeline, dev workflow). If
+you need a single command, chain `make test`, `make oracle`, and
+`make test-safety`.
 
-<br>
+Per-suite pointers: this file (per-suite contracts and recipes), and
+`docs/testing.md` (one-page overview).
 
-The stack has **five layers (L0–L4)**, with L4 (LDBC SNB) being opt-in. Each
-layer is cheaper than the next — the cheap ones gate the expensive ones — and
-a single entry point (`make sweep`) runs them all in order and emits one
-`diagnosis.txt` whose first line is the verdict.
+## Suites
 
-<pre align="center">
-<b>L0</b> cargo --workspace  →  <b>L1</b> fixtures  →  <b>L2</b> Souffle oracle  →  <b>L3</b> perf+memory  →  <b>L4</b> LDBC <i>(opt-in)</i>
-   ~15 s warm                ~30 min        ~30 min                  hours              hours
-</pre>
+| Suite                          | What it checks                                                | Time       |
+|--------------------------------|---------------------------------------------------------------|------------|
+| `cargo test --workspace`       | Per-crate `#[test]`s — the unit-test layer                    | ~15 s warm |
+| `tests/safety/`                | `cleanup_dataset` symlink-guard contract (cross-cutting)      | <1 s       |
+| `tests/fixtures/`              | ~95 small `.dl` programs, byte-diff vs `expected/`            | ~2 min     |
+| `tests/oracle/`                | Real benchmark programs, byte-diff vs **Soufflé** reference   | ~30 min    |
+| `tests/ldbc/` *(future)*       | LDBC SNB correctness (small SF, known-good outputs) — TBD     | n/a today  |
 
-<br>
+Each fixture- and oracle-level suite runs **twice**: once via the
+`flowlog-compiler` binary, once via a synthesised crate that links the
+runtime as a library (`tests/fixtures/run_compiler.sh` + `run_lib.sh`;
+`tests/oracle/run_compiler.sh` + `run_lib.sh`). Both must pass — they
+hit different code paths.
 
----
-
-## Headline result
-
-> **FlowLog vs Soufflé** — 30 workloads, `WORKERS = 64`, median of 3 runs.
-> FlowLog wins **30 / 30**, geomean speedup **6.33×**, range **1.22× → 60.30×**.
-
-<p align="center">
-  <img src="../docs/perf-flowlog-vs-souffle.svg" alt="FlowLog vs Souffle bar chart" />
-</p>
-
-<table>
-  <tr>
-    <td align="center" width="33%"><b>30 / 30</b><br/><sub>workloads where FlowLog wins</sub></td>
-    <td align="center" width="33%"><b>6.33×</b><br/><sub>geometric-mean speedup</sub></td>
-    <td align="center" width="34%"><b>30 / 0 / 0</b><br/><sub>match · mismatch · n/a (cross-check)<sup>†</sup></sub></td>
-  </tr>
-</table>
-
-The plot is generated from a real sweep (`result/sweep/20260505-015100/`) — every
-engine wrapped in `/usr/bin/time -v`, every output cross-validated against
-Souffle for row-count agreement. Six pairs are excluded from the plot because
-they are tagged `[souffle:skip]` (no canonical Souffle `.dl` exists for `cc` or
-`sssp`; `reach=twitter` is too slow under Souffle's single-threaded input
-phase). All 30 baselined pairs cross-validate against Souffle row counts.
-
-> <sup>†</sup> 27 of the 30 matches are exact agreements; the other 3 (`cspa/*`)
-> are reported as `match(1)+aux(2)` — both engines compute three relations
-> (`ValueFlow`, `MemoryAlias`, `ValueAlias`), but the canonical Soufflé `.dl`
-> only `.printsize`s `ValueFlow` (the paper recipe), so we can only directly
-> compare one row count. The `+aux(N)` notation marks reporting differences;
-> it is **not** a correctness flag.
-
-<details>
-  <summary><b>All 30 workload speedups</b> &nbsp;<sub>(click to expand)</sub></summary>
-
-<br>
-
-| # | Workload | FlowLog (s) | Souffle (s) | Speedup | Cross-check |
-|--:|---|---:|---:|---:|:---|
-|  1 | `andersen/large`       |  1.33 |  80.32 | **60.30×** | match(1)  |
-|  2 | `andersen/medium`      |  0.74 |  36.08 | **48.81×** | match(1)  |
-|  3 | `bipartite/netflix`    |  2.74 | 108.88 | **39.74×** | match(3)  |
-|  4 | `bipartite/mind`       |  0.62 |  16.43 | **26.67×** | match(3)  |
-|  5 | `reach/arabic`         |  9.21 | 192.36 | **20.89×** | match(1)  |
-|  6 | `reach/orkut`          |  1.97 |  36.00 | **18.32×** | match(1)  |
-|  7 | `reach/livejournal`    |  1.19 |  19.82 | **16.61×** | match(1)  |
-|  8 | `dyck/kernel`          |  0.76 |   9.07 | **11.92×** | match(3)  |
-|  9 | `bipartite/mag`        | 35.27 | 361.31 | **10.24×** | match(3)  |
-| 10 | `csda/csda-postgresql` |  2.51 |  21.67 |   8.65×    | match(1)  |
-| 11 | `dyck/postgre`         |  0.61 |   4.91 |   8.02×    | match(3)  |
-| 12 | `csda/csda-httpd`      |  1.11 |   7.24 |   6.50×    | match(1)  |
-| 13 | `bipartite/roadNet-CA` |  1.39 |   8.94 |   6.43×    | match(3)  |
-| 14 | `csda/csda-linux`      |  5.84 |  37.10 |   6.35×    | match(1)  |
-| 15 | `z3/z3`                | 15.07 |  90.08 |   5.98×    | match(11) |
-| 16 | `cspa/cspa-postgresql` | 13.13 |  55.52 |   4.23×    | match(1)+aux(2) |
-| 17 | `galen/galen`          |  6.54 |  27.50 |   4.20×    | match(2)  |
-| 18 | `biojava/biojava`      |  3.46 |  13.33 |   3.86×    | match(19) |
-| 19 | `xalan/xalan`          |  2.60 |   9.36 |   3.60×    | match(19) |
-| 20 | `cspa/cspa-linux`      |  3.46 |  12.31 |   3.56×    | match(1)+aux(2) |
-| 21 | `cspa/cspa-httpd`      | 13.63 |  46.82 |   3.43×    | match(1)+aux(2) |
-| 22 | `zxing/zxing`          |  3.23 |  10.69 |   3.30×    | match(19) |
-| 23 | `batik/batik`          | 11.29 |  33.23 |   2.94×    | match(19) |
-| 24 | `sg/G10K-0.001`        | 17.72 |  50.15 |   2.83×    | match(1)  |
-| 25 | `tc/G5K-0.001`         |  1.57 |   4.04 |   2.57×    | match(1)  |
-| 26 | `tc/G10K-0.001`        |  7.51 |  17.90 |   2.38×    | match(1)  |
-| 27 | `eclipse/eclipse`      | 11.96 |  25.18 |   2.11×    | match(19) |
-| 28 | `sg/G5K-0.001`         |  2.79 |   5.51 |   1.98×    | match(1)  |
-| 29 | `cvc5/cvc5`            |  8.44 |  13.14 |   1.56×    | match(11) |
-| 30 | `crdt/crdt`            |  7.49 |   9.17 |   1.22×    | match(8)  |
-
-</details>
-
-> [!NOTE]
-> **Memory.** FlowLog typically uses 1–3× the peak RSS of Souffle on these
-> workloads — that's the cost of differential dataflow's shared arrangements:
-> they trade memory for incremental update speed (and the parallelism that
-> produces the runtime wins above). On `bipartite/mag` (the largest input,
-> 18 GB) FlowLog peaks at 44.5 GB vs Souffle's 21 GB.
-
-<br>
-
----
-
-## The five layers
-
-### `L0` &nbsp; Workspace unit tests
+## Entry points
 
 ```bash
-cargo test --release --workspace
+make build          # cargo build --release --workspace
+make test           # cargo test  --release --workspace
+make test-safety    # tests/safety/cleanup_dataset_test.sh   (<1s)
+make doctor         # tools/env_check.sh — env health probe   (<1s)
+
+# Soufflé oracle:
+make oracle CONFIG=tests/oracle/config_integer.txt           # default MODE=both
+make oracle CONFIG=tests/oracle/config_string.txt MODE=lib   # only lib lowering
 ```
 
-Compiles every crate in the workspace and runs every Rust `#[test]` (~168
-across `flowlog-parser`, `flowlog-planner`, `flowlog-build`,
-`flowlog-runtime`, `flowlog-compiler`, `flowlog-dl`). The sanity gate.
+For the fixtures, call the runners directly (no Make wrapper — they
+take no arguments and the closer-to-the-script form is simpler):
+
+```bash
+bash tests/fixtures/run_compiler.sh
+bash tests/fixtures/run_lib.sh
+```
+
+## Suite details
+
+### Workspace unit tests &nbsp;(`cargo test --workspace`)
+
+Compiles every crate and runs every Rust `#[test]`. The sanity gate.
+If this fails the rest of the suite is meaningless — you have a broken
+parser/typechecker/planner/codegen.
 
 | | |
 |---|---|
@@ -126,26 +65,32 @@ across `flowlog-parser`, `flowlog-planner`, `flowlog-build`,
 | **Time, cold** | `~ 2 min` |
 | **Failure mode** | localised — points at one function or one rewrite |
 
-If L0 fails the sweep aborts immediately. No point running fixtures against a
-broken parser.
+### Cache-safety regression &nbsp;(`tests/safety/cleanup_dataset_test.sh`)
 
-> [!NOTE]
-> A pre-flight **safety regression test** (`tests/safety/cleanup_dataset_test.sh`)
-> runs ahead of L0 in the sweep — `< 1 s`, 11 assertions. It exercises the
-> `cleanup_dataset` env-var contract (`FLOWLOG_KEEP_DATASETS=1` retains;
-> a symlinked `FACT_DIR` retains unless `FLOWLOG_FORCE_CLEANUP=1`; a plain
-> dir deletes) across all three implementations (L2 / L3 / L4). The guard
-> protects the persistent `/datasets/facts/` cache from being `rm -rf`'d
-> through a `facts → /datasets/facts` symlink — a regression here would
-> silently destroy 100+ GB of cached datasets on the next sweep run, so
-> we want it caught first. Invoke standalone with `make test-safety`.
+`tests/oracle/common.sh::cleanup_dataset` is the only place this repo
+deletes from the dataset cache. The contract it must honour:
 
-<br>
+1. `FLOWLOG_KEEP_DATASETS` truthy → never delete.
+2. `FACT_DIR` is a symlink → never delete unless `FLOWLOG_FORCE_CLEANUP=1`.
+   (Protects the persistent `/datasets` cache from being `rm -rf`'d
+   through a `facts → /datasets/facts` symlink.)
+3. otherwise → delete the dataset's subdir.
 
-### `L1` &nbsp; Fixture-level end-to-end &nbsp;·&nbsp; `tests/fixtures/`
+The safety test exercises that contract in isolation (faux dirs in
+`mktemp`, no real datasets touched). It runs in `<1 s` and is meant as a
+pre-flight gate ahead of the oracle: a regression here would silently
+delete tens of GB of cached datasets on the next oracle run.
 
-Runs ~95 small hand-curated `.dl` programs **end-to-end** and byte-diffs the
-output against pinned `expected/` files. Each fixture is a directory:
+The test lives outside `tests/oracle/` because it's a **cross-cutting
+invariant**: any future implementation of `cleanup_dataset` (anywhere
+in this repo or in `flowlog-bench`) is expected to honour the same
+contract, and this test is what keeps them aligned.
+
+### Fixture-level end-to-end &nbsp;(`tests/fixtures/`)
+
+Runs ~95 small hand-curated `.dl` programs end-to-end and byte-diffs
+the output against pinned `expected/` files. Each fixture is a
+directory:
 
 ```
 tests/fixtures/datalog-batch/<feature>/
@@ -170,28 +115,26 @@ Coverage spans all four execution modes:
 > `run_compiler.sh` builds and runs the `flowlog-compiler` binary;
 > `run_lib.sh` synthesises a small Rust runner crate that links
 > `flowlog-build` (build script) + `flowlog-runtime` (engine) and calls
-> `engine.run()` directly. Library mode hits a different code path than binary
-> mode, so a regression that passes one and fails the other almost always
-> points at the build-script ↔ binary-target boundary.
+> `engine.run()` directly. Library mode hits a different code path than
+> binary mode, so a regression that passes one and fails the other
+> almost always points at the build-script ↔ binary-target boundary.
 
-Wall time in the latest sweep: **`run_compiler` ≈ 1366 s, `run_lib` ≈ 357 s**.
-
-<br>
-
-### `L2` &nbsp; Souffle oracle on real benchmark programs &nbsp;·&nbsp; `tests/oracle/`
+### Soufflé oracle &nbsp;(`tests/oracle/`)
 
 For each `program=dataset` pair in `config_integer.txt` (and
-`config_string.txt` for `--str-intern` programs), runs FlowLog against the
-dataset, then byte-diffs **every `.output` relation** against the
-corresponding pre-computed [Souffle](https://souffle-lang.github.io/)
-reference output (a tarball auto-fetched from HuggingFace and cached locally
-under `tests/oracle/cache/`).
+`config_string.txt` for `--str-intern` programs), runs FlowLog against
+the dataset, then byte-diffs **every `.output` relation** against the
+corresponding pre-computed [Soufflé](https://souffle-lang.github.io/)
+reference output (a tarball auto-fetched from HuggingFace and cached
+locally under `tests/oracle/cache/`).
 
 > [!TIP]
-> Souffle being an **independent Datalog engine** is the key — it makes this
-> a real correctness oracle, not a tautology against FlowLog itself. A
-> miscompilation that produces wrong tuples will diverge from Souffle at the
-> first relation byte; the diff is shown in the failure message.
+> Soufflé being an **independent Datalog engine** is the key — it makes
+> this a real correctness oracle, not a tautology against FlowLog
+> itself. A miscompilation that produces wrong tuples will diverge from
+> Soufflé at the first relation byte; the diff is shown in the failure
+> message. The Soufflé *binary* is not required — only the pre-baked
+> reference outputs.
 
 The 19 program-dataset pairs span three program families:
 
@@ -201,259 +144,57 @@ The 19 program-dataset pairs span three program families:
 | Knowledge reasoning  | `crdt`, `galen` |
 | Program analysis     | `andersen`, `cspa`, `csda`, `batik`, `biojava`, `eclipse`, `xalan`, `cvc5`, `z3`, `zxing` |
 
-A typical run cross-checks **~140 output relations and ~700 M tuples**. Same
-dual binary/library runners as L1 (`tests/oracle/run_compiler.sh` /
-`tests/oracle/run_lib.sh`).
+A typical run cross-checks **~140 output relations and ~700 M tuples**.
+Same dual binary/library runners as fixtures
+(`tests/oracle/run_compiler.sh` / `tests/oracle/run_lib.sh`).
 
-Wall time in the latest sweep: **compiler ≈ 903 s, lib ≈ 818 s**.
+#### Soufflé reference cache
 
-<br>
+The oracle downloads pre-baked Soufflé `.csv` references from
+HuggingFace and unpacks them into `/dev/shm/` per pair. On long-lived
+dev VMs you can short-circuit the download by setting
+`FLOWLOG_SOUFFLE_REF_CACHE=<dir>` — `download_souffle_ref` then `cp`s
+from `<dir>/<program>_<dataset>.tar.gz` if the file exists, falling
+back to a live download otherwise. `/datasets/env.sh` on the standard
+dev VM sets this for you.
 
-### `L3` &nbsp; Performance &amp; memory &nbsp;·&nbsp; `tools/benchmark/compare.sh`
+### LDBC SNB &nbsp;(`tests/ldbc/`) — *future*
 
-For each pair in [`tools/benchmark/config.txt`](../tools/benchmark/config.txt)
-(36 pairs at varied scales — small / medium / large datasets), times up to
-**four** engines — the previous interpreter (`vldb26-artifact`), the current
-compiler (this repo), a library-mode runner, and (when
-`--baseline=souffle` or `--baseline=interpreter,souffle`) Souffle — for
-`NUM_RUNS` repetitions each, keeps the median. Every run is wrapped in
-`/usr/bin/time -v` so peak resident-set size is captured alongside wall time.
-
-| Knob | Default | How to override |
-|------|---------|-----------------|
-| Workers per engine | `min(64, nproc)` | `WORKERS=N bash compare.sh` &nbsp;or&nbsp; `make sweep WORKERS=N` |
-| Timed runs per pair | `3` | `NUM_RUNS=N bash compare.sh` &nbsp;or&nbsp; `make sweep NUM_RUNS=N` &nbsp;or&nbsp; `--num-runs N` |
-| Baselines | `interpreter` | `--baseline=souffle` &nbsp;or&nbsp; `--baseline=interpreter,souffle` |
-| Resume vs fresh | resume | `--fresh` to wipe `result/benchmark/` first |
-
-**CSV schema** &nbsp;(`result/benchmark/comparison_results.csv`, 26 columns):
-
-| Group         | Columns |
-|---------------|---------|
-| Identity      | `Program`, `Dataset` |
-| Interpreter   | `Interp_{Load, Exec, Total}`, `Interp_PeakRss_MB` |
-| Compiler      | `Compiler_{Load, Exec, Total}`, `Compiler_PeakRss_MB` |
-| Library mode  | `Lib_Exec`, `Lib_PeakRss_MB` &nbsp;(library mode reports a single dataflow timing — no separate load/total split) |
-| Souffle       | `Souffle_Total`, `Souffle_PeakRss_MB` &nbsp;(Soufflé reports one combined wall time) |
-| Speedups      | `Load_Speedup`, `Exec_Speedup`, `Total_Speedup` &nbsp;(compiler vs interpreter, all phases) |
-| Ratios        | `Lib_vs_Interp_Exec`, `Lib_vs_Compiler_Exec`, `Lib_vs_Compiler_Mem`, `Souffle_vs_Compiler_Total` |
-| Validation    | `Crosscheck_Souffle` &nbsp;(`match(N)` / `match(N)+aux(M)` / `PARTIAL(N):…` / `MISMATCH:rel=AvsB;…` / `n/a`) |
-| Sample count  | `{Interp, Compiler, Lib, Souffle}_RunsSucceeded` &nbsp;(integer K, `0 < K ≤ NUM_RUNS`; empty when the engine wasn't requested for this pair). The diagnosis writer flags rows where any non-empty count is `< NUM_RUNS` as `PARTIAL`. |
-
-> [!IMPORTANT]
-> A pair where any **required** engine produces zero successful runs is
-> deliberately **not** appended to the CSV. `compare.sh` prints a
-> `[PAIR-FAIL]` line, exits non-zero, and leaves the row missing — so a
-> resume run (`compare.sh` without `--fresh`) retries the pair instead of
-> treating it as permanently complete. Without this gate, a transient
-> failure (e.g. one OOM under heavy load) would mask as a permanent
-> success on resume.
-
-#### Per-pair tags in `config.txt`
-
-```text
-graph_analysis/reach.dl=twitter        [interp:skip] [souffle:skip]
-graph_analysis/cc.dl=livejournal       [souffle:skip]
-program_analysis/andersen.dl=large
-```
-
-| Tag             | Effect |
-|-----------------|--------|
-| `[interp:skip]` | Skip the legacy interpreter (typically too slow at scale: `twitter`, `arabic`). |
-| `[souffle:skip]`| Skip Souffle (no canonical `.dl` available — e.g. `cc`, `sssp` whose paper version uses `min(...)` in the head; or too slow — `twitter`). |
-
-#### `bench_one.sh` — closed-loop perf gate wrapper
-
-Used by external regression gates (e.g. the Groomer agent). Prints two
-contract lines on stdout — `<token> <median> <min> <max> <n_runs> <workers>`:
-
-```
-elapsed_seconds 1.331829567 1.298745219 1.402938712 3 64
-peak_rss_kb     2487436     2412304     2519872     3 64
-```
-
-so a gate can opt in to memory tracking by switching `extract_token`
-between `elapsed_seconds` and `peak_rss_kb` without changing the parsing
-harness. Failures are **fail-closed**: any run whose engine returns
-non-zero terminates the wrapper with a non-zero exit code, so a flaky
-or broken run cannot silently disappear into the median.
-
-#### Souffle compile recipe &nbsp;<sub>(paper-canonical)</sub>
-
-```bash
-souffle -o <bin> -p /dev/null -j N -F <facts> <prog.dl>
-```
-
-`-o <bin>` (not `-c`) produces a parallel binary; `-j N` at compile time tells
-Souffle to emit `pfor`-macro parallelism (Souffle 2.5+ uses
-`#pragma omp for schedule(dynamic)` inside `pfor`, so the generated `.cpp`
-contains zero literal `#pragma omp parallel` lines but **is** fully parallel).
-A build-time log line confirms libgomp linkage. The same `-j N` is passed to
-the runtime binary so input loading and join evaluation use the same thread
-budget as FlowLog.
-
-> [!WARNING]
-> Souffle's input phase is single-threaded for very large CSVs (`mag` ~18 GB,
-> `twitter` ~25 GB). Sampling thread counts mid-load can mislead — the run
-> fans out to `N` threads only after CSV ingestion completes.
-
-<br>
-
-### `L4` &nbsp; LDBC SNB &nbsp;<sub>(opt-in)</sub>
-
-`tests/ldbc/ldbc.sh` runs LDBC interactive queries on canonical graph
-datasets and compares against DuckDB. Different query family than L1–L3 (no
-Datalog programs); not part of the default sweep — pass `--include-ldbc` to
-opt in.
-
-<br>
-
----
-
-## Fairness invariants &nbsp;<sub>(L3)</sub>
-
-| Invariant                                | How it's enforced |
-|------------------------------------------|-------------------|
-| Same thread budget across all engines    | Single `WORKERS` env, defaulting to `min(64, nproc)`. Forwarded as `--workers` (interp), `-w` (compiler), `WORKERS=` (lib), `-j` (Souffle compile **and** runtime). |
-| Same dataset, same input format          | All engines read the same on-disk CSV facts under `<dataset>/facts/` (Souffle via `-F`, FlowLog via `.input`). |
-| Same number of repetitions               | `NUM_RUNS=3` median; transient agent bursts are absorbed by the median. |
-| Engines run **sequentially**             | They never compete with each other for cores. |
-| Output cross-check                       | Free row-count comparison via `Crosscheck_Souffle` column — flips on at L3 because both engines have already produced output by then. |
-
-<br>
-
----
-
-## Diagnosis report
-
-After a sweep, `result/sweep/<UTC-timestamp>/diagnosis.txt` is written. It
-opens with a single-line **VERDICT**:
-
-```text
-VERDICT: PASS                      # all layers green, zero anomaly flags
-VERDICT: PASS WITH 2 FLAG(S)       # all layers green, but 2 perf/mem regressions
-VERDICT: FAIL                      # at least one layer failed correctness
-```
-
-followed by a per-step status table (with elapsed seconds and the last log
-line or first error per step), the L3 perf-CSV roll-up (Souffle and
-cross-check columns included when L3 ran with a Souffle baseline), and a
-**Problems flagged** section listing each anomaly category:
-
-| Flag         | Triggers when |
-|--------------|---------------|
-| `CROSSCHECK` | row-count divergence between FlowLog and Soufflé, or partial output overlap (one engine produced relations the other didn't) |
-| `LIB-DRIFT`  | library-mode exec time / compiler-mode exec time outside `[0.7, 1.4]` on the same pair |
-| `PERF`       | compiler is **≥ 1.5× slower than Soufflé** on the same pair (`Souffle_vs_Compiler_Total < 0.66`) |
-| `MEM`        | compiler peak RSS > 2× interpreter on a pair where both finished |
-
-Exit code is `0` iff every layer that ran returned `0`.
-
-<br>
-
----
-
-## One entry point
-
-```bash
-make smoke          # ~5 min — every layer, tiny subset
-make sweep          # full regression sweep (hours; L0+L1+L2+L3, baseline=interpreter)
-make sweep-no-perf  # correctness only (L0+L1+L2, no L3)
-make perf           # L3 in isolation
-make test           # L0 alone
-make clean-sweep    # rm -rf result/sweep/
-```
-
-For more control, call the runner directly:
-
-```bash
-bash tools/sweep/run_full_sweep.sh                              # default
-bash tools/sweep/run_full_sweep.sh --smoke                      # tiny subset everywhere
-bash tools/sweep/run_full_sweep.sh --skip-l3                    # correctness only
-bash tools/sweep/run_full_sweep.sh --include-ldbc               # add L4
-bash tools/sweep/run_full_sweep.sh --keep-going                 # don't abort on first fail
-bash tools/sweep/run_full_sweep.sh --workers 32                 # override thread budget
-bash tools/sweep/run_full_sweep.sh --baseline=souffle --num-runs 3   # produced the chart above
-bash tools/sweep/run_full_sweep.sh --baseline=interpreter,souffle    # both engines in the same CSV
-```
-
-<br>
-
----
-
-## Reproducing the headline chart
-
-```bash
-cd /home/azureuser/flowlog
-source /datasets/env.sh                       # FLOWLOG_KEEP_DATASETS=1
-bash tools/sweep/run_full_sweep.sh \
-     --baseline=souffle --num-runs 3 --keep-going
-# wait ~5–7 hours; then point the renderer at the fresh sweep CSV:
-SWEEP_CSV=$(ls -1dt result/sweep/*/comparison_results.csv | head -1)
-cp "$SWEEP_CSV" docs/perf-snapshot.csv      # refresh the committed snapshot
-python3 docs/render_perf_flowlog_vs_souffle.py "$SWEEP_CSV"
-python3 docs/render_perf_snapshot.py        "$SWEEP_CSV"
-```
-
-Both render scripts accept either the curated `docs/perf-snapshot.csv`
-schema (10 columns: `Program, Dataset, Compiler_Exec_s, Lib_Exec_s,
-Souffle_Total_s, …, Crosscheck`) or the raw 26-column
-`comparison_results.csv` directly, so the chart can be regenerated against
-any sweep without a hand-rename step.
-
-Last full sweep producing the chart and table above:
-&nbsp;**SHA `408d2dc`**, branch `test-infra/memory-and-sweep`, completed
-2026-05-05 06:18 UTC.
-
-<br>
-
----
+The directory is intentionally empty today. The pre-split LDBC runner
+was a runtime cross-validator (FlowLog vs DuckDB on SF3 with per-row
+timing), which the spec classifies as the "timing slice" — that runner
+moves to `flowlog-bench/scripts/ldbc.sh`. The "correctness slice"
+(small/medium SF + static known-good outputs) is to be authored fresh
+in the same shape as `tests/oracle/`. See
+[`tests/ldbc/README.md`](ldbc/README.md) for what fits here.
 
 ## Caching
 
-`tools/benchmark/compare.sh` deletes each dataset after use **unless**
-`FLOWLOG_KEEP_DATASETS` is set to a truthy value — `1`, `yes`, `true`, `on`
-(any case) — or you `source /datasets/env.sh` on the dev VM. The larger
-datasets total **tens of GB** (`arabic`, `orkut`, `livejournal`,
-`cspa-postgresql`, `mag`, …); keeping them avoids HuggingFace re-downloads
-between sweeps.
+`tests/oracle/common.sh::cleanup_dataset` deletes each dataset after
+use **unless** `FLOWLOG_KEEP_DATASETS` is set to a truthy value — `1`,
+`yes`, `true`, `on` (any case) — or you `source /datasets/env.sh` on
+the dev VM. The larger datasets total **tens of GB** (`arabic`,
+`orkut`, `livejournal`, `cspa-postgresql`, …); keeping them avoids
+HuggingFace re-downloads between iterations.
 
 **Symlink safety.** When `FACT_DIR` is a symlink (the standard dev-VM
-layout has the repo's `facts/ → /datasets/facts/`), cleanup is **always**
-skipped — even with `FLOWLOG_KEEP_DATASETS` unset — so a stray sweep can't
-`rm -rf` a 100+ GB cache through the symlink. To override and actually
-delete through the symlink, set `FLOWLOG_FORCE_CLEANUP=1`. The same
-contract is enforced in L2 (`tests/oracle/common.sh`), L3
-(`compare.sh`), and L4 (`tests/ldbc/ldbc.sh`); a pre-L0 regression test
-(`tests/safety/cleanup_dataset_test.sh`, also exposed via
-`make test-safety`) keeps the three implementations aligned.
-
-**Soufflé reference cache.** L2 downloads pre-baked Soufflé `.csv`
-references from HuggingFace and unpacks them into `/dev/shm/` per pair.
-On long-lived dev VMs you can short-circuit the download by setting
-`FLOWLOG_SOUFFLE_REF_CACHE=<dir>` — `download_souffle_ref` then `cp`s
-from `<dir>/<program>_<dataset>.tar.gz` if the file exists, falling back
-to a live download otherwise. `/datasets/env.sh` on the standard dev VM
-sets this for you.
-
-<br>
-
----
+layout has the repo's `facts/ → /datasets/facts/`), cleanup is
+**always** skipped — even with `FLOWLOG_KEEP_DATASETS` unset — so a
+stray run can't `rm -rf` a 100+ GB cache through the symlink. To
+override and actually delete through the symlink, set
+`FLOWLOG_FORCE_CLEANUP=1`. The same contract is exercised by
+[`tests/safety/cleanup_dataset_test.sh`](safety/cleanup_dataset_test.sh)
+(`make test-safety`).
 
 ## Closed-loop integration
 
-External tools (regression CI, agentic optimisation loops like
-[groomer](https://github.com/hangdongzhao_microsoft/groomer)) drive
-FlowLog through **four `make` targets** plus **two env vars**. Everything
-else in this document is dev-facing: the closed-loop contract below is
-the only surface external tooling should depend on.
+External tools (regression CI, agentic loops) drive FlowLog through
+**two `make` targets** plus **two env vars**:
 
 | `make` target | What it does | Stability contract |
 |---|---|---|
-| `make doctor` | Print a 9-section health report; exit 0 when env is ready, 1 on a blocking error. | The exit code; the ✗ / ! / ✓ glyphs are the public log surface. |
-| `make bench-one PROG=<.dl> DATASET=<name>` | Build the lib runner crate for one (program, dataset) pair, run it `NUM_RUNS` times, print stable contract lines on stdout: `<token> <median> <min> <max> <runs> <workers>` for `elapsed_seconds` and `peak_rss_kb`. **Fails closed** on any single run failure. | The two stdout contract lines, in that order, with field 1 = median. Honours `WORKERS`, `NUM_RUNS` env. |
+| `make doctor` | Print an 8-section health report; exit 0 when env is ready, 1 on a blocking error. | The exit code; the ✗ / ! / ✓ glyphs are the public log surface. |
 | `make oracle CONFIG=<file> [MODE=compiler\|lib\|both]` | Run every `<program=dataset>` line in `<config_file>` against the Soufflé oracle in either or both lowering paths; exit non-zero on any byte-diff mismatch. | Positional `CONFIG=`; `MODE=` defaults to `both`. Config-file basename starting with `config_string*` toggles `--str-intern`. Honours `WORKERS`, `RAYON_NUM_THREADS`, `FLOWLOG_KEEP_DATASETS`, `FLOWLOG_SOUFFLE_REF_CACHE` env. |
-| `make perf-compare BASE=<sha> HEAD=<sha> LIST=<file>` | For each `<prog>=<dataset>` pair in LIST, run `bench-one` at BASE (in a cached sibling worktree under `target/perf-compare-base/<sha>/`) and HEAD (in place); fail if any pair regresses past time- or RSS-pct thresholds. | Exit 0 = all pairs within threshold, 1 = at least one regression, 2 = bad usage. Honours `PERF_COMPARE_TIME_PCT` (default 10), `PERF_COMPARE_RSS_PCT` (default 20), `PERF_COMPARE_NUM_RUNS` (default 3), `PERF_COMPARE_WORKERS` (default 1). |
 
 Two env vars round out the contract:
 
@@ -464,17 +205,11 @@ A typical agentic loop launches with all three set:
 
 ```bash
 source /datasets/env.sh                          # FLOWLOG_KEEP_DATASETS=1, FLOWLOG_SOUFFLE_REF_CACHE=...
-make doctor || exit 1                            # gate the run on a green env-check
+make doctor || exit 1                            # gate on a green env-check
 make test-safety                                 # cache-safety contract
-WORKERS=1 NUM_RUNS=5 make bench-one \            # closed-loop perf gate
-    PROG=example/knowledge_reasoning/crdt.dl \
-    DATASET=facts/crdt
-WORKERS=$(nproc) FLOWLOG_KEEP_DATASETS=1 \       # correctness oracle
+WORKERS=$(nproc) FLOWLOG_KEEP_DATASETS=1 \
     make oracle CONFIG=tests/oracle/config_integer.txt
-make perf-compare BASE=$BEFORE HEAD=$AFTER \     # two-sha drift gate
-    LIST=examples/perf-bench-list.txt
 ```
 
-The contract is intentionally minimal so external loops don't need to
-track the 26-column CSV schema or the per-pair tags in `config.txt`. If
-you need any of that machinery, drive `compare.sh` directly.
+For perf gates / benchmarking, use the `flowlog-bench` sibling repo's
+`make cross-engine` / `make regression` instead — see `AGENTS.md`.

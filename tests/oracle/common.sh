@@ -84,8 +84,13 @@ setup_dataset() {
 cleanup_dataset() {
     local dataset_name="$1"
     local fact_dir="${2:-$FACT_DIR_DEFAULT}"
-    # Cache contract — must mirror tools/benchmark/compare.sh and
-    # tests/ldbc/ldbc.sh so every layer treats $fact_dir consistently:
+    # Cache contract — `tests/oracle/common.sh` is now the only
+    # cleanup_dataset implementation in this repo (the perf-side copies
+    # in tools/benchmark/compare.sh and tests/ldbc/ldbc.sh moved to the
+    # flowlog-bench sibling repo with the perf split — see ../../AGENTS.md).
+    # Any future implementation (here or in flowlog-bench) is expected
+    # to honour the same contract; tests/safety/cleanup_dataset_test.sh
+    # is the regression guard.
     #   FLOWLOG_KEEP_DATASETS truthy → never delete (highest priority).
     #                                  Truthy = 1/yes/true/on (any case).
     #   $fact_dir is a symlink       → never delete unless

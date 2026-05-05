@@ -1,76 +1,110 @@
+# tools/env/env.ps1 — one-time machine setup for the FlowLog correctness
+# stack on Windows.
+#
+# Run this **once** in an elevated PowerShell on a fresh dev box / runner
+# image. It:
+#   1. Installs rustup + a stable toolchain (if missing).
+#   2. Installs the helper packages tests need via Chocolatey.
+#   3. Runs `cargo check --workspace` as a smoke test of the install.
+#
+# It is intentionally not idempotent in the *minimal* sense: re-running
+# is safe, but it will check/refresh package versions. It is **not** the
+# right thing to call on every test run — that's `make doctor` (read-only
+# health probe) and the per-suite scripts.
+#
+# This script targets the **flowlog** repo only (correctness). Perf-side
+# deps (souffle, duckdb, GNU time) live with the sibling `flowlog-bench`
+# repo and its own env.ps1 — see ../../AGENTS.md for the split.
+#
+# Exit codes:
+#   0  bootstrap completed; `cargo check --workspace` succeeded
+#   1  bootstrap failed (missing dependency, network failure, build break)
+
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
-Write-Host "[SETUP] Setting up FlowLog development environment (Windows)..."
+$RootDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$ScriptName = Split-Path $PSCommandPath -Leaf
 
-# Helper: ensure the script runs elevated so Chocolatey/package installs succeed
+function Log     { param($m) Write-Host "[$ScriptName] $m" -ForegroundColor Cyan }
+function LogWarn { param($m) Write-Warning "[$ScriptName] $m" }
+function LogDie  { param($m) Write-Error "[$ScriptName] $m"; exit 1 }
+
+# Require an elevated session so Chocolatey/package installs succeed.
 $windowsPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-$runningAsAdmin = $windowsPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $runningAsAdmin) {
-    Write-Warning "Please run this script in an elevated PowerShell session (Run as Administrator)."
-    exit 1
+if (-not $windowsPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    LogDie "Please run this script in an elevated PowerShell session (Run as Administrator)."
 }
 
-# Detect Windows version for logging
 $osInfo = Get-CimInstance Win32_OperatingSystem
-$osCaption = $osInfo.Caption
-$osVersion = $osInfo.Version
-Write-Host "[DETECT] Operating system: $osCaption ($osVersion)"
+Log ("bootstrapping FlowLog correctness env on " + $osInfo.Caption + " (" + $osInfo.Version + ")")
 
-# Chocolatey bootstrap (if missing)
+# ----------------------------------------------------------------------
+# 1. Chocolatey bootstrap
+# ----------------------------------------------------------------------
 function Install-Chocolatey {
-    Write-Host "[INSTALL] Installing Chocolatey..."
+    Log "installing Chocolatey..."
     Set-ExecutionPolicy Bypass -Scope Process -Force
     Invoke-Expression ((Invoke-WebRequest -UseBasicParsing -Uri 'https://community.chocolatey.org/install.ps1').Content)
-    Write-Host "[COMPLETE] Chocolatey installed."
 }
 
 if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     Install-Chocolatey
 } else {
-    Write-Host "[FOUND] Chocolatey already installed."
+    Log "Chocolatey already installed."
 }
 
-# Ensure required packages via Chocolatey
-$packages = @("htop", "dos2unix")
-if ($packages.Count -gt 0) {
-    Write-Host "[INSTALL] Ensuring Windows packages: $($packages -join ', ')"
-    foreach ($pkg in $packages) {
-        choco install $pkg -y --no-progress | Out-Null
-    }
+# ----------------------------------------------------------------------
+# 2. Chocolatey packages
+# ----------------------------------------------------------------------
+# Required for the correctness suites:
+#   - protoc          : crates depend on prost-build
+#   - python3         : diff math in fixture/oracle helpers
+#   - wget, unzip     : oracle reference fetch + extract
+#   - 7zip            : extracting tarballs (Windows ships tar since
+#                       Win10 1803, but include 7zip for older boxes)
+#   - git             : the bash-side helpers shell out to git
+$ChocoPackages = @('protoc', 'python3', 'wget', 'unzip', '7zip', 'git')
+
+Log "installing choco packages: $($ChocoPackages -join ', ')"
+foreach ($pkg in $ChocoPackages) {
+    choco install -y --no-progress $pkg
+    if ($LASTEXITCODE -ne 0) { LogWarn "choco install $pkg returned $LASTEXITCODE" }
 }
 
-# Ensure rustup
+# ----------------------------------------------------------------------
+# 3. rustup + stable toolchain
+# ----------------------------------------------------------------------
 function Install-Rustup {
-    Write-Host "[INSTALL] Installing rustup..."
+    Log "installing rustup..."
     $installer = Join-Path $env:TEMP "rustup-init.exe"
     Invoke-WebRequest -UseBasicParsing -Uri "https://win.rustup.rs/x86_64" -OutFile $installer
-    & $installer -y
+    & $installer -y --default-toolchain stable --profile minimal
     Remove-Item $installer -Force
-    Write-Host "[COMPLETE] rustup installation finished."
 }
 
 if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
     Install-Rustup
     $env:PATH = "$env:USERPROFILE\.cargo\bin;" + $env:PATH
 } else {
-    Write-Host "[FOUND] rustup already installed."
+    Log "rustup already installed."
 }
 
-Write-Host "[UPDATE] Updating Rust toolchain to stable..."
-rustup update stable
+Log "ensuring stable toolchain is installed and default..."
+rustup install stable
 rustup default stable
-Write-Host "[COMPLETE] Rust toolchain ready."
 
-Write-Host "[VERIFY] Running cargo check..."
-$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Split-Path -Parent $repoRoot
-Push-Location $repoRoot
+# ----------------------------------------------------------------------
+# 4. Smoke test
+# ----------------------------------------------------------------------
+Log "running 'cargo check --workspace' as smoke test..."
+Push-Location $RootDir
 try {
-    cargo check
-    Write-Host "[COMPLETE] Environment setup completed successfully!"
+    cargo check --workspace
+    if ($LASTEXITCODE -ne 0) { LogDie "cargo check --workspace failed" }
+    Log "cargo check --workspace OK"
 } finally {
     Pop-Location
 }
 
-# Running command: powershell -ExecutionPolicy Bypass -File tools/env.ps1
+Log "done. Next:  make doctor   then   make test"
