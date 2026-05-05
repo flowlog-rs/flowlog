@@ -224,8 +224,21 @@ setup_dataset() {
 # Remove dataset files to reclaim disk space after a benchmark pair.
 cleanup_dataset() {
     local name="$1"
-    if [[ -n "${FLOWLOG_KEEP_DATASETS:-}" ]]; then
+    # CACHE_PATCH_v2: dataset cache safety guard (symlink-aware).
+    # Mirrors tests/complex/common.sh and tests/ldbc/ldbc.sh so all
+    # three layers honour the same env-var contract.
+    #   FLOWLOG_KEEP_DATASETS=1  → never delete (highest priority)
+    #   FACT_DIR is a symlink    → never delete unless FLOWLOG_FORCE_CLEANUP=1
+    #                              (protects a persistent /datasets cache
+    #                              from being rm -rf'd through the symlink)
+    if [[ "${FLOWLOG_KEEP_DATASETS:-0}" = "1" ]]; then
         log "$YELLOW" "CLEANUP" "$name (kept; FLOWLOG_KEEP_DATASETS=1)"
+        return
+    fi
+    local _fd_real
+    _fd_real="$(readlink -f "${FACT_DIR}" 2>/dev/null || echo "${FACT_DIR}")"
+    if [[ "${_fd_real}" != "${FACT_DIR}" && "${FLOWLOG_FORCE_CLEANUP:-0}" != "1" ]]; then
+        log "$YELLOW" "CLEANUP" "$name (kept; ${FACT_DIR} → ${_fd_real}; set FLOWLOG_FORCE_CLEANUP=1 to override)"
         return
     fi
     log "$YELLOW" "CLEANUP" "$name"
@@ -851,7 +864,13 @@ run_souffle() {
         # Sanity-check: confirm the compiled C++ has parallel pragmas.
         # If 0, something went wrong (souffle version mismatch?), and
         # we'd be timing serial code. Warn but continue.
-        local n_omp=$(grep -cE '#pragma omp parallel' "${sf_bin}.cpp" 2>/dev/null || echo 0)
+        # NB: `grep -c` returns 1 (and prints "0") when nothing matches.
+        # If we did `grep -c ... || echo 0`, the captured value becomes
+        # "0\n0", which then breaks `[[ -eq ]]` numeric compare. Use
+        # `|| true` and trust grep's own "0" output instead.
+        local n_omp
+        n_omp="$(grep -cE '#pragma omp parallel' "${sf_bin}.cpp" 2>/dev/null || true)"
+        n_omp="${n_omp:-0}"
         log "$BLUE" "BUILD" \
             "Souffle: ${sf_bin} compiled with $n_omp parallel-region pragmas"
         if [[ "$n_omp" -eq 0 ]]; then
