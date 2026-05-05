@@ -224,6 +224,10 @@ setup_dataset() {
 # Remove dataset files to reclaim disk space after a benchmark pair.
 cleanup_dataset() {
     local name="$1"
+    if [[ -n "${FLOWLOG_KEEP_DATASETS:-}" ]]; then
+        log "$YELLOW" "CLEANUP" "$name (kept; FLOWLOG_KEEP_DATASETS=1)"
+        return
+    fi
     log "$YELLOW" "CLEANUP" "$name"
     rm -rf "${FACT_DIR}/${name}"
 }
@@ -813,24 +817,46 @@ run_souffle() {
         return 1
     fi
 
-    # Compile once per program (cached). The -j flag at compile time
-    # is what wires Souffle's parallelism into the generated C++;
-    # passing it again at run-time is the standard idiom and matches
-    # the paper. Souffle's compile step also validates `.input`
-    # directives by trying to load the dataset, so -F has to be
-    # present at compile time too — we use the dataset for this pair
-    # as the schema sample.
+    # Compile once per program (cached). Recipe matches the FlowLog
+    # VLDB paper / FlowLog-Reproduction:
+    #
+    #   souffle -o <bin> -p /dev/null <prog.dl> -j <N>  -F <facts>
+    #
+    # Two key details, both load-bearing:
+    #   - `-o <bin>` (NOT `-c`). The `-c` flag compiles AND runs in one
+    #     shot but generates a serial C++ program; `-o` produces a
+    #     parallel binary with `#pragma omp parallel` directives wired
+    #     into the generated code.
+    #   - `-j N` at compile time. Souffle uses this to decide *whether*
+    #     to emit OpenMP pragmas at codegen — without it, the `.cpp`
+    #     contains zero `#pragma omp parallel` lines and the binary is
+    #     effectively single-threaded regardless of the runtime `-j`.
+    #
+    # We pass the same `-j N` again at run-time so the binary spawns
+    # N threads. -F has to be present at compile time too because
+    # Souffle validates `.input` directives against the dataset.
     if [[ ! -x "$sf_bin" ]]; then
         log "$BLUE" "BUILD" \
             "Souffle: compiling $stem with -j $WORKERS (one-off)"
         mkdir -p "$(dirname "$sf_bin")"
-        if ! "$SOUFFLE_BIN" -c -j "$WORKERS" -F "$fact_path" -o "$sf_bin" "$sf_src" \
+        if ! "$SOUFFLE_BIN" -o "$sf_bin" -p /dev/null -j "$WORKERS" \
+                -F "$fact_path" "$sf_src" \
                 > "${sf_bin}.compile.log" 2>&1; then
             log "$RED" "WARN" \
-                "Souffle: -c compile failed for $stem (see ${sf_bin}.compile.log) — recording N/A"
+                "Souffle: -o compile failed for $stem (see ${sf_bin}.compile.log) — recording N/A"
             rm -f "${best_log}.median_rss_kb" "${best_log}.median_total_s"
             : > "$best_log"
             return 1
+        fi
+        # Sanity-check: confirm the compiled C++ has parallel pragmas.
+        # If 0, something went wrong (souffle version mismatch?), and
+        # we'd be timing serial code. Warn but continue.
+        local n_omp=$(grep -cE '#pragma omp parallel' "${sf_bin}.cpp" 2>/dev/null || echo 0)
+        log "$BLUE" "BUILD" \
+            "Souffle: ${sf_bin} compiled with $n_omp parallel-region pragmas"
+        if [[ "$n_omp" -eq 0 ]]; then
+            log "$YELLOW" "WARN" \
+                "Souffle: $stem compiled with NO OpenMP pragmas — runtime will be effectively single-threaded"
         fi
     fi
 
