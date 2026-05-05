@@ -1,120 +1,111 @@
-# FlowLog testing infrastructure — high level
+# Testing infrastructure
 
-> A crisp overview of the test/benchmark stack: layers, the single
-> entry point, the flags you actually need, and the env-var contract.
-> Per-suite implementation details live in [`tests/README.md`](../tests/README.md)
-> and [`tools/sweep/README.md`](../tools/sweep/README.md).
+A 5-layer pipeline gated by one entry point. Each layer is cheaper than
+the next; the cheap ones gate the expensive ones.
 
-## The 5 layers (cheap → expensive, each gates the next)
+Per-suite details: [`tests/README.md`](../tests/README.md),
+[`tools/sweep/README.md`](../tools/sweep/README.md).
 
-| Layer | What it checks                                                   | Tool                                                                                                | Time      |
-|-------|------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|-----------|
-| **L0** | Rust unit tests across the workspace                            | `cargo test --release --workspace`                                                                  | ~15 s warm |
-| **L1** | ~95 small `.dl` fixtures, byte-diff vs `expected/`              | `tests/unit/unit_compiler.sh` + `unit_lib.sh`                                                       | ~1 min    |
-| **L2** | Real benchmark programs, byte-diff vs **Souffle** reference (correctness oracle) | `tests/complex/datalog_batch_compiler.sh` + `_lib.sh`                                               | ~2 min    |
-| **L3** | Wall time + peak RSS vs interpreter and/or Souffle              | `tools/benchmark/compare.sh`                                                                        | ~hours    |
-| **L4** | LDBC SNB queries vs DuckDB (opt-in)                             | `tests/ldbc/ldbc.sh`                                                                                | ~hours    |
+## The 5 layers
 
-L1 and L2 each run in **two modes**:
+| Layer | What it checks                                              | Time       |
+|------:|-------------------------------------------------------------|------------|
+| **L0** | `cargo test --release --workspace`                         | ~15 s warm |
+| **L1** | ~95 small `.dl` fixtures, byte-diff vs `expected/`         | ~1 min     |
+| **L2** | Real benchmark programs, byte-diff vs **Souffle** oracle   | ~2 min     |
+| **L3** | Wall time + peak RSS vs interpreter and/or Souffle         | hours      |
+| **L4** | LDBC SNB queries vs DuckDB *(opt-in)*                      | hours      |
 
-- `unit_compiler` / `datalog_batch_compiler` — exercises the
-  `flowlog-compiler` binary path.
-- `unit_lib` / `datalog_batch_lib` — synthesises a small Rust crate that
-  links the runtime as a library and calls `engine.run()`.
-
-Both must pass — they hit different code paths.
+L1 and L2 each run **twice**: once via the `flowlog-compiler` binary,
+once via a synthesised crate that links the runtime as a library
+(`unit_compiler` / `unit_lib`, `datalog_batch_compiler` / `_lib`). Both
+must pass — they hit different code paths.
 
 ## One entry point
 
 ```bash
-bash tools/sweep/run_full_sweep.sh [flags]
-# or via the Makefile:
 make smoke           # ~5 min — every layer, tiny subset
 make sweep           # full regression sweep (hours)
 make sweep-no-perf   # correctness only (skip L3)
 make perf            # L3 in isolation
 make test            # cargo test --release --workspace
+
+# or directly:
+bash tools/sweep/run_full_sweep.sh [flags]
 ```
 
-The sweep script runs L0 → L4 in order, captures per-step logs, and
-writes one `diagnosis.txt` whose first line is a one-shot
-`VERDICT: PASS / FAIL / PASS WITH N FLAG(S)`.
+The sweep runs L0 → L4 in order, captures per-step logs, and writes one
+`diagnosis.txt` whose first line is `VERDICT: PASS / FAIL / PASS WITH N
+FLAG(S)`.
 
-## Sweep flags (the only ones you need to remember)
+## Sweep flags
 
-| Flag                                   | Purpose                                                                  |
-|----------------------------------------|--------------------------------------------------------------------------|
-| `--smoke`                              | Tiny subset per layer — ~5 min total. For quick sanity.                  |
-| `--skip-l3`                            | Skip the long perf compare. Correctness-only sweep.                      |
-| `--include-ldbc`                       | Opt in to L4 (off by default).                                            |
-| `--keep-going`                         | Don't abort on first failure; collect all evidence.                      |
-| `--workers N`                          | Override thread budget (default `min(64, nproc)`).                        |
-| `--baseline=interpreter[,souffle]`     | Pick L3 baselines. Default `interpreter`. Forwarded verbatim to compare.sh. |
-| `--num-runs N`                         | Override L3 repetitions (default 3, median kept).                         |
+| Flag                                | Purpose                                          |
+|-------------------------------------|--------------------------------------------------|
+| `--smoke`                           | Tiny subset per layer (~5 min).                  |
+| `--skip-l3`                         | Correctness only — skip the long perf compare.   |
+| `--include-ldbc`                    | Opt in to L4.                                    |
+| `--keep-going`                      | Don't abort on first failure.                    |
+| `--workers N`                       | Override thread budget (default `min(64, nproc)`). |
+| `--baseline=interpreter[,souffle]`  | Pick L3 baselines (default `interpreter`).       |
+| `--num-runs N`                      | L3 repetitions per pair (default 3, median kept). |
 
-## Environment variables (the contract)
+## Environment
 
-| Var                                | Default            | Effect                                                                                                                                                                                  |
-|------------------------------------|--------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `WORKERS`                          | `min(64, nproc)`   | Thread budget — applied **identically to every engine** (interpreter `--workers`, compiler `-w`, lib mode env, Souffle `-j` at both compile AND run time). This is the fairness invariant. |
-| `L3_BASELINE`                      | `interpreter`      | Comma-separated L3 baselines, any of `{interpreter, souffle}`. Equivalent to `--baseline=`. Bare `BASELINE` is accepted as a back-compat alias.                                          |
-| `L3_NUM_RUNS`                      | `3`                | L3 timed runs per `(engine, pair)`. Equivalent to `--num-runs`. Bare `NUM_RUNS` (compare.sh's native name) is accepted as a back-compat alias.                                           |
-| `FLOWLOG_KEEP_DATASETS`            | `0`                | If `1`, never `rm -rf` datasets after a run. Set automatically by `source /datasets/env.sh` on the dev VM.                                                                              |
-| `FLOWLOG_FORCE_CLEANUP`            | `0`                | Override the symlink-aware cache guard (only relevant if `facts/` is a symlink to a shared cache). `KEEP=1` always wins over `FORCE=1`.                                                |
+| Var                       | Default          | Effect                                                                                  |
+|---------------------------|------------------|-----------------------------------------------------------------------------------------|
+| `WORKERS`                 | `min(64, nproc)` | Thread budget — applied **identically to every engine**. Fairness invariant.            |
+| `L3_BASELINE`             | `interpreter`    | Comma-separated, any of `{interpreter, souffle}`. Same as `--baseline=`.                |
+| `L3_NUM_RUNS`             | `3`              | Same as `--num-runs`.                                                                   |
+| `FLOWLOG_KEEP_DATASETS`   | `0`              | If `1`, never `rm -rf` datasets after a run. Set by `source /datasets/env.sh`.          |
+| `FLOWLOG_FORCE_CLEANUP`   | `0`              | Override the symlink cache guard. `KEEP=1` always wins.                                 |
 
-The `cleanup_dataset` helper used by L2/L3/L4 honours these three
-variables identically across all three layers (canonical
-`CACHE_PATCH_v2` form).
+`BASELINE` and `NUM_RUNS` (bare names) are accepted as back-compat
+aliases for `L3_BASELINE` / `L3_NUM_RUNS`.
 
-## L3 specifics
+## L3 perf (`tools/benchmark/compare.sh`)
 
-`tools/benchmark/compare.sh` has its own per-pair config
-(`tools/benchmark/config.txt`) listing `program=dataset` pairs and
-optional skip tags:
+Pairs come from `tools/benchmark/config.txt`:
 
 ```text
 graph_analysis/reach.dl=twitter [interp:skip] [souffle:skip]
-graph_analysis/sssp.dl=livejournal-sssp [interp:skip]
+graph_analysis/cc.dl=livejournal [souffle:skip]
 ```
 
-Each pair is timed under up to four engines:
+Each pair runs under up to four engines:
 
-- **Interpreter** (`vldb26-artifact` repo, expected as a sibling checkout).
-- **Compiler** (this repo, batch mode).
-- **Lib mode** (synthesised runner crate that links the runtime).
-- **Souffle** (canonical `.dl` programs from `tools/benchmark/souffle-programs/`).
+- **Interpreter** — `vldb26-artifact` repo (sibling checkout).
+- **Compiler**    — this repo, batch mode.
+- **Lib mode**    — synthesised crate that links the runtime.
+- **Souffle**     — canonical `.dl` from `tools/benchmark/souffle-programs/`.
 
-Every run is wrapped in `/usr/bin/time -v` so peak RSS is captured
-alongside wall time. Output: `result/benchmark/comparison_results.csv`
-(22 columns including `*_Load`, `*_Exec`, `*_Total`, `*_PeakRss_MB`,
-`Souffle_vs_Compiler_Total`, `Crosscheck_Souffle`, etc.).
+Every run is wrapped in `/usr/bin/time -v` (peak RSS alongside wall time).
+Output: `result/benchmark/comparison_results.csv` (22 columns).
 
-The Souffle compile recipe is the FlowLog VLDB paper canonical form:
+Souffle compile recipe (FlowLog VLDB paper canonical form):
 
 ```bash
 souffle -o <bin> -p /dev/null -j N -F <facts> <prog.dl>
 ```
 
-`-o <bin>` (NOT `-c`) is what produces a parallel binary; `-j N` at
-compile time is what tells Souffle to emit OpenMP pragmas at codegen.
-A build-time sanity log line counts the pragmas in the generated `.cpp`
-so you can see whether the binary is actually parallel.
+`-o <bin>` (not `-c`) produces a parallel binary; `-j N` at compile time
+tells Souffle to emit OpenMP pragmas. A build-time log line confirms
+libgomp linkage.
 
 ## Outputs
 
 Everything lands under `result/sweep/<UTC-timestamp>/`:
 
-- `meta.txt` — git head, branch, env, start time.
+- `meta.txt`                 — git head, branch, env, start time.
 - `00-cargo-build.log` … `40-ldbc.log` — per-step transcripts.
-- `comparison_results.csv` — copy of the L3 perf CSV (if L3 ran).
-- **`diagnosis.txt`** — top-of-file verdict, per-step status table,
-  perf CSV roll-up with min/max/sum aggregates, and a list of
-  flagged anomalies (lib drift > 40 %, Souffle faster than compiler,
-  compiler RSS > 2× interpreter, etc.). Also printed to stdout.
+- `comparison_results.csv`   — copy of the L3 CSV (if L3 ran).
+- **`diagnosis.txt`**        — verdict + per-step status table + perf
+  roll-up + flagged anomalies (lib drift > 40 %, Souffle faster than
+  compiler, compiler RSS > 2× interpreter, etc.). Also printed to stdout.
 
-Exit code is `0` iff every layer that ran returned `0`.
+Exit `0` iff every layer that ran returned `0`.
 
-## Quickstart recipes
+## Recipes
 
 ```bash
 # Quickest sanity check before pushing
@@ -123,10 +114,11 @@ make smoke
 # Full correctness sweep, skip the long perf
 bash tools/sweep/run_full_sweep.sh --skip-l3
 
-# Targeted L3 perf compare on one program=dataset pair
+# Targeted L3 on one pair
 NUM_RUNS=3 bash tools/benchmark/compare.sh --fresh \
-    --baseline=interpreter,souffle <(echo 'graph_analysis/reach.dl=livejournal')
+    --baseline=interpreter,souffle \
+    <(echo 'graph_analysis/reach.dl=livejournal')
 
-# Keep datasets between runs (avoid HuggingFace re-downloads)
-source /datasets/env.sh    # exports FLOWLOG_KEEP_DATASETS=1
+# Keep datasets between runs (skip HuggingFace re-downloads)
+source /datasets/env.sh
 ```
