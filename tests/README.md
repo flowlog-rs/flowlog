@@ -424,3 +424,49 @@ contract is enforced in L2 (`tests/complex/common.sh`), L3
 (`compare.sh`), and L4 (`tests/ldbc/ldbc.sh`); a pre-L0 regression test
 (`tests/safety/cleanup_dataset_test.sh`, also exposed via
 `make test-safety`) keeps the three implementations aligned.
+
+**Soufflé reference cache.** L2 downloads pre-baked Soufflé `.csv`
+references from HuggingFace and unpacks them into `/dev/shm/` per pair.
+On long-lived dev VMs you can short-circuit the download by setting
+`FLOWLOG_SOUFFLE_REF_CACHE=<dir>` — `download_souffle_ref` then `cp`s
+from `<dir>/<program>_<dataset>.tar.gz` if the file exists, falling back
+to a live download otherwise. `/datasets/env.sh` on the standard dev VM
+sets this for you.
+
+<br>
+
+---
+
+## Closed-loop integration
+
+External tools (regression CI, agentic optimisation loops like
+[groomer](https://github.com/hangdongzhao_microsoft/groomer)) drive
+FlowLog through three small, **stable** entry points:
+
+| Entry point | What it does | Stability contract |
+|---|---|---|
+| `make doctor` &nbsp;·&nbsp; `tools/env_check.sh` | Print a 9-section health report; exit 0 when env is ready, 1 on a blocking error. | Output is human-readable but exit code is what tooling should key on. The ✗ / ! / ✓ glyphs are the public surface. |
+| `make bench-one PROG=<.dl> DATASET=<name>` &nbsp;·&nbsp; `tools/benchmark/bench_one.sh` | Build the lib runner crate for one (program, dataset) pair, run it `NUM_RUNS` times, print stable contract lines on stdout: `<token> <median> <min> <max> <runs> <workers>` for `elapsed_seconds` and `peak_rss_kb`. **Fails closed** on any single run failure. | The two stdout contract lines, in that order, with field 1 = median. |
+| `bash tests/complex/datalog_batch_compiler.sh <config_file>` | Run every `<program=dataset>` line in `<config_file>` end-to-end, byte-diff every `.output` against the Soufflé reference, exit non-zero on any mismatch. | The single positional `<config_file>` argument; basename starting with `config_string*` toggles `--str-intern`. |
+
+Two env vars round out the contract:
+
+- `FLOWLOG_KEEP_DATASETS` (truthy): preserve cached datasets between iterations.
+- `FLOWLOG_SOUFFLE_REF_CACHE=<dir>`: preserve the Soufflé reference tarball cache between iterations.
+
+A typical agentic loop launches with all three set:
+
+```bash
+source /datasets/env.sh                          # FLOWLOG_KEEP_DATASETS=1, FLOWLOG_SOUFFLE_REF_CACHE=...
+make doctor || exit 1                            # gate the run on a green env-check
+make test-safety                                 # 11/15 — the cache-safety contract
+WORKERS=1 NUM_RUNS=5 make bench-one \            # closed-loop perf gate
+    PROG=example/knowledge_reasoning/crdt.dl \
+    DATASET=facts/crdt
+bash tests/complex/datalog_batch_compiler.sh \   # correctness oracle
+    tests/complex/config_integer.txt
+```
+
+The contract is intentionally minimal so external loops don't need to
+track the 26-column CSV schema or the per-pair tags in `config.txt`. If
+you need any of that machinery, drive `compare.sh` directly.

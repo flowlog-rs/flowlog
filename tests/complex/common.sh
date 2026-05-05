@@ -126,9 +126,21 @@ download_souffle_ref() {
     local ref_url="${SOUFFLE_BASE_URL}/${ref_name}.tar.gz"
 
     mkdir -p "$ref_dir"
-    log "$CYAN" "DOWNLOAD" "Souffle reference: $ref_name" >&2
-    wget --no-verbose --timeout=60 --tries=3 -O "$ref_tar" "$ref_url" \
-        || die "Failed to download Souffle reference: $ref_url"
+    # Optional local cache: if FLOWLOG_SOUFFLE_REF_CACHE points to a
+    # directory that already contains the tarball, copy from it instead
+    # of round-tripping HuggingFace. Replaces the previous loop-local
+    # CACHE_PATCH_v1 patch (which had to be applied + skip-worktreed by
+    # an out-of-tree script). Setting the env var is the *only* opt-in;
+    # missing cache dir or missing tarball falls through to live download.
+    local cached="${FLOWLOG_SOUFFLE_REF_CACHE:-}/${ref_name}.tar.gz"
+    if [[ -n "${FLOWLOG_SOUFFLE_REF_CACHE:-}" && -f "$cached" ]]; then
+        log "$CYAN" "DOWNLOAD" "Souffle reference: $ref_name (cache: $cached)" >&2
+        cp "$cached" "$ref_tar"
+    else
+        log "$CYAN" "DOWNLOAD" "Souffle reference: $ref_name" >&2
+        wget --no-verbose --timeout=60 --tries=3 -O "$ref_tar" "$ref_url" \
+            || die "Failed to download Souffle reference: $ref_url"
+    fi
     tar xzf "$ref_tar" -C "$ref_dir" || die "Failed to extract Souffle reference: $ref_name"
     rm -f "$ref_tar"
 
