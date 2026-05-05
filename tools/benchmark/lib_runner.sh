@@ -2,7 +2,7 @@
 #
 # Library-mode runner crate synthesis for the benchmark comparison.
 #
-# Shares the small leaf helpers in `tests/lib_synth_common.sh` with the
+# Shares the small leaf helpers in `tests/lib/synth_common.sh` with the
 # unit / complex test synthesizer, but keeps its own crate-management +
 # main.rs synthesis because the benchmark has different needs:
 #
@@ -34,8 +34,8 @@
 FLOWLOG_BENCH_LIB_RUNNER_LOADED=1
 
 # Shared lib-mode synth helpers (`.input` filename resolver, CSV finder,
-# DL → Rust type, PascalCase) — also used by `tests/lib_runner_synth.sh`.
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib_synth_common.sh"
+# DL → Rust type, PascalCase) — also used by `tests/lib/runner_synth.sh`.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/lib/synth_common.sh"
 
 ###############################################################################
 # .dl parsing — minimal, local to this file. Handles a single self-contained

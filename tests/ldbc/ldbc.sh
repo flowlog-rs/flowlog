@@ -27,7 +27,7 @@ fail() { echo -e "${RED}[FAIL]${NC}  $*"; }
 die()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 # flowlog_truthy <value>: returns 0 (true) on 1/yes/true/on (any case),
-# 1 otherwise. Mirrors tests/shared.sh::flowlog_truthy (kept inline here
+# 1 otherwise. Mirrors tests/lib/shared.sh::flowlog_truthy (kept inline here
 # because ldbc.sh has its own minimal log/die helpers and does not source
 # shared.sh).
 flowlog_truthy() {

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # FlowLog library-mode end-to-end test runner.
 #
-# Mirrors `unit_compiler.sh`: same fixtures, same comparison helper, same
+# Mirrors `run_compiler.sh`: same fixtures, same comparison helper, same
 # directory layout. Instead of compiling a standalone binary that reads
 # CSVs and writes files, this runner:
 #
@@ -28,7 +28,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 # Runner-crate location must be set before sourcing the synthesis helpers.
 LIB_RUNNER_DIR="${ROOT_DIR}/target/e2e-lib/runner"
-source "$(dirname "${BASH_SOURCE[0]}")/../lib_runner_synth.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 
 skipped=0
 
@@ -44,7 +44,7 @@ out) drive a single \`engine.run()\`; incremental fixtures (with
 and emit per-epoch \`<rel>_t<N>\` delta files computed host-side from
 successive snapshots.
 
-Each test directory under tests/unit/<category>/<name>/ contains:
+Each test directory under tests/fixtures/<category>/<name>/ contains:
   program.dl      Datalog source using .input/.output directives
   data/           Input CSV files (filename matches relation name)
   expected/       Expected output files (one per relation or epoch)
@@ -181,7 +181,7 @@ main() {
     fi
 
     echo ""
-    echo -e "  ${BOLD}FlowLog Unit Tests (library mode)${NC}"
+    echo -e "  ${BOLD}FlowLog Fixture Tests (library mode)${NC}"
     echo ""
 
     ensure_runner_crate

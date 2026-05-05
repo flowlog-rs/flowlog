@@ -39,5 +39,5 @@ jobs:
 
       - name: 🏁 End-to-end tests
         run: |
-          bash tests/unit/unit_compiler.sh
-          bash tests/unit/unit_lib.sh
+          bash tests/fixtures/run_compiler.sh
+          bash tests/fixtures/run_lib.sh

@@ -8,10 +8,10 @@
 # Layers (each runs only if the previous passed):
 #
 #   L0  Cargo workspace          cargo build + cargo test --workspace
-#   L1  Unit fixtures            tests/unit/unit_compiler.sh
-#                                tests/unit/unit_lib.sh
-#   L2  Souffle oracle           tests/complex/datalog_batch_compiler.sh
-#                                tests/complex/datalog_batch_lib.sh
+#   L1  Fixture e2e               tests/fixtures/run_compiler.sh
+#                                tests/fixtures/run_lib.sh
+#   L2  Souffle oracle           tests/oracle/run_compiler.sh
+#                                tests/oracle/run_lib.sh
 #   L3  Performance compare      tools/benchmark/compare.sh
 #                                  → result/benchmark/comparison_results.csv
 #                                  (records both wall time AND peak RSS)
@@ -476,39 +476,39 @@ run_step "L0 cargo test"    "01-cargo-test"  0 -- \
     bash -c "RAYON_NUM_THREADS=$WORKERS CARGO_BUILD_JOBS=$WORKERS cargo test --release --workspace --quiet"
 
 # ----------------------------------------------------------------------
-# L1 - unit fixtures (binary + library mode)
+# L1 - fixture-level e2e tests (binary + library mode)
 # ----------------------------------------------------------------------
 if [[ "$SMOKE" == "1" ]]; then
     L1_FIXTURES=(agg_sum recursive_tc compare_eq)
-    run_step "L1 unit_compiler (smoke)" "10-unit-compiler" 0 -- \
-        bash tests/unit/unit_compiler.sh "${L1_FIXTURES[@]}"
-    run_step "L1 unit_lib (smoke)"      "11-unit-lib"      0 -- \
-        bash tests/unit/unit_lib.sh      "${L1_FIXTURES[@]}"
+    run_step "L1 fixtures-compiler (smoke)" "10-fixtures-compiler" 0 -- \
+        bash tests/fixtures/run_compiler.sh "${L1_FIXTURES[@]}"
+    run_step "L1 fixtures-lib (smoke)"      "11-fixtures-lib"      0 -- \
+        bash tests/fixtures/run_lib.sh      "${L1_FIXTURES[@]}"
 else
-    run_step "L1 unit_compiler"         "10-unit-compiler" 0 -- \
-        bash tests/unit/unit_compiler.sh
-    run_step "L1 unit_lib"              "11-unit-lib"      0 -- \
-        bash tests/unit/unit_lib.sh
+    run_step "L1 fixtures-compiler"         "10-fixtures-compiler" 0 -- \
+        bash tests/fixtures/run_compiler.sh
+    run_step "L1 fixtures-lib"              "11-fixtures-lib"      0 -- \
+        bash tests/fixtures/run_lib.sh
 fi
 
 # ----------------------------------------------------------------------
 # L2 - Souffle-oracle correctness on real benchmark programs
 # ----------------------------------------------------------------------
 if [[ "$SMOKE" == "1" ]]; then
-    L2_CFG="$RUN_DIR/complex-smoke.txt"
+    L2_CFG="$RUN_DIR/oracle-smoke.txt"
     cat > "$L2_CFG" <<EOF
 graph_analysis/tc.dl=G5K-0.001
 graph_analysis/sg.dl=G5K-0.001
 knowledge_reasoning/crdt.dl=crdt
 EOF
 else
-    L2_CFG="${ROOT_DIR}/tests/complex/config_integer.txt"
+    L2_CFG="${ROOT_DIR}/tests/oracle/config_integer.txt"
 fi
 
-run_step "L2 datalog_batch_compiler"   "20-complex-compiler" 0 -- \
-    bash -c "WORKERS=$WORKERS RAYON_NUM_THREADS=$WORKERS bash tests/complex/datalog_batch_compiler.sh $L2_CFG"
-run_step "L2 datalog_batch_lib"        "21-complex-lib"      0 -- \
-    bash -c "WORKERS=$WORKERS RAYON_NUM_THREADS=$WORKERS bash tests/complex/datalog_batch_lib.sh $L2_CFG"
+run_step "L2 oracle-compiler"   "20-oracle-compiler" 0 -- \
+    bash -c "WORKERS=$WORKERS RAYON_NUM_THREADS=$WORKERS bash tests/oracle/run_compiler.sh $L2_CFG"
+run_step "L2 oracle-lib"        "21-oracle-lib"      0 -- \
+    bash -c "WORKERS=$WORKERS RAYON_NUM_THREADS=$WORKERS bash tests/oracle/run_lib.sh $L2_CFG"
 
 # ----------------------------------------------------------------------
 # L3 - perf compare (records both timing AND peak RSS in CSV)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Helpers shared between the two library-mode runner synthesizers:
-#   - tests/lib_runner_synth.sh         (unit + complex test runners)
+#   - tests/lib/runner_synth.sh         (fixture + oracle test runners)
 #   - tools/benchmark/lib_runner.sh     (benchmark runner)
 #
 # Both need to: resolve `.input` filenames, find datasets case-insensitively,

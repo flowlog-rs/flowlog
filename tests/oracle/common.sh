@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 #
-# Shared helpers for FlowLog complex (HuggingFace-dataset) test runners.
+# Shared helpers for FlowLog Souffle-oracle (L2) test runners.
 #
 # Sourced by:
-#   tests/complex/datalog_batch_compiler.sh — binary mode runner
-#   tests/complex/datalog_batch_lib.sh      — library mode runner
+#   tests/oracle/run_compiler.sh — binary mode runner
+#   tests/oracle/run_lib.sh      — library mode runner
 #
-# Pulls generic helpers (colors, log, die, trim) from tests/shared.sh,
-# and layers complex-specific bits on top: dataset/reference download,
+# Pulls generic helpers (colors, log, die, trim) from tests/lib/shared.sh,
+# and layers oracle-specific bits on top: dataset/reference download,
 # .dl preparation, config-file iteration, and CSV-vs-Souffle verification.
 #
 # Not executable on its own — defines functions and globals; the runner
 # script is responsible for invoking `main`.
 
-source "$(dirname "${BASH_SOURCE[0]}")/../shared.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/shared.sh"
 
 ###############################################################################
 # Globals
 ###############################################################################
 
-readonly COMPLEX_DIR="${ROOT_DIR}/tests/complex"
-readonly CONFIG_INTEGER="${COMPLEX_DIR}/config_integer.txt"
-readonly CONFIG_STRING="${COMPLEX_DIR}/config_string.txt"
+readonly ORACLE_DIR="${ROOT_DIR}/tests/oracle"
+readonly CONFIG_INTEGER="${ORACLE_DIR}/config_integer.txt"
+readonly CONFIG_STRING="${ORACLE_DIR}/config_string.txt"
 
 # Staging directory: prefer /dev/shm (tmpfs) for speed, fall back to $TMPDIR or /tmp
 if [[ -d /dev/shm && -w /dev/shm ]]; then

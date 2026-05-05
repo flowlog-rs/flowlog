@@ -12,9 +12,9 @@
 
 <br>
 
-The stack has **four layers**, plus an opt-in fifth (LDBC SNB). Each layer is
-cheaper than the next — the cheap ones gate the expensive ones — and a single
-entry point (`make sweep`) runs them all in order and emits one
+The stack has **five layers (L0–L4)**, with L4 (LDBC SNB) being opt-in. Each
+layer is cheaper than the next — the cheap ones gate the expensive ones — and
+a single entry point (`make sweep`) runs them all in order and emits one
 `diagnosis.txt` whose first line is the verdict.
 
 <pre align="center">
@@ -108,7 +108,7 @@ phase). All 30 baselined pairs cross-validate against Souffle row counts.
 
 ---
 
-## The four layers
+## The five layers
 
 ### `L0` &nbsp; Workspace unit tests
 
@@ -142,13 +142,13 @@ broken parser.
 
 <br>
 
-### `L1` &nbsp; Fixture-level end-to-end &nbsp;·&nbsp; `tests/unit/`
+### `L1` &nbsp; Fixture-level end-to-end &nbsp;·&nbsp; `tests/fixtures/`
 
 Runs ~95 small hand-curated `.dl` programs **end-to-end** and byte-diffs the
 output against pinned `expected/` files. Each fixture is a directory:
 
 ```
-tests/unit/datalog-batch/<feature>/
+tests/fixtures/datalog-batch/<feature>/
 ├── program.dl                # the program under test
 ├── data/                     # optional: input CSVs
 ├── expected/                 # required: one file per .output relation
@@ -167,25 +167,25 @@ Coverage spans all four execution modes:
 
 > [!IMPORTANT]
 > **Two runners exercise the same fixtures via two lowering paths — both must pass.**
-> `unit_compiler.sh` builds and runs the `flowlog-compiler` binary;
-> `unit_lib.sh` synthesises a small Rust runner crate that links
+> `run_compiler.sh` builds and runs the `flowlog-compiler` binary;
+> `run_lib.sh` synthesises a small Rust runner crate that links
 > `flowlog-build` (build script) + `flowlog-runtime` (engine) and calls
 > `engine.run()` directly. Library mode hits a different code path than binary
 > mode, so a regression that passes one and fails the other almost always
 > points at the build-script ↔ binary-target boundary.
 
-Wall time in the latest sweep: **`unit_compiler` ≈ 1366 s, `unit_lib` ≈ 357 s**.
+Wall time in the latest sweep: **`run_compiler` ≈ 1366 s, `run_lib` ≈ 357 s**.
 
 <br>
 
-### `L2` &nbsp; Souffle oracle on real benchmark programs &nbsp;·&nbsp; `tests/complex/`
+### `L2` &nbsp; Souffle oracle on real benchmark programs &nbsp;·&nbsp; `tests/oracle/`
 
 For each `program=dataset` pair in `config_integer.txt` (and
 `config_string.txt` for `--str-intern` programs), runs FlowLog against the
 dataset, then byte-diffs **every `.output` relation** against the
 corresponding pre-computed [Souffle](https://souffle-lang.github.io/)
 reference output (a tarball auto-fetched from HuggingFace and cached locally
-under `tests/complex/cache/`).
+under `tests/oracle/cache/`).
 
 > [!TIP]
 > Souffle being an **independent Datalog engine** is the key — it makes this
@@ -202,8 +202,8 @@ The 19 program-dataset pairs span three program families:
 | Program analysis     | `andersen`, `cspa`, `csda`, `batik`, `biojava`, `eclipse`, `xalan`, `cvc5`, `z3`, `zxing` |
 
 A typical run cross-checks **~140 output relations and ~700 M tuples**. Same
-dual binary/library runners as L1 (`datalog_batch_compiler.sh` /
-`datalog_batch_lib.sh`).
+dual binary/library runners as L1 (`tests/oracle/run_compiler.sh` /
+`tests/oracle/run_lib.sh`).
 
 Wall time in the latest sweep: **compiler ≈ 903 s, lib ≈ 818 s**.
 
@@ -422,7 +422,7 @@ layout has the repo's `facts/ → /datasets/facts/`), cleanup is **always**
 skipped — even with `FLOWLOG_KEEP_DATASETS` unset — so a stray sweep can't
 `rm -rf` a 100+ GB cache through the symlink. To override and actually
 delete through the symlink, set `FLOWLOG_FORCE_CLEANUP=1`. The same
-contract is enforced in L2 (`tests/complex/common.sh`), L3
+contract is enforced in L2 (`tests/oracle/common.sh`), L3
 (`compare.sh`), and L4 (`tests/ldbc/ldbc.sh`); a pre-L0 regression test
 (`tests/safety/cleanup_dataset_test.sh`, also exposed via
 `make test-safety`) keeps the three implementations aligned.
@@ -443,13 +443,16 @@ sets this for you.
 
 External tools (regression CI, agentic optimisation loops like
 [groomer](https://github.com/hangdongzhao_microsoft/groomer)) drive
-FlowLog through three small, **stable** entry points:
+FlowLog through **four `make` targets** plus **two env vars**. Everything
+else in this document is dev-facing: the closed-loop contract below is
+the only surface external tooling should depend on.
 
-| Entry point | What it does | Stability contract |
+| `make` target | What it does | Stability contract |
 |---|---|---|
-| `make doctor` &nbsp;·&nbsp; `tools/env_check.sh` | Print a 9-section health report; exit 0 when env is ready, 1 on a blocking error. | Output is human-readable but exit code is what tooling should key on. The ✗ / ! / ✓ glyphs are the public surface. |
-| `make bench-one PROG=<.dl> DATASET=<name>` &nbsp;·&nbsp; `tools/benchmark/bench_one.sh` | Build the lib runner crate for one (program, dataset) pair, run it `NUM_RUNS` times, print stable contract lines on stdout: `<token> <median> <min> <max> <runs> <workers>` for `elapsed_seconds` and `peak_rss_kb`. **Fails closed** on any single run failure. | The two stdout contract lines, in that order, with field 1 = median. |
-| `bash tests/complex/datalog_batch_compiler.sh <config_file>` | Run every `<program=dataset>` line in `<config_file>` end-to-end, byte-diff every `.output` against the Soufflé reference, exit non-zero on any mismatch. | The single positional `<config_file>` argument; basename starting with `config_string*` toggles `--str-intern`. |
+| `make doctor` | Print a 9-section health report; exit 0 when env is ready, 1 on a blocking error. | The exit code; the ✗ / ! / ✓ glyphs are the public log surface. |
+| `make bench-one PROG=<.dl> DATASET=<name>` | Build the lib runner crate for one (program, dataset) pair, run it `NUM_RUNS` times, print stable contract lines on stdout: `<token> <median> <min> <max> <runs> <workers>` for `elapsed_seconds` and `peak_rss_kb`. **Fails closed** on any single run failure. | The two stdout contract lines, in that order, with field 1 = median. Honours `WORKERS`, `NUM_RUNS` env. |
+| `make oracle CONFIG=<file> [MODE=compiler\|lib\|both]` | Run every `<program=dataset>` line in `<config_file>` against the Soufflé oracle in either or both lowering paths; exit non-zero on any byte-diff mismatch. | Positional `CONFIG=`; `MODE=` defaults to `both`. Config-file basename starting with `config_string*` toggles `--str-intern`. Honours `WORKERS`, `RAYON_NUM_THREADS`, `FLOWLOG_KEEP_DATASETS`, `FLOWLOG_SOUFFLE_REF_CACHE` env. |
+| `make perf-compare BASE=<sha> HEAD=<sha> LIST=<file>` | For each `<prog>=<dataset>` pair in LIST, run `bench-one` at BASE (in a cached sibling worktree under `target/perf-compare-base/<sha>/`) and HEAD (in place); fail if any pair regresses past time- or RSS-pct thresholds. | Exit 0 = all pairs within threshold, 1 = at least one regression, 2 = bad usage. Honours `PERF_COMPARE_TIME_PCT` (default 10), `PERF_COMPARE_RSS_PCT` (default 20), `PERF_COMPARE_NUM_RUNS` (default 3), `PERF_COMPARE_WORKERS` (default 1). |
 
 Two env vars round out the contract:
 
@@ -461,12 +464,14 @@ A typical agentic loop launches with all three set:
 ```bash
 source /datasets/env.sh                          # FLOWLOG_KEEP_DATASETS=1, FLOWLOG_SOUFFLE_REF_CACHE=...
 make doctor || exit 1                            # gate the run on a green env-check
-make test-safety                                 # 11/15 — the cache-safety contract
+make test-safety                                 # cache-safety contract
 WORKERS=1 NUM_RUNS=5 make bench-one \            # closed-loop perf gate
     PROG=example/knowledge_reasoning/crdt.dl \
     DATASET=facts/crdt
-bash tests/complex/datalog_batch_compiler.sh \   # correctness oracle
-    tests/complex/config_integer.txt
+WORKERS=$(nproc) FLOWLOG_KEEP_DATASETS=1 \       # correctness oracle
+    make oracle CONFIG=tests/oracle/config_integer.txt
+make perf-compare BASE=$BEFORE HEAD=$AFTER \     # two-sha drift gate
+    LIST=examples/perf-bench-list.txt
 ```
 
 The contract is intentionally minimal so external loops don't need to

@@ -12,7 +12,7 @@ set -euo pipefail
 #   6. Sorts FlowLog output and diffs against Souffle reference
 #   7. Reports pass/fail
 #
-# See `datalog_batch_lib.sh` for the library-mode analog.
+# See `run_lib.sh` for the library-mode analog.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 

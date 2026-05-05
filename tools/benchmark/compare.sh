@@ -244,7 +244,7 @@ NUM_RUNS="${NUM_RUNS:-3}"
 CSV_FILE="${LOG_DIR}/comparison_results.csv"
 
 # Synthesis helpers for the lib runner crate. Self-contained under tools/ —
-# intentionally does not share code with tests/lib_runner_synth.sh.
+# intentionally does not share code with tests/lib/runner_synth.sh.
 source "$(dirname "$0")/lib_runner.sh"
 
 ############################################################
@@ -345,7 +345,7 @@ cleanup_dataset() {
     # NOTE: the literal "CACHE_PATCH_v2" prefix is consumed by
     # /datasets/lib/patch_repo.py as an idempotency marker on dev VMs.
     # Do not rename without updating that tool.
-    # Mirrors tests/complex/common.sh and tests/ldbc/ldbc.sh so all
+    # Mirrors tests/oracle/common.sh and tests/ldbc/ldbc.sh so all
     # three layers honour the same env-var contract.
     #   FLOWLOG_KEEP_DATASETS truthy  → never delete (highest priority).
     #                                   Truthy = 1/yes/true/on (any case).

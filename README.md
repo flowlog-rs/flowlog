@@ -140,7 +140,7 @@ $ make sweep   # full regression sweep (hours)
 $ make perf    # tools/benchmark/compare.sh — timings + peak RSS vs the interpreter
 ```
 
-`make sweep` runs four gated suites — `cargo test`, `tests/unit/` (binary + library), `tests/complex/` (vs a [Souffle](https://souffle-lang.github.io/) oracle), and `tools/benchmark/compare.sh` — and writes a single `result/sweep/<ts>/diagnosis.txt`. See [`tests/README.md`](tests/README.md) for an in-depth guide — per-layer contracts, fairness invariants, the diagnosis schema, and the full results table.
+`make sweep` runs four gated suites — `cargo test`, `tests/fixtures/` (binary + library), `tests/oracle/` (vs a [Souffle](https://souffle-lang.github.io/) oracle), and `tools/benchmark/compare.sh` — and writes a single `result/sweep/<ts>/diagnosis.txt`. See [`tests/README.md`](tests/README.md) for an in-depth guide — per-layer contracts, fairness invariants, the diagnosis schema, and the full results table.
 
 <p align="center">
   <img src="docs/perf-flowlog-vs-souffle.svg" alt="FlowLog vs Souffle — end-to-end compiler runtime, 30 workloads" />
@@ -156,9 +156,9 @@ End-to-end compiler runtime, FlowLog vs Soufflé (30 workloads, `WORKERS = 64`, 
 
 ## Contributing
 
-Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have run the unit suites:
+Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have run the fixture suites:
 
 ```bash
-$ bash tests/unit/unit_compiler.sh
-$ bash tests/unit/unit_lib.sh
+$ bash tests/fixtures/run_compiler.sh
+$ bash tests/fixtures/run_lib.sh
 ```

@@ -36,9 +36,9 @@ DATASETS_ROOT="${FLOWLOG_DATASETS_ROOT:-/datasets}"
 SOUFFLE_REF_CACHE_DEFAULT="${DATASETS_ROOT}/souffle_ref_tarballs"
 SOUFFLE_REF_CACHE="${FLOWLOG_SOUFFLE_REF_CACHE:-$SOUFFLE_REF_CACHE_DEFAULT}"
 
-# tests/shared.sh owns the canonical truthy parser so we don't drift.
+# tests/lib/shared.sh owns the canonical truthy parser so we don't drift.
 # shellcheck disable=SC1091
-source "${ROOT_DIR}/tests/shared.sh"
+source "${ROOT_DIR}/tests/lib/shared.sh"
 
 errors=0
 warns=0

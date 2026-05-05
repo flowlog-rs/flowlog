@@ -2,7 +2,7 @@
 #
 # Safety regression test for cleanup_dataset across L2/L3/L4.
 #
-# All three layers (`tests/complex/common.sh`, `tools/benchmark/compare.sh`,
+# All three layers (`tests/oracle/common.sh`, `tools/benchmark/compare.sh`,
 # `tests/ldbc/ldbc.sh`) implement their own `cleanup_dataset` because the
 # scripts run in slightly different contexts. They are required to honour
 # the same env-var contract:
@@ -50,10 +50,10 @@ assert_gone() {
 }
 
 # ----------------------------------------------------------------------
-# Test 1: tests/complex/common.sh::cleanup_dataset
+# Test 1: tests/oracle/common.sh::cleanup_dataset
 # ----------------------------------------------------------------------
 test_complex_common() {
-    local layer="L2 tests/complex/common.sh"
+    local layer="L2 tests/oracle/common.sh"
     local real_cache="$TMP/L2_real_cache"
     local repo_facts="$TMP/L2_repo_facts"
     mkdir -p "$real_cache/cspa-httpd"
@@ -65,7 +65,7 @@ test_complex_common() {
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$ROOT"
-source "$ROOT/tests/complex/common.sh"
+source "$ROOT/tests/oracle/common.sh"
 cleanup_dataset "\$1" "\$2"
 EOF
     chmod +x "$shim"

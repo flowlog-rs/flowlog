@@ -3,7 +3,7 @@ set -euo pipefail
 
 # FlowLog correctness test — datalog-batch mode, library path.
 #
-# Mirrors `datalog_batch_compiler.sh` but drives lib mode: instead of
+# Mirrors `run_compiler.sh` but drives lib mode: instead of
 # compiling a standalone executable with `flowlog-compiler`, synthesize a
 # Rust runner crate that uses `flowlog-build`, parse input CSVs into the
 # generated `rel::*` structs, run the engine, and write outputs.
@@ -15,14 +15,14 @@ set -euo pipefail
 #      (lib mode treats .printsize as a count; the Souffle reference
 #       expects tuples, so rewrite so BatchResults carries the rows)
 #   4. Stages prog + CSVs into the persistent runner crate
-#   5. Synthesizes build.rs / main.rs (via lib_runner_synth.sh)
+#   5. Synthesizes build.rs / main.rs (via tests/lib/runner_synth.sh)
 #   6. cargo run --release with WORKERS env plumbed into .workers(n)
 #   7. Downloads Souffle reference and diffs via verify_output
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 LIB_RUNNER_DIR="${ROOT_DIR}/target/e2e-complex-lib/runner"
-source "$(dirname "${BASH_SOURCE[0]}")/../lib_runner_synth.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 
 ###############################################################################
 # Configuration

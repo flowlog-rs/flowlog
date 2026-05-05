@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Shared helpers used by every FlowLog test script (unit + complex,
+# Shared helpers used by every FlowLog test script (fixtures + oracle,
 # binary + lib). Pure presentation + tiny utilities — no test semantics.
 #
-# Sourced by tests/unit/common.sh, tests/complex/common.sh, and
-# tests/lib_runner_synth.sh. Use the include guard below instead of
+# Sourced by tests/fixtures/common.sh, tests/oracle/common.sh, and
+# tests/lib/runner_synth.sh. Use the include guard below instead of
 # sourcing this file unconditionally in case of transitive sourcing.
 
 [[ -n "${FLOWLOG_SHARED_SH_LOADED:-}" ]] && return 0
@@ -26,9 +26,10 @@ readonly CLEAR_LINE='\033[2K'
 
 ###############################################################################
 # ROOT_DIR — repo root, resolved relative to this file.
+# tests/lib/shared.sh → tests/lib → tests → <repo root>, hence "/../.."
 ###############################################################################
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" \
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" \
     || { echo "error: failed to resolve ROOT_DIR" >&2; exit 1; }
 readonly ROOT_DIR
 
@@ -59,7 +60,7 @@ trim() {
 #
 # Returns 0 (true) on common truthy values: 1, yes, y, true, on
 # (case-insensitive). Returns 1 (false) on 0/no/false/off/empty/unset.
-# The cleanup guards in tests/complex/common.sh, tools/benchmark/compare.sh,
+# The cleanup guards in tests/oracle/common.sh, tools/benchmark/compare.sh,
 # and tests/ldbc/ldbc.sh use this to interpret FLOWLOG_KEEP_DATASETS and
 # FLOWLOG_FORCE_CLEANUP, so a user setting `FLOWLOG_KEEP_DATASETS=yes` (a
 # common shell convention) is honoured rather than silently ignored.

@@ -18,7 +18,8 @@ Per-suite details: [`tests/README.md`](../tests/README.md),
 
 L1 and L2 each run **twice**: once via the `flowlog-compiler` binary,
 once via a synthesised crate that links the runtime as a library
-(`unit_compiler` / `unit_lib`, `datalog_batch_compiler` / `_lib`). Both
+(`tests/fixtures/run_compiler.sh` + `run_lib.sh` for L1;
+`tests/oracle/run_compiler.sh` + `run_lib.sh` for L2). Both
 must pass — they hit different code paths.
 
 ## One entry point
