@@ -861,21 +861,22 @@ run_souffle() {
             : > "$best_log"
             return 1
         fi
-        # Sanity-check: confirm the compiled C++ has parallel pragmas.
-        # If 0, something went wrong (souffle version mismatch?), and
-        # we'd be timing serial code. Warn but continue.
-        # NB: `grep -c` returns 1 (and prints "0") when nothing matches.
-        # If we did `grep -c ... || echo 0`, the captured value becomes
-        # "0\n0", which then breaks `[[ -eq ]]` numeric compare. Use
-        # `|| true` and trust grep's own "0" output instead.
-        local n_omp
-        n_omp="$(grep -cE '#pragma omp parallel' "${sf_bin}.cpp" 2>/dev/null || true)"
-        n_omp="${n_omp:-0}"
-        log "$BLUE" "BUILD" \
-            "Souffle: ${sf_bin} compiled with $n_omp parallel-region pragmas"
-        if [[ "$n_omp" -eq 0 ]]; then
+        # Sanity-check: confirm the compiled binary will actually run in
+        # parallel. The previous form grepped for `#pragma omp parallel`
+        # in the generated .cpp — but Souffle 2.5 uses `pfor` macros
+        # that expand to `_Pragma("omp for schedule(dynamic)")`, so the
+        # literal `#pragma omp parallel` string never appears. The
+        # definitive check is whether the binary links against libgomp:
+        # if `_OPENMP` was defined when GCC compiled the .cpp then pfor
+        # expands to a parallel for and libgomp is linked; otherwise
+        # pfor silently becomes a serial `for` and the runtime `-j N`
+        # has no effect.
+        if ldd "$sf_bin" 2>/dev/null | grep -q "libgomp"; then
+            log "$BLUE" "BUILD" \
+                "Souffle: ${sf_bin} linked against libgomp (parallel-ready)"
+        else
             log "$YELLOW" "WARN" \
-                "Souffle: $stem compiled with NO OpenMP pragmas — runtime will be effectively single-threaded"
+                "Souffle: $stem NOT linked against libgomp — runtime will be effectively single-threaded"
         fi
     fi
 
