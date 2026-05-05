@@ -208,13 +208,15 @@ done
 # working untouched; gates that want memory regression detection point
 # their token at `peak_rss_kb` instead.
 # ----------------------------------------------------------------------
-python3 - "${TIMES[@]}" "--rss" "${RSS_KB[@]}" <<PY
+python3 - "${TIMES[@]}" "--rss" "${RSS_KB[@]}" "--workers" "$WORKERS" <<'PY'
 import sys
 
 argv = sys.argv[1:]
-sep  = argv.index("--rss")
-times = sorted(float(x) for x in argv[:sep])
-rss   = sorted(int(x)   for x in argv[sep + 1:])
+sep_rss = argv.index("--rss")
+sep_w   = argv.index("--workers")
+times   = sorted(float(x) for x in argv[:sep_rss])
+rss     = sorted(int(x)   for x in argv[sep_rss + 1 : sep_w])
+workers = argv[sep_w + 1]
 
 def med(xs):
     n = len(xs)
@@ -222,15 +224,15 @@ def med(xs):
 
 n_t = len(times)
 m_t = med(times)
-print(f"elapsed_seconds {m_t:.9f} {times[0]:.9f} {times[-1]:.9f} {n_t} ${WORKERS}")
+print(f"elapsed_seconds {m_t:.9f} {times[0]:.9f} {times[-1]:.9f} {n_t} {workers}")
 
 if rss:
     n_r = len(rss)
     m_r = med(rss)
     # Round median back to int kibibytes; min/max stay native.
-    print(f"peak_rss_kb {int(round(m_r))} {rss[0]} {rss[-1]} {n_r} ${WORKERS}")
+    print(f"peak_rss_kb {int(round(m_r))} {rss[0]} {rss[-1]} {n_r} {workers}")
 else:
     # Emit a placeholder line so extractors keying on the token still
     # see it (they will read N/A and either skip or fail closed).
-    print(f"peak_rss_kb N/A N/A N/A 0 ${WORKERS}")
+    print(f"peak_rss_kb N/A N/A N/A 0 {workers}")
 PY

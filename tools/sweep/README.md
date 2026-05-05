@@ -14,7 +14,11 @@ Flags:
 - `--skip-l3` — skip the long perf compare.
 - `--include-ldbc` — opt-in L4 (LDBC SNB).
 - `--keep-going` — don't abort on first failure; collect all evidence.
-- `--workers N` — override `WORKERS` (default: `nproc`).
+- `--workers N` — override `WORKERS` (default: `min(64, nproc)`).
+- `--baseline=interpreter[,souffle]` — pick L3 baselines (default `interpreter`).
+- `--num-runs N` — override L3 timed runs per pair (default 3).
+
+See [`docs/testing.md`](../../docs/testing.md) for the full env-var contract (`L3_BASELINE`, `L3_NUM_RUNS`, `WORKERS`, `FLOWLOG_KEEP_DATASETS`, …).
 
 Convenience targets in the top-level `Makefile`: `make smoke`, `make sweep`, `make sweep-no-perf`, `make perf`.
 
@@ -32,3 +36,9 @@ The diagnosis lists each step with status (OK / FAIL / SKIP), elapsed seconds, a
 ## Exit code
 
 Returns `0` iff every suite that ran returned `0`. The `OVERALL` line in `diagnosis.txt` mirrors this for human readers.
+
+## Design notes
+
+- **Each sweep is a snapshot.** The L3 perf compare is always invoked with `--fresh`, so `result/benchmark/` is wiped before the run. This means a sweep can never "resume" a partially-completed L3 from a previous attempt — by design, every sweep produces a complete, self-contained CSV (or none at all). If you need resume semantics for ad-hoc benchmarking, drop `--fresh` and invoke `tools/benchmark/compare.sh` directly.
+
+- **No per-pair wall-clock timeout (yet).** A regression that hangs a single L3 pair (e.g. infinite loop in compiled binary, runaway Souffle program) will stall the entire sweep until the OS or the user kills it. LDBC has its own `--timeout 300s`, but L0–L3 do not. Adding a per-pair timeout is a robustness improvement worth a separate, careful PR — see the rubber-duck notes in commit `1c25918` (rss_log preservation under SIGTERM, compile-step coverage, and partial-success quorum all need handling).
