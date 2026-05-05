@@ -1,9 +1,10 @@
 //! Arithmetic expression representation for query planning in FlowLog Datalog programs.
 
-use crate::planner::TransformationArgument;
+use std::fmt;
+
 use crate::catalog::{ArithmeticPos, FactorPos};
 use crate::parser::{ArithmeticOperator, ConstType};
-use std::fmt;
+use crate::planner::TransformationArgument;
 
 /// Represents a basic factor in an arithmetic expression
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -38,8 +39,8 @@ impl FactorArgument {
 impl fmt::Display for FactorArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Var(transformation_arg) => write!(f, "{}", transformation_arg),
-            Self::Const(constant) => write!(f, "{}", constant),
+            Self::Var(transformation_arg) => write!(f, "{transformation_arg}"),
+            Self::Const(constant) => write!(f, "{constant}"),
             Self::FnCall { name, args } => {
                 let args_str = args
                     .iter()
@@ -135,7 +136,7 @@ impl fmt::Display for ArithmeticArgument {
         write!(f, "{}", self.init)?;
 
         for (op, factor) in &self.rest {
-            write!(f, " {} {}", op, factor)?;
+            write!(f, " {op} {factor}")?;
         }
 
         Ok(())
