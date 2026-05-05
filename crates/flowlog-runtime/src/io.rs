@@ -42,8 +42,7 @@ use std::path::Path;
 /// doesn't come out evenly.
 pub fn partition<T>(v: Vec<T>, n: usize) -> Vec<Vec<T>> {
     let n = n.max(1);
-    let total = v.len();
-    let chunk = total / n;
+    let chunk = v.len() / n;
     let mut iter = v.into_iter();
     (0..n)
         .map(|i| {
@@ -71,27 +70,25 @@ pub fn byte_range_reader(
     index: usize,
     peers: usize,
 ) -> Option<(BufReader<File>, u64)> {
-    let mut file = match File::open(path) {
-        Ok(f) => f,
-        Err(e) => {
+    let mut file = File::open(path)
+        .inspect_err(|e| {
             eprintln!(
                 "[flowlog-runtime::io] failed to open {}: {e}",
                 path.display()
             );
-            return None;
-        }
-    };
+        })
+        .ok()?;
 
-    let file_size = match file.metadata() {
-        Ok(m) => m.len(),
-        Err(e) => {
+    let file_size = file
+        .metadata()
+        .inspect_err(|e| {
             eprintln!(
                 "[flowlog-runtime::io] failed to stat {}: {e}",
                 path.display()
             );
-            return None;
-        }
-    };
+        })
+        .ok()?
+        .len();
 
     let chunk = file_size / peers as u64;
     let start = chunk * index as u64;
