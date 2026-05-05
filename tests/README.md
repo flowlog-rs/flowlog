@@ -39,7 +39,7 @@ entry point (`make sweep`) runs them all in order and emits one
   <tr>
     <td align="center" width="33%"><b>30 / 30</b><br/><sub>workloads where FlowLog wins</sub></td>
     <td align="center" width="33%"><b>6.33×</b><br/><sub>geometric-mean speedup</sub></td>
-    <td align="center" width="34%"><b>29 / 0 / 1</b><br/><sub>match · mismatch · n/a (cross-check)<sup>†</sup></sub></td>
+    <td align="center" width="34%"><b>30 / 0 / 0</b><br/><sub>match · mismatch · n/a (cross-check)<sup>†</sup></sub></td>
   </tr>
 </table>
 
@@ -48,10 +48,9 @@ engine wrapped in `/usr/bin/time -v`, every output cross-validated against
 Souffle for row-count agreement. Six pairs are excluded from the plot because
 they are tagged `[souffle:skip]` (no canonical Souffle `.dl` exists for `cc` or
 `sssp`; `reach=twitter` is too slow under Souffle's single-threaded input
-phase). The single `n/a` (galen) is a relation-naming divergence between the
-two `.dl` sources, **not** a correctness defect.
+phase). All 30 baselined pairs cross-validate against Souffle row counts.
 
-> <sup>†</sup> 26 of the 29 matches are exact agreements; the other 3 (`cspa/*`)
+> <sup>†</sup> 27 of the 30 matches are exact agreements; the other 3 (`cspa/*`)
 > are reported as `match(1)+aux(2)` — both engines compute three relations
 > (`ValueFlow`, `MemoryAlias`, `ValueAlias`), but the canonical Soufflé `.dl`
 > only `.printsize`s `ValueFlow` (the paper recipe), so we can only directly
@@ -81,7 +80,7 @@ two `.dl` sources, **not** a correctness defect.
 | 14 | `csda/csda-linux`      |  5.84 |  37.10 |   6.35×    | match(1)  |
 | 15 | `z3/z3`                | 15.07 |  90.08 |   5.98×    | match(11) |
 | 16 | `cspa/cspa-postgresql` | 13.13 |  55.52 |   4.23×    | match(1)+aux(2) |
-| 17 | `galen/galen`          |  6.54 |  27.50 |   4.20×    | n/a       |
+| 17 | `galen/galen`          |  6.54 |  27.50 |   4.20×    | match(2)  |
 | 18 | `biojava/biojava`      |  3.46 |  13.33 |   3.86×    | match(19) |
 | 19 | `xalan/xalan`          |  2.60 |   9.36 |   3.60×    | match(19) |
 | 20 | `cspa/cspa-linux`      |  3.46 |  12.31 |   3.56×    | match(1)+aux(2) |

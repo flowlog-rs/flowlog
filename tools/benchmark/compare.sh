@@ -861,7 +861,13 @@ run_souffle() {
     #
     # We pass the same `-j N` again at run-time to set the worker
     # thread count via `omp_set_num_threads`.
-    if [[ ! -x "$sf_bin" ]]; then
+    #
+    # Cache invalidation: rebuild if the binary is missing OR the .dl
+    # source is newer (e.g. a relation rename). Without the mtime
+    # check, editing a .dl while a stale binary still exists would
+    # silently exercise the old program — same family of footgun as
+    # the WORKERS-cache-key bug fixed earlier.
+    if [[ ! -x "$sf_bin" || "$sf_src" -nt "$sf_bin" ]]; then
         log "$BLUE" "BUILD" \
             "Souffle: compiling $stem with -j $WORKERS (one-off)"
         mkdir -p "$(dirname "$sf_bin")"
@@ -1014,8 +1020,9 @@ crosscheck_compiler_vs_souffle() {
 #                        Flagged as CROSSCHECK by the diagnosis writer.
 #   MISMATCH:...       - some shared relation has a different row count.
 #                        Flagged as CROSSCHECK.
-#   n/a                - no relations match by name (e.g. galen, where the
-#                        two .dl sources use different output relation names).
+#   n/a                - no relations match by name, or one side produced
+#                        no .sizes (e.g. a Souffle-skipped pair). Indicates
+#                        the harness could not establish equivalence at all.
 import sys
 def load(path):
     out = {}
