@@ -3,14 +3,14 @@
 //! - [`AtomArg`]: variable / constant / placeholder (`_`)
 //! - [`Atom`]: `name(arg1, ..., argN)`
 
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::primitive::ConstType;
-use crate::parser::{span_of, Lexeme, Rule};
-use pest::iterators::Pair;
 use std::fmt;
 
-use crate::common::compute_fp;
-use crate::common::{FileId, Ignored, Span};
+use pest::iterators::Pair;
+
+use crate::common::{FileId, Ignored, Span, compute_fp};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::primitive::ConstType;
+use crate::parser::{Lexeme, Rule, span_of};
 
 /// An argument to an atom: variable, constant, or `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
