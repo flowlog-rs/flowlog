@@ -6,12 +6,11 @@ use std::fmt;
 
 use pest::iterators::Pair;
 
+use super::Attribute;
 use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::DataType;
-use crate::parser::{span_of, Lexeme, Rule};
-
-use super::Attribute;
+use crate::parser::{Lexeme, Rule, span_of};
 
 /// Common data for an external (user-defined) function declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,17 +58,14 @@ impl ExternFn {
 
 impl fmt::Display for ExternFn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let params = self
-            .params
-            .iter()
-            .map(|a| format!("{}: {}", a.name(), a.data_type()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(
-            f,
-            ".extern fn {}({}) -> {}",
-            self.name, params, self.ret_type
-        )
+        write!(f, ".extern fn {}(", self.name)?;
+        for (i, attr) in self.params.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            attr.fmt(f)?;
+        }
+        write!(f, ") -> {}", self.ret_type)
     }
 }
 
@@ -99,21 +95,7 @@ impl Lexeme for ExternFn {
             match node.as_rule() {
                 Rule::extern_fn_params => {
                     for param_node in node.into_inner() {
-                        let mut pi = param_node.into_inner();
-                        let pname = pi
-                            .next()
-                            .ok_or_else(|| grammar_bug("extern fn param missing name"))?
-                            .as_str()
-                            .to_string();
-                        let ptype = pi
-                            .next()
-                            .ok_or_else(|| grammar_bug("extern fn param missing type"))?
-                            .as_str()
-                            .parse::<DataType>()
-                            .map_err(|e| {
-                                grammar_bug(format!("invalid type in extern fn param: {e}"))
-                            })?;
-                        params.push(Attribute::new(pname, ptype));
+                        params.push(parse_param(param_node)?);
                     }
                 }
                 Rule::data_type => {
@@ -133,6 +115,23 @@ impl Lexeme for ExternFn {
             span: Ignored(span),
         })
     }
+}
+
+/// Parse a single `extern_fn_param` node (`name : type`) into an [`Attribute`].
+fn parse_param(param_node: Pair<Rule>) -> Result<Attribute, ParseError> {
+    let mut parts = param_node.into_inner();
+    let name = parts
+        .next()
+        .ok_or_else(|| grammar_bug("extern fn param missing name"))?
+        .as_str()
+        .to_string();
+    let data_type = parts
+        .next()
+        .ok_or_else(|| grammar_bug("extern fn param missing type"))?
+        .as_str()
+        .parse::<DataType>()
+        .map_err(|e| grammar_bug(format!("invalid type in extern fn param: {e}")))?;
+    Ok(Attribute::new(name, data_type))
 }
 
 #[cfg(test)]
@@ -164,5 +163,18 @@ mod tests {
         assert_eq!(ext.params()[1].name(), "y");
         assert_eq!(*ext.params()[1].data_type(), DataType::Int32);
         assert_eq!(ext.ret_type(), DataType::Int64);
+    }
+
+    #[test]
+    fn display_round_trips_surface_syntax() {
+        let no_params = ".extern fn get_time() -> int64";
+        let mut pairs = FlowLogParser::parse(Rule::extern_fn, no_params).unwrap();
+        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
+        assert_eq!(ext.to_string(), no_params);
+
+        let with_params = ".extern fn my_hash(x: int64, y: int32) -> int64";
+        let mut pairs = FlowLogParser::parse(Rule::extern_fn, with_params).unwrap();
+        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
+        assert_eq!(ext.to_string(), with_params);
     }
 }
