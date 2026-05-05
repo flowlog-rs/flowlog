@@ -84,10 +84,10 @@ pub(crate) fn gen_batch_main(
                     let mut rels: HashMap<String, Box<dyn Relation>> = HashMap::new();
                     #(#registry_inserts)*
                     #(#file_ingests)*
-                    for (_, r) in rels.iter_mut() {
+                    for r in rels.values_mut() {
                         r.apply_inline(index);
                     }
-                    for (_, r) in rels.iter_mut() {
+                    for r in rels.values_mut() {
                         r.close();
                     }
 

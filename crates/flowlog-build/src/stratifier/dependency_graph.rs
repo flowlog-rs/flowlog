@@ -46,18 +46,21 @@ impl DependencyGraph {
         let mut negative_edges: BTreeSet<(usize, usize)> = BTreeSet::new();
 
         for (rule_id, rule) in rules.iter().enumerate() {
+            // Pre-populated above, so the entry is guaranteed to exist.
+            let deps = dependency_map.get_mut(&rule_id).unwrap();
             for predicate in rule.rhs() {
                 let (atom_name, is_negative) = match predicate {
                     Predicate::PositiveAtom(atom) => (atom.name(), false),
                     Predicate::NegativeAtom(atom) => (atom.name(), true),
                     _ => continue,
                 };
-                if let Some(dep_ids) = head_to_rule_map.get(atom_name) {
-                    for &dep_id in dep_ids {
-                        dependency_map.get_mut(&rule_id).unwrap().insert(dep_id);
-                        if is_negative {
-                            negative_edges.insert((rule_id, dep_id));
-                        }
+                let Some(dep_ids) = head_to_rule_map.get(atom_name) else {
+                    continue;
+                };
+                for &dep_id in dep_ids {
+                    deps.insert(dep_id);
+                    if is_negative {
+                        negative_edges.insert((rule_id, dep_id));
                     }
                 }
             }

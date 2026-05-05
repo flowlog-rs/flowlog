@@ -1,8 +1,9 @@
 //! Command line argument parsing for FlowLog tools.
 
-use clap::{Parser, ValueEnum};
 use std::path::{Path, PathBuf};
 use std::{fs, process};
+
+use clap::{Parser, ValueEnum};
 
 /// Execution strategy for FlowLog workflows
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Default)]
@@ -107,8 +108,8 @@ impl Config {
         Path::new(&self.program)
             .file_stem()
             .and_then(|stem| stem.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "unknown_program".into())
+            .unwrap_or("unknown_program")
+            .to_string()
     }
 
     pub fn fact_dir(&self) -> Option<&str> {

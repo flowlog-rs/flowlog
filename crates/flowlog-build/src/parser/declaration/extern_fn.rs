@@ -4,10 +4,10 @@
 
 use std::fmt;
 
-use crate::common::{FileId, Ignored, Span};
 use pest::iterators::Pair;
 
-use crate::parser::error::{grammar_bug, ParseError};
+use crate::common::{FileId, Ignored, Span};
+use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::DataType;
 use crate::parser::{span_of, Lexeme, Rule};
 

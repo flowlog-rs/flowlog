@@ -103,25 +103,20 @@ impl FlowLogRule {
     /// Panics if any head argument is not a simple constant.
     #[must_use]
     pub(crate) fn extract_constants_from_head(&self) -> Vec<ConstType> {
-        let mut out = Vec::new();
-        for arg in self.head.head_arguments() {
-            match arg {
-                HeadArg::Var(_) | HeadArg::Aggregation(_) => {
-                    panic!("Fact head must contain only constants: {self}")
-                }
-                HeadArg::Arith(arith) => {
-                    if arith.is_const() {
-                        if let Factor::Const(c) = arith.init() {
-                            out.push(c.clone());
-                        } else {
-                            // Defensive (shouldn't happen if is_const() is true).
-                            panic!("Fact head must contain only constants: {self}");
-                        }
-                    } else {
-                        panic!("Fact head must contain only constants: {self}");
-                    }
-                }
-            }
+        let args = self.head.head_arguments();
+        let mut out = Vec::with_capacity(args.len());
+        for arg in args {
+            let HeadArg::Arith(arith) = arg else {
+                panic!("Fact head must contain only constants: {self}");
+            };
+            let Factor::Const(c) = arith.init() else {
+                panic!("Fact head must contain only constants: {self}");
+            };
+            assert!(
+                arith.is_const(),
+                "Fact head must contain only constants: {self}"
+            );
+            out.push(c.clone());
         }
         out
     }
