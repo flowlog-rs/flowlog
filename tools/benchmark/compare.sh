@@ -5,24 +5,52 @@ set -euo pipefail
 # FlowLog Version Comparison Benchmark
 # ==========================================================================
 #
-# Compares the current FlowLog compiler (this repo) against the previous
-# interpreter version (vldb26-artifact).  Only the non-optimization (no -O)
-# configuration is run for the interpreter.
-#
-# Each benchmark pair is executed NUM_RUNS times; the median is kept.
+# Times the FlowLog compiler (this repo) and library-mode runner against
+# zero or more baselines (legacy `vldb26-artifact` interpreter and/or
+# Soufflé). Each (program, dataset) pair is executed NUM_RUNS times per
+# engine; the median wall-time + median peak RSS are kept.
 #
 # Usage:
-#   bash tools/benchmark/compare.sh [config_file]
+#   bash tools/benchmark/compare.sh [FLAGS] [config_file]
 #
-# Environment variables:
-#   WORKERS  -- number of worker threads passed to EVERY competitor in
-#              this comparison (interpreter via --workers, compiler via
-#              -w, library mode via WORKERS env, souffle via -j). One
-#              value, four engines — that's the fairness contract: all
-#              baselines get identical parallelism on identical hardware.
-#              Default: 64 (matches the VLDB paper rig). Override e.g.
-#              `WORKERS=16 bash compare.sh` to time on a smaller host;
-#              just keep it the same across runs you compare.
+# Flags:
+#   --baseline=<list>  comma-separated, any of {interpreter, souffle}.
+#                      Default: interpreter.    Examples:
+#                        --baseline=souffle
+#                        --baseline=interpreter,souffle
+#   --fresh            wipe `result/benchmark/` before running
+#                      (otherwise the script resumes — pairs already in
+#                      the CSV are skipped).
+#
+# Environment:
+#   WORKERS=<n>        thread count passed to EVERY engine
+#                      (interp `--workers`, compiler `-w`, lib `WORKERS=`,
+#                      souffle `-j` at compile AND run time). One value,
+#                      same for every baseline — that's the fairness
+#                      contract. Default: min(64, nproc), capped at 64
+#                      so cross-machine numbers stay paper-comparable on
+#                      hosts with ≥ 64 cores.
+#   NUM_RUNS=<n>       timed runs per (engine, pair). Median is kept.
+#                      Default: 3.
+#   FLOWLOG_KEEP_DATASETS=<truthy>
+#                      preserve datasets between runs (skip the per-pair
+#                      cleanup). Any non-zero / non-`false` value counts
+#                      as truthy (`1`, `yes`, `true`, …).
+#   FLOWLOG_FORCE_CLEANUP=1
+#                      override the symlink-safety guard that retains a
+#                      symlinked FACT_DIR. Use only when you really mean
+#                      to delete through the symlink.
+#   SOUFFLE_BIN=<path> override the Soufflé binary location (default
+#                      `/usr/bin/souffle`).
+#   TIME_BIN=<path>    override GNU `time -v` location (default
+#                      `/usr/bin/time`).
+#
+# CSV (`result/benchmark/comparison_results.csv`, 26 columns):
+#   Program, Dataset, *_{Load,Exec,Total}, *_PeakRss_MB,
+#   {Load,Exec,Total}_Speedup, Lib_vs_*_Exec, Lib_vs_Compiler_Mem,
+#   Souffle_*, Crosscheck_Souffle, *_RunsSucceeded.
+#   A pair where any required engine all-runs-failed is intentionally
+#   NOT recorded (see `[PAIR-FAIL]` log line); resume retries it.
 # ==========================================================================
 
 ############################################################
@@ -90,6 +118,39 @@ CONFIG_FILE="${POSITIONAL_ARGS[0]:-${ROOT_DIR}/tools/benchmark/config.txt}"
 PROG_DIR="${ROOT_DIR}/example"
 FACT_DIR="${ROOT_DIR}/facts"
 LOG_DIR="${ROOT_DIR}/result/benchmark"
+# ==========================================================================
+# Pre-flight dependency checks. Fail fast — *before* downloading datasets
+# or warming caches — when an external tool is missing. Cheap to run; the
+# alternative is a 5-minute setup that aborts with a cryptic error.
+# ==========================================================================
+
+require_cmd() {
+    # require_cmd <bin> [<install hint>]
+    command -v "$1" >/dev/null 2>&1 \
+        || die "required command not found: $1${2:+ — $2}"
+}
+
+require_cmd python3 "median + diff math; install python3 (>= 3.6)"
+require_cmd wget    "needed to download HuggingFace datasets / interpreter programs"
+require_cmd unzip   "needed to extract dataset zips"
+require_cmd tar     "needed to extract Soufflé reference tarballs (L2 oracle)"
+# /usr/bin/time -v is GNU time. Bash's builtin `time` does NOT support -v
+# (peak RSS), so we require the binary. Override via TIME_BIN=<path>.
+TIME_BIN="${TIME_BIN:-/usr/bin/time}"
+[[ -x "$TIME_BIN" ]] \
+    || die "GNU /usr/bin/time not found at $TIME_BIN — apt install time, or set TIME_BIN=<path>"
+
+# Truthy-value parsing for FLOWLOG_KEEP_DATASETS / FLOWLOG_FORCE_CLEANUP.
+# Returns 0 (true) on `1`, `yes`, `true`, `on` (any case). Returns 1
+# (false) on `0`, `no`, `false`, `off`, empty, or unset. Used by the
+# three cleanup_dataset implementations (L2/L3/L4) — keep them in sync.
+flowlog_truthy() {
+    case "${1:-}" in
+        1|y|Y|yes|YES|true|TRUE|True|on|ON|On) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # WORKERS is the thread count passed to EVERY engine in this run
 # (interpreter --workers, compiler -w, library WORKERS env, souffle -j).
 # Default = min(64, nproc):
@@ -101,8 +162,12 @@ LOG_DIR="${ROOT_DIR}/result/benchmark"
 # Override (e.g. when co-running with an agent that needs cores):
 #   WORKERS=48 bash compare.sh
 # Just keep it the same value across runs you compare.
-_DEFAULT_WORKERS=$(( $(nproc) < 64 ? $(nproc) : 64 ))
+_NPROC=$(nproc 2>/dev/null || echo 64)
+[[ "$_NPROC" =~ ^[0-9]+$ ]] && (( _NPROC > 0 )) || _NPROC=64
+_DEFAULT_WORKERS=$(( _NPROC < 64 ? _NPROC : 64 ))
 WORKERS="${WORKERS:-$_DEFAULT_WORKERS}"
+[[ "$WORKERS" =~ ^[0-9]+$ ]] && (( WORKERS > 0 )) \
+    || die "WORKERS must be a positive integer, got: $WORKERS"
 
 # Interpreter repo (vldb26-artifact) is expected next to this repo.
 INTERPRETER_DIR="${ROOT_DIR}/../vldb26-artifact"
@@ -214,8 +279,10 @@ setup_dataset() {
     mkdir -p "$FACT_DIR"
 
     log "$CYAN" "DOWNLOAD" "${name}.zip -> /dev/shm (tmpfs)"
-    wget -q -O "$zip" "${DATASET_URL}/${name}.zip" \
-        || die "Download failed: $name"
+    # --timeout/--tries make a transient HuggingFace 503 retry instead of
+    # hanging the sweep indefinitely; --no-verbose surfaces fatal errors.
+    wget --no-verbose --timeout=60 --tries=3 -O "$zip" "${DATASET_URL}/${name}.zip" \
+        || die "Download failed: $name (try \`source /datasets/env.sh\` if a local cache exists, or check network)"
 
     log "$YELLOW" "EXTRACT" "$name"
     unzip -q "$zip" -d "$FACT_DIR" || die "Extract failed: $name"
@@ -233,22 +300,30 @@ cleanup_dataset() {
     # Do not rename without updating that tool.
     # Mirrors tests/complex/common.sh and tests/ldbc/ldbc.sh so all
     # three layers honour the same env-var contract.
-    #   FLOWLOG_KEEP_DATASETS=1  → never delete (highest priority)
-    #   FACT_DIR is a symlink    → never delete unless FLOWLOG_FORCE_CLEANUP=1
-    #                              (protects a persistent /datasets cache
-    #                              from being rm -rf'd through the symlink)
-    if [[ "${FLOWLOG_KEEP_DATASETS:-0}" = "1" ]]; then
-        log "$YELLOW" "CLEANUP" "$name (kept; FLOWLOG_KEEP_DATASETS=1)"
+    #   FLOWLOG_KEEP_DATASETS truthy  → never delete (highest priority).
+    #                                   Truthy = 1/yes/true/on (any case).
+    #   FACT_DIR is a symlink         → never delete unless
+    #                                   FLOWLOG_FORCE_CLEANUP is truthy
+    #                                   (protects a persistent /datasets
+    #                                   cache from being rm -rf'd through
+    #                                   the symlink).
+    if flowlog_truthy "${FLOWLOG_KEEP_DATASETS:-}"; then
+        log "$YELLOW" "CLEANUP" "$name (kept; FLOWLOG_KEEP_DATASETS=${FLOWLOG_KEEP_DATASETS})"
         return
     fi
+    [[ -n "${FACT_DIR:-}" && -n "${name:-}" ]] \
+        || die "cleanup_dataset: FACT_DIR or dataset name is empty (refusing to rm -rf)"
+    # Portable symlink check: `cd <dir> && pwd -P` resolves symlinks on
+    # both GNU (Linux) and BSD (macOS) without depending on `readlink -f`.
     local _fd_real
-    _fd_real="$(readlink -f "${FACT_DIR}" 2>/dev/null || echo "${FACT_DIR}")"
-    if [[ "${_fd_real}" != "${FACT_DIR}" && "${FLOWLOG_FORCE_CLEANUP:-0}" != "1" ]]; then
+    _fd_real="$(cd "${FACT_DIR}" 2>/dev/null && pwd -P || echo "${FACT_DIR}")"
+    if [[ "${_fd_real}" != "${FACT_DIR}" ]] && ! flowlog_truthy "${FLOWLOG_FORCE_CLEANUP:-}"; then
         log "$YELLOW" "CLEANUP" "$name (kept; ${FACT_DIR} → ${_fd_real}; set FLOWLOG_FORCE_CLEANUP=1 to override)"
         return
     fi
     log "$YELLOW" "CLEANUP" "$name"
-    rm -rf -- "${FACT_DIR:?FACT_DIR is empty - refusing to rm -rf}/${name:?dataset name is empty - refusing to rm -rf}"
+    # shellcheck disable=SC2115  # explicit empty-arg check above + symlink guard make the path safe
+    rm -rf -- "${FACT_DIR}/${name}"
 }
 
 ############################################################
@@ -419,19 +494,25 @@ raw_speedup() {
     fi
 }
 
-# Given space-separated "time:logpath" pairs, return the median entry.
+# Given newline- (or whitespace-) separated "time:logpath" entries, return
+# the median entry. Stdin form (rather than embedding entries in the python
+# source) is path-safe even if a logfile path contains spaces. With even N
+# we deliberately pick the upper-middle entry so the returned logfile is a
+# real file (averaging two times would decouple the reported median from
+# the retained log).
 pick_median() {
     local entries="$1"
-    python3 -c "
-pairs = '${entries}'.split()
-pairs.sort(key=lambda x: float(x.split(':')[0]))
+    printf '%s\n' "$entries" | python3 -c "
+import sys
+pairs = [line.strip() for line in sys.stdin if line.strip()]
+pairs.sort(key=lambda x: float(x.split(':', 1)[0]))
 print(pairs[len(pairs) // 2])
 " 2>/dev/null
 }
 
-# Given space-separated kibibyte values, return the median (integer) or "N/A".
-# RSS distribution is independent from time; we take the median over peaks
-# rather than tracking the peak that came from the median-time run.
+# Given whitespace-separated kibibyte values, return the median (integer) or
+# 'N/A'. RSS distribution is independent from time; we take the median over
+# peaks rather than tracking the peak that came from the median-time run.
 pick_median_rss() {
     local values="$1"
     [[ -z "$values" ]] && { echo "N/A"; return; }
@@ -547,7 +628,7 @@ run_interpreter() {
         r=$(_extract_peak_rss_kb "$rss_log")
         log "$YELLOW" "TIME" "  Run $run: ${t}s, peak ${r} KiB"
 
-        [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries }${t}:${run_log}"
+        [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries$'\n'}${t}:${run_log}"
         [[ "$r" =~ ^[0-9] ]] && rss_values="${rss_values:+$rss_values }${r}"
     done
 
@@ -624,7 +705,7 @@ run_compiler() {
         r=$(_extract_peak_rss_kb "$rss_log")
         log "$YELLOW" "TIME" "  Run $run: ${t}s, peak ${r} KiB"
 
-        [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries }${t}:${run_log}"
+        [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries$'\n'}${t}:${run_log}"
         [[ "$r" =~ ^[0-9] ]] && rss_values="${rss_values:+$rss_values }${r}"
     done
 
@@ -776,7 +857,7 @@ run_lib() {
         r=$(_extract_peak_rss_kb "$rss_log")
         log "$YELLOW" "TIME" "  Run $run: ${t}s, peak ${r} KiB"
 
-        [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries }${t}:${run_log}"
+        [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries$'\n'}${t}:${run_log}"
         [[ "$r" =~ ^[0-9] ]] && rss_values="${rss_values:+$rss_values }${r}"
     done
 
@@ -965,7 +1046,7 @@ run_souffle() {
         r=$(_extract_peak_rss_kb "$rss_log")
         log "$YELLOW" "TIME" "  Run $run: ${t}s, peak ${r} KiB"
 
-        [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries }${t}:${run_log}"
+        [[ "$t" =~ ^[0-9] ]] && entries="${entries:+$entries$'\n'}${t}:${run_log}"
         [[ "$r" =~ ^[0-9] ]] && rss_values="${rss_values:+$rss_values }${r}"
     done
 

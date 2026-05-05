@@ -213,11 +213,18 @@ Wall time in the latest sweep: **compiler ≈ 903 s, lib ≈ 818 s**.
 
 For each pair in [`tools/benchmark/config.txt`](../tools/benchmark/config.txt)
 (36 pairs at varied scales — small / medium / large datasets), times up to
-**four** binaries — the previous interpreter (`vldb26-artifact`), the current
+**four** engines — the previous interpreter (`vldb26-artifact`), the current
 compiler (this repo), a library-mode runner, and (when
-`--baseline=souffle,both`) Souffle — for `NUM_RUNS=3` repetitions each, keeps
-the median. Every run is wrapped in `/usr/bin/time -v` so peak resident-set
-size is captured alongside wall time.
+`--baseline=souffle` or `--baseline=interpreter,souffle`) Souffle — for
+`NUM_RUNS` repetitions each, keeps the median. Every run is wrapped in
+`/usr/bin/time -v` so peak resident-set size is captured alongside wall time.
+
+| Knob | Default | How to override |
+|------|---------|-----------------|
+| Workers per engine | `min(64, nproc)` | `WORKERS=N bash compare.sh` &nbsp;or&nbsp; `make sweep WORKERS=N` |
+| Timed runs per pair | `3` | `NUM_RUNS=N bash compare.sh` &nbsp;or&nbsp; `make sweep NUM_RUNS=N` &nbsp;or&nbsp; `--num-runs N` |
+| Baselines | `interpreter` | `--baseline=souffle` &nbsp;or&nbsp; `--baseline=interpreter,souffle` |
+| Resume vs fresh | resume | `--fresh` to wipe `result/benchmark/` first |
 
 **CSV schema** &nbsp;(`result/benchmark/comparison_results.csv`, 26 columns):
 
@@ -402,10 +409,18 @@ Last full sweep producing the chart and table above:
 ## Caching
 
 `tools/benchmark/compare.sh` deletes each dataset after use **unless**
-`FLOWLOG_KEEP_DATASETS=1` (or `source /datasets/env.sh` on the dev VM). The
-larger datasets total **tens of GB** (`arabic`, `orkut`, `livejournal`,
+`FLOWLOG_KEEP_DATASETS` is set to a truthy value — `1`, `yes`, `true`, `on`
+(any case) — or you `source /datasets/env.sh` on the dev VM. The larger
+datasets total **tens of GB** (`arabic`, `orkut`, `livejournal`,
 `cspa-postgresql`, `mag`, …); keeping them avoids HuggingFace re-downloads
 between sweeps.
 
-L2's `tests/complex/common.sh` honors the same flag for the Souffle-output
-tarballs cached under `tests/complex/cache/`.
+**Symlink safety.** When `FACT_DIR` is a symlink (the standard dev-VM
+layout has the repo's `facts/ → /datasets/facts/`), cleanup is **always**
+skipped — even with `FLOWLOG_KEEP_DATASETS` unset — so a stray sweep can't
+`rm -rf` a 100+ GB cache through the symlink. To override and actually
+delete through the symlink, set `FLOWLOG_FORCE_CLEANUP=1`. The same
+contract is enforced in L2 (`tests/complex/common.sh`), L3
+(`compare.sh`), and L4 (`tests/ldbc/ldbc.sh`); a pre-L0 regression test
+(`tests/safety/cleanup_dataset_test.sh`, also exposed via
+`make test-safety`) keeps the three implementations aligned.

@@ -80,7 +80,9 @@ L3_NUM_RUNS="${L3_NUM_RUNS:-${NUM_RUNS:-}}"
 # auto-shrinks on smaller hosts. Override `make sweep WORKERS=...` or
 # `--workers N` when co-running with another heavy job (e.g. an agent
 # that needs cores). Keep the value consistent across runs you compare.
-_DEFAULT_WORKERS=$(( $(nproc) < 64 ? $(nproc) : 64 ))
+_NPROC=$(nproc 2>/dev/null || echo 64)
+[[ "$_NPROC" =~ ^[0-9]+$ ]] && (( _NPROC > 0 )) || _NPROC=64
+_DEFAULT_WORKERS=$(( _NPROC < 64 ? _NPROC : 64 ))
 WORKERS="${WORKERS:-$_DEFAULT_WORKERS}"
 
 while [[ $# -gt 0 ]]; do
@@ -89,17 +91,32 @@ while [[ $# -gt 0 ]]; do
         --skip-l3)       SKIP_L3=1; shift ;;
         --include-ldbc)  INCLUDE_LDBC=1; shift ;;
         --keep-going)    KEEP_GOING=1; shift ;;
-        --workers)       WORKERS="$2"; shift 2 ;;
+        --workers)
+            WORKERS="$2"; shift 2
+            [[ "$WORKERS" =~ ^[0-9]+$ ]] && (( WORKERS > 0 )) \
+                || { echo "error: --workers must be a positive integer, got: $WORKERS" >&2; exit 2; }
+            ;;
         --baseline=*)    L3_BASELINE="${1#--baseline=}"; shift ;;
         --baseline)      L3_BASELINE="$2"; shift 2 ;;
-        --num-runs)      L3_NUM_RUNS="$2"; shift 2 ;;
+        --num-runs)
+            L3_NUM_RUNS="$2"; shift 2
+            [[ "$L3_NUM_RUNS" =~ ^[0-9]+$ ]] && (( L3_NUM_RUNS > 0 )) \
+                || { echo "error: --num-runs must be a positive integer, got: $L3_NUM_RUNS" >&2; exit 2; }
+            ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
-        *) echo "unknown arg: $1" >&2; exit 2 ;;
+        *) echo "unknown arg: $1 (try --help)" >&2; exit 2 ;;
     esac
 done
+
+# Validate any WORKERS provided via env (the --workers flag already
+# validated above). One canonical check site means a typo in
+# `WORKERS=foo make sweep` fails fast at sweep startup, not 30 min
+# later inside L1 fixtures with a cryptic engine-side error.
+[[ "$WORKERS" =~ ^[0-9]+$ ]] && (( WORKERS > 0 )) \
+    || { echo "error: WORKERS must be a positive integer, got: $WORKERS" >&2; exit 2; }
 
 # ----------------------------------------------------------------------
 # Run dir + meta
@@ -164,6 +181,7 @@ run_step() {
     echo "[sweep] [$name] starting at $(date -u +%H:%M:%SZ)"
     echo "[sweep]   cmd: $*"
     echo "[sweep]   log: $logfile"
+    echo "[sweep]   (follow live: tail -f \"$logfile\")"
     echo "============================================================"
 
     if "$@" >"$logfile" 2>&1; then
@@ -224,16 +242,36 @@ write_diagnosis() {
     local csv="${ROOT_DIR}/result/benchmark/comparison_results.csv"
 
     # Did L3 actually run successfully THIS sweep? The perf CSV lives at
-    # a fixed path; without this gate the diagnosis would happily ingest
-    # a leftover CSV from a previous sweep even when the current one was
-    # invoked with --skip-l3 (or aborted before L3 even started). Treat
-    # only the explicit OK status as "ingest"; everything else (FAIL,
-    # SKIP, never-recorded) means "do not ingest".
+    # a fixed path; without a gate the diagnosis would happily ingest a
+    # leftover CSV from a previous sweep when the current one was invoked
+    # with --skip-l3 (or aborted before L3 even started).
+    #
+    # Three states matter:
+    #   L3 OK                        → ingest as a complete sweep.
+    #   L3 FAIL with non-empty CSV   → ingest as PARTIAL — under
+    #                                  fail-closed pair semantics, every
+    #                                  CSV row reflects a pair where every
+    #                                  required engine succeeded, so the
+    #                                  rows that ARE present remain valid;
+    #                                  flagging it just tells the operator
+    #                                  the sweep stopped early.
+    #   L3 SKIP / never-ran / empty  → don't ingest; emit a clear "not
+    #                                  consumed" message.
     local l3_status
     l3_status="$(step_status 'L3 *')"
     local ingest_csv=0
+    local l3_partial=0
+    local n_csv_rows=0
+    if [[ -f "$csv" ]]; then
+        # Count non-blank, non-header rows. `|| true` keeps `set -e` happy
+        # when the CSV is empty.
+        n_csv_rows=$(awk 'NR>1 && NF>0' "$csv" 2>/dev/null | wc -l || true)
+    fi
     if [[ "$l3_status" == "OK" && -f "$csv" ]]; then
         ingest_csv=1
+    elif [[ "$l3_status" == "FAIL" && -f "$csv" && $n_csv_rows -gt 0 ]]; then
+        ingest_csv=1
+        l3_partial=1
     fi
 
     # ----- Pre-compute the "problems flagged" list from the perf CSV
@@ -323,10 +361,14 @@ PY
         printf "%-32s  %-5s  %8s\n" "TOTAL" "" "$total"
         echo
 
-        # ----- Perf CSV roll-up (only when L3 ran successfully THIS sweep) -----
+        # ----- Perf CSV roll-up -----
         if (( ingest_csv )); then
             cp "$csv" "$RUN_DIR/comparison_results.csv"
-            echo "Performance CSV ($csv):"
+            if (( l3_partial )); then
+                echo "Performance CSV ($csv) — PARTIAL ($n_csv_rows pair(s) in CSV; L3 step ended FAIL — see step log):"
+            else
+                echo "Performance CSV ($csv):"
+            fi
             echo "----------------------------------------------------------------"
             python3 - "$csv" <<'PY'
 import csv, sys
@@ -378,7 +420,7 @@ PY
             case "$l3_status" in
                 "")     echo "(perf CSV not produced — L3 never ran in this sweep)" ;;
                 SKIP)   echo "(perf CSV not produced — L3 was skipped via --skip-l3)" ;;
-                FAIL)   echo "(perf CSV not consumed — L3 failed; any existing CSV may be partial or stale and is intentionally ignored)" ;;
+                FAIL)   echo "(perf CSV not consumed — L3 failed and the CSV is empty; see step log)" ;;
                 *)      echo "(perf CSV not consumed — L3 status: $l3_status)" ;;
             esac
         fi
@@ -414,9 +456,14 @@ run_step "Pre-flight cleanup safety" "00a-safety-cleanup" 0 -- \
 
 # ----------------------------------------------------------------------
 # L0 - workspace build + Rust unit tests
+#
+# Note: we deliberately do NOT pass `--quiet` to cargo here. Cold cargo
+# builds take 5-15 minutes; the `tail -f $logfile` hint above is far more
+# useful when the log shows per-crate "Compiling foo v0.1.2" progress
+# instead of a deafening silence followed by a single "Finished" line.
 # ----------------------------------------------------------------------
 run_step "L0 cargo build"   "00-cargo-build" 0 -- \
-    bash -c "RAYON_NUM_THREADS=$WORKERS CARGO_BUILD_JOBS=$WORKERS cargo build --release --workspace --quiet"
+    bash -c "RAYON_NUM_THREADS=$WORKERS CARGO_BUILD_JOBS=$WORKERS cargo build --release --workspace"
 
 run_step "L0 cargo test"    "01-cargo-test"  0 -- \
     bash -c "RAYON_NUM_THREADS=$WORKERS CARGO_BUILD_JOBS=$WORKERS cargo test --release --workspace --quiet"

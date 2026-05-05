@@ -70,7 +70,10 @@ setup_dataset() {
     mkdir -p "$fact_dir"
     log "$CYAN" "DOWNLOAD" "$dataset_name.zip -> $STAGE_DIR"
     command -v wget >/dev/null 2>&1 || die "wget not found"
-    wget -q -O "$dataset_zip" "$dataset_url" || die "Download failed: $dataset_name"
+    # --timeout/--tries make a transient HuggingFace 503 retry instead of
+    # hanging the sweep indefinitely; --no-verbose surfaces fatal errors.
+    wget --no-verbose --timeout=60 --tries=3 -O "$dataset_zip" "$dataset_url" \
+        || die "Download failed: $dataset_name (try \`source /datasets/env.sh\` if a local cache exists, or check network)"
 
     log "$YELLOW" "EXTRACT" "$dataset_name"
     command -v unzip >/dev/null 2>&1 || die "unzip not found"
@@ -83,24 +86,32 @@ cleanup_dataset() {
     local fact_dir="${2:-$FACT_DIR_DEFAULT}"
     # Cache contract — must mirror tools/benchmark/compare.sh and
     # tests/ldbc/ldbc.sh so every layer treats $fact_dir consistently:
-    #   FLOWLOG_KEEP_DATASETS=1   → never delete (highest priority).
-    #   $fact_dir is a symlink    → never delete unless FLOWLOG_FORCE_CLEANUP=1.
-    #                               Protects a persistent /datasets cache from
-    #                               being rm -rf'd through the symlink (the
-    #                               common dev-VM layout — see /datasets/env.sh).
-    if [[ "${FLOWLOG_KEEP_DATASETS:-0}" = "1" ]]; then
-        log "$YELLOW" "CLEANUP" "Dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=1)"
+    #   FLOWLOG_KEEP_DATASETS truthy → never delete (highest priority).
+    #                                  Truthy = 1/yes/true/on (any case).
+    #   $fact_dir is a symlink       → never delete unless
+    #                                  FLOWLOG_FORCE_CLEANUP is truthy.
+    #                                  Protects a persistent /datasets cache
+    #                                  from being rm -rf'd through the symlink
+    #                                  (the common dev-VM layout — see
+    #                                  /datasets/env.sh).
+    if flowlog_truthy "${FLOWLOG_KEEP_DATASETS:-}"; then
+        log "$YELLOW" "CLEANUP" "Dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=${FLOWLOG_KEEP_DATASETS})"
         return
     fi
+    [[ -n "${fact_dir:-}" && -n "${dataset_name:-}" ]] \
+        || die "cleanup_dataset: fact_dir or dataset_name is empty (refusing to rm -rf)"
+    # Portable symlink check: `cd <dir> && pwd -P` resolves symlinks on
+    # both GNU (Linux) and BSD (macOS) without depending on `readlink -f`.
     local _fd_real
-    _fd_real="$(readlink -f "${fact_dir}" 2>/dev/null || echo "${fact_dir}")"
-    if [[ "${_fd_real}" != "${fact_dir}" && "${FLOWLOG_FORCE_CLEANUP:-0}" != "1" ]]; then
+    _fd_real="$(cd "${fact_dir}" 2>/dev/null && pwd -P || echo "${fact_dir}")"
+    if [[ "${_fd_real}" != "${fact_dir}" ]] && ! flowlog_truthy "${FLOWLOG_FORCE_CLEANUP:-}"; then
         log "$YELLOW" "CLEANUP" \
             "Dataset $dataset_name (kept; ${fact_dir} → ${_fd_real}; set FLOWLOG_FORCE_CLEANUP=1 to override)"
         return
     fi
     log "$YELLOW" "CLEANUP" "Dataset $dataset_name"
-    rm -rf -- "${fact_dir:?fact_dir is empty - refusing to rm -rf}/${dataset_name:?dataset_name is empty - refusing to rm -rf}"
+    # shellcheck disable=SC2115  # explicit empty-arg check above + symlink guard make the path safe
+    rm -rf -- "${fact_dir}/${dataset_name}"
 }
 
 ###############################################################################
@@ -116,7 +127,8 @@ download_souffle_ref() {
 
     mkdir -p "$ref_dir"
     log "$CYAN" "DOWNLOAD" "Souffle reference: $ref_name" >&2
-    wget -q -O "$ref_tar" "$ref_url" || die "Failed to download Souffle reference: $ref_url"
+    wget --no-verbose --timeout=60 --tries=3 -O "$ref_tar" "$ref_url" \
+        || die "Failed to download Souffle reference: $ref_url"
     tar xzf "$ref_tar" -C "$ref_dir" || die "Failed to extract Souffle reference: $ref_name"
     rm -f "$ref_tar"
 

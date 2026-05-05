@@ -92,6 +92,21 @@ EOF
     "$shim" csda-linux "$repo_facts" >/dev/null 2>&1
     assert_gone "$repo_facts/csda-linux" \
         "$layer: plain fact_dir deletes the dataset"
+
+    # Case E: FLOWLOG_KEEP_DATASETS=yes (truthy synonym) → must keep.
+    # Regression check for the "literal '1' only" trap: a user setting
+    # KEEP_DATASETS=yes/true/on (common shell convention) should be
+    # honoured rather than silently treated as falsy and the dataset
+    # deleted.
+    rm -rf "$repo_facts"
+    mkdir -p "$repo_facts/csda-postgresql"
+    touch "$repo_facts/csda-postgresql/marker"
+    FLOWLOG_KEEP_DATASETS=yes "$shim" csda-postgresql "$repo_facts" >/dev/null 2>&1
+    assert_exists "$repo_facts/csda-postgresql" \
+        "$layer: KEEP_DATASETS=yes (truthy synonym) retains the dataset"
+    FLOWLOG_KEEP_DATASETS=true "$shim" csda-postgresql "$repo_facts" >/dev/null 2>&1
+    assert_exists "$repo_facts/csda-postgresql" \
+        "$layer: KEEP_DATASETS=true (truthy synonym) retains the dataset"
 }
 
 # ----------------------------------------------------------------------
@@ -120,6 +135,13 @@ test_compare_sh() {
 set -euo pipefail
 RED=''; YELLOW=''; GREEN=''; BLUE=''; CYAN=''; NC=''
 log() { :; }
+flowlog_truthy() {
+    case "\${1:-}" in
+        1|y|Y|yes|YES|true|TRUE|True|on|ON|On) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+die() { echo "[ERROR] \$*" >&2; exit 1; }
 FACT_DIR="\$2"
 $(cat "$fn_only")
 cleanup_dataset "\$1"
@@ -144,6 +166,14 @@ EOF
     "$shim" orkut "$repo_facts" >/dev/null 2>&1
     assert_gone "$repo_facts/orkut" \
         "$layer: plain FACT_DIR deletes the dataset"
+
+    # Truthy-synonym case: KEEP_DATASETS=yes (parallel to L2's case E).
+    rm -rf "$repo_facts"
+    mkdir -p "$repo_facts/cspa-postgresql"
+    touch "$repo_facts/cspa-postgresql/marker"
+    FLOWLOG_KEEP_DATASETS=true "$shim" cspa-postgresql "$repo_facts" >/dev/null 2>&1
+    assert_exists "$repo_facts/cspa-postgresql" \
+        "$layer: KEEP_DATASETS=true (truthy synonym) retains the dataset"
 }
 
 # ----------------------------------------------------------------------
@@ -169,6 +199,13 @@ test_ldbc_sh() {
 #!/usr/bin/env bash
 set -euo pipefail
 log() { :; }
+flowlog_truthy() {
+    case "\${1:-}" in
+        1|y|Y|yes|YES|true|TRUE|True|on|ON|On) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+die() { echo "[ERROR] \$*" >&2; exit 1; }
 FACT_DIR="\$2"
 $(cat "$fn_only")
 cleanup_dataset "\$1"
@@ -186,6 +223,14 @@ EOF
     FLOWLOG_FORCE_CLEANUP=1 "$shim" sf-1 "$repo_facts" >/dev/null 2>&1
     assert_gone "$real_cache/sf-1" \
         "$layer: FLOWLOG_FORCE_CLEANUP=1 overrides the symlink guard"
+
+    # Truthy-synonym case: KEEP_DATASETS=on (parallel to L2/L3 case E).
+    rm -rf "$repo_facts" "$real_cache"
+    mkdir -p "$repo_facts/sf-3"
+    touch "$repo_facts/sf-3/marker"
+    FLOWLOG_KEEP_DATASETS=on "$shim" sf-3 "$repo_facts" >/dev/null 2>&1
+    assert_exists "$repo_facts/sf-3" \
+        "$layer: KEEP_DATASETS=on (truthy synonym) retains the dataset"
 }
 
 # ----------------------------------------------------------------------

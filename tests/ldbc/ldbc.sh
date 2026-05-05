@@ -26,6 +26,17 @@ pass() { echo -e "${GREEN}[PASS]${NC}  $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}  $*"; }
 die()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
+# flowlog_truthy <value>: returns 0 (true) on 1/yes/true/on (any case),
+# 1 otherwise. Mirrors tests/shared.sh::flowlog_truthy (kept inline here
+# because ldbc.sh has its own minimal log/die helpers and does not source
+# shared.sh).
+flowlog_truthy() {
+    case "${1:-}" in
+        1|y|Y|yes|YES|true|TRUE|True|on|ON|On) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Verify required external commands are available early, before doing any work.
 command -v timeout >/dev/null 2>&1 || die "Required dependency 'timeout' not found on PATH; please install it."
 command -v python3 >/dev/null 2>&1 || die "Required dependency 'python3' not found on PATH; please install Python 3."
@@ -98,7 +109,8 @@ setup_dataset() {
 
     local dataset_tar="/dev/shm/${dataset_name}.tar.zst"
     log "Downloading $dataset_name (.tar.zst) ..."
-    wget -q --max-redirect=5 -O "$dataset_tar" "${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst" \
+    wget --no-verbose --timeout=60 --tries=3 --max-redirect=5 -O "$dataset_tar" \
+        "${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst" \
         || die "Download failed: ${HF_BASE}/dataset/ldbc/${dataset_name}.tar.zst"
     log "Extracting $dataset_name ..."
     tar --use-compress-program=zstd -xf "$dataset_tar" -C "$FACT_DIR"
@@ -114,18 +126,26 @@ cleanup_dataset() {
     # The "CACHE_PATCH_v2" prefix is consumed by /datasets/lib/patch_repo.py
     # as an idempotency marker on dev VMs — do not rename without updating
     # that tool. See tools/benchmark/compare.sh for full contract notes.
-    if [[ "${FLOWLOG_KEEP_DATASETS:-0}" = "1" ]]; then
-        log "Cleaning up dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=1)"
+    #   FLOWLOG_KEEP_DATASETS truthy → never delete (highest priority).
+    #                                  Truthy = 1/yes/true/on (any case).
+    #   FACT_DIR is a symlink        → never delete unless
+    #                                  FLOWLOG_FORCE_CLEANUP is truthy.
+    if flowlog_truthy "${FLOWLOG_KEEP_DATASETS:-}"; then
+        log "Cleaning up dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=${FLOWLOG_KEEP_DATASETS})"
         return
     fi
+    [[ -n "${extract_path:-}" ]] \
+        || die "cleanup_dataset: extract_path is empty (refusing to rm -rf)"
+    # Portable symlink check: `cd <dir> && pwd -P` resolves symlinks on
+    # both GNU (Linux) and BSD (macOS) without depending on `readlink -f`.
     local _fd_real
-    _fd_real="$(readlink -f "${FACT_DIR}" 2>/dev/null || echo "${FACT_DIR}")"
-    if [[ "${_fd_real}" != "${FACT_DIR}" && "${FLOWLOG_FORCE_CLEANUP:-0}" != "1" ]]; then
+    _fd_real="$(cd "${FACT_DIR}" 2>/dev/null && pwd -P || echo "${FACT_DIR}")"
+    if [[ "${_fd_real}" != "${FACT_DIR}" ]] && ! flowlog_truthy "${FLOWLOG_FORCE_CLEANUP:-}"; then
         log "Cleaning up dataset $dataset_name (kept; ${FACT_DIR} → ${_fd_real}; set FLOWLOG_FORCE_CLEANUP=1 to override)"
         return
     fi
     log "Cleaning up dataset $dataset_name"
-    rm -rf -- "${extract_path:?extract_path is empty - refusing to rm -rf}"
+    rm -rf -- "${extract_path}"
 }
 
 # ── Per-param runner ──────────────────────────────────────────────────────────
