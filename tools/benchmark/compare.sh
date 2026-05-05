@@ -104,6 +104,10 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 #   --baseline=souffle            # canonical Souffle programs from
 #                                 # tools/benchmark/souffle-programs/
 #   --baseline=interpreter,souffle  # both, side-by-side in the CSV
+#   --baseline=none               # compiler + library only (no
+#                                 # cross-engine columns); useful for
+#                                 # closed-loop perf+memory checks
+#                                 # that just want to time FlowLog.
 FRESH=0
 BASELINES="interpreter"
 TARGET_FILTER=""
@@ -127,13 +131,26 @@ while (( $# )); do
     esac
 done
 
-# Normalise the baseline list once.
+# Normalise the baseline list once. `--baseline=none` (or `none` in the
+# list) is the explicit no-baseline mode — only compiler + library are
+# timed. Useful for closed-loop perf+memory checks that just want to
+# measure FlowLog itself without the cross-engine machinery.
 RUN_INTERPRETER=0
 RUN_SOUFFLE=0
 case ",$BASELINES," in *,interpreter,*) RUN_INTERPRETER=1 ;; esac
 case ",$BASELINES," in *,souffle,*)     RUN_SOUFFLE=1 ;; esac
-[[ $RUN_INTERPRETER -eq 0 && $RUN_SOUFFLE -eq 0 ]] && \
-    die "--baseline must include 'interpreter' and/or 'souffle' (got: $BASELINES)"
+case ",$BASELINES," in
+    *,none,*)
+        # "none" silences the "must include ..." check below. If the
+        # user passed both `none` and a real baseline, the real one
+        # still wins (already set above); that's harmless.
+        :
+        ;;
+    *)
+        [[ $RUN_INTERPRETER -eq 0 && $RUN_SOUFFLE -eq 0 ]] && \
+            die "--baseline must be 'none', 'interpreter', 'souffle', or a comma-separated combination (got: $BASELINES)"
+        ;;
+esac
 
 CONFIG_FILE="${POSITIONAL_ARGS[0]:-${ROOT_DIR}/tools/benchmark/config.txt}"
 PROG_DIR="${ROOT_DIR}/example"
