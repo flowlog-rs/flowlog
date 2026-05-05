@@ -228,6 +228,9 @@ setup_dataset() {
 cleanup_dataset() {
     local name="$1"
     # CACHE_PATCH_v2: dataset cache safety guard (symlink-aware).
+    # NOTE: the literal "CACHE_PATCH_v2" prefix is consumed by
+    # /datasets/lib/patch_repo.py as an idempotency marker on dev VMs.
+    # Do not rename without updating that tool.
     # Mirrors tests/complex/common.sh and tests/ldbc/ldbc.sh so all
     # three layers honour the same env-var contract.
     #   FLOWLOG_KEEP_DATASETS=1  → never delete (highest priority)
@@ -534,7 +537,7 @@ run_interpreter() {
             --facts "$fact_path" \
             --workers "$WORKERS" \
             > "$run_log" 2>&1 || {
-                log "$RED" "WARN" \
+                log "$YELLOW" "WARN" \
                     "Interpreter run $run failed for $prog_file + $dataset_name (see $run_log)"
                 continue
             }
@@ -560,7 +563,7 @@ run_interpreter() {
         log "$GREEN" "DONE" \
             "Interpreter: $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
     else
-        log "$RED" "WARN" \
+        log "$YELLOW" "WARN" \
             "Interpreter: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
         return 1
     fi
@@ -604,7 +607,7 @@ run_compiler() {
 
         log "$YELLOW" "RUN" "  Compiler attempt $run/$NUM_RUNS"
         "$TIME_BIN" -v -o "$rss_log" "$binary" -w "$WORKERS" > "$run_log" 2>&1 || {
-            log "$RED" "WARN" \
+            log "$YELLOW" "WARN" \
                 "Compiler run $run failed for $prog_file + $dataset_name (see $run_log)"
             continue
         }
@@ -639,7 +642,7 @@ run_compiler() {
         log "$GREEN" "DONE" \
             "Compiler:  $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
     else
-        log "$RED" "WARN" \
+        log "$YELLOW" "WARN" \
             "Compiler: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
         return 1
     fi
@@ -749,7 +752,7 @@ run_lib() {
         env "${csv_envs[@]}" WORKERS="$WORKERS" \
             "$TIME_BIN" -v -o "$rss_log" "$LIB_BENCH_BIN" \
             > "$run_log" 2>&1 || {
-                log "$RED" "WARN" \
+                log "$YELLOW" "WARN" \
                     "Lib run $run failed for $prog_file + $dataset_name (see $run_log)"
                 continue
             }
@@ -775,7 +778,7 @@ run_lib() {
         log "$GREEN" "DONE" \
             "Lib:       $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
     else
-        log "$RED" "WARN" \
+        log "$YELLOW" "WARN" \
             "Lib: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
         return 1
     fi
@@ -838,19 +841,22 @@ run_souffle() {
     #
     #   souffle -o <bin> -p /dev/null <prog.dl> -j <N>  -F <facts>
     #
-    # Two key details, both load-bearing:
-    #   - `-o <bin>` (NOT `-c`). The `-c` flag compiles AND runs in one
-    #     shot but generates a serial C++ program; `-o` produces a
-    #     parallel binary with `#pragma omp parallel` directives wired
-    #     into the generated code.
-    #   - `-j N` at compile time. Souffle uses this to decide *whether*
-    #     to emit OpenMP pragmas at codegen — without it, the `.cpp`
-    #     contains zero `#pragma omp parallel` lines and the binary is
-    #     effectively single-threaded regardless of the runtime `-j`.
+    # Three load-bearing details:
+    #   - `-o <bin>` (NOT `-c`). `-c` compiles AND runs in one shot
+    #     and does not produce a reusable binary; `-o` emits standalone
+    #     C++ via Souffle's `pfor` macro (defined in
+    #     <souffle/utility/ParallelUtil.h>) which expands to
+    #     `_Pragma("omp for schedule(dynamic)")` when `_OPENMP` is
+    #     defined at GCC compile time.
+    #   - `-j N` at compile time. Souffle gates pfor expansion on
+    #     this — without it, pfor degrades to a serial `for` and the
+    #     binary won't be linked against libgomp regardless of the
+    #     runtime `-j N`.
+    #   - `-F <facts>` at compile time. Souffle validates `.input`
+    #     directives against the dataset during codegen.
     #
-    # We pass the same `-j N` again at run-time so the binary spawns
-    # N threads. -F has to be present at compile time too because
-    # Souffle validates `.input` directives against the dataset.
+    # We pass the same `-j N` again at run-time to set the worker
+    # thread count via `omp_set_num_threads`.
     if [[ ! -x "$sf_bin" ]]; then
         log "$BLUE" "BUILD" \
             "Souffle: compiling $stem with -j $WORKERS (one-off)"
@@ -858,22 +864,14 @@ run_souffle() {
         if ! "$SOUFFLE_BIN" -o "$sf_bin" -p /dev/null -j "$WORKERS" \
                 -F "$fact_path" "$sf_src" \
                 > "${sf_bin}.compile.log" 2>&1; then
-            log "$RED" "WARN" \
+            log "$YELLOW" "WARN" \
                 "Souffle: -o compile failed for $stem (see ${sf_bin}.compile.log) — recording N/A"
             rm -f "${best_log}.median_rss_kb" "${best_log}.median_total_s"
             : > "$best_log"
             return 1
         fi
-        # Sanity-check: confirm the compiled binary will actually run in
-        # parallel. The previous form grepped for `#pragma omp parallel`
-        # in the generated .cpp — but Souffle 2.5 uses `pfor` macros
-        # that expand to `_Pragma("omp for schedule(dynamic)")`, so the
-        # literal `#pragma omp parallel` string never appears. The
-        # definitive check is whether the binary links against libgomp:
-        # if `_OPENMP` was defined when GCC compiled the .cpp then pfor
-        # expands to a parallel for and libgomp is linked; otherwise
-        # pfor silently becomes a serial `for` and the runtime `-j N`
-        # has no effect.
+        # Sanity-check: confirm the binary will actually run in parallel.
+        # libgomp linkage is the definitive test — see comment block above.
         if ldd "$sf_bin" 2>/dev/null | grep -q "libgomp"; then
             log "$BLUE" "BUILD" \
                 "Souffle: ${sf_bin} linked against libgomp (parallel-ready)"
@@ -903,7 +901,7 @@ run_souffle() {
         "$TIME_BIN" -v -o "$rss_log" \
             "$sf_bin" -F "$fact_path" -D "$out_dir" -j "$WORKERS" \
             > "$run_log" 2>&1 || {
-                log "$RED" "WARN" \
+                log "$YELLOW" "WARN" \
                     "Souffle run $run failed for $prog_file + $dataset_name (see $run_log)"
                 rm -rf "$out_dir"
                 continue
@@ -953,7 +951,7 @@ run_souffle() {
         log "$GREEN" "DONE" \
             "Souffle:   $prog_file + $dataset_name (median: ${median_time}s, peak ${median_rss} KiB)"
     else
-        log "$RED" "WARN" \
+        log "$YELLOW" "WARN" \
             "Souffle: all $NUM_RUNS runs failed for $prog_file + $dataset_name"
         rm -f "${best_log}.median_rss_kb" "${best_log}.median_total_s"
         : > "$best_log"
@@ -1200,7 +1198,7 @@ main() {
         local _prog_base="$(basename "$PROG_NAME")"
         local _display_stem="${PROG_NAME%.*}"
         if pair_already_done "$_display_stem" "$DATASET_NAME"; then
-            log "$GREEN" "SKIP" "$_display_stem + $DATASET_NAME — already in CSV"
+            log "$YELLOW" "SKIP" "$_display_stem + $DATASET_NAME — already in CSV"
             continue
         fi
 

@@ -82,6 +82,9 @@ cleanup_dataset() {
     local dataset_name="$1"
     local fact_dir="${2:-$FACT_DIR_DEFAULT}"
     # CACHE_PATCH_v2: dataset cache safety guard (symlink-aware).
+    # The "CACHE_PATCH_v2" prefix is consumed by /datasets/lib/patch_repo.py
+    # as an idempotency marker on dev VMs — do not rename without updating
+    # that tool. See tools/benchmark/compare.sh for full contract notes.
     if [[ "${FLOWLOG_KEEP_DATASETS:-0}" = "1" ]]; then
         log "$YELLOW" "CLEANUP" "Dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=1)"
         return

@@ -54,11 +54,13 @@ writes one `diagnosis.txt` whose first line is a one-shot
 
 ## Environment variables (the contract)
 
-| Var                       | Default            | Effect                                                                                                                                                                                  |
-|---------------------------|--------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `WORKERS`                 | `min(64, nproc)`   | Thread budget — applied **identically to every engine** (interpreter `--workers`, compiler `-w`, lib mode env, Souffle `-j` at both compile AND run time). This is the fairness invariant. |
-| `FLOWLOG_KEEP_DATASETS`   | `0`                | If `1`, never `rm -rf` datasets after a run. Set automatically by `source /datasets/env.sh` on the dev VM.                                                                              |
-| `FLOWLOG_FORCE_CLEANUP`   | `0`                | Override the symlink-aware cache guard (only relevant if `facts/` is a symlink to a shared cache). `KEEP=1` always wins over `FORCE=1`.                                                |
+| Var                                | Default            | Effect                                                                                                                                                                                  |
+|------------------------------------|--------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `WORKERS`                          | `min(64, nproc)`   | Thread budget — applied **identically to every engine** (interpreter `--workers`, compiler `-w`, lib mode env, Souffle `-j` at both compile AND run time). This is the fairness invariant. |
+| `L3_BASELINE`                      | `interpreter`      | Comma-separated L3 baselines, any of `{interpreter, souffle}`. Equivalent to `--baseline=`. Bare `BASELINE` is accepted as a back-compat alias.                                          |
+| `L3_NUM_RUNS`                      | `3`                | L3 timed runs per `(engine, pair)`. Equivalent to `--num-runs`. Bare `NUM_RUNS` (compare.sh's native name) is accepted as a back-compat alias.                                           |
+| `FLOWLOG_KEEP_DATASETS`            | `0`                | If `1`, never `rm -rf` datasets after a run. Set automatically by `source /datasets/env.sh` on the dev VM.                                                                              |
+| `FLOWLOG_FORCE_CLEANUP`            | `0`                | Override the symlink-aware cache guard (only relevant if `facts/` is a symlink to a shared cache). `KEEP=1` always wins over `FORCE=1`.                                                |
 
 The `cleanup_dataset` helper used by L2/L3/L4 honours these three
 variables identically across all three layers (canonical

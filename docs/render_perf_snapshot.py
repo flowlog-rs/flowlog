@@ -5,6 +5,10 @@ The snapshot lives in-tree so the README can show real numbers without
 re-running benchmarks on every doc edit. Re-run this script after a
 fresh sweep when you want to refresh the figure.
 
+Note: the y-axis labels say "median of 5" because perf-snapshot.csv was
+captured under the old `NUM_RUNS=5` default. If you regenerate the CSV
+with the current default (`NUM_RUNS=3`), update both labels accordingly.
+
 Usage:
     python3 docs/render_perf_snapshot.py
 """

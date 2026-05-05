@@ -24,16 +24,24 @@
 #   <run-dir>/meta.txt       git head, branch, env, timing
 #
 # Usage:
-#   bash tools/sweep/run_full_sweep.sh                # full sweep
-#   bash tools/sweep/run_full_sweep.sh --smoke        # quick subset
-#   bash tools/sweep/run_full_sweep.sh --skip-l3      # skip the long perf
-#   bash tools/sweep/run_full_sweep.sh --include-ldbc # opt-in L4
-#   bash tools/sweep/run_full_sweep.sh --keep-going   # don't stop on first failure
+#   bash tools/sweep/run_full_sweep.sh                   # full sweep
+#   bash tools/sweep/run_full_sweep.sh --smoke           # quick subset (~5 min)
+#   bash tools/sweep/run_full_sweep.sh --skip-l3         # skip the long perf
+#   bash tools/sweep/run_full_sweep.sh --include-ldbc    # opt-in L4
+#   bash tools/sweep/run_full_sweep.sh --keep-going      # don't stop on first failure
+#   bash tools/sweep/run_full_sweep.sh --workers N       # thread cap (default min(64, nproc))
+#   bash tools/sweep/run_full_sweep.sh --baseline=souffle      # L3 baseline (default interpreter)
+#   bash tools/sweep/run_full_sweep.sh --num-runs N      # L3 timed runs per pair (default 3)
 #
-# Environment:
-#   WORKERS                  override worker count        (default: nproc)
-#   FLOWLOG_KEEP_DATASETS    1 = retain datasets          (sourced from
-#                             /datasets/env.sh if present, else 0)
+# Environment (all optional; flags above take precedence):
+#   WORKERS                  thread count for every engine   (default: min(64, nproc))
+#   L3_BASELINE              L3 baseline list                (default: interpreter)
+#                              comma-separated, any of {interpreter, souffle}
+#                              Bare `BASELINE` accepted as back-compat alias.
+#   L3_NUM_RUNS              L3 timed runs per (engine, pair) (default: 3)
+#                              Bare `NUM_RUNS` accepted as back-compat alias.
+#   FLOWLOG_KEEP_DATASETS    1 = retain datasets on cleanup  (sourced from
+#                              /datasets/env.sh if present, else 0)
 #   RUN_DIR                  override the run-output dir
 #
 # Exit code: 0 iff every layer that ran returned 0; the diagnosis lists
@@ -52,15 +60,18 @@ SKIP_L3=0
 INCLUDE_LDBC=0
 KEEP_GOING=0
 # L3-baseline forwarder: passed verbatim to compare.sh's --baseline= flag.
-# Default "interpreter" preserves prior behaviour. Common values:
+# `L3_BASELINE` is the canonical sweep-level name; bare `BASELINE` is a
+# back-compat alias. Default "interpreter" preserves prior behaviour.
+# Common values:
 #   interpreter            time vs vldb26 interpreter (default)
 #   souffle                time vs canonical Souffle programs only
 #   interpreter,souffle    both side-by-side
-L3_BASELINE="${L3_BASELINE:-interpreter}"
-# NUM_RUNS forwarder: how many timed runs per (engine, pair). Inherited
-# by compare.sh / datalog_batch_*.sh via the env. Default unset → each
-# tool keeps its own default (compare.sh: 3; per-iter perf gates: 3).
-L3_NUM_RUNS="${NUM_RUNS:-}"
+L3_BASELINE="${L3_BASELINE:-${BASELINE:-interpreter}}"
+# NUM_RUNS forwarder: how many timed runs per (engine, pair) for L3.
+# `L3_NUM_RUNS` is the canonical sweep-level name; bare `NUM_RUNS`
+# (compare.sh's native name) is a back-compat alias. Default unset →
+# compare.sh keeps its own default (3). Other layers ignore this.
+L3_NUM_RUNS="${L3_NUM_RUNS:-${NUM_RUNS:-}}"
 
 # WORKERS controls thread count for EVERY engine (interpreter / compiler /
 # library / souffle), so all baselines compete with the same parallelism.
@@ -417,7 +428,7 @@ fi
 # ----------------------------------------------------------------------
 if [[ "$INCLUDE_LDBC" == "1" ]]; then
     run_step "L4 ldbc"                 "40-ldbc"             0 -- \
-        bash tests/ldbc/ldbc.sh
+        bash -c "WORKERS=$WORKERS bash tests/ldbc/ldbc.sh"
 else
     run_step "L4 ldbc"                 "40-ldbc"             1 -- :
 fi
