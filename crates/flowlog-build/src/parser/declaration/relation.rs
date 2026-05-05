@@ -1,16 +1,16 @@
 //! Relation declaration types for FlowLog Datalog programs.
 
-use super::Attribute;
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::primitive::DataType;
-use crate::parser::{span_of, Lexeme, Rule};
-use pest::iterators::Pair;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::common::compute_fp;
-use crate::common::{FileId, Ignored, Span};
+use pest::iterators::Pair;
+
+use super::Attribute;
+use crate::common::{FileId, Ignored, Span, compute_fp};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::primitive::DataType;
+use crate::parser::{Lexeme, Rule, span_of};
 
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,31 +105,23 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn input_file_name(&self) -> String {
-        self.input_params
-            .as_ref()
-            .and_then(|params| params.get("filename").cloned())
-            .unwrap_or_else(|| format!("{}.csv", self.name()))
+        self.input_param("filename")
+            .map_or_else(|| format!("{}.csv", self.name()), str::to_owned)
     }
 
     /// Get the input delimiter for a file-backed relation.
     #[must_use]
     #[inline]
     pub fn input_delimiter(&self) -> &str {
-        self.input_params
-            .as_ref()
-            .and_then(|m| m.get("delimiter").map(String::as_str))
-            .unwrap_or(",")
+        self.input_param("delimiter").unwrap_or(",")
     }
 
     /// Whether to skip the first (header) line when reading this file-backed relation.
     #[must_use]
     #[inline]
     pub fn input_has_header(&self) -> bool {
-        self.input_params
-            .as_ref()
-            .and_then(|m| m.get("header").map(String::as_str))
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
+        self.input_param("header")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"))
     }
 
     /// Whether to print size for this relation.
@@ -158,9 +150,7 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn is_file_backed(&self) -> bool {
-        self.input_params
-            .as_ref()
-            .and_then(|m| m.get("IO"))
+        self.input_param("IO")
             .is_some_and(|io| io.eq_ignore_ascii_case("file"))
     }
 
@@ -170,6 +160,22 @@ impl Relation {
     #[inline]
     pub(crate) fn is_output_printsize(&self) -> bool {
         self.output || self.printsize
+    }
+
+    /// Look up an entry in the `.input` parameter map.
+    fn input_param(&self, key: &str) -> Option<&str> {
+        self.input_params
+            .as_ref()
+            .and_then(|m| m.get(key))
+            .map(String::as_str)
+    }
+
+    /// Look up an entry in the `.output` parameter map.
+    fn output_param(&self, key: &str) -> Option<&str> {
+        self.output_params
+            .as_ref()
+            .and_then(|m| m.get(key))
+            .map(String::as_str)
     }
 
     /// Set input parameters for this relation.
@@ -191,85 +197,70 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn output_delimiter(&self) -> &str {
-        self.output_params
-            .as_ref()
-            .and_then(|m| m.get("delimiter").map(String::as_str))
-            .unwrap_or(",")
+        self.output_param("delimiter").unwrap_or(",")
     }
 
     /// Get the output row limit, if specified.
     #[must_use]
     pub(crate) fn output_limit(&self) -> Option<usize> {
-        let limit = self
-            .output_params
-            .as_ref()
-            .and_then(|m| m.get("limit"))
-            .map(|v| {
-                v.parse::<usize>().unwrap_or_else(|_| {
-                    panic!(
-                        "Parser error: invalid limit '{}' for relation '{}', expected a non-negative integer",
-                        v, self.name
-                    )
-                })
-            });
-        if limit.is_some() {
-            assert!(
-                self.output_params
-                    .as_ref()
-                    .and_then(|m| m.get("order_by"))
-                    .is_some(),
-                "Parser error: limit requires order_by for relation '{}'",
-                self.name
-            );
-        }
-        limit
+        let raw = self.output_param("limit")?;
+        let limit = raw.parse::<usize>().unwrap_or_else(|_| {
+            panic!(
+                "Parser error: invalid limit '{}' for relation '{}', expected a non-negative integer",
+                raw, self.name
+            )
+        });
+        assert!(
+            self.output_param("order_by").is_some(),
+            "Parser error: limit requires order_by for relation '{}'",
+            self.name
+        );
+        Some(limit)
     }
 
     /// Get the output ordering specification, if specified.
     #[must_use]
     pub(crate) fn output_order_by(&self) -> Option<Vec<(usize, DataType, bool)>> {
-        self.output_params
-            .as_ref()
-            .and_then(|m| m.get("order_by"))
-            .map(|spec| {
-                spec.split(',')
-                    .map(|part| {
-                        let tokens: Vec<&str> = part.split_whitespace().collect();
-                        assert!(
-                            !tokens.is_empty(),
-                            "Parser error: empty order_by clause in relation '{}'",
-                            self.name
-                        );
-                        let attr_name = tokens[0].to_lowercase();
-                        assert!(
-                            tokens.len() <= 2,
-                            "Parser error: unexpected extra tokens in order_by clause '{}' for relation '{}'",
-                            part.trim(), self.name
-                        );
-                        let ascending = match tokens.get(1) {
-                            Some(d) if d.eq_ignore_ascii_case("desc") => false,
-                            Some(d) if d.eq_ignore_ascii_case("asc") => true,
-                            Some(d) => panic!(
-                                "Parser error: invalid order_by direction '{}' in relation '{}', expected ASC or DESC",
-                                d, self.name
-                            ),
-                            None => true,
-                        };
-                        let (idx, attr) = self
-                            .attributes
-                            .iter()
-                            .enumerate()
-                            .find(|(_, a)| a.name() == attr_name)
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "Parser error: order_by attribute '{}' not found in relation '{}'",
-                                    attr_name, self.name
-                                )
-                            });
-                        (idx, *attr.data_type(), ascending)
-                    })
-                    .collect()
+        let spec = self.output_param("order_by")?;
+        let parsed = spec
+            .split(',')
+            .map(|part| {
+                let tokens: Vec<&str> = part.split_whitespace().collect();
+                assert!(
+                    !tokens.is_empty(),
+                    "Parser error: empty order_by clause in relation '{}'",
+                    self.name
+                );
+                let attr_name = tokens[0].to_lowercase();
+                assert!(
+                    tokens.len() <= 2,
+                    "Parser error: unexpected extra tokens in order_by clause '{}' for relation '{}'",
+                    part.trim(), self.name
+                );
+                let ascending = match tokens.get(1) {
+                    Some(d) if d.eq_ignore_ascii_case("desc") => false,
+                    Some(d) if d.eq_ignore_ascii_case("asc") => true,
+                    Some(d) => panic!(
+                        "Parser error: invalid order_by direction '{}' in relation '{}', expected ASC or DESC",
+                        d, self.name
+                    ),
+                    None => true,
+                };
+                let (idx, attr) = self
+                    .attributes
+                    .iter()
+                    .enumerate()
+                    .find(|(_, a)| a.name() == attr_name)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Parser error: order_by attribute '{}' not found in relation '{}'",
+                            attr_name, self.name
+                        )
+                    });
+                (idx, *attr.data_type(), ascending)
             })
+            .collect();
+        Some(parsed)
     }
 
     /// Set printsize flag.
