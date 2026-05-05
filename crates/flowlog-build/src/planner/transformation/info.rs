@@ -79,9 +79,7 @@ impl KeyValueLayout {
             .flat_map(|pos| pos.signatures())
             .map(|sig| sig.atom_signature().rhs_id())
             .next()
-            .unwrap_or_else(|| {
-                panic!("Planner error: attempted to extract atom ID from empty key/value layout")
-            })
+            .expect("Planner error: attempted to extract atom ID from empty key/value layout")
     }
 }
 
@@ -201,12 +199,13 @@ impl TransformationInfo {
 
     /// Mark this Key-Value transformation as a SIP projection.
     pub(crate) fn into_sip_projection(mut self) -> Self {
-        match &mut self {
-            Self::KVToKV {
-                is_sip_projection, ..
-            } => *is_sip_projection = true,
-            _ => panic!("Planner error: into_sip_projection is only applicable to KVToKV"),
-        }
+        let Self::KVToKV {
+            is_sip_projection, ..
+        } = &mut self
+        else {
+            panic!("Planner error: into_sip_projection is only applicable to KVToKV");
+        };
+        *is_sip_projection = true;
         self
     }
 
@@ -381,9 +380,9 @@ impl TransformationInfo {
     #[inline]
     pub(crate) fn is_row_output(&self) -> bool {
         match self {
-            Self::KVToKV { is_row_output, .. } => *is_row_output,
-            Self::JoinToKV { is_row_output, .. } => *is_row_output,
-            Self::AntiJoinToKV { is_row_output, .. } => *is_row_output,
+            Self::KVToKV { is_row_output, .. }
+            | Self::JoinToKV { is_row_output, .. }
+            | Self::AntiJoinToKV { is_row_output, .. } => *is_row_output,
         }
     }
 
@@ -511,16 +510,12 @@ impl TransformationInfo {
             Self::KVToKV {
                 is_row_output: row_out,
                 ..
-            } => {
-                *row_out = is_row_output;
             }
-            Self::JoinToKV {
+            | Self::JoinToKV {
                 is_row_output: row_out,
                 ..
-            } => {
-                *row_out = is_row_output;
             }
-            Self::AntiJoinToKV {
+            | Self::AntiJoinToKV {
                 is_row_output: row_out,
                 ..
             } => {
@@ -656,7 +651,9 @@ impl TransformationInfo {
                 predicates.var_eq.extend(var_eq);
             }
             Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } => {
-                panic!("Planner error: attempting to append const constraints to non-unary transformation")
+                panic!(
+                    "Planner error: attempting to append const constraints to non-unary transformation"
+                )
             }
         }
     }

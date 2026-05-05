@@ -84,15 +84,15 @@ pub use build::BuildError;
 // Hidden from docs.rs for the same reason as the pipeline modules above.
 #[doc(hidden)]
 pub use codegen::{
-    const_to_token, data_type_tokens, field_accessor, gen_drain_block, AggSemiringNeeds, CodeGen,
-    CodeParts, CodegenError, Features,
+    AggSemiringNeeds, CodeGen, CodeParts, CodegenError, Features, const_to_token, data_type_tokens,
+    field_accessor, gen_drain_block,
 };
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 pub use crate::common::ExecutionMode;
-use crate::common::{emit, BoxError, SourceMap};
+use crate::common::{BoxError, SourceMap, emit};
 
 /// Compile a single `.dl` program with default options.
 ///
