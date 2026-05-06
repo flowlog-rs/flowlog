@@ -57,9 +57,8 @@ The workspace is split across three crates:
 ### Prerequisites
 
 ```bash
-$ bash env/env.sh               # Linux / macOS — one-time machine setup
-# or, on Windows (elevated PowerShell):
-PS> .\env\env.ps1
+$ bash env/env.sh     # Linux / macOS — one-time machine setup
+PS> .\env\env.ps1     # or, on Windows (elevated PowerShell)
 ```
 
 One-time machine setup: installs a stable Rust toolchain and the OS packages the build/tests need, then runs `cargo check --workspace` as a smoke test. Rust 1.80+ recommended.
