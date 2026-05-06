@@ -21,7 +21,6 @@ use crate::codegen::aggregation::{
     aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce_stmt,
     aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
 };
-use crate::codegen::ident::find_local_ident;
 
 // =========================================================================
 // Recursive Flow Generation
@@ -503,16 +502,13 @@ impl CodeGen {
     fn build_recursive_bindings(&self, recursive_fps: &[u64]) -> (Vec<Ident>, HashMap<u64, Ident>) {
         let names: Vec<Ident> = recursive_fps
             .iter()
-            .map(|fp| {
-                let name = self.find_global_ident(*fp);
-                format_ident!("recursive_{}", name)
-            })
+            .map(|fp| format_ident!("recursive_{}", self.find_global_ident(*fp)))
             .collect();
 
         let bindings = recursive_fps
             .iter()
+            .copied()
             .zip(names.iter().cloned())
-            .map(|(fp, ident)| (*fp, ident))
             .collect();
 
         (names, bindings)
@@ -583,10 +579,9 @@ impl CodeGen {
                      from next bindings"
                 ))
             })?;
-            let iter_var = find_local_ident(recursive_bindings, *fp);
             with_profiler(profiler, |profiler| {
                 profiler.recursive_resultsin_operator(
-                    iter_var.to_string(),
+                    recursive_ident.to_string(),
                     next_ident.to_string(),
                     next_ident.to_string(),
                 );
@@ -602,46 +597,34 @@ impl CodeGen {
                 (quote! {}, quote! {}, quote! {})
             };
 
-            let feedback = if iterative_fps.contains(fp) {
-                // Iterative: replacement — feed back derived value only, no union with self.
-                build_feedback_expr(
-                    next_ident,
-                    recursive_ident,
-                    &plan,
-                    &pos,
-                    &neg,
-                    &dedup,
-                    &normalize,
-                )
-            } else if has_iterative {
-                // Accumulative in a mixed loop: iterative relations can retract, so
-                // explicitly union with the previous self to maintain monotonicity.
+            // Choose the feedback source:
+            //   - Iterative (replacement semantics): feed back the derived value only;
+            //     no self-union, since iterative variables retract by overwriting.
+            //   - Accumulative in a mixed loop: explicitly union with `recursive_X`,
+            //     because iterative relations can retract and that retraction must
+            //     not leak into the accumulative tally — we keep monotonicity by
+            //     re-adding the previous self each iteration.
+            //   - Purely accumulative loop: also feed back `next_X` directly. All
+            //     rules are monotone, so every prior fact is re-derived and no
+            //     self-union is required.
+            let source = if !iterative_fps.contains(fp) && has_iterative {
                 let acc_next = format_ident!("acc_next_{}", fp);
                 stmts.push(quote! {
                     let #acc_next = #next_ident.clone().concat(#recursive_ident.clone()) #dedup;
                 });
-                build_feedback_expr(
-                    &acc_next,
-                    recursive_ident,
-                    &plan,
-                    &pos,
-                    &neg,
-                    &dedup,
-                    &normalize,
-                )
+                acc_next
             } else {
-                // Purely accumulative loop: no self-union needed — all rules are monotone,
-                // so every previously derived fact will be re-derived on the next iteration.
-                build_feedback_expr(
-                    next_ident,
-                    recursive_ident,
-                    &plan,
-                    &pos,
-                    &neg,
-                    &dedup,
-                    &normalize,
-                )
+                next_ident.clone()
             };
+            let feedback = build_feedback_expr(
+                &source,
+                recursive_ident,
+                &plan,
+                &pos,
+                &neg,
+                &dedup,
+                &normalize,
+            );
 
             stmts.push(quote! { #var_name.set(#feedback); });
         }

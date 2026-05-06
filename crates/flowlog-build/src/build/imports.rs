@@ -18,16 +18,12 @@ pub(crate) fn gen_lib_imports(
     features: &Features,
     profile: bool,
 ) -> TokenStream {
-    let ordered_float_import = if features.ordered_float() {
-        quote! { use ::flowlog_runtime::ordered_float; }
-    } else {
-        quote! {}
-    };
-    let lasso_import = if features.string_intern() {
-        quote! { use ::flowlog_runtime::lasso; }
-    } else {
-        quote! {}
-    };
+    let ordered_float_import = features
+        .ordered_float()
+        .then(|| quote! { use ::flowlog_runtime::ordered_float; });
+    let lasso_import = features
+        .string_intern()
+        .then(|| quote! { use ::flowlog_runtime::lasso; });
 
     let mut out = vec![quote! {
         mod relops {
@@ -120,14 +116,11 @@ fn dd_imports(f: &Features) -> TokenStream {
             .collect();
         entries.sort();
 
-        let uses: Vec<_> = entries
-            .iter()
-            .map(|(mod_name, ty_name)| {
-                let mod_ident = format_ident!("{}", mod_name);
-                let ty = format_ident!("{}", ty_name);
-                quote! { use semiring::#mod_ident::#ty; }
-            })
-            .collect();
+        let uses = entries.iter().map(|(mod_name, ty_name)| {
+            let mod_ident = format_ident!("{}", mod_name);
+            let ty = format_ident!("{}", ty_name);
+            quote! { use semiring::#mod_ident::#ty; }
+        });
 
         out.push(quote! {
             #(#uses)*
@@ -149,11 +142,9 @@ fn string_intern_imports(f: &Features) -> TokenStream {
         use ::flowlog_runtime::intern::intern;
     };
 
-    let resolve = if f.string_resolve() {
-        quote! { use ::flowlog_runtime::intern::resolve; }
-    } else {
-        quote! {}
-    };
+    let resolve = f
+        .string_resolve()
+        .then(|| quote! { use ::flowlog_runtime::intern::resolve; });
 
     quote! { #base #resolve }
 }
