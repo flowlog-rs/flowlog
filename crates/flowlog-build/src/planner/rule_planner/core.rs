@@ -42,20 +42,26 @@ impl RulePlanner {
         trace!("Catalog:\n{}", catalog);
         trace!("{}", "-".repeat(60));
 
-        // Apply optimization transformations until fixed point.
-        //   1) `apply_semijoin` (with comparison pushdown) runs first because it
-        //      can eliminate argument usage and so create new projection
-        //      opportunities. `||` short-circuits, so on a successful semijoin
-        //      we re-loop without invoking step 2 in the same iteration.
-        //   2) `remove_unused_arguments` then trims the schema. If neither
-        //      pass changes the catalog we're at the fixed point.
+        // Apply optimization transformations until fixed point
         loop {
-            let changed = self.apply_semijoin(catalog)? || self.remove_unused_arguments(catalog)?;
-            if !changed {
-                break;
+            // 1) Apply semijoin optimizations and comparison pushdown
+            // These optimizations can create new opportunities for projection
+            if self.apply_semijoin(catalog)? {
+                trace!("Catalog:\n{}", catalog);
+                trace!("{}", "-".repeat(60));
+                continue;
             }
-            trace!("Catalog:\n{}", catalog);
-            trace!("{}", "-".repeat(60));
+
+            // 2) Remove unused arguments to reduce data volume
+            // This must come after semijoins as they may eliminate argument usage
+            if self.remove_unused_arguments(catalog)? {
+                trace!("Catalog:\n{}", catalog);
+                trace!("{}", "-".repeat(60));
+                continue;
+            }
+
+            // Fixed point reached - no more optimizations possible
+            break;
         }
         Ok(())
     }

@@ -18,16 +18,6 @@ mod info;
 pub(crate) use flow::TransformationFlow;
 pub(crate) use info::{KeyValueLayout, TransformationInfo};
 
-/// Wraps `Collection::new` plus an `Arc` so call sites stay readable.
-fn arc_collection(fp: u64, name: &str, layout: &KeyValueLayout) -> Arc<Collection> {
-    Arc::new(Collection::new(
-        fp,
-        name.to_string(),
-        layout.key(),
-        layout.value(),
-    ))
-}
-
 /// Represents a data transformation operation in a query execution plan.
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub(crate) enum Transformation {
@@ -250,16 +240,18 @@ impl Transformation {
             info.kv_predicates(),
         );
 
-        let input = arc_collection(
+        let input = Arc::new(Collection::new(
             info.input_info_fp().0,
-            info.input_name().0,
-            info.input_kv_layout().0,
-        );
-        let output = arc_collection(
+            info.input_name().0.to_string(),
+            info.input_kv_layout().0.key(),
+            info.input_kv_layout().0.value(),
+        ));
+        let output = Arc::new(Collection::new(
             info.output_info_fp(),
-            info.output_name(),
-            info.output_kv_layout(),
-        );
+            info.output_name().to_string(),
+            info.output_kv_layout().key(),
+            info.output_kv_layout().value(),
+        ));
 
         match (info.is_row_input(), info.is_row_output()) {
             // Row in, Row out: filtering, projection, or aggregation on flat rows.
@@ -314,23 +306,26 @@ impl Transformation {
         );
 
         let input = (
-            arc_collection(
+            Arc::new(Collection::new(
                 info.input_info_fp().0,
-                info.input_name().0,
-                info.input_kv_layout().0,
-            ),
-            arc_collection(
+                info.input_name().0.to_string(),
+                info.input_kv_layout().0.key(),
+                info.input_kv_layout().0.value(),
+            )),
+            Arc::new(Collection::new(
                 info.input_info_fp().1.unwrap(),
-                info.input_name().1.unwrap(),
-                info.input_kv_layout().1.unwrap(),
-            ),
+                info.input_name().1.unwrap().to_string(),
+                info.input_kv_layout().1.unwrap().key(),
+                info.input_kv_layout().1.unwrap().value(),
+            )),
         );
 
-        let output = arc_collection(
+        let output = Arc::new(Collection::new(
             info.output_info_fp(),
-            info.output_name(),
-            info.output_kv_layout(),
-        );
+            info.output_name().to_string(),
+            info.output_kv_layout().key(),
+            info.output_kv_layout().value(),
+        ));
 
         if info.is_row_output() {
             Self::JnToRow {
@@ -383,23 +378,26 @@ impl Transformation {
         );
 
         let input = (
-            arc_collection(
+            Arc::new(Collection::new(
                 info.input_info_fp().0,
-                info.input_name().0,
-                info.input_kv_layout().0,
-            ),
-            arc_collection(
+                info.input_name().0.to_string(),
+                info.input_kv_layout().0.key(),
+                info.input_kv_layout().0.value(),
+            )),
+            Arc::new(Collection::new(
                 info.input_info_fp().1.unwrap(),
-                info.input_name().1.unwrap(),
-                info.input_kv_layout().1.unwrap(),
-            ),
+                info.input_name().1.unwrap().to_string(),
+                info.input_kv_layout().1.unwrap().key(),
+                info.input_kv_layout().1.unwrap().value(),
+            )),
         );
 
-        let output = arc_collection(
+        let output = Arc::new(Collection::new(
             info.output_info_fp(),
-            info.output_name(),
-            info.output_kv_layout(),
-        );
+            info.output_name().to_string(),
+            info.output_kv_layout().key(),
+            info.output_kv_layout().value(),
+        ));
 
         if info.is_row_output() {
             Self::NJnToRow {
