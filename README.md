@@ -21,11 +21,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"/></a>
 </p>
 
-**Status:** FlowLog is under active development; interfaces may change without notice. `datalog-batch` and `datalog-inc` are the supported modes today; `extend-batch` and `extend-inc` (which add explicit `loop`/`fixpoint` blocks for recursion control) are work-in-progress and `--profile` is unsupported under either Extended sub-mode.
+**Status:** FlowLog is under active development; interfaces may change without notice. 
 
 ## Architecture
 
-A `.dl` program flows through five sequential stages, supported by three side modules.
+A `.dl` program flows through five sequential stages, supported by side modules.
 
 ```mermaid
 flowchart LR
@@ -36,33 +36,33 @@ flowchart LR
     classDef side fill:#fff8e1,stroke:#a80,stroke-dasharray:3 3
 ```
 
-- **parser** — Pest grammar → typed AST anchored to source spans.
-- **typechecker** — pins every polymorphic literal to a concrete width.
-- **stratifier** — SCC analysis; each `loop`/`fixpoint` block is one recursive stratum.
-- **planner** — per-rule `prepare → SIP → core → fuse → post`, dedup'd across rules so DD shares arrangements.
-- **codegen** — Timely + Differential Dataflow operator chains as `proc_macro2::TokenStream`.
-
-The **catalog** (built per-rule inside the planner) precomputes signatures, supersets, local filters, and enforces range-restriction. The **optimizer** stores EDB cardinalities for join ordering. The **profiler** (`-P`) lines build-time predictions up against Timely's runtime operator logs. A small **common** module supplies source spans, `Diagnostic`-trait errors, and `u64` fingerprints that thread `catalog → planner → codegen` to enable arrangement sharing.
-
-Codegen output (`CodeParts`) is consumed by either of two frontends: **library mode** (`flowlog-build::compile()` from a `build.rs`) emits a single `.rs` to `$OUT_DIR/<stem>.rs`; **binary mode** (`flowlog-compiler` CLI) scaffolds a Cargo project, builds it, and drops a binary at `-o <PATH>`. Both link `flowlog-runtime` at run time for interning, IO, sort/merge, and incremental-txn state.
+- **parser** — Reads `.dl` source into a typed AST, each node tagged with its source location.
+- **typechecker** — Resolves every literal's type (e.g. `1` becomes `int32`).
+- **stratifier** — Groups rules into evaluation strata (one per `loop`/`fixpoint` block) so recursion runs in the right order.
+- **planner** — Lowers each rule to a Differential Dataflow plan; common sub-plans are shared across rules to reuse arrangements.
+- **codegen** — Emits the plan as Rust code using Timely + Differential Dataflow.
+- **catalog** — Caches per-rule metadata (relation signatures, pushdown filters, range-restriction checks) for the planner.
+- **optimizer** — Picks join order based on cardinalities and worst-case optimal joins (WIP).
+- **profiler** — Collects runtime metrics from Timely + Differential Dataflow operators.
+- **common** — Small helpers shared across the rest of the pipeline.
 
 The workspace is split across three crates:
 
-- **`flowlog-build`** — the compile pipeline as a library; houses `parser`, `typechecker`, `catalog`, `stratifier`, `optimizer`, `planner`, `codegen`, `profiler`, and the library-mode `build/` orchestrator.
-- **`flowlog-compiler`** — the `flowlog-compiler` binary; calls `flowlog-build`, scaffolds + `cargo build`s a standalone executable.
-- **`flowlog-runtime`** — tiny runtime consumed by generated code (interning, IO, sort, txn).
+- **`flowlog-build`** — Library form. Use from `build.rs` to compile `.dl` programs into Rust at build time.
+- **`flowlog-compiler`** — CLI binary. Use to compile `.dl` programs into standalone executables.
+- **`flowlog-runtime`** — Linked into the generated output for interning, IO, sort/merge, and incremental-txn state. Not depended on directly.
 
 ## Getting Started
 
 ### Prerequisites
 
 ```bash
-$ bash tools/env/env.sh         # Linux / macOS — one-time machine setup
+$ bash env/env.sh               # Linux / macOS — one-time machine setup
 # or, on Windows (elevated PowerShell):
-PS> .\tools\env\env.ps1
+PS> .\env\env.ps1
 ```
 
-The bootstrap script installs a stable Rust toolchain and the OS packages the test stack needs (`protobuf-compiler`, `script` from `bsdmainutils`, `python3`, `wget`, `unzip`, `tar`), then runs `cargo check --workspace` as a smoke test. Run it **once** on a fresh dev box / runner image — not on every test run; for that, use `make doctor` (read-only health probe). At a minimum you need `rustup`, `cargo`, and a compiler capable of building Timely/Differential (Rust 1.80+ recommended).
+One-time machine setup: installs a stable Rust toolchain and the OS packages the build/tests need, then runs `cargo check --workspace` as a smoke test. Rust 1.80+ recommended.
 
 ### Build the Workspace
 
@@ -86,9 +86,9 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 - `-o <PATH>` — output executable path; defaults to the program stem (e.g. `reach.dl` → `./reach`).
 - `-D, --output-dir <DIR>` — where to materialize `.output` relations. Pass `-` to print tuples to stderr. Required when any relation uses `.output`.
 - `--mode <MODE>` — `datalog-batch` (default; uses `Present` diff), `datalog-inc`, `extend-batch`, or `extend-inc`. Extended modes are WIP.
-- `--sip` — Sideways Information Passing; push binding constraints into body atoms. Off by default.
+- `--sip` — Sideways Information Passing: filter later body atoms by bindings from earlier ones to shrink intermediate joins. Off by default.
 - `--str-intern` — intern string columns at load for faster joins / lower memory. Off by default.
-- `-P, --profile` — collect execution statistics. Datalog modes only (panics under Extended).
+- `-P, --profile` — collect execution statistics. Datalog modes only; temporarily unsupported under Extended.
 - `-h, --help` — full Clap help text.
 
 ## End-to-End Example
@@ -136,17 +136,6 @@ Key flags:
 
 ## Testing
 
-This repo is the **correctness** surface for FlowLog. Performance/benchmarking work lives in the sibling [`flowlog-rs/flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench) repo — see [`AGENTS.md`](AGENTS.md) for the split rationale.
-
-```bash
-$ make doctor          # env health probe (<1s)
-$ make test            # cargo test --release --workspace
-$ make test-safety     # cleanup_dataset symlink-guard regression test (<1s)
-$ make oracle CONFIG=tests/oracle/config_integer.txt [MODE=compiler|lib|both]
-$ bash tests/fixtures/run_compiler.sh
-$ bash tests/fixtures/run_lib.sh
-```
-
 See [`tests/README.md`](tests/README.md) for the per-suite contracts and recipes.
 
 ## Background Reading
@@ -157,9 +146,4 @@ See [`tests/README.md`](tests/README.md) for the per-suite contracts and recipes
 
 ## Contributing
 
-Contributions and bug reports are welcome. Please open an issue or submit a pull request once you have run the fixture suites:
-
-```bash
-$ bash tests/fixtures/run_compiler.sh
-$ bash tests/fixtures/run_lib.sh
-```
+Contributions and bug reports are welcome. Open an issue or submit a pull request — PRs must pass CI before merge.

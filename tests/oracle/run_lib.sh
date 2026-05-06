@@ -31,11 +31,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 MODE="datalog-batch"
 ENABLE_SIP=0
 SINGLE_CONFIG=""
+KEEP_DATASETS=0
+WORKERS=64
+SOUFFLE_REF_CACHE=""
 
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [config_file] [--sip]
+  $(basename "$0") [config_file] [options]
 
 Runs FlowLog in datalog-batch mode (library path) and compares output
 against pre-computed Souffle reference results.
@@ -45,25 +48,30 @@ By default, runs both config_integer.txt and config_string.txt
 file to run only that config.
 
 Options:
-  --sip            Also test with Builder::sip(true).
-
-Environment:
-  WORKERS=<n>      Workers forwarded to DatalogBatchEngine::workers (default: 64).
+  --sip                       Also test with Builder::sip(true).
+  --keep-datasets             Don't delete datasets after each pair.
+                              Required when <repo>/facts/ is a symlink.
+  --workers <n>               Workers forwarded to
+                              DatalogBatchEngine::workers (default: 64).
+  --souffle-ref-cache <path>  Local cache of Souffle reference tarballs;
+                              if present, cp instead of wget.
 
 Examples:
   $(basename "$0")
-  $(basename "$0") --sip
-  $(basename "$0") path/to/config.txt
+  $(basename "$0") path/to/config.txt --keep-datasets --workers 32
 EOF
 }
 
 parse_args() {
     while (( $# )); do
         case "$1" in
-            --sip)         ENABLE_SIP=1 ;;
-            -h|--help)     usage; exit 0 ;;
-            --)            shift; break ;;
-            -*)            die "Unknown option: $1 (try --help)" ;;
+            --sip)               ENABLE_SIP=1 ;;
+            --keep-datasets)     KEEP_DATASETS=1 ;;
+            --workers)           shift; WORKERS="${1:?--workers requires a value}" ;;
+            --souffle-ref-cache) shift; SOUFFLE_REF_CACHE="${1:?--souffle-ref-cache requires a path}" ;;
+            -h|--help)           usage; exit 0 ;;
+            --)                  shift; break ;;
+            -*)                  die "Unknown option: $1 (try --help)" ;;
             *)
                 [[ -z "$SINGLE_CONFIG" ]] || die "Unexpected extra argument: $1"
                 SINGLE_CONFIG="$1"
@@ -76,7 +84,6 @@ parse_args() {
 init_paths() {
     PROG_DIR="$PROG_DIR_DEFAULT"
     FACT_DIR="$FACT_DIR_DEFAULT"
-    WORKERS="${WORKERS:-64}"
     export WORKERS
 }
 
@@ -177,7 +184,7 @@ run_test() {
 
     setup_dataset "$dataset_name" "$FACT_DIR"
     local ref_dir
-    ref_dir="$(download_souffle_ref "$program_stem" "$dataset_name")"
+    ref_dir="$(download_souffle_ref "$program_stem" "$dataset_name" "$SOUFFLE_REF_CACHE")"
 
     local dataset_path
     dataset_path="$(realpath "${FACT_DIR}/${dataset_name}")"
@@ -217,7 +224,7 @@ run_test() {
 
     rm -f "$prepared_dl"
     rm -rf "$ref_dir"
-    cleanup_dataset "$dataset_name" "$FACT_DIR"
+    cleanup_dataset "$dataset_name" "$FACT_DIR" "$KEEP_DATASETS"
 }
 
 ###############################################################################

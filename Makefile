@@ -3,21 +3,8 @@
 # This repo is the **correctness** surface for FlowLog. Performance work
 # lives in the sibling `flowlog-bench` repo (see AGENTS.md for the
 # split rationale).
-#
-# ----------------------------------------------------------------------
-# Closed-loop integration surface (stable; consumed by external tools):
-#
-#     make doctor                         env / cache health probe
-#     make oracle    CONFIG=... [MODE=...] full Soufflé oracle on a config file
-#
-# Plus two env vars that influence those targets:
-#     FLOWLOG_KEEP_DATASETS               truthy → don't rm -rf datasets after each pair
-#     FLOWLOG_SOUFFLE_REF_CACHE           reuse cached Soufflé ref tarballs
-#
-# Everything else below is dev-facing.
-# ----------------------------------------------------------------------
 
-.PHONY: help build test test-safety doctor oracle
+.PHONY: help build test oracle
 
 help:
 	@echo "FlowLog convenience targets — correctness only."
@@ -26,14 +13,13 @@ help:
 	@echo "  Dev workflow:"
 	@echo "    make build           cargo build --release --workspace"
 	@echo "    make test            cargo test  --release --workspace"
-	@echo "    make test-safety     run shell-level safety regression test (<1s)"
-	@echo "    make doctor          environment health check                  — <1s"
 	@echo
 	@echo "  Soufflé oracle:"
-	@echo "    make oracle CONFIG=<file> [MODE=compiler|lib|both]"
+	@echo "    make oracle CONFIG=<file> [MODE=compiler|lib|both] [ARGS=...]"
 	@echo "                         full byte-diff against pre-baked Soufflé refs"
-	@echo "                         honours WORKERS, RAYON_NUM_THREADS,"
-	@echo "                         FLOWLOG_KEEP_DATASETS, FLOWLOG_SOUFFLE_REF_CACHE"
+	@echo "                         ARGS forwards to the runner; common flags:"
+	@echo "                           --keep-datasets, --workers <n>,"
+	@echo "                           --souffle-ref-cache <path>, --sip"
 	@echo
 	@echo "  See tests/README.md for the per-suite contracts."
 
@@ -43,27 +29,18 @@ build:
 test:
 	cargo test --release --workspace
 
-test-safety:
-	bash tests/safety/cleanup_dataset_test.sh
-
-doctor:
-	bash tools/env_check.sh
-
 # Soufflé-oracle suite on a single CONFIG file. MODE selects which
 # lowering path to exercise: compiler (binary path), lib (library
-# path), or both (default).
-#
-# Both runners honour the same env vars they would when called directly
-# (WORKERS, RAYON_NUM_THREADS, FLOWLOG_KEEP_DATASETS, FLOWLOG_SOUFFLE_REF_CACHE).
+# path), or both (default). ARGS is forwarded verbatim to the runner.
 oracle:
-	@test -n "$(CONFIG)" || { echo "usage: make oracle CONFIG=<file> [MODE=compiler|lib|both]" >&2; exit 2; }
+	@test -n "$(CONFIG)" || { echo "usage: make oracle CONFIG=<file> [MODE=compiler|lib|both] [ARGS=\"--flag ...\"]" >&2; exit 2; }
 	@case "$(or $(MODE),both)" in \
 	    compiler|lib|both) ;; \
 	    *) echo "MODE must be one of: compiler|lib|both" >&2; exit 2 ;; \
 	 esac
 	@if [ "$(or $(MODE),both)" = "compiler" ] || [ "$(or $(MODE),both)" = "both" ]; then \
-	    bash tests/oracle/run_compiler.sh $(CONFIG) ; \
+	    bash tests/oracle/run_compiler.sh $(CONFIG) $(ARGS) ; \
 	 fi
 	@if [ "$(or $(MODE),both)" = "lib" ]      || [ "$(or $(MODE),both)" = "both" ]; then \
-	    bash tests/oracle/run_lib.sh      $(CONFIG) ; \
+	    bash tests/oracle/run_lib.sh      $(CONFIG) $(ARGS) ; \
 	 fi

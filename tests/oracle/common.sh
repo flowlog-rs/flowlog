@@ -73,7 +73,7 @@ setup_dataset() {
     # --timeout/--tries make a transient HuggingFace 503 retry instead of
     # hanging the sweep indefinitely; --no-verbose surfaces fatal errors.
     wget --no-verbose --timeout=60 --tries=3 -O "$dataset_zip" "$dataset_url" \
-        || die "Download failed: $dataset_name (try \`source /datasets/env.sh\` if a local cache exists, or check network)"
+        || die "Download failed: $dataset_name (check network)"
 
     log "$YELLOW" "EXTRACT" "$dataset_name"
     command -v unzip >/dev/null 2>&1 || die "unzip not found"
@@ -82,40 +82,24 @@ setup_dataset() {
 }
 
 cleanup_dataset() {
-    local dataset_name="$1"
-    local fact_dir="${2:-$FACT_DIR_DEFAULT}"
-    # Cache contract — `tests/oracle/common.sh` is now the only
-    # cleanup_dataset implementation in this repo (the perf-side copies
-    # in tools/benchmark/compare.sh and tests/ldbc/ldbc.sh moved to the
-    # flowlog-bench sibling repo with the perf split — see ../../AGENTS.md).
-    # Any future implementation (here or in flowlog-bench) is expected
-    # to honour the same contract; tests/safety/cleanup_dataset_test.sh
-    # is the regression guard.
-    #   FLOWLOG_KEEP_DATASETS truthy → never delete (highest priority).
-    #                                  Truthy = 1/yes/true/on (any case).
-    #   $fact_dir is a symlink       → never delete unless
-    #                                  FLOWLOG_FORCE_CLEANUP is truthy.
-    #                                  Protects a persistent /datasets cache
-    #                                  from being rm -rf'd through the symlink
-    #                                  (the common dev-VM layout — see
-    #                                  /datasets/env.sh).
-    if flowlog_truthy "${FLOWLOG_KEEP_DATASETS:-}"; then
-        log "$YELLOW" "CLEANUP" "Dataset $dataset_name (kept; FLOWLOG_KEEP_DATASETS=${FLOWLOG_KEEP_DATASETS})"
+    local dataset_name="$1" fact_dir="${2:-$FACT_DIR_DEFAULT}" keep="${3:-0}"
+
+    [[ -n "$dataset_name" && -n "$fact_dir" ]] \
+        || die "cleanup_dataset: empty args (refusing to rm -rf)"
+
+    if (( keep )); then
+        log "$YELLOW" "CLEANUP" "Dataset $dataset_name (kept)"
         return
     fi
-    [[ -n "${fact_dir:-}" && -n "${dataset_name:-}" ]] \
-        || die "cleanup_dataset: fact_dir or dataset_name is empty (refusing to rm -rf)"
-    # Portable symlink check: `cd <dir> && pwd -P` resolves symlinks on
-    # both GNU (Linux) and BSD (macOS) without depending on `readlink -f`.
-    local _fd_real
-    _fd_real="$(cd "${fact_dir}" 2>/dev/null && pwd -P || echo "${fact_dir}")"
-    if [[ "${_fd_real}" != "${fact_dir}" ]] && ! flowlog_truthy "${FLOWLOG_FORCE_CLEANUP:-}"; then
-        log "$YELLOW" "CLEANUP" \
-            "Dataset $dataset_name (kept; ${fact_dir} → ${_fd_real}; set FLOWLOG_FORCE_CLEANUP=1 to override)"
-        return
+    # Refuse to delete through a symlink: protects a shared cache like
+    # /datasets/facts from being nuked when <repo>/facts → /datasets/facts.
+    # Caller's options: pass --keep-datasets, or `rm <repo>/facts` to
+    # decouple from the shared cache.
+    if [[ -L "$fact_dir" ]]; then
+        die "cleanup_dataset: $fact_dir is a symlink; refusing to delete through it"
     fi
     log "$YELLOW" "CLEANUP" "Dataset $dataset_name"
-    # shellcheck disable=SC2115  # explicit empty-arg check above + symlink guard make the path safe
+    # shellcheck disable=SC2115  # empty-arg + symlink guards above make the path safe
     rm -rf -- "${fact_dir}/${dataset_name}"
 }
 
@@ -124,21 +108,15 @@ cleanup_dataset() {
 ###############################################################################
 
 download_souffle_ref() {
-    local program_stem="$1" dataset_name="$2"
+    local program_stem="$1" dataset_name="$2" cache_dir="${3:-}"
     local ref_name="${program_stem}_${dataset_name}"
     local ref_dir="${STAGE_DIR}/souffle_ref_$$_${ref_name}"
     local ref_tar="${STAGE_DIR}/souffle_ref_$$_${ref_name}.tar.gz"
     local ref_url="${SOUFFLE_BASE_URL}/${ref_name}.tar.gz"
 
     mkdir -p "$ref_dir"
-    # Optional local cache: if FLOWLOG_SOUFFLE_REF_CACHE points to a
-    # directory that already contains the tarball, copy from it instead
-    # of round-tripping HuggingFace. Replaces the previous loop-local
-    # CACHE_PATCH_v1 patch (which had to be applied + skip-worktreed by
-    # an out-of-tree script). Setting the env var is the *only* opt-in;
-    # missing cache dir or missing tarball falls through to live download.
-    local cached="${FLOWLOG_SOUFFLE_REF_CACHE:-}/${ref_name}.tar.gz"
-    if [[ -n "${FLOWLOG_SOUFFLE_REF_CACHE:-}" && -f "$cached" ]]; then
+    local cached="${cache_dir}/${ref_name}.tar.gz"
+    if [[ -n "$cache_dir" && -f "$cached" ]]; then
         log "$CYAN" "DOWNLOAD" "Souffle reference: $ref_name (cache: $cached)" >&2
         cp "$cached" "$ref_tar"
     else
