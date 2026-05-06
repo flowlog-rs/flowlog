@@ -81,40 +81,69 @@ impl Diagnostic for PlanError {
                 head_span,
                 rule_span,
                 var,
-            } => user_diagnostic(
-                self.to_string(),
-                (
-                    *head_span,
-                    format!("`{var}` is referenced here but never bound by a positive body atom"),
-                ),
-                (*rule_span, "in this rule".into()),
-                "every variable in the rule head must appear in a positive body \
-                 atom so its value is determined during evaluation",
-            ),
+            } => {
+                let mut labels = Vec::new();
+                if let Some(l) = primary_label(*head_span) {
+                    labels.push(l.with_message(format!(
+                        "`{var}` is referenced here but never bound by a positive body atom"
+                    )));
+                }
+                if let Some(l) = secondary_label(*rule_span) {
+                    labels.push(l.with_message("in this rule"));
+                }
+                CsDiagnostic::error()
+                    .with_message(self.to_string())
+                    .with_labels(labels)
+                    .with_notes(vec![
+                        "every variable in the rule head must appear in a positive body \
+                         atom so its value is determined during evaluation"
+                            .into(),
+                    ])
+            }
 
             PlanError::InconsistentAggregation {
                 rule_span,
                 prior_span,
                 ..
-            } => user_diagnostic(
-                self.to_string(),
-                (*rule_span, "conflicting aggregation declared here".into()),
-                (*prior_span, "first aggregation declared here".into()),
-                "rules producing the same relation within a stratum must agree \
-                 on the aggregation operator and its position in the head",
-            ),
+            } => {
+                let mut labels = Vec::new();
+                if let Some(l) = primary_label(*rule_span) {
+                    labels.push(l.with_message("conflicting aggregation declared here"));
+                }
+                if let Some(l) = secondary_label(*prior_span) {
+                    labels.push(l.with_message("first aggregation declared here"));
+                }
+                CsDiagnostic::error()
+                    .with_message(self.to_string())
+                    .with_labels(labels)
+                    .with_notes(vec![
+                        "rules producing the same relation within a stratum must agree \
+                         on the aggregation operator and its position in the head"
+                            .into(),
+                    ])
+            }
 
             PlanError::MultipleAggregationsInHead {
                 head_span,
                 rule_span,
                 ..
-            } => user_diagnostic(
-                self.to_string(),
-                (*head_span, "multiple aggregations declared here".into()),
-                (*rule_span, "in this rule".into()),
-                "split the head into multiple rules — each producing a separate \
-                 relation — if you need several aggregated columns",
-            ),
+            } => {
+                let mut labels = Vec::new();
+                if let Some(l) = primary_label(*head_span) {
+                    labels.push(l.with_message("multiple aggregations declared here"));
+                }
+                if let Some(l) = secondary_label(*rule_span) {
+                    labels.push(l.with_message("in this rule"));
+                }
+                CsDiagnostic::error()
+                    .with_message(self.to_string())
+                    .with_labels(labels)
+                    .with_notes(vec![
+                        "split the head into multiple rules — each producing a separate \
+                         relation — if you need several aggregated columns"
+                            .into(),
+                    ])
+            }
 
             PlanError::Catalog(e) => e.to_diagnostic(),
             PlanError::Internal(ie) => ie.to_diagnostic(),
@@ -128,27 +157,4 @@ impl Diagnostic for PlanError {
             _ => false,
         }
     }
-}
-
-/// Build a user-facing diagnostic with a primary + secondary label and a
-/// single explanatory note. Each `(span, msg)` pair is dropped silently if
-/// the span is dummy, matching the behaviour of [`primary_label`] /
-/// [`secondary_label`].
-fn user_diagnostic(
-    message: String,
-    primary: (Span, String),
-    secondary: (Span, String),
-    note: &'static str,
-) -> CsDiagnostic<FileId> {
-    let mut labels = Vec::with_capacity(2);
-    if let Some(l) = primary_label(primary.0) {
-        labels.push(l.with_message(primary.1));
-    }
-    if let Some(l) = secondary_label(secondary.0) {
-        labels.push(l.with_message(secondary.1));
-    }
-    CsDiagnostic::error()
-        .with_message(message)
-        .with_labels(labels)
-        .with_notes(vec![note.to_string()])
 }
