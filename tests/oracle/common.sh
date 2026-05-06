@@ -20,8 +20,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/shared.sh"
 ###############################################################################
 
 readonly ORACLE_DIR="${ROOT_DIR}/tests/oracle"
-readonly CONFIG_INTEGER="${ORACLE_DIR}/config_integer.txt"
-readonly CONFIG_STRING="${ORACLE_DIR}/config_string.txt"
+readonly CONFIG_DEFAULT="${ORACLE_DIR}/config.txt"
 
 # Staging directory: prefer /dev/shm (tmpfs) for speed, fall back to $TMPDIR or /tmp
 if [[ -d /dev/shm && -w /dev/shm ]]; then
@@ -145,26 +144,32 @@ prepare_dl_file() {
 ###############################################################################
 # Config iteration
 #
-# Config lines look like `program_name = dataset_id`. Lines are trimmed;
-# blank lines and `#` comments are skipped. The callback receives
-# (program_name, dataset_id, extra_flag).
+# Config lines look like `program_name = dataset_id [tag ...]`. Lines are
+# trimmed; blank lines and `#` comments are skipped. Trailing whitespace-
+# separated tokens after the dataset_id are symbolic capability tags
+# (e.g. `str-intern`) interpreted by the runner. The callback receives
+# (program_name, dataset_id, tags).
 ###############################################################################
 
 for_each_config_entry() {
-    local callback="$1" config_file="$2" extra_flag="${3:-}"
+    local callback="$1" config_file="$2"
 
     while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         local line="${raw_line%%#*}"
         line="$(trim "$line")"
         [[ -z "$line" ]] && continue
 
-        local prog_name dataset_id
-        IFS='=' read -r prog_name dataset_id <<< "$line"
+        local prog_name dataset_field
+        IFS='=' read -r prog_name dataset_field <<< "$line"
         prog_name="$(trim "${prog_name:-}")"
-        dataset_id="$(trim "${dataset_id:-}")"
-        [[ -z "$prog_name" || -z "$dataset_id" ]] && continue
+        dataset_field="$(trim "${dataset_field:-}")"
+        [[ -z "$prog_name" || -z "$dataset_field" ]] && continue
 
-        "$callback" "$prog_name" "$dataset_id" "$extra_flag"
+        # First whitespace-separated token is the dataset; the rest are tags.
+        local dataset_id tags
+        read -r dataset_id tags <<< "$dataset_field"
+
+        "$callback" "$prog_name" "$dataset_id" "$tags"
     done < "$config_file"
 }
 

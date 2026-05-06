@@ -35,9 +35,9 @@ Usage:
 Runs FlowLog in datalog-batch mode (binary path) and compares output
 against pre-computed Souffle reference results.
 
-By default, runs both config_integer.txt and config_string.txt
-(the latter with --str-intern). Pass a single config file to
-run only that config.
+By default, runs tests/oracle/config.txt; pass a single config file
+path to run a different one. Per-entry tags in the config select
+extra runner behavior (e.g. `str-intern`).
 
 Options:
   --sip                       Also test with --sip optimization.
@@ -126,7 +126,14 @@ invoke_compiler() {
 ###############################################################################
 
 run_test() {
-    local prog_name="$1" dataset_name="$2" str_intern_flag="${3:-}"
+    local prog_name="$1" dataset_name="$2" tags="${3:-}"
+    local str_intern_flag=""
+    for t in $tags; do
+        case "$t" in
+            str-intern) str_intern_flag="--str-intern" ;;
+            *) die "Unknown tag in config: '$t' (entry: $prog_name=$dataset_name)" ;;
+        esac
+    done
     local prog_file prog_path program_stem
     prog_file="$(basename "$prog_name")"
     prog_path="${PROG_DIR}/${prog_name}"
@@ -182,10 +189,10 @@ run_test() {
 ###############################################################################
 
 run_config() {
-    local config_file="$1" label="$2" extra_flag="${3:-}"
+    local config_file="$1" label="$2"
     [[ -f "$config_file" ]] || { log "$YELLOW" "SKIP" "$label: config not found ($config_file)"; return 0; }
     log "$BLUE" "SUITE" "$label ($config_file)"
-    for_each_config_entry run_test "$config_file" "$extra_flag"
+    for_each_config_entry run_test "$config_file"
 }
 
 main() {
@@ -196,14 +203,8 @@ main() {
 
     compile_release_workspace
 
-    if [[ -n "$SINGLE_CONFIG" ]]; then
-        local extra=""
-        [[ "$(basename "$SINGLE_CONFIG")" == config_string* ]] && extra="--str-intern"
-        run_config "$SINGLE_CONFIG" "custom" "$extra"
-    else
-        run_config "$CONFIG_INTEGER" "integer"
-        run_config "$CONFIG_STRING"  "string" "--str-intern"
-    fi
+    local config="${SINGLE_CONFIG:-$CONFIG_DEFAULT}"
+    run_config "$config" "oracle"
 
     log "$GREEN" "FINISH" "All tests passed"
 }

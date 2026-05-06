@@ -31,11 +31,11 @@ bash tests/fixtures/run_compiler.sh
 bash tests/fixtures/run_lib.sh
 
 # Soufflé oracle, both lowering paths by default
-make oracle CONFIG=tests/oracle/config_integer.txt
-make oracle CONFIG=tests/oracle/config_string.txt MODE=lib
+make oracle CONFIG=tests/oracle/config.txt
+make oracle CONFIG=tests/oracle/config.txt MODE=lib
 
 # Forward runner flags through ARGS
-make oracle CONFIG=tests/oracle/config_integer.txt \
+make oracle CONFIG=tests/oracle/config.txt \
             ARGS="--keep-datasets --workers $(nproc) \
                   --souffle-ref-cache /datasets/souffle_ref_tarballs"
 ```

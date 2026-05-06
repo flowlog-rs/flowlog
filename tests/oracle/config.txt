@@ -1,4 +1,9 @@
-# Integer-only benchmarks (no --str-intern needed)
+# Souffle-oracle benchmarks.
+#
+# Format: program=dataset[ TAG ...]
+# Tags are symbolic capability flags; each runner translates them.
+#   str-intern  Enable string interning
+#               (compiler: --str-intern; lib: Builder::string_intern(true))
 
 # Graph analysis
 graph_analysis/tc.dl=G5K-0.001
@@ -24,3 +29,6 @@ program_analysis/xalan.dl=xalan
 program_analysis/cvc5.dl=cvc5
 program_analysis/z3.dl=z3
 program_analysis/zxing.dl=zxing
+
+# Program analysis (string-typed)
+program_analysis/polonius.dl=clap str-intern
