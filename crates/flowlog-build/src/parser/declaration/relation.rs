@@ -36,6 +36,13 @@ pub struct Relation {
     /// Output parameters (e.g., delimiter="|")
     output_params: Option<HashMap<String, String>>,
 
+    /// Validated `output(limit=…)` value, populated by [`set_output_params`].
+    output_limit_value: Option<usize>,
+
+    /// Validated `output(order_by=…)` spec (attribute index, type, ascending),
+    /// populated by [`set_output_params`].
+    output_order_by_spec: Option<Vec<(usize, DataType, bool)>>,
+
     /// Whether to print results size (e.g. row count)
     printsize: bool,
 
@@ -60,6 +67,8 @@ impl Relation {
             input_params: None,
             output: false,
             output_params: None,
+            output_limit_value: None,
+            output_order_by_spec: None,
             printsize: false,
             span: Ignored(Span::DUMMY),
         }
@@ -189,8 +198,87 @@ impl Relation {
     }
 
     /// Set output parameters for this relation.
-    pub(crate) fn set_output_params(&mut self, params: HashMap<String, String>) {
+    ///
+    /// Validates the `limit` and `order_by` entries up-front, returning a
+    /// [`ParseError::Internal`] if either is malformed (bad `limit` value,
+    /// `limit` without `order_by`, unknown attribute, etc.). On success, the
+    /// validated values are cached on the relation so the codegen-facing
+    /// accessors are infallible.
+    pub(crate) fn set_output_params(
+        &mut self,
+        params: HashMap<String, String>,
+    ) -> Result<(), ParseError> {
+        // Parse `order_by` first so `limit` validation can refer to it.
+        let order_by_spec = if let Some(spec) = params.get("order_by") {
+            let mut parsed: Vec<(usize, DataType, bool)> = Vec::new();
+            for part in spec.split(',') {
+                let tokens: Vec<&str> = part.split_whitespace().collect();
+                if tokens.is_empty() {
+                    return Err(grammar_bug(format!(
+                        "empty order_by clause for relation `{}`",
+                        self.name
+                    )));
+                }
+                if tokens.len() > 2 {
+                    return Err(grammar_bug(format!(
+                        "unexpected extra tokens in order_by clause `{}` for relation `{}`",
+                        part.trim(),
+                        self.name
+                    )));
+                }
+                let attr_name = tokens[0].to_lowercase();
+                let ascending = match tokens.get(1) {
+                    Some(d) if d.eq_ignore_ascii_case("asc") => true,
+                    Some(d) if d.eq_ignore_ascii_case("desc") => false,
+                    Some(d) => {
+                        return Err(grammar_bug(format!(
+                            "invalid order_by direction `{d}` for relation `{}`, expected ASC or DESC",
+                            self.name
+                        )));
+                    }
+                    None => true,
+                };
+                let (idx, attr) = self
+                    .attributes
+                    .iter()
+                    .enumerate()
+                    .find(|(_, a)| a.name() == attr_name)
+                    .ok_or_else(|| {
+                        grammar_bug(format!(
+                            "order_by attribute `{attr_name}` not found in relation `{}`",
+                            self.name
+                        ))
+                    })?;
+                parsed.push((idx, *attr.data_type(), ascending));
+            }
+            Some(parsed)
+        } else {
+            None
+        };
+
+        // Parse `limit`; require `order_by` whenever `limit` is set.
+        let limit_value = if let Some(raw) = params.get("limit") {
+            let limit = raw.parse::<usize>().map_err(|_| {
+                grammar_bug(format!(
+                    "invalid limit `{raw}` for relation `{}`, expected a non-negative integer",
+                    self.name
+                ))
+            })?;
+            if order_by_spec.is_none() {
+                return Err(grammar_bug(format!(
+                    "limit requires order_by for relation `{}`",
+                    self.name
+                )));
+            }
+            Some(limit)
+        } else {
+            None
+        };
+
         self.output_params = Some(params);
+        self.output_limit_value = limit_value;
+        self.output_order_by_spec = order_by_spec;
+        Ok(())
     }
 
     /// Get the output delimiter. Defaults to `","`.
@@ -200,67 +288,20 @@ impl Relation {
         self.output_param("delimiter").unwrap_or(",")
     }
 
-    /// Get the output row limit, if specified.
+    /// Get the output row limit, if specified. Validated at parse time by
+    /// [`Relation::set_output_params`].
     #[must_use]
+    #[inline]
     pub(crate) fn output_limit(&self) -> Option<usize> {
-        let raw = self.output_param("limit")?;
-        let limit = raw.parse::<usize>().unwrap_or_else(|_| {
-            panic!(
-                "Parser error: invalid limit '{}' for relation '{}', expected a non-negative integer",
-                raw, self.name
-            )
-        });
-        assert!(
-            self.output_param("order_by").is_some(),
-            "Parser error: limit requires order_by for relation '{}'",
-            self.name
-        );
-        Some(limit)
+        self.output_limit_value
     }
 
-    /// Get the output ordering specification, if specified.
+    /// Get the output ordering specification, if specified. Validated at
+    /// parse time by [`Relation::set_output_params`].
     #[must_use]
+    #[inline]
     pub(crate) fn output_order_by(&self) -> Option<Vec<(usize, DataType, bool)>> {
-        let spec = self.output_param("order_by")?;
-        let parsed = spec
-            .split(',')
-            .map(|part| {
-                let tokens: Vec<&str> = part.split_whitespace().collect();
-                assert!(
-                    !tokens.is_empty(),
-                    "Parser error: empty order_by clause in relation '{}'",
-                    self.name
-                );
-                let attr_name = tokens[0].to_lowercase();
-                assert!(
-                    tokens.len() <= 2,
-                    "Parser error: unexpected extra tokens in order_by clause '{}' for relation '{}'",
-                    part.trim(), self.name
-                );
-                let ascending = match tokens.get(1) {
-                    Some(d) if d.eq_ignore_ascii_case("desc") => false,
-                    Some(d) if d.eq_ignore_ascii_case("asc") => true,
-                    Some(d) => panic!(
-                        "Parser error: invalid order_by direction '{}' in relation '{}', expected ASC or DESC",
-                        d, self.name
-                    ),
-                    None => true,
-                };
-                let (idx, attr) = self
-                    .attributes
-                    .iter()
-                    .enumerate()
-                    .find(|(_, a)| a.name() == attr_name)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Parser error: order_by attribute '{}' not found in relation '{}'",
-                            attr_name, self.name
-                        )
-                    });
-                (idx, *attr.data_type(), ascending)
-            })
-            .collect();
-        Some(parsed)
+        self.output_order_by_spec.clone()
     }
 
     /// Set printsize flag.
@@ -382,6 +423,8 @@ impl Lexeme for Relation {
             input_params: None,
             output: false,
             output_params: None,
+            output_limit_value: None,
+            output_order_by_spec: None,
             printsize: false,
             span: Ignored(span),
         })
@@ -406,28 +449,28 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("limit".to_string(), "42".to_string());
         params.insert("order_by".to_string(), "id".to_string());
-        rel.set_output_params(params);
+        rel.set_output_params(params).unwrap();
         assert_eq!(rel.output_limit(), Some(42));
     }
 
     #[test]
-    #[should_panic(expected = "limit requires order_by")]
     fn output_limit_without_order_by() {
         let mut rel = Relation::new("r", attrs());
         let mut params = HashMap::new();
         params.insert("limit".to_string(), "42".to_string());
-        rel.set_output_params(params);
-        let _ = rel.output_limit();
+        let err = rel.set_output_params(params).unwrap_err();
+        assert!(matches!(err, ParseError::Internal(_)));
+        assert!(err.to_string().contains("limit requires order_by"));
     }
 
     #[test]
-    #[should_panic(expected = "invalid limit")]
     fn output_limit_bad_value() {
         let mut rel = Relation::new("r", attrs());
         let mut params = HashMap::new();
         params.insert("limit".to_string(), "abc".to_string());
-        rel.set_output_params(params);
-        let _ = rel.output_limit();
+        let err = rel.set_output_params(params).unwrap_err();
+        assert!(matches!(err, ParseError::Internal(_)));
+        assert!(err.to_string().contains("invalid limit"));
     }
 
     #[test]
@@ -435,7 +478,7 @@ mod tests {
         let mut rel = Relation::new("r", attrs());
         let mut params = HashMap::new();
         params.insert("order_by".to_string(), "id".to_string());
-        rel.set_output_params(params);
+        rel.set_output_params(params).unwrap();
         let spec = rel.output_order_by().unwrap();
         assert_eq!(spec, vec![(0, Int32, true)]);
     }
@@ -445,18 +488,18 @@ mod tests {
         let mut rel = Relation::new("r", attrs());
         let mut params = HashMap::new();
         params.insert("order_by".to_string(), "name DESC, id ASC".to_string());
-        rel.set_output_params(params);
+        rel.set_output_params(params).unwrap();
         let spec = rel.output_order_by().unwrap();
         assert_eq!(spec, vec![(1, String, false), (0, Int32, true)]);
     }
 
     #[test]
-    #[should_panic(expected = "not found in relation")]
     fn output_order_by_unknown_attr() {
         let mut rel = Relation::new("r", attrs());
         let mut params = HashMap::new();
         params.insert("order_by".to_string(), "nonexistent".to_string());
-        rel.set_output_params(params);
-        let _ = rel.output_order_by();
+        let err = rel.set_output_params(params).unwrap_err();
+        assert!(matches!(err, ParseError::Internal(_)));
+        assert!(err.to_string().contains("not found"));
     }
 }

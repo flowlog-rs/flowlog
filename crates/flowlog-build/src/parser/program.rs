@@ -781,7 +781,7 @@ impl Program {
                 Some(rel) => {
                     rel.set_output(true);
                     if !d.parameters().is_empty() {
-                        rel.set_output_params(d.parameters().clone());
+                        rel.set_output_params(d.parameters().clone())?;
                     }
                 }
                 None => {

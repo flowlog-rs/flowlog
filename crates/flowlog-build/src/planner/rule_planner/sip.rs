@@ -142,7 +142,7 @@ impl RulePlanner {
             KeyValueLayout::new(lhs_keys.clone(), vec![]),
             KvPredicates::default(),
         )
-        .into_sip_projection();
+        .into_sip_projection()?;
         let proj_fp = proj_tx.output_info_fp();
 
         self.insert_producer(proj_fp, base_idx);
