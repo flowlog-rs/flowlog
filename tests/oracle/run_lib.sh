@@ -3,7 +3,7 @@ set -euo pipefail
 
 # FlowLog correctness test — datalog-batch mode, library path.
 #
-# Mirrors `datalog_batch_compiler.sh` but drives lib mode: instead of
+# Mirrors `run_compiler.sh` but drives lib mode: instead of
 # compiling a standalone executable with `flowlog-compiler`, synthesize a
 # Rust runner crate that uses `flowlog-build`, parse input CSVs into the
 # generated `rel::*` structs, run the engine, and write outputs.
@@ -15,14 +15,14 @@ set -euo pipefail
 #      (lib mode treats .printsize as a count; the Souffle reference
 #       expects tuples, so rewrite so BatchResults carries the rows)
 #   4. Stages prog + CSVs into the persistent runner crate
-#   5. Synthesizes build.rs / main.rs (via lib_runner_synth.sh)
+#   5. Synthesizes build.rs / main.rs (via tests/lib/runner_synth.sh)
 #   6. cargo run --release with WORKERS env plumbed into .workers(n)
 #   7. Downloads Souffle reference and diffs via verify_output
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 LIB_RUNNER_DIR="${ROOT_DIR}/target/e2e-complex-lib/runner"
-source "$(dirname "${BASH_SOURCE[0]}")/../lib_runner_synth.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 
 ###############################################################################
 # Configuration
@@ -31,39 +31,48 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib_runner_synth.sh"
 MODE="datalog-batch"
 ENABLE_SIP=0
 SINGLE_CONFIG=""
+KEEP_DATASETS=0
+WORKERS=64
+SOUFFLE_REF_CACHE=""
 
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [config_file] [--sip]
+  $(basename "$0") [config_file] [options]
 
 Runs FlowLog in datalog-batch mode (library path) and compares output
 against pre-computed Souffle reference results.
 
-By default, runs both config_integer.txt and config_string.txt
-(the latter with Builder::string_intern(true)). Pass a single config
-file to run only that config.
+By default, runs tests/oracle/config.txt; pass a single config file
+path to run a different one. Per-entry tags in the config select
+extra runner behavior (e.g. `str-intern` enables
+Builder::string_intern(true)).
 
 Options:
-  --sip            Also test with Builder::sip(true).
-
-Environment:
-  WORKERS=<n>      Workers forwarded to DatalogBatchEngine::workers (default: 64).
+  --sip                       Also test with Builder::sip(true).
+  --keep-datasets             Don't delete datasets after each pair.
+                              Required when <repo>/facts/ is a symlink.
+  --workers <n>               Workers forwarded to
+                              DatalogBatchEngine::workers (default: 64).
+  --souffle-ref-cache <path>  Local cache of Souffle reference tarballs;
+                              if present, cp instead of wget.
 
 Examples:
   $(basename "$0")
-  $(basename "$0") --sip
-  $(basename "$0") path/to/config.txt
+  $(basename "$0") path/to/config.txt --keep-datasets --workers 32
 EOF
 }
 
 parse_args() {
     while (( $# )); do
         case "$1" in
-            --sip)         ENABLE_SIP=1 ;;
-            -h|--help)     usage; exit 0 ;;
-            --)            shift; break ;;
-            -*)            die "Unknown option: $1 (try --help)" ;;
+            --sip)               ENABLE_SIP=1 ;;
+            --keep-datasets)     KEEP_DATASETS=1 ;;
+            --workers)           shift; WORKERS="${1:?--workers requires a value}" ;;
+            --souffle-ref-cache) shift; SOUFFLE_REF_CACHE="${1:?--souffle-ref-cache requires a path}" ;;
+            -h|--help)           usage; exit 0 ;;
+            --)                  shift; break ;;
+            -*)                  die "Unknown option: $1 (try --help)" ;;
             *)
                 [[ -z "$SINGLE_CONFIG" ]] || die "Unexpected extra argument: $1"
                 SINGLE_CONFIG="$1"
@@ -76,7 +85,6 @@ parse_args() {
 init_paths() {
     PROG_DIR="$PROG_DIR_DEFAULT"
     FACT_DIR="$FACT_DIR_DEFAULT"
-    WORKERS="${WORKERS:-64}"
     export WORKERS
 }
 
@@ -167,7 +175,14 @@ write_build_rs_with_knobs() {
 }
 
 run_test() {
-    local prog_name="$1" dataset_name="$2" str_intern_config="${3:-0}"
+    local prog_name="$1" dataset_name="$2" tags="${3:-}"
+    local str_intern_config=0
+    for t in $tags; do
+        case "$t" in
+            str-intern) str_intern_config=1 ;;
+            *) die "Unknown tag in config: '$t' (entry: $prog_name=$dataset_name)" ;;
+        esac
+    done
     local prog_file prog_path program_stem
     prog_file="$(basename "$prog_name")"
     prog_path="${PROG_DIR}/${prog_name}"
@@ -177,12 +192,12 @@ run_test() {
 
     setup_dataset "$dataset_name" "$FACT_DIR"
     local ref_dir
-    ref_dir="$(download_souffle_ref "$program_stem" "$dataset_name")"
+    ref_dir="$(download_souffle_ref "$program_stem" "$dataset_name" "$SOUFFLE_REF_CACHE")"
 
     local dataset_path
     dataset_path="$(realpath "${FACT_DIR}/${dataset_name}")"
 
-    local prepared_dl="/tmp/flowlog_prepared_$$_${prog_file}"
+    local prepared_dl="${STAGE_DIR}/flowlog_prepared_$$_${prog_file}"
     prepare_dl_file "$prog_path" "$prepared_dl"
 
     for oi in "${!OPT_KNOBS[@]}"; do
@@ -217,7 +232,7 @@ run_test() {
 
     rm -f "$prepared_dl"
     rm -rf "$ref_dir"
-    cleanup_dataset "$dataset_name" "$FACT_DIR"
+    cleanup_dataset "$dataset_name" "$FACT_DIR" "$KEEP_DATASETS"
 }
 
 ###############################################################################
@@ -225,10 +240,10 @@ run_test() {
 ###############################################################################
 
 run_config() {
-    local config_file="$1" label="$2" str_intern="${3:-0}"
+    local config_file="$1" label="$2"
     [[ -f "$config_file" ]] || { log "$YELLOW" "SKIP" "$label: config not found ($config_file)"; return 0; }
     log "$BLUE" "SUITE" "$label ($config_file)"
-    for_each_config_entry run_test "$config_file" "$str_intern"
+    for_each_config_entry run_test "$config_file"
 }
 
 main() {
@@ -240,14 +255,8 @@ main() {
     compile_release_workspace
     warm_runner_crate
 
-    if [[ -n "$SINGLE_CONFIG" ]]; then
-        local str_intern=0
-        [[ "$(basename "$SINGLE_CONFIG")" == config_string* ]] && str_intern=1
-        run_config "$SINGLE_CONFIG" "custom" "$str_intern"
-    else
-        run_config "$CONFIG_INTEGER" "integer" 0
-        run_config "$CONFIG_STRING"  "string"  1
-    fi
+    local config="${SINGLE_CONFIG:-$CONFIG_DEFAULT}"
+    run_config "$config" "oracle"
 
     log "$GREEN" "FINISH" "All tests passed"
 }

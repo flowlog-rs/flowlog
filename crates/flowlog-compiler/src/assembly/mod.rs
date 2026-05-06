@@ -12,8 +12,8 @@ pub(crate) mod inc;
 
 use quote::quote;
 
-use flowlog_build::common::ExecutionMode;
 use flowlog_build::CodeParts;
+use flowlog_build::common::ExecutionMode;
 
 use crate::{Compiler, CompilerError};
 

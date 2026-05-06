@@ -48,6 +48,7 @@ impl CodeGen {
         for idb in self.program.idbs() {
             let var = self.find_global_ident(idb.fingerprint());
             let name = idb.name();
+            let data_type = idb.data_type();
 
             if idb.printsize() {
                 self.features.mark_as_collection();
@@ -64,14 +65,15 @@ impl CodeGen {
                     .push(self.gen_size_inspector(&var, name, &cell_ident, profiler));
             }
 
-            if idb.data_type().contains(&DataType::Float32)
-                || idb.data_type().contains(&DataType::Float64)
+            if data_type
+                .iter()
+                .any(|dt| matches!(dt, DataType::Float32 | DataType::Float64))
             {
                 self.features.mark_ordered_float();
             }
 
             if idb.output() {
-                if idb.data_type().contains(&DataType::String) {
+                if data_type.contains(&DataType::String) {
                     self.features.mark_string_resolve();
                 }
 
@@ -194,36 +196,34 @@ impl CodeGen {
         buf_ident: &Ident,
         idb: &Relation,
     ) -> (TokenStream, TokenStream, TokenStream) {
-        let maybe_probe = if self.config.is_incremental() {
-            quote! { .probe_with(&mut probe) }
+        let (maybe_consolidate, maybe_probe) = if self.config.is_incremental() {
+            (
+                quote! { .consolidate() },
+                quote! { .probe_with(&mut probe) },
+            )
         } else {
-            quote! {}
-        };
-        let maybe_consolidate = if self.config.is_incremental() {
-            quote! { .consolidate() }
-        } else {
-            quote! {}
+            (quote! {}, quote! {})
         };
         let local_ident = Ident::new(&format!("local_{}", idb.name()), Span::call_site());
 
-        // Batch DD uses `Present` for diff — hardcode 1_i32.
-        let (inspect_pattern, push_stmt) = match (idb.arity() == 0, self.config.is_batch()) {
-            (true, true) => (
-                quote! { (_data, time, _diff) },
-                quote! { #local_ident.borrow_mut().push(((), time.clone(), 1_i32)); },
-            ),
-            (true, false) => (
-                quote! { (_data, time, diff) },
-                quote! { #local_ident.borrow_mut().push(((), time.clone(), *diff)); },
-            ),
-            (false, true) => (
-                quote! { (data, time, _diff) },
-                quote! { #local_ident.borrow_mut().push((data.clone(), time.clone(), 1_i32)); },
-            ),
-            (false, false) => (
-                quote! { (data, time, diff) },
-                quote! { #local_ident.borrow_mut().push((data.clone(), time.clone(), *diff)); },
-            ),
+        // The four cases below are independent: arity==0 picks the data
+        // half (unit-typed key vs cloneable tuple), is_batch picks the
+        // diff half (DD's `Present` is hardcoded to 1_i32 in batch mode).
+        let (data_pat, data_expr) = if idb.arity() == 0 {
+            (quote! { _data }, quote! { () })
+        } else {
+            (quote! { data }, quote! { data.clone() })
+        };
+        let (diff_pat, diff_expr) = if self.config.is_batch() {
+            (quote! { _diff }, quote! { 1_i32 })
+        } else {
+            (quote! { diff }, quote! { *diff })
+        };
+        let inspect_pattern = quote! { (#data_pat, time, #diff_pat) };
+        let push_stmt = quote! {
+            #local_ident
+                .borrow_mut()
+                .push((#data_expr, time.clone(), #diff_expr));
         };
 
         let inner_ty = tuple_type(idb, self.features.string_intern());

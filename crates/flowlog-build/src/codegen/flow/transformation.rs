@@ -120,11 +120,7 @@ impl CodeGen {
                     self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
 
-                let flat_map_body = if let Some(pred) = pred {
-                    quote! { if #pred { Some( #out_val ) } else { None } }
-                } else {
-                    quote! { std::iter::once( #out_val ) }
-                };
+                let flat_map_body = flat_map_body_tokens(pred, out_val);
 
                 Ok(quote! {
                     let #out = #inp.clone()
@@ -207,11 +203,7 @@ impl CodeGen {
                 let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
 
                 // Transformation logic
-                let flat_map_body = if let Some(pred) = pred {
-                    quote! { if #pred { Some( #out_expr ) } else { None } }
-                } else {
-                    quote! { std::iter::once( #out_expr ) }
-                };
+                let flat_map_body = flat_map_body_tokens(pred, out_expr);
 
                 let transformation = quote! {
                     let #out = #inp.clone()
@@ -279,11 +271,7 @@ impl CodeGen {
                 );
 
                 // Transformation logic
-                let flat_map_body = if let Some(pred) = pred {
-                    quote! { if #pred { Some( #out_val ) } else { None } }
-                } else {
-                    quote! { std::iter::once( #out_val ) }
-                };
+                let flat_map_body = flat_map_body_tokens(pred, out_val);
 
                 Ok(quote! {
                     let #out = #inp.clone()
@@ -362,11 +350,7 @@ impl CodeGen {
                 };
 
                 // Flat_map body depends on whether there is a predicate
-                let flat_map_body = if let Some(pred) = pred {
-                    quote! { if #pred { Some( #out_expr ) } else { None } }
-                } else {
-                    quote! { std::iter::once( #out_expr ) }
-                };
+                let flat_map_body = flat_map_body_tokens(pred, out_expr);
 
                 let transformation = quote! {
                     let #out = #inp.clone()
@@ -440,11 +424,7 @@ impl CodeGen {
                 )?;
                 let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si)?;
                 let pred = combine_predicates(vec![cmp_pred, fc_pred]);
-                let join_body = if let Some(pred) = pred {
-                    quote! { if #pred { Some( #out_val ) } else { None } }
-                } else {
-                    quote! { Some( #out_val ) }
-                };
+                let join_body = join_body_tokens(pred, out_val);
 
                 Ok(quote! {
                     let #out = #l.clone()
@@ -511,11 +491,7 @@ impl CodeGen {
                 )?;
                 let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si)?;
                 let pred = combine_predicates(vec![cmp_pred, fc_pred]);
-                let join_body = if let Some(pred) = pred {
-                    quote! { if #pred { Some( #out_expr ) } else { None } }
-                } else {
-                    quote! { Some( #out_expr ) }
-                };
+                let join_body = join_body_tokens(pred, out_expr);
 
                 let transformation = quote! {
                     let #out = #l.clone()
@@ -762,4 +738,28 @@ fn expect_arranged(
              must be arranged before use"
         ))
     })
+}
+
+/// Build the body of a `flat_map` closure that yields `out` either
+/// conditionally (when `pred` is `Some`) or unconditionally.
+///
+/// The unconditional branch uses `std::iter::once` because `flat_map`
+/// expects an iterator.
+fn flat_map_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream {
+    match pred {
+        Some(pred) => quote! { if #pred { Some( #out ) } else { None } },
+        None => quote! { std::iter::once( #out ) },
+    }
+}
+
+/// Build the body of a `join_core` closure that yields `out` either
+/// conditionally (when `pred` is `Some`) or unconditionally.
+///
+/// The unconditional branch returns a bare `Some(...)` because
+/// `join_core` expects an `Option`, not an iterator.
+fn join_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream {
+    match pred {
+        Some(pred) => quote! { if #pred { Some( #out ) } else { None } },
+        None => quote! { Some( #out ) },
+    }
 }

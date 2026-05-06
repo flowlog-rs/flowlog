@@ -1,31 +1,33 @@
 #!/usr/bin/env bash
 #
-# Shared helpers for FlowLog unit test runners.
+# Shared helpers for FlowLog fixture-level (L1) test runners.
 #
 # Sourced by:
-#   tests/unit/unit_compiler.sh — binary mode runner
-#   tests/unit/unit_lib.sh      — library mode runner
+#   tests/fixtures/run_compiler.sh — binary mode runner
+#   tests/fixtures/run_lib.sh      — library mode runner
 #
-# Pulls generic helpers (colors, log, die, trim) from tests/shared.sh,
-# and layers unit-fixture-specific bits on top: progress bar, test
-# discovery across `tests/unit/<category>/<name>/`, output comparison
+# Pulls generic helpers (colors, log, die, trim) from tests/lib/shared.sh,
+# and layers fixture-specific bits on top: progress bar, test
+# discovery across `tests/fixtures/<category>/<name>/`, output comparison
 # against `expected/`, and a failure-list summary printer.
 #
 # Not executable on its own — defines functions and globals; the runner
 # script is responsible for invoking `main`.
 
-source "$(dirname "${BASH_SOURCE[0]}")/../shared.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/shared.sh"
 
 ###############################################################################
-# Unit-test globals
+# Fixture-test globals
 ###############################################################################
 
-readonly TESTS_DIR="${ROOT_DIR}/tests/unit"
+readonly TESTS_DIR="${ROOT_DIR}/tests/fixtures"
 
-# Default category list — runner can override before sourcing if needed.
-if [[ -z "${CATEGORIES+x}" ]]; then
-    readonly -a CATEGORIES=(datalog-batch datalog-inc extend-batch extend-inc)
-fi
+# Each runner declares its own CATEGORIES before sourcing this file —
+# common.sh defines no default. extend-inc is intentionally absent from
+# both runners today (no fixtures exist; lib mode doesn't yet support
+# the mode); add it to both runners when those gaps close.
+[[ -n "${CATEGORIES+x}" ]] || die "CATEGORIES must be set by the runner before sourcing common.sh"
+readonly -a CATEGORIES
 
 passed=0
 failed=0
@@ -71,17 +73,6 @@ clear_progress() {
     if (( IS_TTY )); then
         printf "${CLEAR_LINE}\r"
     fi
-}
-
-indent_file() {
-    local file="$1"
-    sed 's/^/         /' "$file"
-}
-
-tail_and_indent() {
-    local file="$1"
-    local lines="${2:-20}"
-    tail -"${lines}" "$file" | sed 's/^/         /'
 }
 
 record_failure() {

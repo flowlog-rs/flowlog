@@ -84,8 +84,7 @@ impl RulePlanner {
             if original_atom_fp.contains(input_info_fp) {
                 trace!(
                     "[fuse_map] skip at idx {}: input is original atom {:#018x}",
-                    index,
-                    *input_info_fp
+                    index, *input_info_fp
                 );
                 continue;
             }
@@ -114,10 +113,7 @@ impl RulePlanner {
 
                 trace!(
                     "[fuse_map] fuse at idx {}: input {:#018x} -> output {:#018x}; producer idx {}",
-                    index,
-                    input_fp,
-                    output_fp,
-                    input_producer_index
+                    index, input_fp, output_fp, input_producer_index
                 );
 
                 // Extract output key/value argument ids from ArithmeticPos expressions
@@ -125,8 +121,7 @@ impl RulePlanner {
                     out_kv_layout.extract_argument_ids_from_layout();
                 trace!(
                     "[fuse_map]   -> key ids: {:?}, value ids: {:?}",
-                    key_argument_ids,
-                    value_argument_ids
+                    key_argument_ids, value_argument_ids
                 );
 
                 // Apply fused layout + comparisons + fn_call predicates to producer, and get new output fp
@@ -154,8 +149,7 @@ impl RulePlanner {
                 )?;
                 trace!(
                     "[fuse_map]   -> updated consumer idx {} to input {:#018x}",
-                    output_consumer_index,
-                    input_producer_output_fp
+                    output_consumer_index, input_producer_output_fp
                 );
                 // Note: No need to update the input key-value layout of consumers here.
                 // They will be updated when processed as join producers in later iterations.
@@ -183,16 +177,17 @@ impl RulePlanner {
     /// Fuse correct key-value layout requirements from downstream transformation infos
     /// to upstream transformations.
     fn fuse_kv_layout(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
-        // Collect output fingerprints in same order (deduplicated).
-        // It is important to sharing optimization, different processing order
-        // may leads to different fingerprints for same plan operatoions.
-        let mut tx_fps: Vec<u64> = Vec::new();
-        for tx in &self.transformation_infos {
-            let fp = tx.output_info_fp();
-            if !tx_fps.contains(&fp) {
-                tx_fps.push(fp);
-            }
-        }
+        // Collect output fingerprints in transformation order, keeping only
+        // the first occurrence of each. Order matters for sharing
+        // optimization: a different processing order may yield different
+        // fingerprints for the same plan operations.
+        let mut seen: HashSet<u64> = HashSet::new();
+        let tx_fps: Vec<u64> = self
+            .transformation_infos
+            .iter()
+            .map(|tx| tx.output_info_fp())
+            .filter(|fp| seen.insert(*fp))
+            .collect();
 
         for tx_fp in tx_fps {
             // Copy out the producer index and current consumers (if any), then mutate
@@ -215,10 +210,7 @@ impl RulePlanner {
             {
                 trace!(
                     "[fuse_kv_layout] fuse at producer fp {:#018x} -> consumers {:?}; key ids: {:?}, value ids: {:?}",
-                    tx_fp,
-                    consumers,
-                    key_indices,
-                    value_indices
+                    tx_fp, consumers, key_indices, value_indices
                 );
                 // Update producer layout and fingerprint
                 let mut new_output_fp = 0u64;
@@ -484,8 +476,7 @@ impl RulePlanner {
             self.insert_producer(output_fp, index);
             trace!(
                 "[rebuild_producer_consumer] producer: idx {} -> fp {:#018x}",
-                index,
-                output_fp
+                index, output_fp
             );
         }
 
@@ -501,14 +492,12 @@ impl RulePlanner {
         for (fp, (prod_idx, consumers)) in &self.producer_consumer {
             trace!(
                 "[rebuild_producer_consumer] mapping: fp {:#018x} -> producer {:?}, consumers {:?}",
-                fp,
-                prod_idx,
-                consumers
+                fp, prod_idx, consumers
             );
         }
 
         trace!(
-            "[rebuild_producer_consumer] done: {} producers  entries",
+            "[rebuild_producer_consumer] done: {} producer-consumer entries",
             self.producer_consumer.len(),
         );
         Ok(())

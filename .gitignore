@@ -7,6 +7,15 @@
 # Data files
 /facts
 
+# Stray dev-VM symlink to the souffle reference tarball cache. The L2
+# runner used to fall back to this path (CACHE_PATCH_v1, since scrubbed)
+# and a symlink may still be left at the repo root on long-lived dev
+# VMs. Ignore it so a fresh clone-or-fetch doesn't surface it as
+# untracked. The L2 runner today downloads from HuggingFace; the
+# /datasets/souffle_ref_tarballs/ cache (if any) is consulted via
+# /datasets/lib/patch_repo.py on dev VMs only, not via this symlink.
+/souffle_ref_tarballs
+
 # Local test program
 /example/test.dl
 

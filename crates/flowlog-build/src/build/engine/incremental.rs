@@ -31,7 +31,7 @@ use quote::{format_ident, quote};
 
 use crate::parser::{Program, Relation};
 
-use super::{needs_conversion, per_position_tuple, user_to_tuple_convert};
+use super::{per_position_tuple, user_to_tuple_convert};
 use crate::build::relation::user::tuple_to_user_expr;
 use crate::build::relation::{input_struct_ident, rust_ident, user_struct_ident};
 use crate::{CodeParts, data_type_tokens};
@@ -726,12 +726,9 @@ fn gen_one_rel_staging(rel: &Relation, string_intern: bool) -> TokenStream {
     let insert = format_ident!("insert_{}", name);
     let remove = format_ident!("remove_{}", name);
 
-    let map_expr = if needs_conversion(rel, string_intern) {
-        let conv = user_to_tuple_convert(rel, string_intern);
-        quote! { #conv }
-    } else {
-        quote! { item }
-    };
+    // `user_to_tuple_convert` already short-circuits to `quote! { item }` when
+    // no per-position conversion is needed, so no local guard is required.
+    let map_expr = user_to_tuple_convert(rel, string_intern);
 
     let distribute = |diff_tok: TokenStream| -> TokenStream {
         quote! {

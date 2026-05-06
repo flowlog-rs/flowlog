@@ -32,9 +32,9 @@ mod scaffold;
 
 pub use error::CompilerError;
 
+use flowlog_build::CodeGen;
 use flowlog_build::common::BoxError;
 use flowlog_build::common::Config;
-use flowlog_build::CodeGen;
 use flowlog_build::parser::Program;
 use flowlog_build::planner::StratumPlanner;
 use flowlog_build::profiler::Profiler;

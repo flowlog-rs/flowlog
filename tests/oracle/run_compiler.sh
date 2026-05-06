@@ -12,7 +12,7 @@ set -euo pipefail
 #   6. Sorts FlowLog output and diffs against Souffle reference
 #   7. Reports pass/fail
 #
-# See `datalog_batch_lib.sh` for the library-mode analog.
+# See `run_lib.sh` for the library-mode analog.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -22,41 +22,47 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 MODE="datalog-batch"
 ENABLE_SIP=0
-# When a single config is passed via CLI, only that config is run.
 SINGLE_CONFIG=""
+KEEP_DATASETS=0
+WORKERS=64
+SOUFFLE_REF_CACHE=""
 
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [config_file] [--sip]
+  $(basename "$0") [config_file] [options]
 
 Runs FlowLog in datalog-batch mode (binary path) and compares output
 against pre-computed Souffle reference results.
 
-By default, runs both config_integer.txt and config_string.txt
-(the latter with --str-intern). Pass a single config file to
-run only that config.
+By default, runs tests/oracle/config.txt; pass a single config file
+path to run a different one. Per-entry tags in the config select
+extra runner behavior (e.g. `str-intern`).
 
 Options:
-  --sip            Also test with --sip optimization.
-
-Environment:
-  WORKERS=<n>    Number of workers (default: 64)
+  --sip                       Also test with --sip optimization.
+  --keep-datasets             Don't delete datasets after each pair.
+                              Required when <repo>/facts/ is a symlink.
+  --workers <n>               Worker threads (default: 64).
+  --souffle-ref-cache <path>  Local cache of Souffle reference tarballs;
+                              if present, cp instead of wget.
 
 Examples:
   $(basename "$0")
-  $(basename "$0") --sip
-  $(basename "$0") path/to/config.txt
+  $(basename "$0") path/to/config.txt --keep-datasets --workers 32
 EOF
 }
 
 parse_args() {
     while (( $# )); do
         case "$1" in
-            --sip)         ENABLE_SIP=1 ;;
-            -h|--help)     usage; exit 0 ;;
-            --)            shift; break ;;
-            -*)            die "Unknown option: $1 (try --help)" ;;
+            --sip)               ENABLE_SIP=1 ;;
+            --keep-datasets)     KEEP_DATASETS=1 ;;
+            --workers)           shift; WORKERS="${1:?--workers requires a value}" ;;
+            --souffle-ref-cache) shift; SOUFFLE_REF_CACHE="${1:?--souffle-ref-cache requires a path}" ;;
+            -h|--help)           usage; exit 0 ;;
+            --)                  shift; break ;;
+            -*)                  die "Unknown option: $1 (try --help)" ;;
             *)
                 [[ -z "$SINGLE_CONFIG" ]] || die "Unexpected extra argument: $1"
                 SINGLE_CONFIG="$1"
@@ -73,7 +79,6 @@ init_paths() {
     LOG_DIR="${RESULT_DIR}/logs"
     FLOWLOG_OUT_DIR="${RESULT_DIR}/flowlog_out"
     COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
-    WORKERS="${WORKERS:-64}"
 
     mkdir -p "$LOG_DIR" "$FLOWLOG_OUT_DIR"
 }
@@ -111,12 +116,9 @@ invoke_compiler() {
     local prog_path="$1" facts_dir="$2" executable="$3" output_dir="$4" extra_flags="$5"
 
     log "$YELLOW" "COMPILE" "$COMPILER_BIN $prog_path -F $facts_dir -D $output_dir -o $executable --mode $MODE ${extra_flags}"
-    if [[ -n "$extra_flags" ]]; then
-        # shellcheck disable=SC2086
-        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" -o "$executable" --mode "$MODE" $extra_flags
-    else
-        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" -o "$executable" --mode "$MODE"
-    fi
+    local extra_arr=()
+    [[ -n "$extra_flags" ]] && read -ra extra_arr <<< "$extra_flags"
+    "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" -o "$executable" --mode "$MODE" "${extra_arr[@]}"
 }
 
 ###############################################################################
@@ -124,7 +126,14 @@ invoke_compiler() {
 ###############################################################################
 
 run_test() {
-    local prog_name="$1" dataset_name="$2" str_intern_flag="${3:-}"
+    local prog_name="$1" dataset_name="$2" tags="${3:-}"
+    local str_intern_flag=""
+    for t in $tags; do
+        case "$t" in
+            str-intern) str_intern_flag="--str-intern" ;;
+            *) die "Unknown tag in config: '$t' (entry: $prog_name=$dataset_name)" ;;
+        esac
+    done
     local prog_file prog_path program_stem
     prog_file="$(basename "$prog_name")"
     prog_path="${PROG_DIR}/${prog_name}"
@@ -134,7 +143,7 @@ run_test() {
 
     setup_dataset "$dataset_name" "$FACT_DIR"
     local ref_dir
-    ref_dir="$(download_souffle_ref "$program_stem" "$dataset_name")"
+    ref_dir="$(download_souffle_ref "$program_stem" "$dataset_name" "$SOUFFLE_REF_CACHE")"
 
     local dataset_path
     dataset_path="$(realpath "${FACT_DIR}/${dataset_name}")"
@@ -148,7 +157,7 @@ run_test() {
         executable="${ROOT_DIR}/${package_name}"
         log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${MODE}${suffix}.log"
         output_dir="${FLOWLOG_OUT_DIR}/${program_stem}_${dataset_name}${suffix}"
-        prepared_dl="/tmp/flowlog_prepared_$$_${prog_file}"
+        prepared_dl="${STAGE_DIR}/flowlog_prepared_$$_${prog_file}"
 
         mkdir -p "$output_dir"
 
@@ -172,7 +181,7 @@ run_test() {
     done
 
     rm -rf "$ref_dir"
-    cleanup_dataset "$dataset_name" "$FACT_DIR"
+    cleanup_dataset "$dataset_name" "$FACT_DIR" "$KEEP_DATASETS"
 }
 
 ###############################################################################
@@ -180,10 +189,10 @@ run_test() {
 ###############################################################################
 
 run_config() {
-    local config_file="$1" label="$2" extra_flag="${3:-}"
+    local config_file="$1" label="$2"
     [[ -f "$config_file" ]] || { log "$YELLOW" "SKIP" "$label: config not found ($config_file)"; return 0; }
     log "$BLUE" "SUITE" "$label ($config_file)"
-    for_each_config_entry run_test "$config_file" "$extra_flag"
+    for_each_config_entry run_test "$config_file"
 }
 
 main() {
@@ -194,14 +203,8 @@ main() {
 
     compile_release_workspace
 
-    if [[ -n "$SINGLE_CONFIG" ]]; then
-        local extra=""
-        [[ "$(basename "$SINGLE_CONFIG")" == config_string* ]] && extra="--str-intern"
-        run_config "$SINGLE_CONFIG" "custom" "$extra"
-    else
-        run_config "$CONFIG_INTEGER" "integer"
-        run_config "$CONFIG_STRING"  "string" "--str-intern"
-    fi
+    local config="${SINGLE_CONFIG:-$CONFIG_DEFAULT}"
+    run_config "$config" "oracle"
 
     log "$GREEN" "FINISH" "All tests passed"
 }

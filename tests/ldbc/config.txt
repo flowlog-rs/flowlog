@@ -1,1 +1,0 @@
-interactive-complex-13=ldbc_snb_interactive_sf3

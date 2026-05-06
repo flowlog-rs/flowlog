@@ -4,12 +4,12 @@ set -euo pipefail
 # FlowLog binary-mode end-to-end test runner.
 #
 # Layout:
-#   tests/unit/<category>/              Category determines --mode flag:
+#   tests/fixtures/<category>/          Category determines --mode flag:
 #     datalog-batch  → (default)         datalog-inc  → --mode datalog-inc
 #     extend-batch   → --mode extend-batch
 #     extend-inc     → --mode extend-inc
 #
-#   tests/unit/<category>/<test_name>/
+#   tests/fixtures/<category>/<test_name>/
 #     program.dl     Datalog source (must use .output directives)
 #     data/          Optional CSV input facts copied into generated project
 #     expected/      Expected output files (one per output relation)
@@ -17,8 +17,12 @@ set -euo pipefail
 #     runtime_flags  Optional runtime flags (e.g. -w 4 for multi-worker)
 #
 # Usage:
-#   tests/unit/unit_compiler.sh                          # run all tests
-#   tests/unit/unit_compiler.sh <test_name> [test_name ...] # run specific tests
+#   tests/fixtures/run_compiler.sh                          # run all tests
+#   tests/fixtures/run_compiler.sh <test_name> [test_name ...] # run specific tests
+
+# Categories exercised by binary mode. Add `extend-inc` here when the
+# first such fixture lands (binary mode already supports the mode).
+CATEGORIES=(datalog-batch datalog-inc extend-batch)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -231,7 +235,7 @@ main() {
     fi
 
     echo ""
-    echo -e "  ${BOLD}FlowLog Unit Tests (binary mode)${NC}"
+    echo -e "  ${BOLD}FlowLog Fixture Tests (binary mode)${NC}"
     echo ""
 
     ensure_compiler_built

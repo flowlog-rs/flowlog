@@ -119,9 +119,7 @@ pub enum ParseError {
     LoopBlockInStandardMode { span: Span },
 
     /// A loop's until-condition names a relation with nonzero arity.
-    #[error(
-        "loop condition relation `{name}` must be nullary, but is declared with arity {arity}"
-    )]
+    #[error("loop condition relation `{name}` must be nullary, but is declared with arity {arity}")]
     NonNullaryLoopCondition {
         span: Span,
         name: String,
@@ -262,8 +260,8 @@ pub(crate) fn grammar_bug(detail: impl Into<String>) -> ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::{emit, BoxError};
     use crate::common::SourceMap;
+    use crate::common::{BoxError, emit};
 
     fn make_sm_with(text: &str) -> (SourceMap, FileId) {
         let mut sm = SourceMap::new();

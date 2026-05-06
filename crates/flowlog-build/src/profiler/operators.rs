@@ -160,6 +160,12 @@ impl Profiler {
 // =========================================================================
 
 impl Profiler {
+    /// Register a recursive-loop runtime operator that consumes one input,
+    /// produces one output, and maps to a single timely step.
+    fn push_recursive_runtime_step(&mut self, name: String, input: String, output: String) {
+        self.push_node(name, vec![input], Some(output), TAG_RUNTIME, 1, None);
+    }
+
     pub(crate) fn concat_dedup_operator(
         &mut self,
         name: String,
@@ -188,13 +194,10 @@ impl Profiler {
         input_variable_name: String,
         output_variable_name: String,
     ) {
-        self.push_node(
+        self.push_recursive_runtime_step(
             "enter".to_string(),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
+            input_variable_name,
+            output_variable_name,
         );
     }
 
@@ -204,13 +207,10 @@ impl Profiler {
         input_variable_name: String,
         output_variable_name: String,
     ) {
-        self.push_node(
+        self.push_recursive_runtime_step(
             format!("{}: feedback", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
+            input_variable_name,
+            output_variable_name,
         );
     }
 
@@ -220,13 +220,10 @@ impl Profiler {
         input_variable_name: String,
         output_variable_name: String,
     ) {
-        self.push_node(
+        self.push_recursive_runtime_step(
             format!("{}: resultsin", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
+            input_variable_name,
+            output_variable_name,
         );
     }
 
@@ -236,13 +233,10 @@ impl Profiler {
         input_variable_name: String,
         output_variable_name: String,
     ) {
-        self.push_node(
+        self.push_recursive_runtime_step(
             format!("{}: pre-leave opt aggregate", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
+            input_variable_name,
+            output_variable_name,
         );
     }
 
@@ -252,13 +246,10 @@ impl Profiler {
         input_variable_name: String,
         output_variable_name: String,
     ) {
-        self.push_node(
+        self.push_recursive_runtime_step(
             format!("{}: leave", name),
-            vec![input_variable_name],
-            Some(output_variable_name),
-            TAG_RUNTIME,
-            1,
-            None,
+            input_variable_name,
+            output_variable_name,
         );
     }
 
@@ -284,6 +275,21 @@ impl Profiler {
 // =========================================================================
 
 impl Profiler {
+    /// Register an `inspect_content` sink (`terminal` or `file`); both share
+    /// the same step count and only differ in the label woven into the node
+    /// name.
+    fn push_inspect_content(&mut self, kind: &str, input: String, name: String) {
+        let steps = self.inspect_content_steps();
+        self.push_node(
+            format!("{}: inspect {}", name, kind),
+            vec![input],
+            None,
+            TAG_INSPECT,
+            steps,
+            None,
+        );
+    }
+
     pub(crate) fn inspect_size_operator(&mut self, input_variable_name: String, name: String) {
         let steps = self.inspect_size_steps();
         self.push_node(
@@ -296,27 +302,19 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn inspect_content_terminal_operator(&mut self, input_variable_name: String, name: String) {
-        let steps = self.inspect_content_steps();
-        self.push_node(
-            format!("{}: inspect terminal", name),
-            vec![input_variable_name],
-            None,
-            TAG_INSPECT,
-            steps,
-            None,
-        );
+    pub(crate) fn inspect_content_terminal_operator(
+        &mut self,
+        input_variable_name: String,
+        name: String,
+    ) {
+        self.push_inspect_content("terminal", input_variable_name, name);
     }
 
-    pub(crate) fn inspect_content_file_operator(&mut self, input_variable_name: String, name: String) {
-        let steps = self.inspect_content_steps();
-        self.push_node(
-            format!("{}: inspect file", name),
-            vec![input_variable_name],
-            None,
-            TAG_INSPECT,
-            steps,
-            None,
-        );
+    pub(crate) fn inspect_content_file_operator(
+        &mut self,
+        input_variable_name: String,
+        name: String,
+    ) {
+        self.push_inspect_content("file", input_variable_name, name);
     }
 }

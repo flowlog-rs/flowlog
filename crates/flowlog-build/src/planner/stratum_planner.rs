@@ -4,10 +4,10 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, trace};
 
 use crate::catalog::Catalog;
-use crate::common::Config;
+use crate::common::{Config, SECTION_BAR, SUBSECTION_BAR};
 use crate::optimizer::Optimizer;
 use crate::parser::{AggregationOperator, FlowLogRule, HeadArg, LoopCondition};
-use crate::profiler::{with_profiler, Profiler};
+use crate::profiler::{Profiler, with_profiler};
 use crate::stratifier::Stratifier;
 
 use crate::planner::{PlanError, RulePlanner, Transformation, TransformationInfo};
@@ -181,10 +181,6 @@ impl StratumPlanner {
         let mut stratum_planner = Self {
             rule_planners,
             is_recursive,
-            transformations: Vec::new(),
-            non_recursive_transformations: Vec::new(),
-            recursive_transformations: Vec::new(),
-            recursion_enter_collections: Vec::new(),
             recursion_accumulate_recursive_collections: stratifier
                 .stratum_accumulate_recursive_relation(stratum_idx)
                 .to_vec(),
@@ -192,11 +188,9 @@ impl StratumPlanner {
                 .stratum_iterative_recursive_relation(stratum_idx)
                 .to_vec(),
             recursion_leave_collections: stratifier.stratum_leave_relation(stratum_idx).to_vec(),
-            idb_to_heads_map: HashMap::new(),
-            head_to_idb_map: HashMap::new(),
-            idb_to_aggregation_map: HashMap::new(),
             loop_condition: stratifier.loop_condition(stratum_idx).cloned(),
             atom_names,
+            ..Self::default()
         };
         stratum_planner.materialize_transformations();
 
@@ -307,8 +301,6 @@ impl StratumPlanner {
         self.is_recursive
     }
 }
-
-use crate::common::{SECTION_BAR, SUBSECTION_BAR};
 
 impl std::fmt::Display for StratumPlanner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -527,14 +519,16 @@ impl StratumPlanner {
     fn build_idb_to_heads_map(&mut self, catalogs: &[Catalog]) {
         for (rule_idx, catalog) in catalogs.iter().enumerate() {
             let head_idb_fp = catalog.head_idb_fingerprint();
-            if let Some(final_info) = self.rule_planners[rule_idx].transformation_infos().last() {
-                let head_fp = final_info.output_info_fp();
-                self.idb_to_heads_map
-                    .entry(head_idb_fp)
-                    .or_default()
-                    .push(head_fp);
-                self.head_to_idb_map.insert(head_fp, head_idb_fp);
-            }
+            let Some(final_info) = self.rule_planners[rule_idx].transformation_infos().last()
+            else {
+                continue;
+            };
+            let head_fp = final_info.output_info_fp();
+            self.idb_to_heads_map
+                .entry(head_idb_fp)
+                .or_default()
+                .push(head_fp);
+            self.head_to_idb_map.insert(head_fp, head_idb_fp);
         }
     }
 
