@@ -172,11 +172,7 @@ impl CodeGen {
 }
 
 fn slot(tp: &KvTypes, is_key: bool) -> &[DataType] {
-    if is_key {
-        &tp.0
-    } else {
-        &tp.1
-    }
+    if is_key { &tp.0 } else { &tp.1 }
 }
 
 // ==================================================

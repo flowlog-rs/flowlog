@@ -21,7 +21,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Value};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Value, value};
 
 use flowlog_build::common::Config;
 use flowlog_build::{CodeParts, Features};
@@ -68,10 +68,8 @@ impl Compiler {
         }
 
         // Aggregation-specific semiring modules (paths are relative to src/).
-        if !parts.semiring_modules.is_empty() {
-            for (rel_path, content) in &parts.semiring_modules {
-                write_file(&src_dir.join(rel_path), content)?;
-            }
+        for (rel_path, content) in &parts.semiring_modules {
+            write_file(&src_dir.join(rel_path), content)?;
         }
 
         // Optional UDF module — copied verbatim from a user-supplied file.
@@ -163,10 +161,7 @@ pub(crate) fn render_cargo_config() -> String {
 fn inline_versioned_dep(version: &str, features: &[&str]) -> InlineTable {
     let mut tbl = InlineTable::new();
     tbl.insert("version", version.into());
-    let mut arr = Array::new();
-    for f in features {
-        arr.push(*f);
-    }
+    let arr: Array = features.iter().copied().collect();
     tbl.insert("features", Value::Array(arr));
     tbl
 }

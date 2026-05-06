@@ -86,7 +86,7 @@ pub struct Catalog {
     head_idb_fingerprint: u64,
 
     /// Atom argument signatures whose variable string occurs exactly once across
-    /// all predicates in the rule body (positive atoms, negaive atoms, comparisons).
+    /// all predicates in the rule body (positive atoms, negative atoms, comparisons).
     /// Grouped by atom signature for convenience elimination in planners.
     unused_arguments_per_atom: HashMap<AtomSignature, Vec<AtomArgumentSignature>>,
 }
@@ -256,7 +256,10 @@ impl Catalog {
 
     /// Get the argument signatures for a positive atom by its index.
     #[inline]
-    pub(crate) fn positive_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
+    pub(crate) fn positive_atom_argument_signature(
+        &self,
+        index: usize,
+    ) -> &Vec<AtomArgumentSignature> {
         &self.positive_atom_argument_signatures[index]
     }
 
@@ -303,7 +306,10 @@ impl Catalog {
 
     /// Get the argument signatures for a negative atom by its index.
     #[inline]
-    pub(crate) fn negative_atom_argument_signature(&self, index: usize) -> &Vec<AtomArgumentSignature> {
+    pub(crate) fn negative_atom_argument_signature(
+        &self,
+        index: usize,
+    ) -> &Vec<AtomArgumentSignature> {
         &self.negative_atom_argument_signatures[index]
     }
 
@@ -491,7 +497,9 @@ impl Catalog {
 
     /// Get unused arguments grouped by atom signature.
     #[inline]
-    pub(crate) fn unused_arguments_per_atom(&self) -> &HashMap<AtomSignature, Vec<AtomArgumentSignature>> {
+    pub(crate) fn unused_arguments_per_atom(
+        &self,
+    ) -> &HashMap<AtomSignature, Vec<AtomArgumentSignature>> {
         &self.unused_arguments_per_atom
     }
 

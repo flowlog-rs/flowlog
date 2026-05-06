@@ -42,7 +42,6 @@ pub(crate) fn gen_incremental_main(
         preload,
         ..
     } = rp;
-    let merge = merge_blocks;
 
     quote! {
         fn main() {
@@ -269,7 +268,7 @@ pub(crate) fn gen_incremental_main(
 
                                 if index == 0 {
                                     // === Merge output buffers (sort, limit, write) ===
-                                    #(#merge)*
+                                    #(#merge_blocks)*
 
                                     println!("{:?}:\tCommitted & executed", round_timer.elapsed());
                                 }
