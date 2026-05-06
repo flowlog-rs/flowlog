@@ -10,7 +10,7 @@ use clap::Parser;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use flowlog_build::common::{emit_and_exit, get_example_files, Config, SourceMap, SECTION_BAR};
+use flowlog_build::common::{Config, SECTION_BAR, SourceMap, emit_and_exit, get_example_files};
 use flowlog_build::optimizer::Optimizer;
 use flowlog_build::parser::Program;
 use flowlog_build::planner::StratumPlanner;
