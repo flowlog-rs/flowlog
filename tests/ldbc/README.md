@@ -16,7 +16,7 @@ for why the split matters. Per the spec:
 
 - the **timing slice** of LDBC (scale-factor / throughput, the runner +
   programs + data) moves to the sibling `flowlog-bench` repo
-  (`scripts/ldbc.sh`, `programs/ldbc/{flowlog,souffle}/`,
+  (`scripts/ldbc.sh`, `programs/ldbc/{flowlog,duckdb}/`,
   `facts/ldbc/`).
 - the **correctness slice** (small/medium SF + static known-good
   outputs) stays here, but needs to be re-authored in the same shape as

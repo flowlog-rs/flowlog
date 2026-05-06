@@ -2,8 +2,7 @@
 
 This repo is the **correctness** surface for FlowLog. Performance and
 benchmarking work lives in the sibling `flowlog-bench` repo — see
-[`AGENTS.md`](../AGENTS.md) for the split rationale and the
-file-by-file handoff.
+[`AGENTS.md`](../AGENTS.md) for the split rationale.
 
 There is **no** top-level "run everything" wrapper. Each script is
 independently runnable with a stable exit code; composing them into a
