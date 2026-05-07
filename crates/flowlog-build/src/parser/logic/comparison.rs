@@ -3,13 +3,15 @@
 //! - [`ComparisonOperator`]: `== | ≠ | > | ≥ | < | ≤`
 //! - [`ComparisonExpr`]: `{left} {op} {right}`
 
-use super::Arithmetic;
-use crate::common::{FileId, Ignored, Span};
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::{span_of, Lexeme, Rule};
-use pest::iterators::Pair;
 use std::collections::HashSet;
 use std::fmt;
+
+use pest::iterators::Pair;
+
+use super::Arithmetic;
+use crate::common::{FileId, Ignored, Span};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::{Lexeme, Rule, span_of};
 
 /// Comparison operator.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -64,7 +66,7 @@ impl Lexeme for ComparisonOperator {
             other => {
                 return Err(grammar_bug(format!(
                     "unknown comparison operator: {other:?}"
-                )))
+                )));
             }
         })
     }
