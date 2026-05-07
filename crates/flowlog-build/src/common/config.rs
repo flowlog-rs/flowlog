@@ -254,7 +254,7 @@ pub fn get_example_files() -> Vec<std::path::PathBuf> {
 
     // Check if example directory exists
     if !Path::new(example_dir).exists() {
-        eprintln!("Error: Directory '{}' not found", example_dir);
+        eprintln!("Error: Directory '{example_dir}' not found");
         process::exit(1);
     }
 
@@ -265,7 +265,7 @@ pub fn get_example_files() -> Vec<std::path::PathBuf> {
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(e) => {
-                eprintln!("Error reading dir '{}': {}", dir.display(), e);
+                eprintln!("Error reading dir '{}': {e}", dir.display());
                 continue;
             }
         };
@@ -282,7 +282,7 @@ pub fn get_example_files() -> Vec<std::path::PathBuf> {
     files.sort();
 
     if files.is_empty() {
-        eprintln!("No .dl files found in {}", example_dir);
+        eprintln!("No .dl files found in {example_dir}");
         process::exit(1);
     }
 
