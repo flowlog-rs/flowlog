@@ -21,7 +21,7 @@ use crate::catalog::{
 use crate::common::compute_fp;
 use crate::parser::ConstType;
 
-use crate::planner::Collection;
+use crate::planner::{Collection, PlanError};
 
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
@@ -72,15 +72,17 @@ impl KeyValueLayout {
     }
 
     #[inline]
-    pub(crate) fn extract_atom_id(&self) -> usize {
+    pub(crate) fn extract_atom_id(&self) -> Result<usize, PlanError> {
         self.key()
             .iter()
             .chain(self.value().iter())
             .flat_map(|pos| pos.signatures())
             .map(|sig| sig.atom_signature().rhs_id())
             .next()
-            .unwrap_or_else(|| {
-                panic!("Planner error: attempted to extract atom ID from empty key/value layout")
+            .ok_or_else(|| {
+                PlanError::internal(
+                    "extract_atom_id: empty key/value layout has no atom signatures",
+                )
             })
     }
 }
@@ -200,14 +202,17 @@ impl TransformationInfo {
     }
 
     /// Mark this Key-Value transformation as a SIP projection.
-    pub(crate) fn into_sip_projection(mut self) -> Self {
-        match &mut self {
-            Self::KVToKV {
-                is_sip_projection, ..
-            } => *is_sip_projection = true,
-            _ => panic!("Planner error: into_sip_projection is only applicable to KVToKV"),
-        }
-        self
+    pub(crate) fn into_sip_projection(mut self) -> Result<Self, PlanError> {
+        let Self::KVToKV {
+            is_sip_projection, ..
+        } = &mut self
+        else {
+            return Err(PlanError::internal(
+                "into_sip_projection: only applicable to KVToKV transformations",
+            ));
+        };
+        *is_sip_projection = true;
+        Ok(self)
     }
 
     /// Build a Join to Key-Value transformation with a derived (fake) output fingerprint.
@@ -381,9 +386,9 @@ impl TransformationInfo {
     #[inline]
     pub(crate) fn is_row_output(&self) -> bool {
         match self {
-            Self::KVToKV { is_row_output, .. } => *is_row_output,
-            Self::JoinToKV { is_row_output, .. } => *is_row_output,
-            Self::AntiJoinToKV { is_row_output, .. } => *is_row_output,
+            Self::KVToKV { is_row_output, .. }
+            | Self::JoinToKV { is_row_output, .. }
+            | Self::AntiJoinToKV { is_row_output, .. } => *is_row_output,
         }
     }
 
@@ -511,16 +516,12 @@ impl TransformationInfo {
             Self::KVToKV {
                 is_row_output: row_out,
                 ..
-            } => {
-                *row_out = is_row_output;
             }
-            Self::JoinToKV {
+            | Self::JoinToKV {
                 is_row_output: row_out,
                 ..
-            } => {
-                *row_out = is_row_output;
             }
-            Self::AntiJoinToKV {
+            | Self::AntiJoinToKV {
                 is_row_output: row_out,
                 ..
             } => {
@@ -621,26 +622,44 @@ impl TransformationInfo {
     /// Update comparison expressions for transformations that support them.
     ///
     /// Comparison expressions should be added incrementally.
-    pub(crate) fn update_comparisons(&mut self, new_compare_exprs: Vec<ComparisonExprPos>) {
+    pub(crate) fn update_comparisons(
+        &mut self,
+        new_compare_exprs: Vec<ComparisonExprPos>,
+    ) -> Result<(), PlanError> {
         match self {
-            Self::KVToKV { predicates, .. } => predicates.compare_exprs.extend(new_compare_exprs),
-            Self::JoinToKV { predicates, .. } => predicates.compare_exprs.extend(new_compare_exprs),
-            Self::AntiJoinToKV { .. } => {
-                panic!("Planner error: AntiJoinToKV has no comparisons to update");
+            Self::KVToKV { predicates, .. } => {
+                predicates.compare_exprs.extend(new_compare_exprs);
+                Ok(())
             }
+            Self::JoinToKV { predicates, .. } => {
+                predicates.compare_exprs.extend(new_compare_exprs);
+                Ok(())
+            }
+            Self::AntiJoinToKV { .. } => Err(PlanError::internal(
+                "update_comparisons: AntiJoinToKV has no comparisons to update",
+            )),
         }
     }
 
     /// Update boolean UDF predicate filters for transformations that support them.
     ///
     /// UDF predicates should be added incrementally.
-    pub(crate) fn update_fn_call_preds(&mut self, new_fn_call_preds: Vec<FnCallPredicatePos>) {
+    pub(crate) fn update_fn_call_preds(
+        &mut self,
+        new_fn_call_preds: Vec<FnCallPredicatePos>,
+    ) -> Result<(), PlanError> {
         match self {
-            Self::KVToKV { predicates, .. } => predicates.fn_call_preds.extend(new_fn_call_preds),
-            Self::JoinToKV { predicates, .. } => predicates.fn_call_preds.extend(new_fn_call_preds),
-            Self::AntiJoinToKV { .. } => {
-                panic!("Planner error: AntiJoinToKV has no fn_call_preds to update");
+            Self::KVToKV { predicates, .. } => {
+                predicates.fn_call_preds.extend(new_fn_call_preds);
+                Ok(())
             }
+            Self::JoinToKV { predicates, .. } => {
+                predicates.fn_call_preds.extend(new_fn_call_preds);
+                Ok(())
+            }
+            Self::AntiJoinToKV { .. } => Err(PlanError::internal(
+                "update_fn_call_preds: AntiJoinToKV has no fn_call_preds to update",
+            )),
         }
     }
 
@@ -649,15 +668,16 @@ impl TransformationInfo {
         &mut self,
         const_eq: Vec<(AtomArgumentSignature, ConstType)>,
         var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
-    ) {
+    ) -> Result<(), PlanError> {
         match self {
             Self::KVToKV { predicates, .. } => {
                 predicates.const_eq.extend(const_eq);
                 predicates.var_eq.extend(var_eq);
+                Ok(())
             }
-            Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } => {
-                panic!("Planner error: attempting to append const constraints to non-unary transformation")
-            }
+            Self::JoinToKV { .. } | Self::AntiJoinToKV { .. } => Err(PlanError::internal(
+                "update_const_eq_and_var_eq_constraints: only applicable to unary (KVToKV) transformations",
+            )),
         }
     }
 

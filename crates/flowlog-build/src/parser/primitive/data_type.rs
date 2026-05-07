@@ -153,24 +153,27 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
+    /// Every `DataType` variant — the canonical iteration target for tests
+    /// that check a property across the whole enum.
+    const ALL: [DataType; 12] = [
+        DataType::Int8,
+        DataType::Int16,
+        DataType::Int32,
+        DataType::Int64,
+        DataType::UInt8,
+        DataType::UInt16,
+        DataType::UInt32,
+        DataType::UInt64,
+        DataType::Float32,
+        DataType::Float64,
+        DataType::String,
+        DataType::Bool,
+    ];
+
     #[test]
     fn display_roundtrip() {
-        for t in [
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::UInt8,
-            DataType::UInt16,
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Float32,
-            DataType::Float64,
-            DataType::String,
-            DataType::Bool,
-        ] {
-            let s = t.to_string();
-            let parsed = DataType::from_str(&s).unwrap();
+        for t in ALL {
+            let parsed = DataType::from_str(&t.to_string()).unwrap();
             assert_eq!(t, parsed);
         }
     }
@@ -207,30 +210,18 @@ mod tests {
 
     #[test]
     fn is_numeric_returns_true_for_numeric_types() {
-        for dt in [
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::UInt8,
-            DataType::UInt16,
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Float32,
-            DataType::Float64,
-        ] {
-            assert!(dt.is_numeric(), "{dt} should be numeric");
+        for dt in ALL {
+            let expected = !matches!(dt, DataType::String | DataType::Bool);
+            assert_eq!(dt.is_numeric(), expected, "{dt}");
         }
-        assert!(!DataType::String.is_numeric());
-        assert!(!DataType::Bool.is_numeric());
     }
 
     #[test]
     fn is_float_returns_true_only_for_floats() {
-        assert!(DataType::Float32.is_float());
-        assert!(DataType::Float64.is_float());
-        assert!(!DataType::Int32.is_float());
-        assert!(!DataType::String.is_float());
+        for dt in ALL {
+            let expected = matches!(dt, DataType::Float32 | DataType::Float64);
+            assert_eq!(dt.is_float(), expected, "{dt}");
+        }
     }
 
     #[test]

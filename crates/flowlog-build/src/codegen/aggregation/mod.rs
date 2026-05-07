@@ -11,11 +11,11 @@ mod max;
 mod min;
 mod sum;
 
-pub(super) use avg::{
-    aggregation_avg_optimize, aggregation_avg_post_leave, aggregation_avg_pre_leave,
-};
 pub(super) use self::common::{
     aggregation_merge_kv, aggregation_opt_post_leave, aggregation_reduce_stmt, aggregation_row_chop,
+};
+pub(super) use avg::{
+    aggregation_avg_optimize, aggregation_avg_post_leave, aggregation_avg_pre_leave,
 };
 pub(super) use count::{aggregation_count_optimize, aggregation_count_pre_leave};
 pub(super) use max::{aggregation_max_optimize, aggregation_max_pre_leave};

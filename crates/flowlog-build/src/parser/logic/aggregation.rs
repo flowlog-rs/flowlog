@@ -5,8 +5,8 @@
 
 use super::Arithmetic;
 use crate::common::{FileId, Ignored, Span};
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::{span_of, Lexeme, Rule};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::{Lexeme, Rule, span_of};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -35,26 +35,28 @@ impl AggregationOperator {
     }
 
     /// Lowercase name for semiring module paths (e.g. `"min"`, `"sum"`).
+    ///
+    /// `Count` shares its semiring with `Sum`.
     #[must_use]
     pub fn semiring_mod(self) -> &'static str {
-        match self.semiring_canonical() {
+        match self {
             Self::Min => "min",
             Self::Max => "max",
-            Self::Sum => "sum",
+            Self::Sum | Self::Count => "sum",
             Self::Avg => "avg",
-            Self::Count => unreachable!(),
         }
     }
 
     /// Title-case prefix for semiring type names (e.g. `"Min"`, `"Sum"`).
+    ///
+    /// `Count` shares its semiring with `Sum`.
     #[must_use]
     pub fn semiring_prefix(self) -> &'static str {
-        match self.semiring_canonical() {
+        match self {
             Self::Min => "Min",
             Self::Max => "Max",
-            Self::Sum => "Sum",
+            Self::Sum | Self::Count => "Sum",
             Self::Avg => "Avg",
-            Self::Count => unreachable!(),
         }
     }
 }
