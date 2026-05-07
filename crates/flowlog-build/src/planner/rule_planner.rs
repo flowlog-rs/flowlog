@@ -20,7 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
-use crate::parser::{FlowLogRule, Predicate};
+use crate::parser::{Atom, FlowLogRule, Predicate};
 use crate::planner::{Transformation, TransformationInfo};
 
 mod common; // small utilities shared by planner phases
@@ -88,21 +88,15 @@ impl RulePlanner {
         }
 
         let atom_labels = self.rhs_atom_labels();
+        let mut referenced_children = BTreeSet::new();
 
-        let transformations: Vec<Transformation> = self
-            .transformation_infos
-            .iter()
-            .map(|info| match info {
+        for info in &self.transformation_infos {
+            let tx = match info {
                 TransformationInfo::KVToKV { .. } => Transformation::kv_to_kv(info),
                 TransformationInfo::JoinToKV { .. } => Transformation::join(info),
                 TransformationInfo::AntiJoinToKV { .. } => Transformation::antijoin(info),
-            })
-            .collect();
-
-        let mut referenced_children = BTreeSet::new();
-
-        for tx in &transformations {
-            let (label, children) = Self::build_transformation_debug_entry(tx);
+            };
+            let (label, children) = Self::build_transformation_debug_entry(&tx);
             referenced_children.extend(children.iter().copied());
             debug_info_map.insert(tx.output().fingerprint(), (label, children));
         }
@@ -121,29 +115,30 @@ impl RulePlanner {
     /// `Atom`'s `Display` impl. Consumed by the plan-tree developer-debug
     /// walker so the leaf nodes show full binding context.
     pub(crate) fn rhs_atom_labels(&self) -> HashMap<u64, String> {
-        let mut labels = HashMap::new();
-        for predicate in self.rule.rhs() {
-            if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = predicate {
-                labels
-                    .entry(atom.fingerprint())
-                    .or_insert_with(|| atom.to_string());
-            }
-        }
-        labels
+        self.rhs_atom_map(Atom::to_string)
     }
 
     /// Atom fingerprint → relation name (no args). Consumed by codegen to
     /// label operators with the EDB they read from.
     pub(crate) fn rhs_atom_names(&self) -> HashMap<u64, String> {
-        let mut names = HashMap::new();
+        self.rhs_atom_map(|atom| atom.name().to_string())
+    }
+
+    /// Build a `fingerprint → string` map over every positive/negative atom
+    /// on the rule's rhs, with `value_of` deciding the string per atom.
+    /// First occurrence wins on duplicate fingerprints.
+    fn rhs_atom_map<F>(&self, mut value_of: F) -> HashMap<u64, String>
+    where
+        F: FnMut(&Atom) -> String,
+    {
+        let mut out = HashMap::new();
         for predicate in self.rule.rhs() {
             if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = predicate {
-                names
-                    .entry(atom.fingerprint())
-                    .or_insert_with(|| atom.name().to_string());
+                out.entry(atom.fingerprint())
+                    .or_insert_with(|| value_of(atom));
             }
         }
-        names
+        out
     }
 
     fn build_transformation_debug_entry(tx: &Transformation) -> (String, Vec<u64>) {

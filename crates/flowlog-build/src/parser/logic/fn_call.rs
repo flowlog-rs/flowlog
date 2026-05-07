@@ -109,12 +109,10 @@ impl Lexeme for FnCall {
             .ok_or_else(|| grammar_bug("fn_call_expr missing function name"))?
             .as_str()
             .to_string();
-        let mut args = Vec::new();
-        for p in children {
-            if p.as_rule() == Rule::arithmetic_expr {
-                args.push(Arithmetic::from_parsed_rule(p, file)?);
-            }
-        }
+        let args = children
+            .filter(|p| p.as_rule() == Rule::arithmetic_expr)
+            .map(|p| Arithmetic::from_parsed_rule(p, file))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             name: fn_name,
             args,

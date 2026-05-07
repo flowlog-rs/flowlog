@@ -85,20 +85,13 @@ impl RulePlanner {
         catalog: &mut Catalog,
         sip_pair: (usize, usize),
     ) -> Result<(), PlanError> {
-        let (lhs_idx, rhs_idx) = sip_pair;
-
-        let lhs_is_original = catalog
-            .original_atom_fingerprints()
-            .contains(&catalog.positive_atom_fingerprint(lhs_idx));
-        let rhs_is_original = catalog
-            .original_atom_fingerprints()
-            .contains(&catalog.positive_atom_fingerprint(rhs_idx));
-
-        if lhs_is_original {
-            self.create_edb_premap_transformations(catalog, lhs_idx, true)?;
-        }
-        if rhs_is_original {
-            self.create_edb_premap_transformations(catalog, rhs_idx, true)?;
+        // The two atoms are distinct, and premapping one cannot change the
+        // other's fingerprint, so a single forward pass is sufficient.
+        for idx in [sip_pair.0, sip_pair.1] {
+            let fp = catalog.positive_atom_fingerprint(idx);
+            if catalog.original_atom_fingerprints().contains(&fp) {
+                self.create_edb_premap_transformations(catalog, idx, true)?;
+            }
         }
         Ok(())
     }
@@ -193,8 +186,7 @@ impl RulePlanner {
         let new_arguments_list = rhs_keys
             .iter()
             .chain(rhs_vals.iter())
-            .map(|pos| pos.init().as_var_signature().unwrap())
-            .cloned()
+            .map(|pos| *pos.init().as_var_signature().unwrap())
             .collect();
 
         catalog.sip_modify(

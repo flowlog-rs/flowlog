@@ -225,26 +225,26 @@ impl Catalog {
 
     /// Creates a map of which variables appear in which positive atoms.
     fn populate_argument_presence_in_positive_atom_map(&mut self) -> Result<(), CatalogError> {
+        let n_atoms = self.positive_atom_argument_signatures.len();
         for (rhs_id, sigs) in self.positive_atom_argument_signatures.iter().enumerate() {
             for sig in sigs {
-                // Skip non-binding argument kinds (constants, equality-propagated vars, placeholders)
+                // Skip non-binding argument kinds (constants, equality-propagated
+                // vars, placeholders) — only primary binding occurrences count.
                 if self.filters.is_const_or_var_eq_or_placeholder(sig) {
-                    continue; // Not a primary binding occurrence
+                    continue;
                 }
-                if let Some(var) = self.signature_to_argument_str_map.get(sig) {
-                    // Allocate the per-variable presence vector lazily with appropriate length
-                    let entry = self
-                        .argument_presence_in_positive_atom_map
-                        .entry(var.clone())
-                        .or_insert(vec![None; self.positive_atom_argument_signatures.len()]);
-                    // Only record if not already set for this atom index
-                    if entry[rhs_id].is_none() {
-                        entry[rhs_id] = Some(*sig);
-                    }
-                } else {
+                let Some(var) = self.signature_to_argument_str_map.get(sig) else {
                     return Err(CatalogError::internal(format!(
                         "argument signature {sig} absent from signature_to_argument_str_map"
                     )));
+                };
+                let entry = self
+                    .argument_presence_in_positive_atom_map
+                    .entry(var.clone())
+                    .or_insert_with(|| vec![None; n_atoms]);
+                // Only record the first binding occurrence per atom index.
+                if entry[rhs_id].is_none() {
+                    entry[rhs_id] = Some(*sig);
                 }
             }
         }

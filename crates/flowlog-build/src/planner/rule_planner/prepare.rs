@@ -117,67 +117,22 @@ impl RulePlanner {
         left: AtomArgumentSignature,
         right: AtomArgumentSignature,
     ) -> Result<bool, PlanError> {
-        let current_transformation_index = self.transformation_infos.len();
-
-        // Canonicalize the kept/dropped order by argument id.
-        let (left_sig, right_sig) = if left.argument_id() <= right.argument_id() {
+        // Canonicalize the kept/dropped order by argument id (lower-id slot survives).
+        let (kept, dropped) = if left.argument_id() <= right.argument_id() {
             (left, right)
         } else {
             (right, left)
         };
 
-        // The kept variable is left_sig, the dropped variable is right_sig.
-        let atom_signature = left_sig.atom_signature();
-        let (args, atom_fp, _atom_id, input_name) = catalog.resolve_atom(atom_signature)?;
-        let input_name = input_name.to_string();
-
-        // Update consumer transformation index for the atom
-        self.insert_consumer(
-            catalog.original_atom_fingerprints(),
-            atom_fp,
-            current_transformation_index,
-        )?;
-
-        // Get current values for this atom
-        let in_vals = args
-            .iter()
-            .map(|&sig| ArithmeticPos::from_var_signature(sig))
-            .collect::<Vec<_>>();
-
-        // We drop right_sig from the output payload.
-        let out_vals = Self::out_values_excluding(args, right_sig);
-        trace!("Output values after dropping {}: {:?}", right_sig, out_vals);
-
-        // Build a Key-Value to Key-Value info.
-        let kept_attrs = Self::attrs_from_positions(&out_vals, catalog);
-        let new_name = Self::proj_name(&input_name, &kept_attrs);
-        let tx = TransformationInfo::kv_to_kv(
-            atom_fp,
-            input_name,
-            new_name.clone(),
-            catalog.original_atom_fingerprints().contains(&atom_fp),
-            KeyValueLayout::new(vec![], in_vals),
-            KeyValueLayout::new(vec![], out_vals.clone()),
+        self.apply_drop_one_arg(
+            catalog,
+            dropped,
             KvPredicates {
-                var_eq: vec![(left_sig, right_sig)],
+                var_eq: vec![(kept, dropped)],
                 ..Default::default()
             },
-        );
-
-        let new_fp = tx.output_info_fp();
-
-        // Update producer transformation index
-        self.insert_producer(new_fp, current_transformation_index);
-
-        trace!("Var-eq transformation:\n{}", tx);
-
-        // Update catalog with the projection modification
-        catalog.projection_modify(*atom_signature, vec![right_sig], new_name, new_fp)?;
-
-        // Store the transformation info
-        self.transformation_infos.push(tx);
-
-        Ok(true)
+            "Var-eq",
+        )
     }
 
     /// Apply a constant equality filter (var == const) and project away the filtered column.
@@ -187,59 +142,15 @@ impl RulePlanner {
         var_sig: AtomArgumentSignature,
         const_val: ConstType,
     ) -> Result<bool, PlanError> {
-        let current_transformation_index = self.transformation_infos.len();
-
-        // The variable to be dropped is var_sig.
-        let atom_signature = var_sig.atom_signature();
-        let (args, atom_fp, _atom_id, input_name) = catalog.resolve_atom(atom_signature)?;
-        let input_name = input_name.to_string();
-
-        // Update consumer transformation index for the atom
-        self.insert_consumer(
-            catalog.original_atom_fingerprints(),
-            atom_fp,
-            current_transformation_index,
-        )?;
-
-        // Get current values for this atom
-        let in_vals = args
-            .iter()
-            .map(|&sig| ArithmeticPos::from_var_signature(sig))
-            .collect::<Vec<_>>();
-
-        let out_vals = Self::out_values_excluding(args, var_sig);
-        trace!("Output values after dropping {}: {:?}", var_sig, out_vals);
-
-        // Build a Key-Value to Key-Value info.
-        let kept_attrs = Self::attrs_from_positions(&out_vals, catalog);
-        let new_name = Self::proj_name(&input_name, &kept_attrs);
-        let tx = TransformationInfo::kv_to_kv(
-            atom_fp,
-            input_name,
-            new_name.clone(),
-            catalog.original_atom_fingerprints().contains(&atom_fp),
-            KeyValueLayout::new(vec![], in_vals),
-            KeyValueLayout::new(vec![], out_vals.clone()),
+        self.apply_drop_one_arg(
+            catalog,
+            var_sig,
             KvPredicates {
                 const_eq: vec![(var_sig, const_val)],
                 ..Default::default()
             },
-        );
-
-        let new_fp = tx.output_info_fp();
-
-        // Update producer transformation index
-        self.insert_producer(new_fp, current_transformation_index);
-
-        trace!("Const-eq transformation:\n{}", tx);
-
-        // Update catalog with the projection modification
-        catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp)?;
-
-        // Store the transformation info
-        self.transformation_infos.push(tx);
-
-        Ok(true)
+            "Const-eq",
+        )
     }
 
     /// Apply a placeholder filter and project away its column.
@@ -248,53 +159,60 @@ impl RulePlanner {
         catalog: &mut Catalog,
         var_sig: AtomArgumentSignature,
     ) -> Result<bool, PlanError> {
-        let current_transformation_index = self.transformation_infos.len();
+        self.apply_drop_one_arg(catalog, var_sig, KvPredicates::default(), "Placeholder")
+    }
 
-        // The variable to be dropped is var_sig.
-        let atom_signature = var_sig.atom_signature();
+    /// Drop a single argument from one atom and record the resulting kv→kv
+    /// transformation along with the supplied `predicates` payload.
+    ///
+    /// Shared scaffolding for the three filter passes above: each one
+    /// projects exactly one column away and differs only in which
+    /// `KvPredicates` it attaches and which trace label to log.
+    fn apply_drop_one_arg(
+        &mut self,
+        catalog: &mut Catalog,
+        drop_sig: AtomArgumentSignature,
+        predicates: KvPredicates,
+        label: &str,
+    ) -> Result<bool, PlanError> {
+        let current_transformation_index = self.transformation_infos.len();
+        let atom_signature = drop_sig.atom_signature();
         let (args, atom_fp, _atom_id, input_name) = catalog.resolve_atom(atom_signature)?;
         let input_name = input_name.to_string();
 
-        // Update consumer transformation index for the atom
         self.insert_consumer(
             catalog.original_atom_fingerprints(),
             atom_fp,
             current_transformation_index,
         )?;
 
-        // Get current values for this atom
-        let in_vals = args
+        let in_vals: Vec<_> = args
             .iter()
             .map(|&sig| ArithmeticPos::from_var_signature(sig))
-            .collect::<Vec<_>>();
+            .collect();
 
-        let out_vals = Self::out_values_excluding(args, var_sig);
-        trace!("Output values after dropping {}: {:?}", var_sig, out_vals);
+        let out_vals = Self::out_values_excluding(args, drop_sig);
+        trace!("Output values after dropping {}: {:?}", drop_sig, out_vals);
 
-        // Build a Key-Value to Key-Value info.
         let kept_attrs = Self::attrs_from_positions(&out_vals, catalog);
         let new_name = Self::proj_name(&input_name, &kept_attrs);
+        let is_original = catalog.original_atom_fingerprints().contains(&atom_fp);
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
             input_name,
             new_name.clone(),
-            catalog.original_atom_fingerprints().contains(&atom_fp),
+            is_original,
             KeyValueLayout::new(vec![], in_vals),
-            KeyValueLayout::new(vec![], out_vals.clone()),
-            KvPredicates::default(),
+            KeyValueLayout::new(vec![], out_vals),
+            predicates,
         );
 
         let new_fp = tx.output_info_fp();
-
-        // Update producer transformation index
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("Placeholder transformation:\n{}", tx);
+        trace!("{} transformation:\n{}", label, tx);
 
-        // Update catalog with the projection modification
-        catalog.projection_modify(*atom_signature, vec![var_sig], new_name, new_fp)?;
-
-        // Store the layout information
+        catalog.projection_modify(*atom_signature, vec![drop_sig], new_name, new_fp)?;
         self.transformation_infos.push(tx);
 
         Ok(true)
