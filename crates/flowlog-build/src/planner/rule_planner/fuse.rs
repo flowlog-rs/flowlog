@@ -275,13 +275,13 @@ impl RulePlanner {
             producer_tx.update_output_key_value_layout(new_out_kv_layout);
             if !predicates.const_eq.is_empty() || !predicates.var_eq.is_empty() {
                 producer_tx
-                    .update_const_eq_and_var_eq_constraints(remapped_const_eq, remapped_var_eq);
+                    .update_const_eq_and_var_eq_constraints(remapped_const_eq, remapped_var_eq)?;
             }
             if !predicates.compare_exprs.is_empty() {
-                producer_tx.update_comparisons(remapped_cmps);
+                producer_tx.update_comparisons(remapped_cmps)?;
             }
             if !predicates.fn_call_preds.is_empty() {
-                producer_tx.update_fn_call_preds(remapped_fn_calls);
+                producer_tx.update_fn_call_preds(remapped_fn_calls)?;
             }
             producer_tx.update_output_name(fused_map_output_name);
             producer_tx.update_output_fake_sig();
@@ -582,7 +582,7 @@ impl RulePlanner {
 
             // Remap layout signatures to this consumer's atom id, then apply.
             let consumer_tx = &mut self.transformation_infos[consumer_idx];
-            let atom_id = consumer_tx.input_kv_layout().0.extract_atom_id();
+            let atom_id = consumer_tx.input_kv_layout().0.extract_atom_id()?;
             consumer_tx.update_input_layout(Self::remap_atom_kv_layout(&layout, atom_id));
 
             // Group this consumer under the same (key, value) indices as the joins.

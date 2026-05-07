@@ -68,8 +68,8 @@
 use super::FlowLogRule;
 use crate::common::compute_fp;
 use crate::common::{FileId, Ignored, Span};
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::{span_of, Lexeme, Rule};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::{Lexeme, Rule, span_of};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -319,10 +319,10 @@ impl fmt::Display for LoopCondition {
                     }
                 }
             }
-            (None, conn, Some(sg)) => {
+            (None, _, Some(sg)) => {
+                // Pure `until` form; any connective only matters when both
+                // clauses are present, so it is irrelevant here.
                 write!(f, "until {{ {sg} }}")?;
-                // If there were a while part after, it would have been (Some, _, _)
-                let _ = conn;
             }
             (None, _, None) => {}
         }
@@ -331,7 +331,7 @@ impl fmt::Display for LoopCondition {
 }
 
 fn display_windows(windows: &[(u16, u16)]) -> String {
-    let parts: Vec<String> = windows
+    windows
         .iter()
         .map(|(lo, hi)| {
             if *lo == 0 && *hi == u16::MAX {
@@ -346,25 +346,15 @@ fn display_windows(windows: &[(u16, u16)]) -> String {
                 format!("@it >= {lo} and @it <= {hi}")
             }
         })
-        .collect();
-    if parts.is_empty() {
-        String::new()
-    } else {
-        parts.join(" or ")
-    }
+        .collect::<Vec<_>>()
+        .join(" or ")
 }
 
 impl fmt::Display for LoopBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.condition.is_some() {
-            write!(f, "loop")?;
-        } else {
-            write!(f, "fixpoint")?;
-        }
-        if let Some(cond) = &self.condition {
-            writeln!(f, " {} {{", cond)?;
-        } else {
-            writeln!(f, " {{")?;
+        match &self.condition {
+            Some(cond) => writeln!(f, "loop {cond} {{")?,
+            None => writeln!(f, "fixpoint {{")?,
         }
         for directive in &self.iterative_relations {
             writeln!(f, "    .iterative {}", directive.name())?;
@@ -446,7 +436,7 @@ fn parse_connective(pair: Pair<Rule>) -> Result<LoopConnective, ParseError> {
         r => {
             return Err(grammar_bug(format!(
                 "loop_connective unexpected rule {r:?}"
-            )))
+            )));
         }
     })
 }
@@ -454,15 +444,38 @@ fn parse_connective(pair: Pair<Rule>) -> Result<LoopConnective, ParseError> {
 /// Parse a `loop_iter_expr` pair into an [`IterWindows`] list.
 fn parse_iter_expr(pair: Pair<Rule>) -> Result<IterWindows, ParseError> {
     let mut children = pair.into_inner();
+    let mut ranges = next_iter_term(&mut children, "first")?;
 
-    let first_op = children
+    // Subsequent: loop_connective, compare_op, integer (repeated).
+    while let Some(conn_pair) = children.next() {
+        let connective = parse_connective(conn_pair)?;
+        let new_range = next_iter_term(&mut children, "repeat")?;
+        ranges = match connective {
+            LoopConnective::And => intersect_ranges(&ranges, &new_range),
+            LoopConnective::Or => union_ranges(&ranges, &new_range),
+        };
+    }
+
+    Ok(ranges)
+}
+
+/// Pull the next `(compare_op, integer)` pair out of `children` and resolve it
+/// to its allowed iteration range.
+///
+/// `position` is woven into grammar-bug messages to disambiguate the leading
+/// term from continuation terms.
+fn next_iter_term(
+    children: &mut pest::iterators::Pairs<'_, Rule>,
+    position: &str,
+) -> Result<Vec<(u16, u16)>, ParseError> {
+    let op = children
         .next()
-        .ok_or_else(|| grammar_bug("loop_iter_expr missing first compare op"))?
+        .ok_or_else(|| grammar_bug(format!("loop_iter_expr missing {position} compare op")))?
         .as_str()
         .to_string();
-    let first_n: u16 = children
+    let n: u16 = children
         .next()
-        .ok_or_else(|| grammar_bug("loop_iter_expr missing first integer"))?
+        .ok_or_else(|| grammar_bug(format!("loop_iter_expr missing {position} integer")))?
         .as_str()
         .trim_start_matches('+')
         .parse()
@@ -471,35 +484,7 @@ fn parse_iter_expr(pair: Pair<Rule>) -> Result<IterWindows, ParseError> {
                 "loop_iter_expr iteration bound must fit in u16: {e}"
             ))
         })?;
-    let mut ranges = range_for_op(&first_op, first_n)?;
-
-    // Subsequent: loop_connective, compare_op, integer (repeated).
-    while let Some(conn_pair) = children.next() {
-        let connective = parse_connective(conn_pair)?;
-        let op = children
-            .next()
-            .ok_or_else(|| grammar_bug("loop_iter_expr missing compare op in repeat"))?
-            .as_str()
-            .to_string();
-        let n: u16 = children
-            .next()
-            .ok_or_else(|| grammar_bug("loop_iter_expr missing integer in repeat"))?
-            .as_str()
-            .trim_start_matches('+')
-            .parse()
-            .map_err(|e| {
-                grammar_bug(format!(
-                    "loop_iter_expr iteration bound must fit in u16: {e}"
-                ))
-            })?;
-        let new_range = range_for_op(&op, n)?;
-        ranges = match connective {
-            LoopConnective::And => intersect_ranges(&ranges, &new_range),
-            LoopConnective::Or => union_ranges(&ranges, &new_range),
-        };
-    }
-
-    Ok(ranges)
+    range_for_op(&op, n)
 }
 
 /// Parse a `loop_stop_group` pair into a [`StopGroup`].

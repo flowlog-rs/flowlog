@@ -7,8 +7,8 @@ mod macros;
 mod source;
 
 // External API — consumed by flowlog-compiler and integration tests.
-pub use config::{get_example_files, Config, ExecutionMode};
-pub use diag::{emit, emit_and_exit, BoxError, Diagnostic, InternalError, BUG_URL};
+pub use config::{Config, ExecutionMode, get_example_files};
+pub use diag::{BUG_URL, BoxError, Diagnostic, InternalError, emit, emit_and_exit};
 pub use formatter::SECTION_BAR;
 pub use macros::INTERN_MAX_RETRIES;
 pub use source::{FileId, SourceMap, Span};
