@@ -13,7 +13,7 @@ use super::FnCall;
 use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::ConstType;
-use crate::parser::{span_of, Lexeme, Rule};
+use crate::parser::{Lexeme, Rule, span_of};
 
 /// Arithmetic operator.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -57,7 +57,7 @@ impl Lexeme for ArithmeticOperator {
             other => {
                 return Err(grammar_bug(format!(
                     "unknown arithmetic operator: {other:?}"
-                )))
+                )));
             }
         })
     }

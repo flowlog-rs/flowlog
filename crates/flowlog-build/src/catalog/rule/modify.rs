@@ -1,14 +1,24 @@
 //! Rule Modification Operations
 //!
-//! This module provides the catalog modification API for transforming logical rules
-//! during query planning. It implements three core transformation operations:
+//! This module provides the catalog modification API for transforming
+//! logical rules during query planning. Each public method rewrites the
+//! rule's RHS to reflect a planning step and re-syncs the catalog's
+//! internal metadata via [`Catalog::update_rule`].
 //!
-//! 1. **Projection**: Remove specified arguments from atoms
-//! 2. **Join**: Combine multiple atoms into new atoms
-//! 3. **Comparison**: Apply comparison predicates to atoms and generate filtered results
+//! Operations:
 //!
-//! All operations maintain catalog consistency by updating internal metadata mappings
-//! and rebuilding the underlying rule structure.
+//! 1. **Map** ([`Catalog::map_modify`]): Rename an atom while keeping its
+//!    arity intact (used for EDB premap layout adjustments).
+//! 2. **Projection** ([`Catalog::projection_modify`]): Drop specified
+//!    arguments from an atom, reducing its arity.
+//! 3. **SIP** ([`Catalog::sip_modify`]): Reorder a positive atom's
+//!    arguments so join keys come first.
+//! 4. **Join** ([`Catalog::join_modify`]): Replace a left atom and a set
+//!    of right atoms with new joined atoms.
+//! 5. **Comparison** ([`Catalog::comparison_modify`]): Fold a comparison
+//!    predicate into the atoms it filters, producing renamed copies.
+//! 6. **FnCall** ([`Catalog::fn_call_modify`]): Same as comparison, but
+//!    folding a function-call predicate.
 
 use super::Catalog;
 use crate::catalog::{AtomArgumentSignature, AtomSignature, CatalogError};
@@ -17,8 +27,9 @@ use crate::parser::{Atom, AtomArg, FlowLogRule, Predicate};
 /// Public API for modifying rules and updating catalog metadata accordingly.
 impl Catalog {
     /// Map an EDB atom to a required key/value layout.
-    /// This function do not change the arity of the atom.
-    /// Only premap of an original atom should use this function.
+    ///
+    /// Does not change the atom's arity; only the premap of an original
+    /// atom should use this function.
     pub(crate) fn map_modify(
         &mut self,
         atom_signature: AtomSignature,
@@ -100,12 +111,8 @@ impl Catalog {
         };
 
         let new_atom = match &self.rule.rhs()[rhs_index] {
-            Predicate::PositiveAtom(atom) => {
-                Predicate::PositiveAtom(build_projected_atom(atom)?)
-            }
-            Predicate::NegativeAtom(atom) => {
-                Predicate::NegativeAtom(build_projected_atom(atom)?)
-            }
+            Predicate::PositiveAtom(atom) => Predicate::PositiveAtom(build_projected_atom(atom)?),
+            Predicate::NegativeAtom(atom) => Predicate::NegativeAtom(build_projected_atom(atom)?),
             other => {
                 return Err(CatalogError::internal(format!(
                     "projection_modify: target predicate at rhs index {rhs_index} \
@@ -131,10 +138,7 @@ impl Catalog {
         let rhs_index = self.rhs_index_from_signature(right_atom_signature);
 
         // Verify the target is a positive atom
-        if !matches!(
-            self.rule.rhs()[rhs_index],
-            Predicate::PositiveAtom(_)
-        ) {
+        if !matches!(self.rule.rhs()[rhs_index], Predicate::PositiveAtom(_)) {
             return Err(CatalogError::internal(format!(
                 "sip_modify: target predicate at rhs index {rhs_index} is not a positive atom: {}",
                 self.rule.rhs()[rhs_index]
@@ -142,20 +146,7 @@ impl Catalog {
         }
 
         // Create the new SIP atom by reordering arguments according to new arguments
-        let new_atom_args = new_argument_list
-            .iter()
-            .map(|arg_sig| {
-                self.signature_to_argument_str_map
-                    .get(arg_sig)
-                    .cloned()
-                    .map(AtomArg::Var)
-                    .ok_or_else(|| {
-                        CatalogError::internal(format!(
-                            "sip_modify: argument signature {arg_sig:?} not found in signature map"
-                        ))
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let new_atom_args = self.lookup_arg_vars(&new_argument_list, "sip_modify")?;
 
         let new_atom = Atom::new(&new_atom_name, new_atom_args, new_atom_fingerprint);
         self.update_rule_in_place(rhs_index, Predicate::PositiveAtom(new_atom))
@@ -201,37 +192,12 @@ impl Catalog {
         }
 
         // Find and validate all right atoms
-        let right_indices: Vec<usize> = right_atom_signatures
-            .iter()
-            .map(|&sig| {
-                let idx = self.rhs_index_from_signature(sig);
-                match &self.rule.rhs()[idx] {
-                    Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {
-                        Ok(idx)
-                    }
-                    other => Err(CatalogError::internal(format!(
-                        "join_modify: right predicate at rhs index {idx} is not an atom: {other}"
-                    ))),
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let right_indices =
+            self.validate_atom_rhs_indices(&right_atom_signatures, "join_modify")?;
 
         let mut new_joined_atoms = Vec::with_capacity(num_right_atoms);
         for i in 0..num_right_atoms {
-            let new_atom_args: Vec<AtomArg> = new_arguments_list[i]
-                .iter()
-                .map(|arg_sig| {
-                    self.signature_to_argument_str_map
-                        .get(arg_sig)
-                        .map(|arg_str| AtomArg::Var(arg_str.clone()))
-                        .ok_or_else(|| {
-                            CatalogError::internal(format!(
-                                "join_modify: argument signature {arg_sig:?} \
-                                 not found in signature map"
-                            ))
-                        })
-                })
-                .collect::<Result<_, _>>()?;
+            let new_atom_args = self.lookup_arg_vars(&new_arguments_list[i], "join_modify")?;
             let new_atom = Atom::new(&new_names[i], new_atom_args, new_fingerprints[i]);
             new_joined_atoms.push(Predicate::PositiveAtom(new_atom));
         }
@@ -279,41 +245,16 @@ impl Catalog {
             })?;
 
         // Find and validate all target atoms for the comparison
-        let right_indices: Vec<usize> = right_atom_signatures
-            .iter()
-            .map(|&sig| {
-                let idx = self.rhs_index_from_signature(sig);
-                match &self.rule.rhs()[idx] {
-                    Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {
-                        Ok(idx)
-                    }
-                    other => Err(CatalogError::internal(format!(
-                        "comparison_modify: right predicate at rhs index {idx} \
-                         is not an atom: {other}"
-                    ))),
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let right_indices =
+            self.validate_atom_rhs_indices(&right_atom_signatures, "comparison_modify")?;
 
         // Create filtered atoms by copying original atom arguments
-        let new_filtered_atoms: Vec<Predicate> = right_indices
-            .iter()
-            .enumerate()
-            .map(|(i, &atom_idx)| {
-                let new_atom_args = match &self.rule.rhs()[atom_idx] {
-                    Predicate::PositiveAtom(atom)
-                    | Predicate::NegativeAtom(atom) => atom.arguments().to_vec(),
-                    other => {
-                        return Err(CatalogError::internal(format!(
-                            "comparison_modify: expected atom predicate at rhs index \
-                             {atom_idx}, got: {other}"
-                        )));
-                    }
-                };
-                let new_atom = Atom::new(&new_names[i], new_atom_args, new_fingerprints[i]);
-                Ok(Predicate::PositiveAtom(new_atom))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let new_filtered_atoms = self.build_renamed_atom_copies(
+            &right_indices,
+            &new_names,
+            &new_fingerprints,
+            "comparison_modify",
+        )?;
 
         // Remove comparison predicate, then update rule with new filtered atoms
         self.remove_and_update_rule(comparison_rhs_index, right_indices, new_filtered_atoms)
@@ -358,41 +299,16 @@ impl Catalog {
             })?;
 
         // Find and validate all target atoms
-        let right_indices: Vec<usize> = right_atom_signatures
-            .iter()
-            .map(|&sig| {
-                let idx = self.rhs_index_from_signature(sig);
-                match &self.rule.rhs()[idx] {
-                    Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {
-                        Ok(idx)
-                    }
-                    other => Err(CatalogError::internal(format!(
-                        "fn_call_modify: right predicate at rhs index {idx} \
-                         is not an atom: {other}"
-                    ))),
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let right_indices =
+            self.validate_atom_rhs_indices(&right_atom_signatures, "fn_call_modify")?;
 
         // Create filtered atoms by copying original atom arguments
-        let new_filtered_atoms: Vec<Predicate> = right_indices
-            .iter()
-            .enumerate()
-            .map(|(i, &atom_idx)| {
-                let new_atom_args = match &self.rule.rhs()[atom_idx] {
-                    Predicate::PositiveAtom(atom)
-                    | Predicate::NegativeAtom(atom) => atom.arguments().to_vec(),
-                    other => {
-                        return Err(CatalogError::internal(format!(
-                            "fn_call_modify: expected atom predicate at rhs index \
-                             {atom_idx}, got: {other}"
-                        )));
-                    }
-                };
-                let new_atom = Atom::new(&new_names[i], new_atom_args, new_fingerprints[i]);
-                Ok(Predicate::PositiveAtom(new_atom))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let new_filtered_atoms = self.build_renamed_atom_copies(
+            &right_indices,
+            &new_names,
+            &new_fingerprints,
+            "fn_call_modify",
+        )?;
 
         // Remove fn_call predicate, then update rule with new filtered atoms
         self.remove_and_update_rule(fn_call_rhs_index, right_indices, new_filtered_atoms)
@@ -401,6 +317,87 @@ impl Catalog {
     // ========================================================================================
     // === PRIVATE HELPER METHODS ===
     // ========================================================================================
+
+    /// Resolve each `AtomSignature` to its global RHS index and verify that
+    /// the predicate at that index is a positive or negative atom.
+    ///
+    /// `context` is used as a prefix for the error message so callers can
+    /// be identified at the failure site.
+    fn validate_atom_rhs_indices(
+        &self,
+        signatures: &[AtomSignature],
+        context: &str,
+    ) -> Result<Vec<usize>, CatalogError> {
+        signatures
+            .iter()
+            .map(|&sig| {
+                let idx = self.rhs_index_from_signature(sig);
+                match &self.rule.rhs()[idx] {
+                    Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => Ok(idx),
+                    other => Err(CatalogError::internal(format!(
+                        "{context}: right predicate at rhs index {idx} is not an atom: {other}"
+                    ))),
+                }
+            })
+            .collect()
+    }
+
+    /// Look up each argument signature in `signature_to_argument_str_map`
+    /// and wrap the resulting variable name in `AtomArg::Var`.
+    fn lookup_arg_vars(
+        &self,
+        signatures: &[AtomArgumentSignature],
+        context: &str,
+    ) -> Result<Vec<AtomArg>, CatalogError> {
+        signatures
+            .iter()
+            .map(|arg_sig| {
+                self.signature_to_argument_str_map
+                    .get(arg_sig)
+                    .cloned()
+                    .map(AtomArg::Var)
+                    .ok_or_else(|| {
+                        CatalogError::internal(format!(
+                            "{context}: argument signature {arg_sig:?} not found in signature map"
+                        ))
+                    })
+            })
+            .collect()
+    }
+
+    /// Build a positive atom for each RHS index by copying the existing
+    /// atom's arguments and assigning the matching name and fingerprint.
+    ///
+    /// Callers should have already validated that each index points at an
+    /// atom (e.g. via [`Self::validate_atom_rhs_indices`]); the inner
+    /// match is kept defensive so a stale index still surfaces a clean
+    /// internal error instead of a panic.
+    fn build_renamed_atom_copies(
+        &self,
+        indices: &[usize],
+        new_names: &[String],
+        new_fingerprints: &[u64],
+        context: &str,
+    ) -> Result<Vec<Predicate>, CatalogError> {
+        indices
+            .iter()
+            .enumerate()
+            .map(|(i, &atom_idx)| {
+                let args = match &self.rule.rhs()[atom_idx] {
+                    Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
+                        atom.arguments().to_vec()
+                    }
+                    other => {
+                        return Err(CatalogError::internal(format!(
+                            "{context}: expected atom predicate at rhs index {atom_idx}, got: {other}"
+                        )));
+                    }
+                };
+                let new_atom = Atom::new(&new_names[i], args, new_fingerprints[i]);
+                Ok(Predicate::PositiveAtom(new_atom))
+            })
+            .collect()
+    }
 
     /// Update the rule by replacing the predicate at the specified index.
     /// Note that we take global RHS index here, not positive or negative index.

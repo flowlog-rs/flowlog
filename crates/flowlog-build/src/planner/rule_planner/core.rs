@@ -8,7 +8,9 @@
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::catalog::{AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates};
+use crate::catalog::{
+    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates,
+};
 use crate::planner::PlanError;
 use crate::planner::{KeyValueLayout, TransformationInfo};
 
@@ -71,19 +73,13 @@ impl RulePlanner {
         join_tuple_index: (usize, usize),
     ) -> Result<(), PlanError> {
         let (lhs_idx, rhs_idx) = join_tuple_index;
-
-        if catalog
-            .original_atom_fingerprints()
-            .contains(&catalog.positive_atom_fingerprint(lhs_idx))
-        {
-            self.create_edb_premap_transformations(catalog, lhs_idx, true)?;
-        }
-
-        if catalog
-            .original_atom_fingerprints()
-            .contains(&catalog.positive_atom_fingerprint(rhs_idx))
-        {
-            self.create_edb_premap_transformations(catalog, rhs_idx, true)?;
+        for idx in [lhs_idx, rhs_idx] {
+            if catalog
+                .original_atom_fingerprints()
+                .contains(&catalog.positive_atom_fingerprint(idx))
+            {
+                self.create_edb_premap_transformations(catalog, idx, true)?;
+            }
         }
         Ok(())
     }
@@ -125,44 +121,30 @@ impl RulePlanner {
             left_atom_argument_signatures,
             right_atom_argument_signatures,
         );
-        trace!(
-            "Join keys: {:?}",
-            lhs_keys
+        fn labelled<'a>(
+            positions: &'a [ArithmeticPos],
+            catalog: &'a Catalog,
+        ) -> Vec<(&'a ArithmeticPos, &'a String)> {
+            positions
                 .iter()
-                .map(|pos| (
-                    pos,
-                    catalog.signature_to_argument_str(pos.init().as_var_signature().unwrap())
-                ))
-                .collect::<Vec<_>>()
-        );
-        trace!(
-            "Join LHS values: {:?}",
-            lhs_vals
-                .iter()
-                .map(|pos| (
-                    pos,
-                    catalog.signature_to_argument_str(pos.init().as_var_signature().unwrap())
-                ))
-                .collect::<Vec<_>>()
-        );
-        trace!(
-            "Join RHS values: {:?}",
-            rhs_vals
-                .iter()
-                .map(|pos| (
-                    pos,
-                    catalog.signature_to_argument_str(pos.init().as_var_signature().unwrap())
-                ))
-                .collect::<Vec<_>>()
-        );
+                .map(|pos| {
+                    (
+                        pos,
+                        catalog.signature_to_argument_str(pos.init().as_var_signature().unwrap()),
+                    )
+                })
+                .collect()
+        }
+        trace!("Join keys: {:?}", labelled(&lhs_keys, catalog));
+        trace!("Join LHS values: {:?}", labelled(&lhs_vals, catalog));
+        trace!("Join RHS values: {:?}", labelled(&rhs_vals, catalog));
 
         // Construct output argument list: keys + LHS values + RHS values
         let new_arguments_list: Vec<AtomArgumentSignature> = lhs_keys
             .iter()
             .chain(lhs_vals.iter())
             .chain(rhs_vals.iter())
-            .map(|pos| pos.init().as_var_signature().unwrap())
-            .cloned()
+            .map(|pos| *pos.init().as_var_signature().unwrap())
             .collect();
 
         // Create the join transformation with proper key-value layouts

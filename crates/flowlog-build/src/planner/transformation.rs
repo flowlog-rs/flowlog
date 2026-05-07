@@ -4,15 +4,17 @@
 //! through query execution plans. Transformations represent operations like filtering,
 //! projection, joins, and aggregation that convert input collections into output collections.
 
-use crate::planner::Collection;
 use std::fmt;
 use std::sync::Arc;
+
 use tracing::trace;
+
+use crate::catalog::JoinPredicates;
+use crate::planner::Collection;
 
 mod flow;
 mod info;
 
-use crate::catalog::JoinPredicates;
 pub(crate) use flow::TransformationFlow;
 pub(crate) use info::{KeyValueLayout, TransformationInfo};
 
@@ -26,8 +28,8 @@ pub(crate) enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Row-to-key-value transformation (structure rows into KV pairs)
-    /// This include key-value, key-only, and value-only outputs.
+    /// Row-to-key-value transformation (structure rows into KV pairs).
+    /// Includes key-value, key-only, and value-only outputs.
     RowToKv {
         input: Arc<Collection>,
         output: Arc<Collection>,
@@ -39,8 +41,8 @@ pub(crate) enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Key-value to key-value transformation
-    /// This include key-value, key-only, and value-only outputs.
+    /// Key-value to key-value transformation.
+    /// Includes key-value, key-only, and value-only outputs.
     KvToKv {
         input: Arc<Collection>,
         output: Arc<Collection>,
@@ -54,8 +56,8 @@ pub(crate) enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Join: Key-value ⋈ Key-value to key-value transformation
-    /// This include key-value, key-only, and value-only outputs.
+    /// Join: Key-value ⋈ Key-value to key-value transformation.
+    /// Includes key-value, key-only, and value-only outputs.
     JnToKv {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
@@ -67,8 +69,8 @@ pub(crate) enum Transformation {
         output: Arc<Collection>,
         flow: TransformationFlow,
     },
-    /// Antijoin: Key-only ¬ Key-only to key-value transformation
-    /// This include key-value, key-only, and value-only outputs.
+    /// Antijoin: Key-only ¬ Key-only to key-value transformation.
+    /// Includes key-value, key-only, and value-only outputs.
     NJnToKv {
         input: (Arc<Collection>, Arc<Collection>),
         output: Arc<Collection>,
@@ -169,16 +171,16 @@ impl Transformation {
     }
 
     /// Return the transformation operation name.
-    pub(crate) fn operation_name(&self) -> &str {
+    pub(crate) fn operation_name(&self) -> &'static str {
         match self {
-            Transformation::RowToRow { .. } => "[Row -> Row]",
-            Transformation::RowToKv { .. } => "[Row -> KV]",
-            Transformation::KvToRow { .. } => "[KV -> Row]",
-            Transformation::KvToKv { .. } => "[KV -> KV]",
-            Transformation::JnToRow { .. } => "[Join -> Row]",
-            Transformation::JnToKv { .. } => "[Join -> KV]",
-            Transformation::NJnToRow { .. } => "[AntiJoin -> Row]",
-            Transformation::NJnToKv { .. } => "[AntiJoin -> KV]",
+            Self::RowToRow { .. } => "[Row -> Row]",
+            Self::RowToKv { .. } => "[Row -> KV]",
+            Self::KvToRow { .. } => "[KV -> Row]",
+            Self::KvToKv { .. } => "[KV -> KV]",
+            Self::JnToRow { .. } => "[Join -> Row]",
+            Self::JnToKv { .. } => "[Join -> KV]",
+            Self::NJnToRow { .. } => "[AntiJoin -> Row]",
+            Self::NJnToKv { .. } => "[AntiJoin -> KV]",
         }
     }
 
@@ -238,16 +240,12 @@ impl Transformation {
             info.kv_predicates(),
         );
 
-        let is_row_in = info.is_row_input();
-        let is_row_out = info.is_row_output();
-
         let input = Arc::new(Collection::new(
             info.input_info_fp().0,
             info.input_name().0.to_string(),
             info.input_kv_layout().0.key(),
             info.input_kv_layout().0.value(),
         ));
-
         let output = Arc::new(Collection::new(
             info.output_info_fp(),
             info.output_name().to_string(),
@@ -255,7 +253,7 @@ impl Transformation {
             info.output_kv_layout().value(),
         ));
 
-        match (is_row_in, is_row_out) {
+        match (info.is_row_input(), info.is_row_output()) {
             // Row in, Row out: filtering, projection, or aggregation on flat rows.
             (true, true) => Self::RowToRow {
                 input,
@@ -307,8 +305,6 @@ impl Transformation {
             info.join_predicates(),
         );
 
-        let is_row_output = info.is_row_output();
-
         let input = (
             Arc::new(Collection::new(
                 info.input_info_fp().0,
@@ -331,7 +327,7 @@ impl Transformation {
             info.output_kv_layout().value(),
         ));
 
-        if is_row_output {
+        if info.is_row_output() {
             Self::JnToRow {
                 input,
                 output,
@@ -381,9 +377,6 @@ impl Transformation {
             &JoinPredicates::default(), // No predicates for antijoins
         );
 
-        // Determine antijoin type based on output collection characteristics
-        let is_row_output = info.is_row_output();
-
         let input = (
             Arc::new(Collection::new(
                 info.input_info_fp().0,
@@ -406,7 +399,7 @@ impl Transformation {
             info.output_kv_layout().value(),
         ));
 
-        if is_row_output {
+        if info.is_row_output() {
             Self::NJnToRow {
                 input,
                 output,
