@@ -12,7 +12,7 @@
 //! replaced with real ones once they are known. This allows building
 //! a transformation plan before all details are finalized.
 
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 
 use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos, JoinPredicates,
@@ -89,7 +89,12 @@ impl KeyValueLayout {
 
 /// Transformation information, describing how to transform input collection(s)
 /// into an output collection, along with any constraints that must hold.
-#[derive(PartialEq, Clone, Eq, Hash, Debug)]
+///
+/// `PartialEq`/`Eq`/`Hash` key on `output_info_fp` only — the fingerprint is
+/// the canonical identity. The `*_name` strings carry rule-local variable
+/// aliases that would split semantically-identical infos under a derive,
+/// defeating the dedup in `StratumPlanner::deduplicate_transformation_infos`.
+#[derive(Clone, Debug)]
 pub(crate) enum TransformationInfo {
     /// Unary Key-Value to Key-Value transformation (filter, map, projection, etc.).
     KVToKV {
@@ -164,6 +169,23 @@ pub(crate) enum TransformationInfo {
         /// Output layout (key/value positions) (fake until resolved).
         output_kv_layout: KeyValueLayout,
     },
+}
+
+// ========================
+// Identity (Eq / Hash)
+// ========================
+impl PartialEq for TransformationInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.output_info_fp() == other.output_info_fp()
+    }
+}
+
+impl Eq for TransformationInfo {}
+
+impl Hash for TransformationInfo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.output_info_fp().hash(state);
+    }
 }
 
 // ========================
