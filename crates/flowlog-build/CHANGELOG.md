@@ -1,0 +1,25 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.2.3](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.2.2...flowlog-build-v0.2.3) - 2026-05-10
+
+### Fixed
+
+- *(planner)* key TransformationInfo Eq/Hash on output fingerprint ([#108](https://github.com/flowlog-rs/flowlog/pull/108))
+
+### Other
+
+- *(parser)* tidy AST/Display/Parser impls + new round-trip test ([#104](https://github.com/flowlog-rs/flowlog/pull/104))
+- *(errors)* tidy diagnostic formatting + label boilerplate ([#105](https://github.com/flowlog-rs/flowlog/pull/105))
+- *(planner)* extract helpers across rule planner + transformations ([#106](https://github.com/flowlog-rs/flowlog/pull/106))
+- split correctness from perf; modular harness for the correctness surface ([#101](https://github.com/flowlog-rs/flowlog/pull/101))
+- *(imports)* consolidate and regroup `use` blocks across the workspace
+- *(docs)* fix stale and misleading doc comments
+- *(idiomatic)* small idiomatic-Rust rewrites across the workspace
+- *(dry)* extract small DRY helpers across catalog/parser/planner/profiler
