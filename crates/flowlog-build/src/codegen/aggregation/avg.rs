@@ -10,8 +10,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::common::{
-    agg_semiring_new, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline, key_pattern,
-    row_pattern, tuple, ThresholdCmp,
+    ThresholdCmp, agg_semiring_new, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
+    key_pattern, row_pattern, tuple,
 };
 
 /// Full row reconstruction from `(key, agg_val)` where the averaged value is

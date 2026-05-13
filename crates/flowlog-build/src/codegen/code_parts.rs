@@ -95,16 +95,12 @@ impl CodeGen {
                 profiler.update_stratum_block(idx);
             });
 
-            let (core_flows, non_recursive_arranged_map) =
-                self.gen_non_recursive_core_flows(stratum, profiler)?;
+            let core_flows = self.gen_non_recursive_core_flows(stratum, profiler)?;
             flows.extend(core_flows);
 
             if stratum.is_recursive() {
-                flows.push(self.gen_recursive_block(
-                    &non_recursive_arranged_map,
-                    stratum,
-                    profiler,
-                )?);
+                let outer_snapshot = self.outer_arranged.clone();
+                flows.push(self.gen_recursive_block(&outer_snapshot, stratum, profiler)?);
             } else {
                 flows.extend(self.gen_non_recursive_post_flows(
                     &calculated_output_fps,

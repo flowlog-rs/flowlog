@@ -189,7 +189,11 @@ impl CodeGen {
                 .unwrap_or_else(|| self.find_global_ident(*fp));
             let entered = format_ident!("in_{}", source);
             bindings.insert(*fp, entered.clone());
-            stmts.push(quote! { let #entered = #source.enter(inner); });
+            // Clone before entering: when an outer-scope arrangement is
+            // shared across strata (via program-wide `outer_arranged`),
+            // multiple recursive blocks may each need to enter it.
+            // TraceAgent is Rc-backed so the clone is cheap.
+            stmts.push(quote! { let #entered = #source.clone().enter(inner); });
 
             with_profiler(profiler, |profiler| {
                 profiler.recursive_enter_operator(source.to_string(), entered.to_string());

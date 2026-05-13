@@ -220,6 +220,16 @@ impl StratumPlanner {
         &self.non_recursive_transformations
     }
 
+    /// Retain only the non-recursive transformations matching `f`. Used by
+    /// the cross-stratum prune pass to drop transformations whose output
+    /// fingerprint was already produced by an earlier stratum's prelude.
+    pub(crate) fn retain_non_recursive_transformations<F>(&mut self, f: F)
+    where
+        F: FnMut(&Transformation) -> bool,
+    {
+        self.non_recursive_transformations.retain(f);
+    }
+
     /// Get dynamic transformations that depend on IDB collections.
     /// These transformations must be re-evaluated during recursion.
     #[inline]

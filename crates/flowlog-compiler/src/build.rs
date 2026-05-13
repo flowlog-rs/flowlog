@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, io, process};
 
-use flowlog_build::planner::StratumPlanner;
+use flowlog_build::planner::ProgramPlanner;
 use flowlog_build::profiler::Profiler;
 use quote::quote;
 use tracing::info;
@@ -30,10 +30,10 @@ impl Compiler {
     /// Pure codegen — cargo is not invoked here.
     pub(crate) fn emit_sources(
         &mut self,
-        strata: &[StratumPlanner],
+        program_planner: &ProgramPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<(), flowlog_build::common::BoxError> {
-        let parts = self.codegen.generate(strata, profiler)?;
+        let parts = self.codegen.generate(program_planner, profiler)?;
         let features = self.codegen.features();
 
         // `src/relation.rs` — Relation trait + per-EDB `Rel{name}` input handlers.

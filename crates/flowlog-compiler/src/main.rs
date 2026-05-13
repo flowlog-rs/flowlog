@@ -11,11 +11,9 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use flowlog_build::common::{Config, SECTION_BAR, SourceMap, emit_and_exit, get_example_files};
-use flowlog_build::optimizer::Optimizer;
 use flowlog_build::parser::Program;
-use flowlog_build::planner::StratumPlanner;
+use flowlog_build::planner::ProgramPlanner;
 use flowlog_build::profiler::Profiler;
-use flowlog_build::stratifier::Stratifier;
 use flowlog_compiler::Compiler;
 
 fn main() {
@@ -46,16 +44,13 @@ fn compile_single(config: &Config) {
     let (mut program, sm) = parse_program(config);
     flowlog_build::typechecker::check_program(&mut program)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
-    let stratifier = Stratifier::from_program(&program, config.is_extended())
-        .unwrap_or_else(|err| emit_and_exit(err, &sm));
     let mut profiler = new_profiler(config);
-    let mut optimizer = Optimizer::new();
-    let strata = plan_strata(config, &mut optimizer, &mut profiler, &stratifier)
+    let program_planner = ProgramPlanner::from_program(config, &program, &mut profiler)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     let mut compiler = Compiler::new(config.clone(), program);
     compiler
-        .compile(&strata, &mut profiler)
+        .compile(&program_planner, &mut profiler)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 }
 
@@ -97,19 +92,10 @@ fn run_all_examples(config: &Config) {
                 continue;
             }
         };
-        let stratifier = match Stratifier::from_program(&program, config.is_extended()) {
-            Ok(s) => s,
-            Err(err) => {
-                failure += 1;
-                error!("FAILED: {} ({err})", file_name);
-                continue;
-            }
-        };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut optimizer = Optimizer::new();
             let mut profiler = new_profiler(config);
-            plan_strata(config, &mut optimizer, &mut profiler, &stratifier)
-                .map(|strata| (program.rules().len(), strata.len()))
+            ProgramPlanner::from_program(config, &program, &mut profiler)
+                .map(|pp| (program.rules().len(), pp.strata().len()))
         }));
 
         match outcome {
@@ -167,24 +153,6 @@ fn new_profiler(config: &Config) -> Option<Profiler> {
     config
         .profiling_enabled()
         .then(|| Profiler::new(config.mode()))
-}
-
-fn plan_strata(
-    config: &Config,
-    optimizer: &mut Optimizer,
-    profiler: &mut Option<Profiler>,
-    stratifier: &Stratifier,
-) -> Result<Vec<StratumPlanner>, flowlog_build::common::BoxError> {
-    stratifier
-        .stratum()
-        .iter()
-        .enumerate()
-        .map(|(idx, rule_refs)| {
-            let rules: Vec<_> = rule_refs.iter().map(|r| (*r).clone()).collect();
-            StratumPlanner::from_rules(config, &rules, optimizer, profiler, stratifier, idx)
-                .map_err(flowlog_build::common::BoxError::from)
-        })
-        .collect()
 }
 
 // =========================================================================

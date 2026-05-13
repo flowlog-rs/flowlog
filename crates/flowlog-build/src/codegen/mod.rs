@@ -35,7 +35,7 @@ use proc_macro2::Ident;
 
 use crate::common::Config;
 use crate::parser::{DataType, Program};
-use crate::planner::StratumPlanner;
+use crate::planner::ProgramPlanner;
 use crate::profiler::Profiler;
 
 pub struct CodeGen {
@@ -52,6 +52,11 @@ pub struct CodeGen {
     /// Populated during `generate`; drives the frontend's import and derive
     /// emission.
     pub(crate) features: Features,
+
+    /// Outer-scope arrangement cache: fingerprint → `*_arr` ident. Persists
+    /// across strata so a later stratum can reuse an arrangement built by an
+    /// earlier stratum's prelude. Reset at the start of every `generate`.
+    pub(crate) outer_arranged: HashMap<u64, Ident>,
 }
 
 impl CodeGen {
@@ -62,6 +67,7 @@ impl CodeGen {
             global_fp_to_ident: HashMap::new(),
             global_fp_to_type: HashMap::new(),
             features: Features::default(),
+            outer_arranged: HashMap::new(),
         };
         cg.make_global_ident_map();
         cg.make_global_data_type_map();
@@ -75,10 +81,11 @@ impl CodeGen {
     /// Run every code-generation pass and return the resulting [`CodeParts`].
     pub fn generate(
         &mut self,
-        strata: &[StratumPlanner],
+        program_planner: &ProgramPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<CodeParts, CodegenError> {
         self.features.reset();
-        self.collect_parts(strata, profiler)
+        self.outer_arranged.clear();
+        self.collect_parts(program_planner.strata(), profiler)
     }
 }

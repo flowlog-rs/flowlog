@@ -37,6 +37,8 @@
 .decl blankStep(FromCtr: int32, FromN: int32, ToCtr: int32, ToN: int32)
 .printsize blankStep
 
+.decl skipBlank(FromCtr: int32, FromN: int32, ToCtr: int32, ToN: int32)
+
 .decl value_blank_star(FromCtr: int32, FromN: int32, ToCtr: int32, ToN: int32)
 .printsize value_blank_star
 .decl nextVisible(PrevCtr: int32, PrevN: int32, NextCtr: int32, NextN: int32)

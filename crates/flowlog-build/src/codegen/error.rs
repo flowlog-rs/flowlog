@@ -7,9 +7,9 @@
 //! fingerprint, unreachable match arm) which surface as `please file a
 //! bug` ICEs.
 
-use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use crate::common::{Diagnostic, InternalError, BUG_URL};
 use crate::common::FileId;
+use crate::common::{BUG_URL, Diagnostic, InternalError};
+use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use thiserror::Error;
 
 #[non_exhaustive]
