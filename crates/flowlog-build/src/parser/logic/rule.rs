@@ -6,9 +6,9 @@
 
 use super::{Factor, Head, HeadArg, Predicate};
 use crate::common::{FileId, Ignored, Span};
-use crate::parser::error::{grammar_bug, ParseError};
+use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::ConstType;
-use crate::parser::{span_of, Lexeme, Rule};
+use crate::parser::{Lexeme, Rule, span_of};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -170,9 +170,9 @@ impl FlowLogRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::AggregationOperator;
     use crate::parser::logic::{Aggregation, Arithmetic, Factor};
     use crate::parser::primitive::ConstType;
-    use crate::parser::AggregationOperator;
 
     fn head_const(v: ConstType) -> HeadArg {
         HeadArg::Arith(Arithmetic::new(Factor::Const(v), vec![]))

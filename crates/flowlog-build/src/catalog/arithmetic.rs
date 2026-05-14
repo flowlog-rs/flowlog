@@ -161,7 +161,10 @@ impl ArithmeticPos {
     }
 
     /// Transform every variable in this expression using `f`, recursing into FnCall args.
-    pub(crate) fn map_vars(&self, f: &impl Fn(&AtomArgumentSignature) -> FactorPos) -> ArithmeticPos {
+    pub(crate) fn map_vars(
+        &self,
+        f: &impl Fn(&AtomArgumentSignature) -> FactorPos,
+    ) -> ArithmeticPos {
         let init = self.init.map_vars(f);
         let rest = self
             .rest

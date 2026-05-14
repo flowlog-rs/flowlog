@@ -5,12 +5,14 @@ mod compare;
 mod constraint;
 mod error;
 mod fn_call;
+mod program_planner;
 mod rule_planner;
 mod stratum_planner;
 mod transformation;
 
 // External API — used by flowlog-compiler and integration tests.
 pub use error::PlanError;
+pub use program_planner::ProgramPlanner;
 pub use stratum_planner::StratumPlanner;
 
 // Intra-crate shortcuts.

@@ -11,8 +11,8 @@ use crate::parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 
 use super::common::{
-    agg_semiring_new, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
-    result_from_key, row_pattern, ThresholdCmp,
+    ThresholdCmp, agg_semiring_new, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
+    result_from_key, row_pattern,
 };
 
 /// Generates the Sum-semiring optimized aggregation pipeline.

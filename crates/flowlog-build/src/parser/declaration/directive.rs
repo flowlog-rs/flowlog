@@ -1,8 +1,8 @@
 //! Input/Output directive types for FlowLog Datalog programs.
 
 use crate::common::{FileId, Ignored, Span};
-use crate::parser::error::{grammar_bug, ParseError};
-use crate::parser::{span_of, Lexeme, Rule};
+use crate::parser::error::{ParseError, grammar_bug};
+use crate::parser::{Lexeme, Rule, span_of};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 

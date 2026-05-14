@@ -1,16 +1,16 @@
 //! FlowLog compiler — generate a standalone Rust executable from a FlowLog
 //! program.
 //!
-//! The caller is responsible for running the upstream pipeline
-//! (parse → stratify → plan). This crate accepts the resulting
-//! [`StratumPlanner`] list and drives code generation, scaffolding, and
-//! the final `cargo build --release` invocation.
+//! The caller is responsible for parsing + type-checking the program and
+//! building a [`ProgramPlanner`]. This crate consumes the planner and
+//! drives code generation, scaffolding, and the final `cargo build
+//! --release` invocation.
 //!
 //! Typical use:
 //!
 //! ```ignore
 //! let mut compiler = Compiler::new(config, program);
-//! compiler.compile(&strata, &mut profiler)?;
+//! compiler.compile(&program_planner, &mut profiler)?;
 //! ```
 //!
 //! Internal layout:
@@ -36,7 +36,7 @@ use flowlog_build::CodeGen;
 use flowlog_build::common::BoxError;
 use flowlog_build::common::Config;
 use flowlog_build::parser::Program;
-use flowlog_build::planner::StratumPlanner;
+use flowlog_build::planner::ProgramPlanner;
 use flowlog_build::profiler::Profiler;
 
 /// Drives code generation + build for a single FlowLog program.
@@ -66,10 +66,10 @@ impl Compiler {
     /// filesystem writes) surface as internal-compiler-error ICEs.
     pub fn compile(
         &mut self,
-        strata: &[StratumPlanner],
+        program_planner: &ProgramPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<(), BoxError> {
-        self.emit_sources(strata, profiler)?;
+        self.emit_sources(program_planner, profiler)?;
         self.build().map_err(CompilerError::from)?;
         Ok(())
     }

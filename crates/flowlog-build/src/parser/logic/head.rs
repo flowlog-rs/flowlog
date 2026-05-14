@@ -75,7 +75,7 @@ impl Lexeme for HeadArg {
             other => {
                 return Err(grammar_bug(format!(
                     "unexpected rule for HeadArg: {other:?}"
-                )))
+                )));
             }
         })
     }

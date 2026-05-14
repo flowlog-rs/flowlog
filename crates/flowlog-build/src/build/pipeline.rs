@@ -15,11 +15,9 @@ use proc_macro2::TokenStream;
 use crate::build::relation::gen_input_module;
 use crate::codegen::Features;
 use crate::common::{BoxError, Config, SourceMap};
-use crate::optimizer::Optimizer;
 use crate::parser::Program;
-use crate::planner::StratumPlanner;
+use crate::planner::ProgramPlanner;
 use crate::profiler::Profiler;
-use crate::stratifier::Stratifier;
 use crate::{BuildError, Builder, CodeGen, CodeParts};
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
@@ -51,10 +49,10 @@ impl Pipeline {
         let mut profiler = config
             .profiling_enabled()
             .then(|| Profiler::new(config.mode()));
-        let strata = plan(&config, &program, &mut profiler)?;
+        let program_planner = ProgramPlanner::from_program(&config, &program, &mut profiler)?;
 
         let mut cg = CodeGen::new(config.clone(), program.clone());
-        let parts = cg.generate(&strata, &mut profiler)?;
+        let parts = cg.generate(&program_planner, &mut profiler)?;
         let features = cg.features().clone();
         let relations = gen_input_module(&program, &features)?;
 
@@ -76,25 +74,6 @@ fn parse(
     let include_refs: Vec<&Path> = include_dirs.iter().map(PathBuf::as_path).collect();
     Program::parse_with_includes(config.program(), config.is_extended(), &include_refs, sm)
         .map_err(Into::into)
-}
-
-fn plan(
-    config: &Config,
-    program: &Program,
-    profiler: &mut Option<Profiler>,
-) -> Result<Vec<StratumPlanner>, BoxError> {
-    let stratifier = Stratifier::from_program(program, config.is_extended())?;
-    let mut optimizer = Optimizer::new();
-    stratifier
-        .stratum()
-        .iter()
-        .enumerate()
-        .map(|(idx, rule_refs)| {
-            let rules: Vec<_> = rule_refs.iter().copied().cloned().collect();
-            StratumPlanner::from_rules(config, &rules, &mut optimizer, profiler, &stratifier, idx)
-                .map_err(Into::into)
-        })
-        .collect()
 }
 
 /// Project a [`Builder`] onto the shared compiler [`Config`].
