@@ -40,6 +40,9 @@ pub struct CodeParts {
     pub size_cell_decls: Vec<TokenStream>,
     /// Size cell clones moved into the worker closure.
     pub size_cell_clones: Vec<TokenStream>,
+    /// Batch-mode worker step loop. Periodic-flush variant when
+    /// `--profile-flush-secs` is set, plain `while worker.step() {}` otherwise.
+    pub step_loop_batch: TokenStream,
 
     // -- profiling — all fields below are empty when `--profile` is off.
     /// Struct definitions for profiling (emitted at file level).
@@ -138,6 +141,8 @@ impl CodeGen {
         let time_profile_write_incremental = self.gen_time_profile_write_incremental();
         let memory_profile_write_batch = self.gen_memory_profile_write_batch();
         let memory_profile_write_incremental = self.gen_memory_profile_write_incremental();
+        let step_loop_batch =
+            self.gen_step_loop_batch(&time_profile_write_batch, &memory_profile_write_batch);
 
         // Rendered after the codegen loop so the profiler is fully
         // populated. Empty when profile is off.
@@ -161,6 +166,7 @@ impl CodeGen {
             profile_structs,
             profile_ops,
             profile_init,
+            step_loop_batch,
             time_profile_write_batch,
             time_profile_write_incremental,
             memory_profile_write_batch,

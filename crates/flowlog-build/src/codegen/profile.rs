@@ -152,6 +152,37 @@ impl CodeGen {
         }
     }
 
+    /// Emit the batch-mode `while worker.step()` loop. With `--profile` and
+    /// `--profile-flush-secs` both set, the loop body overwrites the
+    /// `<stem>_log/{time,memory}/*.log` files every N seconds so a killed
+    /// run still leaves the latest snapshot on disk.
+    pub(crate) fn gen_step_loop_batch(
+        &self,
+        time_write: &TokenStream,
+        memory_write: &TokenStream,
+    ) -> TokenStream {
+        let Some(period_secs) = self
+            .config
+            .profile_flush_secs()
+            .filter(|_| self.config.profiling_enabled())
+        else {
+            return quote! { while worker.step() {} };
+        };
+
+        quote! {
+            let mut __profile_last_flush = std::time::Instant::now();
+            let __profile_flush_period =
+                std::time::Duration::from_secs(#period_secs);
+            while worker.step() {
+                if __profile_last_flush.elapsed() >= __profile_flush_period {
+                    #time_write
+                    #memory_write
+                    __profile_last_flush = std::time::Instant::now();
+                }
+            }
+        }
+    }
+
     /// Emits time profiling write-out logic for **batch** mode.
     ///
     /// Writes one file per worker under `<stem>_log/time/`:

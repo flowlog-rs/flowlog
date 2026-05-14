@@ -88,6 +88,7 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         output_dir: None,
         mode: builder.mode,
         profile: builder.profile,
+        profile_flush_secs: builder.profile_flush_secs,
         sip: builder.sip,
         str_intern: builder.string_intern,
         udf_file: builder

@@ -185,6 +185,7 @@ fn gen_run_body(
     let size_cell_decls = &parts.size_cell_decls;
     let size_cell_clones = &parts.size_cell_clones;
     let profile_init = &parts.profile_init;
+    let step_loop = &parts.step_loop_batch;
     let time_profile_write = &parts.time_profile_write_batch;
     let memory_profile_write = &parts.memory_profile_write_batch;
 
@@ -226,7 +227,7 @@ fn gen_run_body(
                 inputs.apply_inline_all(index);
                 inputs.close_all();
 
-                while worker.step() {}
+                #step_loop
 
                 #(#flush)*
                 barrier.wait();

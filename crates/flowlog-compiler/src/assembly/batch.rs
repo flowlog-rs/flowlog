@@ -34,6 +34,7 @@ pub(crate) fn gen_batch_main(
         size_cell_decls,
         size_cell_clones,
         profile_init,
+        step_loop_batch: step_loop,
         time_profile_write_batch: time_profile_write,
         memory_profile_write_batch: memory_profile_write,
         ..
@@ -91,7 +92,7 @@ pub(crate) fn gen_batch_main(
                         r.close();
                     }
 
-                    while worker.step() {}
+                    #step_loop
 
                     // Flush per-worker output buffers into the shared ones,
                     // then worker 0 merges and writes results.

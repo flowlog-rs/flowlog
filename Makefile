@@ -13,6 +13,7 @@ help:
 	@echo "  Dev workflow:"
 	@echo "    make build           cargo build --release --workspace"
 	@echo "    make test            cargo test  --release --workspace"
+	@echo "                         + tests/fixtures/run_{compiler,lib}.sh"
 	@echo
 	@echo "  Soufflé oracle:"
 	@echo "    make oracle CONFIG=<file> [MODE=compiler|lib|both] [ARGS=...]"
@@ -28,6 +29,8 @@ build:
 
 test:
 	cargo test --release --workspace
+	bash tests/fixtures/run_compiler.sh
+	bash tests/fixtures/run_lib.sh
 
 # Soufflé-oracle suite on a single CONFIG file. MODE selects which
 # lowering path to exercise: compiler (binary path), lib (library

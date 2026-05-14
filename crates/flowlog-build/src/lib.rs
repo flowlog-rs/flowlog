@@ -120,6 +120,7 @@ pub struct Builder {
     pub(crate) string_intern: bool,
     pub(crate) mode: ExecutionMode,
     pub(crate) profile: bool,
+    pub(crate) profile_flush_secs: Option<u64>,
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
 }
@@ -167,6 +168,13 @@ impl Builder {
     /// panics if the combination is requested.
     pub fn profile(mut self, enabled: bool) -> Self {
         self.profile = enabled;
+        self
+    }
+
+    /// Periodic flush interval (seconds) for the runtime profile.
+    /// Default unset = flush once at end of run.
+    pub fn profile_flush_secs(mut self, secs: u64) -> Self {
+        self.profile_flush_secs = Some(secs);
         self
     }
 

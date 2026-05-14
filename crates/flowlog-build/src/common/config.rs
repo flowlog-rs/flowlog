@@ -66,6 +66,11 @@ pub struct Config {
     #[arg(long, short = 'P')]
     pub profile: bool,
 
+    /// Periodic profile-flush interval in seconds. Unset = flush once at
+    /// end of run. Requires `--profile`.
+    #[arg(long, value_name = "SECS", requires = "profile")]
+    pub profile_flush_secs: Option<u64>,
+
     /// Enable Sideways Information Passing to propagate binding constraints
     /// from rule heads into body atoms, reducing intermediate results
     #[arg(long)]
@@ -212,6 +217,11 @@ impl Config {
         self.output_dir
             .as_ref()
             .expect("--output-dir is required for this tool")
+    }
+
+    /// Periodic flush interval (seconds) for the runtime profile.
+    pub fn profile_flush_secs(&self) -> Option<u64> {
+        self.profile_flush_secs
     }
 
     /// Whether profiling instrumentation is enabled.
