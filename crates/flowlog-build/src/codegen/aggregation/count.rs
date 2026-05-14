@@ -13,8 +13,8 @@ use crate::parser::{AggregationOperator, DataType};
 use crate::codegen::tuple_tokens;
 
 use super::common::{
-    agg_semiring_unit, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
-    result_from_key, ThresholdCmp,
+    ThresholdCmp, agg_semiring_unit, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
+    result_from_key,
 };
 
 /// Row destructuring pattern with `_` at the aggregated position (count ignores the value).

@@ -7,7 +7,8 @@
 //!   heads producing each IDB, dedup, and apply aggregation. Emitted only
 //!   for non-recursive strata.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::mem;
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
@@ -29,34 +30,31 @@ use crate::codegen::aggregation::{
 // Non-Recursive Flow Generation
 // =========================================================================
 impl CodeGen {
-    /// Emit the stratum's non-recursive transformation pipelines, along with
-    /// the per-stratum arrangement cache populated while building them.
+    /// Emit the stratum's non-recursive transformation pipelines into the
+    /// program-wide outer-scope arrangement cache (`self.outer_arranged`).
     pub(crate) fn gen_non_recursive_core_flows(
         &mut self,
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
-    ) -> Result<(Vec<TokenStream>, HashMap<u64, Ident>), CodegenError> {
+    ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::new();
-        // Stratum-scoped cache of arrangements; emit arrange_by_key just before first use.
-        let mut non_recursive_arranged_map: HashMap<u64, Ident> = HashMap::new();
-        // Snapshot the global fingerprint→ident map once: borrowing `&self` while
-        // calling `&mut self` methods inside the loop would conflict, but this map
-        // is populated up-front (see `codegen::ident`) and never mutated by
-        // `gen_transformation`.
         let global_fp_to_ident = self.global_fp_to_ident.clone();
+        let mut outer_arranged = mem::take(&mut self.outer_arranged);
 
         for transformation in stratum.non_recursive_transformations() {
             flows.push(self.gen_transformation(
                 &global_fp_to_ident,
                 transformation,
-                &mut non_recursive_arranged_map,
+                &mut outer_arranged,
                 stratum,
                 profiler,
             )?);
         }
 
+        self.outer_arranged = outer_arranged;
+
         trace!("Generated static flows:\n{}\n", quote! { #(#flows)* });
-        Ok((flows, non_recursive_arranged_map))
+        Ok(flows)
     }
 
     /// Emit per-IDB post-processing: union the contributing heads, dedup,

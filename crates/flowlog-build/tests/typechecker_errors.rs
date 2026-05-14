@@ -2,7 +2,7 @@ mod errors;
 
 use flowlog_build::common::SourceMap;
 use flowlog_build::parser::{DataType, Program};
-use flowlog_build::typechecker::{check_program, TypeCheckError};
+use flowlog_build::typechecker::{TypeCheckError, check_program};
 
 use errors::{fixture, render};
 

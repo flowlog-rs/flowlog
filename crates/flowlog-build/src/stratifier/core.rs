@@ -581,8 +581,9 @@ impl Stratifier {
                 .iter()
                 .flat_map(|&rid| {
                     self.program.rule(rid).rhs().iter().filter_map(|p| match p {
-                        Predicate::PositiveAtom(atom)
-                        | Predicate::NegativeAtom(atom) => Some(atom.fingerprint()),
+                        Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
+                            Some(atom.fingerprint())
+                        }
                         _ => None,
                     })
                 })
@@ -709,8 +710,7 @@ impl Stratifier {
                 let rule = self.program.rule(rid);
                 for predicate in rule.rhs() {
                     let (fp, atom_span) = match predicate {
-                        Predicate::PositiveAtom(atom)
-                        | Predicate::NegativeAtom(atom) => {
+                        Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
                             (atom.fingerprint(), atom.span())
                         }
                         _ => continue,
@@ -795,8 +795,9 @@ impl Stratifier {
                 .iter()
                 .flat_map(|r| {
                     r.rhs().iter().filter_map(|p| match p {
-                        Predicate::PositiveAtom(a)
-                        | Predicate::NegativeAtom(a) => Some(a.fingerprint()),
+                        Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) => {
+                            Some(a.fingerprint())
+                        }
                         _ => None,
                     })
                 })

@@ -2,7 +2,7 @@
 
 use super::DataType;
 use crate::common::FileId;
-use crate::parser::error::{grammar_bug, ParseError};
+use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule};
 use ordered_float::OrderedFloat;
 use pest::iterators::Pair;

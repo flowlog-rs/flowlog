@@ -496,7 +496,7 @@ impl RulePlanner {
                 KeyValueLayout::new(vec![], in_vals),
                 KvPredicates {
                     compare_exprs: vec![
-                        catalog.resolve_comparison_predicates(rhs_idx, lhs_comp_idx)?
+                        catalog.resolve_comparison_predicates(rhs_idx, lhs_comp_idx)?,
                     ],
                     ..Default::default() // no const-eq, no var-eq and fn call predicates
                 },
@@ -570,7 +570,7 @@ impl RulePlanner {
                 KeyValueLayout::new(vec![], in_vals),
                 KvPredicates {
                     fn_call_preds: vec![
-                        catalog.resolve_fn_call_predicates(rhs_idx, lhs_fn_call_idx)?
+                        catalog.resolve_fn_call_predicates(rhs_idx, lhs_fn_call_idx)?,
                     ],
                     ..Default::default() // no const-eq, var-eq, or comparisons
                 },
