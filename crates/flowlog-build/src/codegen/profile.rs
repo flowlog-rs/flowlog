@@ -10,14 +10,16 @@
 //! Registers a differential dataflow arrangement logger to track batch,
 //! merge, drop, and batcher events per operator (arrangement memory usage).
 //!
-//! Output layout — all paths are cwd-relative at runtime, namespaced by
-//! the program stem so multiple compiled programs don't collide:
+//! Output layout — all paths are cwd-relative at runtime. The directory
+//! is `<stem>_log_<YYYYMMDD_HHMMSS>`, timestamped at compile time (see
+//! `Config::profile_log_dir`) so successive compiles write to distinct
+//! folders instead of clobbering one another:
 //!
-//! - `<stem>_log/ops.json`                                 (static plan graph)
-//! - `<stem>_log/time/time_worker_t0_{index}.log`          (batch)
-//! - `<stem>_log/time/time_worker_t{time_stamp}_{index}.log`  (incremental)
-//! - `<stem>_log/memory/memory_worker_t0_{index}.log`      (batch)
-//! - `<stem>_log/memory/memory_worker_t{time_stamp}_{index}.log` (incremental)
+//! - `<dir>/ops.json`                                  (static plan graph)
+//! - `<dir>/time/time_worker_t0_{index}.log`           (batch)
+//! - `<dir>/time/time_worker_t{time_stamp}_{index}.log`   (incremental)
+//! - `<dir>/memory/memory_worker_t0_{index}.log`       (batch)
+//! - `<dir>/memory/memory_worker_t{time_stamp}_{index}.log`  (incremental)
 //!
 //! `ops.json` is baked into the generated source as a `const &str` and
 //! written on engine startup by worker 0, so it lands in the same folder
@@ -30,13 +32,6 @@ use crate::codegen::CodeGen;
 use crate::profiler::Profiler;
 
 impl CodeGen {
-    /// Top-level profiler directory for this program — `<stem>_log`. Used
-    /// by both compile-time path-string formatting and runtime ops.json
-    /// emission. Stem disambiguates multiple programs sharing a process.
-    fn profile_log_dir(&self) -> String {
-        format!("{}_log", self.config.program_name())
-    }
-
     // =================================================================
     // Time profiling (timely dataflow level)
     // =================================================================
@@ -86,7 +81,7 @@ impl CodeGen {
             return quote! {};
         }
 
-        let log_dir = self.profile_log_dir();
+        let log_dir = self.config.profile_log_dir();
         let ops_path = format!("{log_dir}/ops.json");
 
         quote! {
@@ -152,10 +147,28 @@ impl CodeGen {
         }
     }
 
+    /// Force-drain timely's log registry into our `op_stats`/`dd_stats`
+    /// callbacks. DD/timely events sit in per-thread `LogPusher`s until
+    /// timely schedules a logger drain, which is opportunistic and gets
+    /// starved when workers are busy with heavy ops. Without an explicit
+    /// drain before a profile write, the snapshot is stale.
+    ///
+    /// Returns an empty stream when profiling is off.
+    pub(crate) fn gen_log_register_flush(&self) -> TokenStream {
+        if !self.config.profiling_enabled() {
+            return quote! {};
+        }
+        quote! {
+            if let Some(mut __reg) = worker.log_register() {
+                __reg.flush();
+            }
+        }
+    }
+
     /// Emit the batch-mode `while worker.step()` loop. With `--profile` and
     /// `--profile-flush-secs` both set, the loop body overwrites the
-    /// `<stem>_log/{time,memory}/*.log` files every N seconds so a killed
-    /// run still leaves the latest snapshot on disk.
+    /// `<stem>_log/{time,memory}/*.log` files every N seconds so the
+    /// latest snapshot is on disk for the next compile to read.
     pub(crate) fn gen_step_loop_batch(
         &self,
         time_write: &TokenStream,
@@ -169,12 +182,14 @@ impl CodeGen {
             return quote! { while worker.step() {} };
         };
 
+        let drain = self.gen_log_register_flush();
         quote! {
             let mut __profile_last_flush = std::time::Instant::now();
             let __profile_flush_period =
                 std::time::Duration::from_secs(#period_secs);
             while worker.step() {
                 if __profile_last_flush.elapsed() >= __profile_flush_period {
+                    #drain
                     #time_write
                     #memory_write
                     __profile_last_flush = std::time::Instant::now();
@@ -192,7 +207,7 @@ impl CodeGen {
             return quote! {};
         }
 
-        let dir = format!("{}/time", self.profile_log_dir());
+        let dir = format!("{}/time", self.config.profile_log_dir());
         let path_fmt = format!("{dir}/time_worker_t0_{{}}.log");
         gen_time_profile_write_core(&dir, quote! { format!(#path_fmt, index) })
     }
@@ -206,7 +221,7 @@ impl CodeGen {
             return quote! {};
         }
 
-        let dir = format!("{}/time", self.profile_log_dir());
+        let dir = format!("{}/time", self.config.profile_log_dir());
         let path_fmt = format!("{dir}/time_worker_t{{}}_{{}}.log");
         let write =
             gen_time_profile_write_core(&dir, quote! { format!(#path_fmt, time_stamp - 1, index) });
@@ -245,7 +260,7 @@ impl CodeGen {
             struct DdArrangeStats {
                 /// Number of Batch events received.
                 batch_count: u64,
-                /// Total number of records entering the arrangement (summed across batches).
+                /// Total records entering the arrangement (summed across batches).
                 batch_total_len: usize,
                 /// Number of completed merge (compaction) events.
                 merge_completes: u64,
@@ -253,14 +268,10 @@ impl CodeGen {
                 merge_input_total: usize,
                 /// Sum of output lengths across merge completions.
                 merge_output_total: usize,
-                /// Number of Drop events (records freed).
-                drop_count: u64,
-                /// Total number of records freed across drops.
+                /// Total records freed across drop events.
                 drop_total_len: usize,
                 /// Batcher size delta (bytes) – positive = allocated, negative = freed.
                 batcher_size: isize,
-                /// Batcher capacity delta (bytes).
-                batcher_capacity: isize,
             }
         }
     }
@@ -310,14 +321,12 @@ impl CodeGen {
                                 DifferentialEvent::Drop(d) => {
                                     let mut map = dd_stats_in_log.borrow_mut();
                                     let e = map.entry(d.operator).or_default();
-                                    e.drop_count += 1;
                                     e.drop_total_len += d.length;
                                 }
                                 DifferentialEvent::Batcher(b) => {
                                     let mut map = dd_stats_in_log.borrow_mut();
                                     let e = map.entry(b.operator).or_default();
                                     e.batcher_size += b.size_diff;
-                                    e.batcher_capacity += b.capacity_diff;
                                 }
                                 _ => {} // MergeShortfall, TraceShare: not memory-related
                             }
@@ -335,7 +344,7 @@ impl CodeGen {
             return quote! {};
         }
 
-        let dir = format!("{}/memory", self.profile_log_dir());
+        let dir = format!("{}/memory", self.config.profile_log_dir());
         let path_fmt = format!("{dir}/memory_worker_t0_{{}}.log");
         gen_memory_profile_write_core(&dir, quote! { format!(#path_fmt, index) })
     }
@@ -348,7 +357,7 @@ impl CodeGen {
             return quote! {};
         }
 
-        let dir = format!("{}/memory", self.profile_log_dir());
+        let dir = format!("{}/memory", self.config.profile_log_dir());
         let path_fmt = format!("{dir}/memory_worker_t{{}}_{{}}.log");
         let write = gen_memory_profile_write_core(
             &dir,
@@ -425,7 +434,18 @@ fn gen_time_profile_write_core(dir: &str, file_path_expr: TokenStream) -> TokenS
     }
 }
 
-/// Shared implementation for writing memory profiling stats to a file.
+/// Shared implementation for writing memory (arrangement) stats to a file.
+///
+/// One row per arrangement the dataflow touched. The differential logger
+/// fires only for arrangement operators, so `dd_stats`' key set *is* the
+/// set of arrangements — `op_stats` is consulted only to resolve each id
+/// to its name and address (a differential event carries just the id).
+///
+/// Each row carries `batch_count` (number of batch events) and
+/// `batcher_bytes` (arrangement memory) alongside throughput. A large
+/// `batch_count` against a small `batched_in` is the signature of a
+/// stalling plan — many tiny or empty batches — which a throughput-only
+/// view cannot see.
 fn gen_memory_profile_write_core(dir: &str, file_path_expr: TokenStream) -> TokenStream {
     let create_msg = format!("failed to create {dir} directory");
     quote! {
@@ -434,18 +454,16 @@ fn gen_memory_profile_write_core(dir: &str, file_path_expr: TokenStream) -> Toke
             let op_map = op_stats.borrow();
             let dd_map = dd_stats.borrow();
 
-            // Build rows with (addr_nums, addr_string, name, stats)
+            // One row per arrangement (`dd_map`'s keys); `op_map` resolves
+            // each id to its address and name.
             let mut rows: Vec<(Vec<usize>, String, String, DdArrangeStats)> = dd_map
                 .iter()
                 .map(|(id, st)| {
                     let (addr, name) = op_map
                         .get(id)
                         .map(|o| (o.addr.clone(), o.name.clone()))
-                        .unwrap_or_else(|| (
-                            format!("[id={}]", id),
-                            "<unknown>".to_string(),
-                        ));
-                    // Parse "[0, 8, 9]" -> vec![0, 8, 9] for numeric sort
+                        .unwrap_or_else(|| (format!("[id={}]", id), "<unknown>".to_string()));
+                    // Parse "[0, 8, 9]" -> vec![0, 8, 9] for numeric sort.
                     let nums: Vec<usize> = addr
                         .trim_matches(|c| c == '[' || c == ']')
                         .split(',')
@@ -454,7 +472,7 @@ fn gen_memory_profile_write_core(dir: &str, file_path_expr: TokenStream) -> Toke
                     (nums, addr, name, st.clone())
                 })
                 .collect();
-            // Sort numerically by address components
+            // Sort numerically by address components.
             rows.sort_by(|a, b| a.0.cmp(&b.0));
 
             std::fs::create_dir_all(#dir).expect(#create_msg);
@@ -466,26 +484,25 @@ fn gen_memory_profile_write_core(dir: &str, file_path_expr: TokenStream) -> Toke
             // Table header
             writeln!(
                 w,
-                "{:<20} {:<14} {:<10} {:<14} {:<14} {:<14} {}",
-                "addr", "batched_in", "merges", "merge_in", "merge_out", "dropped", "name"
+                "{:<20} {:<14} {:<10} {:<14} {:<14} {:<14} {:<14} {:<16} {}",
+                "addr", "batched_in", "merges", "merge_in", "merge_out",
+                "dropped", "batch_count", "batcher_bytes", "name"
             ).ok();
 
             for (_nums, addr, name, st) in &rows {
                 writeln!(
                     w,
-                    "{:<20} {:<14} {:<10} {:<14} {:<14} {:<14} {}",
+                    "{:<20} {:<14} {:<10} {:<14} {:<14} {:<14} {:<14} {:<16} {}",
                     addr,
                     st.batch_total_len,
                     st.merge_completes,
                     st.merge_input_total,
                     st.merge_output_total,
                     st.drop_total_len,
+                    st.batch_count,
+                    st.batcher_size,
                     name
                 ).ok();
-            }
-
-            if rows.is_empty() {
-                writeln!(w, "(no differential arrangement events recorded)").ok();
             }
 
             w.flush().ok();

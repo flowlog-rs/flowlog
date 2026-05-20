@@ -29,6 +29,7 @@ use crate::profiler::rule::RuleProfile;
 /// Profiler that records the operator plan graph during compilation.
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Profiler {
+    #[serde(default)]
     rules: Vec<RuleProfile>,
     nodes: Vec<NodeProfile>,
 
@@ -83,6 +84,16 @@ impl Profiler {
             .expect("Profiler is Serialize-derived; serialization is infallible")
     }
 
+    /// The per-rule transformation DAGs recorded during compilation.
+    pub(crate) fn rules(&self) -> &[RuleProfile] {
+        &self.rules
+    }
+
+    /// The operator plan-graph nodes recorded during compilation.
+    pub(crate) fn nodes(&self) -> &[NodeProfile] {
+        &self.nodes
+    }
+
     /// Insert a rule using raw plan tree info; the plan tree is rendered internally.
     pub(crate) fn insert_rule(
         &mut self,
@@ -127,7 +138,7 @@ impl Profiler {
         output_variable_name: Option<String>,
         tag: &str,
         operator_steps: u32,
-        fingerprint: Option<u64>,
+        transformation: Option<(u64, String)>,
     ) {
         let node = self.node_manager.build_node(
             name,
@@ -135,7 +146,7 @@ impl Profiler {
             output_variable_name,
             tag,
             operator_steps,
-            fingerprint,
+            transformation,
         );
         self.nodes.push(node);
     }

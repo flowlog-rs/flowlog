@@ -29,6 +29,9 @@ pest = "2.8"
 pest_derive = "2.8"
 ordered-float = "5.1"
 
+# UTC wall-clock for timestamping the per-compile profiler output dir.
+time = "0.3"
+
 [dev-dependencies]
 tempfile.workspace = true
 tracing-test.workspace = true

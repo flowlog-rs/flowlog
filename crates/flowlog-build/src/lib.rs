@@ -121,6 +121,7 @@ pub struct Builder {
     pub(crate) mode: ExecutionMode,
     pub(crate) profile: bool,
     pub(crate) profile_flush_secs: Option<u64>,
+    pub(crate) profile_hint: Vec<PathBuf>,
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
 }
@@ -175,6 +176,13 @@ impl Builder {
     /// Default unset = flush once at end of run.
     pub fn profile_flush_secs(mut self, secs: u64) -> Self {
         self.profile_flush_secs = Some(secs);
+        self
+    }
+
+    /// Add a prior-run `<stem>_log/` directory whose memory snapshots
+    /// should be loaded as cardinality hints. Additive across calls.
+    pub fn profile_hint(mut self, dir: impl AsRef<Path>) -> Self {
+        self.profile_hint.push(dir.as_ref().to_path_buf());
         self
     }
 

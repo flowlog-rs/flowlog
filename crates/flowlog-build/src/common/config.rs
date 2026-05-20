@@ -1,6 +1,7 @@
 //! Command line argument parsing for FlowLog tools.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::{fs, process};
 
 use clap::{Parser, ValueEnum};
@@ -71,6 +72,11 @@ pub struct Config {
     #[arg(long, value_name = "SECS", requires = "profile")]
     pub profile_flush_secs: Option<u64>,
 
+    /// One or more prior `<stem>_log/` directories whose memory snapshots
+    /// the optimizer should read as cardinality hints. Repeatable.
+    #[arg(long, value_name = "DIR", num_args = 1, action = clap::ArgAction::Append)]
+    pub profile_hint: Vec<String>,
+
     /// Enable Sideways Information Passing to propagate binding constraints
     /// from rule heads into body atoms, reducing intermediate results
     #[arg(long)]
@@ -98,6 +104,10 @@ pub struct Config {
     /// directory first, then each `-I` directory in order.
     #[arg(short = 'I', long = "include-dir", value_name = "DIR")]
     pub include_dirs: Vec<String>,
+
+    /// Profiler log folder name — not a CLI argument.
+    #[arg(skip)]
+    pub profile_log_dir: OnceLock<String>,
 }
 
 impl Config {
@@ -224,6 +234,20 @@ impl Config {
         self.profile_flush_secs
     }
 
+    /// Prior-run profile hint directories to consult during planning.
+    pub fn profile_hint(&self) -> &[String] {
+        &self.profile_hint
+    }
+
+    /// Profiler output directory for this compile — `<stem>_log_<ts>`,
+    /// where `<ts>` is the UTC wall-clock as `YYYYMMDD_HHMMSS`.
+    /// Timestamped so successive compiles write to distinct folders
+    /// instead of clobbering one another's logs.
+    pub fn profile_log_dir(&self) -> &str {
+        self.profile_log_dir
+            .get_or_init(|| format!("{}_log_{}", self.program_name(), compile_timestamp()))
+    }
+
     /// Whether profiling instrumentation is enabled.
     pub fn profiling_enabled(&self) -> bool {
         if self.profile && self.is_extended() {
@@ -297,4 +321,19 @@ pub fn get_example_files() -> Vec<std::path::PathBuf> {
     }
 
     files
+}
+
+/// The current UTC wall-clock as `YYYYMMDD_HHMMSS`, used to stamp the
+/// per-compile profiler output directory.
+fn compile_timestamp() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    format!(
+        "{:04}{:02}{:02}_{:02}{:02}{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+    )
 }

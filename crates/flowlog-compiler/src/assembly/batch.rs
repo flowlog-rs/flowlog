@@ -34,6 +34,7 @@ pub(crate) fn gen_batch_main(
         size_cell_decls,
         size_cell_clones,
         profile_init,
+        log_register_flush,
         step_loop_batch: step_loop,
         time_profile_write_batch: time_profile_write,
         memory_profile_write_batch: memory_profile_write,
@@ -99,6 +100,7 @@ pub(crate) fn gen_batch_main(
                     #(#flush)*
                     barrier.wait();
 
+                    #log_register_flush
                     #time_profile_write
                     #memory_profile_write
 

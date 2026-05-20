@@ -87,6 +87,14 @@ impl Atom {
         &self.name
     }
 
+    /// Overwrite the relation name — used to suffix a self-join occurrence
+    /// with a `#<index>` disambiguation tag. Display/cache-key only; the
+    /// fingerprint is not recomputed, so dedup and planner logic are
+    /// unaffected.
+    pub(crate) fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+
     /// Arguments (as a slice).
     #[must_use]
     pub(crate) fn arguments(&self) -> &[AtomArg] {

@@ -7,11 +7,13 @@ use crate::profiler::addr::Addr;
 
 /// A profiled node in the dataflow plan graph.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub(super) struct NodeProfile {
+pub(crate) struct NodeProfile {
     /// Node id.
     id: usize,
     /// Human-friendly node name.
     name: String,
+    /// Hierarchical Collection name (e.g. `(reach ⋈[y] arc)`).
+    transformation_name: Option<String>,
     /// Block label (e.g., input/stratum/inspect) for grouping in UI.
     block: String,
     /// Optional fingerprint used to identify the rule transformation.
@@ -22,6 +24,19 @@ pub(super) struct NodeProfile {
     operators: Vec<Addr>,
     /// Parent node ids (upstream dependencies).
     parents: Vec<usize>,
+}
+
+impl NodeProfile {
+    /// Hierarchical Collection name of the transformation this node
+    /// implements, if any (`None` for runtime plumbing).
+    pub(crate) fn transformation_name(&self) -> Option<&str> {
+        self.transformation_name.as_deref()
+    }
+
+    /// Fingerprint identifying the rule transformation, if any.
+    pub(crate) fn fingerprint(&self) -> Option<&str> {
+        self.fingerprint.as_deref()
+    }
 }
 
 /// Internal nodes manager that tracks ids, scope addresses, and dependencies.
@@ -65,7 +80,9 @@ impl NodeManager {
         self.addr_cnt.advance(1);
     }
 
-    /// Build a node with common metadata, optional fingerprint, and parents.
+    /// Build a node with common metadata and parents. `transformation`
+    /// carries the `(fingerprint, canonical name)` of the plan
+    /// transformation this node implements — `None` for runtime plumbing.
     pub(super) fn build_node(
         &mut self,
         name: String,
@@ -73,18 +90,22 @@ impl NodeManager {
         output_variable_name: Option<String>,
         tag: &str,
         operator_steps: u32,
-        fingerprint: Option<u64>,
+        transformation: Option<(u64, String)>,
     ) -> NodeProfile {
         let parents = input_variable_names
             .iter()
             .filter_map(|variable_name| self.node_map.get(variable_name).copied())
             .collect();
+        let (fingerprint, transformation_name) = transformation
+            .map(|(fp, name)| (format!("0x{fp:016x}"), name))
+            .unzip();
 
         let node = NodeProfile {
             id: self.id_cnt,
             name,
+            transformation_name,
             block: self.block.clone(),
-            fingerprint: fingerprint.map(|fp| format!("0x{:016x}", fp)),
+            fingerprint,
             tags: vec![tag.to_string()],
             operators: self.addr_cnt.advance(operator_steps),
             parents,

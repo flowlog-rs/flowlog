@@ -13,6 +13,7 @@ use super::RulePlanner;
 use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
 };
+use crate::common::{antijoin_name, filter_name, proj_name, semijoin_name};
 use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
 
 // =========================================================================
@@ -257,7 +258,7 @@ impl RulePlanner {
             // Create the join transformation
             let lhs_name = catalog.positive_atom_name(lhs_pos_idx)?.to_string();
             let rhs_name = catalog.positive_atom_name(rhs_idx)?.to_string();
-            let new_name = Self::semijoin_name(&lhs_name, &rhs_name, &lhs_key_names);
+            let new_name = semijoin_name(&lhs_name, &rhs_name, &lhs_key_names);
             let tx = TransformationInfo::join_to_kv(
                 lhs_pos_fp,
                 lhs_name,
@@ -408,7 +409,7 @@ impl RulePlanner {
             // Create the anti-join transformation
             let lhs_name = catalog.negative_atom_name(lhs_neg_idx)?.to_string();
             let rhs_name = catalog.positive_atom_name(rhs_idx)?.to_string();
-            let new_name = Self::antijoin_name(&lhs_name, &rhs_name, &lhs_key_names);
+            let new_name = antijoin_name(&lhs_name, &rhs_name, &lhs_key_names);
             let tx = TransformationInfo::anti_join_to_kv(
                 lhs_neg_fp,
                 lhs_name,
@@ -486,7 +487,7 @@ impl RulePlanner {
 
             let input_name = catalog.positive_atom_name(rhs_idx)?.to_string();
             let cond = catalog.comparison_predicate(lhs_comp_idx).to_string();
-            let new_name = Self::filter_name(&input_name, &cond);
+            let new_name = filter_name(&input_name, &cond);
             let tx = TransformationInfo::kv_to_kv(
                 rhs_fp,
                 input_name,
@@ -560,7 +561,7 @@ impl RulePlanner {
 
             let input_name = catalog.positive_atom_name(rhs_idx)?.to_string();
             let cond = catalog.fn_call_predicate(lhs_fn_call_idx).to_string();
-            let new_name = Self::filter_name(&input_name, &cond);
+            let new_name = filter_name(&input_name, &cond);
             let tx = TransformationInfo::kv_to_kv(
                 rhs_fp,
                 input_name,
@@ -660,7 +661,7 @@ impl RulePlanner {
 
             // Create projection transformation that removes unused arguments
             let kept_attrs = Self::attrs_from_positions(&out_vals, catalog);
-            let new_name = Self::proj_name(&input_name, &kept_attrs);
+            let new_name = proj_name(&input_name, &kept_attrs);
             let tx = TransformationInfo::kv_to_kv(
                 atom_fp,
                 input_name,
@@ -771,19 +772,6 @@ impl RulePlanner {
 // Private Utilities
 // =========================================================================
 impl RulePlanner {
-    /// Hierarchical name wrappers. These describe the logical operation
-    /// applied to the input(s), so each transformation's `output_name`
-    /// records the full construction path from EDBs.
-    #[inline]
-    pub(super) fn proj_name(input_name: &str, attrs: &[String]) -> String {
-        format!("π[{}]({})", attrs.join(","), input_name)
-    }
-
-    #[inline]
-    pub(super) fn filter_name(input_name: &str, cond: &str) -> String {
-        format!("σ[{}]({})", cond, input_name)
-    }
-
     /// Extract named-attribute names from `ArithmeticPos` entries.
     /// Non-binding signatures (placeholders, const-eq, var-eq) and
     /// non-variable arithmetic expressions are skipped — they carry no
@@ -799,21 +787,6 @@ impl RulePlanner {
             .filter(|sig| !filters.is_const_or_var_eq_or_placeholder(sig))
             .map(|sig| catalog.signature_to_argument_str(sig).clone())
             .collect()
-    }
-
-    #[inline]
-    pub(super) fn join_name(left: &str, right: &str, keys: &[String]) -> String {
-        format!("({} ⋈[{}] {})", left, keys.join(","), right)
-    }
-
-    #[inline]
-    pub(super) fn semijoin_name(left: &str, right: &str, keys: &[String]) -> String {
-        format!("({} ⋉[{}] {})", left, keys.join(","), right)
-    }
-
-    #[inline]
-    pub(super) fn antijoin_name(left: &str, right: &str, keys: &[String]) -> String {
-        format!("({} ▷[{}] {})", left, keys.join(","), right)
     }
 
     /// Orders RHS arguments so join keys come first in the same order as the LHS keys.

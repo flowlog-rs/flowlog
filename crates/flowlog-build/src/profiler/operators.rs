@@ -55,6 +55,7 @@ impl Profiler {
         input_variable_names: Vec<String>,
         output_variable_name: String,
         fingerprint: u64,
+        output_name: String,
     ) {
         self.push_node(
             name,
@@ -62,7 +63,7 @@ impl Profiler {
             Some(output_variable_name),
             TAG_STAGE,
             1,
-            Some(fingerprint),
+            Some((fingerprint, output_name)),
         );
     }
 
@@ -73,6 +74,7 @@ impl Profiler {
         output_variable_name: String,
         fingerprint: u64,
         is_key_only: bool,
+        output_name: String,
     ) {
         let operator_steps = if is_key_only { 3 } else { 2 };
         self.push_node(
@@ -81,7 +83,7 @@ impl Profiler {
             Some(output_variable_name),
             TAG_STAGE,
             operator_steps,
-            Some(fingerprint),
+            Some((fingerprint, output_name)),
         );
     }
 
@@ -91,6 +93,7 @@ impl Profiler {
         input_variable_names: Vec<String>,
         output_variable_name: String,
         fingerprint: u64,
+        output_name: String,
     ) {
         let steps = self.anti_join_steps();
         self.push_node(
@@ -99,7 +102,7 @@ impl Profiler {
             Some(output_variable_name),
             TAG_STAGE,
             steps,
-            Some(fingerprint),
+            Some((fingerprint, output_name)),
         );
     }
 
@@ -110,6 +113,7 @@ impl Profiler {
         output_variable_name: String,
         fingerprint: u64,
         is_key_only: bool,
+        output_name: String,
     ) {
         let steps = self.anti_join_steps() + if is_key_only { 2 } else { 1 };
         self.push_node(
@@ -118,7 +122,7 @@ impl Profiler {
             Some(output_variable_name),
             TAG_STAGE,
             steps,
-            Some(fingerprint),
+            Some((fingerprint, output_name)),
         );
     }
 

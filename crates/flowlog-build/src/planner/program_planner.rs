@@ -25,7 +25,7 @@ impl ProgramPlanner {
         profiler: &mut Option<Profiler>,
     ) -> Result<Self, BoxError> {
         let stratifier = Stratifier::from_program(program, config.is_extended())?;
-        let mut optimizer = Optimizer::new();
+        let mut optimizer = Optimizer::new(config, program)?;
         let mut strata: Vec<StratumPlanner> = stratifier
             .stratum()
             .iter()
@@ -165,8 +165,13 @@ mod tests {
             }
         }
 
-        // Headline count: 12 unpruned → 8 after prune (four Zero/One re-keys
-        // collapse). Locks the savings number in for regression.
+        // Headline count after prune. The DP join-order search is
+        // currently soft-blocked (see [`CostEstimator::plan`]) — every
+        // rule is planned left-deep in source-atom order until the
+        // recursive-IDB cost estimate is sharpened. The surviving set
+        // therefore reflects left-deep ordering, not DP. The structural
+        // invariant above (no fp in two strata) is the real correctness
+        // property; this number just locks the count for regression.
         assert_eq!(
             owner.len(),
             8,

@@ -89,6 +89,11 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         mode: builder.mode,
         profile: builder.profile,
         profile_flush_secs: builder.profile_flush_secs,
+        profile_hint: builder
+            .profile_hint
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect(),
         sip: builder.sip,
         str_intern: builder.string_intern,
         udf_file: builder
@@ -101,5 +106,6 @@ fn build_config(builder: &Builder, program: &str) -> Config {
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect(),
+        ..Config::default()
     }
 }

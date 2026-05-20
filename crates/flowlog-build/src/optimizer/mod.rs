@@ -6,7 +6,12 @@
 //!
 //! All interfaces are intentionally lightweight to allow later extension.
 
+pub(crate) mod canonical;
+pub(crate) mod cardinality;
 pub(crate) mod core;
-pub(crate) mod plan_tree;
+pub(crate) mod error;
+pub(crate) mod feedback;
+pub(crate) mod hog;
+pub(crate) mod tree;
 
 pub use self::core::Optimizer;

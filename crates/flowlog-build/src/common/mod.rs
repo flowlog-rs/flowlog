@@ -4,6 +4,7 @@ mod config;
 mod diag;
 mod formatter;
 mod macros;
+mod naming;
 mod source;
 
 // External API — consumed by flowlog-compiler and integration tests.
@@ -16,6 +17,7 @@ pub use source::{FileId, SourceMap, Span};
 // Intra-crate shortcuts.
 pub(crate) use diag::{labels, primary_label, secondary_label};
 pub(crate) use formatter::SUBSECTION_BAR;
+pub(crate) use naming::{antijoin_name, filter_name, join_name, proj_name, semijoin_name};
 pub(crate) use source::Ignored;
 
 use std::collections::hash_map::DefaultHasher;

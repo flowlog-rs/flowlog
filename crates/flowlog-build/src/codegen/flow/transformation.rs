@@ -17,6 +17,7 @@ use crate::codegen::arg::{
 };
 use crate::codegen::ident::find_local_ident;
 use crate::codegen::{CodeGen, CodegenError, data_type_tokens};
+use crate::optimizer::canonical::canonical;
 use crate::planner::{StratumPlanner, Transformation};
 use crate::profiler::{Profiler, with_profiler};
 
@@ -76,6 +77,7 @@ impl CodeGen {
                         vec![inp.to_string()],
                         out.to_string(),
                         output.fingerprint(),
+                        output.name().to_string(),
                     );
                 });
 
@@ -146,6 +148,7 @@ impl CodeGen {
                         format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
+                        output.name().to_string(),
                     );
                 });
 
@@ -216,6 +219,7 @@ impl CodeGen {
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
+                    output.name(),
                 );
 
                 Ok(quote! {
@@ -241,6 +245,7 @@ impl CodeGen {
                         vec![inp.to_string()],
                         out.to_string(),
                         output.fingerprint(),
+                        output.name().to_string(),
                     );
                 });
 
@@ -297,6 +302,7 @@ impl CodeGen {
                         format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
+                        output.name().to_string(),
                     );
                 });
 
@@ -364,6 +370,7 @@ impl CodeGen {
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
+                    output.name(),
                 );
 
                 Ok(quote! {
@@ -393,6 +400,7 @@ impl CodeGen {
                         vec![l.to_string(), r.to_string()],
                         out.to_string(),
                         output.fingerprint(),
+                        output.name().to_string(),
                     );
                 });
 
@@ -454,6 +462,7 @@ impl CodeGen {
                         format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
+                        output.name().to_string(),
                     );
                 });
 
@@ -503,6 +512,7 @@ impl CodeGen {
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
+                    output.name(),
                 );
 
                 Ok(quote! {
@@ -535,6 +545,7 @@ impl CodeGen {
                         vec![l.to_string(), r.to_string()],
                         out.to_string(),
                         output.fingerprint(),
+                        output.name().to_string(),
                     );
                 });
 
@@ -604,6 +615,7 @@ impl CodeGen {
                         format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
+                        output.name().to_string(),
                     );
                 });
 
@@ -659,6 +671,7 @@ impl CodeGen {
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
+                    output.name(),
                 );
 
                 Ok(quote! {
@@ -709,20 +722,26 @@ impl CodeGen {
         (pos, neg)
     }
 
+    /// Register an arrangement of `collection_ident` and emit its
+    /// `arrange_by_{key,self}_named` statement, named with the canonical
+    /// collection name so the runtime memory profiler can attribute each
+    /// `Batch`/`Merge` event by name.
     fn register_arrangement(
         &mut self,
         arranged_map: &mut HashMap<u64, Ident>,
         fingerprint: u64,
         collection_ident: &Ident,
         only_key: bool,
+        collection_name: &str,
     ) -> TokenStream {
         let arrangement_ident = format_ident!("{}_arr", collection_ident);
         arranged_map.insert(fingerprint, arrangement_ident.clone());
+        let name = canonical(collection_name);
 
         if only_key {
-            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_self(); }
+            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_self_named(#name); }
         } else {
-            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_key(); }
+            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_key_named(#name); }
         }
     }
 }

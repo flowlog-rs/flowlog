@@ -52,6 +52,12 @@ pub struct CodeParts {
     pub profile_ops: TokenStream,
     /// Logger registration code (emitted inside worker closure).
     pub profile_init: TokenStream,
+    /// `worker.log_register().flush()` — drains pending DD/timely log
+    /// events into our callbacks. Splice in immediately before any
+    /// profile-write site so the snapshot reflects all events emitted so
+    /// far, not just whatever timely happened to deliver. Empty when
+    /// profiling is off.
+    pub log_register_flush: TokenStream,
     /// Time profiling write-out code for batch mode.
     pub time_profile_write_batch: TokenStream,
     /// Time profiling write-out code for incremental mode.
@@ -143,6 +149,7 @@ impl CodeGen {
         let memory_profile_write_incremental = self.gen_memory_profile_write_incremental();
         let step_loop_batch =
             self.gen_step_loop_batch(&time_profile_write_batch, &memory_profile_write_batch);
+        let log_register_flush = self.gen_log_register_flush();
 
         // Rendered after the codegen loop so the profiler is fully
         // populated. Empty when profile is off.
@@ -166,6 +173,7 @@ impl CodeGen {
             profile_structs,
             profile_ops,
             profile_init,
+            log_register_flush,
             step_loop_batch,
             time_profile_write_batch,
             time_profile_write_incremental,

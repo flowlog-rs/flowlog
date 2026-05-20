@@ -95,8 +95,10 @@ pub struct Catalog {
 impl Catalog {
     /// Build a Catalog from a single rule (derives signatures, filters and helper maps).
     pub fn from_rule(rule: &FlowLogRule) -> Result<Self, CatalogError> {
+        let mut tagged_rule = rule.clone();
+        Self::tag_self_join_atoms(&mut tagged_rule);
         let mut catalog = Self {
-            rule: rule.clone(),
+            rule: tagged_rule,
             signature_to_argument_str_map: HashMap::new(),
             argument_presence_in_positive_atom_map: HashMap::new(),
             original_atom_fingerprints: HashSet::new(),
@@ -139,6 +141,26 @@ impl Catalog {
         debug!("\n{}", catalog);
 
         Ok(catalog)
+    }
+
+    /// Tag each occurrence of a relation that appears more than once in
+    /// the body with a `#<rhs index>` suffix, so join names built from
+    /// them stay distinct in the profile cache. Renames only — the
+    /// fingerprint is untouched, so dedup is unaffected.
+    fn tag_self_join_atoms(rule: &mut FlowLogRule) {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for predicate in rule.rhs() {
+            if let Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) = predicate {
+                *counts.entry(a.name().to_string()).or_default() += 1;
+            }
+        }
+        for (rhs_idx, predicate) in rule.rhs_mut().iter_mut().enumerate() {
+            if let Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) = predicate
+                && counts.get(a.name()).is_some_and(|&c| c >= 2)
+            {
+                a.set_name(format!("{}#{rhs_idx}", a.name()));
+            }
+        }
     }
 
     /// Clear all metadata while keeping the rule unchanged.
@@ -283,6 +305,12 @@ impl Catalog {
         let left_vars = &self.positive_atom_argument_vars_str_sets[left_atom_id];
         let right_vars = &self.positive_atom_argument_vars_str_sets[right_atom_id];
         !left_vars.is_disjoint(right_vars)
+    }
+
+    /// Variable-name set of a positive atom, by index.
+    #[inline]
+    pub(crate) fn positive_atom_var_set(&self, index: usize) -> &HashSet<String> {
+        &self.positive_atom_argument_vars_str_sets[index]
     }
 
     // === Negative Atoms ===

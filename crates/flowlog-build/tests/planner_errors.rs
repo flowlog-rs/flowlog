@@ -20,7 +20,7 @@ fn plan_fixture(name: &str) -> (Result<(), PlanError>, SourceMap) {
         output_dir: Some("-".into()),
         ..Default::default()
     };
-    let mut optimizer = Optimizer::new();
+    let mut optimizer = Optimizer::default();
     let mut profiler = None;
 
     for (idx, rule_refs) in stratifier.stratum().iter().enumerate() {

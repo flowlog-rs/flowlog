@@ -59,6 +59,13 @@ impl Collection {
     pub(crate) fn fingerprint(&self) -> u64 {
         self.fingerprint
     }
+
+    /// Hierarchical name describing how this collection was built (e.g.
+    /// `(reach ⋈[y] arc)`). Used as the structural identity for the profile
+    /// feedback cache.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl fmt::Display for Collection {

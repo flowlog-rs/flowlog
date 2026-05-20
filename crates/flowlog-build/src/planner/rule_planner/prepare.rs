@@ -13,6 +13,7 @@
 
 use super::RulePlanner;
 use crate::catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
+use crate::common::proj_name;
 use crate::parser::ConstType;
 use crate::planner::PlanError;
 use crate::planner::{KeyValueLayout, TransformationInfo};
@@ -195,7 +196,7 @@ impl RulePlanner {
         trace!("Output values after dropping {}: {:?}", drop_sig, out_vals);
 
         let kept_attrs = Self::attrs_from_positions(&out_vals, catalog);
-        let new_name = Self::proj_name(&input_name, &kept_attrs);
+        let new_name = proj_name(&input_name, &kept_attrs);
         let is_original = catalog.original_atom_fingerprints().contains(&atom_fp);
         let tx = TransformationInfo::kv_to_kv(
             atom_fp,
