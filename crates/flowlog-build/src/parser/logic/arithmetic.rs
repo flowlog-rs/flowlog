@@ -9,7 +9,7 @@ use std::fmt;
 
 use pest::iterators::Pair;
 
-use super::FnCall;
+use super::{BuiltinCall, FnCall};
 use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::ConstType;
@@ -63,13 +63,16 @@ impl Lexeme for ArithmeticOperator {
     }
 }
 
-/// Atomic operand for arithmetic: variable, constant, or function call.
+/// Atomic operand for arithmetic. `FnCall` and `Builtin` are kept
+/// distinct so downstream stages match on the node type, not on a name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Factor {
     Var(String),
     Const(ConstType),
-    /// User-defined function call (e.g., `transform(x, y + 1)`).
+    /// User `.extern fn` call.
     FnCall(FnCall),
+    /// Engine built-in (Soufflé-style intrinsic).
+    Builtin(BuiltinCall),
 }
 
 impl Factor {
@@ -90,6 +93,7 @@ impl Factor {
             Self::Var(v) => vec![v],
             Self::Const(_) => vec![],
             Self::FnCall(fc) => fc.vars(),
+            Self::Builtin(bc) => bc.vars(),
         }
     }
 }
@@ -100,18 +104,20 @@ impl fmt::Display for Factor {
             Self::Var(v) => write!(f, "{v}"),
             Self::Const(c) => write!(f, "{c}"),
             Self::FnCall(fc) => write!(f, "{fc}"),
+            Self::Builtin(bc) => write!(f, "{bc}"),
         }
     }
 }
 
 impl Lexeme for Factor {
-    /// Parse a factor (variable, constant, or function call).
+    /// Parse a factor (variable, constant, function call, or built-in).
     fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let inner = parsed_rule
             .into_inner()
             .next()
             .ok_or_else(|| grammar_bug("factor missing inner token"))?;
         Ok(match inner.as_rule() {
+            Rule::builtin_fn_call => Self::Builtin(BuiltinCall::from_parsed_rule(inner, file)?),
             Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner, file)?),
             Rule::variable => Self::Var(inner.as_str().to_string()),
             Rule::constant => Self::Const(ConstType::from_parsed_rule(inner, file)?),

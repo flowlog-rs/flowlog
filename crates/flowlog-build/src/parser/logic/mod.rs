@@ -12,6 +12,7 @@
 mod aggregation;
 mod arithmetic;
 mod atom;
+mod builtin;
 mod comparison;
 mod fn_call;
 mod head;
@@ -25,6 +26,7 @@ mod rule;
 // Externally-visible: widened to `pub` so parser/mod.rs can re-export them.
 pub use aggregation::AggregationOperator;
 pub use arithmetic::ArithmeticOperator;
+pub use builtin::BuiltinOperator;
 pub use comparison::ComparisonOperator;
 pub use rule::FlowLogRule;
 
@@ -32,6 +34,7 @@ pub use rule::FlowLogRule;
 pub(crate) use aggregation::Aggregation;
 pub(crate) use arithmetic::{Arithmetic, Factor};
 pub(crate) use atom::{Atom, AtomArg};
+pub(crate) use builtin::BuiltinCall;
 pub(crate) use comparison::ComparisonExpr;
 pub(crate) use fn_call::FnCall;
 pub(crate) use head::{Head, HeadArg};

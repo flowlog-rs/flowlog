@@ -119,7 +119,7 @@ mod tests {
         let mut sm = SourceMap::new();
         let mut program =
             Program::parse(&tmp.path().to_string_lossy(), false, &mut sm).expect("parse");
-        crate::typechecker::check_program(&mut program).expect("typecheck");
+        crate::typechecker::check_program(&mut program, &Config::default()).expect("typecheck");
         ProgramPlanner::from_program(&Config::default(), &program, &mut None).expect("plan")
     }
 

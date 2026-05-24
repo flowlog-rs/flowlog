@@ -12,7 +12,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::Index;
 
-use crate::parser::{ArithmeticOperator, ComparisonOperator, ConstType, DataType};
+use crate::parser::{ArithmeticOperator, BuiltinOperator, ComparisonOperator, ConstType, DataType};
 use crate::planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
     FnCallPredicateArgument, TransformationArgument,
@@ -850,6 +850,9 @@ impl CodeGen {
             FactorArgument::FnCall { name, args } => {
                 self.fncall_to_token(name, args, string_intern, resolve_var)
             }
+            FactorArgument::Builtin { op, args } => {
+                self.builtin_to_token(*op, args, string_intern, resolve_var)
+            }
         }
     }
 
@@ -888,6 +891,96 @@ impl CodeGen {
                 } else {
                     call
                 })
+            }
+            FactorArgument::Builtin { op, args } => {
+                let call = self.builtin_to_token(*op, args, string_intern, resolve_var)?;
+                // String-returning builtins emit a Spur in intern mode;
+                // resolve for display in a cat / format! context.
+                Ok(if string_intern && op.ret_type() == DataType::String {
+                    self.features.mark_string_resolve();
+                    quote! { resolve(#call) }
+                } else {
+                    call
+                })
+            }
+        }
+    }
+
+    /// Inline lowering for an engine built-in (Soufflé-style intrinsic).
+    /// Each op emits its own Rust template; no `udf::` indirection.
+    fn builtin_to_token<F>(
+        &mut self,
+        op: BuiltinOperator,
+        args: &[ArithmeticArgument],
+        string_intern: bool,
+        resolve_var: &F,
+    ) -> Result<TokenStream, CodegenError>
+    where
+        F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
+    {
+        let raw: Vec<TokenStream> = args
+            .iter()
+            .map(|a| self.build_arithmetic_expr(a, string_intern, resolve_var))
+            .collect::<Result<_, _>>()?;
+
+        // Avoid marking `resolve` for ops that never read a string param
+        // (e.g. `to_string(n: int)`), otherwise an unused helper leaks
+        // into the generated binary.
+        if string_intern && op.param_types().contains(&DataType::String) {
+            self.features.mark_string_resolve();
+        }
+
+        let read_str = |t: &TokenStream| -> TokenStream {
+            if string_intern {
+                quote! { resolve(#t) }
+            } else {
+                quote! { (#t).as_str() }
+            }
+        };
+        let emit_string = |body: TokenStream| -> TokenStream {
+            if string_intern {
+                quote! { intern(&#body) }
+            } else {
+                body
+            }
+        };
+
+        match op {
+            BuiltinOperator::Strlen => {
+                // Char count, not byte count — Soufflé semantics.
+                let s = read_str(&raw[0]);
+                Ok(quote! { ((#s).chars().count() as i32) })
+            }
+            BuiltinOperator::Substr => {
+                let s = read_str(&raw[0]);
+                let start = &raw[1];
+                let len = &raw[2];
+                Ok(emit_string(quote! {
+                    (#s).chars().skip((#start) as usize).take((#len) as usize).collect::<String>()
+                }))
+            }
+            BuiltinOperator::Ord => {
+                // Typechecker enforces `--str-intern` for `ord`, so the
+                // arg is a `Spur` here and its u32 key serves as the
+                // opaque per-symbol id.
+                debug_assert!(string_intern);
+                let s = &raw[0];
+                Ok(quote! { ((#s).into_inner().get() as i32) })
+            }
+            BuiltinOperator::Contains => {
+                let needle = read_str(&raw[0]);
+                let hay = read_str(&raw[1]);
+                Ok(quote! { ((#hay).contains(#needle)) })
+            }
+            BuiltinOperator::ToString => {
+                let n = &raw[0];
+                Ok(emit_string(quote! { (#n).to_string() }))
+            }
+            BuiltinOperator::ToNumber => {
+                // Return 0 on parse failure to stay total — Soufflé
+                // doesn't pin a behaviour for this case.
+                let s = read_str(&raw[0]);
+                Ok(quote! { ((#s).parse::<i32>().unwrap_or(0)) })
             }
         }
     }
