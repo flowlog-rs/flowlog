@@ -10,7 +10,9 @@ use thiserror::Error;
 use crate::common::{
     BUG_URL, Diagnostic, FileId, InternalError, Span, labels, primary_label, secondary_label,
 };
-use crate::parser::{AggregationOperator, ArithmeticOperator, ComparisonOperator, DataType};
+use crate::parser::{
+    AggregationOperator, ArithmeticOperator, BuiltinOperator, ComparisonOperator, DataType,
+};
 
 #[derive(Debug, Error)]
 pub enum TypeCheckError {
@@ -89,6 +91,24 @@ pub enum TypeCheckError {
         expected: DataType,
         found: DataType,
     },
+
+    /// A built-in argument's type doesn't match the declared parameter.
+    /// Arity is enforced earlier by [`ParseError::BuiltinArity`](super::super::parser::ParseError),
+    /// so the typechecker only worries about per-arg type fit.
+    #[error("built-in `{op}` argument {arg_index} expects `{expected:?}` but got `{found:?}`")]
+    BuiltinArgType {
+        span: Span,
+        op: BuiltinOperator,
+        arg_index: usize,
+        expected: DataType,
+        found: DataType,
+    },
+
+    /// `ord(s)` was used without `--str-intern`. `ord` returns the
+    /// symbol's intern key, which only exists when strings are
+    /// interned; there's no collision-free fallback to use otherwise.
+    #[error("built-in `ord` requires `--str-intern` to be enabled")]
+    OrdRequiresStrIntern { span: Span },
 
     /// `sum` / `avg` / `min` / `max` applied to a non-numeric input.
     #[error("aggregation `{op:?}` requires a numeric input but got `{ty:?}`")]
@@ -220,6 +240,29 @@ impl Diagnostic for TypeCheckError {
                 *span,
                 format!("`{name}` param `{param}`: expected `{expected:?}`, got `{found:?}`"),
             )),
+
+            TypeCheckError::BuiltinArgType {
+                span,
+                op,
+                arg_index,
+                expected,
+                found,
+            } => base.with_labels(labels(
+                *span,
+                format!(
+                    "built-in `{op}` arg {arg_index}: expected `{expected:?}`, got `{found:?}`"
+                ),
+            )),
+
+            TypeCheckError::OrdRequiresStrIntern { span } => base
+                .with_labels(labels(*span, "`ord` used here"))
+                .with_notes(vec![
+                    "ord returns the symbol's intern key — a unique per-string \
+                     integer that only exists when strings are interned. Compile \
+                     with `--str-intern` (binary mode) or `.string_intern(true)` \
+                     (library mode) to use it."
+                        .into(),
+                ]),
 
             TypeCheckError::AggregationInputNotNumeric { span, op, ty } => {
                 base.with_labels(labels(

@@ -49,17 +49,20 @@ pub use error::TypeCheckError;
 
 use std::collections::HashMap;
 
-use crate::common::Span;
+use crate::common::{Config, Span};
 use crate::parser::{
-    Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg,
-    ComparisonExpr, ComparisonOperator, ConstType, DataType, Factor, FlowLogRule, FnCall, HeadArg,
-    Predicate, Program,
+    Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg, BuiltinCall,
+    BuiltinOperator, ComparisonExpr, ComparisonOperator, ConstType, DataType, Factor, FlowLogRule,
+    FnCall, HeadArg, Predicate, Program,
 };
 
 /// Type-check every rule and pin each polymorphic literal to its
 /// concrete width. Stops at the first failure; on `Ok(())` the program's
 /// literals are fully concrete.
-pub fn check_program(program: &mut Program) -> Result<(), TypeCheckError> {
+///
+/// `config` is consulted for config-gated builtins (see
+/// [`check_builtin_config_requirements`]).
+pub fn check_program(program: &mut Program, config: &Config) -> Result<(), TypeCheckError> {
     let decls: DeclTypes = program
         .relations()
         .iter()
@@ -93,7 +96,61 @@ pub fn check_program(program: &mut Program) -> Result<(), TypeCheckError> {
         }
     }
 
+    check_builtin_config_requirements(program, config)?;
+
     check_and_pin_facts(program.facts_mut(), &decls)
+}
+
+/// Reject built-in calls whose semantics depend on a build flag that
+/// isn't enabled — today only `ord(_)`, which needs `--str-intern`.
+fn check_builtin_config_requirements(
+    program: &Program,
+    config: &Config,
+) -> Result<(), TypeCheckError> {
+    if config.str_intern_enabled() {
+        return Ok(());
+    }
+    fn check_arith(a: &Arithmetic) -> Result<(), TypeCheckError> {
+        check_factor(a.init())?;
+        for (_, f) in a.rest() {
+            check_factor(f)?;
+        }
+        Ok(())
+    }
+    fn check_factor(f: &Factor) -> Result<(), TypeCheckError> {
+        match f {
+            Factor::Var(_) | Factor::Const(_) => Ok(()),
+            Factor::FnCall(fc) => fc.args().iter().try_for_each(check_arith),
+            Factor::Builtin(bc) => {
+                if bc.op() == BuiltinOperator::Ord {
+                    return Err(TypeCheckError::OrdRequiresStrIntern { span: bc.span() });
+                }
+                bc.args().iter().try_for_each(check_arith)
+            }
+        }
+    }
+    for segment in program.segments() {
+        for rule in segment.as_rules() {
+            for predicate in rule.rhs() {
+                match predicate {
+                    Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => {}
+                    Predicate::Compare(cmp) => {
+                        check_arith(cmp.left())?;
+                        check_arith(cmp.right())?;
+                    }
+                    Predicate::FnCall(fc) => fc.args().iter().try_for_each(check_arith)?,
+                }
+            }
+            for head_arg in rule.head().head_arguments() {
+                match head_arg {
+                    HeadArg::Var(_) => {}
+                    HeadArg::Arith(a) => check_arith(a)?,
+                    HeadArg::Aggregation(agg) => check_arith(agg.arithmetic())?,
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 type DeclTypes = HashMap<String, Vec<DataType>>;
@@ -522,7 +579,42 @@ fn infer_factor_type(
         Factor::Var(v) => bindings.get(v).map(|&(ty, _)| LitKind::Concrete(ty)),
         Factor::Const(c) => Some(lit_kind(c)?),
         Factor::FnCall(fc) => Some(LitKind::Concrete(infer_fn_call_type(fc, bindings, udfs)?)),
+        Factor::Builtin(bc) => Some(LitKind::Concrete(infer_builtin_call_type(
+            bc, bindings, udfs,
+        )?)),
     })
+}
+
+/// Type-check a built-in call against its [`BuiltinOperator`] signature.
+/// Arity is already enforced by the parser, so only per-arg types here.
+fn infer_builtin_call_type(
+    bc: &BuiltinCall,
+    bindings: &Bindings,
+    udfs: &UdfSigs,
+) -> Result<DataType, TypeCheckError> {
+    let op = bc.op();
+    debug_assert_eq!(
+        bc.args().len(),
+        op.param_types().len(),
+        "parser should enforce builtin arity"
+    );
+
+    for (i, (arg, expected)) in bc.args().iter().zip(op.param_types().iter()).enumerate() {
+        let Some(kind) = infer_expr_type(arg, bindings, udfs)? else {
+            continue;
+        };
+        if !kind.fits(*expected) {
+            return Err(TypeCheckError::BuiltinArgType {
+                span: arg.span(),
+                op,
+                arg_index: i,
+                expected: *expected,
+                found: kind.report_ty(),
+            });
+        }
+    }
+
+    Ok(op.ret_type())
 }
 
 fn infer_fn_call_type(
@@ -633,7 +725,18 @@ fn pin_factor(factor: &mut Factor, target: DataType, udfs: &UdfSigs) -> Result<(
         }
         Factor::Var(_) => Ok(()),
         Factor::FnCall(fc) => pin_fn_call_args(fc, udfs),
+        Factor::Builtin(bc) => pin_builtin_call_args(bc, udfs),
     }
+}
+
+/// Pin polymorphic literals in a built-in call against the per-param
+/// types on [`BuiltinOperator`].
+fn pin_builtin_call_args(bc: &mut BuiltinCall, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
+    let op = bc.op();
+    for (arg, pty) in bc.args_mut().iter_mut().zip(op.param_types().iter()) {
+        pin_arith_literals(arg, *pty, udfs)?;
+    }
+    Ok(())
 }
 
 fn pin_fn_call_args(fc: &mut FnCall, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
@@ -710,7 +813,7 @@ mod tests {
         let mut sm = SourceMap::new();
         let mut program =
             Program::parse(&tmp.path().to_string_lossy(), true, &mut sm).expect("parse failed");
-        check_program(&mut program).expect("check failed");
+        check_program(&mut program, &Config::default()).expect("check failed");
         program
     }
 

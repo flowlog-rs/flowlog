@@ -183,6 +183,16 @@ run_test() {
         compile_flags+=(--udf-file "$test_dir/udf.rs")
     fi
 
+    # Per-fixture `compile_flags`: append each whitespace-split token to
+    # the compile invocation (e.g. `--str-intern`).
+    if [[ -f "$test_dir/compile_flags" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            # shellcheck disable=SC2206
+            compile_flags+=($line)
+        done < "$test_dir/compile_flags"
+    fi
+
     # `include_dirs` file: one directory path per line (relative to the
     # fixture directory). Each becomes a `-I <abs>` flag on the compile
     # invocation. Used by fixtures that exercise `-I`-based .include

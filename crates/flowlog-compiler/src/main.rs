@@ -42,7 +42,7 @@ fn main() {
 /// Compile the program specified by `config.program()` into an executable.
 fn compile_single(config: &Config) {
     let (mut program, sm) = parse_program(config);
-    flowlog_build::typechecker::check_program(&mut program)
+    flowlog_build::typechecker::check_program(&mut program, config)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
     let mut profiler = new_profiler(config);
     let program_planner = ProgramPlanner::from_program(config, &program, &mut profiler)

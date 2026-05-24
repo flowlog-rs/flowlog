@@ -17,7 +17,9 @@ pub use error::{DirectiveKind, ParseError};
 // ArithmeticOperator / ComparisonOperator leak through TypeCheckError's
 // pub variants; AggregationOperator leaks through Features::agg_semirings.
 pub use declaration::Relation;
-pub use logic::{AggregationOperator, ArithmeticOperator, ComparisonOperator, FlowLogRule};
+pub use logic::{
+    AggregationOperator, ArithmeticOperator, BuiltinOperator, ComparisonOperator, FlowLogRule,
+};
 pub use primitive::{ConstType, DataType};
 pub use program::Program;
 
@@ -26,7 +28,7 @@ pub use program::Program;
 // Declaration/segment/program inner types are reached via their own
 // submodule paths and don't need a shortcut here.
 pub(crate) use logic::{
-    Aggregation, Arithmetic, Atom, AtomArg, ComparisonExpr, Factor, FnCall, HeadArg,
+    Aggregation, Arithmetic, Atom, AtomArg, BuiltinCall, ComparisonExpr, Factor, FnCall, HeadArg,
     IterativeDirective, LoopCondition, LoopConnective, Predicate,
 };
 pub(crate) use segment::Segment;

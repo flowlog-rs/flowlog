@@ -3,7 +3,7 @@
 use std::fmt;
 
 use crate::catalog::{ArithmeticPos, FactorPos};
-use crate::parser::{ArithmeticOperator, ConstType};
+use crate::parser::{ArithmeticOperator, BuiltinOperator, ConstType};
 use crate::planner::TransformationArgument;
 
 /// Represents a basic factor in an arithmetic expression
@@ -20,15 +20,22 @@ pub(crate) enum FactorArgument {
         name: String,
         args: Vec<ArithmeticArgument>,
     },
+
+    /// Engine built-in call (Soufflé-style intrinsic).
+    Builtin {
+        op: BuiltinOperator,
+        args: Vec<ArithmeticArgument>,
+    },
 }
 
 impl FactorArgument {
-    /// Returns all transformation arguments referenced in this factor (including nested in FnCall args).
+    /// Returns all transformation arguments referenced in this factor
+    /// (including nested in FnCall / Builtin args).
     pub(crate) fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
         match self {
             Self::Var(arg) => vec![arg],
             Self::Const(_) => vec![],
-            Self::FnCall { args, .. } => args
+            Self::FnCall { args, .. } | Self::Builtin { args, .. } => args
                 .iter()
                 .flat_map(|a| a.transformation_arguments())
                 .collect(),
@@ -48,6 +55,14 @@ impl fmt::Display for FactorArgument {
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "{name}({args_str})")
+            }
+            Self::Builtin { op, args } => {
+                let args_str = args
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{op}({args_str})")
             }
         }
     }
@@ -74,6 +89,19 @@ impl ArithmeticArgument {
             var_arguments: &[TransformationArgument],
             var_id: &mut usize,
         ) -> FactorArgument {
+            // Shared between `FnCall` and `Builtin`: consume `signatures().len()`
+            // slots per arg from the running `var_arguments` cursor.
+            let map_call_args =
+                |args: &[ArithmeticPos], var_id: &mut usize| -> Vec<ArithmeticArgument> {
+                    args.iter()
+                        .map(|arg| {
+                            let num_vars = arg.signatures().len();
+                            let sub_args = &var_arguments[*var_id..*var_id + num_vars];
+                            *var_id += num_vars;
+                            ArithmeticArgument::from_arithmeticpos(arg, sub_args)
+                        })
+                        .collect()
+                };
             match factor {
                 FactorPos::Var(_) => {
                     let var = var_arguments[*var_id];
@@ -81,21 +109,14 @@ impl ArithmeticArgument {
                     FactorArgument::Var(var)
                 }
                 FactorPos::Const(constant) => FactorArgument::Const(constant.clone()),
-                FactorPos::FnCall { name, args } => {
-                    let fn_args = args
-                        .iter()
-                        .map(|arg| {
-                            let num_vars = arg.signatures().len();
-                            let sub_args = &var_arguments[*var_id..*var_id + num_vars];
-                            *var_id += num_vars;
-                            ArithmeticArgument::from_arithmeticpos(arg, sub_args)
-                        })
-                        .collect();
-                    FactorArgument::FnCall {
-                        name: name.clone(),
-                        args: fn_args,
-                    }
-                }
+                FactorPos::FnCall { name, args } => FactorArgument::FnCall {
+                    name: name.clone(),
+                    args: map_call_args(args, var_id),
+                },
+                FactorPos::Builtin { op, args } => FactorArgument::Builtin {
+                    op: *op,
+                    args: map_call_args(args, var_id),
+                },
             }
         }
 
