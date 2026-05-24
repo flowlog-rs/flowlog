@@ -1,7 +1,7 @@
 //! Arithmetic expression signatures for FlowLog Datalog programs.
 
 use crate::catalog::AtomArgumentSignature;
-use crate::parser::{Arithmetic, ArithmeticOperator, ConstType, Factor};
+use crate::parser::{Arithmetic, ArithmeticOperator, BuiltinOperator, ConstType, Factor};
 use std::fmt;
 
 /// A factor in an arithmetic expression with variables resolved to their
@@ -17,6 +17,11 @@ pub(crate) enum FactorPos {
         name: String,
         args: Vec<ArithmeticPos>,
     },
+    /// An engine built-in call (Soufflé-style intrinsic).
+    Builtin {
+        op: BuiltinOperator,
+        args: Vec<ArithmeticPos>,
+    },
 }
 
 impl FactorPos {
@@ -24,26 +29,34 @@ impl FactorPos {
     pub(crate) fn as_var_signature(&self) -> Option<&AtomArgumentSignature> {
         match self {
             FactorPos::Var(atom_arg_signature) => Some(atom_arg_signature),
-            FactorPos::Const(_) | FactorPos::FnCall { .. } => None,
+            FactorPos::Const(_) | FactorPos::FnCall { .. } | FactorPos::Builtin { .. } => None,
         }
     }
 
-    /// Returns all argument signatures referenced in this factor (including nested in FnCall args).
+    /// Returns all argument signatures referenced in this factor
+    /// (including nested in FnCall / Builtin args).
     pub(crate) fn signatures(&self) -> Vec<&AtomArgumentSignature> {
         match self {
             FactorPos::Var(sig) => vec![sig],
             FactorPos::Const(_) => vec![],
-            FactorPos::FnCall { args, .. } => args.iter().flat_map(|a| a.signatures()).collect(),
+            FactorPos::FnCall { args, .. } | FactorPos::Builtin { args, .. } => {
+                args.iter().flat_map(|a| a.signatures()).collect()
+            }
         }
     }
 
-    /// Transform every variable in this factor using `f`, recursing into FnCall args.
+    /// Transform every variable in this factor using `f`, recursing into
+    /// FnCall / Builtin args.
     pub(crate) fn map_vars(&self, f: &impl Fn(&AtomArgumentSignature) -> FactorPos) -> FactorPos {
         match self {
             FactorPos::Var(sig) => f(sig),
             FactorPos::Const(c) => FactorPos::Const(c.clone()),
             FactorPos::FnCall { name, args } => FactorPos::FnCall {
                 name: name.clone(),
+                args: args.iter().map(|a| a.map_vars(f)).collect(),
+            },
+            FactorPos::Builtin { op, args } => FactorPos::Builtin {
+                op: *op,
                 args: args.iter().map(|a| a.map_vars(f)).collect(),
             },
         }
@@ -62,6 +75,14 @@ impl fmt::Display for FactorPos {
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "{name}({args_str})")
+            }
+            FactorPos::Builtin { op, args } => {
+                let args_str = args
+                    .iter()
+                    .map(ArithmeticPos::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{op}({args_str})")
             }
         }
     }
@@ -101,6 +122,19 @@ impl ArithmeticPos {
             var_signatures: &[AtomArgumentSignature],
             var_id: &mut usize,
         ) -> FactorPos {
+            // Both `FnCall` and `Builtin` carry their args as
+            // `Vec<Arithmetic>` and consume `num_vars` signatures per arg
+            // in source order. Walk once, reuse for both arms.
+            let map_call_args = |args: &[Arithmetic], var_id: &mut usize| -> Vec<ArithmeticPos> {
+                args.iter()
+                    .map(|arg| {
+                        let num_vars = arg.vars().len();
+                        let sigs = &var_signatures[*var_id..*var_id + num_vars];
+                        *var_id += num_vars;
+                        ArithmeticPos::from_arithmetic(arg, sigs)
+                    })
+                    .collect()
+            };
             match factor {
                 Factor::Var(_) => {
                     let sig = var_signatures[*var_id];
@@ -108,22 +142,14 @@ impl ArithmeticPos {
                     FactorPos::Var(sig)
                 }
                 Factor::Const(c) => FactorPos::Const(c.clone()),
-                Factor::FnCall(fc) => {
-                    let args = fc
-                        .args()
-                        .iter()
-                        .map(|arg| {
-                            let num_vars = arg.vars().len();
-                            let sigs = &var_signatures[*var_id..*var_id + num_vars];
-                            *var_id += num_vars;
-                            ArithmeticPos::from_arithmetic(arg, sigs)
-                        })
-                        .collect();
-                    FactorPos::FnCall {
-                        name: fc.name().to_string(),
-                        args,
-                    }
-                }
+                Factor::FnCall(fc) => FactorPos::FnCall {
+                    name: fc.name().to_string(),
+                    args: map_call_args(fc.args(), var_id),
+                },
+                Factor::Builtin(bc) => FactorPos::Builtin {
+                    op: bc.op(),
+                    args: map_call_args(bc.args(), var_id),
+                },
             }
         }
 

@@ -45,7 +45,7 @@ impl Pipeline {
 
         let config = build_config(builder, program_str);
         let mut program = parse(&config, &builder.include_dirs, sm)?;
-        crate::typechecker::check_program(&mut program)?;
+        crate::typechecker::check_program(&mut program, &config)?;
         let mut profiler = config
             .profiling_enabled()
             .then(|| Profiler::new(config.mode()));

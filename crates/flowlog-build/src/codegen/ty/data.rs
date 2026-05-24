@@ -167,6 +167,7 @@ impl CodeGen {
                 .find(|e| e.name() == name)
                 .map(|e| e.ret_type())
                 .ok_or_else(|| CodegenError::internal(format!("UDF `{name}` not declared"))),
+            FactorArgument::Builtin { op, .. } => Ok(op.ret_type()),
         }
     }
 }

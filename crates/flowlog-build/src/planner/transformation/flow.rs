@@ -315,7 +315,30 @@ impl TransformationFlow {
                     };
                 }
 
-                // Otherwise rebuild the expression factor by factor.
+                // Otherwise rebuild the expression factor by factor. Both
+                // call-style arms (FnCall, Builtin) re-resolve each
+                // sub-expression's variable signatures against the input
+                // expression map, so we share the walk.
+                let lower_call_args = |args: &[ArithmeticPos]| -> Vec<ArithmeticArgument> {
+                    args.iter()
+                        .map(|a| {
+                            let var_args: Vec<_> = a
+                                .signatures()
+                                .iter()
+                                .map(|sig| {
+                                    let key = ArithmeticPos::from_var_signature(**sig);
+                                    *input_exprs_map.get(&key).unwrap_or_else(|| {
+                                        panic!(
+                                            "Planner error: missing call-arg signature {:?}",
+                                            sig
+                                        )
+                                    })
+                                })
+                                .collect();
+                            ArithmeticArgument::from_arithmeticpos(a, &var_args)
+                        })
+                        .collect()
+                };
                 let resolve_factor = |factor: &FactorPos| -> FactorArgument {
                     match factor {
                         FactorPos::Var(sig) => {
@@ -329,31 +352,14 @@ impl TransformationFlow {
                             FactorArgument::Var(trans_arg)
                         }
                         FactorPos::Const(c) => FactorArgument::Const(c.clone()),
-                        FactorPos::FnCall { name, args } => {
-                            let fn_args = args
-                                .iter()
-                                .map(|a| {
-                                    let var_args: Vec<_> = a
-                                        .signatures()
-                                        .iter()
-                                        .map(|sig| {
-                                            let key = ArithmeticPos::from_var_signature(**sig);
-                                            *input_exprs_map.get(&key).unwrap_or_else(|| {
-                                                panic!(
-                                                    "Planner error: missing FnCall arg signature {:?}",
-                                                    sig
-                                                )
-                                            })
-                                        })
-                                        .collect();
-                                    ArithmeticArgument::from_arithmeticpos(a, &var_args)
-                                })
-                                .collect();
-                            FactorArgument::FnCall {
-                                name: name.clone(),
-                                args: fn_args,
-                            }
-                        }
+                        FactorPos::FnCall { name, args } => FactorArgument::FnCall {
+                            name: name.clone(),
+                            args: lower_call_args(args),
+                        },
+                        FactorPos::Builtin { op, args } => FactorArgument::Builtin {
+                            op: *op,
+                            args: lower_call_args(args),
+                        },
                     }
                 };
 

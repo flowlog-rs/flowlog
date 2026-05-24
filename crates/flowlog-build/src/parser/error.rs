@@ -130,6 +130,17 @@ pub enum ParseError {
     #[error("`_` placeholder is not allowed in arguments to UDF `{udf_name}`")]
     PlaceholderInUdf { span: Span, udf_name: String },
 
+    /// A built-in call passes the wrong number of arguments. Carries the
+    /// keyword string instead of the enum to keep this error layer
+    /// independent of `crate::parser::logic::BuiltinOperator`.
+    #[error("built-in `{op}` expects {expected} argument(s) but got {found}")]
+    BuiltinArity {
+        span: Span,
+        op: &'static str,
+        expected: usize,
+        found: usize,
+    },
+
     /// An `.include` directive's target could not be opened.
     #[error("failed to read included file `{}`: {source}", path.display())]
     IncludeIo {
@@ -236,6 +247,7 @@ impl Diagnostic for ParseError {
             | ParseError::LoopBlockInStandardMode { span }
             | ParseError::NonNullaryLoopCondition { span, .. }
             | ParseError::PlaceholderInUdf { span, .. }
+            | ParseError::BuiltinArity { span, .. }
             | ParseError::IncludeIo { span, .. } => base.with_labels(primary_only(*span)),
 
             ParseError::Internal(_) => unreachable!("handled above"),

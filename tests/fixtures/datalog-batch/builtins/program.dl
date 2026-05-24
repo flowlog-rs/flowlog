@@ -1,0 +1,40 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : builtins
+// Feature : grammar-level reserved built-in functions (Soufflé-style intrinsics).
+//           Returns mix string / int32 / bool: strlen, substr, ord, contains
+//           (bool), to_string (int→string), to_number (string→int).
+// Covers  : every builtin exercised in head positions, in `cat` chains, in
+//           comparisons, and nested inside each other so every codegen
+//           path runs.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Sample(name: string, n: int32)
+.input Sample(IO="file", filename="Sample.csv", delimiter=",")
+
+// 1) strlen + substr + ord — each in head position. `oid` is Soufflé-style:
+//    an opaque per-symbol integer (the intern key under --str-intern); only
+//    determinism + distinct-symbols-yield-distinct-values is meaningful.
+.decl LenSubOrd(name: string, nlen: int32, first_two: string, oid: int32)
+LenSubOrd(name, strlen(name), substr(name, 0, 2), ord(name)) :- Sample(name, _).
+.output LenSubOrd
+
+// 2) contains — bool-returning, used as a body filter via `= True`.
+.decl HasA(name: string)
+HasA(name) :- Sample(name, _), contains("a", name) = True.
+.output HasA
+
+// 3) to_string + to_number, including a round-trip nested inside each other.
+.decl Roundtrip(name: string, parsed: int32)
+Roundtrip(name, to_number(to_string(n))) :- Sample(name, n).
+.output Roundtrip
+
+// 4) Built-in result feeding into a `cat` chain (exercises display-context
+//    codegen — Spur→&str when intern is on, plain pass-through otherwise).
+.decl Label(out: string)
+Label("name=" cat name cat " len=" cat to_string(strlen(name))) :- Sample(name, _).
+.output Label
+
+// 5) Built-in result in a comparison filter (numeric return).
+.decl LongName(name: string)
+LongName(name) :- Sample(name, _), strlen(name) > 4.
+.output LongName

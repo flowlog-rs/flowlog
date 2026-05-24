@@ -176,7 +176,7 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
 // Basic elements in arithmetic expressions
-factor = { fn_call_expr | constant | variable }
+factor = { builtin_fn_call | fn_call_expr | constant | variable }
 
 // Arithmetic operators
 arithmetic_op = { 
@@ -195,6 +195,27 @@ times = { "*" }
 divide = { "/" }
 modulo = { "%" }
 cat = { "cat" }
+
+// =============================================================================
+// BUILT-IN FUNCTIONS
+// =============================================================================
+// Reserved keyword call sites lowered inline by the codegen — they are
+// NOT user functions and share no infrastructure with `.extern fn`
+
+builtin_fn_call = {
+    builtin_op ~ "(" ~ (arithmetic_expr ~ ("," ~ arithmetic_expr)*)? ~ ")"
+}
+
+builtin_op = {
+    strlen_op | substr_op | ord_op | contains_op | to_string_op | to_number_op
+}
+
+strlen_op    = @{ "strlen"    ~ !(ASCII_ALPHANUMERIC | "_") }
+substr_op    = @{ "substr"    ~ !(ASCII_ALPHANUMERIC | "_") }
+ord_op       = @{ "ord"       ~ !(ASCII_ALPHANUMERIC | "_") }
+contains_op  = @{ "contains"  ~ !(ASCII_ALPHANUMERIC | "_") }
+to_string_op = @{ "to_string" ~ !(ASCII_ALPHANUMERIC | "_") }
+to_number_op = @{ "to_number" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // =============================================================================
 // COMPARISON EXPRESSIONS  

@@ -98,6 +98,18 @@ run_test() {
     fi
     LIB_RUNNER_INC=$incremental
 
+    # Per-fixture `compile_flags`: translate to Builder knob env vars.
+    LIB_RUNNER_STR_INTERN=0
+    if [[ -f "$test_dir/compile_flags" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            for tok in $line; do
+                case "$tok" in
+                    --str-intern) LIB_RUNNER_STR_INTERN=1 ;;
+                esac
+            done
+        done < "$test_dir/compile_flags"
+    fi
+
     # Stage fixture files into the runner crate. Wipe everything except
     # `src/` (synthesized below) and stale lib/ directories.
     rm -rf "${LIB_RUNNER_DIR}/data" "${LIB_RUNNER_DIR}/output" "${LIB_RUNNER_DIR}/program.dl" "${LIB_RUNNER_DIR}/lib"
