@@ -35,32 +35,58 @@ file_backed_filename() {
     echo "$fname"
 }
 
+# Echo the value of `<param>="…"` from a `.<directive> <rel>(…)` line.
+# Empty stdout (and non-zero status) when the directive line or param is
+# missing. Used by the `*_for` accessors below to share the same regex.
+_extract_directive_param() {
+    local dl_file="$1" directive="$2" rel="$3" param="$4"
+    local line
+    line=$(grep -iE "^[[:space:]]*\.${directive}[[:space:]]+${rel}([[:space:]]|\\()" "$dl_file" 2>/dev/null | head -1 || true)
+    [[ -n "$line" ]] || return 1
+    local val
+    val=$(echo "$line" | grep -oE "${param}[[:space:]]*=[[:space:]]*\"[^\"]*\"" | sed -E 's/.*"([^"]*)"/\1/')
+    [[ -n "$val" ]] || return 1
+    echo "$val"
+}
+
 # Echo the data filename declared by `.input <Rel>(filename="X.csv", …)` —
 # falls back to `<rel>.csv` when no `filename=` parameter is set.
 input_filename_for() {
     local dl_file="$1" rel="$2"
-    local line fname
-    line=$(grep -iE "^[[:space:]]*\.input[[:space:]]+${rel}([[:space:]]|\\()" "$dl_file" 2>/dev/null | head -1 || true)
-    if [[ -n "$line" ]]; then
-        fname=$(echo "$line" | grep -oE 'filename[[:space:]]*=[[:space:]]*"[^"]+"' | sed -E 's/.*"([^"]+)"/\1/')
-        if [[ -n "$fname" ]]; then
-            echo "$fname"
-            return 0
-        fi
-    fi
-    echo "${rel}.csv"
+    _extract_directive_param "$dl_file" "input" "$rel" "filename" 2>/dev/null \
+        || echo "${rel}.csv"
+}
+
+# Echo the raw delimiter declared by `.input <Rel>(delimiter="…", …)`.
+# The returned string is the source form, so escape sequences (`\t`, `\n`,
+# `\r`, `\\`, `\0`) are intact — callers that need a single byte interpret
+# them. Defaults to `,` when no delimiter parameter is set. Rust's char/str
+# escape syntax matches our `.dl` convention, so callers emitting Rust source
+# can splice the value into a `'…'` or `"…"` literal verbatim.
+input_delimiter_for() {
+    local dl_file="$1" rel="$2"
+    _extract_directive_param "$dl_file" "input" "$rel" "delimiter" 2>/dev/null \
+        || echo ","
+}
+
+# As [`input_delimiter_for`] but for `.output <Rel>(delimiter="…", …)`.
+output_delimiter_for() {
+    local dl_file="$1" rel="$2"
+    _extract_directive_param "$dl_file" "output" "$rel" "delimiter" 2>/dev/null \
+        || echo ","
 }
 
 ###############################################################################
 # Filesystem
 ###############################################################################
 
-# Echo the CSV path in `dir` whose basename matches `wanted`
-# case-insensitively (handles on-disk casing drift). Empty if no match.
+# Echo the data-file path in `dir` whose basename matches `wanted`
+# case-insensitively (handles on-disk casing drift). Walks `.csv` and `.tsv`
+# files — non-comma delimiters typically use `.tsv`. Empty if no match.
 find_csv_case_insensitive() {
     local dir="$1" wanted="$2"
     local f base
-    for f in "${dir}"/*.csv; do
+    for f in "${dir}"/*.csv "${dir}"/*.tsv; do
         [[ -f "$f" ]] || continue
         base="$(basename "$f")"
         if [[ "${base,,}" == "${wanted,,}" ]]; then

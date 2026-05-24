@@ -29,8 +29,11 @@ CATEGORIES=(datalog-batch datalog-inc extend-batch)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# Runner-crate location must be set before sourcing the synthesis helpers.
-LIB_RUNNER_DIR="${ROOT_DIR}/target/e2e-lib/runner"
+# Runner-crate base; sequential mode uses `runner`, parallel mode uses
+# `runner-0`, `runner-1`, … (one per worker, to keep cargo target/ dirs
+# isolated since each test wipes the runner crate's program.dl/data/output).
+LIB_RUNNER_DIR_BASE="${ROOT_DIR}/target/e2e-lib"
+LIB_RUNNER_DIR="${LIB_RUNNER_DIR_BASE}/runner"
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 
 skipped=0
@@ -38,7 +41,7 @@ skipped=0
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [test_name ...]
+  $(basename "$0") [-j N] [test_name ...]
 
 Run FlowLog library-mode end-to-end tests against the datalog-batch,
 datalog-inc, and extend-batch fixtures. Batch fixtures (CSV in, files
@@ -53,8 +56,15 @@ Each test directory under tests/fixtures/<category>/<name>/ contains:
   expected/       Expected output files (one per relation or epoch)
   commands.txt    Optional — makes the fixture incremental
 
+Options:
+  -j N            Run up to N workers in parallel (default 1). Each worker
+                  owns its own runner crate at target/e2e-lib/runner-{slot},
+                  so the shared crate state in lib mode is sharded rather
+                  than locked.
+
 Examples:
-  $(basename "$0")                     # run every fixture
+  $(basename "$0")                     # run every fixture sequentially
+  $(basename "$0") -j 4                # 4 workers in parallel
   $(basename "$0") agg_sum             # one batch test
   $(basename "$0") recursive_tc_delta  # one incremental test
 EOF
@@ -174,23 +184,13 @@ run_test() {
 }
 
 ###############################################################################
-# Entry point
+# Warm-up helper
 ###############################################################################
 
-main() {
-    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-        usage
-        exit 0
-    fi
-
-    echo ""
-    echo -e "  ${BOLD}FlowLog Fixture Tests (library mode)${NC}"
-    echo ""
-
+# Build the runner crate once against a trivial program so cargo populates its
+# dependency cache. Used by both sequential and per-slot parallel modes.
+warm_up_runner_crate() {
     ensure_runner_crate
-
-    # Warm-up build to populate the cargo cache before per-test timing kicks in.
-    echo -e "  ${YELLOW}Warming runner crate (release)...${NC}"
     write_build_rs ""
     cat > "${LIB_RUNNER_DIR}/program.dl" <<'EOF'
 .decl Source(id: int32)
@@ -209,18 +209,103 @@ pub mod prog {
 fn main() {}
 EOF
     (cd "${LIB_RUNNER_DIR}" || exit; cargo build --release --quiet 2>&1 | tail -5) \
-        || die "warm-up build failed"
+        || die "warm-up build failed (${LIB_RUNNER_DIR})"
+}
 
-    total=$(count_tests "$@")
-    echo -e "  ${DIM}Running ${total} tests...${NC}"
+###############################################################################
+# Parallel scheduler
+###############################################################################
+
+# Worker subshell: owns one runner-crate slot and processes its pre-assigned
+# shard sequentially. Per-test result handoff goes through the shared
+# `write_test_result_and_tally`; the parent reaps via `aggregate_parallel_results`.
+run_lib_worker() {
+    local slot="$1"
+    local total_count="$2"
+    shift 2
+    local -a tasks=("$@")  # each entry "<spawn_idx>|<category>|<test_dir>"
+
+    (
+        LIB_RUNNER_DIR="${LIB_RUNNER_DIR_BASE}/runner-${slot}"
+        warm_up_runner_crate
+        show_progress() { :; }
+        clear_progress() { :; }
+
+        local entry idx category test_dir full_name result_file
+        for entry in "${tasks[@]}"; do
+            IFS='|' read -r idx category test_dir <<< "$entry"
+            full_name="${category}/$(basename "$test_dir")"
+            result_file="${PARALLEL_RESULTS_DIR}/$(printf '%04d' "$idx").result"
+
+            failure_names=(); failure_reasons=(); failure_details=()
+            passed=0; failed=0
+
+            run_test "$test_dir" "$category"
+            write_test_result_and_tally "$result_file" "$full_name" "$total_count"
+        done
+    )
+}
+
+# Round-robin shard `tasks` across `jobs` workers (one per runner-crate slot).
+run_tasks_parallel() {
+    local jobs="$1"; shift
+    local -a tasks=("$@")  # entries "<category>|<test_dir>"
+
+    init_parallel_dirs "$LIB_RUNNER_DIR_BASE"
+
+    local total_count=${#tasks[@]}
+    local -a shard=()
+    local slot=0 i=0
+    for ((slot=0; slot<jobs; slot++)); do shard[$slot]=""; done
+    for ((i=0; i<total_count; i++)); do
+        slot=$((i % jobs))
+        local entry="${i}|${tasks[$i]}"
+        if [[ -z "${shard[$slot]}" ]]; then
+            shard[$slot]="$entry"
+        else
+            shard[$slot]+=$'\n'"$entry"
+        fi
+    done
+
+    for ((slot=0; slot<jobs; slot++)); do
+        [[ -z "${shard[$slot]}" ]] && continue
+        local -a shard_tasks=()
+        mapfile -t shard_tasks <<< "${shard[$slot]}"
+        run_lib_worker "$slot" "$total_count" "${shard_tasks[@]}" &
+    done
+    wait
+
+    aggregate_parallel_results
+}
+
+###############################################################################
+# Entry point
+###############################################################################
+
+main() {
+    parse_jobs_flag usage "$@"
+    local jobs="$PARSED_JOBS"
+    set -- "${PARSED_POSITIONAL[@]}"
+
+    echo ""
+    echo -e "  ${BOLD}FlowLog Fixture Tests (library mode)${NC}"
     echo ""
 
+    total=$(count_tests "$@")
+    if (( jobs > 1 )); then
+        echo -e "  ${DIM}Running ${total} tests (parallel, -j ${jobs})...${NC}"
+    else
+        echo -e "  ${DIM}Running ${total} tests...${NC}"
+    fi
+
+    # Build the flat (category, test_dir) task list.
+    local -a tasks=()
     if [[ $# -gt 0 ]]; then
         local name
         for name in "$@"; do
             local cat
             cat="$(find_test "$name")" || die "Test not found: $name"
-            run_test "${TESTS_DIR}/${cat}/${name}" "$cat"
+            tasks+=("${cat}|${TESTS_DIR}/${cat}/${name}")
         done
     else
         for cat in "${CATEGORIES[@]}"; do
@@ -228,8 +313,24 @@ EOF
             [[ -d "$cat_dir" ]] || continue
             for test_dir in "$cat_dir"/*/; do
                 [[ -f "$test_dir/program.dl" ]] || continue
-                run_test "$test_dir" "$cat"
+                tasks+=("${cat}|${test_dir%/}")
             done
+        done
+    fi
+
+    if (( jobs > 1 )); then
+        echo -e "  ${YELLOW}Warming ${jobs} runner crates (release)...${NC}"
+        echo ""
+        run_tasks_parallel "$jobs" "${tasks[@]}"
+    else
+        echo -e "  ${YELLOW}Warming runner crate (release)...${NC}"
+        echo ""
+        warm_up_runner_crate
+        local entry category test_dir
+        for entry in "${tasks[@]}"; do
+            category="${entry%%|*}"
+            test_dir="${entry#*|}"
+            run_test "$test_dir" "$category"
         done
     fi
 

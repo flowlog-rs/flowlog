@@ -295,6 +295,12 @@ gen_csv_loader() {
         tuple_exprs+=","
     fi
 
+    # Splice the .input `delimiter=` value directly into a Rust char literal.
+    # Both flowlog `.dl` source and Rust use the same `\t`/`\n`/`\r`/`\\`/`\0`
+    # escape spelling, so the raw param is already valid Rust char syntax.
+    local delim
+    delim=$(input_delimiter_for "$dl_file" "$lower_name")
+
     cat <<EOF
     {
         let __src = std::fs::read_to_string("data/${csv}")
@@ -303,7 +309,7 @@ gen_csv_loader() {
             .lines()
             .filter(|l| !l.trim().is_empty())
             .map(|l| {
-                let mut cols = l.split(',');
+                let mut cols = l.split('${delim}');
                 (${tuple_exprs})
             })
             .collect();
@@ -345,12 +351,18 @@ EOF
         return 0
     fi
 
+    # `.output Rel(delimiter="…")` controls the column separator; the raw
+    # value uses the same escape spelling Rust's `format!` accepts (`\t`,
+    # `\n`, `\r`, `\\`), so it's spliced directly into the format string.
+    local delim
+    delim=$(output_delimiter_for "$dl_file" "$lower_name")
+
     local field_count
     field_count=$(echo "$fields" | wc -w)
     local fmt=""
     local i
     for ((i=0; i<field_count; i++)); do
-        (( i > 0 )) && fmt+=","
+        (( i > 0 )) && fmt+="${delim}"
         fmt+="{}"
     done
 

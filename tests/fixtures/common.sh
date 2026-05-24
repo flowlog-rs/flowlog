@@ -177,6 +177,106 @@ count_tests() {
 }
 
 ###############################################################################
+# CLI helpers
+###############################################################################
+
+# Parse `[-j N] [-h] [--] [positional…]`. Populates `PARSED_JOBS` (positive int,
+# default 1) and `PARSED_POSITIONAL` (array). On `-h|--help` invokes the
+# script-supplied `usage_fn` and exits 0.
+PARSED_JOBS=1
+PARSED_POSITIONAL=()
+parse_jobs_flag() {
+    local usage_fn="$1"; shift
+    PARSED_JOBS=1
+    PARSED_POSITIONAL=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) "$usage_fn"; exit 0 ;;
+            -j) PARSED_JOBS="${2:?}"; shift 2 ;;
+            -j*) PARSED_JOBS="${1#-j}"; shift ;;
+            --) shift; PARSED_POSITIONAL+=("$@"); break ;;
+            *) PARSED_POSITIONAL+=("$1"); shift ;;
+        esac
+    done
+    [[ "$PARSED_JOBS" =~ ^[1-9][0-9]*$ ]] \
+        || die "Invalid -j value: $PARSED_JOBS (expected positive integer)"
+}
+
+###############################################################################
+# Parallel scheduler helpers
+###############################################################################
+
+# Task entries are encoded as `<category>|<test_dir>` (pipe-separated). All
+# fixture identifiers in this repo are simple slugs; `|` in a category or
+# path would corrupt the split.
+# Set by `init_parallel_dirs`, read by the worker / aggregator helpers below.
+PARALLEL_RESULTS_DIR=""
+PARALLEL_TALLY_DIR=""
+
+init_parallel_dirs() {
+    local build_base="$1"
+    PARALLEL_RESULTS_DIR="${build_base}/.results"
+    PARALLEL_TALLY_DIR="${build_base}/.tally"
+    rm -rf "$PARALLEL_RESULTS_DIR" "$PARALLEL_TALLY_DIR"
+    mkdir -p "$PARALLEL_RESULTS_DIR" "$PARALLEL_TALLY_DIR"
+}
+
+# Worker-side: serialize the per-test pass/fail state to `$result_file` and
+# print one progress line keyed off an atomic completion count. Reads the
+# subshell-local `failed` / `failure_*` arrays populated by `run_test`.
+write_test_result_and_tally() {
+    local result_file="$1"
+    local full_name="$2"
+    local total_count="$3"
+
+    if (( failed > 0 )); then
+        {
+            printf 'FAIL\n'
+            printf '%s\n' "${failure_names[0]:-$full_name}"
+            printf '%s\n' "${failure_reasons[0]:-unknown}"
+            printf '%s' "${failure_details[0]:-}"
+        } > "$result_file"
+    else
+        printf 'PASS\n' > "$result_file"
+    fi
+
+    # Atomic count without flock: each subshell creates a unique marker, then
+    # the count is just the entry count of the marker dir.
+    : >"${PARALLEL_TALLY_DIR}/${BASHPID}.${RANDOM}"
+    local n
+    n=$(find "$PARALLEL_TALLY_DIR" -maxdepth 1 -type f | wc -l)
+    local mark color
+    if (( failed > 0 )); then
+        mark="✗"; color="${RED}"
+    else
+        mark="✓"; color="${GREEN}"
+    fi
+    printf "  ${DIM}[%d/%d]${NC} ${color}%s${NC} %s\n" \
+        "$n" "$total_count" "$mark" "$full_name"
+}
+
+# Parent-side: walk result files in spawn order (filenames sort lexically) and
+# populate the caller's `passed`/`failed` counters + failure_* arrays.
+aggregate_parallel_results() {
+    local rf status name reason detail
+    for rf in "$PARALLEL_RESULTS_DIR"/*.result; do
+        [[ -f "$rf" ]] || continue
+        IFS= read -r status < "$rf" || status=""
+        if [[ "$status" == "PASS" ]]; then
+            ((passed++)) || true
+        else
+            { IFS= read -r _; IFS= read -r name; IFS= read -r reason; } < "$rf"
+            detail="$(awk 'NR>3' "$rf")"
+            failure_names+=("$name")
+            failure_reasons+=("$reason")
+            failure_details+=("$detail")
+            ((failed++)) || true
+        fi
+    done
+    rm -rf "$PARALLEL_RESULTS_DIR" "$PARALLEL_TALLY_DIR"
+}
+
+###############################################################################
 # Summary printer
 ###############################################################################
 

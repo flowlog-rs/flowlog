@@ -126,12 +126,12 @@ fn gen_write_row_file(idb: &Relation, string_intern: bool, is_incremental: bool)
         // Incremental lines carry the diff as a signed suffix column.
         let mut parts = vec!["{}"; idb.arity()];
         parts.push("{:+}");
-        let fmt = Literal::string(&parts.join(delim));
+        let fmt = Literal::string(&parts.join(delim.as_str()));
         quote! {
             writeln!(out, #fmt #(, #fields )*, row.2).expect("write failed");
         }
     } else {
-        let fmt = Literal::string(&vec!["{}"; idb.arity()].join(delim));
+        let fmt = Literal::string(&vec!["{}"; idb.arity()].join(delim.as_str()));
         quote! {
             writeln!(out, #fmt #(, #fields )*).expect("write failed");
         }

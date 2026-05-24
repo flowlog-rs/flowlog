@@ -50,6 +50,40 @@ pub struct Relation {
     span: Ignored<Span>,
 }
 
+/// Decode the standard Datalog delimiter escape sequences (`\t`, `\n`, `\r`,
+/// `\\`, `\0`). Unknown `\x` sequences pass through as the two literal bytes,
+/// matching Soufflé's behavior. A trailing lone backslash is preserved.
+fn unescape_delimiter(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\\' && i + 1 < bytes.len() {
+            let next = bytes[i + 1];
+            match next {
+                b't' => out.push(b'\t'),
+                b'n' => out.push(b'\n'),
+                b'r' => out.push(b'\r'),
+                b'\\' => out.push(b'\\'),
+                b'0' => out.push(0),
+                _ => {
+                    out.push(b'\\');
+                    out.push(next);
+                }
+            }
+            i += 2;
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    // All decoded bytes are either ASCII or copied verbatim from a valid UTF-8
+    // input (the only multi-byte path skips the backslash branch), so the
+    // result is always valid UTF-8.
+    String::from_utf8(out).expect("unescape preserves UTF-8 validity")
+}
+
 impl Relation {
     /// Build a fresh relation. Tests only; production code goes through the parser.
     #[cfg(test)]
@@ -119,10 +153,13 @@ impl Relation {
     }
 
     /// Get the input delimiter for a file-backed relation.
+    ///
+    /// Interprets `\t`, `\n`, `\r`, `\\`, and `\0` as the corresponding byte;
+    /// other `\x` sequences pass through unchanged (matching Soufflé).
     #[must_use]
     #[inline]
-    pub fn input_delimiter(&self) -> &str {
-        self.input_param("delimiter").unwrap_or(",")
+    pub fn input_delimiter(&self) -> String {
+        unescape_delimiter(self.input_param("delimiter").unwrap_or(","))
     }
 
     /// Whether to skip the first (header) line when reading this file-backed relation.
@@ -282,10 +319,13 @@ impl Relation {
     }
 
     /// Get the output delimiter. Defaults to `","`.
+    ///
+    /// Interprets `\t`, `\n`, `\r`, `\\`, and `\0` as the corresponding byte;
+    /// other `\x` sequences pass through unchanged (matching Soufflé).
     #[must_use]
     #[inline]
-    pub fn output_delimiter(&self) -> &str {
-        self.output_param("delimiter").unwrap_or(",")
+    pub fn output_delimiter(&self) -> String {
+        unescape_delimiter(self.output_param("delimiter").unwrap_or(","))
     }
 
     /// Get the output row limit, if specified. Validated at parse time by
@@ -491,6 +531,56 @@ mod tests {
         rel.set_output_params(params).unwrap();
         let spec = rel.output_order_by().unwrap();
         assert_eq!(spec, vec![(1, String, false), (0, Int32, true)]);
+    }
+
+    #[test]
+    fn unescape_delimiter_basic_escapes() {
+        assert_eq!(unescape_delimiter("\\t"), "\t");
+        assert_eq!(unescape_delimiter("\\n"), "\n");
+        assert_eq!(unescape_delimiter("\\r"), "\r");
+        assert_eq!(unescape_delimiter("\\\\"), "\\");
+        assert_eq!(unescape_delimiter("\\0"), "\0");
+    }
+
+    #[test]
+    fn unescape_delimiter_literal_passthrough() {
+        assert_eq!(unescape_delimiter(","), ",");
+        assert_eq!(unescape_delimiter("|"), "|");
+        assert_eq!(unescape_delimiter(""), "");
+    }
+
+    #[test]
+    fn unescape_delimiter_unknown_passthrough() {
+        // Soufflé leaves unknown \x sequences as literal — `\x` becomes `\x`.
+        assert_eq!(unescape_delimiter("\\x"), "\\x");
+        // Trailing lone backslash is preserved verbatim.
+        assert_eq!(unescape_delimiter("\\"), "\\");
+    }
+
+    #[test]
+    fn input_delimiter_decodes_tab() {
+        let mut rel = Relation::new("r", attrs());
+        let mut params = HashMap::new();
+        params.insert("delimiter".to_string(), "\\t".to_string());
+        rel.set_input_params(params);
+        assert_eq!(rel.input_delimiter(), "\t");
+        assert_eq!(rel.input_delimiter().as_bytes(), b"\t");
+    }
+
+    #[test]
+    fn output_delimiter_decodes_tab() {
+        let mut rel = Relation::new("r", attrs());
+        let mut params = HashMap::new();
+        params.insert("delimiter".to_string(), "\\t".to_string());
+        rel.set_output_params(params).unwrap();
+        assert_eq!(rel.output_delimiter(), "\t");
+    }
+
+    #[test]
+    fn delimiter_defaults_to_comma() {
+        let rel = Relation::new("r", attrs());
+        assert_eq!(rel.input_delimiter(), ",");
+        assert_eq!(rel.output_delimiter(), ",");
     }
 
     #[test]
