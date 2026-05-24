@@ -1,0 +1,14 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : delimiter_tab
+// Feature : escape-sequence decoding for input/output `delimiter` params
+// Covers  : `delimiter="\t"` is decoded to the tab byte on both sides — before
+//           the fix the literal two-byte string `\t` was used, so rows never
+//           split and the parser emitted "missing col N" for every row.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Pair(a: int32, b: int32)
+.input Pair(IO="file", filename="Pair.tsv", delimiter="\t")
+
+.decl Copy(a: int32, b: int32)
+Copy(x, y) :- Pair(x, y).
+.output Copy(delimiter="\t", order_by="a, b")

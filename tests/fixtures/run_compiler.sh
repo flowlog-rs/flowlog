@@ -32,7 +32,7 @@ readonly BUILD_DIR="${ROOT_DIR}/target/e2e"
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [test_name ...]
+  $(basename "$0") [-j N] [test_name ...]
 
 Run FlowLog binary-mode end-to-end tests. Tests are organized by category:
   datalog-batch/  Standard batch Datalog evaluation (default mode)
@@ -47,8 +47,14 @@ Each test directory contains:
   commands.txt    Optional incremental command transcript
   runtime_flags   Optional runtime flags (e.g. -w 4)
 
+Options:
+  -j N            Run up to N fixtures in parallel (default 1).
+                  Each fixture already gets its own work_dir, so parallelism
+                  is safe in binary mode.
+
 Examples:
-  $(basename "$0")                     # run all tests
+  $(basename "$0")                     # run all tests sequentially
+  $(basename "$0") -j 8                # 8 fixtures at a time
   $(basename "$0") recursive_max       # run one test
 EOF
 }
@@ -225,14 +231,54 @@ run_test() {
 }
 
 ###############################################################################
+# Parallel scheduler
+###############################################################################
+
+# Bounded-concurrency scheduler: one subshell per task, throttled with `wait -n`
+# as a counting semaphore. Per-task results land in result files; the parent
+# aggregates them via `aggregate_parallel_results` after the final wait.
+run_tasks_parallel() {
+    local jobs="$1"; shift
+    local -a tasks=("$@")  # entries are "<category>|<test_dir>"
+
+    init_parallel_dirs "$BUILD_DIR"
+
+    local total_count=${#tasks[@]}
+    local idx=0
+    local entry category test_dir result_file
+    for entry in "${tasks[@]}"; do
+        category="${entry%%|*}"
+        test_dir="${entry#*|}"
+        result_file="${PARALLEL_RESULTS_DIR}/$(printf '%04d' "$idx").result"
+
+        while (( $(jobs -rp | wc -l) >= jobs )); do
+            wait -n
+        done
+        (
+            failure_names=(); failure_reasons=(); failure_details=()
+            passed=0; failed=0; current=0
+            show_progress() { :; }
+            clear_progress() { :; }
+
+            run_test "$test_dir" "$category"
+            write_test_result_and_tally \
+                "$result_file" "${category}/$(basename "$test_dir")" "$total_count"
+        ) &
+        ((idx++)) || true
+    done
+    wait
+
+    aggregate_parallel_results
+}
+
+###############################################################################
 # Entry point
 ###############################################################################
 
 main() {
-    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-        usage
-        exit 0
-    fi
+    parse_jobs_flag usage "$@"
+    local jobs="$PARSED_JOBS"
+    set -- "${PARSED_POSITIONAL[@]}"
 
     echo ""
     echo -e "  ${BOLD}FlowLog Fixture Tests (binary mode)${NC}"
@@ -244,15 +290,21 @@ main() {
 
     # Count total tests first
     total=$(count_tests "$@")
-    echo -e "  ${DIM}Running ${total} tests...${NC}"
+    if (( jobs > 1 )); then
+        echo -e "  ${DIM}Running ${total} tests (parallel, -j ${jobs})...${NC}"
+    else
+        echo -e "  ${DIM}Running ${total} tests...${NC}"
+    fi
     echo ""
 
+    # Build the flat (category, test_dir) task list.
+    local -a tasks=()
     if [[ $# -gt 0 ]]; then
         local name
         for name in "$@"; do
             local cat
             cat="$(find_test "$name")" || die "Test not found: $name (searched all categories)"
-            run_test "${TESTS_DIR}/${cat}/${name}" "$cat"
+            tasks+=("${cat}|${TESTS_DIR}/${cat}/${name}")
         done
     else
         for cat in "${CATEGORIES[@]}"; do
@@ -260,8 +312,19 @@ main() {
             [[ -d "$cat_dir" ]] || continue
             for test_dir in "$cat_dir"/*/; do
                 [[ -f "$test_dir/program.dl" ]] || continue
-                run_test "$test_dir" "$cat"
+                tasks+=("${cat}|${test_dir%/}")
             done
+        done
+    fi
+
+    if (( jobs > 1 )); then
+        run_tasks_parallel "$jobs" "${tasks[@]}"
+    else
+        local entry category test_dir
+        for entry in "${tasks[@]}"; do
+            category="${entry%%|*}"
+            test_dir="${entry#*|}"
+            run_test "$test_dir" "$category"
         done
     fi
 
