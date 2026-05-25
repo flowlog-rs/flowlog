@@ -6,6 +6,7 @@
 
 mod declaration;
 mod error;
+mod inliner;
 mod logic;
 mod primitive;
 mod program;

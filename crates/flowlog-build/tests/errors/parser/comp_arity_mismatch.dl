@@ -1,0 +1,3 @@
+// `.comp Pair<T>` expects one type argument, but the `.init` passes two.
+.comp Pair<T> { .decl P(x: T, y: T) }
+.init bad = Pair<number, symbol>

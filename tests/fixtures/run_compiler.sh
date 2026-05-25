@@ -97,44 +97,18 @@ copy_test_data() {
 # Execution helpers
 ###############################################################################
 
-run_incremental_session() {
-    local work_dir="$1"
-    local commands_file="$2"
-    local run_log="$3"
-    local fifo_path="$4"
-
-    local feeder_pid
-    local status=0
-
-    rm -f "$fifo_path"
-    mkfifo "$fifo_path"
-
-    (
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            printf '%s\n' "$line"
-            sleep 0.02
-        done < "$commands_file"
-    ) > "$fifo_path" &
-    feeder_pid=$!
-
-    (cd "$work_dir" && script -qefc "./program" /dev/null < "$fifo_path" >"$run_log" 2>&1) || status=$?
-
-    rm -f "$fifo_path"
-    wait "$feeder_pid" || true
-    return "$status"
-}
-
 run_generated_binary() {
     local work_dir="$1"
     local test_dir="$2"
-    local test_name="$3"
-    local run_log="$4"
-    local incremental="$5"
+    local run_log="$3"
+    local incremental="$4"
 
+    # Incremental: feed commands via stdin. Rustyline detects non-TTY
+    # stdin and falls back to a synchronous line reader, so no PTY or
+    # pacing choreography is needed.
     if (( incremental )); then
-        command -v script >/dev/null 2>&1 || die "Required dependency 'script' not found on PATH; needed for incremental shell tests."
-        run_incremental_session "$work_dir" "$test_dir/commands.txt" "$run_log" "${BUILD_DIR}/${test_name}.cmd.fifo"
-        return $?
+        (cd "$work_dir" && ./program < "$test_dir/commands.txt" >"$run_log" 2>&1)
+        return
     fi
 
     local runtime_flags=()
@@ -217,7 +191,7 @@ run_test() {
     mkdir -p "$output_dir"
 
     # 3) Execute
-    if ! run_generated_binary "$work_dir" "$test_dir" "$test_name" "$run_log" "$incremental"; then
+    if ! run_generated_binary "$work_dir" "$test_dir" "$run_log" "$incremental"; then
         local detail
         detail="$(tail -20 "$run_log" 2>/dev/null | sed 's/^/         /')"
         record_failure "$full_name" "execution failed" "$detail"

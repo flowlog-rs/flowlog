@@ -1,0 +1,7 @@
+// A rule inside a comp body references `cfg.X` but `cfg` is neither a
+// nested `.init` instance in scope nor a bound type-parameter.
+.comp Holder {
+  .decl R(x: symbol)
+  R(x) :- cfg.X(x).
+}
+.init h = Holder

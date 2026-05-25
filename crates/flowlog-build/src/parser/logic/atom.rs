@@ -87,6 +87,13 @@ impl Atom {
         &self.name
     }
 
+    /// Rename in-place. Lowercases and refreshes the cached fingerprint.
+    pub(crate) fn set_name(&mut self, name: String) {
+        let lname = name.to_lowercase();
+        self.fingerprint = compute_fp(&lname);
+        self.name = lname;
+    }
+
     /// Arguments (as a slice).
     #[must_use]
     pub(crate) fn arguments(&self) -> &[AtomArg] {

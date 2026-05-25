@@ -59,22 +59,34 @@ fn parse_io_params<'i>(
     let mut parameters = HashMap::new();
     for node in inner {
         if node.as_rule() == Rule::io_params {
-            for io_param in node.into_inner() {
-                let mut kv = io_param.into_inner();
-                let key = kv
-                    .next()
-                    .ok_or_else(|| grammar_bug("io parameter missing name"))?
-                    .as_str()
-                    .to_string();
-                let value = kv
-                    .next()
-                    .ok_or_else(|| grammar_bug("io parameter missing value"))?
-                    .as_str()
-                    .trim_matches('"')
-                    .to_string();
-                parameters.insert(key, value);
-            }
+            parameters = parse_io_params_node(node)?;
         }
+    }
+    Ok(parameters)
+}
+
+/// Parse a single `io_params` pest node into a key→value map.
+/// Shared with the raw-comp parser in
+/// [`crate::parser::declaration::comp`].
+pub(super) fn parse_io_params_node(
+    node: Pair<Rule>,
+) -> Result<HashMap<String, String>, ParseError> {
+    debug_assert_eq!(node.as_rule(), Rule::io_params);
+    let mut parameters = HashMap::new();
+    for io_param in node.into_inner() {
+        let mut kv = io_param.into_inner();
+        let key = kv
+            .next()
+            .ok_or_else(|| grammar_bug("io parameter missing name"))?
+            .as_str()
+            .to_string();
+        let value = kv
+            .next()
+            .ok_or_else(|| grammar_bug("io parameter missing value"))?
+            .as_str()
+            .trim_matches('"')
+            .to_string();
+        parameters.insert(key, value);
     }
     Ok(parameters)
 }

@@ -1,0 +1,5 @@
+// Mutual inheritance: `A : B` and `B : A`. The inliner's inheritance
+// walker detects the cycle.
+.comp A : B { .decl X(x: number) }
+.comp B : A { .decl Y(y: number) }
+.init x = A

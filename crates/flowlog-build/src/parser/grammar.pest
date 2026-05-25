@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = {
     SOI ~
-    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | fixpoint_block | loop_block | fact | rule)* ~
+    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | comp_decl | init_decl | fixpoint_block | loop_block | fact | rule)* ~
     EOI
 }
 
@@ -27,15 +27,25 @@ variable = { identifier }
 // Attribute name - names of relation attributes (columns)
 attribute_name = { identifier }
 
-// Relation name - names of relations (tables)
-relation_name = { identifier }
+// Relation name as it appears at a *defining* site (`.decl`). Always
+// a single identifier — dots are reserved for inliner-produced names.
+relation_name = @{ identifier }
+
+// Relation reference at a *use* site (atom, head, directive target,
+// loop condition, iterative list). Accepts the dotted form so user
+// code can refer to inliner-produced relations like `c.Holds`.
+relation_ref = @{ identifier ~ ("." ~ identifier)* }
 
 // Type at a `.decl` attribute. `data_type` must come first so reserved
 // keywords (`number`, `symbol`, …) win over the catch-all identifier.
 type_ref = { data_type | alias_name }
 
-// A `.type`-declared name; rejected after parsing if undeclared.
-alias_name = { identifier }
+// A user-declared type name at a *use* site. Resolved against the
+// [`TypeRegistry`] after parsing — includes top-level `.type` aliases
+// and per-instance prefixed types registered by the component inliner
+// (`a.cfg.context`, etc.). Dotted forms support comp-type-parameter
+// references like `.decl R(c: cfg.Context)`.
+alias_name = @{ identifier ~ ("." ~ identifier)* }
 
 // Data type specification
 data_type = { integer8_type | integer16_type | integer32_type | integer64_type
@@ -117,14 +127,14 @@ declaration = {
 // Input directive for EDB relations - separate from declaration
 // Example: .input Relation(IO="file", filename="data.csv", delimiter=",")
 input_directive = {
-    ".input" ~ relation_name ~ "(" ~ io_params? ~ ")"
+    ".input" ~ relation_ref ~ "(" ~ io_params? ~ ")"
 }
 
 // Output directive for relations
 // Example: .output Relation
 // Example: .output Relation(delimiter="|")
 output_directive = {
-    ".output" ~ relation_name ~ ("(" ~ io_params? ~ ")")?
+    ".output" ~ relation_ref ~ ("(" ~ io_params? ~ ")")?
 }
 
 // Shared key=value parameter list used by both input and output directives
@@ -142,7 +152,7 @@ parameter_value = { string }
 // Print size directive for relations - separate from declaration
 // Example: .printsize Relation
 printsize_directive = {
-    ".printsize" ~ relation_name
+    ".printsize" ~ relation_ref
 }
 
 // Include directive — pull another .dl file into the current program.
@@ -288,7 +298,7 @@ max = { "max" | "MAX" }             // Maximum value
 // Relation with arguments
 // Example: edge(x, y), person("Alice", 25)
 atom = {
-    relation_name ~
+    relation_ref ~
     "(" ~
     (atom_arg ~ ("," ~ atom_arg)*)? ~
     ")"
@@ -326,7 +336,7 @@ rule_bodies = { predicates ~ (";" ~ predicates)* }
 // Left side of rule (before :-)
 // Example: reachable(x, z), stats(count(x))
 head = {
-    relation_name ~
+    relation_ref ~
     "(" ~
     (head_arg ~ ("," ~ head_arg)*)? ~
     ")"
@@ -414,7 +424,7 @@ loop_block = {
 // semantics within this block.  Unlisted relations default to accumulative (new).
 // Scoped per-block: the same relation can be iterative in one block and
 // accumulative in another.
-iterative_directive = { ".iterative" ~ relation_name }
+iterative_directive = { ".iterative" ~ relation_ref }
 
 // At most one while clause and one until clause, in either order.
 // If both are present without "or", stop when EITHER fires (min / and semantics).
@@ -445,7 +455,7 @@ loop_iter_expr = {
 loop_iter_compare_op = { "<=" | ">=" | "==" | "<" | ">" }
 
 // A single nullary (boolean) relation name used in an until clause.
-loop_bool_relation = { relation_name }
+loop_bool_relation = { relation_ref }
 
 // Boolean connective joining clauses or sub-conditions.
 loop_connective = { loop_and | loop_or }
@@ -466,6 +476,46 @@ type_alias_decl = { ".type" ~ identifier ~ type_decl_op ~ type_ref }
 type_decl_op = { subtype_op | alias_op }
 subtype_op = { "<:" }
 alias_op = { "=" }
+
+// =============================================================================
+// COMPONENT DECLARATIONS (.comp / .init)
+// =============================================================================
+//
+//   .comp Container<T> {
+//     .decl Holds(x: T)
+//     Holds(x) :- Source(x).
+//   }
+//   .init c = Container<symbol>
+//
+// `.comp` declares a parameterized template; `.init` instantiates it
+// under a name (e.g. `c`). The component inliner pass eliminates both
+// before typechecking, leaving only prefixed primitive forms
+// (`.decl c.holds(x: symbol)` etc.).
+
+comp_decl = {
+    ".comp" ~ identifier ~ comp_type_params? ~ comp_supertype? ~ "{" ~ comp_body_item* ~ "}"
+}
+
+// `<T>` or `<T, U>` — names of types this component is parameterized by.
+comp_type_params = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
+
+// `: BaseComp<args>` — inherit and splice another component's body.
+comp_supertype = { ":" ~ identifier ~ comp_type_args? }
+
+// `<symbol, NodeId>` — concrete type arguments. `type_ref` so dotted
+// forms like `cfg.Context` work.
+comp_type_args = { "<" ~ type_ref ~ ("," ~ type_ref)* ~ ">" }
+
+// `.init c = Container<symbol>`
+init_decl = { ".init" ~ identifier ~ "=" ~ identifier ~ comp_type_args? }
+
+// Items allowed inside a component body. Mirrors the top-level grammar
+// minus fixpoint/loop blocks and include directives (which are
+// resolved at file-load time).
+comp_body_item = {
+    declaration | type_alias_decl | input_directive | output_directive
+    | printsize_directive | rule | fact | comp_decl | init_decl
+}
 
 // =============================================================================
 // WHITESPACE AND COMMENTS

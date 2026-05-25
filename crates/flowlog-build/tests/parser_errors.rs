@@ -191,3 +191,39 @@ fn include_io() {
         ["failed to read", "nonexistent_file.dl"]
     );
 }
+
+#[test]
+fn comp_unknown() {
+    assert_err!(
+        parse("comp_unknown.dl", true),
+        ParseError::UnknownComponent { .. },
+        ["unknown component", "Container"]
+    );
+}
+
+#[test]
+fn comp_circular_inherit() {
+    assert_err!(
+        parse("comp_circular_inherit.dl", true),
+        ParseError::CircularInheritance { .. },
+        ["circular component inheritance"]
+    );
+}
+
+#[test]
+fn comp_arity_mismatch() {
+    assert_err!(
+        parse("comp_arity_mismatch.dl", true),
+        ParseError::ComponentArityMismatch { .. },
+        ["Pair", "expects 1 type argument", "got 2"]
+    );
+}
+
+#[test]
+fn comp_unresolved_ref() {
+    assert_err!(
+        parse("comp_unresolved_ref.dl", true),
+        ParseError::UnresolvedQualifiedRef { .. },
+        ["unresolved qualified reference", "cfg.X"]
+    );
+}
