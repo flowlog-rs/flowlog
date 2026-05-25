@@ -355,13 +355,13 @@ fn resolve_relation_ref(name: &str, span: Span, scope: &Scope<'_>) -> Result<Str
 
 fn rewrite_rule(rule: &mut FlowLogRule, scope: &Scope<'_>) -> Result<(), ParseError> {
     let head = rule.head_mut();
-    let rewritten = resolve_relation_ref(&head.name().to_string(), head.span(), scope)?;
+    let rewritten = resolve_relation_ref(head.name(), head.span(), scope)?;
     if rewritten != head.name() {
         head.set_name(rewritten);
     }
     for pred in rule.rhs_mut() {
         if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
-            let rewritten = resolve_relation_ref(&atom.name().to_string(), atom.span(), scope)?;
+            let rewritten = resolve_relation_ref(atom.name(), atom.span(), scope)?;
             if rewritten != atom.name() {
                 atom.set_name(rewritten);
             }
