@@ -8,11 +8,13 @@
 //! - [`PrintSizeDirective`]: print size directive for size reporting
 //!
 mod attribute;
+mod comp;
 mod directive;
 mod extern_fn;
 mod relation;
 
 pub(crate) use attribute::Attribute;
+pub(crate) use comp::{CompDecl, InitDecl, RawItem, RawTypeOp, SuperRef, split_type_alias};
 pub(crate) use directive::{InputDirective, OutputDirective, PrintSizeDirective};
 pub(crate) use extern_fn::ExternFn;
 pub use relation::Relation;

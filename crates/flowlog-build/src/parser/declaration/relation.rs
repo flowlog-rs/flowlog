@@ -173,6 +173,14 @@ impl Relation {
     #[must_use]
     #[inline]
     pub(crate) fn new(name: &str, attributes: Vec<Attribute>) -> Self {
+        Self::from_components(name, attributes, Span::DUMMY)
+    }
+
+    /// Build a relation from a pre-resolved name and attribute list.
+    /// Callers must supply attributes whose `TypeId` is already bound
+    /// to the program's `TypeRegistry`.
+    #[must_use]
+    pub(crate) fn from_components(name: &str, attributes: Vec<Attribute>, span: Span) -> Self {
         let raw_name = name.to_string();
         let name = name.to_lowercase();
         let fingerprint = compute_fp(&name);
@@ -187,7 +195,7 @@ impl Relation {
             output_limit_value: None,
             output_order_by_spec: None,
             printsize: false,
-            span: Ignored(Span::DUMMY),
+            span: Ignored(span),
         }
     }
 
@@ -210,6 +218,17 @@ impl Relation {
     #[inline]
     pub(crate) fn raw_name(&self) -> &str {
         &self.raw_name
+    }
+
+    /// Rename in-place. Refreshes the cached fingerprint and treats
+    /// the new name as both the canonical lower-case form and the
+    /// raw surface form. Used by the post-inliner normalization pass
+    /// to turn dotted instance names (`c.holds`) into Rust-ident-safe
+    /// underscored names (`c_holds`).
+    pub(crate) fn set_name(&mut self, name: String) {
+        self.name = name.to_lowercase();
+        self.fingerprint = compute_fp(&self.name);
+        self.raw_name = name;
     }
 
     /// Relation fingerprint.

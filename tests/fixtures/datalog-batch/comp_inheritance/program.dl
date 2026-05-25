@@ -1,0 +1,24 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : comp_inheritance
+// Feature : `.comp Sub<T> : Base<T>` splices supertype body under prefix
+// ════════════════════════════════════════════════════════════════════════════
+
+.comp Base<T> {
+  .decl B(x: T)
+  B(x) :- BSource(x).
+}
+
+.comp Sub<T> : Base<T> {
+  .decl S(x: T)
+  S(x) :- B(x).
+}
+
+.decl BSource(x: number)
+.input BSource(IO="file", filename="BSource.csv", delimiter=",")
+
+.init sub = Sub<number>
+
+.decl Result(x: number)
+.output Result
+
+Result(X) :- sub.S(X).

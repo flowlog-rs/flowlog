@@ -103,6 +103,13 @@ impl Head {
         }
     }
 
+    /// Rename in-place. Lowercases and refreshes the cached fingerprint.
+    pub(crate) fn set_name(&mut self, name: String) {
+        let lname = name.to_lowercase();
+        self.head_fingerprint = compute_fp(&lname);
+        self.name = lname;
+    }
+
     /// Source location this head was parsed from.
     #[must_use]
     #[inline]

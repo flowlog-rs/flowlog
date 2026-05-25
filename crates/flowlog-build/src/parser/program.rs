@@ -27,12 +27,15 @@
 
 use super::{
     ConstType, FlowLogParser, Lexeme, Rule,
-    declaration::{ExternFn, InputDirective, OutputDirective, PrintSizeDirective, Relation},
+    declaration::{
+        CompDecl, ExternFn, InitDecl, InputDirective, OutputDirective, PrintSizeDirective,
+        RawTypeOp, Relation, split_type_alias,
+    },
     error::{DirectiveKind, ParseError, grammar_bug},
+    inliner,
     logic::{Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, LoopBlock, Predicate},
     primitive::TypeRegistry,
     segment::Segment,
-    span_of, type_ref_name,
 };
 use crate::common::{FileId, SourceMap, Span};
 use pest::{Parser, iterators::Pair};
@@ -528,39 +531,29 @@ fn resolve_one_include(raw: &str, base_dir: &Path, include_dirs: &[&Path]) -> Pa
 // Type registry pre-pass
 // =============================================================================
 
-/// Register every `.type` declaration. Define-before-use: a `.type` can
-/// only reference primitives or types declared earlier in source. Cycles
-/// (including `.type X = X`) surface as `UnknownTypeParent` because the
-/// parent isn't registered when the child is processed.
+/// Register every top-level `.type` declaration. Define-before-use:
+/// a `.type` can only reference primitives or types declared earlier
+/// in source. Cycles (including `.type X = X`) surface as
+/// `UnknownTypeParent` because the parent isn't registered when the
+/// child is processed.
+///
+/// `.type` declarations *inside* `.comp` bodies are intentionally
+/// skipped here — the inliner registers per-instance prefixed types
+/// during expansion.
 fn build_type_registry(parsed_rule: Pair<Rule>, file: FileId) -> Result<TypeRegistry, ParseError> {
     let mut registry = TypeRegistry::new();
     for node in parsed_rule.into_inner() {
         if node.as_rule() != Rule::type_alias_decl {
             continue;
         }
-        let span = span_of(&node, file);
-        let mut inner = node.into_inner();
-        let name = inner
-            .next()
-            .ok_or_else(|| grammar_bug("type_alias_decl missing name"))?
-            .as_str()
-            .to_string();
-        let is_subtype = inner
-            .next()
-            .ok_or_else(|| grammar_bug("type_alias_decl missing operator"))?
-            .into_inner()
-            .next()
-            .map(|p| p.as_rule() == Rule::subtype_op)
-            .ok_or_else(|| grammar_bug("type_decl_op missing inner op"))?;
-        let parent = type_ref_name(
-            &inner
-                .next()
-                .ok_or_else(|| grammar_bug("type_alias_decl missing parent type_ref"))?,
-        );
-        if is_subtype {
-            registry.register_subtype(&name, &parent, span)?;
-        } else {
-            registry.register_alias(&name, &parent, span)?;
+        let (name, op, parent, span) = split_type_alias(node, file)?;
+        match op {
+            RawTypeOp::Subtype => {
+                registry.register_subtype(&name, &parent, span)?;
+            }
+            RawTypeOp::Alias => {
+                registry.register_alias(&name, &parent, span)?;
+            }
         }
     }
     Ok(registry)
@@ -578,6 +571,64 @@ fn build_type_registry(parsed_rule: Pair<Rule>, file: FileId) -> Result<TypeRegi
 fn flush_rules(pending: &mut Vec<FlowLogRule>, out: &mut Vec<Segment>) {
     if !pending.is_empty() {
         out.push(Segment::Plain(std::mem::take(pending)));
+    }
+}
+
+/// Replace `.` with `·` (U+00B7) in every dotted relation name.
+/// `·` is in Unicode's XID_Continue (so `c·holds` is a valid Rust
+/// 2021 identifier) but the FlowLog grammar's `identifier` is ASCII
+/// only, so it can never appear in a user-written `.decl` —
+/// collisions with user names are impossible by construction.
+fn normalize_inliner_dots(
+    relations: &mut [Relation],
+    segments: &mut [Segment],
+    raw_facts: &mut [FlowLogRule],
+) {
+    for rel in relations.iter_mut() {
+        if rel.name().contains('.') {
+            let renamed = rel.raw_name().replace('.', INLINER_SEP);
+            rel.set_name(renamed);
+        }
+    }
+    for_each_rule_mut(segments, normalize_rule_dots);
+    for fact in raw_facts.iter_mut() {
+        normalize_rule_dots(fact);
+    }
+}
+
+fn normalize_rule_dots(rule: &mut FlowLogRule) {
+    let head = rule.head_mut();
+    if head.name().contains('.') {
+        head.set_name(head.name().replace('.', INLINER_SEP));
+    }
+    for pred in rule.rhs_mut() {
+        if let Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) = pred
+            && a.name().contains('.')
+        {
+            a.set_name(a.name().replace('.', INLINER_SEP));
+        }
+    }
+}
+
+/// Inliner-produced relation-name separator. Replaces user-written
+/// `.` after inlining. See [`normalize_inliner_dots`].
+const INLINER_SEP: &str = "·";
+
+/// Apply `f` to every rule in every segment, including rules nested
+/// inside loop/fixpoint blocks. Shared by the dot-normalization pass
+/// and the UDF reclassification pass.
+fn for_each_rule_mut<F>(segments: &mut [Segment], mut f: F)
+where
+    F: FnMut(&mut FlowLogRule),
+{
+    for seg in segments.iter_mut() {
+        let rules: &mut [FlowLogRule] = match seg {
+            Segment::Plain(rs) => rs.as_mut_slice(),
+            Segment::Loop(b) | Segment::Fixpoint(b) => b.rules_mut(),
+        };
+        for rule in rules {
+            f(rule);
+        }
     }
 }
 
@@ -628,7 +679,7 @@ impl Program {
     ) -> Result<Self, ParseError> {
         // Resolve `.type` decls first so a forward-referenced
         // `.decl R(x: NodeId)` works.
-        let type_registry = build_type_registry(parsed_rule.clone(), file)?;
+        let mut type_registry = build_type_registry(parsed_rule.clone(), file)?;
 
         let mut relations: Vec<Relation> = Vec::new();
         // Local to the parse loop; not threaded into the returned `Program`.
@@ -640,6 +691,11 @@ impl Program {
         let mut raw_facts: Vec<FlowLogRule> = Vec::new();
         let mut current_rules: Vec<FlowLogRule> = Vec::new();
         let mut segments: Vec<Segment> = Vec::new();
+        let mut comps: HashMap<String, CompDecl> = HashMap::new();
+        // Each `.init` is recorded with the `segments.len()` value at the
+        // point it appeared, so the inliner's output rules splice in at
+        // that exact position — preserving source-order use-before-def.
+        let mut inits_at_pos: Vec<(InitDecl, usize)> = Vec::new();
 
         for node in parsed_rule.into_inner() {
             match node.as_rule() {
@@ -663,6 +719,17 @@ impl Program {
                     udfs.push(ExternFn::from_parsed_rule(node, file, &type_registry)?)
                 }
                 Rule::type_alias_decl => {} // handled by build_type_registry
+                Rule::comp_decl => {
+                    let comp = CompDecl::from_parsed_rule(node, file)?;
+                    comps.insert(comp.name.clone(), comp);
+                }
+                Rule::init_decl => {
+                    // Flush any pending rules before recording the init's
+                    // position so the position points just after them.
+                    flush_rules(&mut current_rules, &mut segments);
+                    let init = InitDecl::from_parsed_rule(node, file)?;
+                    inits_at_pos.push((init, segments.len()));
+                }
 
                 // ── I/O directives ────────────────────────────────────────────
                 Rule::input_directive => {
@@ -724,6 +791,37 @@ impl Program {
         // Seal any rules that trail after the last loop block.
         flush_rules(&mut current_rules, &mut segments);
 
+        // Expand `.comp` / `.init` into prefixed primitive forms.
+        // Each init's emitted rules splice into `segments` at the
+        // position recorded when the `.init` was parsed; rules
+        // referencing the init's relations must appear *after* the
+        // `.init` in source order, otherwise the stratifier catches
+        // them as forward references.
+        let mut shift = 0usize;
+        for (init, pos) in inits_at_pos {
+            let mut out = inliner::InlinerOutput::default();
+            inliner::inline_one("", init, &mut comps, &mut out, &mut type_registry)?;
+            for rel in out.relations {
+                if let Some((_prev_raw, prior)) = decl_spans.get(rel.name()) {
+                    return Err(ParseError::DuplicateDecl {
+                        span: rel.span(),
+                        prior: *prior,
+                        name: rel.raw_name().to_string(),
+                    });
+                }
+                decl_spans.insert(
+                    rel.name().to_string(),
+                    (rel.raw_name().to_string(), rel.span()),
+                );
+                relations.push(rel);
+            }
+            raw_facts.extend(out.facts);
+            if !out.rules.is_empty() {
+                segments.insert(pos + shift, Segment::Plain(out.rules));
+                shift += 1;
+            }
+        }
+
         Self::apply_directives(
             &mut relations,
             input_directives,
@@ -732,6 +830,8 @@ impl Program {
         )?;
         Self::reclassify_udf_predicates(&mut segments, &udfs)?;
         Self::validate_loop_conditions(&segments, &relations)?;
+
+        normalize_inliner_dots(&mut relations, &mut segments, &mut raw_facts);
 
         let mut program = Self {
             relations,
@@ -949,74 +1049,70 @@ impl Program {
             return Ok(());
         }
 
-        for item in items.iter_mut() {
-            match item {
-                Segment::Plain(rules) => Self::reclassify_rules(rules, &udf_names)?,
-                Segment::Loop(block) | Segment::Fixpoint(block) => {
-                    Self::reclassify_rules(block.rules_mut(), &udf_names)?
-                }
+        let mut result = Ok(());
+        for_each_rule_mut(items, |rule| {
+            if result.is_ok() {
+                result = Self::reclassify_one_rule(rule, &udf_names);
             }
-        }
-        Ok(())
+        });
+        result
     }
 
-    /// Rewrite rules in `rules` whose body atoms reference a UDF name.
-    ///
-    /// See [`Self::reclassify_udf_predicates`] for the rationale.
-    fn reclassify_rules(
-        rules: &mut [FlowLogRule],
+    /// Rewrite a single rule's body atoms that reference a UDF name
+    /// into [`FnCall`] predicates. See [`Self::reclassify_udf_predicates`]
+    /// for the rationale.
+    fn reclassify_one_rule(
+        rule: &mut FlowLogRule,
         udf_names: &HashSet<&str>,
     ) -> Result<(), ParseError> {
-        for rule in rules.iter_mut() {
-            let needs_rewrite = rule.rhs().iter().any(|p| {
-                matches!(
-                    p,
-                    Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a)
-                    if udf_names.contains(a.name())
-                )
-            });
-            if !needs_rewrite {
-                continue;
-            }
+        let needs_rewrite = rule.rhs().iter().any(|p| {
+            matches!(
+                p,
+                Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a)
+                if udf_names.contains(a.name())
+            )
+        });
+        if !needs_rewrite {
+            return Ok(());
+        }
 
-            let mut new_rhs = Vec::with_capacity(rule.rhs().len());
-            for pred in rule.rhs() {
-                new_rhs.push(match pred {
-                    Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom)
-                        if udf_names.contains(atom.name()) =>
-                    {
-                        let mut args = Vec::with_capacity(atom.arguments().len());
-                        for a in atom.arguments() {
-                            match a {
-                                AtomArg::Var(v) => {
-                                    args.push(Arithmetic::new(Factor::Var(v.clone()), vec![]));
-                                }
-                                AtomArg::Const(c) => {
-                                    args.push(Arithmetic::new(Factor::Const(c.clone()), vec![]));
-                                }
-                                AtomArg::Placeholder => {
-                                    return Err(ParseError::PlaceholderInUdf {
-                                        span: atom.span(),
-                                        udf_name: atom.name().to_string(),
-                                    });
-                                }
+        let mut new_rhs = Vec::with_capacity(rule.rhs().len());
+        for pred in rule.rhs() {
+            new_rhs.push(match pred {
+                Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom)
+                    if udf_names.contains(atom.name()) =>
+                {
+                    let mut args = Vec::with_capacity(atom.arguments().len());
+                    for a in atom.arguments() {
+                        match a {
+                            AtomArg::Var(v) => {
+                                args.push(Arithmetic::new(Factor::Var(v.clone()), vec![]));
+                            }
+                            AtomArg::Const(c) => {
+                                args.push(Arithmetic::new(Factor::Const(c.clone()), vec![]));
+                            }
+                            AtomArg::Placeholder => {
+                                return Err(ParseError::PlaceholderInUdf {
+                                    span: atom.span(),
+                                    udf_name: atom.name().to_string(),
+                                });
                             }
                         }
-                        Predicate::FnCall(
-                            FnCall::new(
-                                atom.name().to_string(),
-                                args,
-                                matches!(pred, Predicate::NegativeAtom(_)),
-                            )
-                            .with_span(atom.span()),
-                        )
                     }
-                    other => other.clone(),
-                });
-            }
-
-            *rule = FlowLogRule::new(rule.head().clone(), new_rhs);
+                    Predicate::FnCall(
+                        FnCall::new(
+                            atom.name().to_string(),
+                            args,
+                            matches!(pred, Predicate::NegativeAtom(_)),
+                        )
+                        .with_span(atom.span()),
+                    )
+                }
+                other => other.clone(),
+            });
         }
+
+        *rule = FlowLogRule::new(rule.head().clone(), new_rhs);
         Ok(())
     }
 

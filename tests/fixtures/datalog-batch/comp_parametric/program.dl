@@ -1,0 +1,23 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : comp_parametric
+// Feature : two `.init`s of `.comp Pair<T>` with different concrete types
+// ════════════════════════════════════════════════════════════════════════════
+
+.comp Pair<T> {
+  .decl P(x: T, y: T)
+}
+
+.init a = Pair<number>
+.init b = Pair<symbol>
+
+.decl InputA(x: number, y: number)
+.input InputA(IO="file", filename="InputA.csv", delimiter=",")
+
+.decl InputB(x: symbol, y: symbol)
+.input InputB(IO="file", filename="InputB.csv", delimiter=",")
+
+.output a.P
+.output b.P
+
+a.P(X, Y) :- InputA(X, Y).
+b.P(X, Y) :- InputB(X, Y).
