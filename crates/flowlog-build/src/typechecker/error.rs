@@ -146,6 +146,47 @@ pub enum TypeCheckError {
         found: usize,
     },
 
+    /// Sibling subtypes joined at the same variable (no meet).
+    #[error(
+        "variable `{var}` declared as `{first_ty}` but later used as `{later_ty}` (no common subtype)"
+    )]
+    SubtypeMismatch {
+        var: String,
+        first_ty: String,
+        first_span: Span,
+        later_ty: String,
+        later_span: Span,
+    },
+
+    /// Comparison operands with no common subtype — e.g. `x = y` where
+    /// `x: UserId` and `y: ProductId` are siblings of `number`.
+    #[error("comparison operands have incompatible subtypes: `{left_ty}` and `{right_ty}`")]
+    ComparisonSubtypeMismatch {
+        span: Span,
+        left_ty: String,
+        right_ty: String,
+    },
+
+    /// Narrowing in a head column without an explicit `as()`.
+    #[error(
+        "head column {col} of `{rel}` expects `{expected}` but receives `{found}` (use `as(expr, {expected})` to narrow)"
+    )]
+    HeadSubtypeMismatch {
+        span: Span,
+        rel: String,
+        col: usize,
+        expected: String,
+        found: String,
+    },
+
+    /// `as(expr, T)` where source and target have different primitive roots.
+    #[error("illegal cast: cannot cast `{from}` to `{to}` (different primitive roots)")]
+    IllegalCast { span: Span, from: String, to: String },
+
+    /// `as(expr, T)` where `T` is undeclared.
+    #[error("unknown cast target type `{name}`")]
+    UnknownCastType { span: Span, name: String },
+
     /// Type-checker invariant violation, rendered as a "please file a bug" ICE.
     #[error(transparent)]
     Internal(#[from] InternalError),
@@ -307,6 +348,72 @@ impl Diagnostic for TypeCheckError {
                 *span,
                 format!("`{literal}` does not fit `{expected:?}`"),
             )),
+
+            TypeCheckError::SubtypeMismatch {
+                var,
+                first_ty,
+                first_span,
+                later_ty,
+                later_span,
+            } => {
+                let mut label_vec = Vec::new();
+                if let Some(l) = primary_label(*later_span) {
+                    label_vec.push(l.with_message(format!("`{var}` used as `{later_ty}` here")));
+                }
+                if let Some(l) = secondary_label(*first_span) {
+                    label_vec.push(l.with_message(format!("`{var}` first bound as `{first_ty}`")));
+                }
+                base.with_labels(label_vec).with_notes(vec![
+                    "sibling subtypes of the same primitive are intentionally incompatible — \
+                     wrap one side with `as(expr, OtherType)` if you really mean to join them"
+                        .into(),
+                ])
+            }
+
+            TypeCheckError::ComparisonSubtypeMismatch {
+                span,
+                left_ty,
+                right_ty,
+            } => base
+                .with_labels(labels(
+                    *span,
+                    format!("`{left_ty}` and `{right_ty}` have no common subtype"),
+                ))
+                .with_notes(vec![
+                    "wrap one side with `as(expr, OtherType)` to assert they should compare"
+                        .into(),
+                ]),
+
+            TypeCheckError::HeadSubtypeMismatch {
+                span,
+                rel,
+                col,
+                expected,
+                found,
+            } => base
+                .with_labels(labels(
+                    *span,
+                    format!("`{rel}` column {col} expects `{expected}`, found `{found}`"),
+                ))
+                .with_notes(vec![
+                    "head columns allow implicit widening (subtype → parent), \
+                     but narrowing (parent → subtype) requires `as(expr, TargetType)`"
+                        .into(),
+                ]),
+
+            TypeCheckError::IllegalCast { span, from, to } => base
+                .with_labels(labels(*span, format!("`{from}` cannot be cast to `{to}`")))
+                .with_notes(vec![
+                    "`as()` only casts within the same primitive root \
+                     (e.g. between two `<: number` subtypes)"
+                        .into(),
+                ]),
+
+            TypeCheckError::UnknownCastType { span, name } => base
+                .with_labels(labels(*span, format!("`{name}` is not a declared type")))
+                .with_notes(vec![format!(
+                    "use a built-in primitive or add `.type {name} = ...` (or `<:`)"
+                )]),
 
             TypeCheckError::Internal(ie) => ie.to_diagnostic(),
         }

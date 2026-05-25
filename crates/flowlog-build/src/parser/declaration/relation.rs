@@ -2,15 +2,14 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::str::FromStr;
 
 use pest::iterators::Pair;
 
 use super::Attribute;
 use crate::common::{FileId, Ignored, Span, compute_fp};
 use crate::parser::error::{ParseError, grammar_bug};
-use crate::parser::primitive::DataType;
-use crate::parser::{Lexeme, Rule, span_of};
+use crate::parser::primitive::{DataType, TypeRegistry};
+use crate::parser::{Rule, span_of, type_ref_name};
 
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +84,90 @@ fn unescape_delimiter(s: &str) -> String {
 }
 
 impl Relation {
+    /// Like [`Lexeme::from_parsed_rule`] but threads the type registry
+    /// through so each attribute's surface type name can be resolved.
+    pub(crate) fn from_parsed_rule_with_registry(
+        parsed_rule: Pair<Rule>,
+        file: FileId,
+        registry: &TypeRegistry,
+    ) -> Result<Self, ParseError> {
+        let span = span_of(&parsed_rule, file);
+        let mut inner = parsed_rule.into_inner();
+
+        let name = inner
+            .next()
+            .ok_or_else(|| grammar_bug("relation missing name"))?
+            .as_str();
+
+        let mut attributes: Vec<Attribute> = Vec::new();
+
+        for rule in inner {
+            match rule.as_rule() {
+                Rule::attributes_decl => {
+                    let mut seen: HashMap<String, Span> = HashMap::new();
+                    for attr in rule.into_inner() {
+                        let attr_span = span_of(&attr, file);
+                        let mut parts = attr.into_inner();
+                        let aname = parts
+                            .next()
+                            .ok_or_else(|| grammar_bug("attribute missing name"))?
+                            .as_str();
+                        let type_ref_pair = parts
+                            .next()
+                            .ok_or_else(|| grammar_bug("attribute missing type_ref"))?;
+                        let type_ref_span = span_of(&type_ref_pair, file);
+                        let type_name = type_ref_name(&type_ref_pair);
+                        let type_id = registry.lookup(&type_name).ok_or_else(|| {
+                            ParseError::UnknownAttributeType {
+                                span: type_ref_span,
+                                name: type_name.clone(),
+                            }
+                        })?;
+                        let primitive = registry.root_primitive(type_id);
+
+                        let canonical = aname.to_lowercase();
+                        if let Some(prior) = seen.get(&canonical) {
+                            return Err(ParseError::DuplicateAttribute {
+                                span: attr_span,
+                                prior: *prior,
+                                relation: name.to_string(),
+                                name: aname.to_string(),
+                            });
+                        }
+                        seen.insert(canonical, attr_span);
+                        attributes.push(Attribute::with_type(
+                            aname.to_string(),
+                            primitive,
+                            type_id,
+                        ));
+                    }
+                }
+                other => {
+                    return Err(grammar_bug(format!(
+                        "unexpected rule in relation declaration: {other:?}"
+                    )));
+                }
+            }
+        }
+
+        let raw_name = name.to_string();
+        let lname = name.to_lowercase();
+        let fingerprint = compute_fp(&lname);
+        Ok(Self {
+            name: lname,
+            raw_name,
+            fingerprint,
+            attributes,
+            input_params: None,
+            output: false,
+            output_params: None,
+            output_limit_value: None,
+            output_order_by_spec: None,
+            printsize: false,
+            span: Ignored(span),
+        })
+    }
+
     /// Build a fresh relation. Tests only; production code goes through the parser.
     #[cfg(test)]
     #[must_use]
@@ -141,6 +224,13 @@ impl Relation {
     #[inline]
     pub fn data_type(&self) -> Vec<DataType> {
         self.attributes.iter().map(|a| *a.data_type()).collect()
+    }
+
+    /// Per-attribute declared `TypeId`s. Used by the typechecker;
+    /// downstream stages use [`Self::data_type`].
+    #[must_use]
+    pub(crate) fn attribute_declared_ids(&self) -> Vec<crate::parser::primitive::TypeId> {
+        self.attributes.iter().map(|a| a.declared_id()).collect()
     }
 
     /// Get the input filename.
@@ -394,92 +484,17 @@ impl fmt::Display for Relation {
     }
 }
 
-impl Lexeme for Relation {
-    /// Build a `Relation` from a parsed grammar rule.
-    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
-        let span = span_of(&parsed_rule, file);
-        let mut inner = parsed_rule.into_inner();
-
-        // name
-        let name = inner
-            .next()
-            .ok_or_else(|| grammar_bug("relation missing name"))?
-            .as_str();
-
-        let mut attributes: Vec<Attribute> = Vec::new();
-
-        for rule in inner {
-            match rule.as_rule() {
-                Rule::attributes_decl => {
-                    // Per-attribute span lookup keyed on the canonicalized
-                    // (lowercased) name, so case-collisions can cite the
-                    // earlier occurrence just like exact duplicates.
-                    let mut seen: HashMap<String, Span> = HashMap::new();
-                    for attr in rule.into_inner() {
-                        let attr_span = span_of(&attr, file);
-                        let mut parts = attr.into_inner();
-                        let aname = parts
-                            .next()
-                            .ok_or_else(|| grammar_bug("attribute missing name"))?
-                            .as_str();
-                        let dts = parts
-                            .next()
-                            .ok_or_else(|| grammar_bug("attribute missing datatype"))?
-                            .as_str();
-                        let dt = DataType::from_str(dts).map_err(|e| {
-                            grammar_bug(format!(
-                                "invalid datatype `{dts}` for attribute `{aname}`: {e}"
-                            ))
-                        })?;
-                        let canonical = aname.to_lowercase();
-                        if let Some(prior) = seen.get(&canonical) {
-                            return Err(ParseError::DuplicateAttribute {
-                                span: attr_span,
-                                prior: *prior,
-                                relation: name.to_string(),
-                                name: aname.to_string(),
-                            });
-                        }
-                        seen.insert(canonical, attr_span);
-                        attributes.push(Attribute::new(aname.to_string(), dt));
-                    }
-                }
-                other => {
-                    return Err(grammar_bug(format!(
-                        "unexpected rule in relation declaration: {other:?}"
-                    )));
-                }
-            }
-        }
-
-        let raw_name = name.to_string();
-        let lname = name.to_lowercase();
-        let fingerprint = compute_fp(&lname);
-        Ok(Self {
-            name: lname,
-            raw_name,
-            fingerprint,
-            attributes,
-            input_params: None,
-            output: false,
-            output_params: None,
-            output_limit_value: None,
-            output_order_by_spec: None,
-            printsize: false,
-            span: Ignored(span),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::primitive::DataType::{Int32, String};
+    use crate::parser::primitive::TypeRegistry;
 
     fn attrs() -> Vec<Attribute> {
+        let reg = TypeRegistry::new();
         vec![
-            Attribute::new("id".into(), Int32),
-            Attribute::new("name".into(), String),
+            Attribute::with_type("id".into(), Int32, reg.primitive_id(Int32)),
+            Attribute::with_type("name".into(), String, reg.primitive_id(String)),
         ]
     }
 

@@ -1,0 +1,2 @@
+.decl R(x: NoSuchType)
+R(1).

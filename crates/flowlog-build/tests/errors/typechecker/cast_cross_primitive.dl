@@ -1,0 +1,7 @@
+.type Name   <: symbol
+.type UserId <: number
+.decl Customer(name: Name)
+.decl OnlyUsers(u: UserId)
+.input Customer(IO="file", filename="Customer.csv", delimiter=",")
+.output OnlyUsers
+OnlyUsers(as(name, UserId)) :- Customer(name).

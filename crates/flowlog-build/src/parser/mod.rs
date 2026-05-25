@@ -21,6 +21,7 @@ pub use logic::{
     AggregationOperator, ArithmeticOperator, BuiltinOperator, ComparisonOperator, FlowLogRule,
 };
 pub use primitive::{ConstType, DataType};
+pub(crate) use primitive::{TypeId, TypeRegistry};
 pub use program::Program;
 
 // Intra-crate shortcuts — these logic types are imported from elsewhere
@@ -61,4 +62,9 @@ pub(crate) trait Lexeme: Sized {
 pub(crate) fn span_of(pair: &Pair<Rule>, file: FileId) -> Span {
     let s = pair.as_span();
     Span::new(file, s.start() as u32, s.end() as u32)
+}
+
+/// Surface text of a `type_ref` pair.
+pub(crate) fn type_ref_name(pair: &Pair<Rule>) -> String {
+    pair.as_str().trim().to_string()
 }

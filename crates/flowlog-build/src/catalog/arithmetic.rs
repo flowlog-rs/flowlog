@@ -150,6 +150,10 @@ impl ArithmeticPos {
                     op: bc.op(),
                     args: map_call_args(bc.args(), var_id),
                 },
+                // Cast is identity at runtime — strip the wrapper and
+                // map the inner factor directly. The typechecker has
+                // already validated subtype compatibility by this point.
+                Factor::Cast(c) => map_factor(c.inner(), var_signatures, var_id),
             }
         }
 
