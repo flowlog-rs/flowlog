@@ -179,6 +179,29 @@ pub enum ParseError {
     #[error("attribute references unknown type `{name}`")]
     UnknownAttributeType { span: Span, name: String },
 
+    /// `.init c = Foo<...>` where `Foo` was never declared as a `.comp`.
+    #[error("unknown component `{name}`")]
+    UnknownComponent { span: Span, name: String },
+
+    /// `.comp A : B { ... }` where the inheritance chain cycles back to `A`.
+    #[error("circular component inheritance involving `{name}`")]
+    CircularInheritance { span: Span, name: String },
+
+    /// `.init c = Foo<...>` passes a different number of type arguments
+    /// than `Foo`'s `.comp` declaration accepts.
+    #[error("component `{name}` expects {expected} type argument(s) but got {found}")]
+    ComponentArityMismatch {
+        span: Span,
+        name: String,
+        expected: usize,
+        found: usize,
+    },
+
+    /// A dotted reference like `cfg.X` appears in a component body but
+    /// `cfg` is neither a nested init nor a bound type-parameter.
+    #[error("unresolved qualified reference `{path}`")]
+    UnresolvedQualifiedRef { span: Span, path: String },
+
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
     #[error(transparent)]
@@ -280,6 +303,28 @@ impl Diagnostic for ParseError {
                 .with_labels(primary_only(*span))
                 .with_notes(vec![format!(
                     "either use a built-in primitive or add `.type {name} = ...`"
+                )]),
+
+            ParseError::UnknownComponent { span, name } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "declare `{name}` with a `.comp {name} {{ ... }}` block"
+                )]),
+
+            ParseError::CircularInheritance { span, name } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "`.comp {name}` inherits transitively from itself; break the cycle"
+                )]),
+
+            ParseError::ComponentArityMismatch { span, .. } => {
+                base.with_labels(primary_only(*span))
+            }
+
+            ParseError::UnresolvedQualifiedRef { span, path } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "the first segment of `{path}` must be either a nested `.init` instance in this component or a bound type-parameter"
                 )]),
 
             ParseError::Syntax { span, .. }

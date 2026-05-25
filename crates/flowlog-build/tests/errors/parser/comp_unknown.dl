@@ -1,0 +1,2 @@
+// `.init` references a component that was never declared with `.comp`.
+.init c = Container

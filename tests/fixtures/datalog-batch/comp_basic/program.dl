@@ -1,0 +1,19 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : comp_basic
+// Feature : `.comp` body prefixing; external refs left un-prefixed
+// ════════════════════════════════════════════════════════════════════════════
+
+.comp Container {
+  .decl Holds(x: symbol)
+  Holds(x) :- Source(x).
+}
+
+.decl Source(x: symbol)
+.input Source(IO="file", filename="Source.csv", delimiter=",")
+
+.init c = Container
+
+.decl Result(x: symbol)
+.output Result
+
+Result(x) :- c.Holds(x).

@@ -1,0 +1,24 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : comp_nested_typeparam
+// Feature : DOOP-style — type-param names another `.comp`; `cfg.Context` ref
+// ════════════════════════════════════════════════════════════════════════════
+
+.comp Config {
+  .type Context = symbol
+}
+
+.comp Analysis<Cfg> {
+  .init cfg = Cfg
+  .decl R(c: cfg.Context)
+}
+
+.decl Src(c: symbol)
+.input Src(IO="file", filename="Src.csv", delimiter=",")
+
+.init a = Analysis<Config>
+
+.decl Sink(c: symbol)
+.output Sink
+
+a.R(C) :- Src(C).
+Sink(C) :- a.R(C).
