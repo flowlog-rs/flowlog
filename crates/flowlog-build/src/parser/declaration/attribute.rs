@@ -1,44 +1,55 @@
-//! Attribute declaration types for FlowLog Datalog programs.
+//! Relation column schema.
+//!
+//! An `Attribute` carries two type facts in parallel:
+//!
+//! - `primitive_type` ([`DataType`]) — the storage type. Read by every
+//!   stage below the typechecker.
+//! - `declared_id` ([`TypeId`]) — the user-written type name. Read
+//!   only by the typechecker to enforce subtype identity; dead weight
+//!   downstream.
 
-use crate::parser::primitive::DataType;
+use crate::parser::primitive::{DataType, TypeId};
 use std::fmt;
 
-/// A single column in a relation schema: `name: DataType`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Attribute {
     name: String,
-    data_type: DataType,
+    primitive_type: DataType,
+    declared_id: TypeId,
 }
 
 impl Attribute {
-    /// Create a new attribute.
     #[must_use]
     #[inline]
-    pub(crate) fn new(name: String, data_type: DataType) -> Self {
+    pub(crate) fn with_type(name: String, primitive_type: DataType, declared_id: TypeId) -> Self {
         Self {
             name: name.to_lowercase(),
-            data_type,
+            primitive_type,
+            declared_id,
         }
     }
 
-    /// Attribute (column) name.
     #[must_use]
     #[inline]
     pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
-    /// Attribute data type.
     #[must_use]
     #[inline]
     pub(crate) fn data_type(&self) -> &DataType {
-        &self.data_type
+        &self.primitive_type
+    }
+
+    #[must_use]
+    #[inline]
+    pub(crate) fn declared_id(&self) -> TypeId {
+        self.declared_id
     }
 }
 
 impl fmt::Display for Attribute {
-    /// Formats as `name: type` using FlowLog grammar strings.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.name, self.data_type)
+        write!(f, "{}: {}", self.name, self.primitive_type)
     }
 }

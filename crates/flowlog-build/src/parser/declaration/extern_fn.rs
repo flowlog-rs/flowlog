@@ -9,8 +9,8 @@ use pest::iterators::Pair;
 use super::Attribute;
 use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
-use crate::parser::primitive::DataType;
-use crate::parser::{Lexeme, Rule, span_of};
+use crate::parser::primitive::{DataType, TypeRegistry};
+use crate::parser::{Rule, span_of};
 
 /// Common data for an external (user-defined) function declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,9 +69,15 @@ impl fmt::Display for ExternFn {
     }
 }
 
-impl Lexeme for ExternFn {
-    /// Parse an `extern_fn` grammar node into an [`ExternFn`].
-    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+impl ExternFn {
+    /// Parse an `extern_fn` node. The registry is only used to fetch
+    /// the primitive `TypeId` for each parameter — extern fn params
+    /// are always primitives (grammar uses `data_type`, not `type_ref`).
+    pub(crate) fn from_parsed_rule(
+        parsed_rule: Pair<Rule>,
+        file: FileId,
+        registry: &TypeRegistry,
+    ) -> Result<Self, ParseError> {
         if parsed_rule.as_rule() != Rule::extern_fn {
             return Err(grammar_bug(format!(
                 "expected extern_fn, got {:?}",
@@ -95,7 +101,7 @@ impl Lexeme for ExternFn {
             match node.as_rule() {
                 Rule::extern_fn_params => {
                     for param_node in node.into_inner() {
-                        params.push(parse_param(param_node)?);
+                        params.push(parse_param(param_node, registry)?);
                     }
                 }
                 Rule::data_type => {
@@ -118,7 +124,7 @@ impl Lexeme for ExternFn {
 }
 
 /// Parse a single `extern_fn_param` node (`name : type`) into an [`Attribute`].
-fn parse_param(param_node: Pair<Rule>) -> Result<Attribute, ParseError> {
+fn parse_param(param_node: Pair<Rule>, registry: &TypeRegistry) -> Result<Attribute, ParseError> {
     let mut parts = param_node.into_inner();
     let name = parts
         .next()
@@ -131,7 +137,11 @@ fn parse_param(param_node: Pair<Rule>) -> Result<Attribute, ParseError> {
         .as_str()
         .parse::<DataType>()
         .map_err(|e| grammar_bug(format!("invalid type in extern fn param: {e}")))?;
-    Ok(Attribute::new(name, data_type))
+    Ok(Attribute::with_type(
+        name,
+        data_type,
+        registry.primitive_id(data_type),
+    ))
 }
 
 #[cfg(test)]
@@ -145,7 +155,8 @@ mod tests {
     fn parse_scalar_no_params() {
         let input = ".extern fn get_time() -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, input).unwrap();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
+        let registry = TypeRegistry::new();
+        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0), &registry).unwrap();
         assert_eq!(ext.name(), "get_time");
         assert!(ext.params().is_empty());
         assert_eq!(ext.ret_type(), DataType::Int64);
@@ -155,7 +166,8 @@ mod tests {
     fn parse_scalar_with_params() {
         let input = ".extern fn my_hash(x: int64, y: int32) -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, input).unwrap();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
+        let registry = TypeRegistry::new();
+        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0), &registry).unwrap();
         assert_eq!(ext.name(), "my_hash");
         assert_eq!(ext.arity(), 2);
         assert_eq!(ext.params()[0].name(), "x");
@@ -169,12 +181,14 @@ mod tests {
     fn display_round_trips_surface_syntax() {
         let no_params = ".extern fn get_time() -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, no_params).unwrap();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
+        let registry = TypeRegistry::new();
+        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0), &registry).unwrap();
         assert_eq!(ext.to_string(), no_params);
 
         let with_params = ".extern fn my_hash(x: int64, y: int32) -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, with_params).unwrap();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
+        let registry = TypeRegistry::new();
+        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0), &registry).unwrap();
         assert_eq!(ext.to_string(), with_params);
     }
 }

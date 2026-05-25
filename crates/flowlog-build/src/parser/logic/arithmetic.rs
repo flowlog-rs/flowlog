@@ -13,7 +13,7 @@ use super::{BuiltinCall, FnCall};
 use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::ConstType;
-use crate::parser::{Lexeme, Rule, span_of};
+use crate::parser::{Lexeme, Rule, span_of, type_ref_name};
 
 /// Arithmetic operator.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -73,6 +73,60 @@ pub(crate) enum Factor {
     FnCall(FnCall),
     /// Engine built-in (Soufflé-style intrinsic).
     Builtin(BuiltinCall),
+    /// `as(factor, T)`. Runtime no-op; the typechecker lowers it away
+    /// after validating the cast.
+    Cast(Box<Cast>),
+}
+
+/// `as(factor, target_type)`. `inner` is a single [`Factor`] (not a
+/// full [`Arithmetic`]) so the typechecker can lower `Cast(inner)` to
+/// `inner` after subtype validation — downstream never sees a cast.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Cast {
+    inner: Box<Factor>,
+    /// User-written target type name; resolved by the typechecker.
+    target_type: String,
+    span: Ignored<Span>,
+}
+
+impl Cast {
+    #[must_use]
+    pub(crate) fn new(inner: Factor, target_type: String, span: Span) -> Self {
+        Self {
+            inner: Box::new(inner),
+            target_type,
+            span: Ignored(span),
+        }
+    }
+
+    #[must_use]
+    #[inline]
+    pub(crate) fn inner(&self) -> &Factor {
+        &self.inner
+    }
+
+    #[inline]
+    pub(crate) fn inner_mut(&mut self) -> &mut Factor {
+        &mut self.inner
+    }
+
+    #[must_use]
+    #[inline]
+    pub(crate) fn target_type(&self) -> &str {
+        &self.target_type
+    }
+
+    #[must_use]
+    #[inline]
+    pub(crate) fn span(&self) -> Span {
+        self.span.0
+    }
+}
+
+impl fmt::Display for Cast {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "as({}, {})", self.inner, self.target_type)
+    }
 }
 
 impl Factor {
@@ -94,6 +148,7 @@ impl Factor {
             Self::Const(_) => vec![],
             Self::FnCall(fc) => fc.vars(),
             Self::Builtin(bc) => bc.vars(),
+            Self::Cast(c) => c.inner().vars(),
         }
     }
 }
@@ -105,24 +160,53 @@ impl fmt::Display for Factor {
             Self::Const(c) => write!(f, "{c}"),
             Self::FnCall(fc) => write!(f, "{fc}"),
             Self::Builtin(bc) => write!(f, "{bc}"),
+            Self::Cast(c) => write!(f, "{c}"),
         }
     }
 }
 
 impl Lexeme for Factor {
-    /// Parse a factor (variable, constant, function call, or built-in).
     fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let inner = parsed_rule
             .into_inner()
             .next()
             .ok_or_else(|| grammar_bug("factor missing inner token"))?;
         Ok(match inner.as_rule() {
+            Rule::as_cast => Self::Cast(Box::new(Cast::from_parsed_rule(inner, file)?)),
             Rule::builtin_fn_call => Self::Builtin(BuiltinCall::from_parsed_rule(inner, file)?),
             Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner, file)?),
             Rule::variable => Self::Var(inner.as_str().to_string()),
             Rule::constant => Self::Const(ConstType::from_parsed_rule(inner, file)?),
             other => return Err(grammar_bug(format!("invalid factor rule: {other:?}"))),
         })
+    }
+}
+
+impl Lexeme for Cast {
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        if parsed_rule.as_rule() != Rule::as_cast {
+            return Err(grammar_bug(format!(
+                "expected as_cast, got {:?}",
+                parsed_rule.as_rule()
+            )));
+        }
+        let span = span_of(&parsed_rule, file);
+        let mut inner: Option<Factor> = None;
+        let mut target: Option<String> = None;
+        for child in parsed_rule.into_inner() {
+            match child.as_rule() {
+                Rule::factor => inner = Some(Factor::from_parsed_rule(child, file)?),
+                Rule::type_ref => target = Some(type_ref_name(&child)),
+                other => {
+                    return Err(grammar_bug(format!(
+                        "unexpected child of as_cast: {other:?}"
+                    )));
+                }
+            }
+        }
+        let inner = inner.ok_or_else(|| grammar_bug("as_cast missing inner factor"))?;
+        let target = target.ok_or_else(|| grammar_bug("as_cast missing target type"))?;
+        Ok(Self::new(inner, target, span))
     }
 }
 

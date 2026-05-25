@@ -1,0 +1,5 @@
+.decl R(x: number)
+.decl Out(y: number)
+.input R(IO="file", filename="R.csv", delimiter=",")
+.output Out
+Out(as(x, NoSuchType)) :- R(x).

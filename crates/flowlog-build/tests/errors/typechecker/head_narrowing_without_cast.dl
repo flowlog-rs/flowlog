@@ -1,0 +1,6 @@
+.type UserId <: number
+.decl Plain(x: number)
+.decl OnlyUsers(u: UserId)
+.input Plain(IO="file", filename="Plain.csv", delimiter=",")
+.output OnlyUsers
+OnlyUsers(x) :- Plain(x).

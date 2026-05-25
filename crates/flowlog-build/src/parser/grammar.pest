@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = {
     SOI ~
-    (declaration | extern_fn | include_directive | input_directive | output_directive | printsize_directive | fixpoint_block | loop_block | fact | rule)* ~
+    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | fixpoint_block | loop_block | fact | rule)* ~
     EOI
 }
 
@@ -29,6 +29,13 @@ attribute_name = { identifier }
 
 // Relation name - names of relations (tables)
 relation_name = { identifier }
+
+// Type at a `.decl` attribute. `data_type` must come first so reserved
+// keywords (`number`, `symbol`, …) win over the catch-all identifier.
+type_ref = { data_type | alias_name }
+
+// A `.type`-declared name; rejected after parsing if undeclared.
+alias_name = { identifier }
 
 // Data type specification
 data_type = { integer8_type | integer16_type | integer32_type | integer64_type
@@ -147,9 +154,10 @@ include_directive = { ".include" ~ string }
 // Example: src: number, dst: number, weight: string
 attributes_decl = { attribute_decl ~ ("," ~ attribute_decl)* }
 
-// Single attribute with name and data type
-// Example: "src: number" 
-attribute_decl = { attribute_name ~ ":" ~ data_type }
+// Single attribute with name and type. Type is either a built-in primitive
+// or a `.type`-declared alias name (resolved transitively at parse time).
+// Example: "src: number" or "src: NodeId" where `NodeId` is a `.type` alias.
+attribute_decl = { attribute_name ~ ":" ~ type_ref }
 
 // =============================================================================
 // USER-DEFINED EXTERNAL FUNCTION DECLARATIONS
@@ -175,8 +183,14 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 // Note: "x + y * z" is parsed left-to-right as "(x + y) * z"
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
-// Basic elements in arithmetic expressions
-factor = { builtin_fn_call | fn_call_expr | constant | variable }
+// `as_cast` first so `as` wins over a UDF named `as` (reserved keyword).
+factor = { as_cast | builtin_fn_call | fn_call_expr | constant | variable }
+
+// `as(factor, TargetType)` — explicit cast, runtime no-op. Inner is a
+// single `factor` (not `arithmetic_expr`) so the typechecker can lower
+// `as(...)` away after validation; for `as(x + 1, T)`, bind first.
+as_cast = { as_kw ~ "(" ~ factor ~ "," ~ type_ref ~ ")" }
+as_kw = _{ "as" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // Arithmetic operators
 arithmetic_op = { 
@@ -273,11 +287,11 @@ max = { "max" | "MAX" }             // Maximum value
 
 // Relation with arguments
 // Example: edge(x, y), person("Alice", 25)
-atom = { 
-    relation_name ~ 
-    "(" ~ 
-    (atom_arg ~ ("," ~ atom_arg)*)? ~ 
-    ")" 
+atom = {
+    relation_name ~
+    "(" ~
+    (atom_arg ~ ("," ~ atom_arg)*)? ~
+    ")"
 }
 
 // Negative atom for negative conditions
@@ -312,10 +326,10 @@ rule_bodies = { predicates ~ (";" ~ predicates)* }
 // Left side of rule (before :-)
 // Example: reachable(x, z), stats(count(x))
 head = {
-    relation_name ~ 
-    "(" ~ 
+    relation_name ~
+    "(" ~
     (head_arg ~ ("," ~ head_arg)*)? ~
-    ")" 
+    ")"
 }
 
 // Can be aggregate functions or arithmetic expressions (UDF calls are parsed as factors within arithmetic)
@@ -437,6 +451,21 @@ loop_bool_relation = { relation_name }
 loop_connective = { loop_and | loop_or }
 loop_and        = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
 loop_or         = @{ "or"  ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// =============================================================================
+// TYPE DECLARATIONS (.type)
+// =============================================================================
+//   .type NodeId  = number    alias (transparent equivalence)
+//   .type UserId <: number    subtype (distinct compile-time identity)
+//
+// Both forms are global, position-independent, and resolved at parse
+// time to a primitive root. Subtypes are zero-cost: only the type-
+// checker distinguishes them.
+
+type_alias_decl = { ".type" ~ identifier ~ type_decl_op ~ type_ref }
+type_decl_op = { subtype_op | alias_op }
+subtype_op = { "<:" }
+alias_op = { "=" }
 
 // =============================================================================
 // WHITESPACE AND COMMENTS

@@ -1,0 +1,9 @@
+.type UserId    <: number
+.type ProductId <: number
+.decl Friend(a: UserId, b: UserId)
+.decl Buys(u: UserId, p: ProductId)
+.decl Out(x: UserId)
+.input Friend(IO="file", filename="Friend.csv", delimiter=",")
+.input Buys(IO="file", filename="Buys.csv", delimiter=",")
+.output Out
+Out(x) :- Friend(x, _), Buys(_, x).

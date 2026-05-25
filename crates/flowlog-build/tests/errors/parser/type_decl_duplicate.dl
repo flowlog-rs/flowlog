@@ -1,0 +1,4 @@
+.type X = number
+.type X <: number
+.decl R(x: X)
+R(1).
