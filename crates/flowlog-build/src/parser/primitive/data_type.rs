@@ -1,7 +1,22 @@
-//! Data type definitions for FlowLog Datalog programs.
+//! Data types and the per-program type registry.
+//!
+//! - [`DataType`]: the 12 runtime primitives. Codegen, planner, and
+//!   storage work in these exclusively.
+//! - [`TypeRegistry`]: interns every named type (primitives + user
+//!   `.type` aliases and subtypes) under a [`TypeId`]. Used by the
+//!   typechecker to enforce subtype rules; ignored everywhere below.
+//!   Subtypes are zero-cost compile-time phantom types.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
+
+use crate::common::Span;
+use crate::parser::error::ParseError;
+
+// =============================================================================
+// DataType — the closed set of runtime primitives
+// =============================================================================
 
 /// Data types supported in FlowLog Datalog programs.
 ///
@@ -148,10 +163,247 @@ impl fmt::Display for DataType {
     }
 }
 
+// =============================================================================
+// TypeRegistry — every named type, primitive or user-declared
+// =============================================================================
+
+/// Stable handle for a named type — an index into the registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TypeId(usize);
+
+/// One row in the registry.
+///
+/// Aliases (`.type X = Y`) don't get their own `TypeDef` — the name `X`
+/// just maps to `Y`'s existing `TypeId` in `by_name`. Only primitives
+/// and subtypes are distinct identities.
+#[derive(Debug, Clone)]
+struct TypeDef {
+    name: String,
+    /// `None` for primitives; `Some` for subtypes (the type they refine).
+    parent: Option<TypeId>,
+    /// Eagerly resolved so `root_primitive()` is O(1).
+    root_primitive: DataType,
+    /// `Span::DUMMY` for built-in primitives.
+    span: Span,
+}
+
+/// Surface names for each primitive. First name is canonical; the rest
+/// are accepted aliases. Position in the table determines the
+/// primitive's `TypeId` (also indexed by [`PRIMITIVE_TO_ID`]).
+const PRIM_NAMES: [(DataType, &[&str]); 12] = [
+    (DataType::Int8, &["int8"]),
+    (DataType::Int16, &["int16"]),
+    (DataType::Int32, &["int32", "number"]),
+    (DataType::Int64, &["int64"]),
+    (DataType::UInt8, &["uint8"]),
+    (DataType::UInt16, &["uint16"]),
+    (DataType::UInt32, &["uint32", "unsigned"]),
+    (DataType::UInt64, &["uint64"]),
+    (DataType::Float32, &["f32", "float"]),
+    (DataType::Float64, &["f64"]),
+    (DataType::String, &["string", "symbol"]),
+    (DataType::Bool, &["bool"]),
+];
+
+/// Interned table of every type the program can refer to.
+#[derive(Debug, Clone)]
+pub struct TypeRegistry {
+    types: Vec<TypeDef>,
+    by_name: HashMap<String, TypeId>,
+}
+
+impl TypeRegistry {
+    /// Pre-populated with the 12 built-in primitives.
+    #[must_use]
+    pub fn new() -> Self {
+        let mut reg = Self {
+            types: Vec::with_capacity(16),
+            by_name: HashMap::with_capacity(20),
+        };
+        for (i, (prim, names)) in PRIM_NAMES.iter().enumerate() {
+            reg.types.push(TypeDef {
+                name: names[0].to_string(),
+                parent: None,
+                root_primitive: *prim,
+                span: Span::DUMMY,
+            });
+            for n in *names {
+                reg.by_name.insert(n.to_lowercase(), TypeId(i));
+            }
+        }
+        reg
+    }
+
+    /// Case-insensitive surface-name lookup. `None` until the matching
+    /// `.type` declaration has been processed (which the worklist
+    /// in `build_type_registry` retries).
+    #[must_use]
+    pub(crate) fn lookup(&self, name: &str) -> Option<TypeId> {
+        self.by_name.get(&name.to_lowercase()).copied()
+    }
+
+    #[must_use]
+    #[inline]
+    pub(crate) fn root_primitive(&self, id: TypeId) -> DataType {
+        self.types[id.0].root_primitive
+    }
+
+    /// Canonical `TypeId` for a built-in primitive. O(1) — primitives
+    /// are seeded at positions 0..12 in [`PRIM_NAMES`] order.
+    #[must_use]
+    pub(crate) fn primitive_id(&self, dt: DataType) -> TypeId {
+        let idx = PRIM_NAMES
+            .iter()
+            .position(|(p, _)| *p == dt)
+            .expect("every DataType variant is in PRIM_NAMES");
+        TypeId(idx)
+    }
+
+    /// `.type X = Y` — `X` becomes a synonym for `Y`'s existing `TypeId`.
+    /// No new entry is created; the alias is invisible after registration.
+    pub(crate) fn register_alias(
+        &mut self,
+        name: &str,
+        parent_name: &str,
+        span: Span,
+    ) -> Result<TypeId, ParseError> {
+        let canonical = self.reject_duplicate(name, span)?;
+        let parent_id = self.resolve_parent(name, parent_name, span)?;
+        self.by_name.insert(canonical, parent_id);
+        Ok(parent_id)
+    }
+
+    /// `.type X <: Y` — `X` gets a fresh `TypeId` that the typechecker
+    /// treats as distinct from siblings.
+    pub(crate) fn register_subtype(
+        &mut self,
+        name: &str,
+        parent_name: &str,
+        span: Span,
+    ) -> Result<TypeId, ParseError> {
+        let canonical = self.reject_duplicate(name, span)?;
+        let parent_id = self.resolve_parent(name, parent_name, span)?;
+        let root = self.types[parent_id.0].root_primitive;
+        let id = TypeId(self.types.len());
+        self.types.push(TypeDef {
+            name: canonical.clone(),
+            parent: Some(parent_id),
+            root_primitive: root,
+            span,
+        });
+        self.by_name.insert(canonical, id);
+        Ok(id)
+    }
+
+    fn reject_duplicate(&self, name: &str, span: Span) -> Result<String, ParseError> {
+        let canonical = name.to_lowercase();
+        if let Some(prior) = self.by_name.get(&canonical) {
+            return Err(ParseError::DuplicateTypeDecl {
+                span,
+                prior: self.types[prior.0].span,
+                name: name.to_string(),
+            });
+        }
+        Ok(canonical)
+    }
+
+    fn resolve_parent(
+        &self,
+        name: &str,
+        parent_name: &str,
+        span: Span,
+    ) -> Result<TypeId, ParseError> {
+        self.lookup(parent_name)
+            .ok_or_else(|| ParseError::UnknownTypeParent {
+                span,
+                name: name.to_string(),
+                parent: parent_name.to_string(),
+            })
+    }
+
+    // ─── Compatibility predicates used by the typechecker ────────────
+
+    /// `true` iff `sub` widens to `sup` by walking parent pointers.
+    /// Aliases share their parent's `TypeId`, so they're transparent
+    /// here without extra handling.
+    #[must_use]
+    pub(crate) fn is_widening(&self, sub: TypeId, sup: TypeId) -> bool {
+        let mut cur = sub;
+        loop {
+            if cur == sup {
+                return true;
+            }
+            match self.types[cur.0].parent {
+                Some(p) => cur = p,
+                None => return false,
+            }
+        }
+    }
+
+    /// Most-specific common descendant. `Some(t)` when one type widens
+    /// to the other; `None` for siblings or mismatched primitive roots.
+    /// Variable-binding uses this to reject `R(x: UserId), S(x: ProductId)`.
+    #[must_use]
+    pub(crate) fn meet(&self, a: TypeId, b: TypeId) -> Option<TypeId> {
+        if self.is_widening(a, b) {
+            Some(a)
+        } else if self.is_widening(b, a) {
+            Some(b)
+        } else {
+            None
+        }
+    }
+
+    /// Canonical (lowercased) name for diagnostics.
+    #[must_use]
+    pub(crate) fn name_of(&self, id: TypeId) -> &str {
+        &self.types[id.0].name
+    }
+}
+
+impl Default for TypeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PartialEq for TypeRegistry {
+    /// Structural equality on the type list (name + kind + parent),
+    /// so `#[derive(PartialEq)]` on `Program` can compare two parses.
+    fn eq(&self, other: &Self) -> bool {
+        self.types.len() == other.types.len()
+            && self
+                .types
+                .iter()
+                .zip(other.types.iter())
+                .all(|(a, b)| a.name == b.name && a.parent == b.parent)
+    }
+}
+
+impl Eq for TypeRegistry {}
+
+impl fmt::Display for TypeRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, td) in self.types.iter().enumerate() {
+            match td.parent {
+                None => writeln!(f, "  [{i}] {} (primitive)", td.name)?,
+                Some(p) => writeln!(f, "  [{i}] {} <: {}", td.name, self.name_of(p))?,
+            }
+        }
+        Ok(())
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    // ── DataType ───────────────────────────────────────────────────────
 
     /// Every `DataType` variant — the canonical iteration target for tests
     /// that check a property across the whole enum.
@@ -229,5 +481,55 @@ mod tests {
         assert_eq!(DataType::Int32.semiring_suffix(), "I32");
         assert_eq!(DataType::UInt64.semiring_suffix(), "U64");
         assert_eq!(DataType::Float32.semiring_suffix(), "F32");
+    }
+
+    // ── TypeRegistry ───────────────────────────────────────────────────
+
+    fn reg() -> TypeRegistry {
+        TypeRegistry::new()
+    }
+
+    /// Surface aliases must resolve to the same canonical `TypeId`;
+    /// otherwise `.decl R(x: number)` and `.decl S(x: int32)` would
+    /// disagree on column identity.
+    #[test]
+    fn primitives_seeded_with_aliases() {
+        let r = reg();
+        assert_eq!(r.lookup("number"), r.lookup("int32"));
+        assert_eq!(r.lookup("symbol"), r.lookup("string"));
+        assert_eq!(r.lookup("unsigned"), r.lookup("uint32"));
+        assert_eq!(r.lookup("float"), r.lookup("f32"));
+    }
+
+    /// Core invariant: sibling subtypes have no meet, so the typechecker
+    /// rejects `R(x: UserId), S(x: ProductId)`.
+    #[test]
+    fn meet_sibling_subtypes_rejected() {
+        let mut r = reg();
+        let a = r.register_subtype("UserId", "number", Span::DUMMY).unwrap();
+        let b = r
+            .register_subtype("ProductId", "number", Span::DUMMY)
+            .unwrap();
+        assert_eq!(r.meet(a, b), None);
+    }
+
+    /// Most-specific-wins, order-independent.
+    #[test]
+    fn meet_subtype_with_parent_picks_more_specific() {
+        let mut r = reg();
+        let s = r.register_subtype("UserId", "number", Span::DUMMY).unwrap();
+        let n = r.primitive_id(DataType::Int32);
+        assert_eq!(r.meet(s, n), Some(s));
+        assert_eq!(r.meet(n, s), Some(s));
+    }
+
+    /// Asymmetric: subtype → parent yes, parent → subtype no.
+    #[test]
+    fn is_widening_is_asymmetric() {
+        let mut r = reg();
+        let s = r.register_subtype("UserId", "number", Span::DUMMY).unwrap();
+        let n = r.primitive_id(DataType::Int32);
+        assert!(r.is_widening(s, n));
+        assert!(!r.is_widening(n, s));
     }
 }

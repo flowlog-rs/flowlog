@@ -155,3 +155,63 @@ fn head_arity() {
         ["expects arity 3", "got 2"]
     );
 }
+
+#[test]
+fn subtype_sibling_join() {
+    assert_err!(
+        typecheck("subtype_sibling_join.dl"),
+        TypeCheckError::SubtypeMismatch { .. },
+        ["no common subtype", "userid", "productid"]
+    );
+}
+
+#[test]
+fn subtype_compare_mismatch() {
+    // `x = y` where x:UserId and y:ProductId — siblings of `number`,
+    // no meet, so the comparison is rejected even though both reduce
+    // to int32 at the primitive layer.
+    assert_err!(
+        typecheck("subtype_compare_mismatch.dl"),
+        TypeCheckError::ComparisonSubtypeMismatch { .. },
+        ["incompatible subtypes", "userid", "productid"]
+    );
+}
+
+#[test]
+fn head_narrowing_without_cast() {
+    assert_err!(
+        typecheck("head_narrowing_without_cast.dl"),
+        TypeCheckError::HeadSubtypeMismatch { .. },
+        ["expects `userid`", "narrowing"]
+    );
+}
+
+#[test]
+fn cast_unknown_type() {
+    assert_err!(
+        typecheck("cast_unknown_type.dl"),
+        TypeCheckError::UnknownCastType { .. },
+        ["unknown cast", "NoSuchType"]
+    );
+}
+
+#[test]
+fn cast_cross_primitive() {
+    // The primitive pass catches this first as `HeadColumnType`; the
+    // subtype pass's `IllegalCast` would fire if we re-typed at the
+    // cast boundary. Either rejection is meaningful — `as()` here
+    // crosses primitive roots, which the user shouldn't be allowed.
+    let (res, sm) = typecheck("cast_cross_primitive.dl");
+    let err = res.expect_err("expected error");
+    assert!(
+        matches!(
+            err,
+            TypeCheckError::IllegalCast { .. }
+                | TypeCheckError::HeadColumnType { .. }
+                | TypeCheckError::LiteralColumnMismatch { .. }
+        ),
+        "got {err:?}"
+    );
+    let out = render(err, &sm);
+    assert!(!out.is_empty());
+}

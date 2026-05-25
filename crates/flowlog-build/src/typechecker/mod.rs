@@ -44,6 +44,7 @@
 //!   reported separately by the range-restriction pass, not here.
 
 mod error;
+mod subtype;
 
 pub use error::TypeCheckError;
 
@@ -58,7 +59,7 @@ use crate::parser::{
 
 /// Type-check every rule and pin each polymorphic literal to its
 /// concrete width. Stops at the first failure; on `Ok(())` the program's
-/// literals are fully concrete.
+/// literals are fully concrete and subtype rules have been enforced.
 ///
 /// `config` is consulted for config-gated builtins (see
 /// [`check_builtin_config_requirements`]).
@@ -98,7 +99,16 @@ pub fn check_program(program: &mut Program, config: &Config) -> Result<(), TypeC
 
     check_builtin_config_requirements(program, config)?;
 
-    check_and_pin_facts(program.facts_mut(), &decls)
+    check_and_pin_facts(program.facts_mut(), &decls)?;
+
+    // Second pass: enforce subtype rules using the type registry. The
+    // first pass works in primitive `DataType`s only, so two sibling
+    // subtypes of `number` would silently join. This pass tracks each
+    // variable's declared `TypeId` and rejects sibling-subtype joins,
+    // enforces the asymmetric head-widening rule, and validates `as()`
+    // casts. It also lowers every surviving `Factor::Cast` to its
+    // inner factor so downstream stages never see a cast.
+    subtype::check_and_lower(program)
 }
 
 /// Reject built-in calls whose semantics depend on a build flag that
@@ -127,6 +137,7 @@ fn check_builtin_config_requirements(
                 }
                 bc.args().iter().try_for_each(check_arith)
             }
+            Factor::Cast(c) => check_factor(c.inner()),
         }
     }
     for segment in program.segments() {
@@ -582,6 +593,9 @@ fn infer_factor_type(
         Factor::Builtin(bc) => Some(LitKind::Concrete(infer_builtin_call_type(
             bc, bindings, udfs,
         )?)),
+        // Primitive layer sees through casts; the `subtype` pass
+        // enforces the cast rules separately.
+        Factor::Cast(c) => infer_factor_type(c.inner(), bindings, udfs)?,
     })
 }
 
@@ -726,6 +740,9 @@ fn pin_factor(factor: &mut Factor, target: DataType, udfs: &UdfSigs) -> Result<(
         Factor::Var(_) => Ok(()),
         Factor::FnCall(fc) => pin_fn_call_args(fc, udfs),
         Factor::Builtin(bc) => pin_builtin_call_args(bc, udfs),
+        // Cast asserts its inner has the target's primitive — pin
+        // polymorphic literals inside accordingly.
+        Factor::Cast(c) => pin_factor(c.inner_mut(), target, udfs),
     }
 }
 
@@ -992,5 +1009,86 @@ mod tests {
     fn report_ty_polymorphic_defaults() {
         assert_eq!(LitKind::IntLit.report_ty(), DataType::Int32);
         assert_eq!(LitKind::FloatLit.report_ty(), DataType::Float32);
+    }
+
+    // =========================================================================
+    // Subtype rules
+    // =========================================================================
+
+    fn parse_and_check_result(src: &str) -> Result<Program, TypeCheckError> {
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        tmp.write_all(src.as_bytes()).expect("write");
+        let mut sm = SourceMap::new();
+        let mut program = Program::parse(&tmp.path().to_string_lossy(), true, &mut sm)
+            .expect("parse should succeed; this test exercises typecheck only");
+        check_program(&mut program, &Config::default())?;
+        Ok(program)
+    }
+
+    /// Two aliases of `number` join freely — aliases are transparent.
+    #[test]
+    fn alias_join_allowed() {
+        let src = "\
+            .type A = number\n\
+            .type B = number\n\
+            .decl R(x: A)\n\
+            .decl S(x: B)\n\
+            .decl Out(x: number)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- R(x), S(x).\n";
+        parse_and_check_result(src).expect("alias join must be allowed");
+    }
+
+    /// Head narrowing with explicit `as()` is accepted.
+    #[test]
+    fn head_narrowing_with_cast_accepted() {
+        let src = "\
+            .type UserId <: number\n\
+            .decl Plain(x: number)\n\
+            .decl OnlyUsers(u: UserId)\n\
+            .input Plain(IO=\"file\", filename=\"Plain.csv\", delimiter=\",\")\n\
+            .output OnlyUsers\n\
+            OnlyUsers(as(x, UserId)) :- Plain(x).\n";
+        parse_and_check_result(src).expect("explicit narrowing must be allowed");
+    }
+
+    /// `as()` between two sibling subtypes of the same primitive is
+    /// allowed — that's the escape hatch the rule exists for.
+    #[test]
+    fn sibling_subtype_cast_allowed() {
+        let src = "\
+            .type UserId    <: number\n\
+            .type ProductId <: number\n\
+            .decl Friend(a: UserId)\n\
+            .decl ProductsForUsers(p: ProductId)\n\
+            .input Friend(IO=\"file\", filename=\"Friend.csv\", delimiter=\",\")\n\
+            .output ProductsForUsers\n\
+            ProductsForUsers(as(x, ProductId)) :- Friend(x).\n";
+        parse_and_check_result(src).expect("sibling-subtype cast must be allowed");
+    }
+
+    /// After typechecking, every `Factor::Cast` has been lowered to its
+    /// inner factor. Downstream stages never see a cast wrapper.
+    #[test]
+    fn cast_is_lowered_after_typecheck() {
+        let src = "\
+            .type UserId <: number\n\
+            .decl Plain(x: number)\n\
+            .decl OnlyUsers(u: UserId)\n\
+            .input Plain(IO=\"file\", filename=\"Plain.csv\", delimiter=\",\")\n\
+            .output OnlyUsers\n\
+            OnlyUsers(as(x, UserId)) :- Plain(x).\n";
+        let program = parse_and_check_result(src).expect("typecheck must succeed");
+        let rule = program.rules()[0];
+        for arg in rule.head().head_arguments() {
+            if let HeadArg::Arith(a) = arg {
+                assert!(
+                    !matches!(a.init(), Factor::Cast(_)),
+                    "cast should have been lowered after typecheck"
+                );
+            }
+        }
     }
 }

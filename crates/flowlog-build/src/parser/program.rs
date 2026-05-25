@@ -30,7 +30,9 @@ use super::{
     declaration::{ExternFn, InputDirective, OutputDirective, PrintSizeDirective, Relation},
     error::{DirectiveKind, ParseError, grammar_bug},
     logic::{Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, LoopBlock, Predicate},
+    primitive::TypeRegistry,
     segment::Segment,
+    span_of, type_ref_name,
 };
 use crate::common::{FileId, SourceMap, Span};
 use pest::{Parser, iterators::Pair};
@@ -62,6 +64,9 @@ pub struct Program {
     /// of `(span, tuple)` — the head span of the source `rel(c1, ...).`
     /// fact plus its constant columns.
     facts: HashMap<String, Vec<(Span, Vec<ConstType>)>>,
+    /// Built during parsing, consulted by the typechecker for subtype
+    /// rules, ignored downstream (subtypes are compile-time-only).
+    type_registry: TypeRegistry,
 }
 
 // =============================================================================
@@ -377,6 +382,14 @@ impl Program {
         &self.udfs
     }
 
+    /// Split-borrow used by the subtype pass: registry is read while
+    /// segments are mutated in place. Going through a method lets the
+    /// borrow checker see the two fields are disjoint.
+    #[inline]
+    pub(crate) fn registry_and_segments_mut(&mut self) -> (&TypeRegistry, &mut [Segment]) {
+        (&self.type_registry, &mut self.segments)
+    }
+
     #[inline]
     fn is_edb_relation(&self, rel: &Relation) -> bool {
         rel.has_input() || self.has_inline_facts(rel.name())
@@ -512,6 +525,48 @@ fn resolve_one_include(raw: &str, base_dir: &Path, include_dirs: &[&Path]) -> Pa
 }
 
 // =============================================================================
+// Type registry pre-pass
+// =============================================================================
+
+/// Register every `.type` declaration. Define-before-use: a `.type` can
+/// only reference primitives or types declared earlier in source. Cycles
+/// (including `.type X = X`) surface as `UnknownTypeParent` because the
+/// parent isn't registered when the child is processed.
+fn build_type_registry(parsed_rule: Pair<Rule>, file: FileId) -> Result<TypeRegistry, ParseError> {
+    let mut registry = TypeRegistry::new();
+    for node in parsed_rule.into_inner() {
+        if node.as_rule() != Rule::type_alias_decl {
+            continue;
+        }
+        let span = span_of(&node, file);
+        let mut inner = node.into_inner();
+        let name = inner
+            .next()
+            .ok_or_else(|| grammar_bug("type_alias_decl missing name"))?
+            .as_str()
+            .to_string();
+        let is_subtype = inner
+            .next()
+            .ok_or_else(|| grammar_bug("type_alias_decl missing operator"))?
+            .into_inner()
+            .next()
+            .map(|p| p.as_rule() == Rule::subtype_op)
+            .ok_or_else(|| grammar_bug("type_decl_op missing inner op"))?;
+        let parent = type_ref_name(
+            &inner
+                .next()
+                .ok_or_else(|| grammar_bug("type_alias_decl missing parent type_ref"))?,
+        );
+        if is_subtype {
+            registry.register_subtype(&name, &parent, span)?;
+        } else {
+            registry.register_alias(&name, &parent, span)?;
+        }
+    }
+    Ok(registry)
+}
+
+// =============================================================================
 // Parsing helpers
 // =============================================================================
 
@@ -571,6 +626,10 @@ impl Program {
         extended: bool,
         file: FileId,
     ) -> Result<Self, ParseError> {
+        // Resolve `.type` decls first so a forward-referenced
+        // `.decl R(x: NodeId)` works.
+        let type_registry = build_type_registry(parsed_rule.clone(), file)?;
+
         let mut relations: Vec<Relation> = Vec::new();
         // Local to the parse loop; not threaded into the returned `Program`.
         let mut decl_spans: HashMap<String, (String, Span)> = HashMap::new();
@@ -586,7 +645,7 @@ impl Program {
             match node.as_rule() {
                 // ── Schema ────────────────────────────────────────────────────
                 Rule::declaration => {
-                    let rel = Relation::from_parsed_rule(node, file)?;
+                    let rel = Relation::from_parsed_rule_with_registry(node, file, &type_registry)?;
                     if let Some((_prev_raw, prior)) = decl_spans.get(rel.name()) {
                         return Err(ParseError::DuplicateDecl {
                             span: rel.span(),
@@ -600,7 +659,10 @@ impl Program {
                     );
                     relations.push(rel);
                 }
-                Rule::extern_fn => udfs.push(ExternFn::from_parsed_rule(node, file)?),
+                Rule::extern_fn => {
+                    udfs.push(ExternFn::from_parsed_rule(node, file, &type_registry)?)
+                }
+                Rule::type_alias_decl => {} // handled by build_type_registry
 
                 // ── I/O directives ────────────────────────────────────────────
                 Rule::input_directive => {
@@ -675,6 +737,7 @@ impl Program {
             relations,
             segments,
             udfs,
+            type_registry,
             ..Self::default()
         };
         for fact in raw_facts {
@@ -1229,6 +1292,7 @@ impl Program {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::DataType;
     use std::io::Write;
 
     fn loop_blocks(program: &Program) -> Vec<&LoopBlock> {
@@ -1552,6 +1616,29 @@ mod tests {
             .filter(|r| r.name() == "leaf_rel")
             .collect();
         assert_eq!(rels.len(), 1, "leaf_rel inlined twice");
+    }
+
+    /// Chained aliases: `A = B = C = number`. All four resolve to int32.
+    #[test]
+    fn type_alias_chain_resolves_to_root() {
+        let src = "
+            .type C = number
+            .type B = C
+            .type A = B
+            .decl R(x: A, y: B, z: C)
+            .output R
+            R(1, 2, 3).
+        ";
+        let program = parse_program(src);
+        let r = program
+            .relations()
+            .iter()
+            .find(|r| r.name() == "r")
+            .unwrap();
+        assert_eq!(
+            r.data_type(),
+            vec![DataType::Int32, DataType::Int32, DataType::Int32]
+        );
     }
 
     /// UDF reclassification must preserve negation: `!my_udf(x)` parses

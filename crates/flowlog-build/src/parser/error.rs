@@ -159,6 +159,26 @@ pub enum ParseError {
         chain: Vec<PathBuf>,
     },
 
+    /// Two `.type` declarations share a name.
+    #[error("duplicate `.type` declaration of `{name}`")]
+    DuplicateTypeDecl {
+        span: Span,
+        prior: Span,
+        name: String,
+    },
+
+    /// `.type X = Y` (or `<:`) where `Y` is undeclared.
+    #[error("`.type {name} = ...` references unknown type `{parent}`")]
+    UnknownTypeParent {
+        span: Span,
+        name: String,
+        parent: String,
+    },
+
+    /// `.decl R(x: T)` where `T` is undeclared.
+    #[error("attribute references unknown type `{name}`")]
+    UnknownAttributeType { span: Span, name: String },
+
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
     #[error(transparent)]
@@ -242,6 +262,25 @@ impl Diagnostic for ParseError {
                 }
                 diag
             }
+
+            ParseError::DuplicateTypeDecl { span, prior, .. } => base.with_labels(dup_labels(
+                *span,
+                *prior,
+                "redeclared here",
+                "first declared here",
+            )),
+
+            ParseError::UnknownTypeParent { span, parent, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "declare `{parent}` with a `.type {parent} = ...` (or `<:`) earlier in the program"
+                )]),
+
+            ParseError::UnknownAttributeType { span, name } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "either use a built-in primitive or add `.type {name} = ...`"
+                )]),
 
             ParseError::Syntax { span, .. }
             | ParseError::LoopBlockInStandardMode { span }

@@ -134,6 +134,43 @@ fn loop_in_standard_mode() {
 }
 
 #[test]
+fn type_decl_duplicate() {
+    assert_err!(
+        parse("type_decl_duplicate.dl", true),
+        ParseError::DuplicateTypeDecl { .. },
+        ["duplicate", "X"]
+    );
+}
+
+#[test]
+fn type_decl_shadow_primitive() {
+    // `.type number = ...` collides with the built-in primitive.
+    assert_err!(
+        parse("type_decl_shadow_primitive.dl", true),
+        ParseError::DuplicateTypeDecl { .. },
+        ["duplicate", "number"]
+    );
+}
+
+#[test]
+fn type_decl_unknown_parent() {
+    assert_err!(
+        parse("type_decl_unknown_parent.dl", true),
+        ParseError::UnknownTypeParent { .. },
+        ["unknown type", "NoSuchType"]
+    );
+}
+
+#[test]
+fn attribute_unknown_type() {
+    assert_err!(
+        parse("attribute_unknown_type.dl", true),
+        ParseError::UnknownAttributeType { .. },
+        ["unknown type", "NoSuchType"]
+    );
+}
+
+#[test]
 fn circular_include() {
     assert_err!(
         parse("circular_include_a.dl", true),
