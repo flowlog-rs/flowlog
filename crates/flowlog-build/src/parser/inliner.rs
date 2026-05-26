@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::common::Span;
 use crate::parser::declaration::{
-    Attribute, CompDecl, InitDecl, RawItem, RawTypeOp, Relation, SuperRef,
+    Attribute, CompDecl, InitDecl, RawItem, RawRelation, RawTypeOp, Relation, SuperRef,
 };
 use crate::parser::error::ParseError;
 use crate::parser::logic::{FlowLogRule, Predicate};
@@ -159,7 +159,8 @@ pub(crate) fn inline_one(
             RawItem::Init(nested) => {
                 inline_one(&prefix, resolve_init(nested, &env), comps, output, registry)?;
             }
-            RawItem::Comp(_) => {} // already hoisted above
+            RawItem::Comp(_) => {}         // already hoisted above
+            RawItem::Override { .. } => {} // applied + stripped in resolve_inheritance
         }
     }
 
@@ -223,7 +224,7 @@ fn resolve_inheritance(
         });
     }
 
-    let mut result = Vec::new();
+    let mut inherited = Vec::new();
     if let Some(super_ref) = &comp.supertype {
         let SuperRef {
             name: super_name,
@@ -252,13 +253,108 @@ fn resolve_inheritance(
             .zip(resolved_args)
             .collect();
         for item in resolve_inheritance(super_comp, &super_env, comps, stack)? {
-            result.push(substitute_in_raw_item(item, &super_env));
+            inherited.push(substitute_in_raw_item(item, &super_env));
         }
     }
-    result.extend(comp.body.iter().cloned());
+
+    let overrides = collect_overrides(&comp.body);
+    validate_overrides(&overrides, &inherited, &comp.body)?;
+
+    let mut result = Vec::with_capacity(inherited.len() + comp.body.len());
+    for item in inherited {
+        if is_overridden_rule_or_fact(&item, &overrides) {
+            continue;
+        }
+        result.push(item);
+    }
+    // Own body. Strip `.override` directives — they have served their
+    // purpose above and must not reach `inline_one` or any further
+    // ancestor splice (e.g. if this comp is itself inherited later).
+    for item in &comp.body {
+        if matches!(item, RawItem::Override { .. }) {
+            continue;
+        }
+        result.push(item.clone());
+    }
 
     stack.remove(&comp.name);
     Ok(result)
+}
+
+/// Map of override-target-name → declaration span, keyed by the
+/// canonical (lowercased) name. Two `.override Foo` directives in the
+/// same comp collapse to one entry (Soufflé-compatible).
+fn collect_overrides(body: &[RawItem]) -> HashMap<String, Span> {
+    let mut out: HashMap<String, Span> = HashMap::new();
+    for item in body {
+        if let RawItem::Override { name, span } = item {
+            out.entry(name.to_lowercase()).or_insert(*span);
+        }
+    }
+    out
+}
+
+fn validate_overrides(
+    overrides: &HashMap<String, Span>,
+    inherited: &[RawItem],
+    own_body: &[RawItem],
+) -> Result<(), ParseError> {
+    let inherited_decls = decl_map(inherited);
+    let own_decls = decl_map(own_body);
+
+    for (name_lc, span) in overrides {
+        // A local `.decl` would shadow the inherited one and make the
+        // override target ambiguous — reject.
+        if let Some(prior) = own_decls.get(name_lc.as_str()) {
+            return Err(ParseError::OverrideRedeclaresRelation {
+                span: *span,
+                prior: prior.span,
+                name: name_lc.clone(),
+            });
+        }
+
+        let Some(decl) = inherited_decls.get(name_lc.as_str()) else {
+            return Err(ParseError::OverrideUnknownRelation {
+                span: *span,
+                name: name_lc.clone(),
+            });
+        };
+        if !decl.overridable {
+            return Err(ParseError::OverrideOfNonOverridable {
+                span: *span,
+                prior: decl.span,
+                name: name_lc.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Index a body's `.decl` items by their canonical (lowercased) name,
+/// so `validate_overrides` can perform O(1) lookups instead of K×N
+/// linear scans with per-comparison `to_lowercase()` allocations.
+fn decl_map(items: &[RawItem]) -> HashMap<String, &RawRelation> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            RawItem::Decl(r) => Some((r.name.to_lowercase(), r)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether an inherited `RawItem` is a rule or fact whose head matches
+/// one of this comp's `.override` targets — if so, it gets dropped from
+/// the spliced body and replaced by the comp's own derivations.
+fn is_overridden_rule_or_fact(item: &RawItem, overrides: &HashMap<String, Span>) -> bool {
+    if overrides.is_empty() {
+        return false;
+    }
+    let head_name = match item {
+        RawItem::Rule(r) | RawItem::Fact(r) => r.head().name(),
+        _ => return false,
+    };
+    overrides.contains_key(head_name)
 }
 
 /// Substitute supertype type-parameter names in raw body items at the

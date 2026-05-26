@@ -142,6 +142,12 @@ impl Relation {
                         ));
                     }
                 }
+                Rule::overridable_kw => {
+                    return Err(ParseError::OverridableOutsideComp {
+                        span: span_of(&rule, file),
+                        name: name.to_string(),
+                    });
+                }
                 other => {
                     return Err(grammar_bug(format!(
                         "unexpected rule in relation declaration: {other:?}"

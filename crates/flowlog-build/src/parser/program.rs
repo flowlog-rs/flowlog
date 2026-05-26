@@ -1813,4 +1813,257 @@ mod tests {
         );
         assert_eq!(fn_call.name(), "cost");
     }
+
+    // =============================================================
+    // `.override` / `overridable`
+    // =============================================================
+    //
+    // The inliner replaces user-written `.` with `·` (U+00B7) in
+    // prefixed relation names, so a `.init s = Sub` produces facts
+    // keyed by `s·foo` rather than `s.foo`. The tests below assert
+    // against the post-inliner form.
+
+    /// Extract the first-column integer values from `program`'s facts
+    /// for `rel`. Used by the override tests, which assert by tuple
+    /// value rather than by parsed-AST structure.
+    fn fact_numbers(program: &Program, rel: &str) -> Vec<i64> {
+        program
+            .facts()
+            .get(rel)
+            .unwrap_or_else(|| panic!("no facts for `{rel}`"))
+            .iter()
+            .map(|(_, tuple)| match &tuple[0] {
+                ConstType::Int(n) => *n,
+                other => panic!("expected number in `{rel}`, got {other:?}"),
+            })
+            .collect()
+    }
+
+    /// Spec test 1: `.override Foo` drops parent's ground facts.
+    #[test]
+    fn override_drops_parent_facts() {
+        let src = "
+            .comp Base {
+              .decl Foo(x: number) overridable
+              Foo(1).
+              Foo(2).
+            }
+            .comp Sub : Base {
+              .override Foo
+              Foo(10).
+            }
+            .init s = Sub
+            .output s.Foo
+        ";
+        let program = parse_program(src);
+        assert_eq!(fact_numbers(&program, "s·foo"), vec![10]);
+    }
+
+    /// Spec test 2: override replaces a derived rule, not just facts.
+    #[test]
+    fn override_drops_parent_derived_rule() {
+        let src = "
+            .comp Base {
+              .decl Foo(x: number) overridable
+              .decl Seed(x: number)
+              Foo(x) :- Seed(x).
+            }
+            .comp Sub : Base {
+              .override Foo
+              Foo(x) :- Seed(x), x > 5.
+            }
+            .init s = Sub
+            .input s.Seed(IO=\"file\", filename=\"Seed.csv\", delimiter=\",\")
+            .output s.Foo
+        ";
+        let program = parse_program(src);
+        let rules: Vec<_> = program
+            .rules()
+            .into_iter()
+            .filter(|r| r.head().name() == "s·foo")
+            .collect();
+        assert_eq!(rules.len(), 1, "exactly one s·foo rule survives");
+        // The surviving rule must carry the `x > 5` filter.
+        let has_compare = rules[0]
+            .rhs()
+            .iter()
+            .any(|p| matches!(p, Predicate::Compare(_)));
+        assert!(has_compare, "override's filtered rule should survive");
+    }
+
+    /// Spec test 3: `overridable` without `.override` is a no-op.
+    #[test]
+    fn overridable_without_override_keeps_parent_facts() {
+        let src = "
+            .comp Base {
+              .decl Foo(x: number) overridable
+              Foo(1).
+            }
+            .comp Sub : Base { }
+            .init s = Sub
+            .output s.Foo
+        ";
+        let program = parse_program(src);
+        let tuples = program.facts().get("s·foo").expect("s·foo facts");
+        assert_eq!(tuples.len(), 1);
+    }
+
+    /// Spec test 4: `.override` of a non-`overridable` parent is an error.
+    #[test]
+    fn override_of_non_overridable_errors() {
+        let src = "
+            .comp Base { .decl Foo(x: number)  Foo(1). }
+            .comp Sub : Base { .override Foo  Foo(10). }
+            .init s = Sub
+            .output s.Foo
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(
+            matches!(err, ParseError::OverrideOfNonOverridable { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// Spec test 5: `.override` of an unknown relation name is an error.
+    #[test]
+    fn override_unknown_relation_errors() {
+        let src = "
+            .comp Base { .decl Foo(x: number) overridable  Foo(1). }
+            .comp Sub : Base { .override Bar  Foo(10). }
+            .init s = Sub
+            .output s.Foo
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(
+            matches!(err, ParseError::OverrideUnknownRelation { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// Spec test 6: diamond inheritance — Mid's override wins through to Bot.
+    #[test]
+    fn override_propagates_through_inheritance_chain() {
+        let src = "
+            .comp Top  { .decl Foo(x: number) overridable  Foo(1). }
+            .comp Mid1 : Top { .override Foo  Foo(2). }
+            .comp Bot  : Mid1 { }
+            .init b = Bot
+            .output b.Foo
+        ";
+        let program = parse_program(src);
+        assert_eq!(fact_numbers(&program, "b·foo"), vec![2]);
+    }
+
+    /// Spec test 7: parametric — `.comp X<T>` declares `Foo(x: T) overridable`,
+    /// subcomponent overrides it; type substitution must still flow through.
+    #[test]
+    fn override_parametric_type_substitution() {
+        let src = "
+            .comp Base<T> {
+              .decl Foo(x: T) overridable
+              Foo(0).
+            }
+            .comp Sub<T> : Base<T> {
+              .override Foo
+              Foo(42).
+            }
+            .init s = Sub<number>
+            .output s.Foo
+        ";
+        let program = parse_program(src);
+        assert_eq!(fact_numbers(&program, "s·foo"), vec![42]);
+    }
+
+    /// Spec test 8: `.override` with zero replacement rules drops the
+    /// parent's derivations and leaves nothing in their place. (FlowLog
+    /// then prunes the empty relation downstream — Soufflé would keep
+    /// it; either way the override successfully cleared the parent's
+    /// rules, which is what this test guards.)
+    #[test]
+    fn override_to_empty_drops_parent_derivations() {
+        let src = "
+            .comp Base {
+              .decl Foo(x: number) overridable
+              Foo(1).
+            }
+            .comp Sub : Base {
+              .override Foo
+            }
+            .init s = Sub
+            .output s.Foo
+        ";
+        let program = parse_program(src);
+        assert!(program.facts().get("s·foo").is_none());
+        assert!(program.rules().iter().all(|r| r.head().name() != "s·foo"));
+    }
+
+    /// Spec test 9: `.override` at the top level is a syntax error.
+    #[test]
+    fn override_outside_comp_is_syntax_error() {
+        let src = "
+            .decl Foo(x: number)
+            .override Foo
+            .output Foo
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(matches!(err, ParseError::Syntax { .. }), "got {err:?}");
+    }
+
+    /// Spec test 10: subcomponent that both `.override`s AND re-`.decl`s
+    /// the relation must fail with `OverrideRedeclaresRelation`.
+    #[test]
+    fn override_redeclaration_errors() {
+        let src = "
+            .comp Base {
+              .decl Foo(x: number) overridable
+              Foo(1).
+            }
+            .comp Sub : Base {
+              .override Foo
+              .decl Foo(x: number)
+              Foo(10).
+            }
+            .init s = Sub
+            .output s.Foo
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(
+            matches!(err, ParseError::OverrideRedeclaresRelation { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// Spec test 11: two `.override Foo` directives are redundant but
+    /// not an error — they collapse to a single override.
+    #[test]
+    fn double_override_is_accepted() {
+        let src = "
+            .comp Base {
+              .decl Foo(x: number) overridable
+              Foo(1).
+            }
+            .comp Sub : Base {
+              .override Foo
+              .override Foo
+              Foo(10).
+            }
+            .init s = Sub
+            .output s.Foo
+        ";
+        let program = parse_program(src);
+        let tuples = program.facts().get("s·foo").expect("s·foo facts");
+        assert_eq!(tuples.len(), 1);
+    }
+
+    /// `overridable` outside a `.comp` body must be rejected with a
+    /// dedicated error rather than silently accepted.
+    #[test]
+    fn overridable_outside_comp_errors() {
+        let src = ".decl Foo(x: number) overridable\n.output Foo\n";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(
+            matches!(err, ParseError::OverridableOutsideComp { .. }),
+            "got {err:?}"
+        );
+    }
 }
