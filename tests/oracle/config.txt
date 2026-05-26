@@ -22,13 +22,9 @@ knowledge_reasoning/galen.dl=galen
 program_analysis/andersen.dl=medium
 program_analysis/cspa.dl=cspa-httpd
 program_analysis/csda.dl=csda-httpd
-program_analysis/batik.dl=batik
-program_analysis/biojava.dl=biojava
-program_analysis/eclipse.dl=eclipse
-program_analysis/xalan.dl=xalan
 program_analysis/cvc5.dl=cvc5
 program_analysis/z3.dl=z3
-program_analysis/zxing.dl=zxing
 
 # Program analysis (string-typed)
 program_analysis/polonius.dl=clap str-intern
+program_analysis/doop.dl=batik str-intern
