@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : multi_head_multi_body
 // Feature : Souffle-style combined multi-head and multi-body rules
-// Covers  : C; D :- A; B. expands to C:-A. C:-B. D:-A. D:-B.
+// Covers  : C, D :- A; B. expands to C:-A. C:-B. D:-A. D:-B.
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl A(x: int32)
@@ -14,7 +14,7 @@
 .decl D(x: int32)
 
 // Cross product: both heads derive from both bodies
-C(X); D(X) :- A(X); B(X).
+C(X), D(X) :- A(X); B(X).
 
 .output C
 .output D

@@ -348,6 +348,13 @@ VirtualMethodInvocation_Descriptor(invocation, descriptor) :-
 .decl SubtypeOfDifferent(subtype:string, type:string)
 .decl MainMethodDeclaration(method:string)
 
+.printsize MainClass
+.printsize Method_SimpleName
+.printsize Method_DeclaringType
+.printsize Method_Modifier
+.printsize Method_ParamTypes
+.printsize Method_ReturnType
+.printsize Method_Descriptor
 .printsize MethodLookup
 .printsize MethodImplemented
 .printsize DirectSubclass

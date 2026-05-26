@@ -121,11 +121,9 @@ impl FlowLogRule {
         out
     }
 
-    /// Parse a (possibly multi-head / multi-body) rule and expand into
-    /// one `FlowLogRule` per (head, body) pair.
-    ///
-    /// Souffle-style semicolons separate alternative heads and bodies:
-    ///   `h1; h2 :- b1; b2.` → `h1:-b1. h1:-b2. h2:-b1. h2:-b2.`
+    /// Expand a multi-head / multi-body rule into one rule per
+    /// (head, body) pair. Parenthesised `(A ; B)` disjunctions inside
+    /// a conjunction distribute by cross-product.
     pub(crate) fn expand_from_parsed_rule(
         parsed_rule: Pair<Rule>,
         file: FileId,
@@ -144,14 +142,7 @@ impl FlowLogRule {
         let rule_bodies_node = inner
             .next()
             .ok_or_else(|| grammar_bug("rule missing bodies"))?;
-        let mut bodies: Vec<Vec<Predicate>> = Vec::new();
-        for predicates_node in rule_bodies_node.into_inner() {
-            let mut body = Vec::new();
-            for p in predicates_node.into_inner() {
-                body.push(Predicate::from_parsed_rule(p, file)?);
-            }
-            bodies.push(body);
-        }
+        let bodies = expand_rule_bodies(rule_bodies_node, file)?;
 
         let mut out = Vec::with_capacity(heads.len() * bodies.len());
         for head in &heads {
@@ -165,6 +156,48 @@ impl FlowLogRule {
         }
         Ok(out)
     }
+}
+
+fn expand_rule_bodies(node: Pair<Rule>, file: FileId) -> Result<Vec<Vec<Predicate>>, ParseError> {
+    let mut alternatives = Vec::new();
+    for predicates_node in node.into_inner() {
+        alternatives.extend(expand_predicates(predicates_node, file)?);
+    }
+    Ok(alternatives)
+}
+
+/// Expand one comma-separated `predicates` node, distributing any
+/// nested `(A ; B)` groups by cross-product.
+fn expand_predicates(node: Pair<Rule>, file: FileId) -> Result<Vec<Vec<Predicate>>, ParseError> {
+    let mut acc: Vec<Vec<Predicate>> = vec![Vec::new()];
+    for pred_node in node.into_inner() {
+        let inner = pred_node
+            .into_inner()
+            .next()
+            .ok_or_else(|| grammar_bug("predicate missing inner"))?;
+        if matches!(inner.as_rule(), Rule::disjunction_group) {
+            let bodies_node = inner
+                .into_inner()
+                .next()
+                .ok_or_else(|| grammar_bug("disjunction_group missing inner rule_bodies"))?;
+            let nested = expand_rule_bodies(bodies_node, file)?;
+            let mut next = Vec::with_capacity(acc.len() * nested.len());
+            for prefix in &acc {
+                for alt in &nested {
+                    let mut combined = prefix.clone();
+                    combined.extend(alt.iter().cloned());
+                    next.push(combined);
+                }
+            }
+            acc = next;
+        } else {
+            let p = Predicate::from_inner(inner, file)?;
+            for conjunction in &mut acc {
+                conjunction.push(p.clone());
+            }
+        }
+    }
+    Ok(acc)
 }
 
 #[cfg(test)]
