@@ -48,13 +48,16 @@ all_dl_files() {
 
 # Extract input relation names (one per line, lowercase) from a .dl file
 # and any sibling included .dl files. Anchored to line-start (modulo
-# whitespace) so `// .input Foo` comments are skipped.
+# whitespace) so `// .input Foo` comments are skipped. The `.` in the
+# name pattern admits component-instance relations like `a.P`; on output
+# the dot is rewritten to `·` (U+00B7) to mirror the inliner's rename
+# in `crates/flowlog-build/src/parser/program.rs::normalize_inliner_dots`.
 parse_input_relations() {
     local dl_file="$1"
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
-        (grep -oE '^[[:space:]]*\.input[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$f" 2>/dev/null || true) \
-            | awk '{ print tolower($2) }'
+        (grep -oE '^[[:space:]]*\.input[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' "$f" 2>/dev/null || true) \
+            | awk '{ name = tolower($2); gsub(/\./, "·", name); print name }'
     done < <(all_dl_files "$dl_file") \
         | sort -u
 }
@@ -77,13 +80,16 @@ parse_input_filename() {
 # Extract output relation names (lowercase, one per line) from a .dl file
 # and any sibling included .dl files. Treats `.printsize` as `.output` so
 # callers that pre-rewrite the .dl aren't required. Anchored to line-start
-# (modulo whitespace) so commented directives are skipped.
+# (modulo whitespace) so commented directives are skipped. The `.` in the
+# name pattern admits component-instance relations like `a.P`; on output
+# the dot is rewritten to `·` (U+00B7) to mirror the inliner's rename
+# in `crates/flowlog-build/src/parser/program.rs::normalize_inliner_dots`.
 parse_output_relations() {
     local dl_file="$1"
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
-        (grep -oE '^[[:space:]]*\.(output|printsize)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$f" 2>/dev/null || true) \
-            | awk '{ print tolower($2) }'
+        (grep -oE '^[[:space:]]*\.(output|printsize)[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' "$f" 2>/dev/null || true) \
+            | awk '{ name = tolower($2); gsub(/\./, "·", name); print name }'
     done < <(all_dl_files "$dl_file") \
         | sort -u
 }
@@ -108,11 +114,22 @@ _parse_decl() {
     local dl_file="$1"
     local rel="$2"
     local mode="$3"
+    # Names that went through the dot→· rename refer to component-instance
+    # relations (`a.P` from `.init a = Pair<…>`). The user `.decl` lives
+    # inside the `.comp` body under its bare suffix (`P`), so fall back to
+    # matching the post-`·` tail when the full name has no direct decl.
+    local search_names=("$rel")
+    if [[ "$rel" == *·* ]]; then
+        search_names+=("${rel##*·}")
+    fi
     local line=""
+    local name
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
-        line=$(grep -iE "^[[:space:]]*\.decl[[:space:]]+${rel}[[:space:]]*\(" "$f" 2>/dev/null | head -1 || true)
-        [[ -n "$line" ]] && break
+        for name in "${search_names[@]}"; do
+            line=$(grep -iE "^[[:space:]]*\.decl[[:space:]]+${name}[[:space:]]*\(" "$f" 2>/dev/null | head -1 || true)
+            [[ -n "$line" ]] && break 2
+        done
     done < <(all_dl_files "$dl_file")
     [[ -n "$line" ]] || return 1
     local inside
