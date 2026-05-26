@@ -1,0 +1,50 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : comp_override
+// Feature : `overridable` + `.override` (Soufflé-compat). The parent
+//           declares `Hello` as `overridable` with a default fact. Each
+//           subcomponent overrides with its own derivation source; the
+//           third inherits the parent's default. After flattening, the
+//           per-instance rule set comes only from the inheritance
+//           chain — the parent's `Hello("parent_default")` is dropped
+//           by `.override` in the first two subcomponents and survives
+//           in the third.
+// ════════════════════════════════════════════════════════════════════════════
+
+.comp Abstract {
+  .decl Hello(x: symbol) overridable
+  Hello("parent_default").
+}
+
+.comp One : Abstract {
+  .override Hello
+  Hello(x) :- Extra(x).
+}
+
+.comp Two : Abstract {
+  .override Hello
+  Hello(x) :- Other(x).
+}
+
+.comp Three : Abstract { }
+
+.decl Extra(x: symbol)
+.input Extra(IO="file", filename="Extra.csv", delimiter=",")
+
+.decl Other(x: symbol)
+.input Other(IO="file", filename="Other.csv", delimiter=",")
+
+.init one   = One
+.init two   = Two
+.init three = Three
+
+.decl OneOut(x: symbol)
+.output OneOut
+OneOut(x) :- one.Hello(x).
+
+.decl TwoOut(x: symbol)
+.output TwoOut
+TwoOut(x) :- two.Hello(x).
+
+.decl ThreeOut(x: symbol)
+.output ThreeOut
+ThreeOut(x) :- three.Hello(x).
