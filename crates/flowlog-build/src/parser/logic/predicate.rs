@@ -65,17 +65,22 @@ impl fmt::Debug for Predicate {
 }
 
 impl Lexeme for Predicate {
-    /// Parse:
-    /// - `atom` → positive atom
-    /// - `negative_atom` → `!atom`
-    /// - `compare_expr` → comparison
-    /// - `boolean` → `True` | `False`
+    /// Parse a `Rule::predicate` pair (the grammar's wrapper that
+    /// chooses one of `atom | negative_atom | compare_expr | …`).
     fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let inner = parsed_rule
             .into_inner()
             .next()
             .ok_or_else(|| grammar_bug("expected inner rule for predicate"))?;
+        Self::from_inner(inner, file)
+    }
+}
 
+impl Predicate {
+    /// Dispatch on the already-unwrapped inner of a `Rule::predicate`.
+    /// Callers that need to inspect the inner kind before deciding
+    /// (e.g. routing `disjunction_group` elsewhere) use this directly.
+    pub(crate) fn from_inner(inner: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         Ok(match inner.as_rule() {
             Rule::atom => Self::PositiveAtom(Atom::from_parsed_rule(inner, file)?),
             Rule::negative_atom => {

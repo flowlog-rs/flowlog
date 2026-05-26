@@ -1610,7 +1610,7 @@ mod tests {
             .decl c(x: number)
             .output b
             .output c
-            b(X); c(X) :- a(X).
+            b(X), c(X) :- a(X).
         ";
         let program = parse_program(src);
         let rules = program.rules();
@@ -1630,7 +1630,7 @@ mod tests {
             .decl c(x: number, y: number)
             .output b
             .output c
-            fixpoint { b(X, Y); c(X, Y) :- a(X, Y). }
+            fixpoint { b(X, Y), c(X, Y) :- a(X, Y). }
         ";
         let program = parse_program(src);
         let blocks = loop_blocks(&program);
@@ -1659,6 +1659,52 @@ mod tests {
     }
 
     #[test]
+    fn disjunction_arm_can_be_a_conjunction() {
+        // `(A, B ; C, D)` means `(A AND B) OR (C AND D)` — each arm
+        // of a `;` may itself be a comma-separated conjunction.
+        let src = "
+            .decl a(x: number) .decl b(x: number)
+            .decl c(x: number) .decl d(x: number)
+            .decl r(x: number)
+            .output r
+            r(X) :- ( a(X), b(X) ; c(X), d(X) ).
+        ";
+        let program = parse_program(src);
+        let rules = program.rules();
+        assert_eq!(rules.len(), 2);
+        let bodies: Vec<Vec<&str>> = rules
+            .iter()
+            .map(|r| r.rhs().iter().map(|p| p.name()).collect())
+            .collect();
+        assert!(bodies.contains(&vec!["a", "b"]));
+        assert!(bodies.contains(&vec!["c", "d"]));
+    }
+
+    #[test]
+    fn nested_disjunctions_cross_product() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl c(x: number)
+            .decl d(x: number)
+            .decl r(x: number)
+            .output r
+            r(X) :- ( a(X) ; b(X) ), ( c(X) ; d(X) ).
+        ";
+        let program = parse_program(src);
+        let rules = program.rules();
+        assert_eq!(rules.len(), 4);
+        let bodies: Vec<(&str, &str)> = rules
+            .iter()
+            .map(|r| (r.rhs()[0].name(), r.rhs()[1].name()))
+            .collect();
+        assert!(bodies.contains(&("a", "c")));
+        assert!(bodies.contains(&("a", "d")));
+        assert!(bodies.contains(&("b", "c")));
+        assert!(bodies.contains(&("b", "d")));
+    }
+
+    #[test]
     fn multi_head_multi_body_expands() {
         let src = "
             .decl a(x: number)
@@ -1667,7 +1713,7 @@ mod tests {
             .decl d(x: number)
             .output c
             .output d
-            c(X); d(X) :- a(X); b(X).
+            c(X), d(X) :- a(X); b(X).
         ";
         let program = parse_program(src);
         let rules = program.rules();
