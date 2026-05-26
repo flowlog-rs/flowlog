@@ -202,6 +202,37 @@ pub enum ParseError {
     #[error("unresolved qualified reference `{path}`")]
     UnresolvedQualifiedRef { span: Span, path: String },
 
+    /// `overridable` keyword on a top-level `.decl`. The keyword only
+    /// makes sense inside a `.comp` body where a subcomponent might
+    /// supply an `.override`.
+    #[error("`overridable` is only allowed on a `.decl` inside a `.comp` body")]
+    OverridableOutsideComp { span: Span, name: String },
+
+    /// `.override Foo` in a subcomponent, but no `.decl Foo` was
+    /// inherited from any parent component.
+    #[error("override of undeclared relation `{name}`")]
+    OverrideUnknownRelation { span: Span, name: String },
+
+    /// `.override Foo` in a subcomponent, but the inherited `.decl Foo`
+    /// is not marked `overridable`.
+    #[error("override of non-overridable relation `{name}`")]
+    OverrideOfNonOverridable {
+        span: Span,
+        prior: Span,
+        name: String,
+    },
+
+    /// Subcomponent has `.override Foo` and also redeclares `.decl Foo`.
+    /// Override only applies to *inherited* relations, so a local
+    /// redeclaration would shadow the inherited decl and leave nothing
+    /// for `.override` to target.
+    #[error("override of non-inherited relation `{name}`")]
+    OverrideRedeclaresRelation {
+        span: Span,
+        prior: Span,
+        name: String,
+    },
+
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
     #[error(transparent)]
@@ -326,6 +357,36 @@ impl Diagnostic for ParseError {
                 .with_notes(vec![format!(
                     "the first segment of `{path}` must be either a nested `.init` instance in this component or a bound type-parameter"
                 )]),
+
+            ParseError::OverridableOutsideComp { span, name } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "remove `overridable` from this top-level `.decl {name}`, or move the declaration inside a `.comp` body"
+                )]),
+
+            ParseError::OverrideUnknownRelation { span, name } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "no inherited `.decl {name}(...) overridable` was found in any parent component"
+                )]),
+
+            ParseError::OverrideOfNonOverridable { span, prior, name } => base.with_labels(dup_labels(
+                *span,
+                *prior,
+                "override target is not `overridable`",
+                "declared without `overridable` here",
+            )).with_notes(vec![format!(
+                "add `overridable` to the parent `.decl {name}` to allow this override"
+            )]),
+
+            ParseError::OverrideRedeclaresRelation { span, prior, name } => base.with_labels(dup_labels(
+                *span,
+                *prior,
+                "`.override` here",
+                "relation redeclared in this comp here",
+            )).with_notes(vec![format!(
+                "`.override {name}` may only target an inherited relation; drop the local `.decl {name}` from this comp"
+            )]),
 
             ParseError::Syntax { span, .. }
             | ParseError::LoopBlockInStandardMode { span }

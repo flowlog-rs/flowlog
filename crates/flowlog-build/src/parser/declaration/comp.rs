@@ -84,6 +84,13 @@ pub(crate) enum RawItem {
     /// Nested `.comp` inside a component body. Rare; hoisted to the
     /// global component map with a mangled name at inline time.
     Comp(CompDecl),
+    /// `.override Name` — replace the parent's rules/facts for `Name`
+    /// with this component's own derivations. Resolved (and stripped)
+    /// during `resolve_inheritance`; never reaches `inline_one`.
+    Override {
+        name: String,
+        span: Span,
+    },
 }
 
 /// `.decl name(attr: TypeName, ...)` with **un-resolved** type names.
@@ -92,6 +99,10 @@ pub(crate) struct RawRelation {
     pub(crate) name: String,
     /// `(attribute_name, type_source_string)` pairs in declaration order.
     pub(crate) attrs: Vec<(String, String)>,
+    /// `overridable` keyword on the `.decl`. Only meaningful inside a
+    /// `.comp` body; the inliner uses it to validate `.override`
+    /// targets in subcomponents.
+    pub(crate) overridable: bool,
     pub(crate) span: Span,
 }
 
@@ -237,6 +248,7 @@ impl RawItem {
             Rule::printsize_directive => parse_raw_printsize(inner, file),
             Rule::comp_decl => Ok(RawItem::Comp(CompDecl::from_parsed_rule(inner, file)?)),
             Rule::init_decl => Ok(RawItem::Init(InitDecl::from_parsed_rule(inner, file)?)),
+            Rule::override_directive => parse_raw_override(inner, file),
             other => Err(grammar_bug(format!(
                 "unexpected rule inside comp_body_item: {other:?}"
             ))),
@@ -331,6 +343,17 @@ fn parse_raw_printsize(node: Pair<Rule>, file: FileId) -> Result<RawItem, ParseE
     Ok(RawItem::Printsize { name, span })
 }
 
+fn parse_raw_override(node: Pair<Rule>, file: FileId) -> Result<RawItem, ParseError> {
+    let span = span_of(&node, file);
+    let name = node
+        .into_inner()
+        .next()
+        .ok_or_else(|| grammar_bug("override directive missing relation name"))?
+        .as_str()
+        .to_string();
+    Ok(RawItem::Override { name, span })
+}
+
 impl RawRelation {
     /// Parse a `.decl` pest node into raw form (attribute types stay
     /// as source strings — no [`TypeRegistry`] lookup).
@@ -348,26 +371,37 @@ impl RawRelation {
             .to_string();
 
         let mut attrs = Vec::new();
-        for attrs_node in inner {
-            if attrs_node.as_rule() != Rule::attributes_decl {
-                continue;
-            }
-            for attr in attrs_node.into_inner() {
-                let mut parts = attr.into_inner();
-                let aname = parts
-                    .next()
-                    .ok_or_else(|| grammar_bug("attribute missing name"))?
-                    .as_str()
-                    .to_string();
-                let type_name = type_ref_name(
-                    &parts
-                        .next()
-                        .ok_or_else(|| grammar_bug("attribute missing type_ref"))?,
-                );
-                attrs.push((aname, type_name));
+        let mut overridable = false;
+        for node in inner {
+            match node.as_rule() {
+                Rule::attributes_decl => {
+                    for attr in node.into_inner() {
+                        let mut parts = attr.into_inner();
+                        let aname = parts
+                            .next()
+                            .ok_or_else(|| grammar_bug("attribute missing name"))?
+                            .as_str()
+                            .to_string();
+                        let type_name = type_ref_name(
+                            &parts
+                                .next()
+                                .ok_or_else(|| grammar_bug("attribute missing type_ref"))?,
+                        );
+                        attrs.push((aname, type_name));
+                    }
+                }
+                Rule::overridable_kw => {
+                    overridable = true;
+                }
+                _ => {}
             }
         }
 
-        Ok(Self { name, attrs, span })
+        Ok(Self {
+            name,
+            attrs,
+            overridable,
+            span,
+        })
     }
 }

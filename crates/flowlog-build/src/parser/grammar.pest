@@ -118,11 +118,15 @@ boolean = { ("True" | "False") ~ !(ASCII_ALPHANUMERIC | "_") }
 // - EDB (Extensional Database): Input relations with external data
 // - IDB (Intentional Database): Computed relations defined by rules
 
-// Declaration only defines the relation schema
-// I/O directives are separate and can appear anywhere in the program
-declaration = { 
-    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")"
+// Declaration only defines the relation schema. I/O directives are
+// separate and can appear anywhere in the program. Optional trailing
+// `overridable` is only meaningful inside a `.comp` body.
+declaration = {
+    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ overridable_kw?
 }
+
+// Lets a subcomponent's `.override` replace this relation's rules.
+overridable_kw = @{ "overridable" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // Input directive for EDB relations - separate from declaration
 // Example: .input Relation(IO="file", filename="data.csv", delimiter=",")
@@ -515,11 +519,17 @@ init_decl = { ".init" ~ identifier ~ "=" ~ identifier ~ comp_type_args? }
 
 // Items allowed inside a component body. Mirrors the top-level grammar
 // minus fixpoint/loop blocks and include directives (which are
-// resolved at file-load time).
+// resolved at file-load time), plus `override_directive` which is
+// comp-body-only.
 comp_body_item = {
     declaration | type_alias_decl | input_directive | output_directive
     | printsize_directive | rule | fact | comp_decl | init_decl
+    | override_directive
 }
+
+// Drop inherited rules and facts for `Name`; the parent's `.decl Name`
+// (which must be `overridable`) is kept.
+override_directive = { ".override" ~ identifier }
 
 // =============================================================================
 // WHITESPACE AND COMMENTS
