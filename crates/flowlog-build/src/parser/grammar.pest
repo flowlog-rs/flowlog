@@ -323,12 +323,12 @@ atom_arg = { constant | variable | placeholder }
 fact = { head ~ "." }
 
 // Rule with optional multi-head and multi-body (Souffle-style).
-// Semicolons separate alternative heads and alternative bodies:
-//   h1; h2 :- b1; b2.  →  h1:-b1. h1:-b2. h2:-b1. h2:-b2.
+// Commas separate alternative heads, semicolons seperate alternative bodies:
+//   h1, h2 :- b1; b2.  →  h1:-b1. h1:-b2. h2:-b1. h2:-b2.
 rule = { rule_heads ~ ":-" ~ rule_bodies ~ "." }
 
-// One or more semicolon-separated heads
-rule_heads = { head ~ (";" ~ head)* }
+// One or more commas-separated heads
+rule_heads = { head ~ ("," ~ head)* }
 
 // One or more semicolon-separated bodies (disjunction)
 rule_bodies = { predicates ~ (";" ~ predicates)* }
@@ -364,8 +364,12 @@ predicate = {
     compare_expr |  // Comparison: x > y, cost(x) > 5
     atom |          // Positive atom: edge(x, y)
     negative_atom | // Negative atom: !edge(x, y)
+    disjunction_group | // Nested disjunction: (A ; B)
     fn_call_expr    // UDF predicate: is_valid(x + 1, y)
 }
+
+// Parenthesised disjunction inside a body: `(A ; B)`.
+disjunction_group = { "(" ~ rule_bodies ~ ")" }
 
 
 // =============================================================================
