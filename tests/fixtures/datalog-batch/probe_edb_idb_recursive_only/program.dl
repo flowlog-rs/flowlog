@@ -1,0 +1,10 @@
+// Probe: inline seed + recursive rule only (no non-recursive rule).
+// Markdown's "EDB only + recursive" case.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(x: int32, y: int32)
+Reach(1, 1).
+Reach(x, z) :- Reach(x, y), Edge(y, z).
+.output Reach

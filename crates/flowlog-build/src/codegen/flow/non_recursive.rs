@@ -62,7 +62,7 @@ impl CodeGen {
     /// `reduce_core` otherwise).
     pub(crate) fn gen_non_recursive_post_flows(
         &mut self,
-        calculated_output_fps: &HashSet<u64>,
+        bound_fps: &HashSet<u64>,
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
@@ -83,10 +83,9 @@ impl CodeGen {
                 expr = quote! { #expr.concat(#t.clone()) };
             }
 
-            // Output already produced in an earlier stratum: fold the new
-            // heads into the existing collection before deduping.
-            let already_calculated = calculated_output_fps.contains(idb_fp);
-            let (concat_expr, concat_count) = if already_calculated {
+            // Fold into the existing binding rather than shadowing it.
+            let already_bound = bound_fps.contains(idb_fp);
+            let (concat_expr, concat_count) = if already_bound {
                 (quote! { #output.concat(#expr) }, outs.len() as u32)
             } else {
                 (expr, outs.len() as u32 - 1)

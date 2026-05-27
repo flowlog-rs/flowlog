@@ -1,0 +1,10 @@
+// Probe: inline fact + non-recursive rule for same relation.
+// Markdown pattern #1 — should produce union of EDB and derived.
+
+.decl Bar(x: int32)
+.input Bar(IO="file", filename="Bar.csv", delimiter=",")
+
+.decl Foo(x: int32)
+Foo(1).
+Foo(x) :- Bar(x).
+.output Foo
