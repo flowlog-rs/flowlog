@@ -86,9 +86,11 @@ impl CodeGen {
         let time_profile_init = self.gen_time_profile_init();
         let memory_profile_init = self.gen_memory_profile_init();
 
-        // Flow generation per stratum.
+        // Relations whose outer ident is already bound — by `gen_edb_decls`
+        // (seeded here) or by a prior stratum. Without EDB seeding, a rule
+        // for an EDB relation would shadow the EDB binding and drop its tuples.
         let mut flows: Vec<TokenStream> = Vec::new();
-        let mut calculated_output_fps: HashSet<u64> = HashSet::new();
+        let mut bound_fps: HashSet<u64> = self.program.edb_fingerprints();
 
         for (idx, stratum) in strata.iter().enumerate() {
             with_profiler(profiler, |profiler| {
@@ -102,14 +104,10 @@ impl CodeGen {
                 let outer_snapshot = self.outer_arranged.clone();
                 flows.push(self.gen_recursive_block(&outer_snapshot, stratum, profiler)?);
             } else {
-                flows.extend(self.gen_non_recursive_post_flows(
-                    &calculated_output_fps,
-                    stratum,
-                    profiler,
-                )?);
+                flows.extend(self.gen_non_recursive_post_flows(&bound_fps, stratum, profiler)?);
             }
 
-            calculated_output_fps.extend(stratum.output_relations());
+            bound_fps.extend(stratum.output_relations());
         }
 
         // Output inspectors.

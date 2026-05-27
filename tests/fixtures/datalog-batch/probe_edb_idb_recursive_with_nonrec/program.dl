@@ -1,0 +1,11 @@
+// Probe: inline seed + non-recursive Edge→Reach + recursive Reach.
+// Markdown pattern #3.
+
+.decl Edge(x: int32, y: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(x: int32, y: int32)
+Reach(1, 1).
+Reach(x, y) :- Edge(x, y).
+Reach(x, z) :- Reach(x, y), Edge(y, z).
+.output Reach
