@@ -316,7 +316,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "flowlog-build"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "clap",
  "codespan-reporting",
