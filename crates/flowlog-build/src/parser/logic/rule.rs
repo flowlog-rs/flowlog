@@ -284,7 +284,7 @@ fn apply_indices_to_rule(
 pub(crate) fn consume_plan_directive(
     pair: Pair<Rule>,
     file: FileId,
-    rules: &mut Vec<FlowLogRule>,
+    rules: &mut [FlowLogRule],
     plan_target_start: &mut Option<usize>,
 ) -> Result<(), ParseError> {
     let (span, raw_indices) = parse_plan_indices(pair, file)?;
