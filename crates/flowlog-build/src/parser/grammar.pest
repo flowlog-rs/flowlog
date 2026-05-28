@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = {
     SOI ~
-    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | comp_decl | init_decl | fixpoint_block | loop_block | fact | rule)* ~
+    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | comp_decl | init_decl | fixpoint_block | loop_block | fact | rule | plan_directive)* ~
     EOI
 }
 
@@ -331,6 +331,19 @@ fact = { head ~ "." }
 //   h1, h2 :- b1; b2.  →  h1:-b1. h1:-b2. h2:-b1. h2:-b2.
 rule = { rule_heads ~ ":-" ~ rule_bodies ~ "." }
 
+// Plan hint pinning the join order of the immediately preceding rule's
+// positive body atoms. Indices are 1-based positions of positive atoms in
+// the rule's body (negations / comparisons / fn-call predicates are not
+// counted). Must be a permutation of `1..=k` where `k` is the count of
+// positive atoms. Applied at parse time by permuting the rule's RHS, so
+// downstream the source order is the plan order.
+//
+// Example:
+//   A(x,z) :- B(x,y), C(y,z), D(z,w).
+//   .plan (3, 1, 2)
+plan_directive = { ".plan" ~ "(" ~ plan_index ~ ("," ~ plan_index)* ~ ")" }
+plan_index = @{ ASCII_DIGIT+ }
+
 // One or more commas-separated heads
 rule_heads = { head ~ ("," ~ head)* }
 
@@ -421,11 +434,11 @@ disjunction_group = { "(" ~ rule_bodies ~ ")" }
 //   loop until { Done } while { @it >= 5 and @it <= 10 } { ... }
 
 fixpoint_block = {
-    "fixpoint" ~ "{" ~ iterative_directive* ~ rule* ~ "}"
+    "fixpoint" ~ "{" ~ iterative_directive* ~ (rule | plan_directive)* ~ "}"
 }
 
 loop_block = {
-    "loop" ~ loop_condition ~ "{" ~ iterative_directive* ~ rule* ~ "}"
+    "loop" ~ loop_condition ~ "{" ~ iterative_directive* ~ (rule | plan_directive)* ~ "}"
 }
 
 // .iterative <relation_name> — marks a relation as using replacement (new_from)
@@ -521,10 +534,14 @@ init_decl = { ".init" ~ identifier ~ "=" ~ identifier ~ comp_type_args? }
 // minus fixpoint/loop blocks and include directives (which are
 // resolved at file-load time), plus `override_directive` which is
 // comp-body-only.
+// `.plan` is applied at parse time by permuting the preceding rule's
+// positive atoms; component inlining (relation-name rewriting) then
+// runs on the already-permuted body, so each instantiated rule
+// inherits the hint without extra plumbing in the inliner.
 comp_body_item = {
     declaration | type_alias_decl | input_directive | output_directive
     | printsize_directive | rule | fact | comp_decl | init_decl
-    | override_directive
+    | override_directive | plan_directive
 }
 
 // Drop inherited rules and facts for `Name`; the parent's `.decl Name`

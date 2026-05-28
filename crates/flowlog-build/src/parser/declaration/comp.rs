@@ -9,7 +9,7 @@ use pest::iterators::Pair;
 
 use crate::common::{FileId, Span};
 use crate::parser::error::{ParseError, grammar_bug};
-use crate::parser::logic::{FlowLogRule, Head};
+use crate::parser::logic::{FlowLogRule, Head, apply_plan_directive_to_rule};
 use crate::parser::{Lexeme, Rule, span_of, type_ref_name};
 
 /// `.type` operator: `=` (alias) or `<:` (subtype).
@@ -128,7 +128,10 @@ impl CompDecl {
 
         let mut type_params = Vec::new();
         let mut supertype: Option<SuperRef> = None;
-        let mut body = Vec::new();
+        let mut body: Vec<RawItem> = Vec::new();
+        // Applied at parse time so the inliner sees an already-permuted
+        // RHS and stays oblivious to `.plan`.
+        let mut plan_target: Option<usize> = None;
 
         for node in inner {
             match node.as_rule() {
@@ -139,7 +142,26 @@ impl CompDecl {
                     supertype = Some(SuperRef::from_parsed_rule(node, file)?);
                 }
                 Rule::comp_body_item => {
-                    body.push(RawItem::from_parsed_rule(node, file)?);
+                    let inner_kind = node.clone().into_inner().peek().map(|p| p.as_rule());
+                    if matches!(inner_kind, Some(Rule::plan_directive)) {
+                        let plan_pair = node
+                            .into_inner()
+                            .next()
+                            .ok_or_else(|| grammar_bug("comp_body_item missing inner"))?;
+                        let target = plan_target.take().ok_or_else(|| ParseError::PlanOrphan {
+                            span: span_of(&plan_pair, file),
+                        })?;
+                        let RawItem::Rule(rule) = &mut body[target] else {
+                            return Err(grammar_bug(
+                                "plan_target should only ever point at RawItem::Rule",
+                            ));
+                        };
+                        apply_plan_directive_to_rule(plan_pair, file, rule)?;
+                    } else {
+                        let item = RawItem::from_parsed_rule(node, file)?;
+                        plan_target = matches!(item, RawItem::Rule(_)).then_some(body.len());
+                        body.push(item);
+                    }
                 }
                 other => {
                     return Err(grammar_bug(format!(
