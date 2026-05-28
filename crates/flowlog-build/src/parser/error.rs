@@ -233,6 +233,31 @@ pub enum ParseError {
         name: String,
     },
 
+    /// `.plan (...)` appears without an immediately-preceding rule clause
+    /// to attach to.
+    #[error("`.plan` has no preceding rule to attach to")]
+    PlanOrphan { span: Span },
+
+    /// `.plan` index count does not match the rule's positive-atom count.
+    #[error("`.plan` expects {expected} index(es) (one per positive body atom) but got {found}")]
+    PlanArityMismatch {
+        span: Span,
+        expected: usize,
+        found: usize,
+    },
+
+    /// `.plan` references an index outside `1..=positive_atom_count`.
+    #[error("`.plan` index {index} is out of range (valid: 1..={max})")]
+    PlanIndexOutOfRange {
+        span: Span,
+        index: usize,
+        max: usize,
+    },
+
+    /// `.plan` lists the same index twice — must be a permutation.
+    #[error("`.plan` lists positive-atom index {index} more than once")]
+    PlanDuplicateIndex { span: Span, index: usize },
+
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
     #[error(transparent)]
@@ -387,6 +412,31 @@ impl Diagnostic for ParseError {
             )).with_notes(vec![format!(
                 "`.override {name}` may only target an inherited relation; drop the local `.decl {name}` from this comp"
             )]),
+
+            ParseError::PlanOrphan { span } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "place `.plan (...)` immediately after the rule it pins".into(),
+                ]),
+
+            ParseError::PlanArityMismatch { span, expected, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "supply exactly {expected} 1-based index(es), one per positive body atom"
+                )]),
+
+            ParseError::PlanIndexOutOfRange { span, max, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "use a 1-based index in 1..={max} (the rule has {max} positive atom(s))"
+                )]),
+
+            ParseError::PlanDuplicateIndex { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "`.plan` must be a permutation: each positive-atom index appears exactly once"
+                        .into(),
+                ]),
 
             ParseError::Syntax { span, .. }
             | ParseError::LoopBlockInStandardMode { span }

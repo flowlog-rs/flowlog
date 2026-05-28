@@ -33,7 +33,10 @@ use super::{
     },
     error::{DirectiveKind, ParseError, grammar_bug},
     inliner,
-    logic::{Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, LoopBlock, Predicate},
+    logic::{
+        Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, LoopBlock, Predicate,
+        consume_plan_directive,
+    },
     primitive::TypeRegistry,
     segment::Segment,
 };
@@ -696,9 +699,13 @@ impl Program {
         // point it appeared, so the inliner's output rules splice in at
         // that exact position — preserving source-order use-before-def.
         let mut inits_at_pos: Vec<(InitDecl, usize)> = Vec::new();
+        // Cleared by any intervening non-rule node so a later `.plan`
+        // can't silently attach to an earlier rule clause.
+        let mut plan_target_start: Option<usize> = None;
 
         for node in parsed_rule.into_inner() {
-            match node.as_rule() {
+            let node_rule = node.as_rule();
+            match node_rule {
                 // ── Schema ────────────────────────────────────────────────────
                 Rule::declaration => {
                     let rel = Relation::from_parsed_rule_with_registry(node, file, &type_registry)?;
@@ -744,7 +751,12 @@ impl Program {
 
                 // ── Rules and loop/fixpoint blocks ───────────────────────────
                 Rule::rule => {
+                    let start = current_rules.len();
                     current_rules.extend(FlowLogRule::expand_from_parsed_rule(node, file)?);
+                    plan_target_start = Some(start);
+                }
+                Rule::plan_directive => {
+                    consume_plan_directive(node, file, &mut current_rules, &mut plan_target_start)?;
                 }
                 Rule::loop_block => {
                     let block = LoopBlock::from_parsed_rule(node, file)?;
@@ -785,6 +797,9 @@ impl Program {
                 }
 
                 _ => {}
+            }
+            if !matches!(node_rule, Rule::rule | Rule::plan_directive) {
+                plan_target_start = None;
             }
         }
 
@@ -2065,5 +2080,203 @@ mod tests {
             matches!(err, ParseError::OverridableOutsideComp { .. }),
             "got {err:?}"
         );
+    }
+
+    // =============================================================
+    // `.plan` directive
+    // =============================================================
+
+    /// Source-level body order is permuted in the parsed AST so that
+    /// downstream (planner, optimizer) sees the hinted order as if the
+    /// user had written the body that way directly.
+    #[test]
+    fn plan_reorders_positive_atoms() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl c(x: number)
+            .decl h(x: number)
+            .output h
+            h(X) :- a(X), b(X), c(X).
+            .plan (3, 1, 2)
+        ";
+        let program = parse_program(src);
+        let rule = program.rules()[0];
+        let names: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec!["c", "a", "b"]);
+    }
+
+    /// `.plan` indices are positive-atom-only. Negations stay in their
+    /// original global slots; the positive-atom permutation slides under
+    /// them.
+    #[test]
+    fn plan_skips_negations_and_pins_only_positives() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl c(x: number)
+            .decl d(x: number)
+            .decl h(x: number)
+            .output h
+            h(X) :- a(X), !d(X), b(X), c(X).
+            .plan (3, 1, 2)
+        ";
+        let program = parse_program(src);
+        let rule = program.rules()[0];
+        let labelled: Vec<String> = rule
+            .rhs()
+            .iter()
+            .map(|p| match p {
+                Predicate::PositiveAtom(a) => a.name().to_string(),
+                Predicate::NegativeAtom(a) => format!("!{}", a.name()),
+                other => format!("{other}"),
+            })
+            .collect();
+        // Positive slots [a, b, c] permute to [c, a, b]; `!d` keeps slot 1.
+        assert_eq!(labelled, vec!["c", "!d", "a", "b"]);
+    }
+
+    /// `.plan` with no preceding rule clause is rejected, not silently
+    /// dropped or attached to something earlier.
+    #[test]
+    fn plan_without_preceding_rule_errors() {
+        let src = "
+            .decl a(x: number)
+            .output a
+            .plan (1)
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(matches!(err, ParseError::PlanOrphan { .. }), "got {err:?}");
+    }
+
+    /// Index count must equal the positive-atom count.
+    #[test]
+    fn plan_arity_mismatch_errors() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl h(x: number)
+            .output h
+            h(X) :- a(X), b(X).
+            .plan (1, 2, 3)
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ParseError::PlanArityMismatch {
+                    expected: 2,
+                    found: 3,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    /// Index 0 or > positive-atom-count is rejected.
+    #[test]
+    fn plan_index_out_of_range_errors() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl h(x: number)
+            .output h
+            h(X) :- a(X), b(X).
+            .plan (1, 3)
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ParseError::PlanIndexOutOfRange {
+                    index: 3,
+                    max: 2,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    /// Each index must appear exactly once.
+    #[test]
+    fn plan_duplicate_index_errors() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl h(x: number)
+            .output h
+            h(X) :- a(X), b(X).
+            .plan (1, 1)
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(
+            matches!(err, ParseError::PlanDuplicateIndex { index: 1, .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// `.plan` is honored inside `fixpoint { ... }` blocks.
+    #[test]
+    fn plan_inside_fixpoint_block() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl c(x: number)
+            .decl h(x: number)
+            .output h
+            fixpoint {
+                h(X) :- a(X), b(X), c(X).
+                .plan (3, 1, 2)
+            }
+        ";
+        let program = parse_program(src);
+        let block = loop_blocks(&program)[0];
+        let names: Vec<&str> = block.rules()[0].rhs().iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec!["c", "a", "b"]);
+    }
+
+    /// `.plan` inside a `.comp` body permutes the rule's positive atoms
+    /// at parse time, so the inlined / prefixed rule reaches the planner
+    /// already in hint order.
+    #[test]
+    fn plan_inside_comp_body() {
+        let src = "
+            .comp C {
+              .decl A(x: number)
+              .decl B(x: number)
+              .decl D(x: number)
+              .decl H(x: number)
+              H(X) :- A(X), B(X), D(X).
+              .plan (3, 1, 2)
+            }
+            .init c = C
+            .output c.H
+        ";
+        let program = parse_program(src);
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "c·h")
+            .expect("instantiated H rule");
+        let names: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec!["c·d", "c·a", "c·b"]);
+        assert!(rule.plan_pinned(), "plan_pinned should survive inlining");
+    }
+
+    /// `.plan` orphan inside a `.comp` is still rejected.
+    #[test]
+    fn plan_orphan_inside_comp_errors() {
+        let src = "
+            .comp C {
+              .decl A(x: number)
+              .plan (1)
+            }
+            .init c = C
+            .output c.A
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(matches!(err, ParseError::PlanOrphan { .. }), "got {err:?}");
     }
 }
