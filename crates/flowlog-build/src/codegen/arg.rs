@@ -462,11 +462,20 @@ impl CodeGen {
             .iter()
             .map(|fc| {
                 let fn_name = format_ident!("{}", fc.name());
+                let param_types = self.udf_param_types(fc.name());
+                if string_intern && param_types.iter().any(|t| *t == DataType::String) {
+                    self.features.mark_string_resolve();
+                }
                 let args: Vec<TokenStream> = fc
                     .args()
                     .iter()
-                    .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern, None))
-                    .collect::<Result<_, _>>()?;
+                    .enumerate()
+                    .map(|(i, a)| {
+                        let token =
+                            self.build_kv_args_arithmetic_expr(a, string_intern, None)?;
+                        Ok(wrap_udf_arg(token, param_type_at(&param_types, i), string_intern))
+                    })
+                    .collect::<Result<_, CodegenError>>()?;
                 Ok(if fc.is_negated() {
                     quote! { !udf::#fn_name(#( #args ),*) }
                 } else {
@@ -491,11 +500,19 @@ impl CodeGen {
             .iter()
             .map(|fc| {
                 let fn_name = format_ident!("{}", fc.name());
+                let param_types = self.udf_param_types(fc.name());
+                if string_intern && param_types.iter().any(|t| *t == DataType::String) {
+                    self.features.mark_string_resolve();
+                }
                 let args: Vec<TokenStream> = fc
                     .args()
                     .iter()
-                    .map(|a| self.build_join_args_arithmetic_expr(a, string_intern))
-                    .collect::<Result<_, _>>()?;
+                    .enumerate()
+                    .map(|(i, a)| {
+                        let token = self.build_join_args_arithmetic_expr(a, string_intern)?;
+                        Ok(wrap_udf_arg(token, param_type_at(&param_types, i), string_intern))
+                    })
+                    .collect::<Result<_, CodegenError>>()?;
                 Ok(if fc.is_negated() {
                     quote! { !udf::#fn_name(#( #args ),*) }
                 } else {
@@ -521,13 +538,20 @@ impl CodeGen {
             .iter()
             .map(|fc| {
                 let fn_name = format_ident!("{}", fc.name());
+                let param_types = self.udf_param_types(fc.name());
+                if string_intern && param_types.iter().any(|t| *t == DataType::String) {
+                    self.features.mark_string_resolve();
+                }
                 let args: Vec<TokenStream> = fc
                     .args()
                     .iter()
-                    .map(|a| {
-                        self.build_row_args_arithmetic_expr(a, row_fields, string_intern, None)
+                    .enumerate()
+                    .map(|(i, a)| {
+                        let token = self
+                            .build_row_args_arithmetic_expr(a, row_fields, string_intern, None)?;
+                        Ok(wrap_udf_arg(token, param_type_at(&param_types, i), string_intern))
                     })
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<_, CodegenError>>()?;
                 Ok(if fc.is_negated() {
                     quote! { !udf::#fn_name(#( #args ),*) }
                 } else {
@@ -812,6 +836,13 @@ impl CodeGen {
     /// UDFs take ownership of their arguments. We clone each arg to avoid
     /// invalidating variables that may be used elsewhere in the same closure
     /// (e.g., in the output tuple or another predicate). Clone on Copy types is free.
+    ///
+    /// Under `--str-intern`, FlowLog string columns are passed around as
+    /// interned `Spur` handles, but user UDFs are written in plain Rust and
+    /// declare their string parameters/returns as `String`. We bridge the
+    /// boundary the same way `builtin_op_to_token` does for built-ins:
+    /// `Spur` args are wrapped with `resolve(...).to_string()`, and a
+    /// `String` return is re-interned with `intern(&...)`.
     fn fncall_to_token<F>(
         &mut self,
         name: &str,
@@ -823,15 +854,35 @@ impl CodeGen {
         F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
     {
         let fn_ident = format_ident!("{}", name);
+
+        let param_types = self.udf_param_types(name);
         let arg_tokens: Vec<TokenStream> = args
             .iter()
-            .map(|a| {
+            .enumerate()
+            .map(|(i, a)| {
                 let token = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
-                Ok(quote! { (#token).clone() })
+                Ok(wrap_udf_arg(token, param_type_at(&param_types, i), string_intern))
             })
             .collect::<Result<_, CodegenError>>()?;
+
+        let returns_string = self
+            .udf_return_type(name)
+            .is_some_and(|t| t == DataType::String);
+
+        if string_intern && param_types.iter().any(|t| *t == DataType::String) {
+            self.features.mark_string_resolve();
+        }
+        if string_intern && returns_string {
+            self.features.mark_string_intern();
+        }
+
         self.features.mark_udf();
-        Ok(quote! { udf::#fn_ident(#(#arg_tokens),*) })
+        let call = quote! { udf::#fn_ident(#(#arg_tokens),*) };
+        Ok(if string_intern && returns_string {
+            quote! { intern(&#call) }
+        } else {
+            call
+        })
     }
 
     /// Convert a factor to a token stream for numeric/general expressions.
@@ -1073,5 +1124,52 @@ impl CodeGen {
                 "non-Jn argument in join arithmetic builder",
             )),
         })
+    }
+}
+
+// ==================================================
+// UDF signature helpers (shared by predicate and expression UDF lowering)
+// ==================================================
+
+impl CodeGen {
+    /// Look up the declared parameter types of `.extern fn <name>(...)`.
+    /// Returns an empty Vec if the name doesn't match any extern decl —
+    /// this should be unreachable after the parser's UDF reclassification
+    /// pass, but we tolerate it to keep codegen total.
+    pub(super) fn udf_param_types(&self, name: &str) -> Vec<DataType> {
+        self.program
+            .udfs()
+            .iter()
+            .find(|f| f.name() == name)
+            .map(|f| f.params().iter().map(|p| *p.data_type()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Look up the declared return type of `.extern fn <name>(...) -> T`.
+    /// `None` if the name doesn't match (same caveat as above).
+    pub(super) fn udf_return_type(&self, name: &str) -> Option<DataType> {
+        self.program
+            .udfs()
+            .iter()
+            .find(|f| f.name() == name)
+            .map(|f| f.ret_type())
+    }
+}
+
+/// Param-type lookup with graceful out-of-bounds. Variadic-style mismatches
+/// shouldn't happen post-typecheck, but a panic here would be surprising.
+fn param_type_at(types: &[DataType], idx: usize) -> Option<DataType> {
+    types.get(idx).copied()
+}
+
+/// Wrap a UDF argument token so it matches the declared param type at the
+/// Rust call boundary. When interning is on and the param is `:string`, the
+/// arg expression yields a `Spur` and must be resolved + owned into a
+/// `String`. For every other case the existing `.clone()` is sufficient.
+fn wrap_udf_arg(token: TokenStream, param_type: Option<DataType>, string_intern: bool) -> TokenStream {
+    if string_intern && param_type == Some(DataType::String) {
+        quote! { resolve((#token).clone()).to_string() }
+    } else {
+        quote! { (#token).clone() }
     }
 }
