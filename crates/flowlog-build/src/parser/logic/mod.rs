@@ -40,3 +40,4 @@ pub(crate) use fn_call::FnCall;
 pub(crate) use head::{Head, HeadArg};
 pub(crate) use loop_block::{IterativeDirective, LoopBlock, LoopCondition, LoopConnective};
 pub(crate) use predicate::Predicate;
+pub(crate) use rule::{apply_plan_directive_to_rule, consume_plan_directive};

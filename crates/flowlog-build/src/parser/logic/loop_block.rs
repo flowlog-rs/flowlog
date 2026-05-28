@@ -627,9 +627,11 @@ impl Lexeme for LoopBlock {
 
         // Block body: interleaved `.iterative` directives and rules.
         let mut iterative_relations = Vec::new();
-        let mut rules = Vec::new();
+        let mut rules: Vec<FlowLogRule> = Vec::new();
+        let mut plan_target_start: Option<usize> = None;
         for item in inner {
-            match item.as_rule() {
+            let item_rule = item.as_rule();
+            match item_rule {
                 Rule::iterative_directive => {
                     let directive_span = span_of(&item, file);
                     let name = item
@@ -646,13 +648,26 @@ impl Lexeme for LoopBlock {
                     });
                 }
                 Rule::rule => {
+                    let start = rules.len();
                     rules.extend(FlowLogRule::expand_from_parsed_rule(item, file)?);
+                    plan_target_start = Some(start);
+                }
+                Rule::plan_directive => {
+                    crate::parser::logic::consume_plan_directive(
+                        item,
+                        file,
+                        &mut rules,
+                        &mut plan_target_start,
+                    )?;
                 }
                 r => {
                     return Err(grammar_bug(format!(
                         "unexpected rule in loop/fixpoint block: {r:?}"
                     )));
                 }
+            }
+            if !matches!(item_rule, Rule::rule | Rule::plan_directive) {
+                plan_target_start = None;
             }
         }
 
