@@ -57,7 +57,7 @@ StartsWithE(id, name) :- Person(id, name, _, _), starts_with(name, "e") = 1.
 
 // cat concatenation with string-returning UDF (display context, skip intern)
 .decl Greeting(id: int32, msg: string)
-Greeting(id, "Hello, " cat upper(name) cat "!") :- Person(id, name, _, _).
+Greeting(id, cat("Hello, ", cat(upper(name), "!"))) :- Person(id, name, _, _).
 .output Greeting
 
 // 3 string params with string constants (tests resolve on both var and const args)

@@ -23,7 +23,6 @@ pub enum ArithmeticOperator {
     Multiply, // *
     Divide,   // /
     Modulo,   // %
-    Cat,      // string concatenation
 }
 
 impl fmt::Display for ArithmeticOperator {
@@ -34,7 +33,6 @@ impl fmt::Display for ArithmeticOperator {
             Self::Multiply => "*",
             Self::Divide => "/",
             Self::Modulo => "%",
-            Self::Cat => "cat",
         };
         write!(f, "{sym}")
     }
@@ -53,7 +51,6 @@ impl Lexeme for ArithmeticOperator {
             Rule::times => Self::Multiply,
             Rule::divide => Self::Divide,
             Rule::modulo => Self::Modulo,
-            Rule::cat => Self::Cat,
             other => {
                 return Err(grammar_bug(format!(
                     "unknown arithmetic operator: {other:?}"

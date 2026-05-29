@@ -690,19 +690,17 @@ fn bare_const(a: &Arithmetic) -> Option<&ConstType> {
     }
 }
 
-/// Numeric ops (`+`, `-`, `*`, `/`, `%`) require numeric factors;
-/// `cat` requires strings; `Bool` has no arithmetic.
+/// Numeric ops (`+`, `-`, `*`, `/`, `%`) require numeric factors.
+/// String / bool factors can't appear in arithmetic.
 fn check_arith_op(
     kind: LitKind,
     op: &ArithmeticOperator,
     span: Span,
 ) -> Result<(), TypeCheckError> {
-    let is_cat = matches!(op, ArithmeticOperator::Cat);
-    let allowed = match kind {
-        LitKind::Concrete(DataType::Bool) => false,
-        LitKind::Concrete(DataType::String) => is_cat,
-        _ => !is_cat,
-    };
+    let allowed = !matches!(
+        kind,
+        LitKind::Concrete(DataType::Bool) | LitKind::Concrete(DataType::String)
+    );
     if allowed {
         Ok(())
     } else {
@@ -969,11 +967,12 @@ mod tests {
         assert_eq!(merge_lit(Concrete(Bool), IntLit), None);
     }
 
-    /// `check_arith_op` controls which types can appear around which operator.
-    /// Integration covers Bool rejection; the `cat` operator corners
-    /// (`String cat String` accept, numeric `cat` reject, string `+` reject)
-    /// have no fixture. A regression in any row would silently flip
-    /// acceptance for real programs.
+    /// `check_arith_op` rejects every non-numeric type around an
+    /// arithmetic op. String concatenation lives in the `cat(a, b)`
+    /// built-in (not exercised here — built-ins go through a separate
+    /// signature-check path), so a string factor in an arithmetic
+    /// expression is always wrong. A regression in any row would
+    /// silently flip acceptance for real programs.
     #[test]
     fn check_arith_op_table() {
         use ArithmeticOperator::*;
@@ -986,18 +985,12 @@ mod tests {
         assert!(check_arith_op(Concrete(Int32), &Plus, span).is_ok());
         assert!(check_arith_op(Concrete(Float64), &Multiply, span).is_ok());
 
-        // Positive: `cat` on strings.
-        assert!(check_arith_op(Concrete(String), &Cat, span).is_ok());
-
-        // Negative: `cat` on numeric → error.
-        assert!(check_arith_op(Concrete(Int32), &Cat, span).is_err());
-
         // Negative: numeric op on strings → error.
         assert!(check_arith_op(Concrete(String), &Plus, span).is_err());
 
-        // Negative: Bool rejects everything (numeric ops AND cat).
+        // Negative: Bool rejects every arithmetic op.
         assert!(check_arith_op(Concrete(Bool), &Plus, span).is_err());
-        assert!(check_arith_op(Concrete(Bool), &Cat, span).is_err());
+        assert!(check_arith_op(Concrete(Bool), &Multiply, span).is_err());
     }
 
     /// `report_ty` on polymorphic literals returns the default width used
