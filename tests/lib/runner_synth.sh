@@ -94,6 +94,30 @@ parse_output_relations() {
         | sort -u
 }
 
+# Map a lowered output-relation name (as produced by `parse_output_relations`,
+# e.g. `reach`, `a·p`) back to its on-disk output filename in the new
+# Soufflé-compat shape: the case-preserved `.output`/`.printsize` token with
+# literal dots, plus a `.csv` extension (e.g. `Reach.csv`, `a.P.csv`). Mirrors
+# the compiler's `<RawName>.csv` convention so lib-mode output matches the
+# `expected/` files. Falls back to `<lower>.csv` if no directive is found.
+output_filename_for() {
+    local dl_file="$1" want_lower="$2"
+    local f raw rawlower
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        while IFS= read -r raw; do
+            [[ -n "$raw" ]] || continue
+            # Lowercase + dot→· to match parse_output_relations' awk form.
+            rawlower="${raw,,}"; rawlower="${rawlower//./·}"
+            if [[ "$rawlower" == "$want_lower" ]]; then
+                printf '%s.csv' "$raw"
+                return 0
+            fi
+        done < <(grep -oE '^[[:space:]]*\.(output|printsize)[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' "$f" 2>/dev/null | awk '{print $2}')
+    done < <(all_dl_files "$dl_file")
+    printf '%s.csv' "$want_lower"
+}
+
 # Lookup a `.decl <Name>(field1: type1, field2: type2, ...)` declaration
 # across the .dl file and any sibling included files. Echoes a
 # space-separated list of field names. Returns 1 if not found.
@@ -252,9 +276,27 @@ write_build_rs() {
         include_decl=$'    let include_dirs: Vec<std::path::PathBuf> = vec![\n'"${include_lines}"$'    ];\n'
     fi
 
+    # `cargo:rerun-if-changed` for every build-time input. Without these,
+    # Cargo's default "rerun if any package file changed" heuristic is
+    # unreliable across the rapid program.dl rewrites this runner does
+    # (each fixture reuses the same crate dir), so the build script can skip
+    # regenerating program.rs and the test silently runs against a stale
+    # program (e.g. the warm-up crate's TC). Listing the inputs explicitly
+    # pins the rebuild to the .dl / udf / include files.
+    local rerun_lines
+    rerun_lines=$'    println!("cargo:rerun-if-changed=program.dl");\n'
+    rerun_lines+=$'    println!("cargo:rerun-if-changed=build.rs");\n'
+    (( has_udf )) && rerun_lines+=$'    println!("cargo:rerun-if-changed=udf.rs");\n'
+    if [[ -n "$test_dir" && -f "$test_dir/include_dirs" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -z "$line" ]] && continue
+            rerun_lines+="    println!(\"cargo:rerun-if-changed=${line}\");"$'\n'
+        done < "$test_dir/include_dirs"
+    fi
+
     cat > "${LIB_RUNNER_DIR}/build.rs" <<EOF
 fn main() {
-${include_decl}    let result = flowlog_build::Builder::default()
+${rerun_lines}${include_decl}    let result = flowlog_build::Builder::default()
 ${knob_setters}${udf_setter}${builder_tail};
     if let Err(err) = result {
         eprintln!("{err}");
@@ -432,14 +474,16 @@ write_main_rs() {
     done < <(parse_input_relations "$dl_file")
 
     # Output writers — one block per .output/.printsize relation. File name
-    # is the lowercase relation name (matches binary-mode's convention that
-    # compare_expected_outputs / verify_output both use).
+    # is the case-preserved `<RawName>.csv` (via output_filename_for), matching
+    # the compiler's Soufflé-compat convention that compare_expected_outputs
+    # diffs against.
     local writer_blocks=""
     local lower
     while IFS= read -r lower; do
         [[ -n "$lower" ]] || continue
-        local block
-        block=$(gen_writer_block "$dl_file" "$lower" "$lower")
+        local block fname
+        fname=$(output_filename_for "$dl_file" "$lower")
+        block=$(gen_writer_block "$dl_file" "$lower" "$fname")
         writer_blocks+="${block}"$'\n'
     done < <(parse_output_relations "$dl_file")
 
@@ -481,7 +525,7 @@ EOF
 # through typed insert/remove/set/unset calls. Since the library returns
 # full snapshots rather than per-epoch deltas, the synthesized main.rs
 # keeps a host-side mirror of every output relation and diffs it against
-# each new snapshot to reproduce the binary's `<cols>,<+1|-1>` line format.
+# each new snapshot to reproduce the binary's `<cols>\t<+1|-1>` line format.
 
 # Rust parse expression for one CSV column at index `idx` of type `rust_ty`.
 _inc_col_parse() {
@@ -516,14 +560,14 @@ _inc_tuple_ty() {
 }
 
 # Format string + accessor list for a tuple with `arity` fields. Used by
-# the delta-emission block to produce `1,2,+1`-style output lines.
+# the delta-emission block to produce `1\t2\t+1`-style output lines.
 # Echoes one line: `<fmt>|<accessors>`.
 _inc_fmt_and_accessors() {
     local arity="$1"
     local fmt="" accessors=""
     local i
     for ((i=0; i<arity; i++)); do
-        (( i > 0 )) && { fmt+=","; accessors+=", "; }
+        (( i > 0 )) && { fmt+="\t"; accessors+=", "; }
         fmt+="{}"
         accessors+="t.${i}"
     done
@@ -658,8 +702,8 @@ _inc_prev_decl() {
 #
 # Non-nullary: fold this commit's `Vec<(tuple, i32)>` into per-tuple
 # diffs, then for each tuple compare prev count vs new count to detect
-# set-membership transitions. Emit `<cols>,+1` for 0→positive and
-# `<cols>,-1` for positive→0; suppress count-only changes that don't
+# set-membership transitions. Emit `<cols>\t+1` for 0→positive and
+# `<cols>\t-1` for positive→0; suppress count-only changes that don't
 # cross zero. Sorted for deterministic output.
 #
 # Nullary: same logic over a single running count — write "True"
@@ -667,6 +711,12 @@ _inc_prev_decl() {
 _inc_delta_block() {
     local dl_file="$1" rel="$2"
     local fields arity=0
+    # Per-epoch delta filename base: `<RawName>` (case-preserved), so the
+    # written path is `<RawName>_t<N>.csv` — `_t<N>` injected before the
+    # extension, matching the compiler's incremental output convention.
+    local out_base
+    out_base=$(output_filename_for "$dl_file" "$rel")
+    out_base="${out_base%.csv}"
     fields=$(parse_decl_fields "$dl_file" "$rel") || return 1
     if [[ -z "$fields" ]]; then
         cat <<EOF
@@ -675,7 +725,7 @@ _inc_delta_block() {
                     let new_count = prev_count_${rel} + diff;
                     let was_true = prev_count_${rel} > 0;
                     let is_true = new_count > 0;
-                    let path = format!("output/${rel}_t{}", commit_num);
+                    let path = format!("output/${out_base}_t{}.csv", commit_num);
                     let mut f = std::fs::File::create(&path).expect("create");
                     if was_true != is_true {
                         writeln!(f, "True").unwrap();
@@ -705,9 +755,9 @@ EOF
                         let was_in = prev_count > 0;
                         let is_in = new_count > 0;
                         if !was_in && is_in {
-                            lines.push(format!("${fmt},+1", ${accessors}));
+                            lines.push(format!("${fmt}\t+1", ${accessors}));
                         } else if was_in && !is_in {
-                            lines.push(format!("${fmt},-1", ${accessors}));
+                            lines.push(format!("${fmt}\t-1", ${accessors}));
                         }
                         if new_count == 0 {
                             prev_counts_${rel}.remove(&t);
@@ -716,7 +766,7 @@ EOF
                         }
                     }
                     lines.sort();
-                    let path = format!("output/${rel}_t{}", commit_num);
+                    let path = format!("output/${out_base}_t{}.csv", commit_num);
                     let mut f = std::fs::File::create(&path).expect("create");
                     for line in &lines {
                         writeln!(f, "{}", line).unwrap();

@@ -338,12 +338,7 @@ main() {
         echo -e "  ${YELLOW}Warming runner crate (release)...${NC}"
         echo ""
         warm_up_runner_crate
-        local entry category test_dir
-        for entry in "${tasks[@]}"; do
-            category="${entry%%|*}"
-            test_dir="${entry#*|}"
-            run_test "$test_dir" "$category"
-        done
+        run_tasks_sequential "${tasks[@]}"
     fi
 
     clear_progress

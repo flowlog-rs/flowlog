@@ -304,12 +304,7 @@ main() {
     if (( jobs > 1 )); then
         run_tasks_parallel "$jobs" "${tasks[@]}"
     else
-        local entry category test_dir
-        for entry in "${tasks[@]}"; do
-            category="${entry%%|*}"
-            test_dir="${entry#*|}"
-            run_test "$test_dir" "$category"
-        done
+        run_tasks_sequential "${tasks[@]}"
     fi
 
     clear_progress

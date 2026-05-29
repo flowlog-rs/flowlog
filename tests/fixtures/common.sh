@@ -75,6 +75,39 @@ clear_progress() {
     fi
 }
 
+# Print one permanent per-test result line in the same `[n/total] ✓/✗ name`
+# format the parallel scheduler emits, so sequential runs surface each test's
+# pass/fail as it completes (not just the final summary). `ok` is 1 for pass.
+print_test_result_line() {
+    local n="$1" total_count="$2" ok="$3" full_name="$4"
+    local mark color
+    if (( ok )); then
+        mark="✓"; color="${GREEN}"
+    else
+        mark="✗"; color="${RED}"
+    fi
+    printf "  ${DIM}[%d/%d]${NC} ${color}%s${NC} %s\n" \
+        "$n" "$total_count" "$mark" "$full_name"
+}
+
+# Run every "<category>|<test_dir>" task sequentially via the caller's
+# `run_test`, printing a per-test result line as each finishes. `run_test`
+# bumps the shared `passed`/`failed`/`current` counters, so a pass is just
+# `passed` advancing across the call.
+run_tasks_sequential() {
+    local entry category test_dir before_pass
+    for entry in "$@"; do
+        category="${entry%%|*}"
+        test_dir="${entry#*|}"
+        before_pass=$passed
+        run_test "$test_dir" "$category"
+        clear_progress
+        print_test_result_line "$current" "$total" \
+            "$(( passed > before_pass ))" \
+            "${category}/$(basename "$test_dir")"
+    done
+}
+
 record_failure() {
     local test_name="$1"
     local reason="$2"
@@ -245,14 +278,7 @@ write_test_result_and_tally() {
     : >"${PARALLEL_TALLY_DIR}/${BASHPID}.${RANDOM}"
     local n
     n=$(find "$PARALLEL_TALLY_DIR" -maxdepth 1 -type f | wc -l)
-    local mark color
-    if (( failed > 0 )); then
-        mark="✗"; color="${RED}"
-    else
-        mark="✓"; color="${GREEN}"
-    fi
-    printf "  ${DIM}[%d/%d]${NC} ${color}%s${NC} %s\n" \
-        "$n" "$total_count" "$mark" "$full_name"
+    print_test_result_line "$n" "$total_count" "$(( failed == 0 ))" "$full_name"
 }
 
 # Parent-side: walk result files in spawn order (filenames sort lexically) and
