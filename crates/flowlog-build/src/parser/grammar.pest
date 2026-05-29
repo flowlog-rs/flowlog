@@ -128,10 +128,13 @@ declaration = {
 // Lets a subcomponent's `.override` replace this relation's rules.
 overridable_kw = @{ "overridable" ~ !(ASCII_ALPHANUMERIC | "_") }
 
-// Input directive for EDB relations - separate from declaration
+// Input directive for EDB relations - separate from declaration.
+// Parens are optional; an empty/missing param list means defaults
+// (`IO="file"`, `filename="<RelationName>.facts"`, `delimiter="\t"`).
 // Example: .input Relation(IO="file", filename="data.csv", delimiter=",")
+// Example: .input Edge                                  // all defaults
 input_directive = {
-    ".input" ~ relation_ref ~ "(" ~ io_params? ~ ")"
+    ".input" ~ relation_ref ~ ("(" ~ io_params? ~ ")")?
 }
 
 // Output directive for relations
@@ -206,14 +209,14 @@ factor = { as_cast | builtin_fn_call | fn_call_expr | constant | variable }
 as_cast = { as_kw ~ "(" ~ factor ~ "," ~ type_ref ~ ")" }
 as_kw = _{ "as" ~ !(ASCII_ALPHANUMERIC | "_") }
 
-// Arithmetic operators
-arithmetic_op = { 
+// Arithmetic operators. String concatenation lives in the `cat(a, b)`
+// built-in — there is no infix `cat` operator.
+arithmetic_op = {
     plus |    // +
     minus |   // -
     times |   // *
     divide |  // /
-    modulo |  // %
-    cat       // string concatenation
+    modulo    // %
 }
 
 // Individual arithmetic operators
@@ -222,7 +225,6 @@ minus = { "-" }
 times = { "*" }
 divide = { "/" }
 modulo = { "%" }
-cat = { "cat" }
 
 // =============================================================================
 // BUILT-IN FUNCTIONS
@@ -234,8 +236,10 @@ builtin_fn_call = {
     builtin_op ~ "(" ~ (arithmetic_expr ~ ("," ~ arithmetic_expr)*)? ~ ")"
 }
 
+// `cat_op` is the Soufflé function form `cat(a, b)`. There is no
+// infix `cat`; chains nest as `cat(a, cat(b, c))`.
 builtin_op = {
-    strlen_op | substr_op | ord_op | contains_op | to_string_op | to_number_op
+    strlen_op | substr_op | ord_op | contains_op | to_string_op | to_number_op | cat_op
 }
 
 strlen_op    = @{ "strlen"    ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -244,6 +248,7 @@ ord_op       = @{ "ord"       ~ !(ASCII_ALPHANUMERIC | "_") }
 contains_op  = @{ "contains"  ~ !(ASCII_ALPHANUMERIC | "_") }
 to_string_op = @{ "to_string" ~ !(ASCII_ALPHANUMERIC | "_") }
 to_number_op = @{ "to_number" ~ !(ASCII_ALPHANUMERIC | "_") }
+cat_op       = @{ "cat"       ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // =============================================================================
 // COMPARISON EXPRESSIONS  
@@ -338,11 +343,21 @@ rule = { rule_heads ~ ":-" ~ rule_bodies ~ "." }
 // positive atoms. Applied at parse time by permuting the rule's RHS, so
 // downstream the source order is the plan order.
 //
-// Example:
+// An optional `<plan_version> :` prefix is accepted for Soufflé
+// compatibility. Soufflé uses the version to disambiguate clauses in a
+// multi-headed/multi-bodied rule; FlowLog already expands those clauses
+// during parsing, so the prefix is parsed and discarded — the
+// permutation is then applied identically to the native form.
+//
+// Examples:
 //   A(x,z) :- B(x,y), C(y,z), D(z,w).
-//   .plan (3, 1, 2)
-plan_directive = { ".plan" ~ "(" ~ plan_index ~ ("," ~ plan_index)* ~ ")" }
+//   .plan (3, 1, 2)         // native form
+//   .plan 1:(3, 1, 2)       // Soufflé form, same effect
+plan_directive = {
+    ".plan" ~ (plan_version ~ ":")? ~ "(" ~ plan_index ~ ("," ~ plan_index)* ~ ")"
+}
 plan_index = @{ ASCII_DIGIT+ }
+plan_version = @{ ASCII_DIGIT+ }
 
 // One or more commas-separated heads
 rule_heads = { head ~ ("," ~ head)* }

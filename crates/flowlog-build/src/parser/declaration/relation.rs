@@ -17,7 +17,10 @@ pub struct Relation {
     /// Canonical (lowercased) relation name.
     name: String,
 
-    /// Original surface-syntax name.
+    /// Original surface-syntax name (case-preserved). For relations
+    /// inlined out of a `.comp`, this keeps the dotted form (`c.R`)
+    /// even after [`Self::set_name`] rewrites `name` to the Rust-safe
+    /// `·` form — used by I/O sinks for Soufflé-style filenames.
     raw_name: String,
 
     /// Relation fingerprint.
@@ -219,22 +222,29 @@ impl Relation {
         &self.name
     }
 
-    /// Original surface-syntax name.
+    /// Original surface-syntax name (case-preserved). Used by the
+    /// compiler-side I/O sink to produce Soufflé-compatible filenames
+    /// like `Edge.facts` / `Path.csv` rather than the lowercased
+    /// canonical form returned by [`Self::name`].
     #[must_use]
     #[inline]
-    pub(crate) fn raw_name(&self) -> &str {
+    pub fn raw_name(&self) -> &str {
         &self.raw_name
     }
 
-    /// Rename in-place. Refreshes the cached fingerprint and treats
-    /// the new name as both the canonical lower-case form and the
-    /// raw surface form. Used by the post-inliner normalization pass
-    /// to turn dotted instance names (`c.holds`) into Rust-ident-safe
-    /// underscored names (`c_holds`).
+    /// Rename in-place. Refreshes the cached fingerprint and the
+    /// canonical lower-case `name`, but **leaves `raw_name` alone** so
+    /// the original surface form is preserved for I/O sinks and
+    /// diagnostics.
+    ///
+    /// Used by the post-inliner pass that rewrites dotted instance
+    /// names (`c.holds`) to the Rust-ident-safe middle-dot form
+    /// (`c·holds`) — the dataflow refers to relations by `name`, but
+    /// file paths still need the original `c.holds` (Soufflé writes
+    /// `c.holds.csv`).
     pub(crate) fn set_name(&mut self, name: String) {
         self.name = name.to_lowercase();
         self.fingerprint = compute_fp(&self.name);
-        self.raw_name = name;
     }
 
     /// Relation fingerprint.
@@ -259,22 +269,24 @@ impl Relation {
     }
 
     /// Get the input filename.
-    /// Defaults to `<relation_name>.csv` when no filename parameter is set.
+    /// Defaults to `<RelationName>.facts` (case-preserved, matching
+    /// Soufflé) when no filename parameter is set.
     #[must_use]
     #[inline]
     pub fn input_file_name(&self) -> String {
         self.input_param("filename")
-            .map_or_else(|| format!("{}.csv", self.name()), str::to_owned)
+            .map_or_else(|| format!("{}.facts", self.raw_name()), str::to_owned)
     }
 
     /// Get the input delimiter for a file-backed relation.
     ///
+    /// Default is TAB (`\t`), matching Soufflé.
     /// Interprets `\t`, `\n`, `\r`, `\\`, and `\0` as the corresponding byte;
     /// other `\x` sequences pass through unchanged (matching Soufflé).
     #[must_use]
     #[inline]
     pub fn input_delimiter(&self) -> String {
-        unescape_delimiter(self.input_param("delimiter").unwrap_or(","))
+        unescape_delimiter(self.input_param("delimiter").unwrap_or("\t"))
     }
 
     /// Whether to skip the first (header) line when reading this file-backed relation.
@@ -307,12 +319,21 @@ impl Relation {
     }
 
     /// Check whether this relation is file-backed (`IO="file"`).
-    /// Returns false for `IO="command"` (interactive-only).
+    /// Returns false for `IO="command"` (interactive-only) and for
+    /// relations that have no `.input` directive at all.
+    ///
+    /// Within an `.input` directive, absent `IO=` defaults to `"file"`
+    /// (Soufflé semantics) — so `.input Edge` and
+    /// `.input Edge(filename="…")` are both file-backed.
     #[must_use]
     #[inline]
     pub fn is_file_backed(&self) -> bool {
-        self.input_param("IO")
-            .is_some_and(|io| io.eq_ignore_ascii_case("file"))
+        self.input_params
+            .as_ref()
+            .is_some_and(|params| match params.get("IO") {
+                None => true,
+                Some(io) => io.eq_ignore_ascii_case("file"),
+            })
     }
 
     /// Check if this is an output/printsize relation.
@@ -433,14 +454,24 @@ impl Relation {
         Ok(())
     }
 
-    /// Get the output delimiter. Defaults to `","`.
+    /// Get the output delimiter. Defaults to TAB (`\t`), matching Soufflé.
     ///
     /// Interprets `\t`, `\n`, `\r`, `\\`, and `\0` as the corresponding byte;
     /// other `\x` sequences pass through unchanged (matching Soufflé).
     #[must_use]
     #[inline]
     pub fn output_delimiter(&self) -> String {
-        unescape_delimiter(self.output_param("delimiter").unwrap_or(","))
+        unescape_delimiter(self.output_param("delimiter").unwrap_or("\t"))
+    }
+
+    /// Get the output filename. Honors `filename=` from `.output`
+    /// params; defaults to `<RawName>.csv` (case-preserved, matching
+    /// Soufflé).
+    #[must_use]
+    #[inline]
+    pub fn output_file_name(&self) -> String {
+        self.output_param("filename")
+            .map_or_else(|| format!("{}.csv", self.raw_name()), str::to_owned)
     }
 
     /// Get the output row limit, if specified. Validated at parse time by
@@ -617,10 +648,81 @@ mod tests {
     }
 
     #[test]
-    fn delimiter_defaults_to_comma() {
+    fn input_delimiter_defaults_to_tab() {
         let rel = Relation::new("r", attrs());
-        assert_eq!(rel.input_delimiter(), ",");
-        assert_eq!(rel.output_delimiter(), ",");
+        assert_eq!(rel.input_delimiter(), "\t");
+    }
+
+    #[test]
+    fn output_delimiter_defaults_to_tab() {
+        let rel = Relation::new("r", attrs());
+        assert_eq!(rel.output_delimiter(), "\t");
+    }
+
+    #[test]
+    fn input_file_name_defaults_to_raw_name_dot_facts() {
+        let rel = Relation::new("Edge", attrs());
+        assert_eq!(rel.input_file_name(), "Edge.facts");
+    }
+
+    #[test]
+    fn is_file_backed_defaults_true_when_io_absent() {
+        let mut rel = Relation::new("r", attrs());
+        rel.set_input_params(HashMap::new());
+        assert!(rel.is_file_backed());
+    }
+
+    #[test]
+    fn is_file_backed_false_for_explicit_non_file_io() {
+        let mut rel = Relation::new("r", attrs());
+        let mut params = HashMap::new();
+        params.insert("IO".to_string(), "command".to_string());
+        rel.set_input_params(params);
+        assert!(!rel.is_file_backed());
+    }
+
+    /// A relation with NO `.input` directive at all must NOT be
+    /// file-backed — only the presence of the directive (regardless
+    /// of `IO=` value) makes it so. Pins the `input_params == None`
+    /// arm against a regression that would mistakenly try to open
+    /// `<RawName>.facts` for purely-IDB relations.
+    #[test]
+    fn is_file_backed_false_when_no_input_directive() {
+        let rel = Relation::new("r", attrs());
+        assert!(!rel.is_file_backed());
+    }
+
+    /// `set_name` updates `name` (canonical, Rust-ident-safe) but
+    /// MUST NOT touch `raw_name` — the inliner relies on the original
+    /// surface form (incl. literal dots like `c.R`) surviving for
+    /// I/O sinks. A regression that re-introduces `self.raw_name = name`
+    /// would silently rename Soufflé output files from `c.R.csv` to
+    /// `c·R.csv`.
+    #[test]
+    fn set_name_preserves_raw_name() {
+        let mut rel = Relation::new("c.R", attrs());
+        assert_eq!(rel.raw_name(), "c.R");
+        rel.set_name("c\u{00B7}R".to_string());
+        assert_eq!(rel.name(), "c\u{00B7}r");
+        assert_eq!(rel.raw_name(), "c.R");
+    }
+
+    /// `.output Foo(filename="x.tsv")` overrides the default
+    /// `<RawName>.csv` shape. Pins the param plumbing — a regression
+    /// would silently drop the user's filename and write to `Foo.csv`.
+    #[test]
+    fn output_file_name_honors_filename_param() {
+        let mut rel = Relation::new("Foo", attrs());
+        let mut params = HashMap::new();
+        params.insert("filename".to_string(), "x.tsv".to_string());
+        rel.set_output_params(params).unwrap();
+        assert_eq!(rel.output_file_name(), "x.tsv");
+    }
+
+    #[test]
+    fn output_file_name_defaults_to_raw_name_dot_csv() {
+        let rel = Relation::new("Path", attrs());
+        assert_eq!(rel.output_file_name(), "Path.csv");
     }
 
     #[test]

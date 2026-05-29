@@ -220,7 +220,7 @@ Method_ReturnType(method, returnType) :-
   _Method(method, simplename, params, declaringType, returnType, jvmDescriptor, arity).
 
 // Method_Descriptor computed via cat
-Method_Descriptor(method, returnType cat "(" cat params cat ")") :-
+Method_Descriptor(method, cat(returnType, cat("(", cat(params, ")")))) :-
   Method_ReturnType(method, returnType),
   Method_ParamTypes(method, params).
 

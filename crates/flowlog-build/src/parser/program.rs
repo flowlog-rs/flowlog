@@ -70,6 +70,23 @@ pub struct Program {
     /// of `(span, tuple)` — the head span of the source `rel(c1, ...).`
     /// fact plus its constant columns.
     facts: HashMap<String, Vec<(Span, Vec<ConstType>)>>,
+    /// Filenames of relations marked `.output` whose `.decl` was
+    /// pruned out of `relations` (and out of the dataflow) because
+    /// they had no rules and no facts.
+    ///
+    /// Each entry is the relation's
+    /// [`Relation::output_file_name`] result — usually
+    /// `<RawName>.csv`, or the user-supplied `filename=` parameter.
+    /// They produce no tuples at runtime, but Soufflé's contract is
+    /// that every `.output R` materialises a file — empty for an
+    /// empty relation — so downstream readers that iterate declared
+    /// outputs don't fail on a missing path. The compiler's I/O sink
+    /// uses this list to `File::create` a zero-byte file per entry,
+    /// with no buffer / inspector / drain attached.
+    ///
+    /// Distinct from [`Self::output_idbs`], which lists relations
+    /// that ARE in the dataflow and emit through the normal drain.
+    empty_output_files: Vec<String>,
     /// Built during parsing, consulted by the typechecker for subtype
     /// rules, ignored downstream (subtypes are compile-time-only).
     type_registry: TypeRegistry,
@@ -300,6 +317,17 @@ impl Program {
     #[inline]
     pub fn output_idbs(&self) -> Vec<&Relation> {
         self.relations.iter().filter(|rel| rel.output()).collect()
+    }
+
+    /// Filenames (relative to `-D <outdir>`) of `.output`-marked
+    /// relations whose `.decl` was pruned out of the dataflow (no
+    /// rules, no facts). The compiler touches an empty file per
+    /// entry. See [`Self::empty_output_files`] field doc for the
+    /// full rationale.
+    #[must_use]
+    #[inline]
+    pub fn empty_output_files(&self) -> &[String] {
+        &self.empty_output_files
     }
 
     /// IDB relations annotated with `.printsize`, in declaration order.
@@ -843,6 +871,7 @@ impl Program {
             output_directives,
             printsize_directives,
         )?;
+        Self::validate_output_printsize_exclusion(&relations)?;
         Self::reclassify_udf_predicates(&mut segments, &udfs)?;
         Self::validate_loop_conditions(&segments, &relations)?;
 
@@ -981,6 +1010,24 @@ impl Program {
                         name: d.relation_name().to_string(),
                     });
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Reject `.output R` + `.printsize R` on the same relation. Both
+    /// target `<RawName>.csv`, so the second would silently clobber
+    /// the first. Runs AFTER both the inliner and [`Self::apply_directives`]
+    /// have populated `relations`, so it catches the conflict whether
+    /// the directives came from the top level, from inside a `.comp`,
+    /// or one from each.
+    fn validate_output_printsize_exclusion(relations: &[Relation]) -> Result<(), ParseError> {
+        for rel in relations {
+            if rel.output() && rel.printsize() {
+                return Err(ParseError::OutputAndPrintsizeConflict {
+                    span: rel.span(),
+                    name: rel.raw_name().to_string(),
+                });
             }
         }
         Ok(())
@@ -1344,6 +1391,19 @@ impl Program {
             warn!("Pruned dead components:\n{}", parts.join("\n"));
         }
 
+        // Capture `.output`-marked relations that prune is about to drop
+        // (declared but never derived). They stay out of the dataflow,
+        // but the compiler still writes an empty file for each —
+        // Soufflé's "every .output produces a file" contract. Filenames
+        // honor any user-supplied `filename=` param, falling back to
+        // `<RawName>.csv`.
+        self.empty_output_files = self
+            .relations
+            .iter()
+            .filter(|d| d.output() && !needed_preds.contains(d.name()))
+            .map(Relation::output_file_name)
+            .collect();
+
         self.relations.retain(|d| needed_preds.contains(d.name()));
 
         // Filter dead rules from all segments; drop any segment that becomes empty.
@@ -1617,6 +1677,26 @@ mod tests {
         assert_eq!(inline_facts, vec!["both", "fact_only"]);
     }
 
+    /// `.input Edge` with no parens / no params is accepted and
+    /// resolves to Soufflé defaults: file-backed, `Edge.facts`, TAB.
+    #[test]
+    fn bare_input_directive_uses_souffle_defaults() {
+        let src = "
+            .decl Edge(a: symbol, b: symbol)
+            .input Edge
+        ";
+        let program = parse_program(src);
+        let edge = program
+            .relations()
+            .iter()
+            .find(|r| r.name() == "edge")
+            .expect("edge relation");
+        assert!(edge.has_input(), "bare .input attaches params");
+        assert!(edge.is_file_backed(), "absent IO= defaults to file");
+        assert_eq!(edge.input_file_name(), "Edge.facts");
+        assert_eq!(edge.input_delimiter(), "\t");
+    }
+
     #[test]
     fn multi_head_rule_expands() {
         let src = "
@@ -1852,6 +1932,173 @@ mod tests {
                 other => panic!("expected number in `{rel}`, got {other:?}"),
             })
             .collect()
+    }
+
+    /// `.output R` and `.printsize R` on the same relation conflict —
+    /// both target `R.csv`, the second would silently clobber the
+    /// first. Reject at parse time.
+    #[test]
+    fn output_and_printsize_on_same_relation_rejected() {
+        let err = parse_program_result(
+            "
+            .decl R(x: number)
+            R(1).
+            .output R
+            .printsize R
+            ",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ParseError::OutputAndPrintsizeConflict { ref name, .. } if name == "R"),
+            "expected OutputAndPrintsizeConflict, got {err:?}"
+        );
+    }
+
+    /// Order-independent: `.printsize R` before `.output R` is the
+    /// same conflict and must also be rejected.
+    #[test]
+    fn output_and_printsize_rejected_regardless_of_order() {
+        let err = parse_program_result(
+            "
+            .decl R(x: number)
+            R(1).
+            .printsize R
+            .output R
+            ",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ParseError::OutputAndPrintsizeConflict { .. }),
+            "expected OutputAndPrintsizeConflict, got {err:?}"
+        );
+    }
+
+    /// Comp-internal directives bypass `apply_directives` (the
+    /// inliner sets the flags directly), so the conflict check must
+    /// run AFTER both passes. This pins that — without the post-pass
+    /// validator the conflict would slip through and produce two
+    /// writers racing on the same `c.R.csv` file.
+    #[test]
+    fn output_and_printsize_inside_comp_rejected() {
+        let err = parse_program_result(
+            "
+            .comp C {
+              .decl Src(x: number)
+              .decl R(x: number)
+              Src(1).
+              R(x) :- Src(x).
+              .output R
+              .printsize R
+            }
+            .init c = C
+            ",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ParseError::OutputAndPrintsizeConflict { .. }),
+            "expected OutputAndPrintsizeConflict for comp-internal pair, got {err:?}"
+        );
+    }
+
+    /// `.output R` with no rules, no facts, and no body references
+    /// is recorded in [`Program::empty_output_files`] (the
+    /// compiler-side sink uses this to touch an empty file) and
+    /// pruned from `relations` (so codegen doesn't try to emit a
+    /// buffer for a non-existent dataflow node).
+    #[test]
+    fn empty_output_recorded_and_pruned_from_dataflow() {
+        let program = parse_program(
+            "
+            .decl Nothing(x: symbol)
+            .decl Src(x: symbol)
+            .decl Out(x: symbol)
+            Src(\"v\").
+            Out(x) :- Src(x).
+            .output Nothing
+            .output Out
+            ",
+        );
+        // `Nothing` is pruned from output_idbs (no rules, no facts,
+        // unreferenced by any body atom).
+        assert!(
+            program.output_idbs().iter().all(|r| r.name() != "nothing"),
+            "empty `.output` should be pruned from output_idbs, got: {:?}",
+            program
+                .output_idbs()
+                .iter()
+                .map(|r| r.name())
+                .collect::<Vec<_>>()
+        );
+        // …but its filename survives in the touch list.
+        assert_eq!(program.empty_output_files(), &["Nothing.csv"]);
+        // `Out` flows through the normal drain path.
+        assert!(program.output_idbs().iter().any(|r| r.name() == "out"));
+    }
+
+    /// `.output R(filename="custom.tsv")` overrides the default
+    /// `<RawName>.csv`. The override flows all the way to the
+    /// touch-file list when the relation is also pruned.
+    #[test]
+    fn empty_output_filename_param_honored() {
+        let program = parse_program(
+            "
+            .decl Nothing(x: symbol)
+            .output Nothing(filename=\"custom.tsv\")
+            // companion derived rel to keep the dataflow non-empty so codegen works
+            .decl Filled(x: symbol)
+            Filled(\"v\").
+            .decl Out(x: symbol)
+            Out(x) :- Filled(x).
+            .output Out
+            ",
+        );
+        assert_eq!(program.empty_output_files(), &["custom.tsv"]);
+    }
+
+    /// Infix `cat` is gone — `a cat b` MUST NOT parse as a string
+    /// concatenation. A future re-introduction would silently change
+    /// the grammar; this test pins that.
+    #[test]
+    fn infix_cat_no_longer_parses() {
+        let res = parse_program_result(
+            "
+            .decl A(x: symbol)
+            .decl B(x: symbol)
+            .decl C(x: symbol)
+            A(\"hi\").
+            B(\"there\").
+            C(x cat y) :- A(x), B(y).
+            ",
+        );
+        assert!(
+            res.is_err(),
+            "infix `cat` should be a parse error, but parsed: {res:?}"
+        );
+    }
+
+    /// Inliner normalizes dotted instance names (`c.R` → `c·R`) on
+    /// `name` for Rust ident safety, but leaves `raw_name` carrying
+    /// the original literal-dot form — that's what the I/O sinks use
+    /// for Soufflé-style filenames (`c.R.csv`, not `c·R.csv`).
+    #[test]
+    fn inlined_relation_raw_name_keeps_literal_dot() {
+        let src = "
+            .comp C {
+              .decl R(x: symbol)
+              .decl S(x: symbol)
+              R(x) :- S(x).
+              .output R
+            }
+            .init c = C
+        ";
+        let program = parse_program(src);
+        let r = program
+            .relations()
+            .iter()
+            .find(|r| r.name() == "c·r")
+            .expect("inlined c·r relation");
+        assert_eq!(r.name(), "c·r");
+        assert_eq!(r.raw_name(), "c.R");
     }
 
     /// Spec test 1: `.override Foo` drops parent's ground facts.
@@ -2099,6 +2346,26 @@ mod tests {
             .output h
             h(X) :- a(X), b(X), c(X).
             .plan (3, 1, 2)
+        ";
+        let program = parse_program(src);
+        let rule = program.rules()[0];
+        let names: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec!["c", "a", "b"]);
+    }
+
+    /// Soufflé's `.plan N:(…)` form is accepted as an alias: the
+    /// leading version index is stripped and the permutation is
+    /// applied just like the native form.
+    #[test]
+    fn plan_souffle_form_applies_permutation() {
+        let src = "
+            .decl a(x: number)
+            .decl b(x: number)
+            .decl c(x: number)
+            .decl h(x: number)
+            .output h
+            h(X) :- a(X), b(X), c(X).
+            .plan 1:(3, 1, 2)
         ";
         let program = parse_program(src);
         let rule = program.rules()[0];

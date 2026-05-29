@@ -19,16 +19,48 @@ use crate::{Compiler, CompilerError};
 
 impl Compiler {
     /// Per-IDB merge blocks spliced into `main()` after the barrier
-    /// (worker 0 only). The order follows `.output` then `.printsize`.
+    /// (worker 0 only). Order: empty-output touches (for `.output`
+    /// relations the dataflow pruner dropped), then derived `.output`
+    /// drains, then `.printsize` reports.
     pub(crate) fn gen_merge_blocks(&self) -> Result<Vec<TokenStream>, CompilerError> {
         let mut blocks = Vec::new();
+        if !self.config.output_to_stdout() {
+            for file_name in self.program.empty_output_files() {
+                blocks.push(self.gen_empty_output_touch(file_name)?);
+            }
+        }
         for idb in self.program.output_idbs() {
             blocks.push(self.gen_output_drain(idb)?);
         }
         for idb in self.program.printsize_idbs() {
-            blocks.push(gen_size_report(idb));
+            blocks.push(self.gen_size_report(idb)?);
         }
         Ok(blocks)
+    }
+
+    /// Resolve `-D <outdir>` or return the canonical "unset" error
+    /// using `context` to disambiguate. Centralised because every
+    /// file-emitting block needs the same lookup with a slightly
+    /// different message.
+    fn require_output_dir(&self, context: &'static str) -> Result<&str, CompilerError> {
+        self.config.output_dir().ok_or_else(|| {
+            CompilerError::internal(format!("binary mode {context} but `output_dir` is unset"))
+        })
+    }
+
+    /// Touch `<outdir>/<file_name>` as an empty file. Used for
+    /// `.output` relations the dataflow pruner dropped (no rules and
+    /// no facts) — Soufflé writes the file anyway so downstream
+    /// readers iterating declared outputs don't choke on a missing
+    /// path. `file_name` already encodes any user-supplied `filename=`
+    /// override; see [`flowlog_build::Program::empty_output_files`].
+    fn gen_empty_output_touch(&self, file_name: &str) -> Result<TokenStream, CompilerError> {
+        let base_dir = self.require_output_dir("touching empty `.output` file")?;
+        Ok(quote! {{
+            let out_path = format!("{}/{}", #base_dir, #file_name);
+            std::fs::File::create(&out_path)
+                .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e));
+        }})
     }
 
     /// Drain one `.output` relation's shared buffer through its sink.
@@ -43,13 +75,9 @@ impl Compiler {
                 gen_write_row_stderr(idb, string_intern),
             )
         } else {
-            let base_dir = self.config.output_dir().ok_or_else(|| {
-                CompilerError::internal(
-                    "binary mode writing IDB output to files but `output_dir` is unset",
-                )
-            })?;
+            let base_dir = self.require_output_dir("writing IDB output to files")?;
             (
-                gen_file_preamble(idb.name(), base_dir, is_incremental),
+                gen_file_preamble(&idb.output_file_name(), base_dir, is_incremental),
                 gen_write_row_file(idb, string_intern, is_incremental),
             )
         };
@@ -62,17 +90,36 @@ impl Compiler {
             string_intern,
         ))
     }
-}
 
-/// Read one `.printsize` cell and `eprintln!` the `(time, size)` pair.
-fn gen_size_report(idb: &Relation) -> TokenStream {
-    let cell = Ident::new(&format!("size_{}", idb.name()), Span::call_site());
-    let prefix = idb.name().to_string();
-    quote! {
-        {
-            let (t, size) = &*#cell.lock().unwrap();
-            eprintln!("[size][{}] t={:?} size={}", #prefix, t, size);
+    /// Read one `.printsize` cell and either write the count to a file
+    /// (`<outdir>/<RawName>.csv`, single line, Soufflé-shaped) or, when
+    /// `-D -` is set, `eprintln!` the `(time, size)` pair to stderr.
+    ///
+    /// Mutual exclusion with `.output R` on the same relation is
+    /// enforced at parse time, so we never race against an output
+    /// drain over the same path.
+    fn gen_size_report(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
+        let cell = Ident::new(&format!("size_{}", idb.name()), Span::call_site());
+        if self.config.output_to_stdout() {
+            let prefix = idb.name().to_string();
+            return Ok(quote! {{
+                let (t, size) = &*#cell.lock().unwrap();
+                eprintln!("[size][{}] t={:?} size={}", #prefix, t, size);
+            }});
         }
+
+        let base_dir = self.require_output_dir("writing `.printsize` to a file")?;
+        let file_name = idb.output_file_name();
+        Ok(quote! {{
+            use std::io::Write as _;
+            let (_, size) = *#cell.lock().unwrap();
+            let out_path = format!("{}/{}", #base_dir, #file_name);
+            let mut out = std::io::BufWriter::new(
+                std::fs::File::create(&out_path)
+                    .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
+            );
+            writeln!(out, "{}", size).expect("printsize write failed");
+        }})
     }
 }
 
@@ -81,13 +128,19 @@ fn gen_size_report(idb: &Relation) -> TokenStream {
 // The drain block's `write_row` closes over `out`.
 // =========================================================================
 
-fn gen_file_preamble(name: &str, base_dir: &str, is_incremental: bool) -> TokenStream {
-    // Incremental mode appends `_t{timestamp}` so each epoch writes its own
-    // file rather than overwriting the previous one.
+fn gen_file_preamble(file_name: &str, base_dir: &str, is_incremental: bool) -> TokenStream {
+    // `file_name` is the full filename (including any extension);
+    // by default `<RawName>.csv` per Soufflé, overridable via the
+    // `.output Foo(filename="…")` parameter. Incremental mode inserts
+    // the epoch immediately before the file extension (or at the end
+    // if no extension) so each epoch gets its own file.
     let out_path = if is_incremental {
-        quote! { let out_path = format!("{}/{}_t{}", #base_dir, #name, time_stamp); }
+        let (stem, ext) = split_file_extension(file_name);
+        quote! {
+            let out_path = format!("{}/{}_t{}{}", #base_dir, #stem, time_stamp, #ext);
+        }
     } else {
-        quote! { let out_path = format!("{}/{}", #base_dir, #name); }
+        quote! { let out_path = format!("{}/{}", #base_dir, #file_name); }
     };
     quote! {
         use std::io::Write as _;
@@ -96,6 +149,16 @@ fn gen_file_preamble(name: &str, base_dir: &str, is_incremental: bool) -> TokenS
             std::fs::File::create(&out_path)
                 .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
         );
+    }
+}
+
+/// Split `name.ext` into `("name", ".ext")`. No dot → `(name, "")`.
+/// Used by incremental-mode preambles to inject `_t<ts>` before the
+/// extension instead of after it.
+fn split_file_extension(file_name: &str) -> (&str, &str) {
+    match file_name.rfind('.') {
+        Some(idx) if idx > 0 => (&file_name[..idx], &file_name[idx..]),
+        _ => (file_name, ""),
     }
 }
 

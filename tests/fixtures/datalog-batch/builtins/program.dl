@@ -28,10 +28,11 @@ HasA(name) :- Sample(name, _), contains("a", name) = True.
 Roundtrip(name, to_number(to_string(n))) :- Sample(name, n).
 .output Roundtrip
 
-// 4) Built-in result feeding into a `cat` chain (exercises display-context
-//    codegen — Spur→&str when intern is on, plain pass-through otherwise).
+// 4) Built-in result feeding into nested `cat(...)` calls (exercises
+//    display-context codegen — Spur→&str when intern is on, plain
+//    pass-through otherwise).
 .decl Label(out: string)
-Label("name=" cat name cat " len=" cat to_string(strlen(name))) :- Sample(name, _).
+Label(cat("name=", cat(name, cat(" len=", to_string(strlen(name)))))) :- Sample(name, _).
 .output Label
 
 // 5) Built-in result in a comparison filter (numeric return).

@@ -31,6 +31,8 @@ pub enum BuiltinOperator {
     ToString,
     /// `to_number(s) -> int32` — 0 on parse failure.
     ToNumber,
+    /// `cat(a, b) -> string` — binary string concat function.
+    Cat,
 }
 
 impl BuiltinOperator {
@@ -43,6 +45,7 @@ impl BuiltinOperator {
             BuiltinOperator::Contains => "contains",
             BuiltinOperator::ToString => "to_string",
             BuiltinOperator::ToNumber => "to_number",
+            BuiltinOperator::Cat => "cat",
         }
     }
 
@@ -63,6 +66,7 @@ impl BuiltinOperator {
             BuiltinOperator::Contains => &[Str, Str],
             BuiltinOperator::ToString => &[Int32],
             BuiltinOperator::ToNumber => &[Str],
+            BuiltinOperator::Cat => &[Str, Str],
         }
     }
 
@@ -72,7 +76,9 @@ impl BuiltinOperator {
             BuiltinOperator::Strlen | BuiltinOperator::Ord | BuiltinOperator::ToNumber => {
                 DataType::Int32
             }
-            BuiltinOperator::Substr | BuiltinOperator::ToString => DataType::String,
+            BuiltinOperator::Substr | BuiltinOperator::ToString | BuiltinOperator::Cat => {
+                DataType::String
+            }
             BuiltinOperator::Contains => DataType::Bool,
         }
     }
@@ -194,6 +200,7 @@ fn op_from_node(node: &Pair<Rule>) -> Result<BuiltinOperator, ParseError> {
         Rule::contains_op => BuiltinOperator::Contains,
         Rule::to_string_op => BuiltinOperator::ToString,
         Rule::to_number_op => BuiltinOperator::ToNumber,
+        Rule::cat_op => BuiltinOperator::Cat,
         other => return Err(grammar_bug(format!("unknown built-in operator: {other:?}"))),
     })
 }
@@ -234,6 +241,42 @@ mod tests {
                 assert_eq!(op, "strlen");
                 assert_eq!(expected, 1);
                 assert_eq!(found, 2);
+            }
+            e => panic!("expected BuiltinArity, got {e:?}"),
+        }
+    }
+
+    /// `cat(a, b)` parses as a binary string-concat built-in. Pinning
+    /// the op kind + arity protects against accidental rewrites that
+    /// would silently route through `FnCall` (which never resolves
+    /// the typechecker's string concat semantics).
+    #[test]
+    fn cat_parses_as_binary_string_builtin() {
+        let bc = try_parse("cat(a, b)").unwrap();
+        assert_eq!(bc.op(), BuiltinOperator::Cat);
+        assert_eq!(bc.args().len(), 2);
+        assert_eq!(
+            BuiltinOperator::Cat.param_types(),
+            &[DataType::String, DataType::String]
+        );
+        assert_eq!(BuiltinOperator::Cat.ret_type(), DataType::String);
+    }
+
+    /// `cat(...)` with the wrong number of args is rejected up-front
+    /// with [`ParseError::BuiltinArity`]. Souffle's `cat` is strictly
+    /// binary; chains must nest explicitly.
+    #[test]
+    fn cat_wrong_arity_rejected() {
+        match try_parse("cat(a, b, c)").expect_err("expected arity error") {
+            ParseError::BuiltinArity {
+                op,
+                expected,
+                found,
+                ..
+            } => {
+                assert_eq!(op, "cat");
+                assert_eq!(expected, 2);
+                assert_eq!(found, 3);
             }
             e => panic!("expected BuiltinArity, got {e:?}"),
         }

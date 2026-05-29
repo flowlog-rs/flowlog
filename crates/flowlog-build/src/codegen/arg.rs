@@ -731,19 +731,14 @@ pub(super) fn combine_predicates(preds: Vec<Option<TokenStream>>) -> Option<Toke
 // ==================================================
 // Arithmetic expression helpers
 // ==================================================
-fn numeric_arithmetic_op_tokens(op: &ArithmeticOperator) -> Result<TokenStream, CodegenError> {
-    Ok(match op {
+fn numeric_arithmetic_op_tokens(op: &ArithmeticOperator) -> TokenStream {
+    match op {
         ArithmeticOperator::Plus => quote! { + },
         ArithmeticOperator::Minus => quote! { - },
         ArithmeticOperator::Multiply => quote! { * },
         ArithmeticOperator::Divide => quote! { / },
         ArithmeticOperator::Modulo => quote! { % },
-        _ => {
-            return Err(CodegenError::internal(format!(
-                "string operator `{op}` reached numeric arithmetic builder"
-            )));
-        }
-    })
+    }
 }
 
 /// Build a batched `cat` (string concatenation) from a list of display-ready
@@ -775,28 +770,13 @@ impl CodeGen {
     where
         F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
     {
-        // String expr: type checking guarantees every op is Cat; batch
-        // into a single `format!` call.
-        if expr
-            .rest()
-            .first()
-            .is_some_and(|(op, _)| matches!(op, ArithmeticOperator::Cat))
-        {
-            let mut factors =
-                vec![self.factor_to_display_token(expr.init(), string_intern, resolve_var)?];
-            for (_, factor) in expr.rest() {
-                factors.push(self.factor_to_display_token(factor, string_intern, resolve_var)?);
-            }
-            return Ok(build_cat_batch(factors, string_intern));
-        }
-
         // Numeric fold: left-to-right, parenthesising intermediate steps
         // only — the outermost expression stays bare to avoid Rust's
         // `unused_parens` lint when it's used as a function argument.
         let rest = expr.rest();
         let mut result = self.factor_to_token(expr.init(), string_intern, resolve_var)?;
         for (i, (op, factor)) in rest.iter().enumerate() {
-            let op_token = numeric_arithmetic_op_tokens(op)?;
+            let op_token = numeric_arithmetic_op_tokens(op);
             let factor_token = self.factor_to_token(factor, string_intern, resolve_var)?;
             result = if i < rest.len() - 1 {
                 quote! { ( #result #op_token #factor_token ) }
@@ -918,6 +898,27 @@ impl CodeGen {
     where
         F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
     {
+        // `cat(a, b)` wants display-ready tokens (the inner factors
+        // must lower to something `Display`-able for `format!`).
+        // Other built-ins want raw value tokens — handled below.
+        if matches!(op, BuiltinOperator::Cat) {
+            debug_assert_eq!(args.len(), 2, "cat() arity is enforced at parse time");
+            // After typecheck, a string-typed `cat` arg has no
+            // arithmetic `rest`; only Cat could produce a compound
+            // string, and Cat is itself a built-in factor.
+            let factors: Vec<TokenStream> = args
+                .iter()
+                .map(|a| {
+                    debug_assert!(
+                        a.rest.is_empty(),
+                        "cat() arg is a single factor after typecheck"
+                    );
+                    self.factor_to_display_token(&a.init, string_intern, resolve_var)
+                })
+                .collect::<Result<_, _>>()?;
+            return Ok(build_cat_batch(factors, string_intern));
+        }
+
         let raw: Vec<TokenStream> = args
             .iter()
             .map(|a| self.build_arithmetic_expr(a, string_intern, resolve_var))
@@ -982,6 +983,9 @@ impl CodeGen {
                 let s = read_str(&raw[0]);
                 Ok(quote! { ((#s).parse::<i32>().unwrap_or(0)) })
             }
+            // `Cat` is dispatched up-front via `factor_to_display_token`
+            // and never reaches this match.
+            BuiltinOperator::Cat => unreachable!("cat handled early in builtin_to_token"),
         }
     }
 

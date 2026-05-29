@@ -228,17 +228,24 @@ fn parse_plan_indices(pair: Pair<Rule>, file: FileId) -> Result<(Span, Vec<usize
     let span = span_of(&pair, file);
     let mut raw_indices = Vec::new();
     for child in pair.into_inner() {
-        if !matches!(child.as_rule(), Rule::plan_index) {
-            return Err(grammar_bug(format!(
-                "plan_directive unexpected child rule {:?}",
-                child.as_rule()
-            )));
+        match child.as_rule() {
+            // Soufflé `.plan N:(…)` carries an overload index. FlowLog
+            // expands multi-clause rules at parse time, so the version
+            // has no clause to bind to — parse and discard.
+            Rule::plan_version => continue,
+            Rule::plan_index => {
+                let parsed: usize = child
+                    .as_str()
+                    .parse()
+                    .map_err(|_| grammar_bug("plan_index is not a valid integer"))?;
+                raw_indices.push(parsed);
+            }
+            other => {
+                return Err(grammar_bug(format!(
+                    "plan_directive unexpected child rule {other:?}"
+                )));
+            }
         }
-        let parsed: usize = child
-            .as_str()
-            .parse()
-            .map_err(|_| grammar_bug("plan_index is not a valid integer"))?;
-        raw_indices.push(parsed);
     }
     Ok((span, raw_indices))
 }
