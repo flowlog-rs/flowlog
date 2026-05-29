@@ -70,10 +70,12 @@ input_delimiter_for() {
 }
 
 # As [`input_delimiter_for`] but for `.output <Rel>(delimiter="…", …)`.
+# Defaults to TAB (`\t`) when no delimiter is set, matching the compiler's
+# Soufflé-compat output convention (`<RawName>.csv`, TAB-separated).
 output_delimiter_for() {
     local dl_file="$1" rel="$2"
     _extract_directive_param "$dl_file" "output" "$rel" "delimiter" 2>/dev/null \
-        || echo ","
+        || printf '%s' '\t'
 }
 
 ###############################################################################
