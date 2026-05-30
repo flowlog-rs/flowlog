@@ -1486,6 +1486,14 @@ mod tests {
         Program::parse(&tmp.path().to_string_lossy(), true, &mut sm)
     }
 
+    fn find_relation<'a>(program: &'a Program, name: &str) -> &'a Relation {
+        program
+            .relations()
+            .iter()
+            .find(|r| r.name() == name)
+            .unwrap_or_else(|| panic!("relation `{name}` not found"))
+    }
+
     #[test]
     fn decl_case_collision_rejected() {
         let err = parse_program_result(
@@ -2099,6 +2107,78 @@ mod tests {
             .expect("inlined c·r relation");
         assert_eq!(r.name(), "c·r");
         assert_eq!(r.raw_name(), "c.R");
+    }
+
+    // =============================================================
+    // Qualified member types of nested / type-param-bound `.init`s
+    // =============================================================
+
+    /// Facet A: an attribute typed `instance.Member` resolves even when
+    /// the nested `.init` that supplies `Member` is declared *after* the
+    /// `.decl` in the comp body. Attribute-type resolution must not
+    /// depend on textual order (Soufflé-compatible).
+    #[test]
+    fn member_type_resolves_when_nested_init_follows_decl() {
+        let src = "
+            .type Value = symbol
+            .comp Cfg { .type Context = symbol }
+            .comp Analysis<Configuration> {
+              .decl RunningThread(ctx:configuration.Context, v:Value)
+              .init configuration = Configuration
+            }
+            .init mainAnalysis = Analysis<Cfg>
+        ";
+        let program = parse_program(src);
+        let r = find_relation(&program, "mainanalysis·runningthread");
+        assert_eq!(r.data_type(), vec![DataType::String, DataType::String]);
+    }
+
+    /// Facet A control: same program with the `.init` moved *before* the
+    /// `.decl` resolves identically — the two orders must agree.
+    #[test]
+    fn member_type_resolves_when_nested_init_precedes_decl() {
+        let src = "
+            .type Value = symbol
+            .comp Cfg { .type Context = symbol }
+            .comp Analysis<Configuration> {
+              .init configuration = Configuration
+              .decl RunningThread(ctx:configuration.Context, v:Value)
+            }
+            .init mainAnalysis = Analysis<Cfg>
+        ";
+        let program = parse_program(src);
+        let r = find_relation(&program, "mainanalysis·runningthread");
+        assert_eq!(r.data_type(), vec![DataType::String, DataType::String]);
+    }
+
+    /// Facet B: a base component declares relations over
+    /// `configuration.Member` where `configuration` is the eventual
+    /// instance of that component itself (no local `.init`), and the
+    /// member `.type` is supplied by a concrete subtype. When the
+    /// outermost `.init` binds the subtype, `configuration.Member`
+    /// resolves to the subtype's `.type`.
+    #[test]
+    fn self_referential_member_type_from_concrete_subtype() {
+        let src = "
+            .type Value = symbol
+            .type Invo = symbol
+            .comp AbstractConfiguration {
+              .decl ContextRequest(ctx:configuration.Context, invo:Invo)
+            }
+            .comp Analysis<Configuration> {
+              .init configuration = Configuration
+              .decl RunningThread(ctx:configuration.Context, v:Value)
+            }
+            .comp ConcreteConfiguration : AbstractConfiguration {
+              .type Context = symbol
+            }
+            .init mainAnalysis = Analysis<ConcreteConfiguration>
+        ";
+        let program = parse_program(src);
+        let req = find_relation(&program, "mainanalysis·configuration·contextrequest");
+        assert_eq!(req.data_type(), vec![DataType::String, DataType::String]);
+        let thread = find_relation(&program, "mainanalysis·runningthread");
+        assert_eq!(thread.data_type(), vec![DataType::String, DataType::String]);
     }
 
     /// Spec test 1: `.override Foo` drops parent's ground facts.

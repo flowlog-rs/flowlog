@@ -43,6 +43,10 @@ pub(crate) struct InlinerOutput {
 struct Scope<'a> {
     env: &'a HashMap<String, String>,
     prefix: &'a str,
+    /// Simple name of the instance being inlined (the last segment of
+    /// `prefix`). A dotted type whose head equals this is a
+    /// self-reference to the instance's own member types.
+    instance: &'a str,
     local_decls: &'a HashSet<String>,
     nested_inits: &'a HashSet<String>,
 }
@@ -55,6 +59,7 @@ pub(crate) fn inline_one(
     registry: &mut TypeRegistry,
 ) -> Result<(), ParseError> {
     let prefix = qualify(parent_prefix, &init.instance);
+    let instance = init.instance;
 
     let comp = comps
         .get(&init.comp)
@@ -107,63 +112,117 @@ pub(crate) fn inline_one(
     let scope = Scope {
         env: &env,
         prefix: &prefix,
+        instance: &instance,
         local_decls: &local_decls,
         nested_inits: &nested_inits,
     };
 
+    // Resolution proceeds in two walks of the body, NOT in textual order.
+    // INVARIANT: `collect_instance` fully populates this instance's symbol
+    // table — its registered member `.type`s plus the `local_decls` /
+    // `nested_inits` already indexed above — before `resolve_instance`
+    // resolves a single attribute, rule, or directive. This completeness
+    // invariant (not the order of items in the source) is what makes member
+    // types order-independent within a comp body, matching Soufflé. Keep the
+    // two walks separate: merging them would reintroduce order-dependence.
+    collect_instance(&body, &scope, comps, output, registry)?;
+    resolve_instance(body, &scope, output, registry)?;
+
+    Ok(())
+}
+
+/// First walk — build this instance's symbol table. Recursively inline
+/// nested `.init`s (registering their member `.type`s under the instance
+/// prefix) and register local `.type` aliases. Aliases follow the inits
+/// because an alias may reference a nested instance's member type. After
+/// this returns, every member type referenced in the body is registered.
+fn collect_instance(
+    body: &[RawItem],
+    scope: &Scope<'_>,
+    comps: &mut HashMap<String, CompDecl>,
+    output: &mut InlinerOutput,
+    registry: &mut TypeRegistry,
+) -> Result<(), ParseError> {
+    for item in body {
+        if let RawItem::Init(nested) = item {
+            inline_one(
+                scope.prefix,
+                resolve_init(nested.clone(), scope.env),
+                comps,
+                output,
+                registry,
+            )?;
+        }
+    }
+    for item in body {
+        if let RawItem::TypeAlias {
+            name,
+            op,
+            parent,
+            span,
+        } = item
+        {
+            let prefixed = qualify(scope.prefix, name);
+            let resolved = resolve_qualified(parent, *span, scope, false)?;
+            match op {
+                RawTypeOp::Alias => registry.register_alias(&prefixed, &resolved, *span)?,
+                RawTypeOp::Subtype => registry.register_subtype(&prefixed, &resolved, *span)?,
+            };
+        }
+    }
+    Ok(())
+}
+
+/// Second walk — resolve against the now-complete symbol table. Declares
+/// relations (attribute types all resolve regardless of source order),
+/// then rewrites rules / facts and applies `.input`/`.output`/`.printsize`
+/// directives over the relations just declared.
+fn resolve_instance(
+    body: Vec<RawItem>,
+    scope: &Scope<'_>,
+    output: &mut InlinerOutput,
+    registry: &TypeRegistry,
+) -> Result<(), ParseError> {
+    for item in &body {
+        if let RawItem::Decl(raw) = item {
+            let prefixed = qualify(scope.prefix, &raw.name);
+            let attrs = resolve_attributes(&raw.attrs, raw.span, scope, registry)?;
+            output
+                .relations
+                .push(Relation::from_components(&prefixed, attrs, raw.span));
+        }
+    }
+
     for item in body {
         match item {
-            RawItem::Decl(raw) => {
-                let prefixed = qualify(&prefix, &raw.name);
-                let attrs = resolve_attributes(&raw.attrs, raw.span, &scope, registry)?;
-                output
-                    .relations
-                    .push(Relation::from_components(&prefixed, attrs, raw.span));
-            }
-            RawItem::TypeAlias {
-                name,
-                op,
-                parent,
-                span,
-            } => {
-                let prefixed = qualify(&prefix, &name);
-                let resolved = resolve_type_str(&parent, &scope);
-                match op {
-                    RawTypeOp::Alias => registry.register_alias(&prefixed, &resolved, span)?,
-                    RawTypeOp::Subtype => registry.register_subtype(&prefixed, &resolved, span)?,
-                };
-            }
             RawItem::Rule(mut rule) => {
-                rewrite_rule(&mut rule, &scope)?;
+                rewrite_rule(&mut rule, scope)?;
                 output.rules.push(rule);
             }
             RawItem::Fact(mut fact) => {
-                rewrite_rule(&mut fact, &scope)?;
+                rewrite_rule(&mut fact, scope)?;
                 output.facts.push(fact);
             }
             RawItem::Input { name, params, span } => {
-                resolve_directive_target(&name, span, &scope, &mut output.relations)?
+                resolve_directive_target(&name, span, scope, &mut output.relations)?
                     .set_input_params(params);
             }
             RawItem::Output { name, params, span } => {
-                let rel = resolve_directive_target(&name, span, &scope, &mut output.relations)?;
+                let rel = resolve_directive_target(&name, span, scope, &mut output.relations)?;
                 rel.set_output(true);
                 if !params.is_empty() {
                     rel.set_output_params(params)?;
                 }
             }
             RawItem::Printsize { name, span } => {
-                resolve_directive_target(&name, span, &scope, &mut output.relations)?
+                resolve_directive_target(&name, span, scope, &mut output.relations)?
                     .set_printsize(true);
             }
-            RawItem::Init(nested) => {
-                inline_one(&prefix, resolve_init(nested, &env), comps, output, registry)?;
-            }
-            RawItem::Comp(_) => {}         // already hoisted above
-            RawItem::Override { .. } => {} // applied + stripped in resolve_inheritance
+            // Decl / TypeAlias / Init handled in `collect_instance`; Comp
+            // hoisted before the walks; Override stripped in inheritance.
+            _ => {}
         }
     }
-
     Ok(())
 }
 
@@ -179,7 +238,7 @@ fn resolve_attributes(
     attrs
         .iter()
         .map(|(aname, tname)| {
-            let resolved = resolve_type_str(tname, scope);
+            let resolved = resolve_qualified(tname, span, scope, false)?;
             let tid =
                 registry
                     .lookup(&resolved)
@@ -402,62 +461,74 @@ fn subst(env: &HashMap<String, String>, s: &str) -> String {
     env.get(s).cloned().unwrap_or_else(|| s.to_string())
 }
 
-/// Resolve a type-reference string (an attribute type, an alias parent,
-/// or a `.type` parent). Cases:
+/// Resolve a qualified name against the current scope. One resolver
+/// serves both namespaces; `strict` selects which:
 ///
-/// 1. exact match against a type-param → bound value
+/// - **types** (`strict = false`): attribute types, alias / `.type`
+///   parents. Lenient — an unrecognised name passes through to be
+///   resolved later by the global [`TypeRegistry`].
+/// - **relations** (`strict = true`): rule heads, body atoms, directive
+///   targets. A dotted ref whose head is not a nested-init is rejected
+///   with [`ParseError::UnresolvedQualifiedRef`].
+///
+/// Resolution cases, in precedence order:
+/// 1. *(types only)* exact match against a type-param → bound value
 /// 2. dotted, head matches a nested-init → `prefix.head.rest`
-/// 3. dotted, head matches a type-param → `bound.rest`
-/// 4. single segment local-alias declared inside this comp → `prefix.name`
-/// 5. otherwise → unchanged, resolved later via the global registry
-fn resolve_type_str(s: &str, scope: &Scope<'_>) -> String {
-    if let Some(bound) = scope.env.get(s) {
-        return bound.clone();
+/// 3. *(types only)* dotted, head matches this instance's own name →
+///    `prefix.rest` (self-reference: the member type is supplied by this
+///    instance's own/inherited `.type`s, e.g. `configuration.Context`
+///    written inside the component instantiated as `configuration`)
+/// 4. *(types only)* dotted, head matches a type-param → `bound.rest`
+/// 5. dotted, none of the above → pass through (types) / error (relations)
+/// 6. single segment local-decl/alias in this comp → `prefix.name`
+/// 7. otherwise → unchanged, resolved later via the global registry
+///
+/// Cases 1/3/4 are gated on `!strict` so the relation path reproduces the
+/// former `resolve_relation_ref` exactly: only a nested-init head ever
+/// resolves a dotted relation ref. The nested-init check (2) precedes the
+/// self-reference check (3) so a name that is both stays a nested-init.
+fn resolve_qualified(
+    s: &str,
+    span: Span,
+    scope: &Scope<'_>,
+    strict: bool,
+) -> Result<String, ParseError> {
+    if !strict && let Some(bound) = scope.env.get(s) {
+        return Ok(bound.clone());
     }
     if let Some((head, rest)) = s.split_once('.') {
         if scope.nested_inits.contains(&head.to_lowercase()) {
-            return format!("{}.{}.{}", scope.prefix, head, rest);
-        }
-        if let Some(bound) = scope.env.get(head) {
-            return format!("{bound}.{rest}");
-        }
-        return s.to_string();
-    }
-    if scope.local_decls.contains(&s.to_lowercase()) {
-        return qualify(scope.prefix, s);
-    }
-    s.to_string()
-}
-
-/// Resolve a relation reference (head, body atom, or directive target).
-///
-/// Strict on dotted refs: the head segment must be a nested-init in
-/// scope, otherwise reject with [`ParseError::UnresolvedQualifiedRef`].
-fn resolve_relation_ref(name: &str, span: Span, scope: &Scope<'_>) -> Result<String, ParseError> {
-    if let Some((head, rest)) = name.split_once('.') {
-        if scope.nested_inits.contains(&head.to_lowercase()) {
             return Ok(format!("{}.{}.{}", scope.prefix, head, rest));
+        }
+        if !strict {
+            if head.eq_ignore_ascii_case(scope.instance) {
+                return Ok(format!("{}.{}", scope.prefix, rest));
+            }
+            if let Some(bound) = scope.env.get(head) {
+                return Ok(format!("{bound}.{rest}"));
+            }
+            return Ok(s.to_string());
         }
         return Err(ParseError::UnresolvedQualifiedRef {
             span,
-            path: name.to_string(),
+            path: s.to_string(),
         });
     }
-    if scope.local_decls.contains(&name.to_lowercase()) {
-        return Ok(qualify(scope.prefix, name));
+    if scope.local_decls.contains(&s.to_lowercase()) {
+        return Ok(qualify(scope.prefix, s));
     }
-    Ok(name.to_string())
+    Ok(s.to_string())
 }
 
 fn rewrite_rule(rule: &mut FlowLogRule, scope: &Scope<'_>) -> Result<(), ParseError> {
     let head = rule.head_mut();
-    let rewritten = resolve_relation_ref(head.name(), head.span(), scope)?;
+    let rewritten = resolve_qualified(head.name(), head.span(), scope, true)?;
     if rewritten != head.name() {
         head.set_name(rewritten);
     }
     for pred in rule.rhs_mut() {
         if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
-            let rewritten = resolve_relation_ref(atom.name(), atom.span(), scope)?;
+            let rewritten = resolve_qualified(atom.name(), atom.span(), scope, true)?;
             if rewritten != atom.name() {
                 atom.set_name(rewritten);
             }
@@ -475,7 +546,7 @@ fn resolve_directive_target<'a>(
     scope: &Scope<'_>,
     rels: &'a mut [Relation],
 ) -> Result<&'a mut Relation, ParseError> {
-    let resolved = resolve_relation_ref(name, span, scope)?;
+    let resolved = resolve_qualified(name, span, scope, true)?;
     let target_lc = resolved.to_lowercase();
     rels.iter_mut()
         .find(|r| r.name() == target_lc)
