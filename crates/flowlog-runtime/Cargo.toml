@@ -14,8 +14,8 @@ keywords = ["datalog", "dataflow", "differential", "timely"]
 categories = ["database", "compilers"]
 
 [dependencies]
-timely = "0.29"
-differential-dataflow = "0.23"
+timely = "0.30"
+differential-dataflow = "0.24"
 ordered-float = { version = "5", features = ["serde"] }
 lasso = { version = "0.7", features = ["multi-threaded", "serialize"] }
 serde = { workspace = true }

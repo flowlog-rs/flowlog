@@ -114,8 +114,8 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
     doc["dependencies"] = Item::Table(toml_edit::Table::new());
     {
         let deps = doc["dependencies"].as_table_mut().unwrap();
-        deps["timely"] = "0.29".into();
-        deps["differential-dataflow"] = "0.23".into();
+        deps["timely"] = "0.30".into();
+        deps["differential-dataflow"] = "0.24".into();
         deps["mimalloc"] = "0.1".into();
         deps["flowlog-runtime"] = "0.2".into();
 
