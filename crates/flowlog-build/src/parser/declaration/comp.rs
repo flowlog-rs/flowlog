@@ -9,7 +9,7 @@ use pest::iterators::Pair;
 
 use crate::common::{FileId, Span};
 use crate::parser::error::{ParseError, grammar_bug};
-use crate::parser::logic::{FlowLogRule, Head, apply_plan_directive_to_rule};
+use crate::parser::logic::{FlowLogRule, Head, apply_indices_to_rule, parse_plan_indices};
 use crate::parser::{Lexeme, Rule, span_of, type_ref_name};
 
 /// `.type` operator: `=` (alias) or `<:` (subtype).
@@ -129,9 +129,13 @@ impl CompDecl {
         let mut type_params = Vec::new();
         let mut supertype: Option<SuperRef> = None;
         let mut body: Vec<RawItem> = Vec::new();
-        // Applied at parse time so the inliner sees an already-permuted
-        // RHS and stays oblivious to `.plan`.
-        let mut plan_target: Option<usize> = None;
+        // Index into `body` of the first rule emitted by the most recent
+        // rule clause. A `.plan` pins every rule from here to the end of
+        // `body` — a single source clause can expand to several
+        // `RawItem::Rule`s (multi-head / multi-body), all of which share
+        // the hint. Applied at parse time so the inliner sees an
+        // already-permuted RHS and stays oblivious to `.plan`.
+        let mut plan_target_start: Option<usize> = None;
 
         for node in inner {
             match node.as_rule() {
@@ -148,19 +152,26 @@ impl CompDecl {
                             .into_inner()
                             .next()
                             .ok_or_else(|| grammar_bug("comp_body_item missing inner"))?;
-                        let target = plan_target.take().ok_or_else(|| ParseError::PlanOrphan {
-                            span: span_of(&plan_pair, file),
-                        })?;
-                        let RawItem::Rule(rule) = &mut body[target] else {
-                            return Err(grammar_bug(
-                                "plan_target should only ever point at RawItem::Rule",
-                            ));
-                        };
-                        apply_plan_directive_to_rule(plan_pair, file, rule)?;
+                        let start =
+                            plan_target_start
+                                .take()
+                                .ok_or_else(|| ParseError::PlanOrphan {
+                                    span: span_of(&plan_pair, file),
+                                })?;
+                        let (span, raw_indices) = parse_plan_indices(plan_pair, file)?;
+                        for item in &mut body[start..] {
+                            let RawItem::Rule(rule) = item else {
+                                return Err(grammar_bug(
+                                    "plan_target_start should only ever point at RawItem::Rule items",
+                                ));
+                            };
+                            apply_indices_to_rule(rule, span, &raw_indices)?;
+                        }
                     } else {
-                        let item = RawItem::from_parsed_rule(node, file)?;
-                        plan_target = matches!(item, RawItem::Rule(_)).then_some(body.len());
-                        body.push(item);
+                        let items = RawItem::from_parsed_rule(node, file)?;
+                        plan_target_start =
+                            matches!(items.first(), Some(RawItem::Rule(_))).then_some(body.len());
+                        body.extend(items);
                     }
                 }
                 other => {
@@ -236,45 +247,53 @@ fn parse_comp_type_args(node: Option<Pair<Rule>>) -> Result<Vec<String>, ParseEr
 }
 
 impl RawItem {
-    /// Parse a `comp_body_item` pest node.
+    /// Parse a `comp_body_item` pest node into one or more raw items.
+    ///
+    /// Returns a `Vec` because a single rule clause can expand to several
+    /// rules — multi-head (`A, B :- C.`) and multi-body (`A :- B ; C.`)
+    /// distribute the same way they do at top level. Every other body
+    /// item yields exactly one element.
     pub(crate) fn from_parsed_rule(
         parsed_rule: Pair<Rule>,
         file: FileId,
-    ) -> Result<Self, ParseError> {
+    ) -> Result<Vec<Self>, ParseError> {
         debug_assert_eq!(parsed_rule.as_rule(), Rule::comp_body_item);
         let inner = parsed_rule
             .into_inner()
             .next()
             .ok_or_else(|| grammar_bug("comp_body_item missing inner"))?;
-        match inner.as_rule() {
-            Rule::declaration => Ok(RawItem::Decl(RawRelation::from_parsed_rule(inner, file)?)),
+        let item = match inner.as_rule() {
+            Rule::declaration => RawItem::Decl(RawRelation::from_parsed_rule(inner, file)?),
             Rule::type_alias_decl => {
                 let (name, op, parent, span) = split_type_alias(inner, file)?;
-                Ok(RawItem::TypeAlias {
+                RawItem::TypeAlias {
                     name,
                     op,
                     parent,
                     span,
-                })
+                }
             }
-            Rule::rule => parse_raw_rule(inner, file),
-            Rule::fact => parse_raw_fact(inner, file),
+            Rule::rule => return parse_raw_rule(inner, file),
+            Rule::fact => parse_raw_fact(inner, file)?,
             Rule::input_directive => {
                 let (name, params, span) = parse_io_parts(inner, file)?;
-                Ok(RawItem::Input { name, params, span })
+                RawItem::Input { name, params, span }
             }
             Rule::output_directive => {
                 let (name, params, span) = parse_io_parts(inner, file)?;
-                Ok(RawItem::Output { name, params, span })
+                RawItem::Output { name, params, span }
             }
-            Rule::printsize_directive => parse_raw_printsize(inner, file),
-            Rule::comp_decl => Ok(RawItem::Comp(CompDecl::from_parsed_rule(inner, file)?)),
-            Rule::init_decl => Ok(RawItem::Init(InitDecl::from_parsed_rule(inner, file)?)),
-            Rule::override_directive => parse_raw_override(inner, file),
-            other => Err(grammar_bug(format!(
-                "unexpected rule inside comp_body_item: {other:?}"
-            ))),
-        }
+            Rule::printsize_directive => parse_raw_printsize(inner, file)?,
+            Rule::comp_decl => RawItem::Comp(CompDecl::from_parsed_rule(inner, file)?),
+            Rule::init_decl => RawItem::Init(InitDecl::from_parsed_rule(inner, file)?),
+            Rule::override_directive => parse_raw_override(inner, file)?,
+            other => {
+                return Err(grammar_bug(format!(
+                    "unexpected rule inside comp_body_item: {other:?}"
+                )));
+            }
+        };
+        Ok(vec![item])
     }
 }
 
@@ -312,16 +331,15 @@ pub(crate) fn split_type_alias(
     Ok((name, op, parent, span))
 }
 
-/// Reuse the standard rule parser, rejecting multi-head / multi-body
-/// rules inside comp bodies (one `RawItem::Rule` per `comp_body_item`).
-fn parse_raw_rule(node: Pair<Rule>, file: FileId) -> Result<RawItem, ParseError> {
-    let mut rules = FlowLogRule::expand_from_parsed_rule(node, file)?;
-    match rules.len() {
-        1 => Ok(RawItem::Rule(rules.remove(0))),
-        n => Err(grammar_bug(format!(
-            "multi-head/multi-body rules are not supported inside `.comp` bodies (expanded to {n} rules)"
-        ))),
-    }
+/// Reuse the standard rule parser, expanding multi-head / multi-body
+/// rules into one `RawItem::Rule` per (head, body) pair. The inliner
+/// then prefixes and rewrites each expanded rule independently, exactly
+/// as it would a hand-written single-clause rule.
+fn parse_raw_rule(node: Pair<Rule>, file: FileId) -> Result<Vec<RawItem>, ParseError> {
+    Ok(FlowLogRule::expand_from_parsed_rule(node, file)?
+        .into_iter()
+        .map(RawItem::Rule)
+        .collect())
 }
 
 fn parse_raw_fact(node: Pair<Rule>, file: FileId) -> Result<RawItem, ParseError> {

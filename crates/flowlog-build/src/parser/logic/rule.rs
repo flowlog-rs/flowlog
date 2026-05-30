@@ -224,7 +224,10 @@ impl FlowLogRule {
     }
 }
 
-fn parse_plan_indices(pair: Pair<Rule>, file: FileId) -> Result<(Span, Vec<usize>), ParseError> {
+pub(crate) fn parse_plan_indices(
+    pair: Pair<Rule>,
+    file: FileId,
+) -> Result<(Span, Vec<usize>), ParseError> {
     let span = span_of(&pair, file);
     let mut raw_indices = Vec::new();
     for child in pair.into_inner() {
@@ -250,7 +253,7 @@ fn parse_plan_indices(pair: Pair<Rule>, file: FileId) -> Result<(Span, Vec<usize
     Ok((span, raw_indices))
 }
 
-fn apply_indices_to_rule(
+pub(crate) fn apply_indices_to_rule(
     rule: &mut FlowLogRule,
     span: Span,
     raw_indices: &[usize],
@@ -302,18 +305,6 @@ pub(crate) fn consume_plan_directive(
         apply_indices_to_rule(rule, span, &raw_indices)?;
     }
     Ok(())
-}
-
-/// Single-rule consumer for `.comp` bodies: comp body items run through
-/// the inliner and reject multi-head/multi-body, so there's exactly one
-/// rule to pin. Caller owns the "last RawItem::Rule" anchor.
-pub(crate) fn apply_plan_directive_to_rule(
-    pair: Pair<Rule>,
-    file: FileId,
-    rule: &mut FlowLogRule,
-) -> Result<(), ParseError> {
-    let (span, raw_indices) = parse_plan_indices(pair, file)?;
-    apply_indices_to_rule(rule, span, &raw_indices)
 }
 
 fn expand_rule_bodies(node: Pair<Rule>, file: FileId) -> Result<Vec<Vec<Predicate>>, ParseError> {
