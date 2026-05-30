@@ -16,6 +16,17 @@ pub(crate) struct InputDirective {
 }
 
 impl InputDirective {
+    /// Construct directly (used by the inliner to defer a comp-internal
+    /// directive whose target is a relation in the enclosing/global scope,
+    /// so it is applied alongside top-level directives).
+    pub(crate) fn new(relation_name: String, parameters: HashMap<String, String>, span: Span) -> Self {
+        Self {
+            relation_name,
+            parameters,
+            span: Ignored(span),
+        }
+    }
+
     /// Get the relation name
     #[must_use]
     pub(crate) fn relation_name(&self) -> &str {
@@ -112,6 +123,15 @@ pub(crate) struct OutputDirective {
 }
 
 impl OutputDirective {
+    /// Construct directly. See [`InputDirective::new`].
+    pub(crate) fn new(relation_name: String, parameters: HashMap<String, String>, span: Span) -> Self {
+        Self {
+            relation_name,
+            parameters,
+            span: Ignored(span),
+        }
+    }
+
     /// Get the relation name
     #[must_use]
     pub(crate) fn relation_name(&self) -> &str {
@@ -152,6 +172,14 @@ pub(crate) struct PrintSizeDirective {
 }
 
 impl PrintSizeDirective {
+    /// Construct directly. See [`InputDirective::new`].
+    pub(crate) fn new(relation_name: String, span: Span) -> Self {
+        Self {
+            relation_name,
+            span: Ignored(span),
+        }
+    }
+
     /// Get the relation name
     #[must_use]
     pub(crate) fn relation_name(&self) -> &str {
