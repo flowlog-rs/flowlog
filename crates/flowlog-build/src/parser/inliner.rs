@@ -53,10 +53,17 @@ struct Scope<'a> {
     /// alias, which `collect_instance` registered under the instance.
     local_types: &'a HashSet<String>,
     nested_inits: &'a HashSet<String>,
+    /// Instances visible in the *enclosing* scope where this instance was
+    /// instantiated (its sibling / global `.init`s), mapped from name to
+    /// the instance's absolute prefix. A dotted relation/type head that is
+    /// not a nested `.init` may resolve to one of these (Soufflé
+    /// sibling-scope visibility, e.g. `basic.SubtypeOf`).
+    enclosing_instances: &'a HashMap<String, String>,
 }
 
 pub(crate) fn inline_one(
     parent_prefix: &str,
+    enclosing: &HashMap<String, String>,
     init: InitDecl,
     comps: &mut HashMap<String, CompDecl>,
     output: &mut InlinerOutput,
@@ -124,7 +131,16 @@ pub(crate) fn inline_one(
         local_decls: &local_decls,
         local_types: &local_types,
         nested_inits: &nested_inits,
+        enclosing_instances: enclosing,
     };
+
+    // Instances visible to a nested `.init` in this body: everything
+    // visible to *this* instance (its enclosing scope) plus this body's
+    // own nested `.init`s, each keyed by name to its absolute prefix.
+    let mut child_enclosing = enclosing.clone();
+    for name in &nested_inits {
+        child_enclosing.insert(name.clone(), qualify(&prefix, name));
+    }
 
     // Resolution proceeds in two walks of the body, NOT in textual order.
     // INVARIANT: `collect_instance` fully populates this instance's symbol
@@ -142,7 +158,7 @@ pub(crate) fn inline_one(
     // define-before-use rule top-level `.type`s follow (see
     // `build_type_registry` in program.rs). Cycles surface as
     // `UnknownTypeParent`, not a hang.
-    collect_instance(&body, &scope, comps, output, registry)?;
+    collect_instance(&body, &scope, &child_enclosing, comps, output, registry)?;
     resolve_instance(body, &scope, output, registry)?;
 
     Ok(())
@@ -156,6 +172,7 @@ pub(crate) fn inline_one(
 fn collect_instance(
     body: &[RawItem],
     scope: &Scope<'_>,
+    child_enclosing: &HashMap<String, String>,
     comps: &mut HashMap<String, CompDecl>,
     output: &mut InlinerOutput,
     registry: &mut TypeRegistry,
@@ -164,6 +181,7 @@ fn collect_instance(
         if let RawItem::Init(nested) = item {
             inline_one(
                 scope.prefix,
+                child_enclosing,
                 resolve_init(nested.clone(), scope.env),
                 comps,
                 output,
@@ -491,21 +509,24 @@ fn subst(env: &HashMap<String, String>, s: &str) -> String {
 /// Resolution cases, in precedence order:
 /// 1. *(types only)* exact match against a type-param → bound value
 /// 2. dotted, head matches a nested-init → `prefix.head.rest`
-/// 3. *(types only)* dotted, head matches this instance's own name →
+/// 3. dotted, head matches a sibling/enclosing-scope instance →
+///    `that-instance-prefix.rest` (e.g. `basic.SubtypeOf` inside a
+///    component instantiated alongside the global `.init basic`)
+/// 4. *(types only)* dotted, head matches this instance's own name →
 ///    `prefix.rest` (self-reference: the member type is supplied by this
 ///    instance's own/inherited `.type`s, e.g. `configuration.Context`
 ///    written inside the component instantiated as `configuration`)
-/// 4. *(types only)* dotted, head matches a type-param → `bound.rest`
-/// 5. dotted, none of the above → pass through (types) / error (relations)
-/// 6. single segment matching a local `.decl`, or *(types only)* a local
+/// 5. *(types only)* dotted, head matches a type-param → `bound.rest`
+/// 6. dotted, none of the above → pass through (types) / error (relations)
+/// 7. single segment matching a local `.decl`, or *(types only)* a local
 ///    `.type` alias declared in this comp → `prefix.name`
-/// 7. otherwise → unchanged, resolved later via the global registry
+/// 8. otherwise → unchanged, resolved later via the global registry
 ///
-/// Cases 1/3/4 and the alias half of 6 are gated on `!strict` so the
-/// relation path reproduces the former `resolve_relation_ref` exactly:
-/// only a nested-init head ever resolves a dotted relation ref. The
-/// nested-init check (2) precedes the self-reference check (3) so a name
-/// that is both stays a nested-init.
+/// Cases 1/4/5 and the alias half of 7 are gated on `!strict` so the
+/// relation path resolves a dotted head only via a nested-init (2) or a
+/// sibling/enclosing instance (3). The nested-init check (2) precedes the
+/// enclosing check (3) so an inner instance shadows an outer one of the
+/// same name.
 fn resolve_qualified(
     s: &str,
     span: Span,
@@ -516,8 +537,12 @@ fn resolve_qualified(
         return Ok(bound.clone());
     }
     if let Some((head, rest)) = s.split_once('.') {
-        if scope.nested_inits.contains(&head.to_lowercase()) {
+        let head_lc = head.to_lowercase();
+        if scope.nested_inits.contains(&head_lc) {
             return Ok(format!("{}.{}.{}", scope.prefix, head, rest));
+        }
+        if let Some(inst_prefix) = scope.enclosing_instances.get(&head_lc) {
+            return Ok(format!("{inst_prefix}.{rest}"));
         }
         if !strict {
             if head.eq_ignore_ascii_case(scope.instance) {

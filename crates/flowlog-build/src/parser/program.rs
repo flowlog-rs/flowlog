@@ -840,10 +840,18 @@ impl Program {
         // referencing the init's relations must appear *after* the
         // `.init` in source order, otherwise the stratifier catches
         // them as forward references.
+        // Every top-level `.init` is visible to every other at global
+        // scope, so a rule inside one instance may reference a sibling's
+        // relations (e.g. `basic.SubtypeOf`). Map each global instance
+        // name to its prefix (which, at global scope, is the name itself).
+        let global_instances: HashMap<String, String> = inits_at_pos
+            .iter()
+            .map(|(init, _)| (init.instance.to_lowercase(), init.instance.clone()))
+            .collect();
         let mut shift = 0usize;
         for (init, pos) in inits_at_pos {
             let mut out = inliner::InlinerOutput::default();
-            inliner::inline_one("", init, &mut comps, &mut out, &mut type_registry)?;
+            inliner::inline_one("", &global_instances, init, &mut comps, &mut out, &mut type_registry)?;
             for rel in out.relations {
                 if let Some((_prev_raw, prior)) = decl_spans.get(rel.name()) {
                     return Err(ParseError::DuplicateDecl {
@@ -2189,6 +2197,35 @@ mod tests {
         let program = parse_program(src);
         let r = find_relation(&program, "c·contextrequest");
         assert_eq!(r.data_type(), vec![DataType::String, DataType::String]);
+    }
+
+    /// A rule inside one component may reference a relation of a *sibling*
+    /// instance declared in the enclosing (global) scope. `basic` and
+    /// `main` are both global `.init`s; `basic.SubtypeOf` inside `main`'s
+    /// body resolves to the global `basic·subtypeof` relation (Soufflé
+    /// sibling/enclosing-scope visibility).
+    #[test]
+    fn sibling_instance_relation_ref_resolves() {
+        let src = "
+            .comp Lib { .decl SubtypeOf(a:symbol, b:symbol) }
+            .init basic = Lib
+            .comp Analysis {
+              .decl R(x:symbol)
+              R(x) :- basic.SubtypeOf(x, _).
+            }
+            .init main = Analysis
+        ";
+        let program = parse_program(src);
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "main·r")
+            .expect("main·r rule");
+        let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        assert!(
+            body.contains(&"basic·subtypeof"),
+            "sibling ref should resolve to basic·subtypeof, got {body:?}"
+        );
     }
 
     /// Spec test 1: `.override Foo` drops parent's ground facts.
