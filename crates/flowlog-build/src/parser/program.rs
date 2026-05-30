@@ -1694,11 +1694,7 @@ mod tests {
             .input Edge
         ";
         let program = parse_program(src);
-        let edge = program
-            .relations()
-            .iter()
-            .find(|r| r.name() == "edge")
-            .expect("edge relation");
+        let edge = find_relation(&program, "edge");
         assert!(edge.has_input(), "bare .input attaches params");
         assert!(edge.is_file_backed(), "absent IO= defaults to file");
         assert_eq!(edge.input_file_name(), "Edge.facts");
@@ -1875,11 +1871,7 @@ mod tests {
             R(1, 2, 3).
         ";
         let program = parse_program(src);
-        let r = program
-            .relations()
-            .iter()
-            .find(|r| r.name() == "r")
-            .unwrap();
+        let r = find_relation(&program, "r");
         assert_eq!(
             r.data_type(),
             vec![DataType::Int32, DataType::Int32, DataType::Int32]
@@ -2100,11 +2092,7 @@ mod tests {
             .init c = C
         ";
         let program = parse_program(src);
-        let r = program
-            .relations()
-            .iter()
-            .find(|r| r.name() == "c·r")
-            .expect("inlined c·r relation");
+        let r = find_relation(&program, "c·r");
         assert_eq!(r.name(), "c·r");
         assert_eq!(r.raw_name(), "c.R");
     }
@@ -2115,8 +2103,8 @@ mod tests {
 
     /// Facet A: an attribute typed `instance.Member` resolves even when
     /// the nested `.init` that supplies `Member` is declared *after* the
-    /// `.decl` in the comp body. Attribute-type resolution must not
-    /// depend on textual order (Soufflé-compatible).
+    /// `.decl` in the comp body — attribute-type resolution is independent
+    /// of textual order within the comp body (Soufflé-compatible).
     #[test]
     fn member_type_resolves_when_nested_init_follows_decl() {
         let src = "
@@ -2125,24 +2113,6 @@ mod tests {
             .comp Analysis<Configuration> {
               .decl RunningThread(ctx:configuration.Context, v:Value)
               .init configuration = Configuration
-            }
-            .init mainAnalysis = Analysis<Cfg>
-        ";
-        let program = parse_program(src);
-        let r = find_relation(&program, "mainanalysis·runningthread");
-        assert_eq!(r.data_type(), vec![DataType::String, DataType::String]);
-    }
-
-    /// Facet A control: same program with the `.init` moved *before* the
-    /// `.decl` resolves identically — the two orders must agree.
-    #[test]
-    fn member_type_resolves_when_nested_init_precedes_decl() {
-        let src = "
-            .type Value = symbol
-            .comp Cfg { .type Context = symbol }
-            .comp Analysis<Configuration> {
-              .init configuration = Configuration
-              .decl RunningThread(ctx:configuration.Context, v:Value)
             }
             .init mainAnalysis = Analysis<Cfg>
         ";
@@ -2179,6 +2149,46 @@ mod tests {
         assert_eq!(req.data_type(), vec![DataType::String, DataType::String]);
         let thread = find_relation(&program, "mainanalysis·runningthread");
         assert_eq!(thread.data_type(), vec![DataType::String, DataType::String]);
+    }
+
+    /// A component-local `.type` alias used as a *bare* (unqualified)
+    /// attribute type within the same component must resolve, matching
+    /// top-level `.type` alias behaviour. The alias is registered under
+    /// the instance prefix, so a bare use-site must resolve against the
+    /// instance-local alias table.
+    #[test]
+    fn comp_local_type_alias_resolves_as_attr_type() {
+        let src = "
+            .comp C {
+              .type MethodType = symbol
+              .decl R(mt:MethodType, i:number)
+            }
+            .init c = C
+        ";
+        let program = parse_program(src);
+        let r = find_relation(&program, "c·r");
+        assert_eq!(r.data_type(), vec![DataType::String, DataType::Int32]);
+    }
+
+    /// A *bare* member type declared by a concrete subtype resolves in an
+    /// inherited base-component `.decl`. Inheritance flattens the base body
+    /// and the subtype's `.type` into one comp body, so the subtype's alias
+    /// is local — the same mechanism as a plain component-local alias.
+    #[test]
+    fn bare_member_type_from_concrete_subtype_resolves() {
+        let src = "
+            .type Invo = symbol
+            .comp AbstractConfiguration {
+              .decl ContextRequest(ctx:Context, invo:Invo)
+            }
+            .comp ConcreteConfiguration : AbstractConfiguration {
+              .type Context = symbol
+            }
+            .init c = ConcreteConfiguration
+        ";
+        let program = parse_program(src);
+        let r = find_relation(&program, "c·contextrequest");
+        assert_eq!(r.data_type(), vec![DataType::String, DataType::String]);
     }
 
     /// Spec test 1: `.override Foo` drops parent's ground facts.

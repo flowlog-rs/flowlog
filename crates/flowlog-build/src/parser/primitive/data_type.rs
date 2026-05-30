@@ -235,8 +235,11 @@ impl TypeRegistry {
     }
 
     /// Case-insensitive surface-name lookup. `None` until the matching
-    /// `.type` declaration has been processed (which the worklist
-    /// in `build_type_registry` retries).
+    /// `.type` declaration has been processed. Registration is
+    /// define-before-use (source order, eager parent resolution) both at
+    /// top level (`build_type_registry`) and per-instance
+    /// (`inliner::collect_instance`) — there is no retry, so a forward
+    /// reference yields `UnknownTypeParent`.
     #[must_use]
     pub(crate) fn lookup(&self, name: &str) -> Option<TypeId> {
         self.by_name.get(&name.to_lowercase()).copied()

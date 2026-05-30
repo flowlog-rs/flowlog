@@ -48,6 +48,10 @@ struct Scope<'a> {
     /// self-reference to the instance's own member types.
     instance: &'a str,
     local_decls: &'a HashSet<String>,
+    /// Names of `.type` aliases declared in this comp body. A bare
+    /// (unqualified) type name matching one resolves to the prefixed
+    /// alias, which `collect_instance` registered under the instance.
+    local_types: &'a HashSet<String>,
     nested_inits: &'a HashSet<String>,
 }
 
@@ -86,11 +90,15 @@ pub(crate) fn inline_one(
     // Index local decls / nested-init names and hoist nested `.comp`
     // decls so subsequent nested `.init`s can resolve them.
     let mut local_decls = HashSet::new();
+    let mut local_types = HashSet::new();
     let mut nested_inits = HashSet::new();
     for item in &body {
         match item {
             RawItem::Decl(r) => {
                 local_decls.insert(r.name.to_lowercase());
+            }
+            RawItem::TypeAlias { name, .. } => {
+                local_types.insert(name.to_lowercase());
             }
             RawItem::Init(j) => {
                 nested_inits.insert(j.instance.to_lowercase());
@@ -114,6 +122,7 @@ pub(crate) fn inline_one(
         prefix: &prefix,
         instance: &instance,
         local_decls: &local_decls,
+        local_types: &local_types,
         nested_inits: &nested_inits,
     };
 
@@ -121,10 +130,18 @@ pub(crate) fn inline_one(
     // INVARIANT: `collect_instance` fully populates this instance's symbol
     // table — its registered member `.type`s plus the `local_decls` /
     // `nested_inits` already indexed above — before `resolve_instance`
-    // resolves a single attribute, rule, or directive. This completeness
-    // invariant (not the order of items in the source) is what makes member
-    // types order-independent within a comp body, matching Soufflé. Keep the
-    // two walks separate: merging them would reintroduce order-dependence.
+    // resolves a single `.decl` attribute, rule, or directive. This makes
+    // attribute and relation resolution independent of where a `.decl` sits
+    // relative to the `.init`/`.type` it depends on. Keep the two walks
+    // separate: merging them would reintroduce that order-dependence.
+    //
+    // NOTE: this does NOT make a `.type` alias's *parent* order-independent.
+    // `collect_instance` registers aliases in body order with eager parent
+    // resolution, so a member alias must be declared after the type it
+    // references (`.type B = A` requires `A` earlier) — the same
+    // define-before-use rule top-level `.type`s follow (see
+    // `build_type_registry` in program.rs). Cycles surface as
+    // `UnknownTypeParent`, not a hang.
     collect_instance(&body, &scope, comps, output, registry)?;
     resolve_instance(body, &scope, output, registry)?;
 
@@ -480,13 +497,15 @@ fn subst(env: &HashMap<String, String>, s: &str) -> String {
 ///    written inside the component instantiated as `configuration`)
 /// 4. *(types only)* dotted, head matches a type-param → `bound.rest`
 /// 5. dotted, none of the above → pass through (types) / error (relations)
-/// 6. single segment local-decl/alias in this comp → `prefix.name`
+/// 6. single segment matching a local `.decl`, or *(types only)* a local
+///    `.type` alias declared in this comp → `prefix.name`
 /// 7. otherwise → unchanged, resolved later via the global registry
 ///
-/// Cases 1/3/4 are gated on `!strict` so the relation path reproduces the
-/// former `resolve_relation_ref` exactly: only a nested-init head ever
-/// resolves a dotted relation ref. The nested-init check (2) precedes the
-/// self-reference check (3) so a name that is both stays a nested-init.
+/// Cases 1/3/4 and the alias half of 6 are gated on `!strict` so the
+/// relation path reproduces the former `resolve_relation_ref` exactly:
+/// only a nested-init head ever resolves a dotted relation ref. The
+/// nested-init check (2) precedes the self-reference check (3) so a name
+/// that is both stays a nested-init.
 fn resolve_qualified(
     s: &str,
     span: Span,
@@ -514,7 +533,8 @@ fn resolve_qualified(
             path: s.to_string(),
         });
     }
-    if scope.local_decls.contains(&s.to_lowercase()) {
+    let key = s.to_lowercase();
+    if scope.local_decls.contains(&key) || (!strict && scope.local_types.contains(&key)) {
         return Ok(qualify(scope.prefix, s));
     }
     Ok(s.to_string())
@@ -555,3 +575,4 @@ fn resolve_directive_target<'a>(
             name: resolved,
         })
 }
+
