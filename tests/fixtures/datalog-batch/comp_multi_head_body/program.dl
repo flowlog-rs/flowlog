@@ -1,0 +1,35 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : comp_multi_head_body
+// Feature : multi-head (`A, B :- C.`) and multi-body (`A :- B ; C.`) rules
+//           inside a `.comp` body, expanded + prefixed per (head, body) pair.
+//           `Edge` is an external relation (not declared in the comp), so it
+//           stays un-prefixed; the comp's own relations gain the `g.` prefix.
+// ════════════════════════════════════════════════════════════════════════════
+
+.comp Graph {
+  .decl Fwd(x: symbol, y: symbol)
+  .decl Rev(x: symbol, y: symbol)
+  .decl Reach(x: symbol, y: symbol)
+
+  // Multi-head: one clause derives into two relations.
+  Fwd(x, y), Rev(y, x) :- Edge(x, y).
+
+  // Multi-body: disjunction expands into two clauses.
+  Reach(x, y) :- Fwd(x, y) ; Reach(x, z), Fwd(z, y).
+}
+
+.decl Edge(x: symbol, y: symbol)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.init g = Graph
+
+.decl Fwd(x: symbol, y: symbol)
+.decl Rev(x: symbol, y: symbol)
+.decl Reach(x: symbol, y: symbol)
+.output Fwd
+.output Rev
+.output Reach
+
+Fwd(x, y) :- g.Fwd(x, y).
+Rev(x, y) :- g.Rev(x, y).
+Reach(x, y) :- g.Reach(x, y).
