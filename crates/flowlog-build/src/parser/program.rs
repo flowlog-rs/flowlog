@@ -867,6 +867,12 @@ impl Program {
                 relations.push(rel);
             }
             raw_facts.extend(out.facts);
+            // Comp-internal directives that targeted an enclosing/global
+            // relation are applied with the top-level directives, against
+            // the full relation set.
+            input_directives.extend(out.input_directives);
+            output_directives.extend(out.output_directives);
+            printsize_directives.extend(out.printsize_directives);
             if !out.rules.is_empty() {
                 segments.insert(pos + shift, Segment::Plain(out.rules));
                 shift += 1;
@@ -2228,7 +2234,31 @@ mod tests {
         );
     }
 
-    /// Spec test 1: `.override Foo` drops parent's ground facts.
+    /// An `.output`/`.input` directive *inside* a component may target a
+    /// relation declared in the enclosing (global) scope. The directive
+    /// resolver falls through to the global relation set — the same scope
+    /// fall-through rule-body references already use.
+    #[test]
+    fn comp_directive_targets_global_relation() {
+        let src = "
+            .decl G(x:symbol)
+            G(\"a\").
+            .comp C {
+              .decl L(x:symbol)
+              L(x) :- G(x).
+              .output G(IO=\"file\",filename=\"G.csv\",delimiter=\"\\t\")
+            }
+            .init c = C
+        ";
+        let program = parse_program(src);
+        let g = find_relation(&program, "g");
+        assert!(
+            g.output(),
+            ".output of a global relation from inside a comp should apply"
+        );
+    }
+
+    /// Spec test 1: `.output Foo` drops parent's ground facts.
     #[test]
     fn override_drops_parent_facts() {
         let src = "

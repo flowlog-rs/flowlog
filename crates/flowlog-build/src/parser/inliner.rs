@@ -20,7 +20,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::common::Span;
 use crate::parser::declaration::{
-    Attribute, CompDecl, InitDecl, RawItem, RawRelation, RawTypeOp, Relation, SuperRef,
+    Attribute, CompDecl, InitDecl, InputDirective, OutputDirective, PrintSizeDirective, RawItem,
+    RawRelation, RawTypeOp, Relation, SuperRef,
 };
 use crate::parser::error::ParseError;
 use crate::parser::logic::{FlowLogRule, Predicate};
@@ -32,6 +33,12 @@ pub(crate) struct InlinerOutput {
     pub(crate) relations: Vec<Relation>,
     pub(crate) rules: Vec<FlowLogRule>,
     pub(crate) facts: Vec<FlowLogRule>,
+    /// Comp-internal directives whose target was not a relation of this
+    /// instance — deferred for the driver to apply against the full
+    /// (global + inlined) relation set via `apply_directives`.
+    pub(crate) input_directives: Vec<InputDirective>,
+    pub(crate) output_directives: Vec<OutputDirective>,
+    pub(crate) printsize_directives: Vec<PrintSizeDirective>,
 }
 
 // =============================================================================
@@ -238,20 +245,41 @@ fn resolve_instance(
                 rewrite_rule(&mut fact, scope)?;
                 output.facts.push(fact);
             }
+            // A directive targets a relation of this instance, or — like a
+            // rule-body reference — one in the enclosing/global scope. When
+            // the target is not local, defer it so the driver applies it
+            // against the full relation set (`apply_directives`).
             RawItem::Input { name, params, span } => {
-                resolve_directive_target(&name, span, scope, &mut output.relations)?
-                    .set_input_params(params);
+                let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
+                match output.relations.iter_mut().find(|r| r.name() == lc) {
+                    Some(rel) => rel.set_input_params(params),
+                    None => output
+                        .input_directives
+                        .push(InputDirective::new(lc, params, span)),
+                }
             }
             RawItem::Output { name, params, span } => {
-                let rel = resolve_directive_target(&name, span, scope, &mut output.relations)?;
-                rel.set_output(true);
-                if !params.is_empty() {
-                    rel.set_output_params(params)?;
+                let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
+                match output.relations.iter_mut().find(|r| r.name() == lc) {
+                    Some(rel) => {
+                        rel.set_output(true);
+                        if !params.is_empty() {
+                            rel.set_output_params(params)?;
+                        }
+                    }
+                    None => output
+                        .output_directives
+                        .push(OutputDirective::new(lc, params, span)),
                 }
             }
             RawItem::Printsize { name, span } => {
-                resolve_directive_target(&name, span, scope, &mut output.relations)?
-                    .set_printsize(true);
+                let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
+                match output.relations.iter_mut().find(|r| r.name() == lc) {
+                    Some(rel) => rel.set_printsize(true),
+                    None => output
+                        .printsize_directives
+                        .push(PrintSizeDirective::new(lc, span)),
+                }
             }
             // Decl / TypeAlias / Init handled in `collect_instance`; Comp
             // hoisted before the walks; Override stripped in inheritance.
@@ -580,24 +608,5 @@ fn rewrite_rule(rule: &mut FlowLogRule, scope: &Scope<'_>) -> Result<(), ParseEr
         }
     }
     Ok(())
-}
-
-/// Resolve an `.input` / `.output` / `.printsize` directive's target
-/// relation. The target must already exist in `rels` (declared earlier
-/// in this comp body, or by a nested `.init` we just expanded).
-fn resolve_directive_target<'a>(
-    name: &str,
-    span: Span,
-    scope: &Scope<'_>,
-    rels: &'a mut [Relation],
-) -> Result<&'a mut Relation, ParseError> {
-    let resolved = resolve_qualified(name, span, scope, true)?;
-    let target_lc = resolved.to_lowercase();
-    rels.iter_mut()
-        .find(|r| r.name() == target_lc)
-        .ok_or(ParseError::UndeclaredInRule {
-            span,
-            name: resolved,
-        })
 }
 
