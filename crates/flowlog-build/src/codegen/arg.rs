@@ -463,7 +463,7 @@ impl CodeGen {
             .map(|fc| {
                 let fn_name = format_ident!("{}", fc.name());
                 let param_types = self.udf_param_types(fc.name());
-                if string_intern && param_types.iter().any(|t| *t == DataType::String) {
+                if string_intern && param_types.contains(&DataType::String) {
                     self.features.mark_string_resolve();
                 }
                 let args: Vec<TokenStream> = fc
@@ -501,7 +501,7 @@ impl CodeGen {
             .map(|fc| {
                 let fn_name = format_ident!("{}", fc.name());
                 let param_types = self.udf_param_types(fc.name());
-                if string_intern && param_types.iter().any(|t| *t == DataType::String) {
+                if string_intern && param_types.contains(&DataType::String) {
                     self.features.mark_string_resolve();
                 }
                 let args: Vec<TokenStream> = fc
@@ -539,7 +539,7 @@ impl CodeGen {
             .map(|fc| {
                 let fn_name = format_ident!("{}", fc.name());
                 let param_types = self.udf_param_types(fc.name());
-                if string_intern && param_types.iter().any(|t| *t == DataType::String) {
+                if string_intern && param_types.contains(&DataType::String) {
                     self.features.mark_string_resolve();
                 }
                 let args: Vec<TokenStream> = fc
@@ -869,7 +869,7 @@ impl CodeGen {
             .udf_return_type(name)
             .is_some_and(|t| t == DataType::String);
 
-        if string_intern && param_types.iter().any(|t| *t == DataType::String) {
+        if string_intern && param_types.contains(&DataType::String) {
             self.features.mark_string_resolve();
         }
         if string_intern && returns_string {
