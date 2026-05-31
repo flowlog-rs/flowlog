@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.0...flowlog-build-v0.3.1) - 2026-05-31
+
+### Fixed
+
+- *(codegen)* bridge Spur/String at UDF boundary under --str-intern ([#118](https://github.com/flowlog-rs/flowlog/pull/118))
+
 ## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.2.3...flowlog-build-v0.3.0) - 2026-05-27
 
 ### Added
