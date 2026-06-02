@@ -26,5 +26,5 @@ program_analysis/cvc5.dl=cvc5
 program_analysis/z3.dl=z3
 
 # Program analysis (string-typed)
-program_analysis/polonius.dl=clap str-intern
+program_analysis/polonius_str.dl=clap str-intern
 program_analysis/doop.dl=batik str-intern
