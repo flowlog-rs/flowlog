@@ -66,7 +66,7 @@ use crate::parser::segment::Segment;
 /// removes every `BodyAggregate` predicate on the first pass.
 pub(crate) fn desugar_body_aggregates(
     relations: &mut Vec<Relation>,
-    segments: &mut Vec<Segment>,
+    segments: &mut [Segment],
     udfs: &[ExternFn],
     registry: &TypeRegistry,
 ) -> Result<(), ParseError> {
