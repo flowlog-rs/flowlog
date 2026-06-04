@@ -982,12 +982,16 @@ impl CodeGen {
                 // The regex is compiled at call time. Pulling cached
                 // compilation behind a thread-local is a clean follow-up
                 // optimisation but not needed for correctness.
-                self.features.mark_regex();
+                //
+                // Reach `regex` through `flowlog_runtime` rather than as a
+                // top-level crate so both binary-mode (scaffolded crate)
+                // and library-mode (host Cargo.toml) consumers compile
+                // without any extra Cargo.toml plumbing.
                 let pat = read_str(&raw[0]);
                 let s = read_str(&raw[1]);
                 Ok(quote! {{
                     let __re_src = format!("^(?:{})$", #pat);
-                    ::regex::Regex::new(&__re_src)
+                    ::flowlog_runtime::regex::Regex::new(&__re_src)
                         .map(|re| re.is_match(#s))
                         .unwrap_or(false)
                 }})

@@ -134,11 +134,6 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
         if config.is_incremental() {
             deps["rustyline"] = "17".into();
         }
-        if features.regex() {
-            // Soufflé's `match()` builtin compiles a regex per call;
-            // the `regex` crate is the de-facto standard for Rust.
-            deps["regex"] = "1".into();
-        }
     }
 
     let mut rendered = doc.to_string();
