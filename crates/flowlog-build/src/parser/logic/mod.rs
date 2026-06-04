@@ -12,6 +12,7 @@
 mod aggregation;
 mod arithmetic;
 mod atom;
+mod body_aggregate;
 mod builtin;
 mod comparison;
 mod fn_call;
@@ -34,6 +35,7 @@ pub use rule::FlowLogRule;
 pub(crate) use aggregation::Aggregation;
 pub(crate) use arithmetic::{Arithmetic, Factor};
 pub(crate) use atom::{Atom, AtomArg};
+pub(crate) use body_aggregate::BodyAggregate;
 pub(crate) use builtin::BuiltinCall;
 pub(crate) use comparison::ComparisonExpr;
 pub(crate) use fn_call::FnCall;

@@ -96,6 +96,7 @@ pub struct Features {
     ordered_float: bool,
     udf: bool,
     output_buffers: bool,
+    regex: bool,
 }
 
 impl Features {
@@ -120,6 +121,7 @@ impl Features {
         (ordered_float,  mark_ordered_float),
         (udf,            mark_udf),
         (output_buffers, mark_output_buffers),
+        (regex,          mark_regex),
     }
 
     // -- aggregation semirings (non-boolean) ----------------------------

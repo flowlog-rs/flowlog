@@ -150,6 +150,9 @@ fn check_builtin_config_requirements(
                         check_arith(cmp.right())?;
                     }
                     Predicate::FnCall(fc) => fc.args().iter().try_for_each(check_arith)?,
+                    Predicate::BodyAggregate(_) => {
+                        unreachable!("body aggregates are lowered before type checking");
+                    }
                 }
             }
             for head_arg in rule.head().head_arguments() {
@@ -251,6 +254,9 @@ fn check_rule(
                 // UDF predicate return is always bool; drop the inferred type.
                 infer_fn_call_type(fc, &bindings, udfs)?;
                 pin_fn_call_args(fc, udfs)?;
+            }
+            Predicate::BodyAggregate(_) => {
+                unreachable!("body aggregates are lowered before type checking");
             }
         }
     }

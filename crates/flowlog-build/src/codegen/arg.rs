@@ -973,6 +973,25 @@ impl CodeGen {
                 let hay = read_str(&raw[1]);
                 Ok(quote! { ((#hay).contains(#needle)) })
             }
+            BuiltinOperator::Match => {
+                // Soufflé's `match(pattern, s)` is anchored: the pattern
+                // must consume the entire string. We don't try to detect
+                // pre-anchored patterns and skip the wrapping — `^...$`
+                // is idempotent for valid Soufflé regexes.
+                //
+                // The regex is compiled at call time. Pulling cached
+                // compilation behind a thread-local is a clean follow-up
+                // optimisation but not needed for correctness.
+                self.features.mark_regex();
+                let pat = read_str(&raw[0]);
+                let s = read_str(&raw[1]);
+                Ok(quote! {{
+                    let __re_src = format!("^(?:{})$", #pat);
+                    ::regex::Regex::new(&__re_src)
+                        .map(|re| re.is_match(#s))
+                        .unwrap_or(false)
+                }})
+            }
             BuiltinOperator::ToString => {
                 let n = &raw[0];
                 Ok(emit_string(quote! { (#n).to_string() }))

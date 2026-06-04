@@ -107,6 +107,12 @@ pub(crate) struct Aggregation {
 impl Aggregation {
     #[cfg(test)]
     pub(crate) fn new(operator: AggregationOperator, arithmetic: Arithmetic) -> Self {
+        Self::synth(operator, arithmetic)
+    }
+
+    /// Synthesise an aggregation outside the parser (e.g. lowering a
+    /// body aggregate to a head-position one).
+    pub(crate) fn synth(operator: AggregationOperator, arithmetic: Arithmetic) -> Self {
         Self {
             operator,
             arithmetic,

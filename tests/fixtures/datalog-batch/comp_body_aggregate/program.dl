@@ -1,0 +1,29 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : comp_body_aggregate
+// Feature : Soufflé-style body aggregate (`x = min v : { ... }`) inside a
+//           `.comp` body, whose inner body atom references a comp-local
+//           relation. The inliner must descend into the BodyAggregate
+//           body to rewrite the atom name from `Edges` → `g·Edges`; the
+//           dot-normalizer must do the same. Without that, the desugar
+//           pass cannot find the atom's type signature in the relation
+//           index and fails with "expression has no inferrable type".
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Raw(src: int32, dst: int32, w: int32)
+.input Raw(IO="file", filename="Raw.csv", delimiter=",")
+
+.comp MinFinder {
+  .decl Edges(src: int32, dst: int32, w: int32)
+  Edges(s, d, w) :- Raw(s, d, w).
+
+  .decl ClosestNeighbor(src: int32, mw: int32)
+  ClosestNeighbor(s, mw) :-
+    Edges(s, _, _),
+    mw = min w : { Edges(s, _, w) }.
+}
+
+.init g = MinFinder
+
+.decl Answer(src: int32, mw: int32)
+.output Answer
+Answer(s, mw) :- g.ClosestNeighbor(s, mw).

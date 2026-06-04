@@ -267,6 +267,22 @@ pub enum ParseError {
     #[error("`.plan` lists positive-atom index {index} more than once")]
     PlanDuplicateIndex { span: Span, index: usize },
 
+    /// A body-position aggregate uses a grouping variable whose column
+    /// type cannot be resolved from any positive atom in the rule.
+    #[error("body aggregate cannot infer the type of grouping variable `{var}`")]
+    AggregateUntypedVar { span: Span, var: String },
+
+    /// A body-position `min`/`max`/`sum`/`avg` aggregate was written
+    /// without an expression (only `count` may omit it).
+    #[error("body aggregate `{op}` requires an expression — only `count` may be written without one")]
+    AggregateMissingExpr { span: Span, op: String },
+
+    /// The aggregated expression's result type cannot be inferred (no
+    /// variable in it appears in a typed atom, and no constant fixes
+    /// the type).
+    #[error("body aggregate expression has no inferrable type")]
+    AggregateUntypedExpr { span: Span },
+
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
     #[error(transparent)]
@@ -459,6 +475,9 @@ impl Diagnostic for ParseError {
             | ParseError::NonNullaryLoopCondition { span, .. }
             | ParseError::PlaceholderInUdf { span, .. }
             | ParseError::BuiltinArity { span, .. }
+            | ParseError::AggregateUntypedVar { span, .. }
+            | ParseError::AggregateMissingExpr { span, .. }
+            | ParseError::AggregateUntypedExpr { span }
             | ParseError::IncludeIo { span, .. } => base.with_labels(primary_only(*span)),
 
             ParseError::Internal(_) => unreachable!("handled above"),

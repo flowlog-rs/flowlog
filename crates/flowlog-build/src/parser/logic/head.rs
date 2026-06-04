@@ -93,6 +93,12 @@ pub(crate) struct Head {
 impl Head {
     #[cfg(test)]
     pub(crate) fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
+        Self::synth(name, head_arguments)
+    }
+
+    /// Synthesise a head outside the parser (e.g. desugaring passes).
+    /// Lower-cases the name and refreshes the fingerprint.
+    pub(crate) fn synth(name: String, head_arguments: Vec<HeadArg>) -> Self {
         let name = name.to_lowercase();
         let head_fingerprint = compute_fp(&name);
         Self {
