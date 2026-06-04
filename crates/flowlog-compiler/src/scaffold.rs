@@ -118,6 +118,10 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
         deps["differential-dataflow"] = "0.24".into();
         deps["mimalloc"] = "0.1".into();
         deps["flowlog-runtime"] = "0.2".into();
+        // `regex` powers the Soufflé `match()` builtin; the dep is small
+        // enough (~150 KB compiled) that gating it behind a feature flag
+        // adds more complexity than it saves.
+        deps["regex"] = "1".into();
 
         if features.string_intern() {
             deps["lasso"] = value(inline_versioned_dep(

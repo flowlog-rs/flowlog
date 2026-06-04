@@ -206,6 +206,7 @@ publish = false
 # suites. (Pre-leanness this pinned flowlog-runtime to crates.io 0.2,
 # which silently masked any local-only runtime change.)
 flowlog-runtime = { path = "${ROOT_DIR}/crates/flowlog-runtime" }
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]

@@ -1,9 +1,12 @@
 //! `use` statements emitted into the library-mode generated file.
 //!
-//! Every external crate reference is funneled through `::flowlog_runtime::`
+//! Most external crate references are funneled through `::flowlog_runtime::`
 //! so the consumer only needs `flowlog-runtime` in `[dependencies]` — DD,
 //! timely, `lasso`, `ordered_float`, `serde` are all re-exported from
-//! there.
+//! there. The one exception is `regex`, which powers the Soufflé
+//! `match()` builtin; it's referenced as a top-level `::regex::Regex`
+//! and consumers (the binary-mode scaffolder + lib-mode runner template)
+//! pin it directly.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};

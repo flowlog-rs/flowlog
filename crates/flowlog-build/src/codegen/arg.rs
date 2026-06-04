@@ -983,15 +983,14 @@ impl CodeGen {
                 // compilation behind a thread-local is a clean follow-up
                 // optimisation but not needed for correctness.
                 //
-                // Reach `regex` through `flowlog_runtime` rather than as a
-                // top-level crate so both binary-mode (scaffolded crate)
-                // and library-mode (host Cargo.toml) consumers compile
-                // without any extra Cargo.toml plumbing.
+                // Reach `regex` as a top-level crate; both the scaffolder
+                // (binary mode) and the lib-runner Cargo.toml template
+                // include `regex = "1"` so the dep is always in scope.
                 let pat = read_str(&raw[0]);
                 let s = read_str(&raw[1]);
                 Ok(quote! {{
                     let __re_src = format!("^(?:{})$", #pat);
-                    ::flowlog_runtime::regex::Regex::new(&__re_src)
+                    ::regex::Regex::new(&__re_src)
                         .map(|re| re.is_match(#s))
                         .unwrap_or(false)
                 }})

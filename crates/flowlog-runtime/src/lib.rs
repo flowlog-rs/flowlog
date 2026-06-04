@@ -56,8 +56,6 @@ pub use lasso;
 #[doc(hidden)]
 pub use ordered_float;
 #[doc(hidden)]
-pub use regex;
-#[doc(hidden)]
 pub use serde;
 #[doc(hidden)]
 pub use timely;
