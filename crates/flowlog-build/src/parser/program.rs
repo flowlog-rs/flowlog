@@ -1396,6 +1396,43 @@ impl Program {
     fn prune_dead_components(&mut self) {
         let ((needed_rules, needed_preds), underived) = self.identify_needed_components();
 
+        // Soufflé empty-relation compatibility. A relation that survives
+        // pruning (still referenced by a needed rule) but is declared with no
+        // defining rule, no inline facts, and no `.input` is, in Soufflé,
+        // simply an empty relation — e.g. DOOP's `HeapAllocation_Keep`,
+        // declared and used only as `!HeapAllocation_Keep(h)`. Register it as
+        // an empty inline-fact EDB so the stratifier treats it as available
+        // before the first stratum and codegen emits an empty collection: a
+        // negated use is then always satisfied and a positive use never fires,
+        // exactly matching Soufflé. An *undeclared* reference is already
+        // rejected by `validate_relation_references`, so this only ever fires
+        // for genuinely declared-but-underived relations.
+        let empty_relations: Vec<String> = {
+            let facts = &self.facts;
+            let derived: HashSet<&str> = self
+                .segments
+                .iter()
+                .flat_map(|seg| match seg {
+                    Segment::Plain(rules) => rules.as_slice(),
+                    Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
+                })
+                .map(|rule| rule.head().name())
+                .collect();
+            self.relations
+                .iter()
+                .filter(|rel| {
+                    needed_preds.contains(rel.name())
+                        && !derived.contains(rel.name())
+                        && !rel.has_input()
+                        && !facts.contains_key(rel.name())
+                })
+                .map(|rel| rel.name().to_string())
+                .collect()
+        };
+        for name in empty_relations {
+            self.facts.entry(name).or_default();
+        }
+
         // Collect dead relations (unreachable) and dead rules for a single
         // structured warning so the output is easy to scan.
         let dead_relations: Vec<_> = self
@@ -2105,6 +2142,64 @@ mod tests {
             ",
         );
         assert_eq!(program.empty_output_files(), &["custom.tsv"]);
+    }
+
+    /// Soufflé-compat empty relation: a relation that is declared but has no
+    /// rule/facts/`.input`, yet is referenced (here negated) by a *needed*
+    /// rule, is registered as an empty inline-fact EDB so the stratifier sees
+    /// it as available before the first stratum.
+    #[test]
+    fn declared_underived_relation_referenced_by_needed_rule_becomes_empty_edb() {
+        let program = parse_program(
+            "
+            .decl Node(x: symbol)
+            Node(\"a\").
+            .decl Excluded(x: symbol)
+            .decl Kept(x: symbol)
+            .output Kept
+            Kept(x) :- Node(x), !Excluded(x).
+            ",
+        );
+        assert!(
+            program.has_inline_facts("excluded"),
+            "underived-but-referenced relation should get an (empty) facts entry"
+        );
+        assert_eq!(
+            program.facts().get("excluded").map(Vec::len),
+            Some(0),
+            "the registered facts entry must hold zero tuples"
+        );
+        assert!(
+            program.edbs().iter().any(|r| r.name() == "excluded"),
+            "it should now be treated as an EDB (available before stratum 0)"
+        );
+    }
+
+    /// The empty-EDB registration must be driven by *surviving* references
+    /// only: a declared-underived relation reachable solely through a pruned
+    /// (dead) rule stays pruned and is not resurrected as an EDB.
+    #[test]
+    fn declared_underived_relation_used_only_by_dead_rule_is_not_revived() {
+        let program = parse_program(
+            "
+            .decl Node(x: symbol)
+            Node(\"a\").
+            .decl Excluded(x: symbol)
+            .decl Dead(x: symbol)
+            Dead(x) :- Node(x), !Excluded(x).
+            .decl Kept(x: symbol)
+            .output Kept
+            Kept(x) :- Node(x).
+            ",
+        );
+        assert!(
+            !program.has_inline_facts("excluded"),
+            "a relation referenced only by a pruned rule must not become an EDB"
+        );
+        assert!(
+            program.edbs().iter().all(|r| r.name() != "excluded"),
+            "dead-only references must not resurrect the relation as an EDB"
+        );
     }
 
     /// Infix `cat` is gone — `a cat b` MUST NOT parse as a string
