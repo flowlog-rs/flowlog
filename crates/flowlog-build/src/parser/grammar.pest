@@ -106,7 +106,7 @@ string = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 // Placeholder for unused variables (underscore)
 // Used when you don't need to reference a variable
-placeholder = { "_" } 
+placeholder = @{ "_" ~ !(ASCII_ALPHANUMERIC | "_") } 
 
 // Boolean literal values
 boolean = { ("True" | "False") ~ !(ASCII_ALPHANUMERIC | "_") } 
@@ -340,7 +340,10 @@ neg_inner     = { builtin_fn_call | atom }
 // `AtomArg::Var` / `AtomArg::Const` forms; anything with an operator or a
 // builtin/UDF/cast factor becomes `AtomArg::Expr` and is lifted to a fresh
 // variable plus an equality by the `desugar` pass before later stages run.
-// `placeholder` is listed first so `_` is never parsed as a variable.
+// `placeholder` is listed first so a standalone `_` is the placeholder, but
+// it has a boundary (`placeholder = @{ "_" ~ !(ASCII_ALPHANUMERIC | "_") }`)
+// so a `_`-prefixed variable like `_x` still parses as a variable via
+// `arithmetic_expr`, not as `_` + a failed atom.
 atom_arg = { placeholder | arithmetic_expr }
 
 // =============================================================================

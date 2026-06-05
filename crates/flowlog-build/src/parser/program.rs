@@ -2429,6 +2429,40 @@ mod tests {
         assert!(!has_expr, "plain args must not become AtomArg::Expr");
     }
 
+    /// An underscore-prefixed identifier (`_x`) in atom-argument position is
+    /// a *variable*, not the `_` placeholder. The `atom_arg` grammar lists
+    /// `placeholder` first, so without a boundary on `placeholder` the `_`
+    /// of `_x` would match and the atom would fail to parse, falling through
+    /// to a UDF call. This guards that boundary.
+    #[test]
+    fn underscore_prefixed_var_is_a_variable_not_placeholder() {
+        let src = "
+            .decl Node(x: symbol)
+            .decl R(x: symbol)
+            R(_x) :- Node(_x).
+        ";
+        let program = parse_program(src);
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "r")
+            .expect("r rule");
+        // The body must hold a positive atom `node(_x)`, not a fn-call.
+        let node = rule
+            .rhs()
+            .iter()
+            .find_map(|p| match p {
+                Predicate::PositiveAtom(a) if a.name() == "node" => Some(a),
+                _ => None,
+            })
+            .expect("node atom (not a UDF fall-through)");
+        assert_eq!(
+            node.arguments(),
+            &[AtomArg::Var("_x".to_string())],
+            "`_x` must parse as a variable argument"
+        );
+    }
+
     /// An expression argument inside a *negated* atom is rejected with a
     /// clear diagnostic (the lifted variable could not be range-restricted).
     #[test]
