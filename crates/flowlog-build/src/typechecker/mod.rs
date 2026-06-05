@@ -300,6 +300,9 @@ fn bind_atom_vars(
                 }
             }
             AtomArg::Placeholder => {}
+            AtomArg::Expr(_) => {
+                unreachable!("expression atom args are lowered by desugar before typecheck")
+            }
         }
     }
     Ok(())
@@ -338,6 +341,9 @@ fn check_atom_uses(
                 }
             }
             AtomArg::Placeholder => {}
+            AtomArg::Expr(_) => {
+                unreachable!("expression atom args are lowered by desugar before typecheck")
+            }
         }
     }
     Ok(())

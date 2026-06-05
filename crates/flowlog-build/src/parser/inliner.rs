@@ -66,11 +66,21 @@ struct Scope<'a> {
     /// not a nested `.init` may resolve to one of these (Soufflé
     /// sibling-scope visibility, e.g. `basic.SubtypeOf`).
     enclosing_instances: &'a HashMap<String, String>,
+    /// Relations declared in *enclosing* components (the ancestor chain),
+    /// mapped from the relation's (lowercased) name to the absolute prefix
+    /// of the ancestor that declares it. A single-segment relation
+    /// reference that is not a local `.decl` resolves to one of these
+    /// before falling through to the global scope — Soufflé's
+    /// enclosing-component visibility (e.g. a nested `configuration`
+    /// component referencing the parent `mainAnalysis`'s
+    /// `isImmutableHContext`). Closest ancestor wins on name collisions.
+    enclosing_relations: &'a HashMap<String, String>,
 }
 
 pub(crate) fn inline_one(
     parent_prefix: &str,
     enclosing: &HashMap<String, String>,
+    enclosing_relations: &HashMap<String, String>,
     init: InitDecl,
     comps: &mut HashMap<String, CompDecl>,
     output: &mut InlinerOutput,
@@ -139,6 +149,7 @@ pub(crate) fn inline_one(
         local_types: &local_types,
         nested_inits: &nested_inits,
         enclosing_instances: enclosing,
+        enclosing_relations,
     };
 
     // Instances visible to a nested `.init` in this body: everything
@@ -147,6 +158,17 @@ pub(crate) fn inline_one(
     let mut child_enclosing = enclosing.clone();
     for name in &nested_inits {
         child_enclosing.insert(name.clone(), qualify(&prefix, name));
+    }
+
+    // Relations visible to a nested `.init` from *its* enclosing scopes:
+    // the relations this instance inherits from its own ancestors, plus
+    // every relation declared directly in this body, keyed to this
+    // instance's prefix. Inserting this body's decls after cloning the
+    // ancestor map makes the closest ancestor win on a name collision
+    // (inner-shadows-outer), matching Soufflé.
+    let mut child_enclosing_relations = enclosing_relations.clone();
+    for name in &local_decls {
+        child_enclosing_relations.insert(name.clone(), prefix.clone());
     }
 
     // Resolution proceeds in two walks of the body, NOT in textual order.
@@ -165,7 +187,15 @@ pub(crate) fn inline_one(
     // define-before-use rule top-level `.type`s follow (see
     // `build_type_registry` in program.rs). Cycles surface as
     // `UnknownTypeParent`, not a hang.
-    collect_instance(&body, &scope, &child_enclosing, comps, output, registry)?;
+    collect_instance(
+        &body,
+        &scope,
+        &child_enclosing,
+        &child_enclosing_relations,
+        comps,
+        output,
+        registry,
+    )?;
     resolve_instance(body, &scope, output, registry)?;
 
     Ok(())
@@ -180,6 +210,7 @@ fn collect_instance(
     body: &[RawItem],
     scope: &Scope<'_>,
     child_enclosing: &HashMap<String, String>,
+    child_enclosing_relations: &HashMap<String, String>,
     comps: &mut HashMap<String, CompDecl>,
     output: &mut InlinerOutput,
     registry: &mut TypeRegistry,
@@ -189,6 +220,7 @@ fn collect_instance(
             inline_one(
                 scope.prefix,
                 child_enclosing,
+                child_enclosing_relations,
                 resolve_init(nested.clone(), scope.env),
                 comps,
                 output,
@@ -548,7 +580,12 @@ fn subst(env: &HashMap<String, String>, s: &str) -> String {
 /// 6. dotted, none of the above → pass through (types) / error (relations)
 /// 7. single segment matching a local `.decl`, or *(types only)* a local
 ///    `.type` alias declared in this comp → `prefix.name`
-/// 8. otherwise → unchanged, resolved later via the global registry
+/// 8. *(relations only)* single segment declared in an enclosing component
+///    → `that-ancestor-prefix.name` (Soufflé enclosing-component
+///    visibility, e.g. `isImmutableHContext` written inside the nested
+///    `configuration` component resolving to the parent `mainAnalysis`'s
+///    relation)
+/// 9. otherwise → unchanged, resolved later via the global registry
 ///
 /// Cases 1/4/5 and the alias half of 7 are gated on `!strict` so the
 /// relation path resolves a dotted head only via a nested-init (2) or a
@@ -589,6 +626,15 @@ fn resolve_qualified(
     let key = s.to_lowercase();
     if scope.local_decls.contains(&key) || (!strict && scope.local_types.contains(&key)) {
         return Ok(qualify(scope.prefix, s));
+    }
+    // Soufflé enclosing-component visibility: a single-segment relation
+    // reference not declared locally resolves to a relation declared in
+    // an enclosing component (the ancestor chain), before falling through
+    // to the global scope. Gated to the relation path (`strict`) — type
+    // names resolve their enclosing members through `env` / instance /
+    // global lookup, and the map only holds `.decl` relation names.
+    if strict && let Some(encl_prefix) = scope.enclosing_relations.get(&key) {
+        return Ok(qualify(encl_prefix, s));
     }
     Ok(s.to_string())
 }

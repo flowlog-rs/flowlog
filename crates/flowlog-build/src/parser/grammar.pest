@@ -334,8 +334,14 @@ atom = {
 negative_atom = { "!" ~ ( "(" ~ neg_inner ~ ")" | neg_inner ) }
 neg_inner     = { builtin_fn_call | atom }
 
-// Arguments in atoms can be constants, variables, or placeholders
-atom_arg = { constant | variable | placeholder } 
+// Arguments in atoms can be constants, variables, placeholders, or — for
+// Soufflé compatibility — arithmetic expressions like `idx - 1` or
+// `ord(h)`. A bare variable / constant collapses to the plain
+// `AtomArg::Var` / `AtomArg::Const` forms; anything with an operator or a
+// builtin/UDF/cast factor becomes `AtomArg::Expr` and is lifted to a fresh
+// variable plus an equality by the `desugar` pass before later stages run.
+// `placeholder` is listed first so `_` is never parsed as a variable.
+atom_arg = { placeholder | arithmetic_expr }
 
 // =============================================================================
 // RULES SECTION

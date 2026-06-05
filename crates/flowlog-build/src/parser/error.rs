@@ -283,6 +283,18 @@ pub enum ParseError {
     #[error("body aggregate expression has no inferrable type")]
     AggregateUntypedExpr { span: Span },
 
+    /// An arithmetic expression appeared in a *negated* atom's argument
+    /// (`!Edge(x, x + 1)`). Lifting it would bind the fresh variable only
+    /// through an equality, which the engine's range-restriction model
+    /// does not yet treat as binding. Rewrite the negation over a relation
+    /// whose column already holds the computed value.
+    #[error(
+        "expression argument in negated atom `{atom}` is not supported \
+         (the computed value cannot be range-restricted); compute it in a \
+         positive atom or relation first"
+    )]
+    ExprArgInNegatedAtom { span: Span, atom: String },
+
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
     #[error(transparent)]
@@ -478,6 +490,7 @@ impl Diagnostic for ParseError {
             | ParseError::AggregateUntypedVar { span, .. }
             | ParseError::AggregateMissingExpr { span, .. }
             | ParseError::AggregateUntypedExpr { span }
+            | ParseError::ExprArgInNegatedAtom { span, .. }
             | ParseError::IncludeIo { span, .. } => base.with_labels(primary_only(*span)),
 
             ParseError::Internal(_) => unreachable!("handled above"),

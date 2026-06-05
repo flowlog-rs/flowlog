@@ -1,23 +1,30 @@
 //! Atom types for FlowLog Datalog programs.
 //!
-//! - [`AtomArg`]: variable / constant / placeholder (`_`)
+//! - [`AtomArg`]: variable / constant / placeholder (`_`) / expression
 //! - [`Atom`]: `name(arg1, ..., argN)`
 
 use std::fmt;
 
 use pest::iterators::Pair;
 
+use super::{Arithmetic, Factor};
 use crate::common::{FileId, Ignored, Span, compute_fp};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::ConstType;
 use crate::parser::{Lexeme, Rule, span_of};
 
-/// An argument to an atom: variable, constant, or `_`.
+/// An argument to an atom: variable, constant, `_`, or a Soufflé-style
+/// arithmetic expression (`idx - 1`, `ord(h)`, `as(x, T)`).
+///
+/// [`Self::Expr`] is a transient surface form: the `desugar` pass lifts
+/// every expression argument to a fresh variable bound by an equality in
+/// the rule body, so no stage past parsing/desugaring ever observes it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum AtomArg {
     Var(String),
     Const(ConstType),
     Placeholder,
+    Expr(Arithmetic),
 }
 
 impl fmt::Display for AtomArg {
@@ -26,12 +33,19 @@ impl fmt::Display for AtomArg {
             Self::Var(v) => write!(f, "{v}"),
             Self::Const(c) => write!(f, "{c}"),
             Self::Placeholder => write!(f, "_"),
+            Self::Expr(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl Lexeme for AtomArg {
     /// Parse an atom argument from the grammar.
+    ///
+    /// `atom_arg = { placeholder | arithmetic_expr }`. A single-factor
+    /// arithmetic expression that is a bare variable or constant collapses
+    /// to [`Self::Var`] / [`Self::Const`] so the common case is unchanged;
+    /// anything else (operators, builtins, UDF calls, casts) becomes
+    /// [`Self::Expr`].
     fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let inner = parsed_rule
             .into_inner()
@@ -39,9 +53,19 @@ impl Lexeme for AtomArg {
             .ok_or_else(|| grammar_bug("atom_arg missing inner token"))?;
 
         Ok(match inner.as_rule() {
-            Rule::variable => Self::Var(inner.as_str().to_string()),
-            Rule::constant => Self::Const(ConstType::from_parsed_rule(inner, file)?),
             Rule::placeholder => Self::Placeholder,
+            Rule::arithmetic_expr => {
+                let arith = Arithmetic::from_parsed_rule(inner, file)?;
+                if arith.rest().is_empty() {
+                    match arith.init() {
+                        Factor::Var(v) => Self::Var(v.clone()),
+                        Factor::Const(c) => Self::Const(c.clone()),
+                        _ => Self::Expr(arith),
+                    }
+                } else {
+                    Self::Expr(arith)
+                }
+            }
             other => {
                 return Err(grammar_bug(format!(
                     "invalid atom argument rule: {other:?}"
