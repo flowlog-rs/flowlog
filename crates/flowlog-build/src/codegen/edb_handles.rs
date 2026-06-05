@@ -4,6 +4,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::CodeGen;
+use crate::codegen::ty::data::data_type_tokens;
 use crate::parser::DataType;
 use crate::profiler::{Profiler, with_profiler};
 
@@ -43,6 +44,7 @@ impl CodeGen {
             profiler.update_input_block();
         });
 
+        let str_intern = self.config.str_intern_enabled();
         edbs.iter()
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
@@ -58,8 +60,21 @@ impl CodeGen {
                     );
                 });
 
+                // Pin the collection's element type from the relation's
+                // declared schema. This is the same data type the relation's
+                // `InputSession` handle carries, so it never disagrees with
+                // inference — but it is *required* for EDBs that push no typed
+                // rows (Soufflé-compat empty relations) or whose only pushes go
+                // through the string-intern boundary, where `D` is otherwise
+                // uninferrable (`new_collection::<_, _>()`).
+                let elem_ty = if rel.arity() == 0 {
+                    quote! { () }
+                } else {
+                    data_type_tokens(&rel.data_type(), str_intern)
+                };
+
                 quote! {
-                    let (#handle, #coll) = scope.new_collection::<_, Diff>();
+                    let (#handle, #coll) = scope.new_collection::<#elem_ty, Diff>();
                     let #coll = #coll #normalize;
                 }
             })

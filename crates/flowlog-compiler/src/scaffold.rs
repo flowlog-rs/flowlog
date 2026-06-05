@@ -147,13 +147,21 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
     rendered
 }
 
-/// Render `.cargo/config.toml` with `-Dwarnings` so any unused imports or
-/// dead code in the generated crate surface as errors instead of silent
+/// Render `.cargo/config.toml` with `-Dwarnings` so unused imports, dead
+/// code, etc. in the generated crate surface as errors instead of silent
 /// warnings — a forcing function to keep the generator honest.
+///
+/// `unused_variables` / `unused_assignments` are exempted: a large
+/// multi-stratum program (e.g. DOOP) legitimately binds a relation in one
+/// stratum that is consumed only in another, so the intermediate binding is
+/// locally unused. That is an artifact of the dataflow lowering, not a
+/// generator bug, and is impractical to eliminate for arbitrary programs.
 pub(crate) fn render_cargo_config() -> String {
     let mut doc = DocumentMut::new();
     let mut flags = Array::new();
     flags.push("-Dwarnings");
+    flags.push("-Aunused_variables");
+    flags.push("-Aunused_assignments");
     doc["build"]["rustflags"] = value(flags);
     doc.to_string()
 }

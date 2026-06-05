@@ -7,6 +7,7 @@
 mod declaration;
 mod desugar;
 mod error;
+mod grounding;
 mod inliner;
 mod logic;
 mod primitive;

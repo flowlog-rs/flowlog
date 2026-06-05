@@ -32,9 +32,10 @@ use super::{
         RawTypeOp, Relation, split_type_alias,
     },
     error::{DirectiveKind, ParseError, grammar_bug},
+    grounding,
     inliner,
     logic::{
-        Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, LoopBlock, Predicate,
+        Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, HeadArg, LoopBlock, Predicate,
         consume_plan_directive,
     },
     primitive::TypeRegistry,
@@ -933,6 +934,13 @@ impl Program {
             program.extract_fact(fact);
         }
 
+        // Ground Soufflé assignment-style equalities (`x = "abstract"`,
+        // `calleeCtx = callerCtx`). Runs after the body-aggregate and
+        // expression-atom-argument desugars so a body only ever holds the four
+        // primitive predicate kinds. A rule that grounds to an empty body with
+        // an all-constant head is moved into the inline-fact map.
+        program.ground_assignment_bindings();
+
         program.validate_relation_references()?;
 
         Ok(program)
@@ -1238,6 +1246,53 @@ impl Program {
         let tuple = fact_rule.extract_constants_from_head();
         self.facts.entry(rel_name).or_default().push((span, tuple));
     }
+
+    /// Ground Soufflé assignment-style equalities across every rule, then
+    /// relocate any rule that collapsed to a pure ground fact into the
+    /// inline-fact map.
+    ///
+    /// Soufflé writes `isModifier(x) :- x = "abstract"` (and multi-head forms,
+    /// already split into single-head rules at parse time). After
+    /// [`grounding::ground_rule`] substitutes `x := "abstract"` the rule has an
+    /// empty body and an all-constant head — a fact. `HeapRepresentative`-style
+    /// rules that keep a residual body atom (`… :- null = "…", Type_null(t)`)
+    /// stay rules with the constant inlined.
+    fn ground_assignment_bindings(&mut self) {
+        let mut new_facts: Vec<FlowLogRule> = Vec::new();
+
+        for segment in &mut self.segments {
+            let rules = match segment {
+                Segment::Plain(rules) => rules,
+                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules_mut(),
+            };
+            let mut kept = Vec::with_capacity(rules.len());
+            for mut rule in rules.drain(..) {
+                grounding::ground_rule(&mut rule);
+                if is_ground_fact(&rule) {
+                    new_facts.push(rule);
+                } else {
+                    kept.push(rule);
+                }
+            }
+            *rules = kept;
+        }
+
+        for fact in new_facts {
+            self.extract_fact(fact);
+        }
+    }
+}
+
+/// True iff `rule` is a ground fact: an empty body and a head whose every
+/// argument is a constant arithmetic factor (what grounding leaves behind for
+/// `H(x) :- x = "c"`).
+fn is_ground_fact(rule: &FlowLogRule) -> bool {
+    rule.rhs().is_empty()
+        && rule
+            .head()
+            .head_arguments()
+            .iter()
+            .all(|arg| matches!(arg, HeadArg::Arith(a) if a.is_const()))
 }
 
 // =============================================================================
@@ -1276,8 +1331,14 @@ impl Program {
             .map(|d| d.name().to_string())
             .collect();
 
-        // Fact relations are always needed.
-        needed_preds.extend(self.facts.keys().cloned());
+        // Inline facts do NOT by themselves make a relation live: a relation
+        // is needed iff it is an output/printsize or is referenced (directly or
+        // transitively) by one. Referenced fact relations are picked up by the
+        // dependency DFS below; a program that is *only* facts (no outputs)
+        // falls through to the "keep everything" guard. This keeps grounding's
+        // by-products honest — e.g. `Modifier_abstract(x) :- x = "abstract"`
+        // grounds to a fact, but if nothing reads `Modifier_abstract` it stays
+        // dead rather than being resurrected as an unused EDB collection.
 
         // Relations referenced by loop until conditions must be retained even if
         // they are not outputs. They are semantically live because the loop
@@ -2200,6 +2261,60 @@ mod tests {
             program.edbs().iter().all(|r| r.name() != "excluded"),
             "dead-only references must not resurrect the relation as an EDB"
         );
+    }
+
+    /// Assignment-binding grounding: a rule whose body is a single equality
+    /// binding a head variable to a constant collapses to an inline fact.
+    #[test]
+    fn assignment_to_constant_becomes_inline_fact() {
+        let program = parse_program(
+            "
+            .decl A(x: symbol)
+            .output A
+            A(v) :- v = \"c\".
+            ",
+        );
+        assert!(
+            program.has_inline_facts("a"),
+            "`A(v) :- v = \"c\"` should ground to the fact A(\"c\")"
+        );
+        assert_eq!(program.facts().get("a").map(Vec::len), Some(1));
+        // No rule head named `a` should remain in the segments.
+        let has_rule = program.segments.iter().any(|seg| {
+            let rules = match seg {
+                Segment::Plain(r) => r.as_slice(),
+                Segment::Loop(b) | Segment::Fixpoint(b) => b.rules(),
+            };
+            rules.iter().any(|r| r.head().name() == "a")
+        });
+        assert!(!has_rule, "the grounded rule must be removed from the segments");
+    }
+
+    /// A constant binding with a residual positive atom inlines the constant
+    /// but stays a rule (it is not a pure ground fact).
+    #[test]
+    fn assignment_with_residual_body_stays_a_rule() {
+        let program = parse_program(
+            "
+            .decl Inp(x: symbol)
+            Inp(\"a\").
+            .decl C(c: symbol, y: symbol)
+            .output C
+            C(c, y) :- c = \"k\", Inp(y).
+            ",
+        );
+        assert!(
+            !program.has_inline_facts("c"),
+            "`C` keeps a body atom, so it must remain a rule, not a fact"
+        );
+        let has_rule = program.segments.iter().any(|seg| {
+            let rules = match seg {
+                Segment::Plain(r) => r.as_slice(),
+                Segment::Loop(b) | Segment::Fixpoint(b) => b.rules(),
+            };
+            rules.iter().any(|r| r.head().name() == "c")
+        });
+        assert!(has_rule, "C with a residual body atom must stay a rule");
     }
 
     /// Infix `cat` is gone — `a cat b` MUST NOT parse as a string
