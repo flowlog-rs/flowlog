@@ -110,6 +110,9 @@ impl Catalog {
                         // Record placeholder _
                         local_placeholder_set.insert(sig);
                     }
+                    AtomArg::Expr(_) => {
+                        unreachable!("expression atom args are lowered by desugar before populate")
+                    }
                 }
             }
 
@@ -191,6 +194,9 @@ impl Catalog {
                     }
                     AtomArg::Placeholder => {
                         local_placeholder_set.insert(sig);
+                    }
+                    AtomArg::Expr(_) => {
+                        unreachable!("expression atom args are lowered by desugar before populate")
                     }
                 }
             }

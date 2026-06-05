@@ -90,6 +90,14 @@ impl BodyAggregate {
         &mut self.body
     }
 
+    /// Replace the body predicates wholesale. Needed by desugaring passes
+    /// that may change the body length (e.g. lifting an expression atom
+    /// argument inside the aggregate to a fresh variable + equality).
+    #[inline]
+    pub(crate) fn set_body(&mut self, body: Vec<Predicate>) {
+        self.body = body;
+    }
+
     /// Source location.
     #[must_use]
     #[inline]

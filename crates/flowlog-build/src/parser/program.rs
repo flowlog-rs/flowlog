@@ -866,7 +866,7 @@ impl Program {
         let mut shift = 0usize;
         for (init, pos) in inits_at_pos {
             let mut out = inliner::InlinerOutput::default();
-            inliner::inline_one("", &global_instances, init, &mut comps, &mut out, &mut type_registry)?;
+            inliner::inline_one("", &global_instances, &HashMap::new(), init, &mut comps, &mut out, &mut type_registry)?;
             for rel in out.relations {
                 if let Some((_prev_raw, prior)) = decl_spans.get(rel.name()) {
                     return Err(ParseError::DuplicateDecl {
@@ -905,6 +905,12 @@ impl Program {
         Self::validate_loop_conditions(&segments, &relations)?;
 
         normalize_inliner_dots(&mut relations, &mut segments, &mut raw_facts);
+
+        // Lower Soufflé expression-valued atom arguments (`R(idx - 1, x)`)
+        // to a fresh variable bound by an equality. Runs before the
+        // body-aggregate lowering and recurses into aggregate bodies, so
+        // no later stage observes `AtomArg::Expr`.
+        super::desugar::desugar_expr_atom_args(&mut segments)?;
 
         // Lower Soufflé body-position aggregates to auxiliary IDB
         // relations + positive-atom references. After this runs no
@@ -1191,6 +1197,13 @@ impl Program {
                             }
                             AtomArg::Const(c) => {
                                 args.push(Arithmetic::new(Factor::Const(c.clone()), vec![]));
+                            }
+                            // A UDF predicate may carry an expression
+                            // argument (`is_valid(x + 1, y)`); it parses as
+                            // an atom with `AtomArg::Expr` and becomes a UDF
+                            // call argument directly.
+                            AtomArg::Expr(e) => {
+                                args.push(e.clone());
                             }
                             AtomArg::Placeholder => {
                                 return Err(ParseError::PlaceholderInUdf {
@@ -2228,6 +2241,214 @@ mod tests {
         let program = parse_program(src);
         let r = find_relation(&program, "c·contextrequest");
         assert_eq!(r.data_type(), vec![DataType::String, DataType::String]);
+    }
+
+    /// An *enclosing-component* relation referenced unqualified from a
+    /// nested instance resolves to the ancestor that declares it. This is
+    /// the DOOP shape: `Conf` is instantiated as the type parameter of
+    /// `Outer` (as `m.c`); its body's bare `Parent` resolves to the
+    /// enclosing `Outer` instance's `m·parent`, while the inherited `Req`
+    /// resolves to its own `m·c·req` (Soufflé enclosing-scope visibility).
+    #[test]
+    fn enclosing_comp_relation_ref_resolves() {
+        let src = "
+            .comp AbstractConf {
+              .decl Req(x: symbol)
+              .decl Resp(x: symbol)
+            }
+            .comp Conf : AbstractConf {
+              Resp(x) :- Req(x), Parent(x).
+            }
+            .comp Outer<C> {
+              .decl Parent(x: symbol)
+              .init c = C
+            }
+            .init m = Outer<Conf>
+        ";
+        let program = parse_program(src);
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "m·c·resp")
+            .expect("m·c·resp rule");
+        let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        assert!(
+            body.contains(&"m·parent"),
+            "enclosing-comp relation should resolve to m·parent, got {body:?}"
+        );
+        assert!(
+            body.contains(&"m·c·req"),
+            "inherited local relation should resolve to m·c·req, got {body:?}"
+        );
+    }
+
+    /// A locally declared relation shadows an enclosing-component relation
+    /// of the same name (inner scope wins).
+    #[test]
+    fn local_decl_shadows_enclosing_relation() {
+        let src = "
+            .comp Conf {
+              .decl Parent(x: symbol)
+              .decl Resp(x: symbol)
+              Resp(x) :- Parent(x).
+            }
+            .comp Outer<C> {
+              .decl Parent(x: symbol)
+              .init c = C
+            }
+            .init m = Outer<Conf>
+        ";
+        let program = parse_program(src);
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "m·c·resp")
+            .expect("m·c·resp rule");
+        let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        assert!(
+            body.contains(&"m·c·parent"),
+            "local Parent should shadow the enclosing one, got {body:?}"
+        );
+    }
+
+    /// An enclosing-component relation shadows a *global* relation of the
+    /// same name (Soufflé inner-shadows-outer, where global is outermost).
+    #[test]
+    fn enclosing_comp_relation_shadows_global() {
+        let src = "
+            .decl Parent(x: symbol)
+            .comp Conf {
+              .decl Resp(x: symbol)
+              Resp(x) :- Parent(x).
+            }
+            .comp Outer<C> {
+              .decl Parent(x: symbol)
+              .init c = C
+            }
+            .init m = Outer<Conf>
+        ";
+        let program = parse_program(src);
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "m·c·resp")
+            .expect("m·c·resp rule");
+        let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        assert!(
+            body.contains(&"m·parent"),
+            "enclosing Parent should shadow the global one, got {body:?}"
+        );
+    }
+
+    /// When two ancestors declare the same relation name, the *nearest*
+    /// enclosing component wins.
+    #[test]
+    fn nearest_enclosing_relation_wins() {
+        let src = "
+            .comp Inner {
+              .decl Resp(x: symbol)
+              Resp(x) :- Shared(x).
+            }
+            .comp Mid<C> {
+              .decl Shared(x: symbol)
+              .init i = C
+            }
+            .comp Outer<C> {
+              .decl Shared(x: symbol)
+              .init mid = Mid<C>
+            }
+            .init top = Outer<Inner>
+        ";
+        let program = parse_program(src);
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "top·mid·i·resp")
+            .expect("top·mid·i·resp rule");
+        let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        assert!(
+            body.contains(&"top·mid·shared"),
+            "nearest enclosing Shared (Mid) should win over Outer's, got {body:?}"
+        );
+    }
+
+    /// A Soufflé expression-valued atom argument in a positive body atom is
+    /// lifted to a fresh variable bound by an equality; the relation atom
+    /// keeps a plain variable in that column.
+    #[test]
+    fn expr_atom_arg_lifted_to_fresh_var_and_equality() {
+        let src = "
+            .decl Node(x: number)
+            .decl Edge(a: number, b: number)
+            .decl R(x: number)
+            R(x) :- Node(x), Edge(x - 1, x).
+        ";
+        let program = parse_program(src);
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "r")
+            .expect("r rule");
+        let edge = rule
+            .rhs()
+            .iter()
+            .find_map(|p| match p {
+                Predicate::PositiveAtom(a) if a.name() == "edge" => Some(a),
+                _ => None,
+            })
+            .expect("edge atom");
+        assert!(
+            matches!(&edge.arguments()[0], AtomArg::Var(v) if v.starts_with("__atom_arg")),
+            "first arg should be a lifted fresh variable, got {:?}",
+            edge.arguments()
+        );
+        assert!(
+            !edge.arguments().iter().any(|a| matches!(a, AtomArg::Expr(_))),
+            "no expression args should remain after desugaring"
+        );
+        assert!(
+            rule.rhs().iter().any(|p| matches!(p, Predicate::Compare(_))),
+            "a binding equality should have been synthesized"
+        );
+    }
+
+    /// Plain variable / constant atom arguments are unchanged by the
+    /// expression-argument desugaring (no regression for the common case).
+    #[test]
+    fn plain_atom_args_unchanged_by_expr_desugar() {
+        let src = "
+            .decl Node(x: number)
+            .decl R(x: number)
+            R(x) :- Node(x).
+            R(5) :- Node(5).
+        ";
+        let program = parse_program(src);
+        let has_expr = program.rules().into_iter().any(|r| {
+            r.rhs().iter().any(|p| match p {
+                Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) => {
+                    a.arguments().iter().any(|x| matches!(x, AtomArg::Expr(_)))
+                }
+                _ => false,
+            })
+        });
+        assert!(!has_expr, "plain args must not become AtomArg::Expr");
+    }
+
+    /// An expression argument inside a *negated* atom is rejected with a
+    /// clear diagnostic (the lifted variable could not be range-restricted).
+    #[test]
+    fn expr_arg_in_negated_atom_rejected() {
+        let src = "
+            .decl Node(x: number)
+            .decl Edge(a: number, b: number)
+            .decl R(x: number)
+            R(x) :- Node(x), !Edge(x, x + 1).
+        ";
+        let err = parse_program_result(src).unwrap_err();
+        assert!(
+            matches!(err, ParseError::ExprArgInNegatedAtom { .. }),
+            "got {err:?}"
+        );
     }
 
     /// A rule inside one component may reference a relation of a *sibling*

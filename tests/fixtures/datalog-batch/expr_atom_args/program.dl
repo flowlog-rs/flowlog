@@ -1,0 +1,31 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Feature : Soufflé-style expression-valued atom arguments in *positive*
+//           body atoms — `R(x - 1, ...)` / `R(x + 1, ...)`. The desugar pass
+//           lifts each to a fresh variable bound (range-restricted) by the
+//           positive atom, with the equality acting as a filter. Expected/*
+//           values were produced by Soufflé 2.5 on the same inputs.
+//
+//           Expression args in *negated* atoms (`!R(x + 1, ...)`) need
+//           assignment-style binding, which the engine does not yet provide;
+//           they are rejected with a clear diagnostic instead.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: number, dst: number)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.decl Node(id: number)
+.input Node(IO="file", filename="Node.csv", delimiter=",")
+
+// Baseline (comparison-bound) and expression-in-arg forms must agree.
+.decl Consecutive(a: number, b: number)
+.output Consecutive
+Consecutive(x, y) :- Node(x), Node(y), Edge(x, y), y = x + 1.
+
+// Expression directly in a positive atom argument.
+.decl HasPrev(x: number)
+.output HasPrev
+HasPrev(x) :- Node(x), Edge(x - 1, x).
+
+// Multiple/compound expression arguments in one atom.
+.decl Around(x: number)
+.output Around
+Around(x) :- Node(x), Edge(x - 1, x + 1).

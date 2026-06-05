@@ -163,6 +163,14 @@ impl FlowLogRule {
         &mut self.rhs
     }
 
+    /// Replace the body predicates wholesale. Used by desugaring passes
+    /// whose rewrite may change the body length (e.g. lifting expression
+    /// atom arguments to fresh variables + equalities).
+    #[inline]
+    pub(crate) fn set_rhs(&mut self, rhs: Vec<Predicate>) {
+        self.rhs = rhs;
+    }
+
     /// Extract constants from a fact's head.
     ///
     /// Panics if any head argument is not a simple constant.
