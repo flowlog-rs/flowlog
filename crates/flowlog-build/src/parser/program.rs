@@ -1546,6 +1546,21 @@ mod tests {
             .unwrap_or_else(|| panic!("relation `{name}` not found"))
     }
 
+    /// Resolved relation names in the body of the (single) rule whose head
+    /// is `head_name`. Assumes every body predicate is an atom — fine for
+    /// the component name-resolution tests, which use atom-only bodies.
+    fn resolved_body_names<'a>(program: &'a Program, head_name: &str) -> Vec<&'a str> {
+        program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == head_name)
+            .unwrap_or_else(|| panic!("rule with head `{head_name}` not found"))
+            .rhs()
+            .iter()
+            .map(|p| p.name())
+            .collect()
+    }
+
     #[test]
     fn decl_case_collision_rejected() {
         let err = parse_program_result(
@@ -2266,12 +2281,7 @@ mod tests {
             .init m = Outer<Conf>
         ";
         let program = parse_program(src);
-        let rule = program
-            .rules()
-            .into_iter()
-            .find(|r| r.head().name() == "m·c·resp")
-            .expect("m·c·resp rule");
-        let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        let body = resolved_body_names(&program, "m·c·resp");
         assert!(
             body.contains(&"m·parent"),
             "enclosing-comp relation should resolve to m·parent, got {body:?}"
@@ -2299,12 +2309,7 @@ mod tests {
             .init m = Outer<Conf>
         ";
         let program = parse_program(src);
-        let rule = program
-            .rules()
-            .into_iter()
-            .find(|r| r.head().name() == "m·c·resp")
-            .expect("m·c·resp rule");
-        let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        let body = resolved_body_names(&program, "m·c·resp");
         assert!(
             body.contains(&"m·c·parent"),
             "local Parent should shadow the enclosing one, got {body:?}"
@@ -2328,12 +2333,7 @@ mod tests {
             .init m = Outer<Conf>
         ";
         let program = parse_program(src);
-        let rule = program
-            .rules()
-            .into_iter()
-            .find(|r| r.head().name() == "m·c·resp")
-            .expect("m·c·resp rule");
-        let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        let body = resolved_body_names(&program, "m·c·resp");
         assert!(
             body.contains(&"m·parent"),
             "enclosing Parent should shadow the global one, got {body:?}"
@@ -2360,12 +2360,7 @@ mod tests {
             .init top = Outer<Inner>
         ";
         let program = parse_program(src);
-        let rule = program
-            .rules()
-            .into_iter()
-            .find(|r| r.head().name() == "top·mid·i·resp")
-            .expect("top·mid·i·resp rule");
-        let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
+        let body = resolved_body_names(&program, "top·mid·i·resp");
         assert!(
             body.contains(&"top·mid·shared"),
             "nearest enclosing Shared (Mid) should win over Outer's, got {body:?}"
