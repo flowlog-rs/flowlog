@@ -21,7 +21,13 @@ pub(crate) fn gen_relation(
     let edbs = program.edbs();
     let str_intern = features.string_intern();
     let facts = program.facts();
-    let has_any_inline = edbs.iter().any(|rel| facts.contains_key(rel.name()));
+    // Only EDBs with at least one inline tuple emit `update(row, SEMIRING_ONE)`
+    // (see `gen_inline_facts`, which is a no-op for None/empty). Soufflé-compat
+    // empty EDBs carry a zero-row `facts` entry, so gate the import on a real
+    // tuple to avoid an unused-import warning.
+    let has_any_inline = edbs
+        .iter()
+        .any(|rel| facts.get(rel.name()).is_some_and(|rows| !rows.is_empty()));
 
     let needs_ordered_float = edbs
         .iter()

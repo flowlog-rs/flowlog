@@ -42,7 +42,12 @@ impl Compiler {
         let has_file_backed_edbs = edbs
             .iter()
             .any(|rel| rel.is_file_backed() && rel.arity() > 0);
-        let has_inline_facts = !self.program.facts().is_empty();
+        // Only real inline tuples need a preload pass. Declared-empty
+        // relations (Soufflé-compat empty EDBs) carry a zero-row `facts`
+        // entry purely so the stratifier sees them as available; they must
+        // not by themselves force a preload epoch. Behavior is unchanged for
+        // programs whose `facts` entries all hold real tuples.
+        let has_inline_facts = self.program.facts().values().any(|rows| !rows.is_empty());
         let needs_preload = has_file_backed_edbs || has_inline_facts;
 
         let maybe_peers = if has_file_backed_edbs {
