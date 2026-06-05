@@ -4,18 +4,23 @@
 //! [`Program`] and rewrite *surface-level* syntactic sugar to the
 //! restricted core that downstream stages already understand.
 //!
-//! Currently provides:
+//! Currently provides, in pipeline order:
 //!
+//! * [`desugar_expr_atom_args`] — lifts a Soufflé expression in a body
+//!   atom's argument position (`R(idx - 1, x)`) to a fresh variable
+//!   bound by an equality, so atoms only ever carry variables, constants,
+//!   and placeholders.
 //! * [`desugar_body_aggregates`] — lifts each Soufflé-style body
 //!   aggregate `r = op [expr] : body` into a fresh auxiliary IDB
 //!   relation that runs a normal head-position aggregate, and replaces
 //!   the original site with a positive atom referencing the aux
 //!   relation's result column.
 //!
-//! Keeping this pass parser-adjacent (rather than typechecker-adjacent)
+//! Keeping these passes parser-adjacent (rather than typechecker-adjacent)
 //! lets every later stage assume rule bodies hold only the four
 //! "primitive" predicate kinds: positive atom, negative atom,
-//! comparison, fn-call.
+//! comparison, fn-call — and that every atom argument is a variable,
+//! constant, or placeholder.
 //!
 //! ## Why a separate aux IDB?
 //!
@@ -48,9 +53,8 @@ use crate::common::Span;
 use crate::parser::declaration::{Attribute, ExternFn, Relation};
 use crate::parser::error::ParseError;
 use crate::parser::logic::{
-    Aggregation, AggregationOperator, Arithmetic, Atom, AtomArg, BodyAggregate, BuiltinCall,
-    BuiltinOperator, ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head,
-    HeadArg, Predicate,
+    Aggregation, AggregationOperator, Arithmetic, Atom, AtomArg, BodyAggregate, BuiltinOperator,
+    ComparisonExpr, ComparisonOperator, Factor, FlowLogRule, FnCall, Head, HeadArg, Predicate,
 };
 use crate::parser::primitive::{ConstType, DataType, TypeRegistry};
 use crate::parser::segment::Segment;
@@ -84,10 +88,7 @@ pub(crate) fn desugar_body_aggregates(
     let mut new_relations: Vec<Relation> = Vec::new();
 
     for segment in segments.iter_mut() {
-        let rules: &mut Vec<FlowLogRule> = match segment {
-            Segment::Plain(r) => r,
-            Segment::Loop(block) | Segment::Fixpoint(block) => block.rules_mut(),
-        };
+        let rules = segment_rules_mut(segment);
 
         let mut rewritten: Vec<FlowLogRule> = Vec::with_capacity(rules.len());
         for mut rule in rules.drain(..) {
@@ -109,133 +110,31 @@ pub(crate) fn desugar_body_aggregates(
     Ok(())
 }
 
-// =============================================================================
-// Expression-valued atom arguments (Soufflé compatibility)
-// =============================================================================
-//
-// Soufflé allows an arithmetic expression directly in a body atom's
-// argument position, e.g.
-//
-//   FormalParam(idx - 1, method, formal)
-//   ArrayIndexPointsTo(ord(h), ...)
-//
-// FlowLog's core relational form only admits a variable, constant, or
-// placeholder per column. This pass lifts every such expression argument
-// to a fresh variable bound by an equality, inserted immediately *before*
-// the atom that uses it:
-//
-//   __atom_arg_0 = idx - 1,
-//   FormalParam(__atom_arg_0, method, formal)
-//
-// Placing the binding before the atom keeps negation safe (`!R(idx-1, x)`
-// becomes `__a = idx-1, !R(__a, x)` — the fresh variable is ground before
-// the negated atom), and is equally correct for positive atoms (the
-// planner is free to use the equality as an assignment or a filter).
-//
-// Runs before [`desugar_body_aggregates`] and recurses into aggregate
-// bodies, so by the time the body-aggregate / typecheck / populate stages
-// run, no `AtomArg::Expr` remains anywhere.
-
-/// Lower every expression-valued atom argument in `segments` to a fresh
-/// variable plus a preceding equality. Idempotent in spirit: a second
-/// pass is a no-op once all `AtomArg::Expr` have been rewritten.
-///
-/// Expression arguments inside a *negated* atom are rejected (see
-/// [`ParseError::ExprArgInNegatedAtom`]): the lifted variable would be
-/// bound only through an equality, which the range-restriction model does
-/// not treat as binding.
-pub(crate) fn desugar_expr_atom_args(segments: &mut [Segment]) -> Result<(), ParseError> {
-    let mut counter: usize = 0;
-    for segment in segments.iter_mut() {
-        let rules: &mut Vec<FlowLogRule> = match segment {
-            Segment::Plain(r) => r,
-            Segment::Loop(block) | Segment::Fixpoint(block) => block.rules_mut(),
-        };
-        for rule in rules.iter_mut() {
-            let lifted = lift_predicates(rule.rhs().to_vec(), &mut counter)?;
-            rule.set_rhs(lifted);
-        }
-    }
-    Ok(())
-}
-
-/// Rewrite a predicate list, lifting expression atom arguments. Recurses
-/// into body-aggregate inner bodies so their atoms are lifted in the same
-/// scope (a grouping variable hidden inside an expression stays visible to
-/// the body aggregate's grouping logic).
-fn lift_predicates(
-    preds: Vec<Predicate>,
-    counter: &mut usize,
-) -> Result<Vec<Predicate>, ParseError> {
-    let mut out: Vec<Predicate> = Vec::with_capacity(preds.len());
-    for pred in preds {
-        match pred {
-            Predicate::PositiveAtom(atom) => {
-                let (atom, binders) = lift_atom_args(atom, counter);
-                out.extend(binders);
-                out.push(Predicate::PositiveAtom(atom));
-            }
-            Predicate::NegativeAtom(atom) => {
-                // A negated atom's lifted variable would be bound only by
-                // the synthesized equality, which is not range-restricting.
-                if atom.arguments().iter().any(|a| matches!(a, AtomArg::Expr(_))) {
-                    return Err(ParseError::ExprArgInNegatedAtom {
-                        span: atom.span(),
-                        atom: atom.to_string(),
-                    });
-                }
-                out.push(Predicate::NegativeAtom(atom));
-            }
-            Predicate::BodyAggregate(mut agg) => {
-                let lifted = lift_predicates(agg.body().to_vec(), counter)?;
-                agg.set_body(lifted);
-                out.push(Predicate::BodyAggregate(agg));
-            }
-            other => out.push(other),
-        }
-    }
-    Ok(out)
-}
-
-/// Replace each `AtomArg::Expr` in `atom` with a fresh variable, returning
-/// the rewritten atom and the equality predicates that bind those fresh
-/// variables (to be spliced in before the atom).
-fn lift_atom_args(mut atom: Atom, counter: &mut usize) -> (Atom, Vec<Predicate>) {
-    let mut binders: Vec<Predicate> = Vec::new();
-    for arg in atom.arguments_mut() {
-        if let AtomArg::Expr(expr) = arg {
-            let fresh = format!("__atom_arg_{}", *counter);
-            *counter += 1;
-            binders.push(eq_binding(&fresh, expr.clone()));
-            *arg = AtomArg::Var(fresh);
-        }
-    }
-    (atom, binders)
-}
-
-/// `<var> = <expr>` as a comparison predicate.
-fn eq_binding(var: &str, expr: Arithmetic) -> Predicate {
-    let lhs = Arithmetic::new(Factor::Var(var.to_string()), vec![]);
-    Predicate::Compare(ComparisonExpr::synth(
-        lhs,
-        ComparisonOperator::Equal,
-        expr,
-        Span::DUMMY,
-    ))
-}
-
 /// True iff any rule (Plain segment or inside a loop block) holds at
 /// least one body-aggregate predicate.
 fn any_body_aggregate(segments: &[Segment]) -> bool {
     segments.iter().any(|seg| {
-        let rules: &[FlowLogRule] = match seg {
-            Segment::Plain(r) => r,
-            Segment::Loop(b) | Segment::Fixpoint(b) => b.rules(),
-        };
-        rules
+        segment_rules(seg)
             .iter()
             .any(|r| r.rhs().iter().any(|p| matches!(p, Predicate::BodyAggregate(_))))
     })
+}
+
+/// The rules a segment carries, regardless of whether it is a plain
+/// stratum or a loop/fixpoint block.
+fn segment_rules(segment: &Segment) -> &[FlowLogRule] {
+    match segment {
+        Segment::Plain(rules) => rules,
+        Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
+    }
+}
+
+/// Mutable counterpart of [`segment_rules`].
+fn segment_rules_mut(segment: &mut Segment) -> &mut Vec<FlowLogRule> {
+    match segment {
+        Segment::Plain(rules) => rules,
+        Segment::Loop(block) | Segment::Fixpoint(block) => block.rules_mut(),
+    }
 }
 
 // =============================================================================
@@ -701,6 +600,130 @@ fn infer_factor_type(
 }
 
 // =============================================================================
+// Expression-valued atom arguments (Soufflé compatibility)
+// =============================================================================
+//
+// Soufflé allows an arithmetic expression directly in a body atom's
+// argument position, e.g.
+//
+//   FormalParam(idx - 1, method, formal)
+//   ArrayIndexPointsTo(ord(h), ...)
+//
+// FlowLog's core relational form only admits a variable, constant, or
+// placeholder per column. This pass lifts every such expression argument
+// to a fresh variable bound by an equality, inserted immediately *before*
+// the atom that uses it:
+//
+//   __atom_arg_0 = idx - 1,
+//   FormalParam(__atom_arg_0, method, formal)
+//
+// The fresh variable is range-restricted by the (positive) atom it feeds,
+// so the equality acts as a filter. Runs before `desugar_body_aggregates`
+// and recurses into aggregate bodies, so by the time the body-aggregate /
+// typecheck / populate stages run, no `AtomArg::Expr` remains anywhere.
+
+/// Lower every expression-valued atom argument in `segments` to a fresh
+/// variable plus a preceding equality. Idempotent in spirit: a second
+/// pass is a no-op once all `AtomArg::Expr` have been rewritten.
+///
+/// An expression inside a *negated* atom is rejected (see
+/// [`ParseError::ExprArgInNegatedAtom`]): the lifted variable would be
+/// bound only through the equality, which the range-restriction model does
+/// not treat as binding.
+pub(crate) fn desugar_expr_atom_args(segments: &mut [Segment]) -> Result<(), ParseError> {
+    let mut counter: usize = 0;
+    for segment in segments.iter_mut() {
+        for rule in segment_rules_mut(segment).iter_mut() {
+            // Skip the clone+rewrite for the overwhelming majority of
+            // rules that carry no expression argument.
+            if !predicates_have_expr_arg(rule.rhs()) {
+                continue;
+            }
+            let lifted = lift_predicates(rule.rhs().to_vec(), &mut counter)?;
+            rule.set_rhs(lifted);
+        }
+    }
+    Ok(())
+}
+
+/// True iff any atom (top-level or inside a body aggregate) carries an
+/// `AtomArg::Expr`. Cheap, allocation-free pre-check for the rewrite.
+fn predicates_have_expr_arg(preds: &[Predicate]) -> bool {
+    preds.iter().any(|pred| match pred {
+        Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
+            atom.arguments().iter().any(|a| matches!(a, AtomArg::Expr(_)))
+        }
+        Predicate::BodyAggregate(agg) => predicates_have_expr_arg(agg.body()),
+        Predicate::Compare(_) | Predicate::FnCall(_) => false,
+    })
+}
+
+/// Rewrite a predicate list, lifting expression atom arguments. Recurses
+/// into body-aggregate inner bodies so their atoms are lifted in the same
+/// scope (a grouping variable hidden inside an expression stays visible to
+/// the body aggregate's grouping logic).
+fn lift_predicates(
+    preds: Vec<Predicate>,
+    counter: &mut usize,
+) -> Result<Vec<Predicate>, ParseError> {
+    let mut out: Vec<Predicate> = Vec::with_capacity(preds.len());
+    for pred in preds {
+        match pred {
+            Predicate::PositiveAtom(atom) => {
+                let (atom, binders) = lift_atom_args(atom, counter);
+                out.extend(binders);
+                out.push(Predicate::PositiveAtom(atom));
+            }
+            Predicate::NegativeAtom(atom) => {
+                // A negated atom's lifted variable would be bound only by
+                // the synthesized equality, which is not range-restricting.
+                if atom.arguments().iter().any(|a| matches!(a, AtomArg::Expr(_))) {
+                    return Err(ParseError::ExprArgInNegatedAtom {
+                        span: atom.span(),
+                        atom: atom.to_string(),
+                    });
+                }
+                out.push(Predicate::NegativeAtom(atom));
+            }
+            Predicate::BodyAggregate(mut agg) => {
+                let lifted = lift_predicates(agg.body().to_vec(), counter)?;
+                agg.set_body(lifted);
+                out.push(Predicate::BodyAggregate(agg));
+            }
+            other => out.push(other),
+        }
+    }
+    Ok(out)
+}
+
+/// Replace each `AtomArg::Expr` in `atom` with a fresh variable, returning
+/// the rewritten atom and the equalities that bind those fresh variables
+/// (to be spliced in before the atom).
+fn lift_atom_args(mut atom: Atom, counter: &mut usize) -> (Atom, Vec<Predicate>) {
+    let mut binders: Vec<Predicate> = Vec::new();
+    for arg in atom.arguments_mut() {
+        if let AtomArg::Expr(expr) = arg {
+            let fresh = format!("__atom_arg_{counter}");
+            *counter += 1;
+            binders.push(eq_binding(&fresh, expr.clone()));
+            *arg = AtomArg::Var(fresh);
+        }
+    }
+    (atom, binders)
+}
+
+/// `<var> = <expr>` as a comparison predicate.
+fn eq_binding(var: &str, expr: Arithmetic) -> Predicate {
+    let lhs = Arithmetic::new(Factor::Var(var.to_string()), vec![]);
+    Predicate::Compare(ComparisonExpr::synth(
+        lhs,
+        ComparisonOperator::Equal,
+        expr,
+        Span::DUMMY,
+    ))
+}
+
+// =============================================================================
 // RelationIndex — name → per-column (DataType, TypeId)
 // =============================================================================
 
@@ -726,15 +749,3 @@ impl RelationIndex {
         self.inner.get(name).map(Vec::as_slice)
     }
 }
-
-// =============================================================================
-// Suppress unused-import warning for ComparisonExpr — referenced only
-// through the `Predicate::Compare` arm above, which the borrow-checker
-// counts as use of the variant but not the type alias.
-// =============================================================================
-
-#[allow(dead_code)]
-fn _ensure_comparison_used(_: &ComparisonExpr) {}
-
-#[allow(dead_code)]
-fn _ensure_builtin_call_used(_: &BuiltinCall) {}
