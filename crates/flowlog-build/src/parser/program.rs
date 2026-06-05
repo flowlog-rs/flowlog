@@ -633,11 +633,26 @@ fn normalize_rule_dots(rule: &mut FlowLogRule) {
         head.set_name(head.name().replace('.', INLINER_SEP));
     }
     for pred in rule.rhs_mut() {
-        if let Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) = pred
-            && a.name().contains('.')
-        {
-            a.set_name(a.name().replace('.', INLINER_SEP));
+        normalize_predicate_dots(pred);
+    }
+}
+
+/// Recursively normalize `.`-containing relation names in a predicate.
+/// Descends into body-aggregate inner bodies, mirroring the rewrite
+/// scope used by the component inliner.
+fn normalize_predicate_dots(pred: &mut Predicate) {
+    match pred {
+        Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a) => {
+            if a.name().contains('.') {
+                a.set_name(a.name().replace('.', INLINER_SEP));
+            }
         }
+        Predicate::BodyAggregate(agg) => {
+            for inner in agg.body_mut() {
+                normalize_predicate_dots(inner);
+            }
+        }
+        Predicate::Compare(_) | Predicate::FnCall(_) => {}
     }
 }
 
@@ -890,6 +905,16 @@ impl Program {
         Self::validate_loop_conditions(&segments, &relations)?;
 
         normalize_inliner_dots(&mut relations, &mut segments, &mut raw_facts);
+
+        // Lower Soufflé body-position aggregates to auxiliary IDB
+        // relations + positive-atom references. After this runs no
+        // downstream stage observes `Predicate::BodyAggregate`.
+        super::desugar::desugar_body_aggregates(
+            &mut relations,
+            &mut segments,
+            &udfs,
+            &type_registry,
+        )?;
 
         let mut program = Self {
             relations,

@@ -5,6 +5,7 @@
 //! relation declarations, logic rules, and primitive types.
 
 mod declaration;
+mod desugar;
 mod error;
 mod inliner;
 mod logic;

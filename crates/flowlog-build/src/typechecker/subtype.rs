@@ -84,6 +84,9 @@ fn check_rule(
                     check_arith_casts(arg, reg, &bindings)?;
                 }
             }
+            Predicate::BodyAggregate(_) => {
+                unreachable!("body aggregates are lowered before subtype checking");
+            }
         }
     }
 
@@ -312,6 +315,9 @@ fn lower_rule(rule: &mut FlowLogRule) {
                 for a in fc.args_mut() {
                     lower_arith(a);
                 }
+            }
+            Predicate::BodyAggregate(_) => {
+                unreachable!("body aggregates are lowered before subtype lowering");
             }
         }
     }

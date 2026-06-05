@@ -75,6 +75,9 @@ impl Catalog {
                 }
                 Predicate::Compare(expr) => comparison_predicates.push(expr.clone()),
                 Predicate::FnCall(fc) => fn_call_predicates.push(fc.clone()),
+                Predicate::BodyAggregate(_) => {
+                    unreachable!("body aggregates are lowered before catalog construction");
+                }
             }
         }
 

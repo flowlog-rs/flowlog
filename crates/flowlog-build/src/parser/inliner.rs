@@ -600,12 +600,28 @@ fn rewrite_rule(rule: &mut FlowLogRule, scope: &Scope<'_>) -> Result<(), ParseEr
         head.set_name(rewritten);
     }
     for pred in rule.rhs_mut() {
-        if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
+        rewrite_predicate(pred, scope)?;
+    }
+    Ok(())
+}
+
+/// Rename relation references in a single predicate. Descends into
+/// body-aggregate inner bodies so qualified atoms inside `: { ... }`
+/// receive the same component-prefix treatment as outer-body atoms.
+fn rewrite_predicate(pred: &mut Predicate, scope: &Scope<'_>) -> Result<(), ParseError> {
+    match pred {
+        Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
             let rewritten = resolve_qualified(atom.name(), atom.span(), scope, true)?;
             if rewritten != atom.name() {
                 atom.set_name(rewritten);
             }
         }
+        Predicate::BodyAggregate(agg) => {
+            for inner in agg.body_mut() {
+                rewrite_predicate(inner, scope)?;
+            }
+        }
+        Predicate::Compare(_) | Predicate::FnCall(_) => {}
     }
     Ok(())
 }

@@ -293,9 +293,55 @@ impl fmt::Display for Arithmetic {
 }
 
 impl Lexeme for Arithmetic {
-    /// Parse `factor (operator factor)*`.
+    /// Parse `factor (operator factor)*`, optionally wrapped in a single
+    /// pair of boundary parentheses.
+    ///
+    /// The grammar exposes `arithmetic_expr = { paren_arith |
+    /// unparen_arith }`. Parens at the boundary of an arithmetic
+    /// expression are pure grouping with no semantic effect (the
+    /// engine's arithmetic has no operator precedence), so we strip
+    /// them here and recurse into the inner expression. This keeps
+    /// the AST flat — downstream stages never see a `Paren` node.
     fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         let span = span_of(&parsed_rule, file);
+
+        // The `arithmetic_expr` rule wraps exactly one of
+        // `paren_arith` or `unparen_arith`; peel that wrapper first.
+        let body = match parsed_rule.as_rule() {
+            Rule::arithmetic_expr => parsed_rule
+                .into_inner()
+                .next()
+                .ok_or_else(|| grammar_bug("arithmetic_expr missing inner alternative"))?,
+            _ => parsed_rule,
+        };
+
+        match body.as_rule() {
+            Rule::paren_arith => {
+                let inner = body
+                    .into_inner()
+                    .next()
+                    .ok_or_else(|| grammar_bug("paren_arith missing inner arithmetic"))?;
+                let mut nested = Self::from_parsed_rule(inner, file)?;
+                // Preserve the *outer* span (including the parens) so
+                // diagnostics point at the user-visible source range.
+                nested.span = Ignored(span);
+                Ok(nested)
+            }
+            Rule::unparen_arith => Self::from_unparen(body, file, span),
+            other => Err(grammar_bug(format!(
+                "expected paren_arith or unparen_arith, got {other:?}"
+            ))),
+        }
+    }
+}
+
+impl Arithmetic {
+    /// Parse the parenless body `factor (op factor)*`.
+    fn from_unparen(
+        parsed_rule: Pair<Rule>,
+        file: FileId,
+        span: Span,
+    ) -> Result<Self, ParseError> {
         let mut inner = parsed_rule.into_inner();
 
         let init_pair = inner

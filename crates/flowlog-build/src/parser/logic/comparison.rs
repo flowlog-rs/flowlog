@@ -127,6 +127,23 @@ impl ComparisonExpr {
         vars.extend(self.right.vars_set());
         vars
     }
+
+    /// Construct a comparison from already-built parts. Used by parse-time
+    /// desugarings (e.g. lowering a body-position boolean builtin
+    /// `match(re, s)` into `match(re, s) = true`).
+    pub(crate) fn synth(
+        left: Arithmetic,
+        operator: ComparisonOperator,
+        right: Arithmetic,
+        span: Span,
+    ) -> Self {
+        Self {
+            left,
+            operator,
+            right,
+            span: Ignored(span),
+        }
+    }
 }
 
 impl fmt::Display for ComparisonExpr {

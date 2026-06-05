@@ -198,7 +198,17 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 
 // Simple arithmetic without precedence
 // Note: "x + y * z" is parsed left-to-right as "(x + y) * z"
-arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
+//
+// Parentheses are accepted only at the *boundary* of an arithmetic
+// expression — i.e., `(a - b) <= 15` and `x = (a + b)` are fine,
+// but `(a - b) + c` is not. Boundary parens are stripped at parse
+// time and have no effect on evaluation. Deep paren nesting for
+// precedence override is intentionally not supported here because
+// the engine's arithmetic has no operator precedence to override;
+// see `Factor` / `Arithmetic` for the flat left-to-right model.
+arithmetic_expr = { paren_arith | unparen_arith }
+paren_arith     = { "(" ~ arithmetic_expr ~ ")" }
+unparen_arith   = { factor ~ (arithmetic_op ~ factor)* }
 
 // `as_cast` first so `as` wins over a UDF named `as` (reserved keyword).
 factor = { as_cast | builtin_fn_call | fn_call_expr | constant | variable }
@@ -239,13 +249,14 @@ builtin_fn_call = {
 // `cat_op` is the Soufflé function form `cat(a, b)`. There is no
 // infix `cat`; chains nest as `cat(a, cat(b, c))`.
 builtin_op = {
-    strlen_op | substr_op | ord_op | contains_op | to_string_op | to_number_op | cat_op
+    strlen_op | substr_op | ord_op | contains_op | match_op | to_string_op | to_number_op | cat_op
 }
 
 strlen_op    = @{ "strlen"    ~ !(ASCII_ALPHANUMERIC | "_") }
 substr_op    = @{ "substr"    ~ !(ASCII_ALPHANUMERIC | "_") }
 ord_op       = @{ "ord"       ~ !(ASCII_ALPHANUMERIC | "_") }
 contains_op  = @{ "contains"  ~ !(ASCII_ALPHANUMERIC | "_") }
+match_op     = @{ "match"     ~ !(ASCII_ALPHANUMERIC | "_") }
 to_string_op = @{ "to_string" ~ !(ASCII_ALPHANUMERIC | "_") }
 to_number_op = @{ "to_number" ~ !(ASCII_ALPHANUMERIC | "_") }
 cat_op       = @{ "cat"       ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -315,7 +326,13 @@ atom = {
 
 // Negative atom for negative conditions
 // Example: !edge(x, y)
-negative_atom = { "!" ~ atom }
+// Negation accepts an atom or a boolean builtin call, with an optional
+// pair of parens around the negated term. So `!foo(x)`, `!(foo(x))`,
+// `!match(re, s)`, and `!(match(re, s))` are all accepted. The inner
+// alternatives are listed builtin-first because `match(...)` would
+// otherwise greedily match `atom` as a relation named "match".
+negative_atom = { "!" ~ ( "(" ~ neg_inner ~ ")" | neg_inner ) }
+neg_inner     = { builtin_fn_call | atom }
 
 // Arguments in atoms can be constants, variables, or placeholders
 atom_arg = { constant | variable | placeholder } 
@@ -390,18 +407,55 @@ fn_call_expr = {
 predicates = { predicate ~ ("," ~ predicate)* }
 
 // Types of predicates allowed in rule bodies
-// Note: compare_expr must come before atom because compare_expr can start with
+// Note: body_aggregate must come before compare_expr because both start with
+// `variable ~ "="`; the aggregate variant is more specific (op + `:`-delimited body).
+// compare_expr must come before atom because compare_expr can start with
 // fn_call_expr (e.g., "cost(x) > 5") which atom would greedily consume.
+// builtin_fn_call must come before atom so `match("...", x)` and
+// `contains(needle, hay)` parse as builtin predicates, not as an atom
+// named "match" / "contains".
 predicate = {
+    body_aggregate | // Soufflé body aggregate: x = min ord(h) : Body(h)
     compare_expr |  // Comparison: x > y, cost(x) > 5
+    builtin_fn_call | // Boolean builtin used as a body predicate: match(re, s)
     atom |          // Positive atom: edge(x, y)
-    negative_atom | // Negative atom: !edge(x, y)
+    negative_atom | // Negative atom: !edge(x, y), !match(re, s)
     disjunction_group | // Nested disjunction: (A ; B)
     fn_call_expr    // UDF predicate: is_valid(x + 1, y)
 }
 
 // Parenthesised disjunction inside a body: `(A ; B)`.
 disjunction_group = { "(" ~ rule_bodies ~ ")" }
+
+// Body-position aggregate, Soufflé-style: `<var> = <op> [<expr>] : <body>`.
+// Desugared at parse time into an auxiliary IDB relation + atom reference,
+// so downstream stages never see this variant. Examples:
+//
+//   minLen     = min len           : _MethodLookup_WithLen(_, _, _, _, len)
+//   minLen     = min len           : { Atom1(...), Atom2(...) }
+//   minOrd     = min ord(h)        : Body(g, h)
+//   color      = max (n)           : StringColorGreaterThan(n, heap)
+//   n          = count             : MethodAndTypeToHeap(_, type, meth)
+//
+// `body_agg_expr` is optional only for `count` (Soufflé semantics).
+body_aggregate = {
+    variable ~ "=" ~ aggregate_op ~ body_agg_expr? ~ ":" ~ body_agg_body
+}
+
+// Expression aggregated over. Accepts an optional surrounding pair of
+// parens for the `max (n)` form. Inner is the same `arithmetic_expr`
+// used in head aggregates, so builtins like `ord(h)` work uniformly.
+body_agg_expr = {
+      "(" ~ arithmetic_expr ~ ")"
+    | arithmetic_expr
+}
+
+// Body of the aggregate: a single atom (bare) or a `{ ... }`-bracketed
+// conjunction of predicates (Soufflé's multi-atom aggregate body).
+body_agg_body = {
+      "{" ~ predicates ~ "}"
+    | atom
+}
 
 
 // =============================================================================
