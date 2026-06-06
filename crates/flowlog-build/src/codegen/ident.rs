@@ -10,7 +10,7 @@ use proc_macro2::Ident;
 use quote::format_ident;
 
 use crate::build::relation::rust_ident;
-use crate::codegen::CodeGen;
+use crate::codegen::{CodeGen, CodegenError};
 
 /// Two distinct relations whose names lower to the *same* Rust binding ident.
 #[derive(Debug)]
@@ -69,22 +69,26 @@ impl CodeGen {
     /// than emitted verbatim into an invalid binding. Because that escape is
     /// per-name it cannot guarantee uniqueness, so we also guard against two
     /// distinct relations lowering to the same binding (see
-    /// [`build_global_ident_map`]).
-    pub(super) fn make_global_ident_map(&mut self) {
+    /// [`build_global_ident_map`]). A collision is surfaced as a
+    /// [`CodegenError`] — the same diagnostic path every other codegen failure
+    /// takes — rather than a panic, so the CLI renders it cleanly and library
+    /// embedders get a recoverable error.
+    pub(super) fn make_global_ident_map(&mut self) -> Result<(), CodegenError> {
         let relations = self
             .program
             .relations()
             .iter()
             .map(|rel| (rel.fingerprint(), rel.name()));
-        self.global_fp_to_ident = build_global_ident_map(relations).unwrap_or_else(|c| {
-            panic!(
-                "codegen: relations `{}` and `{}` both lower to the Rust binding \
-                 `{}`; per-name keyword escaping cannot guarantee unique \
-                 collection idents. Rename one relation. (A follow-up that binds \
-                 relations to synthetic idents will remove this limitation.)",
+        self.global_fp_to_ident = build_global_ident_map(relations).map_err(|c| {
+            CodegenError::internal(format!(
+                "relations `{}` and `{}` both lower to the Rust binding `{}`; \
+                 per-name keyword escaping cannot guarantee unique collection idents \
+                 — rename one relation (a follow-up that binds relations to synthetic \
+                 idents will remove this limitation)",
                 c.first, c.second, c.ident,
-            )
-        });
+            ))
+        })?;
+        Ok(())
     }
 
     /// Resolve a fingerprint to its global ident, falling back to `t_<fp>`

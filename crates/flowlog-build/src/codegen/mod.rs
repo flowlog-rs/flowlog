@@ -69,7 +69,6 @@ impl CodeGen {
             features: Features::default(),
             outer_arranged: HashMap::new(),
         };
-        cg.make_global_ident_map();
         cg.make_global_data_type_map();
         cg
     }
@@ -84,6 +83,7 @@ impl CodeGen {
         program_planner: &ProgramPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<CodeParts, CodegenError> {
+        self.make_global_ident_map()?;
         self.features.reset();
         self.outer_arranged.clear();
         self.collect_parts(program_planner.strata(), profiler)
