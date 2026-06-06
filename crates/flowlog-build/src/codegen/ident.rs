@@ -14,12 +14,21 @@ use crate::codegen::CodeGen;
 impl CodeGen {
     /// Seed the global `fingerprint → ident` map from every declared
     /// relation (EDB + IDB), using the relation's own name as the ident.
+    ///
+    /// Names are routed through [`rust_ident`](crate::build::relation::rust_ident)
+    /// so a relation whose name collides with a Rust keyword (`type`, `match`,
+    /// …) is escaped rather than emitted verbatim into an invalid binding.
     pub(super) fn make_global_ident_map(&mut self) {
         self.global_fp_to_ident = self
             .program
             .relations()
             .iter()
-            .map(|rel| (rel.fingerprint(), format_ident!("{}", rel.name())))
+            .map(|rel| {
+                (
+                    rel.fingerprint(),
+                    crate::build::relation::rust_ident(rel.name()),
+                )
+            })
             .collect();
     }
 

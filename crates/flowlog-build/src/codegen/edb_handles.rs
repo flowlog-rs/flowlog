@@ -46,7 +46,7 @@ impl CodeGen {
         edbs.iter()
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
-                let coll = format_ident!("{}", rel.name());
+                let coll = crate::build::relation::rust_ident(rel.name());
 
                 // Record source file input operator and dedup operator in profiler if enabled
                 with_profiler(profiler, |profiler| {

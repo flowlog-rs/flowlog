@@ -3,7 +3,7 @@ mod engine;
 mod error;
 mod imports;
 mod pipeline;
-mod relation;
+pub(crate) mod relation;
 mod results;
 
 pub(crate) use assembly::assemble;

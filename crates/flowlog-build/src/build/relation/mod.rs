@@ -122,7 +122,11 @@ pub(crate) fn rust_ident(name: &str) -> Ident {
             | "yield"
             | "try"
     );
-    if is_keyword {
+    if matches!(name, "crate" | "self" | "Self" | "super") {
+        // These four keywords cannot be raw identifiers (`r#self` etc. is
+        // rejected by the compiler), so escape them with a trailing underscore.
+        format_ident!("{}_", name)
+    } else if is_keyword {
         Ident::new_raw(name, Span::call_site())
     } else {
         Ident::new(name, Span::call_site())
@@ -263,6 +267,73 @@ fn gen_inputs_container(edbs: &[&Relation]) -> TokenStream {
             pub fn flush_all(&mut self) {
                 #(#flush)*
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod ident_tests {
+    use super::rust_ident;
+    use quote::quote;
+
+    /// All Rust strict + reserved keywords. A relation/field name may coincide
+    /// with any of these, so `rust_ident` must escape every one into a valid,
+    /// usable identifier.
+    const RUST_KEYWORDS: &[&str] = &[
+        "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false",
+        "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+        "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe",
+        "use", "where", "while", "async", "await", "abstract", "become", "box", "do", "final",
+        "macro", "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
+    ];
+
+    /// Non-keyword names pass through unchanged (the common case).
+    #[test]
+    fn non_keyword_names_pass_through() {
+        assert_eq!(rust_ident("VarPointsTo").to_string(), "VarPointsTo");
+        assert_eq!(rust_ident("method_lookup").to_string(), "method_lookup");
+    }
+
+    /// Raw-able keywords become raw identifiers; the four that cannot be raw
+    /// (`crate`/`self`/`Self`/`super`) get a trailing underscore.
+    #[test]
+    fn keywords_are_escaped() {
+        assert_eq!(rust_ident("type").to_string(), "r#type");
+        assert_eq!(rust_ident("match").to_string(), "r#match");
+        assert_eq!(rust_ident("in").to_string(), "r#in");
+        assert_eq!(rust_ident("true").to_string(), "r#true");
+        assert_eq!(rust_ident("super").to_string(), "super_");
+        assert_eq!(rust_ident("self").to_string(), "self_");
+        assert_eq!(rust_ident("Self").to_string(), "Self_");
+        assert_eq!(rust_ident("crate").to_string(), "crate_");
+    }
+
+    /// Every keyword must yield an identifier usable both as a binding and as
+    /// an expression — `let <id> = 1; let _ = <id>;` must parse as valid Rust.
+    /// This is exactly how codegen uses these idents, and it guards against any
+    /// keyword that is neither bare-usable nor raw-able (previously `crate`,
+    /// `self`, `Self`, `super` panicked here via `Ident::new_raw`).
+    #[test]
+    fn every_keyword_yields_usable_binding() {
+        for kw in RUST_KEYWORDS {
+            let id = rust_ident(kw);
+            let ts = quote! { { let #id = 1; let _ = #id; } };
+            syn::parse2::<syn::Block>(ts).unwrap_or_else(|e| {
+                panic!("keyword {kw:?} -> `{id}` is not a usable binding: {e}")
+            });
+        }
+    }
+
+    /// Distinct keyword names never collapse to the same identifier.
+    #[test]
+    fn keyword_escapes_are_distinct() {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for kw in RUST_KEYWORDS {
+            assert!(
+                seen.insert(rust_ident(kw).to_string()),
+                "duplicate escaped ident for keyword {kw:?}"
+            );
         }
     }
 }

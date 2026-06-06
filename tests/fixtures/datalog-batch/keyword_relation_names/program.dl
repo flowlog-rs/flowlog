@@ -1,0 +1,18 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : keyword_relation_names
+// Feature : relation names that collide with Rust keywords (`Type`->type,
+//           `Match`->match) must not break codegen. Names are escaped to raw
+//           identifiers (`r#type`) / underscore-suffixed where unraw-able.
+//           Regression for the relation-name → Rust-ident keyword collision.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Type(id: int32, name: string)
+.input Type(IO="file", filename="Type.csv", delimiter=",")
+
+.decl Match(id: int32, tag: string)
+.input Match(IO="file", filename="Match.csv", delimiter=",")
+
+// Join across two keyword-named relations; head relation has a normal name.
+.decl Out(id: int32, name: string)
+Out(id, name) :- Type(id, name), Match(id, _).
+.output Out
