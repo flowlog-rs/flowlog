@@ -127,8 +127,8 @@ fn gen_one_rel_nullary(
     facts: Option<&Vec<(Span, Vec<ConstType>)>>,
     is_batch: bool,
 ) -> Result<TokenStream, CodegenError> {
-    let name = rel.name();
-    let struct_name = format_ident!("Rel{}", name);
+    let raw_name = rel.raw_name();
+    let struct_name = format_ident!("Rel{}", rel.name());
 
     let nullary_apply_inline = match facts {
         Some(rows) if !rows.is_empty() => quote! {
@@ -151,7 +151,7 @@ fn gen_one_rel_nullary(
             } else if !s.eq_ignore_ascii_case("false") {
                 eprintln!(
                     "[relation][{}] nullary expects tuple 'True' or 'False', got {:?}",
-                    #name,
+                    #raw_name,
                     s
                 );
             }
@@ -167,7 +167,7 @@ fn gen_one_rel_nullary(
             } else {
                 eprintln!(
                     "[relation][{}] nullary expects tuple 'True' or 'False', got {:?}",
-                    #name,
+                    #raw_name,
                     s
                 );
                 return;
@@ -210,7 +210,7 @@ fn gen_one_rel_nullary(
                 // Nullary relations only allow tuple interaction.
                 eprintln!(
                     "[relation][{}] nullary relation does not support file ingestion. Use: put {} True|False",
-                    #name,
+                    #raw_name,
                     path.display()
                 );
             }
@@ -239,8 +239,8 @@ fn gen_one_rel_nonnullary(
     facts: Option<&Vec<(Span, Vec<ConstType>)>>,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
-    let name = rel.name();
-    let struct_name = format_ident!("Rel{}", name);
+    let raw_name = rel.raw_name();
+    let struct_name = format_ident!("Rel{}", rel.name());
 
     let arity = rel.arity();
     debug_assert!(arity > 0);
@@ -280,8 +280,8 @@ fn gen_one_rel_nonnullary(
         }
         DataType::Bool => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
     };
-    let tuple_parse_stmts = gen_parse_from_str(name, &dts, string_intern);
-    let file_parse_stmts = gen_parse_from_bytes(name, &dts, string_intern);
+    let tuple_parse_stmts = gen_parse_from_str(raw_name, &dts, string_intern);
+    let file_parse_stmts = gen_parse_from_bytes(raw_name, &dts, string_intern);
     let has_header = rel.input_has_header();
     let inline_body = gen_inline_facts(facts, string_intern)?;
     let apply_inline_impl = if inline_body.is_empty() {
@@ -362,7 +362,7 @@ fn gen_one_rel_nonnullary(
                         Ok(0) => return,
                         Ok(_) => bytes_consumed += buf.len() as u64,
                         Err(e) => {
-                            eprintln!("[relation][{}] I/O error reading {}: {}", #name, path.display(), e);
+                            eprintln!("[relation][{}] I/O error reading {}: {}", #raw_name, path.display(), e);
                             return;
                         }
                     }
@@ -373,7 +373,7 @@ fn gen_one_rel_nonnullary(
                         Ok(0) => break,
                         Ok(_) => {}
                         Err(e) => {
-                            eprintln!("[relation][{}] I/O error reading {}: {}", #name, path.display(), e);
+                            eprintln!("[relation][{}] I/O error reading {}: {}", #raw_name, path.display(), e);
                             break;
                         }
                     }
@@ -395,7 +395,7 @@ fn gen_one_rel_nonnullary(
                     }
                 }
                 if index == 0 {
-                    println!("{:?}:\tData loaded for {}", load_start.elapsed(), #name);
+                    println!("{:?}:\tData loaded for {}", load_start.elapsed(), #raw_name);
                 }
             }
 
@@ -462,7 +462,7 @@ fn gen_inline_facts(
 // ------------------------------------------------------------
 
 /// Parse from `it: Iterator<Item=&str>` into f0..f{n-1}.
-fn gen_parse_from_str(rel: &str, dts: &[DataType], string_intern: bool) -> TokenStream {
+fn gen_parse_from_str(rel_label: &str, dts: &[DataType], string_intern: bool) -> TokenStream {
     let stmts: Vec<TokenStream> = dts
         .iter()
         .enumerate()
@@ -472,23 +472,23 @@ fn gen_parse_from_str(rel: &str, dts: &[DataType], string_intern: bool) -> Token
                 let s = match it.next() {
                     Some(s) => s,
                     None => {
-                        eprintln!("[relation][{}] bad tuple '{}': missing col {}", #rel, tuple, #idx);
+                        eprintln!("[relation][{}] bad tuple '{}': missing col {}", #rel_label, tuple, #idx);
                         return;
                     }
                 };
             };
             match *dt {
-                DataType::Int8 => parse_str_scalar(&v, quote! { i8 }, "i8", rel, idx, &get),
-                DataType::Int16 => parse_str_scalar(&v, quote! { i16 }, "i16", rel, idx, &get),
-                DataType::Int32 => parse_str_scalar(&v, quote! { i32 }, "i32", rel, idx, &get),
-                DataType::Int64 => parse_str_scalar(&v, quote! { i64 }, "i64", rel, idx, &get),
-                DataType::UInt8 => parse_str_scalar(&v, quote! { u8 }, "u8", rel, idx, &get),
-                DataType::UInt16 => parse_str_scalar(&v, quote! { u16 }, "u16", rel, idx, &get),
-                DataType::UInt32 => parse_str_scalar(&v, quote! { u32 }, "u32", rel, idx, &get),
-                DataType::UInt64 => parse_str_scalar(&v, quote! { u64 }, "u64", rel, idx, &get),
-                DataType::Bool => parse_str_scalar(&v, quote! { bool }, "bool", rel, idx, &get),
-                DataType::Float32 => parse_str_float(&v, quote! { f32 }, "f32", rel, idx, &get),
-                DataType::Float64 => parse_str_float(&v, quote! { f64 }, "f64", rel, idx, &get),
+                DataType::Int8 => parse_str_scalar(&v, quote! { i8 }, "i8", rel_label, idx, &get),
+                DataType::Int16 => parse_str_scalar(&v, quote! { i16 }, "i16", rel_label, idx, &get),
+                DataType::Int32 => parse_str_scalar(&v, quote! { i32 }, "i32", rel_label, idx, &get),
+                DataType::Int64 => parse_str_scalar(&v, quote! { i64 }, "i64", rel_label, idx, &get),
+                DataType::UInt8 => parse_str_scalar(&v, quote! { u8 }, "u8", rel_label, idx, &get),
+                DataType::UInt16 => parse_str_scalar(&v, quote! { u16 }, "u16", rel_label, idx, &get),
+                DataType::UInt32 => parse_str_scalar(&v, quote! { u32 }, "u32", rel_label, idx, &get),
+                DataType::UInt64 => parse_str_scalar(&v, quote! { u64 }, "u64", rel_label, idx, &get),
+                DataType::Bool => parse_str_scalar(&v, quote! { bool }, "bool", rel_label, idx, &get),
+                DataType::Float32 => parse_str_float(&v, quote! { f32 }, "f32", rel_label, idx, &get),
+                DataType::Float64 => parse_str_float(&v, quote! { f64 }, "f64", rel_label, idx, &get),
                 DataType::String => {
                     let field = if string_intern {
                         quote! { let #v: Spur = intern(s); }
@@ -509,7 +509,7 @@ fn parse_str_scalar(
     v: &proc_macro2::Ident,
     ty: TokenStream,
     ty_name: &str,
-    rel: &str,
+    rel_label: &str,
     idx: usize,
     get: &TokenStream,
 ) -> TokenStream {
@@ -520,7 +520,7 @@ fn parse_str_scalar(
             Err(_) => {
                 eprintln!(
                     "[relation][{}] bad tuple '{}': col {} not {}: '{}'",
-                    #rel, tuple, #idx, #ty_name, s
+                    #rel_label, tuple, #idx, #ty_name, s
                 );
                 return;
             }
@@ -533,7 +533,7 @@ fn parse_str_float(
     v: &proc_macro2::Ident,
     ty: TokenStream,
     ty_name: &str,
-    rel: &str,
+    rel_label: &str,
     idx: usize,
     get: &TokenStream,
 ) -> TokenStream {
@@ -544,7 +544,7 @@ fn parse_str_float(
             Err(_) => {
                 eprintln!(
                     "[relation][{}] bad tuple '{}': col {} not {}: '{}'",
-                    #rel, tuple, #idx, #ty_name, s
+                    #rel_label, tuple, #idx, #ty_name, s
                 );
                 return;
             }
@@ -553,7 +553,7 @@ fn parse_str_float(
 }
 
 /// Parse from `cols: Iterator<Item=&[u8]>` into f0..f{n-1}.
-fn gen_parse_from_bytes(rel: &str, dts: &[DataType], string_intern: bool) -> TokenStream {
+fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) -> TokenStream {
     let stmts: Vec<TokenStream> = dts
         .iter()
         .enumerate()
@@ -565,7 +565,7 @@ fn gen_parse_from_bytes(rel: &str, dts: &[DataType], string_intern: bool) -> Tok
                     None => {
                         eprintln!(
                             "[relation][{}] bad row in {}: '{:?}' (missing col {})",
-                            #rel,
+                            #rel_label,
                             path.display(),
                             String::from_utf8_lossy(&line),
                             #idx
@@ -575,37 +575,37 @@ fn gen_parse_from_bytes(rel: &str, dts: &[DataType], string_intern: bool) -> Tok
                 };
             };
             match *dt {
-                DataType::Int8 => parse_scalar_bytes(&v, quote! { i8 }, "i8", rel, idx, &get_raw),
+                DataType::Int8 => parse_scalar_bytes(&v, quote! { i8 }, "i8", rel_label, idx, &get_raw),
                 DataType::Int16 => {
-                    parse_scalar_bytes(&v, quote! { i16 }, "i16", rel, idx, &get_raw)
+                    parse_scalar_bytes(&v, quote! { i16 }, "i16", rel_label, idx, &get_raw)
                 }
                 DataType::Int32 => {
-                    parse_scalar_bytes(&v, quote! { i32 }, "i32", rel, idx, &get_raw)
+                    parse_scalar_bytes(&v, quote! { i32 }, "i32", rel_label, idx, &get_raw)
                 }
                 DataType::Int64 => {
-                    parse_scalar_bytes(&v, quote! { i64 }, "i64", rel, idx, &get_raw)
+                    parse_scalar_bytes(&v, quote! { i64 }, "i64", rel_label, idx, &get_raw)
                 }
-                DataType::UInt8 => parse_scalar_bytes(&v, quote! { u8 }, "u8", rel, idx, &get_raw),
+                DataType::UInt8 => parse_scalar_bytes(&v, quote! { u8 }, "u8", rel_label, idx, &get_raw),
                 DataType::UInt16 => {
-                    parse_scalar_bytes(&v, quote! { u16 }, "u16", rel, idx, &get_raw)
+                    parse_scalar_bytes(&v, quote! { u16 }, "u16", rel_label, idx, &get_raw)
                 }
                 DataType::UInt32 => {
-                    parse_scalar_bytes(&v, quote! { u32 }, "u32", rel, idx, &get_raw)
+                    parse_scalar_bytes(&v, quote! { u32 }, "u32", rel_label, idx, &get_raw)
                 }
                 DataType::UInt64 => {
-                    parse_scalar_bytes(&v, quote! { u64 }, "u64", rel, idx, &get_raw)
+                    parse_scalar_bytes(&v, quote! { u64 }, "u64", rel_label, idx, &get_raw)
                 }
                 DataType::Bool => {
-                    parse_scalar_bytes(&v, quote! { bool }, "bool", rel, idx, &get_raw)
+                    parse_scalar_bytes(&v, quote! { bool }, "bool", rel_label, idx, &get_raw)
                 }
                 DataType::Float32 => {
-                    parse_float_bytes(&v, quote! { f32 }, "f32", rel, idx, &get_raw)
+                    parse_float_bytes(&v, quote! { f32 }, "f32", rel_label, idx, &get_raw)
                 }
                 DataType::Float64 => {
-                    parse_float_bytes(&v, quote! { f64 }, "f64", rel, idx, &get_raw)
+                    parse_float_bytes(&v, quote! { f64 }, "f64", rel_label, idx, &get_raw)
                 }
                 DataType::String => {
-                    let utf8 = utf8_trim_or_return_none(rel, idx);
+                    let utf8 = utf8_trim_or_return_none(rel_label, idx);
                     let field = if string_intern {
                         quote! { let #v: Spur = intern(s); }
                     } else {
@@ -626,14 +626,14 @@ fn gen_parse_from_bytes(rel: &str, dts: &[DataType], string_intern: bool) -> Tok
 
 /// Decode the raw column bytes as utf8 + trim, binding `s`. Bails out of the
 /// enclosing `(|| -> Option<_> { … })()` closure with `None` on invalid utf8.
-fn utf8_trim_or_return_none(rel: &str, idx: usize) -> TokenStream {
+fn utf8_trim_or_return_none(rel_label: &str, idx: usize) -> TokenStream {
     quote! {
         let s = match std::str::from_utf8(raw) {
             Ok(s) => s.trim(),
             Err(_) => {
                 eprintln!(
                     "[relation][{}] bad row in {}: '{:?}' (col {} not utf8)",
-                    #rel, path.display(), String::from_utf8_lossy(&line), #idx
+                    #rel_label, path.display(), String::from_utf8_lossy(&line), #idx
                 );
                 return None;
             }
@@ -647,11 +647,11 @@ fn parse_scalar_bytes(
     v: &proc_macro2::Ident,
     ty: TokenStream,
     ty_name: &str,
-    rel: &str,
+    rel_label: &str,
     idx: usize,
     get_raw: &TokenStream,
 ) -> TokenStream {
-    let utf8 = utf8_trim_or_return_none(rel, idx);
+    let utf8 = utf8_trim_or_return_none(rel_label, idx);
     quote! {
         #get_raw
         #utf8
@@ -660,7 +660,7 @@ fn parse_scalar_bytes(
             Err(_) => {
                 eprintln!(
                     "[relation][{}] bad row in {}: '{:?}' (col {} not {}: '{}')",
-                    #rel, path.display(), String::from_utf8_lossy(&line), #idx, #ty_name, s
+                    #rel_label, path.display(), String::from_utf8_lossy(&line), #idx, #ty_name, s
                 );
                 return None;
             }
@@ -674,11 +674,11 @@ fn parse_float_bytes(
     v: &proc_macro2::Ident,
     ty: TokenStream,
     ty_name: &str,
-    rel: &str,
+    rel_label: &str,
     idx: usize,
     get_raw: &TokenStream,
 ) -> TokenStream {
-    let utf8 = utf8_trim_or_return_none(rel, idx);
+    let utf8 = utf8_trim_or_return_none(rel_label, idx);
     quote! {
         #get_raw
         #utf8
@@ -687,7 +687,7 @@ fn parse_float_bytes(
             Err(_) => {
                 eprintln!(
                     "[relation][{}] bad row in {}: '{:?}' (col {} not {}: '{}')",
-                    #rel, path.display(), String::from_utf8_lossy(&line), #idx, #ty_name, s
+                    #rel_label, path.display(), String::from_utf8_lossy(&line), #idx, #ty_name, s
                 );
                 return None;
             }

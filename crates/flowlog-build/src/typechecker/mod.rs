@@ -85,21 +85,27 @@ pub fn check_program(program: &mut Program, config: &Config) -> Result<(), TypeC
             )
         })
         .collect();
+    // Canonical name -> user-facing spelling, for diagnostics only.
+    let display: DisplayNames = program
+        .relations()
+        .iter()
+        .map(|r| (r.name().to_string(), r.raw_name().to_string()))
+        .collect();
 
     for segment in program.segments_mut() {
         for rule in segment.as_rules_mut() {
-            check_rule(rule, &decls, &udfs)?;
+            check_rule(rule, &decls, &udfs, &display)?;
         }
         if let Some(block) = segment.as_loop_mut() {
             for rule in block.rules_mut() {
-                check_rule(rule, &decls, &udfs)?;
+                check_rule(rule, &decls, &udfs, &display)?;
             }
         }
     }
 
     check_builtin_config_requirements(program, config)?;
 
-    check_and_pin_facts(program.facts_mut(), &decls)?;
+    check_and_pin_facts(program.facts_mut(), &decls, &display)?;
 
     // Second pass: enforce subtype rules using the type registry. The
     // first pass works in primitive `DataType`s only, so two sibling
@@ -108,7 +114,7 @@ pub fn check_program(program: &mut Program, config: &Config) -> Result<(), TypeC
     // enforces the asymmetric head-widening rule, and validates `as()`
     // casts. It also lowers every surviving `Factor::Cast` to its
     // inner factor so downstream stages never see a cast.
-    subtype::check_and_lower(program)
+    subtype::check_and_lower(program, &display)
 }
 
 /// Reject built-in calls whose semantics depend on a build flag that
@@ -165,6 +171,18 @@ fn check_builtin_config_requirements(
 }
 
 type DeclTypes = HashMap<String, Vec<DataType>>;
+/// Canonical relation name -> the user's original spelling. Used only to
+/// render names in diagnostics; every lookup and key stays canonical.
+type DisplayNames = HashMap<String, String>;
+
+/// User-facing spelling for `canonical`, falling back to the canonical
+/// form itself (synthesized names have no separate raw spelling).
+fn display_name(display: &DisplayNames, canonical: &str) -> String {
+    display
+        .get(canonical)
+        .cloned()
+        .unwrap_or_else(|| canonical.to_string())
+}
 type UdfSigs = HashMap<String, (Vec<(String, DataType)>, DataType)>;
 
 /// Var → (first-seen type, first-seen span). Later uses must agree.
@@ -230,6 +248,7 @@ fn check_rule(
     rule: &mut FlowLogRule,
     decls: &DeclTypes,
     udfs: &UdfSigs,
+    display: &DisplayNames,
 ) -> Result<(), TypeCheckError> {
     // Bind vars first so out-of-order body predicates can resolve them.
     let mut bindings: Bindings = HashMap::new();
@@ -255,7 +274,7 @@ fn check_rule(
         }
     }
 
-    check_head(rule, decls, udfs, &bindings)
+    check_head(rule, decls, udfs, &bindings, display)
 }
 
 /// Record each variable's first-seen type; validate const arg families.
@@ -432,9 +451,11 @@ fn check_head(
     decls: &DeclTypes,
     udfs: &UdfSigs,
     bindings: &Bindings,
+    display: &DisplayNames,
 ) -> Result<(), TypeCheckError> {
     let head = rule.head_mut();
     let (rel_name, arity, head_span) = (head.name().to_string(), head.arity(), head.span());
+    let rel_display = display_name(display, &rel_name);
     let col_types: Vec<DataType> = {
         let Some(decl) = decls.get(&rel_name) else {
             return Err(TypeCheckError::internal(format!(
@@ -447,7 +468,7 @@ fn check_head(
     if arity != col_types.len() {
         return Err(TypeCheckError::HeadArity {
             span: head_span,
-            rel: rel_name,
+            rel: rel_display,
             expected: col_types.len(),
             found: arity,
         });
@@ -467,7 +488,7 @@ fn check_head(
                 {
                     return Err(TypeCheckError::HeadColumnType {
                         span: head_span,
-                        rel: rel_name.clone(),
+                        rel: rel_display.clone(),
                         col,
                         expected,
                         found,
@@ -478,7 +499,7 @@ fn check_head(
                 if let Some(kind) = infer_expr_type(a, bindings, udfs)?
                     && !kind.fits(expected)
                 {
-                    return Err(head_or_literal_mismatch(a, &rel_name, col, expected, kind));
+                    return Err(head_or_literal_mismatch(a, &rel_display, col, expected, kind));
                 }
                 pin_arith_literals(a, expected, udfs)?;
             }
@@ -778,6 +799,7 @@ fn pin_fn_call_args(fc: &mut FnCall, udfs: &UdfSigs) -> Result<(), TypeCheckErro
 fn check_and_pin_facts(
     facts: &mut HashMap<String, Vec<(Span, Vec<ConstType>)>>,
     decls: &DeclTypes,
+    display: &DisplayNames,
 ) -> Result<(), TypeCheckError> {
     for (rel_name, tuples) in facts.iter_mut() {
         let Some(col_types) = decls.get(rel_name) else {
@@ -789,7 +811,7 @@ fn check_and_pin_facts(
             if tuple.len() != col_types.len() {
                 return Err(TypeCheckError::HeadArity {
                     span: *span,
-                    rel: rel_name.clone(),
+                    rel: display_name(display, rel_name),
                     expected: col_types.len(),
                     found: tuple.len(),
                 });
