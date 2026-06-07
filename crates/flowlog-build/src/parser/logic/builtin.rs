@@ -27,6 +27,8 @@ pub enum BuiltinOperator {
     Ord,
     /// `contains(needle, hay) -> bool`.
     Contains,
+    /// `match(pattern, s) -> bool` — full (anchored) regex match, Soufflé semantics.
+    Match,
     /// `to_string(n: int32) -> string`.
     ToString,
     /// `to_number(s) -> int32` — 0 on parse failure.
@@ -43,6 +45,7 @@ impl BuiltinOperator {
             BuiltinOperator::Substr => "substr",
             BuiltinOperator::Ord => "ord",
             BuiltinOperator::Contains => "contains",
+            BuiltinOperator::Match => "match",
             BuiltinOperator::ToString => "to_string",
             BuiltinOperator::ToNumber => "to_number",
             BuiltinOperator::Cat => "cat",
@@ -64,6 +67,7 @@ impl BuiltinOperator {
             BuiltinOperator::Substr => &[Str, Int32, Int32],
             BuiltinOperator::Ord => &[Str],
             BuiltinOperator::Contains => &[Str, Str],
+            BuiltinOperator::Match => &[Str, Str],
             BuiltinOperator::ToString => &[Int32],
             BuiltinOperator::ToNumber => &[Str],
             BuiltinOperator::Cat => &[Str, Str],
@@ -79,7 +83,7 @@ impl BuiltinOperator {
             BuiltinOperator::Substr | BuiltinOperator::ToString | BuiltinOperator::Cat => {
                 DataType::String
             }
-            BuiltinOperator::Contains => DataType::Bool,
+            BuiltinOperator::Contains | BuiltinOperator::Match => DataType::Bool,
         }
     }
 }
@@ -198,6 +202,7 @@ fn op_from_node(node: &Pair<Rule>) -> Result<BuiltinOperator, ParseError> {
         Rule::substr_op => BuiltinOperator::Substr,
         Rule::ord_op => BuiltinOperator::Ord,
         Rule::contains_op => BuiltinOperator::Contains,
+        Rule::match_op => BuiltinOperator::Match,
         Rule::to_string_op => BuiltinOperator::ToString,
         Rule::to_number_op => BuiltinOperator::ToNumber,
         Rule::cat_op => BuiltinOperator::Cat,

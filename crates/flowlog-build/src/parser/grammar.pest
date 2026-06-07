@@ -201,7 +201,19 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
 // `as_cast` first so `as` wins over a UDF named `as` (reserved keyword).
-factor = { as_cast | builtin_fn_call | fn_call_expr | constant | variable }
+// `paren_expr` gives explicit grouping: since arithmetic has no operator
+// precedence (it folds strictly left-to-right), parentheses are the only
+// way to override evaluation order, e.g. `x * (a + b)`.
+factor = { as_cast | builtin_fn_call | fn_call_expr | paren_expr | constant | variable }
+
+// Parenthesised sub-expression. Both wrappers are silent (`_`): a
+// single-factor `(x)` surfaces as the bare inner factor, while a
+// multi-term `(a + b)` surfaces as `group_expr` (the `+` requires an
+// operator). A group node thus exists only when the grouping affects
+// the left-to-right fold.
+paren_expr  = _{ "(" ~ paren_inner ~ ")" }
+paren_inner = _{ group_expr | factor }
+group_expr  =  { factor ~ (arithmetic_op ~ factor)+ }
 
 // `as(factor, TargetType)` — explicit cast, runtime no-op. Inner is a
 // single `factor` (not `arithmetic_expr`) so the typechecker can lower
@@ -239,13 +251,14 @@ builtin_fn_call = {
 // `cat_op` is the Soufflé function form `cat(a, b)`. There is no
 // infix `cat`; chains nest as `cat(a, cat(b, c))`.
 builtin_op = {
-    strlen_op | substr_op | ord_op | contains_op | to_string_op | to_number_op | cat_op
+    strlen_op | substr_op | ord_op | contains_op | match_op | to_string_op | to_number_op | cat_op
 }
 
 strlen_op    = @{ "strlen"    ~ !(ASCII_ALPHANUMERIC | "_") }
 substr_op    = @{ "substr"    ~ !(ASCII_ALPHANUMERIC | "_") }
 ord_op       = @{ "ord"       ~ !(ASCII_ALPHANUMERIC | "_") }
 contains_op  = @{ "contains"  ~ !(ASCII_ALPHANUMERIC | "_") }
+match_op     = @{ "match"     ~ !(ASCII_ALPHANUMERIC | "_") }
 to_string_op = @{ "to_string" ~ !(ASCII_ALPHANUMERIC | "_") }
 to_number_op = @{ "to_number" ~ !(ASCII_ALPHANUMERIC | "_") }
 cat_op       = @{ "cat"       ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -313,9 +326,12 @@ atom = {
     ")"
 }
 
-// Negative atom for negative conditions
-// Example: !edge(x, y)
-negative_atom = { "!" ~ atom }
+// Negative atom for negative conditions. The atom may be wrapped in
+// redundant parentheses — `!(edge(x, y))` — which Soufflé accepts and
+// treats identically to `!edge(x, y)`. The parens are silent literals,
+// so the parser sees the same inner `atom` either way.
+// Example: !edge(x, y)  or  !(edge(x, y))
+negative_atom = { "!" ~ ("(" ~ atom ~ ")" | atom) }
 
 // Arguments in atoms can be constants, variables, or placeholders
 atom_arg = { constant | variable | placeholder } 

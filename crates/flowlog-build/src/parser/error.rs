@@ -267,6 +267,21 @@ pub enum ParseError {
     #[error("`.plan` lists positive-atom index {index} more than once")]
     PlanDuplicateIndex { span: Span, index: usize },
 
+    /// An equality assignment `v = expr` grounds `v`, but `v` is then used as
+    /// an argument of a negated atom with a non-trivial (arithmetic / function)
+    /// right-hand side. FlowLog can substitute a variable or constant into a
+    /// negation, but not an arbitrary expression (atom arguments are not
+    /// expressions), so this form is rejected rather than silently mishandled.
+    #[error("assignment-bound variable `{var}` cannot be used in a negated atom with a computed value")]
+    AssignmentVarInNegation { span: Span, var: String },
+
+    /// Assignment desugaring emptied a rule's body, but the head could not be
+    /// reduced to constants (an unbound head variable, or a non-integer
+    /// expression). The planner requires at least one positive atom, so the
+    /// rule is rejected here rather than panicking downstream.
+    #[error("rule body reduces to nothing but its head is not a constant fact")]
+    GroundRuleNotConst { span: Span },
+
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
     #[error(transparent)]
@@ -459,6 +474,8 @@ impl Diagnostic for ParseError {
             | ParseError::NonNullaryLoopCondition { span, .. }
             | ParseError::PlaceholderInUdf { span, .. }
             | ParseError::BuiltinArity { span, .. }
+            | ParseError::AssignmentVarInNegation { span, .. }
+            | ParseError::GroundRuleNotConst { span }
             | ParseError::IncludeIo { span, .. } => base.with_labels(primary_only(*span)),
 
             ParseError::Internal(_) => unreachable!("handled above"),

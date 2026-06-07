@@ -163,6 +163,14 @@ impl FlowLogRule {
         &mut self.rhs
     }
 
+    /// Replace the rule body wholesale. Used by the equality-assignment
+    /// desugaring pass, which removes assignment literals after substituting
+    /// their bound variable into the head and remaining predicates.
+    #[inline]
+    pub(crate) fn set_rhs(&mut self, rhs: Vec<Predicate>) {
+        self.rhs = rhs;
+    }
+
     /// Extract constants from a fact's head.
     ///
     /// Panics if any head argument is not a simple constant.

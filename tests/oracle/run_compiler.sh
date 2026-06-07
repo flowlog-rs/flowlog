@@ -81,6 +81,11 @@ init_paths() {
     COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
 
     mkdir -p "$LOG_DIR" "$FLOWLOG_OUT_DIR"
+
+# Build generated crates against the workspace runtime instead of crates.io,
+# so unpublished flowlog-runtime additions are testable (scaffold emits a
+# [patch.crates-io] entry when this is set).
+export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/crates/flowlog-runtime"
 }
 
 init_opt_flags() {

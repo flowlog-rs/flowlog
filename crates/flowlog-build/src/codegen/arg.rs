@@ -884,6 +884,10 @@ impl CodeGen {
             FactorArgument::Builtin { op, args } => {
                 self.builtin_to_token(*op, args, string_intern, resolve_var)
             }
+            FactorArgument::Group(a) => {
+                let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
+                Ok(quote! { ( #inner ) })
+            }
         }
     }
 
@@ -933,6 +937,12 @@ impl CodeGen {
                 } else {
                     call
                 })
+            }
+            FactorArgument::Group(a) => {
+                // Grammar guarantees a `Group` is multi-term, hence numeric
+                // (string concat is `cat`) — no display resolution needed.
+                let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
+                Ok(quote! { ( #inner ) })
             }
         }
     }
@@ -1023,6 +1033,35 @@ impl CodeGen {
                 let needle = read_str(&raw[0]);
                 let hay = read_str(&raw[1]);
                 Ok(quote! { ((#hay).contains(#needle)) })
+            }
+            BuiltinOperator::Match => {
+                // Soufflé `match(pattern, s)` is a *full* match, so anchor
+                // with `^(?:…)$` (the `regex` crate searches by default).
+                // A malformed pattern yields `false` rather than aborting.
+                // `regex` resolves via the `flowlog_runtime` re-export in
+                // both binary and library modes (runtime ≥ 0.2.3).
+                let hay = read_str(&raw[1]);
+                // Literal pattern (the common case): anchor at codegen time
+                // and compile once per call site via a `LazyLock` static.
+                if let FactorArgument::Const(ConstType::Text(p)) = &args[0].init
+                    && args[0].rest.is_empty()
+                {
+                    let anchored = format!("^(?:{p})$");
+                    return Ok(quote! {{
+                        static RE: ::std::sync::LazyLock<
+                            Option<::flowlog_runtime::regex::Regex>,
+                        > = ::std::sync::LazyLock::new(|| {
+                            ::flowlog_runtime::regex::Regex::new(#anchored).ok()
+                        });
+                        RE.as_ref().is_some_and(|re| re.is_match(#hay))
+                    }});
+                }
+                // Computed pattern: compile per evaluation.
+                let pat = read_str(&raw[0]);
+                Ok(quote! {
+                    ::flowlog_runtime::regex::Regex::new(&format!("^(?:{})$", #pat))
+                        .map_or(false, |re| re.is_match(#hay))
+                })
             }
             BuiltinOperator::ToString => {
                 let n = &raw[0];
