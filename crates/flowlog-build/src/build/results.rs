@@ -23,7 +23,7 @@ use quote::{format_ident, quote};
 
 use crate::parser::Program;
 
-use crate::build::relation::{rust_ident, user_struct_ident};
+use crate::build::relation::{printsize_field_ident, results_field_ident, user_struct_ident};
 
 /// `BatchResults` — returned by `DatalogBatchEngine::run()`.
 pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {
@@ -31,7 +31,7 @@ pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {
     let mut fields: Vec<TokenStream> = Vec::new();
 
     for rel in program.output_idbs() {
-        let field = rust_ident(rel.name());
+        let field = results_field_ident(rel);
         if rel.arity() == 0 {
             fields.push(quote! { pub #field: bool });
         } else {
@@ -41,7 +41,7 @@ pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {
     }
 
     for rel in program.printsize_idbs() {
-        let field = format_ident!("{}_size", rel.name());
+        let field = printsize_field_ident(rel);
         fields.push(quote! { pub #field: usize });
     }
 
@@ -60,7 +60,7 @@ pub(crate) fn gen_incremental_results(program: &Program) -> TokenStream {
     let mut fields: Vec<TokenStream> = Vec::new();
 
     for rel in program.output_idbs() {
-        let field = rust_ident(rel.name());
+        let field = results_field_ident(rel);
         if rel.arity() == 0 {
             fields.push(quote! { pub #field: i32 });
         } else {
@@ -70,7 +70,7 @@ pub(crate) fn gen_incremental_results(program: &Program) -> TokenStream {
     }
 
     for rel in program.printsize_idbs() {
-        let field = format_ident!("{}_size", rel.name());
+        let field = printsize_field_ident(rel);
         fields.push(quote! { pub #field: i32 });
     }
 

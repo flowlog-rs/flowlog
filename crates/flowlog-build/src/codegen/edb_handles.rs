@@ -46,13 +46,16 @@ impl CodeGen {
         edbs.iter()
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
-                let coll = crate::build::relation::rust_ident(rel.name());
+                // The collection binding comes from the global ident map —
+                // never re-derived from the name — so it always matches the
+                // ident every downstream flow resolves via fingerprint.
+                let coll = self.find_global_ident(rel.fingerprint());
 
                 // Record source file input operator and dedup operator in profiler if enabled
                 with_profiler(profiler, |profiler| {
-                    profiler.input_edb_operator(rel.name().to_string(), coll.to_string());
+                    profiler.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
                     profiler.input_dedup_operator(
-                        rel.name().to_string(),
+                        rel.raw_name().to_string(),
                         coll.to_string(),
                         coll.to_string(),
                     );

@@ -111,6 +111,16 @@ pub struct Stratifier {
 // =============================================================================
 
 impl Stratifier {
+    /// User-facing spelling for the relation behind `fp`, for diagnostics —
+    /// falls back to the given canonical name when the fingerprint has no
+    /// declaration (synthesized relations).
+    pub(crate) fn display_name(&self, fp: u64, canonical: &str) -> String {
+        self.program
+            .relation_by_fingerprint(fp)
+            .map(|r| r.raw_name().to_string())
+            .unwrap_or_else(|| canonical.to_string())
+    }
+
     /// Returns `true` if stratum `idx` is recursive.
     #[must_use]
     pub(crate) fn is_recursive_stratum(&self, idx: usize) -> bool {
@@ -629,13 +639,13 @@ impl Stratifier {
                     let fp = directive.fp();
                     if !heads.contains(&fp) {
                         return Err(StratifyError::IterativeNotInLoopHead {
-                            rel: directive.name().to_string(),
+                            rel: self.display_name(fp, directive.name()),
                             decl_span: directive.span(),
                         });
                     }
                     if !recursive_fps.contains(&fp) {
                         return Err(StratifyError::IterativeNotRecursive {
-                            rel: directive.name().to_string(),
+                            rel: self.display_name(fp, directive.name()),
                             decl_span: directive.span(),
                         });
                     }
@@ -691,12 +701,6 @@ impl Stratifier {
     /// only defined in a later segment and will be empty when stratum *i* runs,
     /// silently producing wrong results.
     fn validate_forward_references(&self) -> Result<(), StratifyError> {
-        let fp_to_name: HashMap<u64, &str> = self
-            .program
-            .relations()
-            .iter()
-            .map(|r| (r.fingerprint(), r.name()))
-            .collect();
         let edb_fps = self.program.edb_fingerprints();
 
         for (i, stratum) in self.stratum.iter().enumerate() {
@@ -718,7 +722,7 @@ impl Stratifier {
                     if edb_fps.contains(&fp) || available.contains(&fp) || heads.contains(&fp) {
                         continue;
                     }
-                    let rel_name = fp_to_name.get(&fp).copied().unwrap_or("<unknown>");
+                    let rel_name = self.display_name(fp, "<unknown>");
                     // Fall back to the rule's span if the atom has no recorded
                     // position (synthesized atoms, dummies in tests).
                     let span = if atom_span.is_dummy() {
@@ -817,7 +821,7 @@ impl Stratifier {
 
                 if !heads.contains(&fp) {
                     return Err(StratifyError::LoopConditionNotDerived {
-                        rel: rel_name.to_string(),
+                        rel: self.display_name(fp, rel_name),
                         span,
                     });
                 }
@@ -832,7 +836,7 @@ impl Stratifier {
                     .collect();
                 if !self.reaches_recursive(&dep_graph, &seed, &recursive_rule_ids) {
                     return Err(StratifyError::LoopConditionNotRecursive {
-                        rel: rel_name.to_string(),
+                        rel: self.display_name(fp, rel_name),
                         span,
                     });
                 }

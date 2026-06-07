@@ -52,7 +52,7 @@ fn unknown_head_variable() {
 fn multiple_aggregations_in_head() {
     assert_err!(
         plan_fixture("multiple_aggregations_in_head.dl"),
-        PlanError::MultipleAggregationsInHead { ref rel, count: 2, .. } if rel == "totals",
+        PlanError::MultipleAggregationsInHead { ref rel, count: 2, .. } if rel == "Totals",
         ["contains 2 aggregations", "at most one is allowed"]
     );
 }
@@ -64,7 +64,7 @@ fn inconsistent_aggregation() {
         PlanError::InconsistentAggregation { .. },
         [
             "inconsistent aggregation",
-            "totals",
+            "Totals",
             "conflicting aggregation"
         ]
     );

@@ -62,7 +62,7 @@ impl CodeGen {
                     let #cell_ident = #cell_ident.clone();
                 });
                 cg.inspect_stmts
-                    .push(self.gen_size_inspector(&var, name, &cell_ident, profiler));
+                    .push(self.gen_size_inspector(&var, idb.raw_name(), &cell_ident, profiler));
             }
 
             if data_type
@@ -79,13 +79,21 @@ impl CodeGen {
 
                 self.features.mark_output_buffers();
 
+                // Wiring (first arg) is the collection binding feeding the
+                // sink; the label (second arg) is the human-facing name.
                 if self.config.output_to_stdout() {
                     with_profiler(profiler, |p| {
-                        p.inspect_content_terminal_operator(name.to_string(), name.to_string());
+                        p.inspect_content_terminal_operator(
+                            var.to_string(),
+                            idb.raw_name().to_string(),
+                        );
                     });
                 } else {
                     with_profiler(profiler, |p| {
-                        p.inspect_content_file_operator(name.to_string(), name.to_string());
+                        p.inspect_content_file_operator(
+                            var.to_string(),
+                            idb.raw_name().to_string(),
+                        );
                     });
                 }
 
@@ -116,7 +124,7 @@ impl CodeGen {
     fn gen_size_inspector(
         &self,
         var: &Ident,
-        name: &str,
+        display: &str,
         cell_ident: &Ident,
         profiler: &mut Option<Profiler>,
     ) -> TokenStream {
@@ -126,8 +134,10 @@ impl CodeGen {
             quote! {}
         };
 
+        // Wiring (first arg) is the collection binding feeding the sink;
+        // the label (second arg) is the human-facing name.
         with_profiler(profiler, |p| {
-            p.inspect_size_operator(name.to_string(), name.to_string());
+            p.inspect_size_operator(var.to_string(), display.to_string());
         });
 
         // The inspect fires once per epoch with `size` = the epoch's delta

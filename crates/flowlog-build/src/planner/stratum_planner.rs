@@ -70,11 +70,10 @@ pub struct StratumPlanner {
     /// `None` for plain strata (which run to fixpoint implicitly).
     loop_condition: Option<LoopCondition>,
 
-    /// Atom fingerprint → relation name, unioned across every rule's rhs.
-    /// Computed once at stratum construction so codegen can annotate
-    /// operator labels with the EDB they consume without re-walking the
-    /// rule planners per transformation.
-    atom_names: HashMap<u64, String>,
+    /// Atom fingerprints unioned across every rule's rhs. Computed once at
+    /// stratum construction so codegen can tell which transformation inputs
+    /// are named atoms without re-walking the rule planners.
+    atom_fps: HashSet<u64>,
 }
 
 impl StratumPlanner {
@@ -171,13 +170,10 @@ impl StratumPlanner {
 
         // Phase 6: Materialize deduplicated transformations
         // this phase also do sharing optimization across rules
-        let atom_names = rule_planners
+        let atom_fps: HashSet<u64> = rule_planners
             .iter()
-            .flat_map(RulePlanner::rhs_atom_names)
-            .fold(HashMap::new(), |mut acc, (fp, name)| {
-                acc.entry(fp).or_insert(name);
-                acc
-            });
+            .flat_map(RulePlanner::rhs_atom_fps)
+            .collect();
         let mut stratum_planner = Self {
             rule_planners,
             is_recursive,
@@ -189,7 +185,7 @@ impl StratumPlanner {
                 .to_vec(),
             recursion_leave_collections: stratifier.stratum_leave_relation(stratum_idx).to_vec(),
             loop_condition: stratifier.loop_condition(stratum_idx).cloned(),
-            atom_names,
+            atom_fps,
             ..Self::default()
         };
         stratum_planner.materialize_transformations();
@@ -200,7 +196,7 @@ impl StratumPlanner {
         stratum_planner.identify_recursive_transformations(is_recursive);
         stratum_planner
             .build_recursion_enter_collections(stratifier.stratum_available_relations(stratum_idx));
-        stratum_planner.build_idb_to_aggregation_map(&catalogs)?;
+        stratum_planner.build_idb_to_aggregation_map(&catalogs, stratifier)?;
 
         // Debug info for non-recursive vs recursive transformations.
         debug!("\n{}", stratum_planner);
@@ -301,8 +297,8 @@ impl StratumPlanner {
     /// the profiler/visualizer can show `[Row -> KV] K:(V0) arc(x, y)` without
     /// any downstream knowledge of atoms.
     #[inline]
-    pub(crate) fn atom_names(&self) -> &HashMap<u64, String> {
-        &self.atom_names
+    pub(crate) fn atom_fps(&self) -> &HashSet<u64> {
+        &self.atom_fps
     }
 
     /// Check if this stratum is recursive.
@@ -545,7 +541,11 @@ impl StratumPlanner {
     /// Build the mapping from each final output collection fingerprint to
     /// its aggregation requirement. Ensures consistent aggregation operator
     /// and position across rules that produce the same relation.
-    fn build_idb_to_aggregation_map(&mut self, catalogs: &[Catalog]) -> Result<(), PlanError> {
+    fn build_idb_to_aggregation_map(
+        &mut self,
+        catalogs: &[Catalog],
+        stratifier: &Stratifier,
+    ) -> Result<(), PlanError> {
         // Side map of first-seen head spans used only when constructing
         // the `InconsistentAggregation` diagnostic's `prior_span`.
         let mut prior_spans: HashMap<u64, crate::common::Span> = HashMap::new();
@@ -571,10 +571,11 @@ impl StratumPlanner {
                 .filter(|a| matches!(a, HeadArg::Aggregation(_)))
                 .count();
             if agg_count > 1 {
+                let head = catalog.rule().head();
                 return Err(PlanError::MultipleAggregationsInHead {
                     head_span: current_span,
                     rule_span: catalog.rule().span(),
-                    rel: catalog.rule().head().name().to_string(),
+                    rel: stratifier.display_name(head.head_fingerprint(), head.name()),
                     count: agg_count,
                 });
             }
@@ -599,7 +600,8 @@ impl StratumPlanner {
                             .get(&head_idb_fp)
                             .copied()
                             .unwrap_or(crate::common::Span::DUMMY),
-                        rel: catalog.rule().head().name().to_string(),
+                        rel: stratifier
+                            .display_name(head_idb_fp, catalog.rule().head().name()),
                         existing_op,
                         existing_pos,
                         found_op: op,

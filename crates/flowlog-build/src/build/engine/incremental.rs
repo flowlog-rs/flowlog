@@ -33,7 +33,10 @@ use crate::parser::{Program, Relation};
 
 use super::{per_position_tuple, user_to_tuple_convert};
 use crate::build::relation::user::tuple_to_user_expr;
-use crate::build::relation::{input_struct_ident, rust_ident, user_struct_ident};
+use crate::build::relation::{
+    input_struct_ident, inputs_field_ident, printsize_field_ident, results_field_ident,
+    user_struct_ident,
+};
 use crate::{CodeParts, data_type_tokens};
 
 pub(crate) fn gen_lib_incremental_engine(
@@ -387,7 +390,7 @@ fn gen_worker_closure(
         .iter()
         .map(|rel| {
             let slots = slots_ident(rel);
-            let field = rust_ident(rel.name());
+            let field = inputs_field_ident(rel);
             quote! {
                 {
                     let my_chunk = ::std::mem::take(
@@ -405,7 +408,7 @@ fn gen_worker_closure(
         .iter()
         .map(|rel| {
             let slots = slots_ident(rel);
-            let field = rust_ident(rel.name());
+            let field = inputs_field_ident(rel);
             quote! {
                 if index == 0 {
                     if let Some(diff) = #slots.lock().expect("slot poisoned").take() {
@@ -612,7 +615,7 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
     let mut blocks = Vec::new();
 
     for rel in program.output_idbs() {
-        let field = rust_ident(rel.name());
+        let field = results_field_ident(rel);
         let buf = buf_ident(rel);
         if rel.arity() == 0 {
             blocks.push(quote! {
@@ -651,7 +654,7 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
     }
 
     for rel in program.printsize_idbs() {
-        let field = format_ident!("{}_size", rel.name());
+        let field = printsize_field_ident(rel);
         let cell = size_cell_ident(rel);
         blocks.push(quote! {
             let #field: i32 = {
@@ -667,11 +670,11 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
 fn gen_result_field_names(program: &Program) -> Vec<TokenStream> {
     let mut names = Vec::new();
     for rel in program.output_idbs() {
-        let field = rust_ident(rel.name());
+        let field = results_field_ident(rel);
         names.push(quote! { #field });
     }
     for rel in program.printsize_idbs() {
-        let field = format_ident!("{}_size", rel.name());
+        let field = printsize_field_ident(rel);
         names.push(quote! { #field });
     }
     names

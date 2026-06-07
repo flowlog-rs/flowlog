@@ -1,8 +1,9 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : keyword_relation_names
 // Feature : relation names that collide with Rust keywords (`Type`->type,
-//           `Match`->match) must not break codegen. Names are escaped to raw
-//           identifiers (`r#type`) / underscore-suffixed where unraw-able.
+//           `Match`->match) must not break codegen. Internal collection
+//           bindings are synthetic (`rel_<N>_<name>`), so no relation name
+//           can produce a Rust keyword or collide with another binding.
 //           Regression for the relation-name → Rust-ident keyword collision.
 // ════════════════════════════════════════════════════════════════════════════
 
