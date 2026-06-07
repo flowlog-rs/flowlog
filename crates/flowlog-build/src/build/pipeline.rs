@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use proc_macro2::TokenStream;
 
-use crate::build::relation::gen_input_module;
+use crate::build::relation::{gen_input_module, validate_api_surface};
 use crate::codegen::Features;
 use crate::common::{BoxError, Config, SourceMap};
 use crate::parser::Program;
@@ -46,6 +46,9 @@ impl Pipeline {
         let config = build_config(builder, program_str);
         let mut program = parse(&config, &builder.include_dirs, sm)?;
         crate::typechecker::check_program(&mut program, &config)?;
+        // The generated library API mirrors relation names verbatim; reject
+        // the rare names it cannot represent before codegen runs.
+        validate_api_surface(&program)?;
         let mut profiler = config
             .profiling_enabled()
             .then(|| Profiler::new(config.mode()));

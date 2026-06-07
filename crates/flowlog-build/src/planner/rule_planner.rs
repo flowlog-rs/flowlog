@@ -118,18 +118,19 @@ impl RulePlanner {
         self.rhs_atom_map(Atom::to_string)
     }
 
-    /// Atom fingerprint → relation name (no args). Consumed by codegen to
-    /// label operators with the EDB they read from.
-    pub(crate) fn rhs_atom_names(&self) -> HashMap<u64, String> {
-        self.rhs_atom_map(|atom| atom.name().to_string())
+    /// Fingerprints of every positive/negative atom on the rule's rhs.
+    /// Consumed by codegen to decide which transformation inputs are named
+    /// atoms (label text comes from `display_name`).
+    pub(crate) fn rhs_atom_fps(&self) -> HashSet<u64> {
+        self.rhs_atom_map(|_| ()).into_keys().collect()
     }
 
-    /// Build a `fingerprint → string` map over every positive/negative atom
-    /// on the rule's rhs, with `value_of` deciding the string per atom.
+    /// Build a `fingerprint → value` map over every positive/negative atom
+    /// on the rule's rhs, with `value_of` deciding the value per atom.
     /// First occurrence wins on duplicate fingerprints.
-    fn rhs_atom_map<F>(&self, mut value_of: F) -> HashMap<u64, String>
+    fn rhs_atom_map<T, F>(&self, mut value_of: F) -> HashMap<u64, T>
     where
-        F: FnMut(&Atom) -> String,
+        F: FnMut(&Atom) -> T,
     {
         let mut out = HashMap::new();
         for predicate in self.rule.rhs() {

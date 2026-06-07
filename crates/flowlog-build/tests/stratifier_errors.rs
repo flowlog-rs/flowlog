@@ -28,7 +28,7 @@ fn recursion_outside_loop() {
 fn forward_reference() {
     assert_err!(
         stratify("forward_reference.dl", true),
-        StratifyError::ForwardReference { ref rel, .. } if rel == "b",
+        StratifyError::ForwardReference { ref rel, .. } if rel == "B",
         ["not yet defined", "later segment"]
     );
 }

@@ -403,49 +403,51 @@ fn resolve_inheritance(
     Ok(result)
 }
 
-/// Map of override-target-name → declaration span, keyed by the
-/// canonical (lowercased) name. Two `.override Foo` directives in the
-/// same comp collapse to one entry (Soufflé-compatible).
-fn collect_overrides(body: &[RawItem]) -> HashMap<String, Span> {
-    let mut out: HashMap<String, Span> = HashMap::new();
+/// Map of override-target-name → `(declaration span, raw spelling)`,
+/// keyed by the canonical (lowercased) name. Two `.override Foo`
+/// directives in the same comp collapse to one entry
+/// (Soufflé-compatible). The raw spelling is kept for diagnostics.
+fn collect_overrides(body: &[RawItem]) -> HashMap<String, (Span, String)> {
+    let mut out: HashMap<String, (Span, String)> = HashMap::new();
     for item in body {
         if let RawItem::Override { name, span } = item {
-            out.entry(name.to_lowercase()).or_insert(*span);
+            out.entry(name.to_lowercase())
+                .or_insert_with(|| (*span, name.clone()));
         }
     }
     out
 }
 
 fn validate_overrides(
-    overrides: &HashMap<String, Span>,
+    overrides: &HashMap<String, (Span, String)>,
     inherited: &[RawItem],
     own_body: &[RawItem],
 ) -> Result<(), ParseError> {
     let inherited_decls = decl_map(inherited);
     let own_decls = decl_map(own_body);
 
-    for (name_lc, span) in overrides {
+    for (name_lc, (span, raw_name)) in overrides {
         // A local `.decl` would shadow the inherited one and make the
         // override target ambiguous — reject.
         if let Some(prior) = own_decls.get(name_lc.as_str()) {
             return Err(ParseError::OverrideRedeclaresRelation {
                 span: *span,
                 prior: prior.span,
-                name: name_lc.clone(),
+                name: raw_name.clone(),
             });
         }
 
         let Some(decl) = inherited_decls.get(name_lc.as_str()) else {
             return Err(ParseError::OverrideUnknownRelation {
                 span: *span,
-                name: name_lc.clone(),
+                name: raw_name.clone(),
             });
         };
         if !decl.overridable {
             return Err(ParseError::OverrideOfNonOverridable {
                 span: *span,
                 prior: decl.span,
-                name: name_lc.clone(),
+                name: raw_name.clone(),
             });
         }
     }
@@ -468,7 +470,10 @@ fn decl_map(items: &[RawItem]) -> HashMap<String, &RawRelation> {
 /// Whether an inherited `RawItem` is a rule or fact whose head matches
 /// one of this comp's `.override` targets — if so, it gets dropped from
 /// the spliced body and replaced by the comp's own derivations.
-fn is_overridden_rule_or_fact(item: &RawItem, overrides: &HashMap<String, Span>) -> bool {
+fn is_overridden_rule_or_fact(
+    item: &RawItem,
+    overrides: &HashMap<String, (Span, String)>,
+) -> bool {
     if overrides.is_empty() {
         return false;
     }

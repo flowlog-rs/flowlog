@@ -30,7 +30,7 @@ pub(crate) fn gen_public_rel_module(program: &Program) -> TokenStream {
 
 /// Unique non-nullary relations across `.input` EDBs and `.output` IDBs —
 /// a hybrid relation (both `.input` and `.output`) shows up once.
-fn collect_user_rels(program: &Program) -> Vec<&Relation> {
+pub(crate) fn collect_user_rels(program: &Program) -> Vec<&Relation> {
     let mut seen: Vec<&Relation> = Vec::new();
     for rel in program.edbs().into_iter().chain(program.output_idbs()) {
         if rel.arity() == 0 {

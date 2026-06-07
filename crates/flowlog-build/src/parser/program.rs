@@ -248,6 +248,18 @@ impl Program {
         &self.relations
     }
 
+    /// Look up a declared relation by fingerprint.
+    ///
+    /// This is the bridge from codegen's fingerprint world back to the
+    /// declaration — primarily so human-facing output (profiler labels,
+    /// diagnostics) can show the user's original spelling
+    /// ([`Relation::raw_name`]) instead of the canonical internal name.
+    /// Linear scan: callers are codegen-time, never on the data path.
+    #[must_use]
+    pub(crate) fn relation_by_fingerprint(&self, fp: u64) -> Option<&Relation> {
+        self.relations.iter().find(|rel| rel.fingerprint() == fp)
+    }
+
     /// EDB relations available before rule evaluation starts.
     ///
     /// This is the union of:
@@ -1098,7 +1110,7 @@ impl Program {
                 if decl.arity() != 0 {
                     return Err(ParseError::NonNullaryLoopCondition {
                         span: block.span(),
-                        name: name.to_string(),
+                        name: decl.raw_name().to_string(),
                         arity: decl.arity(),
                     });
                 }
@@ -1364,7 +1376,7 @@ impl Program {
             .relations
             .iter()
             .filter(|d| !needed_preds.contains(d.name()) && !underived.contains(d.name()))
-            .map(|d| d.name().to_string())
+            .map(|d| d.raw_name().to_string())
             .collect();
 
         let dead_rules: Vec<_> = self
@@ -1382,15 +1394,18 @@ impl Program {
         if !underived.is_empty() || !dead_relations.is_empty() || !dead_rules.is_empty() {
             let mut parts = Vec::new();
             if !underived.is_empty() {
-                let mut sorted: Vec<_> = underived.iter().collect();
-                sorted.sort();
+                // Display-only: show the user's spelling (`underived`
+                // keeps canonical names for the membership tests above).
+                let mut sorted: Vec<&str> = self
+                    .relations
+                    .iter()
+                    .filter(|r| underived.contains(r.name()))
+                    .map(Relation::raw_name)
+                    .collect();
+                sorted.sort_unstable();
                 parts.push(format!(
                     "  underived IDBs (declared but no rules): {}",
-                    sorted
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    sorted.join(", ")
                 ));
             }
             if !dead_relations.is_empty() {

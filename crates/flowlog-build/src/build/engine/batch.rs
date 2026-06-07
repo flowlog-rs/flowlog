@@ -16,7 +16,10 @@ use crate::parser::{Program, Relation};
 
 use super::{needs_conversion, per_position_tuple, user_to_tuple_convert};
 use crate::build::relation::user::tuple_to_user_expr;
-use crate::build::relation::{input_struct_ident, rust_ident, user_struct_ident};
+use crate::build::relation::{
+    input_struct_ident, inputs_field_ident, printsize_field_ident, results_field_ident,
+    user_struct_ident,
+};
 use crate::{CodeParts, data_type_tokens, gen_drain_block};
 
 pub(crate) fn gen_lib_engine(
@@ -290,7 +293,7 @@ fn gen_inputs_new_args(edbs: &[&Relation]) -> Vec<TokenStream> {
 fn gen_typed_ingest(edbs: &[&Relation]) -> Vec<TokenStream> {
     edbs.iter()
         .map(|rel| {
-            let field = rust_ident(rel.name());
+            let field = inputs_field_ident(rel);
             let slots = partition_slots_ident(rel);
             quote! {
                 {
@@ -314,11 +317,11 @@ fn gen_typed_ingest(edbs: &[&Relation]) -> Vec<TokenStream> {
 fn gen_result_fields(program: &Program) -> Vec<TokenStream> {
     let mut fields = Vec::new();
     for rel in program.output_idbs() {
-        let ident = rust_ident(rel.name());
+        let ident = results_field_ident(rel);
         fields.push(quote! { #ident });
     }
     for rel in program.printsize_idbs() {
-        let ident = format_ident!("{}_size", rel.name());
+        let ident = printsize_field_ident(rel);
         fields.push(quote! { #ident });
     }
     fields
@@ -330,7 +333,7 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
     let mut blocks = Vec::new();
 
     for rel in program.output_idbs() {
-        let field = rust_ident(rel.name());
+        let field = results_field_ident(rel);
         let buf = format_ident!("buf_{}", rel.name());
 
         if rel.arity() == 0 {
@@ -355,7 +358,7 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
     }
 
     for rel in program.printsize_idbs() {
-        let field = format_ident!("{}_size", rel.name());
+        let field = printsize_field_ident(rel);
         let cell = format_ident!("size_{}", rel.name());
         // The size cell stores `(Ts, i32)`; clamp negatives to 0 — they
         // shouldn't happen in batch mode but surfacing `usize` to the user
