@@ -17,6 +17,20 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     let mut out = Vec::<TokenStream>::new();
 
     out.push(quote! {
+        // Mechanically generated dataflow routinely leaves intermediate
+        // collection bindings unused — e.g. a relation declared (with `.input`
+        // or inline facts) yet never referenced by any rule body, or a derived
+        // collection whose only consumer is an output drain through a separate
+        // handle. These are valid Datalog (Soufflé accepts them); relax just the
+        // unused-variable lint on the generated binary while `-Dwarnings` keeps
+        // every other lint class fatal.
+        #![allow(unused_variables)]
+
+        // Relation names may legally begin with `_` (DOOP's `basic._MethodLookup_*`);
+        // joined with their component prefix they synthesize binding idents with
+        // consecutive underscores, which `non_snake_case` rejects.
+        #![allow(non_snake_case)]
+
         mod relation;
         use relation::*;
         use std::collections::HashMap;

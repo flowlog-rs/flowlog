@@ -26,6 +26,9 @@ pub(crate) enum FactorArgument {
         op: BuiltinOperator,
         args: Vec<ArithmeticArgument>,
     },
+
+    /// Parenthesised sub-expression, preserving its grouping.
+    Group(Box<ArithmeticArgument>),
 }
 
 impl FactorArgument {
@@ -39,6 +42,7 @@ impl FactorArgument {
                 .iter()
                 .flat_map(|a| a.transformation_arguments())
                 .collect(),
+            Self::Group(a) => a.transformation_arguments(),
         }
     }
 }
@@ -64,6 +68,7 @@ impl fmt::Display for FactorArgument {
                     .join(", ");
                 write!(f, "{op}({args_str})")
             }
+            Self::Group(a) => write!(f, "({a})"),
         }
     }
 }
@@ -117,6 +122,14 @@ impl ArithmeticArgument {
                     op: *op,
                     args: map_call_args(args, var_id),
                 },
+                FactorPos::Group(a) => {
+                    let num_vars = a.signatures().len();
+                    let sub_args = &var_arguments[*var_id..*var_id + num_vars];
+                    *var_id += num_vars;
+                    FactorArgument::Group(Box::new(ArithmeticArgument::from_arithmeticpos(
+                        a, sub_args,
+                    )))
+                }
             }
         }
 

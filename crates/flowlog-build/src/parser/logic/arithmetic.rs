@@ -73,6 +73,13 @@ pub(crate) enum Factor {
     /// `as(factor, T)`. Runtime no-op; the typechecker lowers it away
     /// after validating the cast.
     Cast(Box<Cast>),
+    /// Parenthesised sub-expression `(expr)`. Preserves grouping because
+    /// arithmetic folds left-to-right with no operator precedence. The
+    /// grammar enforces multi-term content (`group_expr` requires at
+    /// least one operator; single-factor parens like `(x)` are silent
+    /// and parse as the bare factor), so a `Group` exists only when the
+    /// grouping affects the fold.
+    Group(Box<Arithmetic>),
 }
 
 /// `as(factor, target_type)`. `inner` is a single [`Factor`] (not a
@@ -146,6 +153,7 @@ impl Factor {
             Self::FnCall(fc) => fc.vars(),
             Self::Builtin(bc) => bc.vars(),
             Self::Cast(c) => c.inner().vars(),
+            Self::Group(a) => a.vars(),
         }
     }
 }
@@ -158,6 +166,7 @@ impl fmt::Display for Factor {
             Self::FnCall(fc) => write!(f, "{fc}"),
             Self::Builtin(bc) => write!(f, "{bc}"),
             Self::Cast(c) => write!(f, "{c}"),
+            Self::Group(a) => write!(f, "({a})"),
         }
     }
 }
@@ -174,6 +183,13 @@ impl Lexeme for Factor {
             Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner, file)?),
             Rule::variable => Self::Var(inner.as_str().to_string()),
             Rule::constant => Self::Const(ConstType::from_parsed_rule(inner, file)?),
+            // Multi-term parenthesised sub-expression — the grammar's
+            // `group_expr` requires at least one operator, so `Group` is
+            // constructed only when grouping affects the fold.
+            Rule::group_expr => Self::Group(Box::new(Arithmetic::from_parsed_rule(inner, file)?)),
+            // Single-factor parens `(x)`: the paren wrappers are silent in
+            // the grammar, so the bare inner factor pair surfaces here.
+            Rule::factor => Self::from_parsed_rule(inner, file)?,
             other => return Err(grammar_bug(format!("invalid factor rule: {other:?}"))),
         })
     }
@@ -343,5 +359,63 @@ mod tests {
         let y = "y".to_string();
         assert_eq!(a.vars(), vec![&x, &x, &y]);
         assert_eq!(a.vars_set().len(), 2);
+    }
+
+    /// A parenthesised sub-expression parses into `Factor::Group`,
+    /// preserves its inner variables (in order), and round-trips through
+    /// `Display` with its parentheses intact — the grouping must survive
+    /// because arithmetic folds left-to-right with no operator precedence.
+    #[test]
+    fn parse_paren_group() {
+        use crate::parser::{FlowLogParser, Rule};
+        use pest::Parser;
+
+        let mut pairs = FlowLogParser::parse(Rule::arithmetic_expr, "a * (b + c)").unwrap();
+        let arith =
+            Arithmetic::from_parsed_rule(pairs.next().unwrap(), crate::common::FileId(0)).unwrap();
+
+        // init = `a`; rest = [(*, Group(b + c))].
+        assert!(matches!(arith.init(), Factor::Var(v) if v == "a"));
+        let (op, factor) = &arith.rest()[0];
+        assert!(matches!(op, ArithmeticOperator::Multiply));
+        assert!(matches!(factor, Factor::Group(_)));
+
+        // Variables recurse through the group, preserving order.
+        let a = "a".to_string();
+        let b = "b".to_string();
+        let c = "c".to_string();
+        assert_eq!(arith.vars(), vec![&a, &b, &c]);
+
+        // Parentheses survive the round-trip.
+        assert_eq!(arith.to_string(), "a * (b + c)");
+    }
+
+    /// Parentheses around a single factor are semantically transparent and
+    /// collapse to the bare factor at parse time — `(x)`, `("c")`, and
+    /// `(f(x))` must behave exactly like their unparenthesised forms in
+    /// fact detection, subtype narrowing, and assignment recognition.
+    /// Nested parens around a multi-term expression collapse to one `Group`.
+    #[test]
+    fn parse_single_factor_group_collapses() {
+        use crate::parser::{FlowLogParser, Rule};
+        use pest::Parser;
+
+        let parse = |src: &str| -> Factor {
+            let mut pairs = FlowLogParser::parse(Rule::arithmetic_expr, src).unwrap();
+            Arithmetic::from_parsed_rule(pairs.next().unwrap(), crate::common::FileId(0))
+                .unwrap()
+                .init()
+                .clone()
+        };
+
+        assert!(matches!(parse("(x)"), Factor::Var(v) if v == "x"));
+        assert!(matches!(parse("(((x)))"), Factor::Var(v) if v == "x"));
+        assert!(matches!(parse("(\"boolean\")"), Factor::Const(_)));
+        // Nested parens: `((b + c))` is one Group around the expression.
+        let Factor::Group(inner) = parse("((b + c))") else {
+            panic!("expected Group");
+        };
+        assert!(matches!(inner.init(), Factor::Var(v) if v == "b"));
+        assert!(!inner.rest().is_empty());
     }
 }

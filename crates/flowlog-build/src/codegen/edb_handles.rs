@@ -4,6 +4,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::CodeGen;
+use crate::codegen::ty::data::data_type_tokens;
 use crate::parser::DataType;
 use crate::profiler::{Profiler, with_profiler};
 
@@ -43,6 +44,7 @@ impl CodeGen {
             profiler.update_input_block();
         });
 
+        let str_intern = self.config.str_intern_enabled();
         edbs.iter()
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
@@ -61,8 +63,16 @@ impl CodeGen {
                     );
                 });
 
+                // The matching `InputSession` handle is always typed from the
+                // declared column types (see `gen_input_struct`), so annotating
+                // the collection's element type identically is provably
+                // consistent and frees the generated crate from fragile
+                // inference (e.g. fact-only or orphan relations whose element
+                // type is otherwise un-inferable).
+                let ty = data_type_tokens(&rel.data_type(), str_intern);
+
                 quote! {
-                    let (#handle, #coll) = scope.new_collection::<_, Diff>();
+                    let (#handle, #coll) = scope.new_collection::<#ty, Diff>();
                     let #coll = #coll #normalize;
                 }
             })

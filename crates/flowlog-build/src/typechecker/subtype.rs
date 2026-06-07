@@ -205,7 +205,7 @@ fn single_var_type(a: &Arithmetic, reg: &TypeRegistry, bindings: &Bindings) -> O
     match a.init() {
         Factor::Var(v) => bindings.get(v).map(|&(id, _)| id),
         Factor::Cast(c) => reg.lookup(c.target_type()),
-        Factor::Const(_) | Factor::FnCall(_) | Factor::Builtin(_) => None,
+        Factor::Const(_) | Factor::FnCall(_) | Factor::Builtin(_) | Factor::Group(_) => None,
     }
 }
 
@@ -282,6 +282,7 @@ fn check_factor_casts(
             // Recurse for nested casts: `as(as(x, A), B)`.
             check_factor_casts(c.inner(), reg, bindings)
         }
+        Factor::Group(a) => check_arith_casts(a, reg, bindings),
     }
 }
 
@@ -298,6 +299,9 @@ fn inner_factor_primitive_root(
         Factor::Const(_) => None,
         Factor::FnCall(_) | Factor::Builtin(_) => None,
         Factor::Cast(c) => reg.lookup(c.target_type()).map(|id| reg.root_primitive(id)),
+        // A grouped expression drops subtype identity, like multi-factor
+        // arithmetic; the primitive pass already validated its contents.
+        Factor::Group(_) => None,
     }
 }
 
@@ -362,6 +366,7 @@ fn lower_factor(f: &mut Factor) {
                 lower_arith(a);
             }
         }
+        Factor::Group(a) => lower_arith(a),
         Factor::Cast(_) => unreachable!("cast was peeled above"),
     }
 }

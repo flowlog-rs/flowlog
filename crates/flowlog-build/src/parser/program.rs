@@ -234,6 +234,10 @@ impl Program {
 
         let mut program = Self::collect_program(root, extended, combined_file)?;
         program.prune_dead_components();
+        // Materialize orphan references only *after* pruning, so the empty-fact
+        // entries we add can't disable pruning's "no outputs/facts ⇒ keep all"
+        // shortcut, and so we never materialize a relation that pruning dropped.
+        program.materialize_orphan_relations();
 
         debug!("\n{}", program);
         info!("Successfully parsed program from '{}'.", path);
@@ -860,10 +864,11 @@ impl Program {
             .iter()
             .map(|(init, _)| (init.instance.to_lowercase(), init.instance.clone()))
             .collect();
+        let global_decls: HashMap<String, String> = HashMap::new();
         let mut shift = 0usize;
         for (init, pos) in inits_at_pos {
             let mut out = inliner::InlinerOutput::default();
-            inliner::inline_one("", &global_instances, init, &mut comps, &mut out, &mut type_registry)?;
+            inliner::inline_one("", &global_instances, &global_decls, init, &mut comps, &mut out, &mut type_registry)?;
             for rel in out.relations {
                 if let Some((_prev_raw, prior)) = decl_spans.get(rel.name()) {
                     return Err(ParseError::DuplicateDecl {
@@ -903,6 +908,11 @@ impl Program {
 
         normalize_inliner_dots(&mut relations, &mut segments, &mut raw_facts);
 
+        // Eliminate equality assignments (`v = expr`) by substitution before the
+        // catalog/planner, which ground variables only through positive atoms.
+        // Constant-only rules become inline facts.
+        super::desugar::desugar_equality_assignments(&mut segments, &mut raw_facts)?;
+
         let mut program = Self {
             relations,
             segments,
@@ -917,6 +927,50 @@ impl Program {
         program.validate_relation_references()?;
 
         Ok(program)
+    }
+
+    /// Materialize *orphan* relations as empty inputs.
+    ///
+    /// A relation that is declared and referenced in some rule body, yet has no
+    /// producing rule, no `.input`, and no inline facts, denotes the empty
+    /// relation under Soufflé semantics (a positive reference yields nothing; a
+    /// negative reference is always satisfied). The stratifier already tolerates
+    /// such references; here we give them an empty inline-fact entry so codegen
+    /// emits an empty collection for them instead of referencing an undefined
+    /// binding.
+    fn materialize_orphan_relations(&mut self) {
+        let mut produced: HashSet<String> = HashSet::new();
+        let mut referenced: HashSet<String> = HashSet::new();
+        for segment in &self.segments {
+            let rules: &[FlowLogRule] = match segment {
+                Segment::Plain(rules) => rules,
+                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
+            };
+            for rule in rules {
+                produced.insert(rule.head().name().to_string());
+                for pred in rule.rhs() {
+                    if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
+                        referenced.insert(atom.name().to_string());
+                    }
+                }
+            }
+        }
+
+        let orphans: Vec<String> = self
+            .relations
+            .iter()
+            .filter(|rel| {
+                let name = rel.name();
+                referenced.contains(name)
+                    && !produced.contains(name)
+                    && !self.facts.contains_key(name)
+                    && !rel.has_input()
+            })
+            .map(|rel| rel.name().to_string())
+            .collect();
+        for name in orphans {
+            self.facts.entry(name).or_default();
+        }
     }
 
     /// Reject any rule head, body atom, or ground fact whose relation
@@ -1493,6 +1547,8 @@ impl Program {
 mod tests {
     use super::*;
     use crate::parser::DataType;
+    use crate::parser::HeadArg;
+    use crate::parser::ComparisonOperator;
     use std::io::Write;
 
     fn loop_blocks(program: &Program) -> Vec<&LoopBlock> {
@@ -2246,6 +2302,408 @@ mod tests {
         assert!(
             body.contains(&"basic·subtypeof"),
             "sibling ref should resolve to basic·subtypeof, got {body:?}"
+        );
+    }
+
+    /// `R(t) :- A(x), t = x + 1.` — the assignment grounds `t`, which is
+    /// substituted into the head as an arithmetic expression; the equality
+    /// literal is dropped, leaving only the positive atom.
+    #[test]
+    fn equality_assignment_arith_substituted_into_head() {
+        let program = parse_program(
+            "
+            .decl A(x:number)
+            .decl R(t:number)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            R(t) :- A(x), t = x + 1.
+            .output R
+            ",
+        );
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "r")
+            .expect("r rule");
+        assert_eq!(rule.rhs().len(), 1, "equality literal should be dropped");
+        assert!(matches!(rule.rhs()[0], Predicate::PositiveAtom(_)));
+        assert!(
+            matches!(rule.head().head_arguments()[0], HeadArg::Arith(_)),
+            "head arg should carry the substituted arithmetic"
+        );
+    }
+
+    /// `R(y) :- A(x), y = x.` — a pure aliasing assignment collapses the head
+    /// argument back to the source variable.
+    #[test]
+    fn equality_assignment_alias_substituted_into_head() {
+        let program = parse_program(
+            "
+            .decl A(x:symbol)
+            .decl R(y:symbol)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            R(y) :- A(x), y = x.
+            .output R
+            ",
+        );
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "r")
+            .expect("r rule");
+        assert_eq!(rule.rhs().len(), 1);
+        match &rule.head().head_arguments()[0] {
+            HeadArg::Var(v) => assert_eq!(v, "x"),
+            other => panic!("expected aliased Var(x), got {other:?}"),
+        }
+    }
+
+    /// `P(t) :- t = "boolean".` — an empty-body rule whose head is fully ground
+    /// after substitution is lowered to an inline fact.
+    #[test]
+    fn equality_assignment_const_only_becomes_fact() {
+        let program = parse_program(
+            "
+            .decl P(t:symbol)
+            P(t) :- t = \"boolean\".
+            .output P
+            ",
+        );
+        assert!(
+            program.facts().contains_key("p"),
+            "const-only assignment rule should become a fact"
+        );
+        assert_eq!(program.facts()["p"].len(), 1);
+        assert!(
+            program.rules().iter().all(|r| r.head().name() != "p"),
+            "no derivation rule should remain for the fact relation"
+        );
+    }
+
+    /// `R(x,t) :- A(x), B(t), t = x.` — `t` is already bound by `B`, so the
+    /// equality is a genuine filter and must be left in the body, not treated
+    /// as an assignment.
+    #[test]
+    fn equality_between_bound_columns_is_kept_as_filter() {
+        let program = parse_program(
+            "
+            .decl A(x:number)
+            .decl B(t:number)
+            .decl R(x:number, t:number)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            .input B(IO=\"file\",filename=\"B.csv\")
+            R(x, t) :- A(x), B(t), t = x.
+            .output R
+            ",
+        );
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "r")
+            .expect("r rule");
+        let compares = rule
+            .rhs()
+            .iter()
+            .filter(|p| matches!(p, Predicate::Compare(_)))
+            .count();
+        assert_eq!(compares, 1, "filter equality must be preserved");
+    }
+
+    /// A relation that is declared and referenced by a live rule but never
+    /// produced (no rule, no `.input`, no facts) is materialized as an empty
+    /// inline-fact relation so codegen emits an empty collection for it.
+    /// An `.input`-backed relation is NOT an orphan — its collection comes
+    /// from the fact file.
+    #[test]
+    fn orphan_relation_referenced_by_live_rule_is_materialized_empty() {
+        let program = parse_program(
+            "
+            .decl O(x:symbol)
+            .decl I(x:symbol)
+            .input I(IO=\"file\",filename=\"I.csv\")
+            .decl R(x:symbol)
+            R(x) :- O(x), I(x).
+            .output R
+            ",
+        );
+        assert!(
+            program.facts().contains_key("o"),
+            "orphan relation should be materialized"
+        );
+        assert!(
+            program.facts()["o"].is_empty(),
+            "materialized orphan must be empty"
+        );
+        assert!(
+            !program.facts().contains_key("i"),
+            ".input relation must not be materialized as an orphan"
+        );
+    }
+
+
+    /// Substituting an assignment of a *computed* expression into a negated
+    /// atom is rejected: a negated atom argument can only be a bare variable or
+    /// constant, never an arithmetic expression.
+    #[test]
+    fn equality_assignment_into_negation_with_arith_errors() {
+        let err = parse_program_result(
+            "
+            .decl A(x:number)
+            .decl B(t:number)
+            .decl R(x:number)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            .input B(IO=\"file\",filename=\"B.csv\")
+            R(x) :- A(x), !B(t), t = x + 1.
+            .output R
+            ",
+        )
+        .expect_err("computed value into negated atom should error");
+        assert!(
+            matches!(err, ParseError::AssignmentVarInNegation { .. }),
+            "expected AssignmentVarInNegation, got {err:?}"
+        );
+    }
+
+    /// A rule whose body desugars away entirely must still leave the segment:
+    /// ground integer arithmetic in the head is folded (`x = 1 + 2` → fact
+    /// `P(3)`), and anything unfoldable is rejected with
+    /// [`ParseError::GroundRuleNotConst`] instead of reaching the planner,
+    /// which panics on zero-positive-atom rules.
+    #[test]
+    fn assignment_only_rule_folds_or_rejects() {
+        // Foldable integer expression → inline fact P(3).
+        let program = parse_program(
+            "
+            .decl P(x:number)
+            P(x) :- x = 1 + 2.
+            .output P
+            ",
+        );
+        assert!(program.facts().contains_key("p"));
+        assert!(program.rules().iter().all(|r| r.head().name() != "p"));
+
+        // Unfoldable (builtin call) → rejected, not handed to the planner.
+        let err = parse_program_result(
+            "
+            .decl P(s:symbol)
+            P(s) :- s = cat(\"a\", \"b\").
+            .output P
+            ",
+        )
+        .expect_err("builtin in ground head should be rejected");
+        assert!(
+            matches!(err, ParseError::GroundRuleNotConst { .. }),
+            "expected GroundRuleNotConst, got {err:?}"
+        );
+
+        // Unbound head variable with emptied body → same rejection.
+        let err = parse_program_result(
+            "
+            .decl P(x:number)
+            P(x) :- y = 1.
+            .output P
+            ",
+        )
+        .expect_err("unbound head var in ground rule should be rejected");
+        assert!(
+            matches!(err, ParseError::GroundRuleNotConst { .. }),
+            "expected GroundRuleNotConst, got {err:?}"
+        );
+
+        // Division by zero refuses to fold → rejected, not miscomputed.
+        let err = parse_program_result(
+            "
+            .decl P(x:number)
+            P(x) :- x = 1 / 0.
+            .output P
+            ",
+        )
+        .expect_err("division by zero should be rejected");
+        assert!(matches!(err, ParseError::GroundRuleNotConst { .. }));
+
+        // Folding recurses through groups: (1 + 2) * 3 → fact P(9).
+        let program = parse_program(
+            "
+            .decl P(x:number)
+            P(x) :- x = (1 + 2) * 3.
+            .output P
+            ",
+        );
+        assert!(program.facts().contains_key("p"));
+    }
+
+    /// Chained assignments resolve to a fixpoint regardless of source order
+    /// (`b = a + 2` is discovered only after `a = x + 1` grounds `a`), and the
+    /// resolved values substitute into remaining comparison filters.
+    #[test]
+    fn chained_assignments_resolve_and_substitute_into_filters() {
+        let program = parse_program(
+            "
+            .decl A(x:number)
+            .decl R(a:number, b:number)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            R(a, b) :- A(x), b = a + 2, a = x + 1, b < 10.
+            .output R
+            ",
+        );
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "r")
+            .expect("r rule");
+        // Both assignments eliminated; only the `< 10` filter survives, and it
+        // no longer mentions the assignment variables.
+        let mut compare_vars = Vec::new();
+        let mut compares = 0;
+        for pred in rule.rhs() {
+            if let Predicate::Compare(e) = pred {
+                compares += 1;
+                compare_vars.extend(e.left().vars().into_iter().cloned());
+                compare_vars.extend(e.right().vars().into_iter().cloned());
+            }
+        }
+        assert_eq!(compares, 1, "only the filter comparison remains");
+        assert!(
+            compare_vars.iter().all(|v| v == "x"),
+            "assignment vars must be fully substituted away: {rule}"
+        );
+    }
+
+    /// A multi-term assignment value spliced into a factor slot is wrapped in
+    /// a `Group`, preserving fold order: `z = x * y` with `y := a - b` must
+    /// mean `x * (a - b)`, not `(x * a) - b`. Same inside aggregation args.
+    #[test]
+    fn multi_term_substitution_wraps_in_group() {
+        use crate::parser::Factor;
+
+        let program = parse_program(
+            "
+            .decl A(x:number, a:number, b:number)
+            .decl R(z:number)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            R(z) :- A(x, a, b), y = a - b, z = x * y.
+            .output R
+            ",
+        );
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "r")
+            .expect("r rule");
+        let [HeadArg::Arith(arith)] = rule.head().head_arguments() else {
+            panic!("expected one arithmetic head arg");
+        };
+        let (_, factor) = &arith.rest()[0];
+        assert!(
+            matches!(factor, Factor::Group(inner) if !inner.rest().is_empty()),
+            "substituted multi-term value must be group-wrapped: {arith}"
+        );
+
+        // Aggregation arguments take the same substitution path.
+        let program = parse_program(
+            "
+            .decl A(g:number, x:number)
+            .decl S(g:number, s:number)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            S(g, sum(t)) :- A(g, x), t = x + 1.
+            .output S
+            ",
+        );
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "s")
+            .expect("s rule");
+        let agg = rule
+            .head()
+            .head_arguments()
+            .iter()
+            .find_map(|a| match a {
+                HeadArg::Aggregation(agg) => Some(agg),
+                _ => None,
+            })
+            .expect("aggregation head arg");
+        assert!(
+            !agg.arithmetic().vars().iter().any(|v| *v == "t"),
+            "assignment var must be substituted inside the aggregation"
+        );
+    }
+
+    /// The desugar pass also runs inside `fixpoint`/`loop` blocks.
+    #[test]
+    fn assignment_inside_fixpoint_desugared() {
+        let program = parse_program(
+            "
+            .decl A(x:number)
+            .decl R(t:number)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            fixpoint {
+              R(t) :- A(x), t = x + 1.
+              R(t) :- R(x), t = x + 1, x < 5.
+            }
+            .output R
+            ",
+        );
+        for rule in program.rules() {
+            let assignments = rule
+                .rhs()
+                .iter()
+                .filter(|p| matches!(p, Predicate::Compare(e) if *e.operator() == ComparisonOperator::Equal))
+                .count();
+            assert_eq!(assignments, 0, "assignments inside blocks must desugar");
+        }
+    }
+
+    /// Parentheses around a single factor are transparent: a grouped constant
+    /// assignment `t = ("boolean")` lowers to a fact exactly like the bare
+    /// form, a grouped assignment variable `(t) = x` is still recognized as
+    /// an assignment, and a grouped bare variable substituted into a negated
+    /// atom is accepted (it is not computed arithmetic).
+    #[test]
+    fn single_factor_groups_are_transparent_to_desugar() {
+        // Grouped constant → inline fact (not an empty-bodied rule).
+        let program = parse_program(
+            "
+            .decl P(t:symbol)
+            P(t) :- t = (\"boolean\").
+            .output P
+            ",
+        );
+        assert!(
+            program.facts().contains_key("p"),
+            "grouped const-only assignment rule should become a fact"
+        );
+
+        // Grouped assignment variable → recognized and eliminated.
+        let program = parse_program(
+            "
+            .decl A(x:number)
+            .decl R(t:number)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            R(t) :- A(x), (t) = x.
+            .output R
+            ",
+        );
+        let rule = program
+            .rules()
+            .into_iter()
+            .find(|r| r.head().name() == "r")
+            .expect("r rule");
+        assert!(
+            !rule.rhs().iter().any(|p| matches!(p, Predicate::Compare(_))),
+            "grouped assignment must be eliminated, not left as a filter"
+        );
+
+        // Grouped bare variable into a negated atom → fine, not arithmetic.
+        parse_program(
+            "
+            .decl A(x:number)
+            .decl B(t:number)
+            .decl R(x:number)
+            .input A(IO=\"file\",filename=\"A.csv\")
+            .input B(IO=\"file\",filename=\"B.csv\")
+            R(x) :- A(x), !B(t), t = (x).
+            .output R
+            ",
         );
     }
 

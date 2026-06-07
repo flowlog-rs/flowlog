@@ -168,6 +168,7 @@ impl CodeGen {
                 .map(|e| e.ret_type())
                 .ok_or_else(|| CodegenError::internal(format!("UDF `{name}` not declared"))),
             FactorArgument::Builtin { op, .. } => Ok(op.ret_type()),
+            FactorArgument::Group(a) => self.infer_expr_type(a, left_type, right_type),
         }
     }
 }

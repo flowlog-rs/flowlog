@@ -117,7 +117,9 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
         deps["timely"] = "0.30".into();
         deps["differential-dataflow"] = "0.24".into();
         deps["mimalloc"] = "0.1".into();
-        deps["flowlog-runtime"] = "0.2".into();
+        // 0.2.3 is the minimum carrying the `regex` re-export that generated
+        // `match(...)` code resolves through (`::flowlog_runtime::regex`).
+        deps["flowlog-runtime"] = "0.2.3".into();
 
         if features.string_intern() {
             deps["lasso"] = value(inline_versioned_dep(
@@ -134,6 +136,18 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
         if config.is_incremental() {
             deps["rustyline"] = "17".into();
         }
+    }
+
+    // `FLOWLOG_RUNTIME_PATH` redirects the runtime dependency to a local
+    // checkout via `[patch.crates-io]`. The test harness sets it so generated
+    // crates build against the workspace runtime instead of crates.io —
+    // required whenever the workspace runtime has unpublished additions.
+    if let Ok(path) = std::env::var("FLOWLOG_RUNTIME_PATH") {
+        let mut patch = toml_edit::InlineTable::new();
+        patch.insert("path", path.into());
+        doc["patch"] = Item::Table(toml_edit::Table::new());
+        doc["patch"]["crates-io"] = Item::Table(toml_edit::Table::new());
+        doc["patch"]["crates-io"]["flowlog-runtime"] = value(patch);
     }
 
     let mut rendered = doc.to_string();
