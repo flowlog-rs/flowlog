@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.2.2...flowlog-runtime-v0.2.3) - 2026-06-07
+
+### Added
+
+- *(engine)* bridge Datalog/Soufflé gaps for DOOP end-to-end compilation ([#130](https://github.com/flowlog-rs/flowlog/pull/130))
+
+### Other
+
+- Migrate to differential-dataflow 0.24 / timely 0.30
+
 ## [0.2.2](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.2.1...flowlog-runtime-v0.2.2) - 2026-05-10
 
 ### Other
