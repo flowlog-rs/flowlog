@@ -349,7 +349,7 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
             let write_row = quote! {
                 #field.push(#user_tuple);
             };
-            let drain = gen_drain_block(&buf, rel, quote! {}, write_row, string_intern);
+            let drain = gen_drain_block(&buf, rel, quote! {}, write_row, quote! {}, string_intern);
             blocks.push(quote! {
                 let mut #field: Vec<rel::#struct_ident> = Vec::new();
                 #drain

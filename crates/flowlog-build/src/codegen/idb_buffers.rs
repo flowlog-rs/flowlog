@@ -61,8 +61,12 @@ impl CodeGen {
                 cg.size_cell_clones.push(quote! {
                     let #cell_ident = #cell_ident.clone();
                 });
-                cg.inspect_stmts
-                    .push(self.gen_size_inspector(&var, idb.raw_name(), &cell_ident, profiler));
+                cg.inspect_stmts.push(self.gen_size_inspector(
+                    &var,
+                    idb.raw_name(),
+                    &cell_ident,
+                    profiler,
+                ));
             }
 
             if data_type
@@ -269,6 +273,9 @@ impl CodeGen {
 /// then iterate with `write_row` against the sink set up by `sink_preamble`.
 ///
 /// `write_row` runs once per row with `row: &(tuple, Ts, i32)` in scope.
+/// `sink_postamble` runs once after the last row, with the preamble's
+/// bindings still in scope — file sinks use it to `flush()` explicitly
+/// (relying on `BufWriter::Drop` would silently swallow flush errors).
 /// The block evaluates to `()`; callers that need to capture a value (e.g.
 /// library mode pushing into a typed `Vec`) should pre-declare the target
 /// binding outside the block and have `write_row` mutate it.
@@ -277,6 +284,7 @@ pub fn gen_drain_block(
     idb: &Relation,
     sink_preamble: TokenStream,
     write_row: TokenStream,
+    sink_postamble: TokenStream,
     string_intern: bool,
 ) -> TokenStream {
     let order_by = idb.output_order_by();
@@ -291,6 +299,7 @@ pub fn gen_drain_block(
                     #write_row
                 }
             }
+            #sink_postamble
         }},
 
         (Some(spec), None) => {
@@ -317,6 +326,7 @@ pub fn gen_drain_block(
                         #write_row
                     },
                 );
+                #sink_postamble
             }}
         }
 
@@ -333,6 +343,7 @@ pub fn gen_drain_block(
                 for row in &all {
                     #write_row
                 }
+                #sink_postamble
             }}
         }
     }

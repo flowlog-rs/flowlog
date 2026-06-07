@@ -69,16 +69,20 @@ impl Compiler {
         let string_intern = self.codegen.features().string_intern();
         let is_incremental = self.config.is_incremental();
 
-        let (sink_preamble, write_row) = if self.config.output_to_stdout() {
+        // Stderr is unbuffered, so only the file sink needs the explicit
+        // final flush; `BufWriter::Drop` would swallow a failed tail write.
+        let (sink_preamble, write_row, sink_postamble) = if self.config.output_to_stdout() {
             (
                 gen_stderr_preamble(),
                 gen_write_row_stderr(idb, string_intern),
+                quote! {},
             )
         } else {
             let base_dir = self.require_output_dir("writing IDB output to files")?;
             (
                 gen_file_preamble(&idb.output_file_name(), base_dir, is_incremental),
                 gen_write_row_file(idb, string_intern, is_incremental),
+                quote! { out.flush().expect("flush failed"); },
             )
         };
 
@@ -87,6 +91,7 @@ impl Compiler {
             idb,
             sink_preamble,
             write_row,
+            sink_postamble,
             string_intern,
         ))
     }
@@ -119,6 +124,7 @@ impl Compiler {
                     .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
             );
             writeln!(out, "{}", size).expect("printsize write failed");
+            out.flush().expect("printsize flush failed");
         }})
     }
 }
