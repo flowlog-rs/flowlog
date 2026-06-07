@@ -3,7 +3,7 @@ name = "flowlog-runtime"
 # Explicit version (not `version.workspace = true`) because the runtime
 # releases on its own cadence — generated code depends on it by
 # published version, so any additive change ships as an independent bump.
-version = "0.2.3"
+version = "0.2.4"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
