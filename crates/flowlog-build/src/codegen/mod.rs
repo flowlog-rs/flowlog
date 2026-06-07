@@ -42,8 +42,9 @@ pub struct CodeGen {
     pub(crate) config: Config,
     pub(crate) program: Program,
 
-    /// Fingerprint → identifier map, stable across strata — local recursion
-    /// strata may introduce new identifiers that refer back to these.
+    /// Fingerprint → binding-ident map, stable across strata — local
+    /// recursion strata may introduce new identifiers that refer back to
+    /// these. Idents are synthetic; see [`ident`] for the scheme.
     pub(crate) global_fp_to_ident: HashMap<u64, Ident>,
     /// Fingerprint → `(key_types, value_types)`. Seeded in `new` from the
     /// parsed program; extended in `generate` with inferred output types.
@@ -69,7 +70,6 @@ impl CodeGen {
             features: Features::default(),
             outer_arranged: HashMap::new(),
         };
-        cg.make_global_ident_map();
         cg.make_global_data_type_map();
         cg
     }
@@ -84,6 +84,7 @@ impl CodeGen {
         program_planner: &ProgramPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<CodeParts, CodegenError> {
+        self.make_global_ident_map();
         self.features.reset();
         self.outer_arranged.clear();
         self.collect_parts(program_planner.strata(), profiler)

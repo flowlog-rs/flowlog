@@ -215,17 +215,30 @@ impl Relation {
         self.span.0
     }
 
-    /// Canonical (lowercased) relation name.
+    /// Canonical (lowercased) relation name — the relation's **internal**
+    /// identity.
+    ///
+    /// Every internal use routes through this form: fingerprints, map
+    /// keys, generated idents, and the lib-mode API surface
+    /// (`insert_<name>`, result fields). Unique per program; for inlined
+    /// component relations the dots are rewritten to `·` (see
+    /// [`Self::set_name`]). Never show this to the user when
+    /// [`Self::raw_name`] is available.
     #[must_use]
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Original surface-syntax name (case-preserved). Used by the
-    /// compiler-side I/O sink to produce Soufflé-compatible filenames
-    /// like `Edge.facts` / `Path.csv` rather than the lowercased
-    /// canonical form returned by [`Self::name`].
+    /// Original surface-syntax name (case and dots preserved) — the
+    /// relation's **user-facing** spelling.
+    ///
+    /// Anything a human reads uses this form: profiler labels,
+    /// diagnostics, and Soufflé-compatible I/O filenames (`Edge.facts` /
+    /// `c.holds.csv`) rather than the lowercased canonical form returned
+    /// by [`Self::name`]. Canonicalization is deterministic
+    /// (lowercase + `.`→`·`), so distinct relations always have distinct
+    /// raw names too.
     #[must_use]
     #[inline]
     pub fn raw_name(&self) -> &str {
@@ -389,14 +402,14 @@ impl Relation {
                 if tokens.is_empty() {
                     return Err(grammar_bug(format!(
                         "empty order_by clause for relation `{}`",
-                        self.name
+                        self.raw_name
                     )));
                 }
                 if tokens.len() > 2 {
                     return Err(grammar_bug(format!(
                         "unexpected extra tokens in order_by clause `{}` for relation `{}`",
                         part.trim(),
-                        self.name
+                        self.raw_name
                     )));
                 }
                 let attr_name = tokens[0].to_lowercase();
@@ -406,7 +419,7 @@ impl Relation {
                     Some(d) => {
                         return Err(grammar_bug(format!(
                             "invalid order_by direction `{d}` for relation `{}`, expected ASC or DESC",
-                            self.name
+                            self.raw_name
                         )));
                     }
                     None => true,
@@ -419,7 +432,7 @@ impl Relation {
                     .ok_or_else(|| {
                         grammar_bug(format!(
                             "order_by attribute `{attr_name}` not found in relation `{}`",
-                            self.name
+                            self.raw_name
                         ))
                     })?;
                 parsed.push((idx, *attr.data_type(), ascending));
@@ -434,13 +447,13 @@ impl Relation {
             let limit = raw.parse::<usize>().map_err(|_| {
                 grammar_bug(format!(
                     "invalid limit `{raw}` for relation `{}`, expected a non-negative integer",
-                    self.name
+                    self.raw_name
                 ))
             })?;
             if order_by_spec.is_none() {
                 return Err(grammar_bug(format!(
                     "limit requires order_by for relation `{}`",
-                    self.name
+                    self.raw_name
                 )));
             }
             Some(limit)

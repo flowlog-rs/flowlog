@@ -101,7 +101,7 @@ impl Compiler {
     fn gen_size_report(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
         let cell = Ident::new(&format!("size_{}", idb.name()), Span::call_site());
         if self.config.output_to_stdout() {
-            let prefix = idb.name().to_string();
+            let prefix = idb.raw_name().to_string();
             return Ok(quote! {{
                 let (t, size) = &*#cell.lock().unwrap();
                 eprintln!("[size][{}] t={:?} size={}", #prefix, t, size);
@@ -202,7 +202,7 @@ fn gen_write_row_file(idb: &Relation, string_intern: bool, is_incremental: bool)
 }
 
 fn gen_write_row_stderr(idb: &Relation, string_intern: bool) -> TokenStream {
-    let prefix = idb.name().to_string();
+    let prefix = idb.raw_name().to_string();
     if idb.arity() == 0 {
         return quote! {
             writeln!(out, "[tuple][{}]  t={:?}  True  diff={:+}",

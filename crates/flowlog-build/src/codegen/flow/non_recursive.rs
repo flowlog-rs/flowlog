@@ -93,7 +93,7 @@ impl CodeGen {
 
             with_profiler(profiler, |profiler| {
                 profiler.concat_dedup_operator(
-                    output.to_string(),
+                    self.display_name(*idb_fp),
                     outs.iter().map(|id| id.to_string()).collect(),
                     output.to_string(),
                     concat_count,
@@ -143,7 +143,7 @@ impl CodeGen {
 
                     with_profiler(profiler, |profiler| {
                         profiler.opt_aggregate_operator(
-                            output.to_string(),
+                            self.display_name(*idb_fp),
                             output.to_string(),
                             output.to_string(),
                         );
@@ -165,7 +165,7 @@ impl CodeGen {
 
                     with_profiler(profiler, |profiler| {
                         profiler.general_aggregate_operator(
-                            output.to_string(),
+                            self.display_name(*idb_fp),
                             output.to_string(),
                             output.to_string(),
                         );

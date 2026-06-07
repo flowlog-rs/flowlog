@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::mem;
 
-use super::TypeCheckError;
+use super::{DisplayNames, TypeCheckError, display_name};
 use crate::common::Span;
 use crate::parser::{
     Arithmetic, Atom, AtomArg, ComparisonExpr, Factor, FlowLogRule, HeadArg, Predicate, Program,
@@ -30,7 +30,10 @@ type DeclIds = HashMap<String, Vec<TypeId>>;
 type Bindings = HashMap<String, (TypeId, Span)>;
 
 /// Check and lower casts in a single per-rule walk.
-pub(super) fn check_and_lower(program: &mut Program) -> Result<(), TypeCheckError> {
+pub(super) fn check_and_lower(
+    program: &mut Program,
+    display: &DisplayNames,
+) -> Result<(), TypeCheckError> {
     let decls: DeclIds = program
         .relations()
         .iter()
@@ -40,11 +43,11 @@ pub(super) fn check_and_lower(program: &mut Program) -> Result<(), TypeCheckErro
     let (registry, segments) = program.registry_and_segments_mut();
     for segment in segments.iter_mut() {
         for rule in segment.as_rules_mut() {
-            check_rule(rule, registry, &decls)?;
+            check_rule(rule, registry, &decls, display)?;
         }
         if let Some(block) = segment.as_loop_mut() {
             for rule in block.rules_mut() {
-                check_rule(rule, registry, &decls)?;
+                check_rule(rule, registry, &decls, display)?;
             }
         }
     }
@@ -57,6 +60,7 @@ fn check_rule(
     rule: &mut FlowLogRule,
     reg: &TypeRegistry,
     decls: &DeclIds,
+    display: &DisplayNames,
 ) -> Result<(), TypeCheckError> {
     let mut bindings: Bindings = HashMap::new();
 
@@ -87,7 +91,7 @@ fn check_rule(
         }
     }
 
-    check_head(rule, decls, reg, &bindings)?;
+    check_head(rule, decls, reg, &bindings, display)?;
     lower_rule(rule);
     Ok(())
 }
@@ -141,9 +145,11 @@ fn check_head(
     decls: &DeclIds,
     reg: &TypeRegistry,
     bindings: &Bindings,
+    display: &DisplayNames,
 ) -> Result<(), TypeCheckError> {
     let head = rule.head();
     let rel_name = head.name();
+    let rel_display = display_name(display, rel_name);
     let col_ids = decls.get(rel_name).ok_or_else(|| {
         TypeCheckError::internal(format!(
             "subtype pass: head relation `{rel_name}` not declared"
@@ -157,7 +163,7 @@ fn check_head(
                 {
                     return Err(TypeCheckError::HeadSubtypeMismatch {
                         span: head.span(),
-                        rel: rel_name.to_string(),
+                        rel: rel_display.clone(),
                         col,
                         expected: reg.name_of(expected_id).to_string(),
                         found: reg.name_of(found_id).to_string(),
@@ -172,7 +178,7 @@ fn check_head(
                 {
                     return Err(TypeCheckError::HeadSubtypeMismatch {
                         span: head.span(),
-                        rel: rel_name.to_string(),
+                        rel: rel_display.clone(),
                         col,
                         expected: reg.name_of(expected_id).to_string(),
                         found: reg.name_of(found_id).to_string(),

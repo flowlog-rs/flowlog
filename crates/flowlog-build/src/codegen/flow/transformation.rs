@@ -34,11 +34,14 @@ impl CodeGen {
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<TokenStream, CodegenError> {
-        let atom_names = stratum.atom_names();
+        // `atom_fps` decides *which* inputs are named atoms; the label
+        // text comes from `display_name` (the user's spelling).
+        let atom_fps = stratum.atom_fps();
         let edb_names = transformation
             .input_fingerprints()
             .into_iter()
-            .filter_map(|fp| atom_names.get(&fp).map(String::as_str))
+            .filter(|fp| atom_fps.contains(fp))
+            .map(|fp| self.display_name(fp))
             .collect::<Vec<_>>();
         let edb_suffix = if edb_names.is_empty() {
             String::new()

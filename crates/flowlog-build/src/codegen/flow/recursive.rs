@@ -67,10 +67,10 @@ impl CodeGen {
         let mut recursive_var_inits: Vec<TokenStream> = Vec::new();
 
         // Accumulative: always Variable::new — starts empty and grows monotonically.
-        for name in &acc_names {
+        for (fp, name) in acc_fps.iter().zip(&acc_names) {
             with_profiler(profiler, |profiler| {
                 profiler.recursive_feedback_operator(
-                    name.to_string(),
+                    self.display_name(*fp),
                     name.to_string(),
                     name.to_string(),
                 );
@@ -87,7 +87,7 @@ impl CodeGen {
         for (fp, name) in itr_fps.iter().zip(&itr_names) {
             with_profiler(profiler, |profiler| {
                 profiler.recursive_feedback_operator(
-                    name.to_string(),
+                    self.display_name(*fp),
                     name.to_string(),
                     name.to_string(),
                 );
@@ -261,11 +261,10 @@ impl CodeGen {
             };
 
             with_profiler(profiler, |profiler| {
-                let output_name = self.find_global_ident(*idb_fp).to_string();
                 let source_names: Vec<String> = sources.iter().map(|id| id.to_string()).collect();
                 let concat_count = (sources.len() as u32).saturating_sub(1);
                 profiler.concat_dedup_operator(
-                    output_name,
+                    self.display_name(*idb_fp),
                     source_names,
                     next_ident.to_string(),
                     concat_count,
@@ -277,7 +276,7 @@ impl CodeGen {
             // Aggregation
             // ----------------------------------------------------------------
             if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(idb_fp) {
-                let output_name = self.find_global_ident(*idb_fp).to_string();
+                let output_name = self.display_name(*idb_fp);
                 let agg_type = self.agg_column_type(*idb_fp, *agg_pos)?;
 
                 // Semiring fast path: replace reduce_core with threshold_semigroup
@@ -373,8 +372,7 @@ impl CodeGen {
 
         let leave_exprs: Vec<TokenStream> = leave_fps
             .iter()
-            .zip(targets.iter())
-            .map(|(fp, target)| -> Result<TokenStream, CodegenError> {
+            .map(|fp| -> Result<TokenStream, CodegenError> {
                 let next_ident = next.get(fp).ok_or_else(|| {
                     CodegenError::internal(format!(
                         "leave relation fingerprint 0x{fp:016x} missing \
@@ -409,7 +407,7 @@ impl CodeGen {
 
                     with_profiler(profiler, |profiler| {
                         profiler.recursive_pre_leave_opt_aggregate_operator(
-                            target.to_string(),
+                            self.display_name(*fp),
                             next_ident.to_string(),
                             next_ident.to_string(),
                         );
@@ -459,7 +457,7 @@ impl CodeGen {
 
             with_profiler(profiler, |profiler| {
                 profiler.recursive_leave_operator(
-                    target.to_string(),
+                    self.display_name(*fp),
                     next_ident.to_string(),
                     target.to_string(),
                 );
@@ -485,7 +483,7 @@ impl CodeGen {
 
                 with_profiler(profiler, |profiler| {
                     profiler.recursive_post_leave_opt_aggregate_operator(
-                        target.to_string(),
+                        self.display_name(*fp),
                         target.to_string(),
                         target.to_string(),
                     );
@@ -585,7 +583,7 @@ impl CodeGen {
             })?;
             with_profiler(profiler, |profiler| {
                 profiler.recursive_resultsin_operator(
-                    recursive_ident.to_string(),
+                    self.display_name(*fp),
                     next_ident.to_string(),
                     next_ident.to_string(),
                 );
