@@ -22,6 +22,8 @@ pub(crate) enum FactorPos {
         op: BuiltinOperator,
         args: Vec<ArithmeticPos>,
     },
+    /// Parenthesised sub-expression, preserving its grouping.
+    Group(Box<ArithmeticPos>),
 }
 
 impl FactorPos {
@@ -29,7 +31,10 @@ impl FactorPos {
     pub(crate) fn as_var_signature(&self) -> Option<&AtomArgumentSignature> {
         match self {
             FactorPos::Var(atom_arg_signature) => Some(atom_arg_signature),
-            FactorPos::Const(_) | FactorPos::FnCall { .. } | FactorPos::Builtin { .. } => None,
+            FactorPos::Const(_)
+            | FactorPos::FnCall { .. }
+            | FactorPos::Builtin { .. }
+            | FactorPos::Group(_) => None,
         }
     }
 
@@ -42,6 +47,7 @@ impl FactorPos {
             FactorPos::FnCall { args, .. } | FactorPos::Builtin { args, .. } => {
                 args.iter().flat_map(|a| a.signatures()).collect()
             }
+            FactorPos::Group(a) => a.signatures(),
         }
     }
 
@@ -59,6 +65,7 @@ impl FactorPos {
                 op: *op,
                 args: args.iter().map(|a| a.map_vars(f)).collect(),
             },
+            FactorPos::Group(a) => FactorPos::Group(Box::new(a.map_vars(f))),
         }
     }
 }
@@ -84,6 +91,7 @@ impl fmt::Display for FactorPos {
                     .join(", ");
                 write!(f, "{op}({args_str})")
             }
+            FactorPos::Group(a) => write!(f, "({a})"),
         }
     }
 }
@@ -154,6 +162,12 @@ impl ArithmeticPos {
                 // map the inner factor directly. The typechecker has
                 // already validated subtype compatibility by this point.
                 Factor::Cast(c) => map_factor(c.inner(), var_signatures, var_id),
+                Factor::Group(a) => {
+                    let num_vars = a.vars().len();
+                    let sigs = &var_signatures[*var_id..*var_id + num_vars];
+                    *var_id += num_vars;
+                    FactorPos::Group(Box::new(ArithmeticPos::from_arithmetic(a, sigs)))
+                }
             }
         }
 

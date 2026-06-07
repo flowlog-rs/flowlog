@@ -360,6 +360,14 @@ impl TransformationFlow {
                             op: *op,
                             args: lower_call_args(args),
                         },
+                        FactorPos::Group(a) => {
+                            // Reuse the call-arg lowering: a grouped expression
+                            // resolves its inner signatures the same way.
+                            let inner = lower_call_args(std::slice::from_ref(a))
+                                .pop()
+                                .expect("group lowering yields exactly one arithmetic");
+                            FactorArgument::Group(Box::new(inner))
+                        }
                     }
                 };
 

@@ -66,11 +66,21 @@ struct Scope<'a> {
     /// not a nested `.init` may resolve to one of these (Soufflé
     /// sibling-scope visibility, e.g. `basic.SubtypeOf`).
     enclosing_instances: &'a HashMap<String, String>,
+    /// Relations declared in the *enclosing* component instances (and up the
+    /// instantiation chain), mapped from lowercase simple name to the
+    /// absolute qualified relation name. A bare relation reference that is
+    /// not local to this component resolves against these — Soufflé's
+    /// lexical scoping lets a nested instance's rules name a relation
+    /// declared in the component it was instantiated within (e.g. a
+    /// `configuration` sub-instance referencing the enclosing analysis's
+    /// `isImmutableHContext`).
+    enclosing_decls: &'a HashMap<String, String>,
 }
 
 pub(crate) fn inline_one(
     parent_prefix: &str,
     enclosing: &HashMap<String, String>,
+    enclosing_decls: &HashMap<String, String>,
     init: InitDecl,
     comps: &mut HashMap<String, CompDecl>,
     output: &mut InlinerOutput,
@@ -139,6 +149,7 @@ pub(crate) fn inline_one(
         local_types: &local_types,
         nested_inits: &nested_inits,
         enclosing_instances: enclosing,
+        enclosing_decls,
     };
 
     // Instances visible to a nested `.init` in this body: everything
@@ -147,6 +158,14 @@ pub(crate) fn inline_one(
     let mut child_enclosing = enclosing.clone();
     for name in &nested_inits {
         child_enclosing.insert(name.clone(), qualify(&prefix, name));
+    }
+
+    // Relations visible to a nested `.init`: those visible to this instance
+    // plus this body's own `.decl`s, qualified under this instance's prefix.
+    // A nested instance's bare relation references resolve against these.
+    let mut child_enclosing_decls = enclosing_decls.clone();
+    for name in &local_decls {
+        child_enclosing_decls.insert(name.clone(), qualify(&prefix, name));
     }
 
     // Resolution proceeds in two walks of the body, NOT in textual order.
@@ -165,7 +184,7 @@ pub(crate) fn inline_one(
     // define-before-use rule top-level `.type`s follow (see
     // `build_type_registry` in program.rs). Cycles surface as
     // `UnknownTypeParent`, not a hang.
-    collect_instance(&body, &scope, &child_enclosing, comps, output, registry)?;
+    collect_instance(&body, &scope, &child_enclosing, &child_enclosing_decls, comps, output, registry)?;
     resolve_instance(body, &scope, output, registry)?;
 
     Ok(())
@@ -180,6 +199,7 @@ fn collect_instance(
     body: &[RawItem],
     scope: &Scope<'_>,
     child_enclosing: &HashMap<String, String>,
+    child_enclosing_decls: &HashMap<String, String>,
     comps: &mut HashMap<String, CompDecl>,
     output: &mut InlinerOutput,
     registry: &mut TypeRegistry,
@@ -189,6 +209,7 @@ fn collect_instance(
             inline_one(
                 scope.prefix,
                 child_enclosing,
+                child_enclosing_decls,
                 resolve_init(nested.clone(), scope.env),
                 comps,
                 output,
@@ -553,7 +574,9 @@ fn subst(env: &HashMap<String, String>, s: &str) -> String {
 /// 6. dotted, none of the above → pass through (types) / error (relations)
 /// 7. single segment matching a local `.decl`, or *(types only)* a local
 ///    `.type` alias declared in this comp → `prefix.name`
-/// 8. otherwise → unchanged, resolved later via the global registry
+/// 8. *(relations only)* single segment matching a relation declared in an
+///    enclosing instance → that instance's qualified name
+/// 9. otherwise → unchanged, resolved later via the global registry
 ///
 /// Cases 1/4/5 and the alias half of 7 are gated on `!strict` so the
 /// relation path resolves a dotted head only via a nested-init (2) or a
@@ -594,6 +617,12 @@ fn resolve_qualified(
     let key = s.to_lowercase();
     if scope.local_decls.contains(&key) || (!strict && scope.local_types.contains(&key)) {
         return Ok(qualify(scope.prefix, s));
+    }
+    // A bare relation reference that isn't local resolves to a relation
+    // declared in an enclosing instance, if one exists (Soufflé lexical
+    // scoping). Types are excluded — they fall through to the registry.
+    if strict && let Some(qualified) = scope.enclosing_decls.get(&key) {
+        return Ok(qualified.clone());
     }
     Ok(s.to_string())
 }

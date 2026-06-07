@@ -1,0 +1,21 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : cat_paren_intern
+// Feature : parenthesised string argument to `cat(...)` under --str-intern
+// Covers  : the grammar's single-factor paren collapse — `(val)` must parse
+//           as the bare factor and resolve like `val` in a display context,
+//           not surface as a raw interned Spur.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Src(id: int32, val: string)
+.input Src(IO="file", filename="Src.csv", delimiter=",")
+
+// Parenthesised string argument: `(val)` is a Factor::Group wrapping the
+// string variable. Under --str-intern it must display as the resolved string.
+.decl Tagged(id: int32, out: string)
+Tagged(id, cat("v=", (val))) :- Src(id, val).
+.output Tagged
+
+// Control: the same concatenation without parentheses — must match Tagged.
+.decl Plain(id: int32, out: string)
+Plain(id, cat("v=", val)) :- Src(id, val).
+.output Plain

@@ -213,17 +213,39 @@ impl Stratifier {
         let mut iterative_rels: Vec<Vec<IterativeDirective>> = Vec::new();
         let mut id_offset = 0usize;
 
-        for seg in program.segments() {
-            match seg {
-                Segment::Plain(rules) => {
-                    let (seg_strata, seg_bitmap) =
-                        Self::stratify_segment(rules, id_offset, extended)?;
+        let segments = program.segments();
+        let mut i = 0;
+        while i < segments.len() {
+            match &segments[i] {
+                Segment::Plain(_) => {
+                    // Coalesce the maximal run of consecutive `Plain` segments
+                    // and stratify it as one unit. Component instances splice
+                    // into their own segment per `.init`, so a relation may be
+                    // defined in a later instance than it is referenced. One
+                    // SCC problem per run makes instance order irrelevant —
+                    // matching Soufflé's global stratification — while
+                    // `Loop`/`Fixpoint` barriers still bound each run.
+                    let mut run: Vec<&[FlowLogRule]> = Vec::new();
+                    let mut total = 0usize;
+                    while let Some(Segment::Plain(rules)) = segments.get(i) {
+                        run.push(rules);
+                        total += rules.len();
+                        i += 1;
+                    }
+                    let (seg_strata, seg_bitmap) = if let [rules] = run[..] {
+                        // Single segment: stratify the slice directly.
+                        Self::stratify_segment(rules, id_offset, extended)?
+                    } else {
+                        let combined: Vec<FlowLogRule> =
+                            run.iter().flat_map(|r| r.iter().cloned()).collect();
+                        Self::stratify_segment(&combined, id_offset, extended)?
+                    };
                     let n = seg_strata.len();
                     strata.extend(seg_strata);
                     bitmap.extend(seg_bitmap);
                     loop_conditions.extend(std::iter::repeat_n(None, n));
                     iterative_rels.extend(std::iter::repeat_with(Vec::new).take(n));
-                    id_offset += rules.len();
+                    id_offset += total;
                 }
                 Segment::Loop(block) | Segment::Fixpoint(block) => {
                     // A loop/fixpoint block is always exactly one recursive stratum.
@@ -243,6 +265,7 @@ impl Stratifier {
                     loop_conditions.push(block.condition().cloned());
                     iterative_rels.push(block.iterative_relations().to_vec());
                     id_offset += rule_count;
+                    i += 1;
                 }
             }
         }
@@ -703,6 +726,19 @@ impl Stratifier {
     fn validate_forward_references(&self) -> Result<(), StratifyError> {
         let edb_fps = self.program.edb_fingerprints();
 
+        // Fingerprints of every relation produced by some rule head anywhere in
+        // the program. A body atom whose relation is neither an EDB nor any
+        // rule's head is an *orphan*: declared but never populated. Soufflé
+        // treats such a relation as simply empty (the referencing rule yields
+        // nothing), so this is not a forward reference — only a relation that
+        // *is* defined, but in a later stratum, qualifies.
+        let defined_fps: HashSet<u64> = self
+            .stratum
+            .iter()
+            .flatten()
+            .map(|&rid| self.program.rule(rid).head().head_fingerprint())
+            .collect();
+
         for (i, stratum) in self.stratum.iter().enumerate() {
             let available = &self.stratum_available_relations[i];
             let heads: HashSet<u64> = stratum
@@ -719,7 +755,11 @@ impl Stratifier {
                         }
                         _ => continue,
                     };
-                    if edb_fps.contains(&fp) || available.contains(&fp) || heads.contains(&fp) {
+                    if edb_fps.contains(&fp)
+                        || available.contains(&fp)
+                        || heads.contains(&fp)
+                        || !defined_fps.contains(&fp)
+                    {
                         continue;
                     }
                     let rel_name = self.display_name(fp, "<unknown>");
@@ -993,6 +1033,31 @@ mod tests {
             .expect("failed to write temp file");
         let mut sm = SourceMap::new();
         Program::parse(&tmp.path().to_string_lossy(), true, &mut sm).expect("parse failed")
+    }
+
+    /// Each `.init` splices its component instance into its own `Plain`
+    /// segment, so instance `a` negating `b.Keep` — produced by a *later*
+    /// instance — is a forward reference across segments. Coalescing the
+    /// Plain run before SCC stratification makes instance order irrelevant,
+    /// matching Soufflé's global stratification.
+    #[test]
+    fn coalesced_plain_run_stratifies_cross_instance_forward_reference() {
+        let src = "\
+            .decl In(x: int32)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .comp A {\n\
+              .decl Out(x: int32)\n\
+              Out(x) :- In(x), !b.Keep(x).\n\
+            }\n\
+            .comp B {\n\
+              .decl Keep(x: int32)\n\
+              Keep(x) :- In(x).\n\
+            }\n\
+            .init a = A\n\
+            .init b = B\n\
+            .output a.Out\n";
+        Stratifier::from_program(&parse_program(src), false)
+            .expect("cross-instance forward reference must stratify");
     }
 
     /// A(x,y) :- Edge(x,y), !B(x,y).

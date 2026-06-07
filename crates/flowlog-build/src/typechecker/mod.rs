@@ -144,6 +144,7 @@ fn check_builtin_config_requirements(
                 bc.args().iter().try_for_each(check_arith)
             }
             Factor::Cast(c) => check_factor(c.inner()),
+            Factor::Group(a) => check_arith(a),
         }
     }
     for segment in program.segments() {
@@ -617,6 +618,7 @@ fn infer_factor_type(
         // Primitive layer sees through casts; the `subtype` pass
         // enforces the cast rules separately.
         Factor::Cast(c) => infer_factor_type(c.inner(), bindings, udfs)?,
+        Factor::Group(a) => infer_expr_type(a, bindings, udfs)?,
     })
 }
 
@@ -762,6 +764,7 @@ fn pin_factor(factor: &mut Factor, target: DataType, udfs: &UdfSigs) -> Result<(
         // Cast asserts its inner has the target's primitive — pin
         // polymorphic literals inside accordingly.
         Factor::Cast(c) => pin_factor(c.inner_mut(), target, udfs),
+        Factor::Group(a) => pin_arith_literals(a, target, udfs),
     }
 }
 
@@ -1067,6 +1070,27 @@ mod tests {
             .output OnlyUsers\n\
             OnlyUsers(as(x, UserId)) :- Plain(x).\n";
         parse_and_check_result(src).expect("explicit narrowing must be allowed");
+    }
+
+    /// Head narrowing without `as()` is rejected — and parentheses around
+    /// the variable must not bypass the check (`OnlyUsers((x))` is the same
+    /// pass-through as `OnlyUsers(x)`; the parser collapses the group).
+    #[test]
+    fn head_narrowing_without_cast_rejected_even_parenthesized() {
+        for head in ["OnlyUsers(x)", "OnlyUsers((x))"] {
+            let src = format!(
+                ".type UserId <: number\n\
+                 .decl Plain(x: number)\n\
+                 .decl OnlyUsers(u: UserId)\n\
+                 .input Plain(IO=\"file\", filename=\"Plain.csv\", delimiter=\",\")\n\
+                 .output OnlyUsers\n\
+                 {head} :- Plain(x).\n"
+            );
+            assert!(
+                parse_and_check_result(&src).is_err(),
+                "implicit narrowing must be rejected for {head}"
+            );
+        }
     }
 
     /// `as()` between two sibling subtypes of the same primitive is
