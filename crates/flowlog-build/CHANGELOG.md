@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.0...flowlog-build-v0.3.1) - 2026-06-07
+
+### Added
+
+- *(engine)* bridge Datalog/Soufflé gaps for DOOP end-to-end compilation ([#130](https://github.com/flowlog-rs/flowlog/pull/130))
+- support multi-head/multi-body rules in .comp bodies
+- several features make doop migration easier
+- support  hint
+
+### Fixed
+
+- *(codegen)* escape relation names that collide with Rust keywords ([#131](https://github.com/flowlog-rs/flowlog/pull/131))
+- comp-internal directive targeting an enclosing/global relation
+- resolve qualified references to sibling/enclosing-scope instances
+- resolve component-local .type aliases as bare attribute types
+- non texture order type inference in .comp
+- cargo clippy
+- *(codegen)* bridge Spur/String at UDF boundary under --str-intern ([#118](https://github.com/flowlog-rs/flowlog/pull/118))
+
 ## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.2.3...flowlog-build-v0.3.0) - 2026-05-27
 
 ### Added
