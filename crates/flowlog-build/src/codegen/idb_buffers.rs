@@ -74,7 +74,7 @@ impl CodeGen {
 
             if idb.output() {
                 if data_type.contains(&DataType::String) {
-                    self.features.mark_string_resolve();
+                    self.features.mark_string_resolve_out();
                 }
 
                 self.features.mark_output_buffers();
@@ -344,7 +344,11 @@ pub fn gen_drain_block(
 
 /// Access column `col_idx` of a buffer row. `base` must evaluate to the
 /// `(tuple, Ts, i32)` triple — produces `<base>.0.<col_idx>` and wraps with
-/// `resolve()` for interned-string columns.
+/// `resolve_out()` for interned-string columns.
+///
+/// Output runs after fixpoint, so interned strings resolve through the flat
+/// snapshot path (`resolve_out`) rather than the concurrent `DashMap`
+/// (`resolve`) used while the dataflow is still interning.
 pub fn field_accessor(
     col_idx: usize,
     data_type: &DataType,
@@ -354,7 +358,7 @@ pub fn field_accessor(
     let idx = Index::from(col_idx);
     let inner = quote! { #base.0.#idx };
     if matches!(data_type, DataType::String) && string_intern {
-        quote! { resolve(#inner) }
+        quote! { resolve_out(#inner) }
     } else {
         inner
     }

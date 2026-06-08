@@ -12,10 +12,16 @@
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 
-use flowlog_build::parser::Relation;
+use flowlog_build::parser::{DataType, Relation};
 use flowlog_build::{field_accessor, gen_drain_block};
 
 use crate::{Compiler, CompilerError};
+
+/// Capacity of the per-IDB output `BufWriter`. Large enough to amortize
+/// write syscalls across the millions of small rows DOOP-scale outputs
+/// produce; only one writer is live at a time (drains run sequentially on
+/// worker 0), so the buffer is cheap.
+const OUTPUT_BUFFER_BYTES: usize = 1 << 20;
 
 impl Compiler {
     /// Per-IDB merge blocks spliced into `main()` after the barrier
@@ -145,7 +151,8 @@ fn gen_file_preamble(file_name: &str, base_dir: &str, is_incremental: bool) -> T
     quote! {
         use std::io::Write as _;
         #out_path
-        let mut out = std::io::BufWriter::new(
+        let mut out = std::io::BufWriter::with_capacity(
+            #OUTPUT_BUFFER_BYTES,
             std::fs::File::create(&out_path)
                 .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
         );
@@ -170,7 +177,12 @@ fn gen_stderr_preamble() -> TokenStream {
 }
 
 // =========================================================================
-// Row formatters — emit the `writeln!(out, ...)` that runs per row.
+// Row formatters — emit the per-row writes against the sink.
+//
+// File rows write column bytes directly (`write_all`) rather than through
+// `writeln!`/`core::fmt`: string columns are the bulk of DOOP-scale output
+// and their UTF-8 bytes need no formatting, so we skip the per-row format
+// machinery entirely. Numeric/bool columns still format through `write!`.
 // =========================================================================
 
 fn gen_write_row_file(idb: &Relation, string_intern: bool, is_incremental: bool) -> TokenStream {
@@ -178,26 +190,39 @@ fn gen_write_row_file(idb: &Relation, string_intern: bool, is_incremental: bool)
     if idb.arity() == 0 {
         return quote! {
             let _ = &row;
-            writeln!(out, "True").expect("write failed");
+            out.write_all(b"True\n").expect("write failed");
         };
     }
 
-    let fields = data_field_accessors(idb, string_intern);
     let delim = idb.output_delimiter();
+    let delim_lit = Literal::byte_string(delim.as_bytes());
+
+    let mut stmts: Vec<TokenStream> = Vec::new();
+    for (i, dt) in idb.data_type().iter().enumerate() {
+        if i > 0 {
+            stmts.push(quote! { out.write_all(#delim_lit).expect("write failed"); });
+        }
+        let accessor = field_accessor(i, dt, quote! { row }, string_intern);
+        stmts.push(col_write_stmt(dt, accessor));
+    }
 
     if is_incremental {
         // Incremental lines carry the diff as a signed suffix column.
-        let mut parts = vec!["{}"; idb.arity()];
-        parts.push("{:+}");
-        let fmt = Literal::string(&parts.join(delim.as_str()));
-        quote! {
-            writeln!(out, #fmt #(, #fields )*, row.2).expect("write failed");
-        }
+        stmts.push(quote! { out.write_all(#delim_lit).expect("write failed"); });
+        stmts.push(quote! { write!(out, "{:+}", row.2).expect("write failed"); });
+    }
+
+    stmts.push(quote! { out.write_all(b"\n").expect("write failed"); });
+    quote! { #(#stmts)* }
+}
+
+/// One column's byte write. String columns emit their UTF-8 bytes directly;
+/// other scalar types format through `write!`.
+fn col_write_stmt(dt: &DataType, accessor: TokenStream) -> TokenStream {
+    if matches!(dt, DataType::String) {
+        quote! { out.write_all(#accessor.as_bytes()).expect("write failed"); }
     } else {
-        let fmt = Literal::string(&vec!["{}"; idb.arity()].join(delim.as_str()));
-        quote! {
-            writeln!(out, #fmt #(, #fields )*).expect("write failed");
-        }
+        quote! { write!(out, "{}", #accessor).expect("write failed"); }
     }
 }
 

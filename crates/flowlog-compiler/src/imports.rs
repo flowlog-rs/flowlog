@@ -319,5 +319,36 @@ fn string_intern_imports(f: &Features) -> TokenStream {
         quote! {}
     };
 
-    quote! { #base #resolve }
+    // Output runs after the dataflow reaches fixpoint, so interned strings
+    // can be resolved through a flat `Spur`-indexed snapshot instead of the
+    // concurrent `DashMap` path (`resolve`), which hashes the key and takes
+    // a read lock on every call. The snapshot is built lazily on first use;
+    // keys interned after it is frozen fall back to `resolve`.
+    let resolve_out = if f.string_resolve_out() {
+        quote! {
+            use lasso::Key as _;
+
+            static RESOLVED: std::sync::OnceLock<Box<[&'static str]>> =
+                std::sync::OnceLock::new();
+
+            #[inline]
+            fn resolve_out(key: Spur) -> &'static str {
+                let table = RESOLVED.get_or_init(|| {
+                    let mut table: Vec<&'static str> = vec![""; INTERNER.len()];
+                    for (k, s) in INTERNER.iter() {
+                        table[k.into_usize()] = s;
+                    }
+                    table.into_boxed_slice()
+                });
+                match table.get(key.into_usize()) {
+                    Some(&s) => s,
+                    None => INTERNER.resolve(&key),
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    quote! { #base #resolve #resolve_out }
 }

@@ -146,5 +146,9 @@ fn string_intern_imports(f: &Features) -> TokenStream {
         .string_resolve()
         .then(|| quote! { use ::flowlog_runtime::intern::resolve; });
 
-    quote! { #base #resolve }
+    let resolve_out = f
+        .string_resolve_out()
+        .then(|| quote! { use ::flowlog_runtime::intern::resolve_out; });
+
+    quote! { #base #resolve #resolve_out }
 }
