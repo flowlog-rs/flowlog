@@ -1,16 +1,24 @@
 //! Thread-safe string interning via `lasso::ThreadedRodeo`.
 
 use lasso::{Key, Spur, ThreadedRodeo};
+use rustc_hash::FxBuildHasher;
 use std::sync::{LazyLock, OnceLock};
 
 /// Global string interner shared across all FlowLog engines in the process.
+///
+/// Uses `FxBuildHasher` rather than lasso's default `RandomState` (SipHash):
+/// interner keys are program-controlled (`.dl` literals + input facts), not
+/// adversarial, so the HashDoS resistance of SipHash buys nothing while its
+/// per-byte cost shows up on every `intern` of a (potentially long) string
+/// and every `DashMap` `resolve`.
 ///
 /// **Limitation**: this is a process-local pool. In a distributed DD
 /// deployment (multiple machines), each process gets its own independent
 /// `INTERNER`, so `Spur` values are NOT comparable across machines.
 /// Distributed support would require a global interning protocol or
 /// switching back to `String`-keyed collections.
-pub static INTERNER: LazyLock<ThreadedRodeo> = LazyLock::new(ThreadedRodeo::default);
+pub static INTERNER: LazyLock<ThreadedRodeo<Spur, FxBuildHasher>> =
+    LazyLock::new(|| ThreadedRodeo::with_hasher(FxBuildHasher));
 
 const MAX_RETRIES: usize = 1024;
 
