@@ -65,7 +65,8 @@ pub(crate) fn user_to_tuple_expr(
 }
 
 /// Inverse of `user_to_tuple_expr`: internal slot → user-facing expression,
-/// used at drain time.
+/// used at drain time. Interned strings resolve through the flat snapshot
+/// path (`resolve_out`) since drain runs after the dataflow's fixpoint.
 pub(crate) fn tuple_to_user_expr(
     dt: &DataType,
     string_intern: bool,
@@ -73,7 +74,7 @@ pub(crate) fn tuple_to_user_expr(
 ) -> TokenStream {
     match *dt {
         DataType::Float32 | DataType::Float64 => quote! { (#src).into_inner() },
-        DataType::String if string_intern => quote! { resolve(#src).to_string() },
+        DataType::String if string_intern => quote! { resolve_out(#src).to_string() },
         _ => src,
     }
 }

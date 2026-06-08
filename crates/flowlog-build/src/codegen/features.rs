@@ -93,6 +93,7 @@ pub struct Features {
     // -- library support --
     string_intern: bool,
     string_resolve: bool,
+    string_resolve_out: bool,
     ordered_float: bool,
     udf: bool,
     output_buffers: bool,
@@ -119,6 +120,7 @@ impl Features {
         (aggregation,    mark_aggregation),
         (string_intern,  mark_string_intern),
         (string_resolve, mark_string_resolve),
+        (string_resolve_out, mark_string_resolve_out),
         (ordered_float,  mark_ordered_float),
         (udf,            mark_udf),
         (output_buffers, mark_output_buffers),
