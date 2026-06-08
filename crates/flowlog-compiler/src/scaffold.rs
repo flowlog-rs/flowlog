@@ -126,6 +126,9 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
                 "0.7",
                 &["multi-threaded", "serialize"],
             ));
+            // Fast, non-cryptographic hasher for the interner (keys are
+            // program-controlled, so SipHash's HashDoS resistance is wasted).
+            deps["rustc-hash"] = "2".into();
         }
         if features.ordered_float() {
             deps["ordered-float"] = value(inline_versioned_dep("5", &["serde"]));

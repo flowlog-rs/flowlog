@@ -289,9 +289,14 @@ fn string_intern_imports(f: &Features) -> TokenStream {
     let max_retries = INTERN_MAX_RETRIES;
     let base = quote! {
         use lasso::{ThreadedRodeo, Spur};
+        use rustc_hash::FxBuildHasher;
         use std::sync::LazyLock;
 
-        static INTERNER: LazyLock<ThreadedRodeo> = LazyLock::new(ThreadedRodeo::default);
+        // FxBuildHasher (not lasso's default SipHash): interner keys are
+        // program-controlled, so the per-byte cost of a HashDoS-resistant
+        // hash is pure overhead on every intern/resolve.
+        static INTERNER: LazyLock<ThreadedRodeo<Spur, FxBuildHasher>> =
+            LazyLock::new(|| ThreadedRodeo::with_hasher(FxBuildHasher));
 
         #[inline(always)]
         fn intern(s: &str) -> Spur {
