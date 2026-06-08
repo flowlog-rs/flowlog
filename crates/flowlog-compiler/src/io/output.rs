@@ -130,9 +130,11 @@ impl Compiler {
             )
         } else {
             let base_dir = self.require_output_dir("writing IDB output to files")?;
+            let file_preamble = gen_file_preamble(&idb.output_file_name(), base_dir, is_incremental);
+            let (scratch_decls, write_row) = gen_file_row_writer(idb, string_intern, is_incremental);
             (
-                gen_file_preamble(&idb.output_file_name(), base_dir, is_incremental),
-                gen_write_row_file(idb, string_intern, is_incremental),
+                quote! { #file_preamble #scratch_decls },
+                write_row,
                 quote! { out.flush().expect("flush failed"); },
             )
         };
@@ -232,58 +234,54 @@ fn gen_stderr_preamble() -> TokenStream {
 }
 
 // =========================================================================
-// Row formatters — emit the per-row writes against the sink.
+// File row formatter.
 //
-// File rows write column bytes directly (`write_all`) rather than through
-// `writeln!`/`core::fmt`: string columns are the bulk of DOOP-scale output
-// and their UTF-8 bytes need no formatting, so we skip the per-row format
-// machinery entirely. Numeric/bool columns still format through `write!`.
-//
-// `gen_write_row_file` (sequential sink) and `gen_row_bytes` (parallel sink)
-// MUST stay byte-identical — any change to column text, delimiter, or the
-// incremental `{:+}` diff must mirror across both; both are pinned by the
-// `output_all_types*` fixtures.
+// `gen_row_bytes` assembles one row's bytes for BOTH file sinks — the
+// sequential one (into a reused scratch `Vec<u8>` flushed via `write_all`) and
+// the parallel drain (into its per-segment buffer). One source of truth, so the
+// two paths cannot drift. String columns are copied verbatim (the bulk of
+// DOOP-scale output needs no formatting); integers go through `itoa`,
+// floats/bool through `core::fmt` — byte-for-byte the values' `Display`. Pinned
+// by the `output_all_types*` fixtures. (Stderr is a separate human-readable
+// `Debug` format; see `gen_write_row_stderr`.)
 // =========================================================================
 
-fn gen_write_row_file(idb: &Relation, string_intern: bool, is_incremental: bool) -> TokenStream {
+/// Sequential file sink: returns `(scratch_decls, write_row)`. The caller
+/// splices `scratch_decls` into the preamble (once) and runs `write_row` per
+/// row. Each row is assembled into the reused scratch `bytes` via the shared
+/// [`gen_row_bytes`] formatter, then emitted with a single `write_all`.
+fn gen_file_row_writer(
+    idb: &Relation,
+    string_intern: bool,
+    is_incremental: bool,
+) -> (TokenStream, TokenStream) {
     // Nullary: output is a boolean presence marker, one literal `True` line.
     if idb.arity() == 0 {
-        return quote! {
-            let _ = &row;
-            out.write_all(b"True\n").expect("write failed");
-        };
+        return (
+            quote! {},
+            quote! {
+                let _ = &row;
+                out.write_all(b"True\n").expect("write failed");
+            },
+        );
     }
 
-    let delim = idb.output_delimiter();
-    let delim_lit = Literal::byte_string(delim.as_bytes());
-
-    let mut stmts: Vec<TokenStream> = Vec::new();
-    for (i, dt) in idb.data_type().iter().enumerate() {
-        if i > 0 {
-            stmts.push(quote! { out.write_all(#delim_lit).expect("write failed"); });
-        }
-        let accessor = field_accessor(i, dt, quote! { row }, string_intern);
-        stmts.push(col_write_stmt(dt, accessor));
-    }
-
-    if is_incremental {
-        // Incremental lines carry the diff as a signed suffix column.
-        stmts.push(quote! { out.write_all(#delim_lit).expect("write failed"); });
-        stmts.push(quote! { write!(out, "{:+}", row.2).expect("write failed"); });
-    }
-
-    stmts.push(quote! { out.write_all(b"\n").expect("write failed"); });
-    quote! { #(#stmts)* }
-}
-
-/// One column's byte write. String columns emit their UTF-8 bytes directly;
-/// other scalar types format through `write!`.
-fn col_write_stmt(dt: &DataType, accessor: TokenStream) -> TokenStream {
-    if matches!(dt, DataType::String) {
-        quote! { out.write_all(#accessor.as_bytes()).expect("write failed"); }
+    let (row_writer, uses_itoa) = gen_row_bytes(idb, string_intern, is_incremental);
+    let itoa_decl = if uses_itoa {
+        quote! { let mut itoa_buf = ::itoa::Buffer::new(); }
     } else {
-        quote! { write!(out, "{}", #accessor).expect("write failed"); }
-    }
+        quote! {}
+    };
+    let scratch_decls = quote! {
+        let mut bytes: Vec<u8> = Vec::new();
+        #itoa_decl
+    };
+    let write_row = quote! {
+        bytes.clear();
+        #row_writer
+        out.write_all(&bytes).expect("write failed");
+    };
+    (scratch_decls, write_row)
 }
 
 fn gen_write_row_stderr(idb: &Relation, string_intern: bool) -> TokenStream {
@@ -414,14 +412,14 @@ fn gen_parallel_file_drain(
     }}
 }
 
-/// Per-row byte-assembly statements with `row: &(tuple, Ts, i32)`,
-/// `bytes: &mut Vec<u8>`, and (when `uses_itoa`) `itoa_buf` in scope. Returns
-/// the tokens plus whether they reference `itoa_buf`.
+/// Per-row byte-assembly statements for both file sinks, with
+/// `row: &(tuple, Ts, i32)`, `bytes: &mut Vec<u8>`, and (when `uses_itoa`)
+/// `itoa_buf` in scope. Returns the tokens plus whether they reference
+/// `itoa_buf`.
 ///
-/// Byte-fidelity contract (pinned by the `output_all_types*` fixtures, and it
-/// must match [`gen_write_row_file`]): integers via `itoa` ≡ `Display`;
-/// floats/bool via `write!("{}")` ≡ the sequential path; strings are raw bytes
-/// either way (interned columns resolved through `resolve_out`).
+/// Byte-fidelity contract (pinned by the `output_all_types*` fixtures):
+/// integers via `itoa` ≡ `Display`; floats/bool via `write!("{}")`; strings are
+/// raw bytes (interned columns resolved through `resolve_out`).
 fn gen_row_bytes(idb: &Relation, string_intern: bool, is_incremental: bool) -> (TokenStream, bool) {
     let delim = Literal::byte_string(idb.output_delimiter().as_bytes());
     let mut uses_itoa = false;
