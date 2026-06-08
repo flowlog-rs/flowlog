@@ -83,6 +83,16 @@ impl CodeGen {
 
                 self.features.mark_output_buffers();
 
+                // The parallel file drain uses `rayon` (always) and `::itoa`
+                // for integer columns and the incremental `{:+}` diff. The
+                // scaffold gates both deps on these marks.
+                if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
+                    self.features.mark_parallel_output();
+                    if data_type.iter().any(DataType::is_integer) || self.config.is_incremental() {
+                        self.features.mark_itoa();
+                    }
+                }
+
                 // Wiring (first arg) is the collection binding feeding the
                 // sink; the label (second arg) is the human-facing name.
                 if self.config.output_to_stdout() {

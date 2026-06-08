@@ -24,15 +24,15 @@ impl Compiler {
         imports: &proc_macro2::TokenStream,
         worker_helpers: &proc_macro2::TokenStream,
     ) -> Result<String, CompilerError> {
-        let merge_blocks = self.gen_merge_blocks()?;
-        let input = self.gen_input(parts, &merge_blocks);
+        let merge_section = self.gen_merge_section()?;
+        let input = self.gen_input(parts, &merge_section);
 
         let main_fn = match self.config.mode() {
             ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => {
-                batch::gen_batch_main(parts, &input, &merge_blocks)
+                batch::gen_batch_main(parts, &input, &merge_section)
             }
             ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
-                inc::gen_incremental_main(parts, &input, &merge_blocks)
+                inc::gen_incremental_main(parts, &input, &merge_section)
             }
         };
 

@@ -491,7 +491,7 @@ impl Relation {
     /// [`Relation::set_output_params`].
     #[must_use]
     #[inline]
-    pub(crate) fn output_limit(&self) -> Option<usize> {
+    pub fn output_limit(&self) -> Option<usize> {
         self.output_limit_value
     }
 
@@ -499,8 +499,19 @@ impl Relation {
     /// parse time by [`Relation::set_output_params`].
     #[must_use]
     #[inline]
-    pub(crate) fn output_order_by(&self) -> Option<Vec<(usize, DataType, bool)>> {
+    pub fn output_order_by(&self) -> Option<Vec<(usize, DataType, bool)>> {
         self.output_order_by_spec.clone()
+    }
+
+    /// Whether this `.output` relation takes the parallel file-drain path
+    /// (binary file sink, arity > 0, no `ORDER BY`). Nullary outputs write a
+    /// literal `True` line, `ORDER BY`/`LIMIT` need a global sort, and stderr
+    /// (`-D -`) is one shared stream — all of those stay on the sequential
+    /// drain. Defined here so the drain router and the `itoa` feature marking
+    /// (in two different crates) share one predicate and cannot drift.
+    #[must_use]
+    pub fn uses_parallel_file_drain(&self, output_to_stdout: bool) -> bool {
+        !output_to_stdout && self.arity() > 0 && self.output_order_by().is_none()
     }
 
     /// Set printsize flag.
