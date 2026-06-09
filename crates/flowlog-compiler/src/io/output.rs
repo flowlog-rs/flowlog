@@ -3,26 +3,43 @@
 //! For each IDB that is `.output`'d or `.printsize`'d, emits the post-barrier
 //! code that runs on worker 0:
 //!
-//! - **`.output`**: drain the shared buffer, apply `ORDER BY` / `LIMIT` via
-//!   [`flowlog_build::gen_drain_block`] (shared with library mode through
-//!   `::flowlog_runtime::sort::*`), then write each row to a file (default) or
-//!   stderr (`-D -`).
+//! - **`.output`**: drain the shared buffer and write each row to a file
+//!   (default) or stderr (`-D -`). File sinks without `ORDER BY` use the
+//!   bounded-streaming parallel drain ([`gen_parallel_file_drain`]); the rest
+//!   go through [`flowlog_build::gen_drain_block`], which applies `ORDER BY` /
+//!   `LIMIT` and is shared with library mode.
 //! - **`.printsize`**: read the shared size cell and report it to stderr.
 
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 
-use flowlog_build::parser::Relation;
+use flowlog_build::parser::{DataType, Relation};
 use flowlog_build::{field_accessor, gen_drain_block};
 
 use crate::{Compiler, CompilerError};
 
+/// Capacity of each per-IDB output `BufWriter`, sized to amortize write
+/// syscalls over many small rows. A few drains run concurrently in file mode,
+/// but 1 MiB each is negligible next to the data.
+const OUTPUT_BUFFER_BYTES: usize = 1 << 20;
+
+/// Rows per parallel-drain segment. The drain formats and writes one segment
+/// at a time instead of materializing the whole output, bounding peak
+/// in-flight memory to roughly `lanes * SEG_ROWS * row_width` per relation.
+/// This is a memory bound, not a parallelism knob: 8K is large enough to
+/// amortize per-segment overhead while keeping the transient buffers small.
+const PARALLEL_DRAIN_SEG_ROWS: usize = 8192;
+
 impl Compiler {
-    /// Per-IDB merge blocks spliced into `main()` after the barrier
-    /// (worker 0 only). Order: empty-output touches (for `.output`
-    /// relations the dataflow pruner dropped), then derived `.output`
-    /// drains, then `.printsize` reports.
-    pub(crate) fn gen_merge_blocks(&self) -> Result<Vec<TokenStream>, CompilerError> {
+    /// The merge section spliced into `main()` after the barrier (worker 0
+    /// only): empty-output touches, derived `.output` drains, then `.printsize`
+    /// reports.
+    ///
+    /// In file mode the blocks run in concurrent scoped threads — each writes a
+    /// distinct file, so the kernel parallelizes the writes, and every drain is
+    /// bounded-streaming so concurrent drains stay memory-safe. Stderr (`-D -`)
+    /// stays sequential since all blocks share one stream.
+    pub(crate) fn gen_merge_section(&self) -> Result<TokenStream, CompilerError> {
         let mut blocks = Vec::new();
         if !self.config.output_to_stdout() {
             for file_name in self.program.empty_output_files() {
@@ -35,7 +52,15 @@ impl Compiler {
         for idb in self.program.printsize_idbs() {
             blocks.push(self.gen_size_report(idb)?);
         }
-        Ok(blocks)
+
+        if blocks.is_empty() || self.config.output_to_stdout() {
+            return Ok(quote! { #(#blocks)* });
+        }
+        Ok(quote! {
+            std::thread::scope(|merge_scope| {
+                #( merge_scope.spawn(|| #blocks); )*
+            });
+        })
     }
 
     /// Resolve `-D <outdir>` or return the canonical "unset" error
@@ -69,16 +94,40 @@ impl Compiler {
         let string_intern = self.codegen.features().string_intern();
         let is_incremental = self.config.is_incremental();
 
-        let (sink_preamble, write_row) = if self.config.output_to_stdout() {
+        // File sinks without ORDER BY take the bounded-streaming parallel drain
+        // (same bytes and row order, resolve+format spread across cores).
+        // Nullary, ORDER BY/LIMIT, and stderr stay on the sequential path.
+        if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
+            let base_dir = self.require_output_dir("writing IDB output to files")?;
+            let out_path_stmt =
+                gen_out_path_stmt(&idb.output_file_name(), base_dir, is_incremental);
+            return Ok(gen_parallel_file_drain(
+                &buf_ident,
+                idb,
+                out_path_stmt,
+                string_intern,
+                is_incremental,
+            ));
+        }
+
+        // Stderr is unbuffered, so only the file sink needs the explicit final
+        // flush; `BufWriter::Drop` would swallow a failed tail write.
+        let (sink_preamble, write_row, sink_postamble) = if self.config.output_to_stdout() {
             (
                 gen_stderr_preamble(),
                 gen_write_row_stderr(idb, string_intern),
+                quote! {},
             )
         } else {
             let base_dir = self.require_output_dir("writing IDB output to files")?;
+            let file_preamble =
+                gen_file_preamble(&idb.output_file_name(), base_dir, is_incremental);
+            let (scratch_decls, write_row) =
+                gen_file_row_writer(idb, string_intern, is_incremental);
             (
-                gen_file_preamble(&idb.output_file_name(), base_dir, is_incremental),
-                gen_write_row_file(idb, string_intern, is_incremental),
+                quote! { #file_preamble #scratch_decls },
+                write_row,
+                quote! { out.flush().expect("flush failed"); },
             )
         };
 
@@ -87,6 +136,7 @@ impl Compiler {
             idb,
             sink_preamble,
             write_row,
+            sink_postamble,
             string_intern,
         ))
     }
@@ -119,6 +169,7 @@ impl Compiler {
                     .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
             );
             writeln!(out, "{}", size).expect("printsize write failed");
+            out.flush().expect("printsize flush failed");
         }})
     }
 }
@@ -129,26 +180,31 @@ impl Compiler {
 // =========================================================================
 
 fn gen_file_preamble(file_name: &str, base_dir: &str, is_incremental: bool) -> TokenStream {
-    // `file_name` is the full filename (including any extension);
-    // by default `<RawName>.csv` per Soufflé, overridable via the
-    // `.output Foo(filename="…")` parameter. Incremental mode inserts
-    // the epoch immediately before the file extension (or at the end
-    // if no extension) so each epoch gets its own file.
-    let out_path = if is_incremental {
+    let out_path = gen_out_path_stmt(file_name, base_dir, is_incremental);
+    quote! {
+        use std::io::Write as _;
+        #out_path
+        let mut out = std::io::BufWriter::with_capacity(
+            #OUTPUT_BUFFER_BYTES,
+            std::fs::File::create(&out_path)
+                .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
+        );
+    }
+}
+
+/// Bind `let out_path = ...;` for a file sink. `file_name` is the full
+/// filename (including any extension); by default `<RawName>.csv` per
+/// Soufflé, overridable via the `.output Foo(filename="…")` parameter.
+/// Incremental mode inserts the epoch immediately before the file extension
+/// (or at the end if no extension) so each epoch gets its own file.
+fn gen_out_path_stmt(file_name: &str, base_dir: &str, is_incremental: bool) -> TokenStream {
+    if is_incremental {
         let (stem, ext) = split_file_extension(file_name);
         quote! {
             let out_path = format!("{}/{}_t{}{}", #base_dir, #stem, time_stamp, #ext);
         }
     } else {
         quote! { let out_path = format!("{}/{}", #base_dir, #file_name); }
-    };
-    quote! {
-        use std::io::Write as _;
-        #out_path
-        let mut out = std::io::BufWriter::new(
-            std::fs::File::create(&out_path)
-                .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
-        );
     }
 }
 
@@ -170,35 +226,51 @@ fn gen_stderr_preamble() -> TokenStream {
 }
 
 // =========================================================================
-// Row formatters — emit the `writeln!(out, ...)` that runs per row.
+// File row formatter.
+//
+// `gen_row_bytes` builds one row's bytes for both file sinks — sequential and
+// parallel — so the two paths cannot drift. Strings are copied verbatim,
+// integers go through `itoa`, floats/bool through `core::fmt`; the bytes match
+// each value's `Display`. Pinned by the `output_all_types*` fixtures. (Stderr
+// uses a separate `Debug` format; see `gen_write_row_stderr`.)
 // =========================================================================
 
-fn gen_write_row_file(idb: &Relation, string_intern: bool, is_incremental: bool) -> TokenStream {
+/// Sequential file sink: returns `(scratch_decls, write_row)`. The caller
+/// splices `scratch_decls` into the preamble once and runs `write_row` per row,
+/// which builds the row into the reused `bytes` scratch via [`gen_row_bytes`]
+/// and emits it with a single `write_all`.
+fn gen_file_row_writer(
+    idb: &Relation,
+    string_intern: bool,
+    is_incremental: bool,
+) -> (TokenStream, TokenStream) {
     // Nullary: output is a boolean presence marker, one literal `True` line.
     if idb.arity() == 0 {
-        return quote! {
-            let _ = &row;
-            writeln!(out, "True").expect("write failed");
-        };
+        return (
+            quote! {},
+            quote! {
+                let _ = &row;
+                out.write_all(b"True\n").expect("write failed");
+            },
+        );
     }
 
-    let fields = data_field_accessors(idb, string_intern);
-    let delim = idb.output_delimiter();
-
-    if is_incremental {
-        // Incremental lines carry the diff as a signed suffix column.
-        let mut parts = vec!["{}"; idb.arity()];
-        parts.push("{:+}");
-        let fmt = Literal::string(&parts.join(delim.as_str()));
-        quote! {
-            writeln!(out, #fmt #(, #fields )*, row.2).expect("write failed");
-        }
+    let (row_writer, uses_itoa) = gen_row_bytes(idb, string_intern, is_incremental);
+    let itoa_decl = if uses_itoa {
+        quote! { let mut itoa_buf = ::itoa::Buffer::new(); }
     } else {
-        let fmt = Literal::string(&vec!["{}"; idb.arity()].join(delim.as_str()));
-        quote! {
-            writeln!(out, #fmt #(, #fields )*).expect("write failed");
-        }
-    }
+        quote! {}
+    };
+    let scratch_decls = quote! {
+        let mut bytes: Vec<u8> = Vec::new();
+        #itoa_decl
+    };
+    let write_row = quote! {
+        bytes.clear();
+        #row_writer
+        out.write_all(&bytes).expect("write failed");
+    };
+    (scratch_decls, write_row)
 }
 
 fn gen_write_row_stderr(idb: &Relation, string_intern: bool) -> TokenStream {
@@ -224,11 +296,156 @@ fn gen_write_row_stderr(idb: &Relation, string_intern: bool) -> TokenStream {
 }
 
 /// Token streams that read `row.0.<i>` for each data column, wrapping
-/// interned-string columns in `resolve()` so they format as `&str`.
+/// interned-string columns in `resolve_out()` so they format as `&str`.
 fn data_field_accessors(idb: &Relation, string_intern: bool) -> Vec<TokenStream> {
     idb.data_type()
         .iter()
         .enumerate()
         .map(|(i, dt)| field_accessor(i, dt, quote! { row }, string_intern))
         .collect()
+}
+
+// =========================================================================
+// Bounded-streaming parallel file drain
+// =========================================================================
+//
+// The shared buffer is already partitioned one Vec per timely worker. We split
+// those into ordered fixed-size segments and, wave by wave, format `rayon`-many
+// segments in parallel, then write each wave to the file in worker/row order.
+// Output is byte-identical to the sequential drain, with the format cost spread
+// across cores — but only one wave of formatted bytes is resident at a time, so
+// a large relation never materializes a second full copy in RAM. Scratch
+// buffers are pooled and reused across waves.
+
+/// Emit the bounded-streaming parallel drain for one `.output` file sink.
+///
+/// `out_path_stmt` must bind `let out_path = ...;`. The block empties the
+/// shared buffer (`mem::take`), preserves row order exactly, streams each wave
+/// to the `BufWriter`, and ends with an explicit error-checked `flush()`.
+fn gen_parallel_file_drain(
+    buf_ident: &Ident,
+    idb: &Relation,
+    out_path_stmt: TokenStream,
+    string_intern: bool,
+    is_incremental: bool,
+) -> TokenStream {
+    debug_assert!(idb.arity() > 0, "nullary outputs use the sequential path");
+    let (row_writer, uses_itoa) = gen_row_bytes(idb, string_intern, is_incremental);
+    let seg_rows = Literal::usize_unsuffixed(PARALLEL_DRAIN_SEG_ROWS);
+
+    // `::itoa::Buffer` is per-segment scratch; omit when no column needs it so
+    // `-Dwarnings` never sees an unused binding.
+    let itoa_decl = if uses_itoa {
+        quote! { let mut itoa_buf = ::itoa::Buffer::new(); }
+    } else {
+        quote! {}
+    };
+
+    quote! {{
+        use std::io::Write as _;
+        use ::rayon::prelude::*;
+        #out_path_stmt
+        let mut out = std::io::BufWriter::with_capacity(
+            #OUTPUT_BUFFER_BYTES,
+            std::fs::File::create(&out_path)
+                .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
+        );
+
+        // Own the per-worker buffers; the shared Vec is left empty.
+        let per_worker = std::mem::take(&mut *#buf_ident.lock().unwrap());
+
+        // Ordered (worker, start, end) row segments — worker order then row
+        // order, so writing the segments in this order is byte-identical to the
+        // sequential drain.
+        let mut segments: Vec<(usize, usize, usize)> = Vec::new();
+        for (wi, wbuf) in per_worker.iter().enumerate() {
+            let mut start = 0usize;
+            while start < wbuf.len() {
+                let end = (start + #seg_rows).min(wbuf.len());
+                segments.push((wi, start, end));
+                start = end;
+            }
+        }
+
+        // Stream wave by wave: format up to `lanes` segments in parallel into
+        // pooled scratch buffers, write them in order, reuse. Peak resident
+        // formatted bytes ≈ one wave, not the whole relation.
+        let lanes = ::rayon::current_num_threads().max(1);
+        let mut pool: Vec<Vec<u8>> = Vec::new();
+        for wave in segments.chunks(lanes) {
+            while pool.len() < wave.len() {
+                pool.push(Vec::new());
+            }
+            pool[..wave.len()]
+                .par_iter_mut()
+                .zip(wave.par_iter())
+                .for_each(|(bytes, &(wi, start, end))| {
+                    bytes.clear();
+                    #itoa_decl
+                    for row in &per_worker[wi][start..end] {
+                        #row_writer
+                    }
+                });
+            for bytes in &pool[..wave.len()] {
+                out.write_all(bytes).expect("write failed");
+            }
+        }
+        out.flush().expect("flush failed");
+    }}
+}
+
+/// Per-row byte-assembly statements for both file sinks. Expects `row`,
+/// `bytes: &mut Vec<u8>`, and (when the returned flag is set) `itoa_buf` in
+/// scope. Returns the tokens plus whether they use `itoa_buf`.
+///
+/// Byte-fidelity contract (pinned by the `output_all_types*` fixtures):
+/// integers via `itoa`, floats/bool via `write!("{}")`, strings as raw bytes
+/// (interned columns resolved through `resolve_out`).
+fn gen_row_bytes(idb: &Relation, string_intern: bool, is_incremental: bool) -> (TokenStream, bool) {
+    let delim = Literal::byte_string(idb.output_delimiter().as_bytes());
+    let mut uses_itoa = false;
+    let mut stmts: Vec<TokenStream> = Vec::new();
+
+    for (i, dt) in idb.data_type().iter().enumerate() {
+        if i > 0 {
+            stmts.push(quote! { bytes.extend_from_slice(#delim); });
+        }
+        // `row.0.<i>`, wrapped in `resolve_out()` for interned string columns;
+        // `field` is then `&str` (interned/plain) or the column's scalar type.
+        let field = field_accessor(i, dt, quote! { row }, string_intern);
+        stmts.push(match dt {
+            DataType::String => {
+                quote! { bytes.extend_from_slice(#field.as_bytes()); }
+            }
+            DataType::Bool => {
+                quote! { bytes.extend_from_slice(if #field { b"true" } else { b"false" }); }
+            }
+            DataType::Float32 | DataType::Float64 => {
+                // OrderedFloat's Display forwards to the inner float — the same
+                // text `write!("{}")` produces.
+                quote! { write!(bytes, "{}", #field).expect("write failed"); }
+            }
+            // The eight integer types.
+            _ => {
+                uses_itoa = true;
+                quote! { bytes.extend_from_slice(itoa_buf.format(#field).as_bytes()); }
+            }
+        });
+    }
+
+    if is_incremental {
+        // Trailing diff column, `{:+}`-shaped: explicit '+' for >= 0, itoa
+        // renders the '-' itself for negatives.
+        uses_itoa = true;
+        stmts.push(quote! {
+            bytes.extend_from_slice(#delim);
+            if row.2 >= 0 {
+                bytes.push(b'+');
+            }
+            bytes.extend_from_slice(itoa_buf.format(row.2).as_bytes());
+        });
+    }
+
+    stmts.push(quote! { bytes.push(b'\n'); });
+    (quote! { #(#stmts)* }, uses_itoa)
 }

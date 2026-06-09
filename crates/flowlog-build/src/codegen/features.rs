@@ -93,9 +93,12 @@ pub struct Features {
     // -- library support --
     string_intern: bool,
     string_resolve: bool,
+    string_resolve_out: bool,
     ordered_float: bool,
     udf: bool,
     output_buffers: bool,
+    parallel_output: bool,
+    itoa: bool,
 }
 
 impl Features {
@@ -117,9 +120,15 @@ impl Features {
         (aggregation,    mark_aggregation),
         (string_intern,  mark_string_intern),
         (string_resolve, mark_string_resolve),
+        (string_resolve_out, mark_string_resolve_out),
         (ordered_float,  mark_ordered_float),
         (udf,            mark_udf),
         (output_buffers, mark_output_buffers),
+        // parallel file-output drain (binary mode only); the scaffold gates
+        // the `rayon` dependency on this, and `itoa` on having integer columns
+        // on that path.
+        (parallel_output, mark_parallel_output),
+        (itoa,           mark_itoa),
     }
 
     // -- aggregation semirings (non-boolean) ----------------------------

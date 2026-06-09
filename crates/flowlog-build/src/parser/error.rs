@@ -272,7 +272,9 @@ pub enum ParseError {
     /// right-hand side. FlowLog can substitute a variable or constant into a
     /// negation, but not an arbitrary expression (atom arguments are not
     /// expressions), so this form is rejected rather than silently mishandled.
-    #[error("assignment-bound variable `{var}` cannot be used in a negated atom with a computed value")]
+    #[error(
+        "assignment-bound variable `{var}` cannot be used in a negated atom with a computed value"
+    )]
     AssignmentVarInNegation { span: Span, var: String },
 
     /// Assignment desugaring emptied a rule's body, but the head could not be

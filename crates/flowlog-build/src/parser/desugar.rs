@@ -151,8 +151,7 @@ fn desugar_rule(rule: &mut FlowLogRule) -> Result<bool, ParseError> {
         match arg {
             HeadArg::Arith(a) if a.is_const() => {}
             HeadArg::Arith(a) => {
-                let folded = fold_const_int(a)
-                    .ok_or(ParseError::GroundRuleNotConst { span })?;
+                let folded = fold_const_int(a).ok_or(ParseError::GroundRuleNotConst { span })?;
                 *a = Arithmetic::new(Factor::Const(ConstType::Int(folded)), vec![]);
             }
             HeadArg::Var(_) | HeadArg::Aggregation(_) => {
@@ -199,24 +198,25 @@ fn as_assignment(
     rhs: &Arithmetic,
     bound: &HashSet<String>,
 ) -> Option<(String, Arithmetic)> {
-    let try_side = |var_side: &Arithmetic, value_side: &Arithmetic| -> Option<(String, Arithmetic)> {
-        if !var_side.is_var() {
-            return None;
-        }
-        let var = var_side.vars().into_iter().next()?.clone();
-        if bound.contains(&var) {
-            return None;
-        }
-        let value_vars = value_side.vars();
-        if value_vars.iter().any(|v| **v == var) {
-            return None;
-        }
-        if value_vars.iter().all(|v| bound.contains(*v)) {
-            Some((var, value_side.clone()))
-        } else {
-            None
-        }
-    };
+    let try_side =
+        |var_side: &Arithmetic, value_side: &Arithmetic| -> Option<(String, Arithmetic)> {
+            if !var_side.is_var() {
+                return None;
+            }
+            let var = var_side.vars().into_iter().next()?.clone();
+            if bound.contains(&var) {
+                return None;
+            }
+            let value_vars = value_side.vars();
+            if value_vars.iter().any(|v| **v == var) {
+                return None;
+            }
+            if value_vars.iter().all(|v| bound.contains(*v)) {
+                Some((var, value_side.clone()))
+            } else {
+                None
+            }
+        };
 
     try_side(lhs, rhs).or_else(|| try_side(rhs, lhs))
 }
@@ -249,11 +249,7 @@ fn subst_head(rule: &mut FlowLogRule, var: &str, value: &Arithmetic) {
     }
 }
 
-fn subst_predicate(
-    pred: &mut Predicate,
-    var: &str,
-    value: &Arithmetic,
-) -> Result<(), ParseError> {
+fn subst_predicate(pred: &mut Predicate, var: &str, value: &Arithmetic) -> Result<(), ParseError> {
     match pred {
         // The assignment variable is never grounded by a positive atom, so it
         // cannot appear in one.

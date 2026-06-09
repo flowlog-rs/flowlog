@@ -15,5 +15,5 @@ mod const_type;
 mod data_type;
 
 pub use const_type::ConstType;
-pub use data_type::{DataType, TypeRegistry};
 pub(crate) use data_type::TypeId;
+pub use data_type::{DataType, TypeRegistry};

@@ -19,7 +19,7 @@ use crate::io::input::Input;
 pub(crate) fn gen_batch_main(
     parts: &CodeParts,
     input: &Input,
-    merge_blocks: &[TokenStream],
+    merge_section: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
         edb_decls,
@@ -103,7 +103,7 @@ pub(crate) fn gen_batch_main(
 
                     if index == 0 {
                         println!("{:?}:\tDataflow executed", timer.elapsed());
-                        #(#merge_blocks)*
+                        #merge_section
                     }
                 }
             })

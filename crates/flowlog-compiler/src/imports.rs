@@ -289,9 +289,14 @@ fn string_intern_imports(f: &Features) -> TokenStream {
     let max_retries = INTERN_MAX_RETRIES;
     let base = quote! {
         use lasso::{ThreadedRodeo, Spur};
+        use rustc_hash::FxBuildHasher;
         use std::sync::LazyLock;
 
-        static INTERNER: LazyLock<ThreadedRodeo> = LazyLock::new(ThreadedRodeo::default);
+        // FxBuildHasher (not lasso's default SipHash): interner keys are
+        // program-controlled, so the per-byte cost of a HashDoS-resistant
+        // hash is pure overhead on every intern/resolve.
+        static INTERNER: LazyLock<ThreadedRodeo<Spur, FxBuildHasher>> =
+            LazyLock::new(|| ThreadedRodeo::with_hasher(FxBuildHasher));
 
         #[inline(always)]
         fn intern(s: &str) -> Spur {
@@ -319,5 +324,35 @@ fn string_intern_imports(f: &Features) -> TokenStream {
         quote! {}
     };
 
-    quote! { #base #resolve }
+    // After fixpoint, interned strings resolve through a flat `Spur`-indexed
+    // snapshot instead of the concurrent `DashMap` path (`resolve`), which
+    // hashes and locks on every call. Built lazily; keys interned later fall
+    // back to `resolve`.
+    let resolve_out = if f.string_resolve_out() {
+        quote! {
+            use lasso::Key as _;
+
+            static RESOLVED: std::sync::OnceLock<Box<[&'static str]>> =
+                std::sync::OnceLock::new();
+
+            #[inline]
+            fn resolve_out(key: Spur) -> &'static str {
+                let table = RESOLVED.get_or_init(|| {
+                    let mut table: Vec<&'static str> = vec![""; INTERNER.len()];
+                    for (k, s) in INTERNER.iter() {
+                        table[k.into_usize()] = s;
+                    }
+                    table.into_boxed_slice()
+                });
+                match table.get(key.into_usize()) {
+                    Some(&s) => s,
+                    None => INTERNER.resolve(&key),
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    quote! { #base #resolve #resolve_out }
 }

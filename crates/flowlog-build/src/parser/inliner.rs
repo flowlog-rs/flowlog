@@ -184,7 +184,15 @@ pub(crate) fn inline_one(
     // define-before-use rule top-level `.type`s follow (see
     // `build_type_registry` in program.rs). Cycles surface as
     // `UnknownTypeParent`, not a hang.
-    collect_instance(&body, &scope, &child_enclosing, &child_enclosing_decls, comps, output, registry)?;
+    collect_instance(
+        &body,
+        &scope,
+        &child_enclosing,
+        &child_enclosing_decls,
+        comps,
+        output,
+        registry,
+    )?;
     resolve_instance(body, &scope, output, registry)?;
 
     Ok(())
@@ -491,10 +499,7 @@ fn decl_map(items: &[RawItem]) -> HashMap<String, &RawRelation> {
 /// Whether an inherited `RawItem` is a rule or fact whose head matches
 /// one of this comp's `.override` targets — if so, it gets dropped from
 /// the spliced body and replaced by the comp's own derivations.
-fn is_overridden_rule_or_fact(
-    item: &RawItem,
-    overrides: &HashMap<String, (Span, String)>,
-) -> bool {
+fn is_overridden_rule_or_fact(item: &RawItem, overrides: &HashMap<String, (Span, String)>) -> bool {
     if overrides.is_empty() {
         return false;
     }
@@ -643,4 +648,3 @@ fn rewrite_rule(rule: &mut FlowLogRule, scope: &Scope<'_>) -> Result<(), ParseEr
     }
     Ok(())
 }
-

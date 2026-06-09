@@ -19,4 +19,5 @@ differential-dataflow = "0.24"
 ordered-float = { version = "5", features = ["serde"] }
 lasso = { version = "0.7", features = ["multi-threaded", "serialize"] }
 regex = "1"
+rustc-hash = "2"
 serde = { workspace = true }
