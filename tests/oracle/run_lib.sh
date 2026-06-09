@@ -152,9 +152,14 @@ stage_fixture() {
     rm -rf "${LIB_RUNNER_DIR}/data" "${LIB_RUNNER_DIR}/output"
     mkdir -p "${LIB_RUNNER_DIR}/data"
     cp "$prepared_dl" "${LIB_RUNNER_DIR}/program.dl"
-    if compgen -G "${dataset_path}/*.csv" > /dev/null; then
-        cp "${dataset_path}"/*.csv "${LIB_RUNNER_DIR}/data/"
-    fi
+    # Datasets ship inputs as .csv/.tsv (graph/program analysis) or .facts
+    # (DOOP/batik). Stage every recognized extension — copying only .csv left
+    # .facts inputs unstaged, running the engine on empty inputs.
+    for ext in csv tsv facts; do
+        if compgen -G "${dataset_path}/*.${ext}" > /dev/null; then
+            cp "${dataset_path}"/*."${ext}" "${LIB_RUNNER_DIR}/data/"
+        fi
+    done
 }
 
 # Apply a space-separated `KEY=VAL` knob list before calling write_build_rs,

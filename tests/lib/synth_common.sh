@@ -83,12 +83,13 @@ output_delimiter_for() {
 ###############################################################################
 
 # Echo the data-file path in `dir` whose basename matches `wanted`
-# case-insensitively (handles on-disk casing drift). Walks `.csv` and `.tsv`
-# files — non-comma delimiters typically use `.tsv`. Empty if no match.
+# case-insensitively (handles on-disk casing drift). Walks `.csv`, `.tsv`, and
+# `.facts` files — non-comma delimiters use `.tsv`, DOOP datasets use `.facts`.
+# Empty if no match.
 find_csv_case_insensitive() {
     local dir="$1" wanted="$2"
     local f base
-    for f in "${dir}"/*.csv "${dir}"/*.tsv; do
+    for f in "${dir}"/*.csv "${dir}"/*.tsv "${dir}"/*.facts; do
         [[ -f "$f" ]] || continue
         base="$(basename "$f")"
         if [[ "${base,,}" == "${wanted,,}" ]]; then
