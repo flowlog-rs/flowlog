@@ -130,7 +130,12 @@ pub(crate) fn validate_api_surface(program: &Program) -> Result<(), BuildError> 
     let mut fields: HashMap<String, String> = HashMap::new();
     for rel in program.output_idbs() {
         ensure_plain_ident(rel.name(), rel.raw_name(), "a results field")?;
-        ensure_unique(&mut fields, rel.name().to_string(), rel.raw_name(), "results field")?;
+        ensure_unique(
+            &mut fields,
+            rel.name().to_string(),
+            rel.raw_name(),
+            "results field",
+        )?;
     }
     for rel in program.printsize_idbs() {
         let field = printsize_field_ident(rel).to_string();
@@ -151,7 +156,12 @@ pub(crate) fn validate_api_surface(program: &Program) -> Result<(), BuildError> 
     let mut input_structs: HashMap<String, String> = HashMap::new();
     for rel in program.edbs() {
         let stem = input_struct_ident(rel).to_string();
-        ensure_unique(&mut input_structs, stem, rel.raw_name(), "input-handler struct")?;
+        ensure_unique(
+            &mut input_structs,
+            stem,
+            rel.raw_name(),
+            "input-handler struct",
+        )?;
     }
 
     Ok(())
@@ -335,8 +345,9 @@ mod api_surface_tests {
     /// maintain here.
     #[test]
     fn keywords_are_rejected_as_plain_idents() {
-        for kw in ["type", "match", "in", "loop", "self", "Self", "crate", "super", "yield", "try"]
-        {
+        for kw in [
+            "type", "match", "in", "loop", "self", "Self", "crate", "super", "yield", "try",
+        ] {
             assert!(
                 ensure_plain_ident(kw, kw, "a results field").is_err(),
                 "keyword {kw:?} should be rejected as a verbatim API ident"
@@ -374,11 +385,21 @@ mod api_surface_tests {
     fn pascal_namespace_hazards_are_caught() {
         assert_eq!(pascal_case("foo_bar"), pascal_case("foo__bar"));
         let mut owners = HashMap::new();
-        ensure_unique(&mut owners, pascal_case("foo_bar"), "foo_bar", "`rel::` type alias")
-            .unwrap();
+        ensure_unique(
+            &mut owners,
+            pascal_case("foo_bar"),
+            "foo_bar",
+            "`rel::` type alias",
+        )
+        .unwrap();
         assert!(
-            ensure_unique(&mut owners, pascal_case("foo__bar"), "foo__bar", "`rel::` type alias")
-                .is_err()
+            ensure_unique(
+                &mut owners,
+                pascal_case("foo__bar"),
+                "foo__bar",
+                "`rel::` type alias"
+            )
+            .is_err()
         );
         assert_eq!(pascal_case("self"), "Self");
         assert!(ensure_plain_ident(&pascal_case("self"), "self", "a `rel::` type alias").is_err());

@@ -324,11 +324,10 @@ fn string_intern_imports(f: &Features) -> TokenStream {
         quote! {}
     };
 
-    // Output runs after the dataflow reaches fixpoint, so interned strings
-    // can be resolved through a flat `Spur`-indexed snapshot instead of the
-    // concurrent `DashMap` path (`resolve`), which hashes the key and takes
-    // a read lock on every call. The snapshot is built lazily on first use;
-    // keys interned after it is frozen fall back to `resolve`.
+    // After fixpoint, interned strings resolve through a flat `Spur`-indexed
+    // snapshot instead of the concurrent `DashMap` path (`resolve`), which
+    // hashes and locks on every call. Built lazily; keys interned later fall
+    // back to `resolve`.
     let resolve_out = if f.string_resolve_out() {
         quote! {
             use lasso::Key as _;

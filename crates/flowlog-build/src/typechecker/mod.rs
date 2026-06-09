@@ -500,7 +500,13 @@ fn check_head(
                 if let Some(kind) = infer_expr_type(a, bindings, udfs)?
                     && !kind.fits(expected)
                 {
-                    return Err(head_or_literal_mismatch(a, &rel_display, col, expected, kind));
+                    return Err(head_or_literal_mismatch(
+                        a,
+                        &rel_display,
+                        col,
+                        expected,
+                        kind,
+                    ));
                 }
                 pin_arith_literals(a, expected, udfs)?;
             }

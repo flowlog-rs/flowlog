@@ -122,9 +122,6 @@ mod binding_ident_tests {
     /// keeping generated code ASCII.
     #[test]
     fn inliner_separator_is_sanitized() {
-        assert_eq!(
-            binding_ident(2, "c·holdsat").to_string(),
-            "rel_2_c_holdsat"
-        );
+        assert_eq!(binding_ident(2, "c·holdsat").to_string(), "rel_2_c_holdsat");
     }
 }

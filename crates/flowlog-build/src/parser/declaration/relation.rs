@@ -504,11 +504,9 @@ impl Relation {
     }
 
     /// Whether this `.output` relation takes the parallel file-drain path
-    /// (binary file sink, arity > 0, no `ORDER BY`). Nullary outputs write a
-    /// literal `True` line, `ORDER BY`/`LIMIT` need a global sort, and stderr
-    /// (`-D -`) is one shared stream — all of those stay on the sequential
-    /// drain. Defined here so the drain router and the `itoa` feature marking
-    /// (in two different crates) share one predicate and cannot drift.
+    /// (binary file sink, arity > 0, no `ORDER BY`). Nullary, `ORDER BY`/`LIMIT`,
+    /// and stderr stay on the sequential drain. Defined here so the drain router
+    /// and the `itoa` feature marking (in two crates) share one predicate.
     #[must_use]
     pub fn uses_parallel_file_drain(&self, output_to_stdout: bool) -> bool {
         !output_to_stdout && self.arity() > 0 && self.output_order_by().is_none()

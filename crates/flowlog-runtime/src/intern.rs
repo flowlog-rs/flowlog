@@ -6,11 +6,10 @@ use std::sync::{LazyLock, OnceLock};
 
 /// Global string interner shared across all FlowLog engines in the process.
 ///
-/// Uses `FxBuildHasher` rather than lasso's default `RandomState` (SipHash):
-/// interner keys are program-controlled (`.dl` literals + input facts), not
-/// adversarial, so the HashDoS resistance of SipHash buys nothing while its
-/// per-byte cost shows up on every `intern` of a (potentially long) string
-/// and every `DashMap` `resolve`.
+/// Uses `FxBuildHasher` instead of lasso's default SipHash: interner keys are
+/// program-controlled (`.dl` literals + input facts), not adversarial, so
+/// SipHash's HashDoS resistance is pure per-byte overhead on every intern and
+/// resolve.
 ///
 /// **Limitation**: this is a process-local pool. In a distributed DD
 /// deployment (multiple machines), each process gets its own independent
@@ -62,11 +61,10 @@ fn build_snapshot() -> Box<[&'static str]> {
 /// Resolve a [`Spur`] at output time via a flat index instead of the
 /// concurrent `DashMap` path taken by [`resolve`].
 ///
-/// The snapshot is built lazily on first use. Output runs after the
-/// dataflow reaches fixpoint (no concurrent interning), so the snapshot is
-/// complete in batch mode. Keys interned after the snapshot was frozen
-/// (e.g. later epochs in incremental mode) fall outside its range and fall
-/// back to [`resolve`], keeping resolution correct without a rebuild.
+/// Built lazily on first use. Output runs after fixpoint, so the snapshot is
+/// complete in batch mode. Keys interned later (e.g. new epochs in incremental
+/// mode) fall outside its range and fall back to [`resolve`], staying correct
+/// without a rebuild.
 #[inline]
 pub fn resolve_out(key: Spur) -> &'static str {
     let table = RESOLVED.get_or_init(build_snapshot);

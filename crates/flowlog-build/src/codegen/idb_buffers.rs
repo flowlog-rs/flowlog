@@ -83,10 +83,10 @@ impl CodeGen {
 
                 self.features.mark_output_buffers();
 
-                // Both file sinks assemble rows via `gen_row_bytes`, which uses
-                // `::itoa` for integer columns and the incremental `{:+}` diff;
-                // the parallel drain additionally needs `rayon`. Stderr (`-D -`)
-                // uses neither. The scaffold gates the deps on these marks.
+                // Both file sinks build rows via `gen_row_bytes`: `itoa` for
+                // integer columns and the incremental diff, `rayon` for the
+                // parallel drain. Stderr uses neither. The scaffold gates the
+                // deps on these marks.
                 if !self.config.output_to_stdout() && !data_type.is_empty() {
                     if data_type.iter().any(DataType::is_integer) || self.config.is_incremental() {
                         self.features.mark_itoa();

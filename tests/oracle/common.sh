@@ -130,15 +130,27 @@ download_souffle_ref() {
 }
 
 ###############################################################################
-# Program preparation: .printsize -> .output
+# Program preparation: .printsize -> .output, forced comma delimiter
 #
 # Souffle reference files exist for .output relations; rewriting ensures
 # FlowLog emits them to disk regardless of the source directive.
+#
+# The Souffle references are comma-separated CSV, but FlowLog's own delimiter
+# default is TAB (matching Souffle). So we tag every output directive with
+# delimiter="," to make the emitted files diff against the references. This is
+# an oracle-only rewrite — the compiler default is intentionally left at TAB.
 ###############################################################################
 
 prepare_dl_file() {
     local src_path="$1" dest_path="$2"
-    sed -E 's/^\.printsize\s+(\w+)/.output \1/' "$src_path" > "$dest_path"
+    # 1st expr: .printsize Rel        -> .output Rel(delimiter=",")
+    # 2nd expr: bare .output Rel       -> .output Rel(delimiter=",")
+    # Both anchor the name to end-of-line, so a directive that already carries
+    # params (e.g. .output Rel(filename="…")) is left untouched.
+    sed -E \
+        -e 's/^(\s*)\.printsize\s+(\w+)\s*$/\1.output \2(delimiter=",")/' \
+        -e 's/^(\s*)\.output\s+(\w+)\s*$/\1.output \2(delimiter=",")/' \
+        "$src_path" > "$dest_path"
 }
 
 ###############################################################################

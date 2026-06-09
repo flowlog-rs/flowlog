@@ -868,7 +868,15 @@ impl Program {
         let mut shift = 0usize;
         for (init, pos) in inits_at_pos {
             let mut out = inliner::InlinerOutput::default();
-            inliner::inline_one("", &global_instances, &global_decls, init, &mut comps, &mut out, &mut type_registry)?;
+            inliner::inline_one(
+                "",
+                &global_instances,
+                &global_decls,
+                init,
+                &mut comps,
+                &mut out,
+                &mut type_registry,
+            )?;
             for rel in out.relations {
                 if let Some((_prev_raw, prior)) = decl_spans.get(rel.name()) {
                     return Err(ParseError::DuplicateDecl {
@@ -1546,9 +1554,9 @@ impl Program {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::ComparisonOperator;
     use crate::parser::DataType;
     use crate::parser::HeadArg;
-    use crate::parser::ComparisonOperator;
     use std::io::Write;
 
     fn loop_blocks(program: &Program) -> Vec<&LoopBlock> {
@@ -2439,7 +2447,6 @@ mod tests {
         );
     }
 
-
     /// Substituting an assignment of a *computed* expression into a negated
     /// atom is rejected: a negated atom argument can only be a bare variable or
     /// constant, never an arithmetic expression.
@@ -2689,7 +2696,10 @@ mod tests {
             .find(|r| r.head().name() == "r")
             .expect("r rule");
         assert!(
-            !rule.rhs().iter().any(|p| matches!(p, Predicate::Compare(_))),
+            !rule
+                .rhs()
+                .iter()
+                .any(|p| matches!(p, Predicate::Compare(_))),
             "grouped assignment must be eliminated, not left as a filter"
         );
 

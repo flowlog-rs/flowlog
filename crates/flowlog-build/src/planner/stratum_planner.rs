@@ -600,8 +600,7 @@ impl StratumPlanner {
                             .get(&head_idb_fp)
                             .copied()
                             .unwrap_or(crate::common::Span::DUMMY),
-                        rel: stratifier
-                            .display_name(head_idb_fp, catalog.rule().head().name()),
+                        rel: stratifier.display_name(head_idb_fp, catalog.rule().head().name()),
                         existing_op,
                         existing_pos,
                         found_op: op,
