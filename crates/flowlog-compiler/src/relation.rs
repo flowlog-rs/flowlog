@@ -575,7 +575,9 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                 };
             };
             match *dt {
-                DataType::Int8 => parse_scalar_bytes(&v, quote! { i8 }, "i8", rel_label, idx, &get_raw),
+                DataType::Int8 => {
+                    parse_scalar_bytes(&v, quote! { i8 }, "i8", rel_label, idx, &get_raw)
+                }
                 DataType::Int16 => {
                     parse_scalar_bytes(&v, quote! { i16 }, "i16", rel_label, idx, &get_raw)
                 }
@@ -585,7 +587,9 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                 DataType::Int64 => {
                     parse_scalar_bytes(&v, quote! { i64 }, "i64", rel_label, idx, &get_raw)
                 }
-                DataType::UInt8 => parse_scalar_bytes(&v, quote! { u8 }, "u8", rel_label, idx, &get_raw),
+                DataType::UInt8 => {
+                    parse_scalar_bytes(&v, quote! { u8 }, "u8", rel_label, idx, &get_raw)
+                }
                 DataType::UInt16 => {
                     parse_scalar_bytes(&v, quote! { u16 }, "u16", rel_label, idx, &get_raw)
                 }

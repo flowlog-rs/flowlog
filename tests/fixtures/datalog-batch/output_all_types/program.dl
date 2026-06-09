@@ -1,0 +1,43 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : output_all_types
+// Feature : byte-exact `.output` formatting across every column type
+// Covers  : all 12 data types as output columns (int8/16/32/64 incl. MIN/MAX,
+//           uint8/16/32/64 incl. MAX, f32/f64 incl. whole numbers printed
+//           without ".0" and large values without e-notation, string incl.
+//           unicode, bool), a mixed-type row, a nullary `.output` (literal
+//           "True" line), and a declared-but-underived `.output` (empty
+//           touch file). Single worker → expected/ pins exact row order.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Ints(a: int8, b: int16, c: int32, d: int64)
+.input Ints(IO="file", filename="Ints.csv", delimiter=",")
+.output Ints
+
+.decl UInts(a: uint8, b: uint16, c: uint32, d: uint64)
+.input UInts(IO="file", filename="UInts.csv", delimiter=",")
+.output UInts
+
+.decl Floats(a: f32, b: f64)
+.input Floats(IO="file", filename="Floats.csv", delimiter=",")
+.output Floats
+
+.decl Mixed(id: int32, name: string, flag: bool, score: f64)
+.input Mixed(IO="file", filename="Mixed.csv", delimiter=",")
+.output Mixed
+
+// Derived relation: exercises arithmetic + string passthrough on the
+// output path, not just EDB echo.
+.decl Scaled(name: string, doubled: int32, flag: bool)
+Scaled(n, c * 2, f) :- Mixed(c, n, f, _).
+.output Scaled
+
+// Nullary: holds (Mixed is non-empty) → one literal "True" line.
+.decl AnyRows()
+AnyRows() :- Mixed(_, _, _, _).
+.output AnyRows
+
+// Derived but always empty → zero-row file through the regular drain
+// (and a `BatchResults` field in library mode, unlike a pruned relation).
+.decl NeverDerived(x: int32)
+NeverDerived(x) :- Mixed(x, _, _, _), x < 0.
+.output NeverDerived

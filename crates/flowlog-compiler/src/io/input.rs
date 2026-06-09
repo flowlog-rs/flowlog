@@ -21,7 +21,7 @@ pub(crate) struct Input {
 impl Compiler {
     /// Build the binary-mode EDB registry + preload fragments from the
     /// program's input relations and the compiler's fact directory.
-    pub(crate) fn gen_input(&self, parts: &CodeParts, merge_blocks: &[TokenStream]) -> Input {
+    pub(crate) fn gen_input(&self, parts: &CodeParts, merge_section: &TokenStream) -> Input {
         let edbs = self.program.edbs();
 
         let registry_inserts: Vec<TokenStream> = edbs
@@ -92,7 +92,7 @@ impl Compiler {
                 #(#flush)*
                 barrier.wait();
                 if index == 0 {
-                    #(#merge_blocks)*
+                    #merge_section
                 }
                 barrier.wait();
             }

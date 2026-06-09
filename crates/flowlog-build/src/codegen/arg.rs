@@ -471,9 +471,12 @@ impl CodeGen {
                     .iter()
                     .enumerate()
                     .map(|(i, a)| {
-                        let token =
-                            self.build_kv_args_arithmetic_expr(a, string_intern, None)?;
-                        Ok(wrap_udf_arg(token, param_type_at(&param_types, i), string_intern))
+                        let token = self.build_kv_args_arithmetic_expr(a, string_intern, None)?;
+                        Ok(wrap_udf_arg(
+                            token,
+                            param_type_at(&param_types, i),
+                            string_intern,
+                        ))
                     })
                     .collect::<Result<_, CodegenError>>()?;
                 Ok(if fc.is_negated() {
@@ -510,7 +513,11 @@ impl CodeGen {
                     .enumerate()
                     .map(|(i, a)| {
                         let token = self.build_join_args_arithmetic_expr(a, string_intern)?;
-                        Ok(wrap_udf_arg(token, param_type_at(&param_types, i), string_intern))
+                        Ok(wrap_udf_arg(
+                            token,
+                            param_type_at(&param_types, i),
+                            string_intern,
+                        ))
                     })
                     .collect::<Result<_, CodegenError>>()?;
                 Ok(if fc.is_negated() {
@@ -547,9 +554,17 @@ impl CodeGen {
                     .iter()
                     .enumerate()
                     .map(|(i, a)| {
-                        let token = self
-                            .build_row_args_arithmetic_expr(a, row_fields, string_intern, None)?;
-                        Ok(wrap_udf_arg(token, param_type_at(&param_types, i), string_intern))
+                        let token = self.build_row_args_arithmetic_expr(
+                            a,
+                            row_fields,
+                            string_intern,
+                            None,
+                        )?;
+                        Ok(wrap_udf_arg(
+                            token,
+                            param_type_at(&param_types, i),
+                            string_intern,
+                        ))
                     })
                     .collect::<Result<_, CodegenError>>()?;
                 Ok(if fc.is_negated() {
@@ -841,7 +856,11 @@ impl CodeGen {
             .enumerate()
             .map(|(i, a)| {
                 let token = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
-                Ok(wrap_udf_arg(token, param_type_at(&param_types, i), string_intern))
+                Ok(wrap_udf_arg(
+                    token,
+                    param_type_at(&param_types, i),
+                    string_intern,
+                ))
             })
             .collect::<Result<_, CodegenError>>()?;
 
@@ -1209,7 +1228,11 @@ fn param_type_at(types: &[DataType], idx: usize) -> Option<DataType> {
 /// Rust call boundary. When interning is on and the param is `:string`, the
 /// arg expression yields a `Spur` and must be resolved + owned into a
 /// `String`. For every other case the existing `.clone()` is sufficient.
-fn wrap_udf_arg(token: TokenStream, param_type: Option<DataType>, string_intern: bool) -> TokenStream {
+fn wrap_udf_arg(
+    token: TokenStream,
+    param_type: Option<DataType>,
+    string_intern: bool,
+) -> TokenStream {
     if string_intern && param_type == Some(DataType::String) {
         quote! { resolve((#token).clone()).to_string() }
     } else {

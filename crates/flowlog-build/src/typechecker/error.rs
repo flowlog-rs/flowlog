@@ -181,7 +181,11 @@ pub enum TypeCheckError {
 
     /// `as(expr, T)` where source and target have different primitive roots.
     #[error("illegal cast: cannot cast `{from}` to `{to}` (different primitive roots)")]
-    IllegalCast { span: Span, from: String, to: String },
+    IllegalCast {
+        span: Span,
+        from: String,
+        to: String,
+    },
 
     /// `as(expr, T)` where `T` is undeclared.
     #[error("unknown cast target type `{name}`")]
@@ -380,8 +384,7 @@ impl Diagnostic for TypeCheckError {
                     format!("`{left_ty}` and `{right_ty}` have no common subtype"),
                 ))
                 .with_notes(vec![
-                    "wrap one side with `as(expr, OtherType)` to assert they should compare"
-                        .into(),
+                    "wrap one side with `as(expr, OtherType)` to assert they should compare".into(),
                 ]),
 
             TypeCheckError::HeadSubtypeMismatch {

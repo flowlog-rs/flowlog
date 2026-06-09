@@ -61,8 +61,12 @@ impl CodeGen {
                 cg.size_cell_clones.push(quote! {
                     let #cell_ident = #cell_ident.clone();
                 });
-                cg.inspect_stmts
-                    .push(self.gen_size_inspector(&var, idb.raw_name(), &cell_ident, profiler));
+                cg.inspect_stmts.push(self.gen_size_inspector(
+                    &var,
+                    idb.raw_name(),
+                    &cell_ident,
+                    profiler,
+                ));
             }
 
             if data_type
@@ -74,10 +78,23 @@ impl CodeGen {
 
             if idb.output() {
                 if data_type.contains(&DataType::String) {
-                    self.features.mark_string_resolve();
+                    self.features.mark_string_resolve_out();
                 }
 
                 self.features.mark_output_buffers();
+
+                // Both file sinks build rows via `gen_row_bytes`: `itoa` for
+                // integer columns and the incremental diff, `rayon` for the
+                // parallel drain. Stderr uses neither. The scaffold gates the
+                // deps on these marks.
+                if !self.config.output_to_stdout() && !data_type.is_empty() {
+                    if data_type.iter().any(DataType::is_integer) || self.config.is_incremental() {
+                        self.features.mark_itoa();
+                    }
+                    if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
+                        self.features.mark_parallel_output();
+                    }
+                }
 
                 // Wiring (first arg) is the collection binding feeding the
                 // sink; the label (second arg) is the human-facing name.
@@ -269,6 +286,9 @@ impl CodeGen {
 /// then iterate with `write_row` against the sink set up by `sink_preamble`.
 ///
 /// `write_row` runs once per row with `row: &(tuple, Ts, i32)` in scope.
+/// `sink_postamble` runs once after the last row, with the preamble's
+/// bindings still in scope — file sinks use it to `flush()` explicitly
+/// (relying on `BufWriter::Drop` would silently swallow flush errors).
 /// The block evaluates to `()`; callers that need to capture a value (e.g.
 /// library mode pushing into a typed `Vec`) should pre-declare the target
 /// binding outside the block and have `write_row` mutate it.
@@ -277,6 +297,7 @@ pub fn gen_drain_block(
     idb: &Relation,
     sink_preamble: TokenStream,
     write_row: TokenStream,
+    sink_postamble: TokenStream,
     string_intern: bool,
 ) -> TokenStream {
     let order_by = idb.output_order_by();
@@ -291,6 +312,7 @@ pub fn gen_drain_block(
                     #write_row
                 }
             }
+            #sink_postamble
         }},
 
         (Some(spec), None) => {
@@ -317,6 +339,7 @@ pub fn gen_drain_block(
                         #write_row
                     },
                 );
+                #sink_postamble
             }}
         }
 
@@ -333,6 +356,7 @@ pub fn gen_drain_block(
                 for row in &all {
                     #write_row
                 }
+                #sink_postamble
             }}
         }
     }
@@ -344,7 +368,11 @@ pub fn gen_drain_block(
 
 /// Access column `col_idx` of a buffer row. `base` must evaluate to the
 /// `(tuple, Ts, i32)` triple — produces `<base>.0.<col_idx>` and wraps with
-/// `resolve()` for interned-string columns.
+/// `resolve_out()` for interned-string columns.
+///
+/// Output runs after fixpoint, so interned strings resolve through the flat
+/// snapshot path (`resolve_out`) rather than the concurrent `DashMap`
+/// (`resolve`) used while the dataflow is still interning.
 pub fn field_accessor(
     col_idx: usize,
     data_type: &DataType,
@@ -354,7 +382,7 @@ pub fn field_accessor(
     let idx = Index::from(col_idx);
     let inner = quote! { #base.0.#idx };
     if matches!(data_type, DataType::String) && string_intern {
-        quote! { resolve(#inner) }
+        quote! { resolve_out(#inner) }
     } else {
         inner
     }

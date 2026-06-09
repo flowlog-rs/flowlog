@@ -18,7 +18,7 @@ use crate::io::input::Input;
 pub(crate) fn gen_incremental_main(
     p: &CodeParts,
     rp: &Input,
-    merge_blocks: &[TokenStream],
+    merge_section: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
         edb_decls,
@@ -268,7 +268,7 @@ pub(crate) fn gen_incremental_main(
 
                                 if index == 0 {
                                     // === Merge output buffers (sort, limit, write) ===
-                                    #(#merge_blocks)*
+                                    #merge_section
 
                                     println!("{:?}:\tCommitted & executed", round_timer.elapsed());
                                 }
