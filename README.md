@@ -21,11 +21,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"/></a>
 </p>
 
-**Status:** FlowLog is under active development; interfaces may change without notice. 
+**Status:** Under active development; interfaces may change without notice.
 
 ## Architecture
 
-A `.dl` program flows through five sequential stages, supported by side modules.
+A `.dl` program flows through five sequential stages (solid arrows), assisted by side modules (dashed).
 
 ```mermaid
 flowchart LR
@@ -36,21 +36,25 @@ flowchart LR
     classDef side fill:#fff8e1,stroke:#a80,stroke-dasharray:3 3
 ```
 
-- **parser** — Reads `.dl` source into a typed AST, each node tagged with its source location.
-- **typechecker** — Resolves every literal's type (e.g. `1` becomes `int32`).
-- **stratifier** — Groups rules into evaluation strata (one per `loop`/`fixpoint` block) so recursion runs in the right order.
-- **planner** — Lowers each rule to a Differential Dataflow plan; common sub-plans are shared across rules to reuse arrangements.
-- **codegen** — Emits the plan as Rust code using Timely + Differential Dataflow.
-- **catalog** — Caches per-rule metadata (relation signatures, pushdown filters, range-restriction checks) for the planner.
-- **optimizer** — Picks join order based on cardinalities and worst-case optimal joins (WIP).
-- **profiler** — Collects runtime metrics from Timely + Differential Dataflow operators.
-- **common** — Small helpers shared across the rest of the pipeline.
+**Stages:**
 
-The workspace is split across three crates:
+- **parser** — `.dl` source → typed AST, each node tagged with its source location.
+- **typechecker** — resolves each literal's type (`1` → `int32`).
+- **stratifier** — groups rules into strata (one per `loop`/`fixpoint`) so recursion runs in order.
+- **planner** — lowers each rule to a Differential Dataflow plan, sharing common sub-plans to reuse arrangements.
+- **codegen** — emits the plan as Timely + Differential Dataflow Rust.
 
-- **`flowlog-build`** — Library form. Use from `build.rs` to compile `.dl` programs into Rust at build time.
-- **`flowlog-compiler`** — CLI binary. Use to compile `.dl` programs into standalone executables.
-- **`flowlog-runtime`** — Linked into the generated output for interning, IO, sort/merge, and incremental-txn state. Not depended on directly.
+**Side modules:**
+
+- **catalog** — per-rule metadata (signatures, pushdown filters, range checks) for the planner.
+- **optimizer** — cardinality-based join ordering and worst-case optimal joins (WIP).
+- **profiler** — runtime metrics from Timely / Differential Dataflow operators.
+
+Three crates make up the workspace:
+
+- **`flowlog-build`** — library; call from `build.rs` to compile `.dl` to Rust at build time.
+- **`flowlog-compiler`** — CLI; compile `.dl` into a standalone executable.
+- **`flowlog-runtime`** — linked into generated output (interning, IO, sort/merge, incremental-txn state); not a direct dependency.
 
 ## Getting Started
 
@@ -61,7 +65,7 @@ $ bash env/env.sh     # Linux / macOS — one-time machine setup
 PS> .\env\env.ps1     # or, on Windows (elevated PowerShell)
 ```
 
-One-time machine setup: installs a stable Rust toolchain and the OS packages the build/tests need, then runs `cargo check --workspace` as a smoke test. Rust 1.80+ recommended.
+One-time setup: installs a stable Rust toolchain (1.80+) and the required OS packages, then runs `cargo check --workspace` as a smoke test.
 
 ### Build the Workspace
 
@@ -79,16 +83,16 @@ Compile a FlowLog program into a Timely/Differential Dataflow executable.
 $ flowlog-compiler <PROGRAM> [OPTIONS]
 ```
 
-`<PROGRAM>` is a path to a `.dl` file (or `all` / `--all` to iterate over every program in `example/`). Optional flags:
+`<PROGRAM>` is a path to a `.dl` file, or `all` / `--all` to compile every program in `example/`. Common options:
 
-- `-F, --fact-dir <DIR>` — prepend `<DIR>` to every `filename=` in `.input` directives. Required when `.input` uses relative filenames.
-- `-o <PATH>` — output executable path; defaults to the program stem (e.g. `reach.dl` → `./reach`).
-- `-D, --output-dir <DIR>` — where to materialize `.output` relations. Pass `-` to print tuples to stderr. Required when any relation uses `.output`.
-- `--mode <MODE>` — `datalog-batch` (default; uses `Present` diff), `datalog-inc`, `extend-batch`, or `extend-inc`. Extended modes are WIP.
-- `--sip` — Sideways Information Passing: filter later body atoms by bindings from earlier ones to shrink intermediate joins. Off by default.
-- `--str-intern` — intern string columns at load for faster joins / lower memory. Off by default.
-- `-P, --profile` — collect execution statistics. Datalog modes only; temporarily unsupported under Extended.
-- `-h, --help` — full Clap help text.
+- `-F, --fact-dir <DIR>` — prepend `<DIR>` to relative `filename=` paths in `.input` directives.
+- `-o <PATH>` — output executable path; defaults to the program stem (`reach.dl` → `./reach`).
+- `-D, --output-dir <DIR>` — where to materialize `.output` relations; `-` prints tuples to stderr.
+- `--mode <MODE>` — `datalog-batch` (default), `datalog-inc`, `extend-batch`, or `extend-inc` (extended modes WIP).
+- `--sip` — sideways information passing: filter later body atoms by earlier bindings to shrink joins (off by default).
+- `--str-intern` — intern string columns at load for faster joins and lower memory (off by default).
+- `-P, --profile` — collect execution statistics (Datalog modes only).
+- `-h, --help` — full help text.
 
 ## End-to-End Example
 
@@ -106,7 +110,7 @@ Reach(y) :- Reach(x), Arc(x,y).
 .printsize Reach
 ```
 
-> Below shows batch mode only. For incremental mode and profiler usage see <https://www.flowlog-rs.com/>.
+> Batch mode is shown here; for incremental mode and the profiler, see <https://www.flowlog-rs.com/>.
 
 ### 1. Prepare a Tiny Dataset
 
@@ -119,23 +123,16 @@ $ printf '1,2\n2,3\n' > reach/Arc.csv
 ### 2. Compile and Run
 
 ```bash
-# Compile the .dl program into a binary executable
+# Compile the .dl program to a binary (compiler flags are listed above)
 $ target/release/flowlog-compiler example/graph_analysis/reach.dl -F reach -o reach_bin -D -
 
-# Run the generated executable
+# Run it on 4 worker threads
 $ ./reach_bin -w 4
 ```
 
-Key flags:
-
-- `-F reach` points the compiler at the directory holding `Source.csv` and `Arc.csv`.
-- `-o reach_bin` names the output executable.
-- `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
-- `-w 4` tells the generated executable to use 4 worker threads.
-
 ## Testing
 
-See [`tests/README.md`](tests/README.md) for the per-suite contracts and recipes.
+See [`tests/README.md`](tests/README.md) for per-suite contracts and recipes.
 
 ## Background Reading
 
@@ -145,4 +142,4 @@ See [`tests/README.md`](tests/README.md) for the per-suite contracts and recipes
 
 ## Contributing
 
-Contributions and bug reports are welcome. Open an issue or submit a pull request — PRs must pass CI before merge.
+Issues and pull requests are welcome. PRs must pass CI before merge.
