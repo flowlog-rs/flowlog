@@ -113,11 +113,22 @@ impl CodeGen {
         current.extend(recursive_bindings.clone());
 
         // --- Rule transformations -------------------------------------------
+        // Per-block semantic arrangement cache: idents created here live inside
+        // this `iterative(|inner| …)` closure, so sharing must be scoped to the
+        // block (a fresh map per recursive scope, never shared across blocks).
+        let mut recursive_sem_arranged: HashMap<u64, (Ident, Ident)> = HashMap::new();
         let flow_stmts: Vec<TokenStream> = stratum
             .recursive_transformations()
             .iter()
             .map(|tx| {
-                self.gen_transformation(&current, tx, &mut recursive_arranged, stratum, profiler)
+                self.gen_transformation(
+                    &current,
+                    tx,
+                    &mut recursive_arranged,
+                    &mut recursive_sem_arranged,
+                    stratum,
+                    profiler,
+                )
             })
             .collect::<Result<_, _>>()?;
 

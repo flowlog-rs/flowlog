@@ -17,8 +17,47 @@ use crate::codegen::arg::{
 };
 use crate::codegen::ident::find_local_ident;
 use crate::codegen::{CodeGen, CodegenError, data_type_tokens};
+use crate::common::compute_fp;
 use crate::planner::{StratumPlanner, Transformation};
 use crate::profiler::{Profiler, with_profiler};
+
+/// Canonical content key for arrangement sharing.
+///
+/// Returns a fingerprint of the exact generated `build` tokens — with the
+/// output ident neutralized — plus whether the arrangement is key-only. Two
+/// transformations collide on this key iff they emit byte-identical code, which
+/// is exactly when their collections (and the arranged traces built from them)
+/// are identical, so sharing on a collision is always sound.
+///
+/// Why hash the *rendered code* rather than `(input_fp, flow, is_k_only)`:
+/// codegen is the canonical normal form of a `TransformationFlow`. Two flows
+/// that differ only in codegen-irrelevant ways (e.g. the order of `compares` /
+/// `fn_call_preds` `Vec`s) render to the same code but hash differently, so a
+/// key over `flow` *over-splits* and misses content-identical arrangements
+/// reached via different rule paths. Hashing the code collapses exactly those.
+///
+/// Type safety: input idents derive from input fingerprints, each naming one
+/// typed collection, so identical code implies identical input types — there is
+/// no risk of merging e.g. a `Spur`-keyed arrangement with an `i32`-keyed one.
+///
+/// Normalization contract: `out` is the only output-fingerprint-derived ident
+/// appearing in `build` (it is the let-binding target, and the only such ident
+/// on any RHS — including the dedup re-binding `let out = out …`). It is
+/// replaced by a placeholder via exact token match: `proc_macro2`'s
+/// `to_string()` space-separates tokens, so matching whole tokens (never
+/// substrings) avoids corrupting idents that share a digit prefix. If codegen
+/// ever embeds another output-derived ident in `build`, extend this to
+/// neutralize it too, or content-identical arrangements will silently un-share.
+fn arrangement_share_key(out: &Ident, only_key: bool, build: &TokenStream) -> u64 {
+    let out_str = out.to_string();
+    let normalized = build
+        .to_string()
+        .split_whitespace()
+        .map(|tok| if tok == out_str { "OUT" } else { tok })
+        .collect::<Vec<_>>()
+        .join(" ");
+    compute_fp((normalized, only_key))
+}
 
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.
@@ -31,6 +70,7 @@ impl CodeGen {
         local_fp_to_ident: &HashMap<u64, Ident>,
         transformation: &Transformation,
         arranged_map: &mut HashMap<u64, Ident>,
+        sem_cache: &mut HashMap<u64, (Ident, Ident)>,
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<TokenStream, CodegenError> {
@@ -213,18 +253,16 @@ impl CodeGen {
                         .flat_map(|#row_pat: #row_ty| { #flat_map_body });
                 };
 
-                // Arrangement registration
-                let arrange_stmt = self.register_arrangement(
+                // Share the arrangement when an identical-content one already
+                // exists in scope; otherwise emit the projection + arrange.
+                Ok(self.emit_shared_arrangement(
                     arranged_map,
+                    sem_cache,
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
-                );
-
-                Ok(quote! {
-                    #transformation
-                    #arrange_stmt
-                })
+                    transformation,
+                ))
             }
 
             // KV -> Row
@@ -361,18 +399,14 @@ impl CodeGen {
                     #out_dedup_expr
                 };
 
-                // Arrangement registration
-                let arrange_stmt = self.register_arrangement(
+                Ok(self.emit_shared_arrangement(
                     arranged_map,
+                    sem_cache,
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
-                );
-
-                Ok(quote! {
-                    #transformation
-                    #arrange_stmt
-                })
+                    transformation,
+                ))
             }
 
             // Join: Key-value ⋈ Key-value -> Row
@@ -501,17 +535,14 @@ impl CodeGen {
                         .join_core(#r.clone(), |#jn_k, #jn_lv, #jn_rv| { #join_body });
                 };
 
-                let arrange_stmt = self.register_arrangement(
+                Ok(self.emit_shared_arrangement(
                     arranged_map,
+                    sem_cache,
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
-                );
-
-                Ok(quote! {
-                    #transformation
-                    #arrange_stmt
-                })
+                    transformation,
+                ))
             }
 
             // Antijoin: Key-value ¬ Key-only to Row
@@ -657,17 +688,14 @@ impl CodeGen {
                             #final_normalize;
                 };
 
-                let arrange_stmt = self.register_arrangement(
+                Ok(self.emit_shared_arrangement(
                     arranged_map,
+                    sem_cache,
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
-                );
-
-                Ok(quote! {
-                    #transformation
-                    #arrange_stmt
-                })
+                    transformation,
+                ))
             }
         }
     }
@@ -712,21 +740,48 @@ impl CodeGen {
         (pos, neg)
     }
 
-    fn register_arrangement(
+    /// Emit a projected/joined collection together with its arrangement,
+    /// sharing the sorted trace whenever a content-identical arrangement already
+    /// exists in this scope.
+    ///
+    /// The share key is a fingerprint of the *exact generated build tokens*
+    /// (with the output ident neutralized) plus whether the arrangement is
+    /// key-only — see [`arrangement_share_key`]. Two transformations share iff
+    /// they emit byte-identical code, which is precisely the condition under
+    /// which their collections (and arranged traces) are identical. This is
+    /// tighter than the planner's lineage fingerprint *and* than an
+    /// input+flow fingerprint (both over-split content-identical arrangements
+    /// reached via different rule paths). On a hit the duplicate projection is
+    /// **not** recomputed: `out` is aliased to the canonical collection (a cheap
+    /// dataflow-handle clone) and its fingerprint is pointed at the shared trace
+    /// (join sites `.clone()` the refcounted arrangement handle). On a miss the
+    /// `build` tokens are emitted, the collection is arranged, and both idents
+    /// are recorded as the canonical for this key.
+    fn emit_shared_arrangement(
         &mut self,
         arranged_map: &mut HashMap<u64, Ident>,
+        sem_cache: &mut HashMap<u64, (Ident, Ident)>,
         fingerprint: u64,
-        collection_ident: &Ident,
+        out: &Ident,
         only_key: bool,
+        build: TokenStream,
     ) -> TokenStream {
-        let arrangement_ident = format_ident!("{}_arr", collection_ident);
-        arranged_map.insert(fingerprint, arrangement_ident.clone());
-
-        if only_key {
-            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_self(); }
-        } else {
-            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_key(); }
+        let share_key = arrangement_share_key(out, only_key, &build);
+        if let Some((canon_coll, canon_arr)) = sem_cache.get(&share_key).cloned() {
+            arranged_map.insert(fingerprint, canon_arr);
+            return quote! { let #out = #canon_coll.clone(); };
         }
+
+        let arr_ident = format_ident!("{}_arr", out);
+        arranged_map.insert(fingerprint, arr_ident.clone());
+        sem_cache.insert(share_key, (out.clone(), arr_ident.clone()));
+
+        let arrange = if only_key {
+            quote! { let #arr_ident = #out.clone().arrange_by_self(); }
+        } else {
+            quote! { let #arr_ident = #out.clone().arrange_by_key(); }
+        };
+        quote! { #build #arrange }
     }
 }
 

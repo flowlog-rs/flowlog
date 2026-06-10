@@ -40,18 +40,21 @@ impl CodeGen {
         let mut flows = Vec::new();
         let global_fp_to_ident = self.global_fp_to_ident.clone();
         let mut outer_arranged = mem::take(&mut self.outer_arranged);
+        let mut outer_sem_arranged = mem::take(&mut self.outer_sem_arranged);
 
         for transformation in stratum.non_recursive_transformations() {
             flows.push(self.gen_transformation(
                 &global_fp_to_ident,
                 transformation,
                 &mut outer_arranged,
+                &mut outer_sem_arranged,
                 stratum,
                 profiler,
             )?);
         }
 
         self.outer_arranged = outer_arranged;
+        self.outer_sem_arranged = outer_sem_arranged;
 
         trace!("Generated static flows:\n{}\n", quote! { #(#flows)* });
         Ok(flows)

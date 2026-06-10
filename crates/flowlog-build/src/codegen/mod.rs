@@ -58,6 +58,14 @@ pub struct CodeGen {
     /// across strata so a later stratum can reuse an arrangement built by an
     /// earlier stratum's prelude. Reset at the start of every `generate`.
     pub(crate) outer_arranged: HashMap<u64, Ident>,
+
+    /// Semantic arrangement cache for the non-recursive (outer) scope:
+    /// content `share_key` → `(collection_ident, arr_ident)` of the canonical
+    /// arrangement. Two transformations producing identical content reuse the
+    /// canonical's projected collection and sorted trace instead of rebuilding
+    /// them, even when their lineage-bearing output fingerprints differ. Same
+    /// lifetime as `outer_arranged`.
+    pub(crate) outer_sem_arranged: HashMap<u64, (Ident, Ident)>,
 }
 
 impl CodeGen {
@@ -69,6 +77,7 @@ impl CodeGen {
             global_fp_to_type: HashMap::new(),
             features: Features::default(),
             outer_arranged: HashMap::new(),
+            outer_sem_arranged: HashMap::new(),
         };
         cg.make_global_data_type_map();
         cg
@@ -87,6 +96,7 @@ impl CodeGen {
         self.make_global_ident_map();
         self.features.reset();
         self.outer_arranged.clear();
+        self.outer_sem_arranged.clear();
         self.collect_parts(program_planner.strata(), profiler)
     }
 }
