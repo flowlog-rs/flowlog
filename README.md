@@ -123,16 +123,16 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 
 A green oracle run is the definition of correct — see [`tests/README.md`](tests/README.md) for per-suite contracts and recipes.
 
-### FlowLog vs Soufflé — DOOP context-insensitive
+### FlowLog vs Soufflé — DOOP points-to
 
-An apple-to-apple comparison on the DOOP `context-insensitive` points-to analysis across 19 [DaCapo](https://www.dacapobench.org/) programs. Both engines run on **32 threads** (FlowLog `-w 32`; Soufflé compiled and run with `-j 32`) over the **same left-to-right join order** — Soufflé's `.plan` hints stripped and auto-scheduling off — so the numbers reflect the engine, not an optimiser. All 19 programs produce identical results.
+An apple-to-apple comparison on the DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo](https://www.dacapobench.org/) programs. Both engines run on **32 threads** (FlowLog `-w 32`; Soufflé compiled and run with `-j 32`) over identical tab-delimited facts. The Soufflé program is the *same* `default.dl` with only type-keyword renames (`:string`→`:symbol`, `:int32`→`:number`) — identical rules and written join order, so the numbers reflect the engine. All 20 programs produce **identical VarPointsTo**.
 
 ![DOOP run time — FlowLog vs Soufflé](docs/doop-time.png)
 
 ![DOOP peak memory — FlowLog vs Soufflé](docs/doop-memory.png)
 
-- **Run time** (FlowLog's one-off compile excluded) — FlowLog faster on 17/19, geomean **1.95×** (range 0.56–4.75×).
-- **Peak memory** — Soufflé/FlowLog geomean **0.73×**: Soufflé is leaner on light apps, FlowLog on the densest (h2o, batik).
+- **Run time** (run only; one-off compile excluded) — FlowLog faster on **20/20**, geomean **1.95×** (range 1.41–3.27×).
+- **Peak memory** — Soufflé is leaner: Soufflé/FlowLog geomean **0.42×** (FlowLog trades memory for speed).
 
 Full methodology and per-program numbers live in [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
 
