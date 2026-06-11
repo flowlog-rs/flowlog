@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::parser::{Atom, FlowLogRule, Predicate};
-use crate::planner::{Transformation, TransformationInfo};
+use crate::planner::{PlanError, Transformation, TransformationInfo};
 
 mod common; // small utilities shared by planner phases
 mod core; // core join, plus fixed-point of semijoin/pushdown and projection removal
@@ -73,6 +73,75 @@ impl RulePlanner {
     #[inline]
     pub(crate) fn rule(&self) -> &FlowLogRule {
         &self.rule
+    }
+
+    /// Rehash all transformation fingerprints to canonical, content-based
+    /// values.
+    ///
+    /// Lineage fingerprints hash rule-local atom positions (`rhs_id`), so the
+    /// same collection consumed the same way in two differently-shaped rules
+    /// hashes apart and defeats every fingerprint-keyed sharing layer. After
+    /// this pass, fingerprint equality means content equality: the canonical
+    /// hash is a pure function of content, so identical chains in other rules
+    /// (or other strata) arrive at identical fingerprints with no
+    /// coordination, and the existing dedup/prune/codegen machinery shares
+    /// them with no further changes. Layouts keep their `rhs_id`s — only the
+    /// fingerprints change.
+    ///
+    /// Two phases, so the planner is never left half-rewritten:
+    /// 1. Read-only walk in transformation order (producers precede
+    ///    consumers) computing `old → canonical` for every output, resolving
+    ///    each info's inputs through the map built so far. A consumed
+    ///    fingerprint that some info produces but is not yet mapped is a
+    ///    forward reference — error out before mutating anything, as it
+    ///    would otherwise leave a dangling (stale) input fingerprint.
+    /// 2. Mechanical substitution of every fingerprint field through the
+    ///    completed map; relation leaves pass through unchanged.
+    ///
+    /// Does NOT consult `producer_consumer`: that map is last rebuilt during
+    /// fuse and `post` re-fingerprints the head-aligning transformations
+    /// afterwards without maintaining it, so its keys are stale by now.
+    pub(crate) fn rehash_fingerprints(&mut self) -> Result<(), PlanError> {
+        let produced: HashSet<u64> = self
+            .transformation_infos
+            .iter()
+            .map(TransformationInfo::output_info_fp)
+            .collect();
+
+        // Phase 1: pure bottom-up canonical computation + forward-ref check.
+        let mut remap: HashMap<u64, u64> = HashMap::new();
+        for info in &self.transformation_infos {
+            let (left, right) = info.input_info_fp();
+            for fp in std::iter::once(left).chain(right) {
+                if produced.contains(&fp) && !remap.contains_key(&fp) {
+                    return Err(PlanError::internal(format!(
+                        "rehash_fingerprints: rule `{}` consumes 0x{fp:016x} \
+                         before its producer (non-topological transformation \
+                         order)",
+                        self.rule
+                    )));
+                }
+            }
+            remap.insert(info.output_info_fp(), info.canonical_fp(&remap));
+        }
+
+        // Phase 2: substitute every fingerprint through the completed map.
+        for info in self.transformation_infos.iter_mut() {
+            info.remap_fps(&remap);
+        }
+
+        // Self-consistency (debug): the stored fingerprint must remain
+        // reproducible from the info's current fields — inputs are canonical
+        // now, so an identity resolve must yield the stored value. Catches
+        // any later phase clobbering a canonical fp with the lineage formula
+        // (`update_output_fake_sig`).
+        debug_assert!(
+            self.transformation_infos
+                .iter()
+                .all(|info| info.canonical_fp(&HashMap::new()) == info.output_info_fp()),
+            "rehash_fingerprints: canonical fingerprint not reproducible from final state"
+        );
+        Ok(())
     }
 }
 

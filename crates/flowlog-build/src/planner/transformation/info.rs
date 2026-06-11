@@ -12,6 +12,7 @@
 //! replaced with real ones once they are known. This allows building
 //! a transformation plan before all details are finalized.
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::catalog::{
@@ -21,6 +22,7 @@ use crate::catalog::{
 use crate::common::compute_fp;
 use crate::parser::ConstType;
 
+use super::Transformation;
 use crate::planner::{Collection, PlanError};
 
 /// Key/Value layout of a collection: which positions form the key-value.
@@ -706,6 +708,12 @@ impl TransformationInfo {
     /// Recompute the (fake) output fingerprint using the current resolved fields.
     ///
     /// Call this after all relevant inputs/layouts/constraints are up-to-date.
+    ///
+    /// Pre-rehash only: this computes the *lineage* fingerprint (hashes the
+    /// rule-coordinate layouts, including `rhs_id`s). Calling it after
+    /// `RulePlanner::rehash_fingerprints` would clobber the canonical
+    /// (content-based) fingerprint and silently break sharing — the debug
+    /// assertion at the end of the rehash guards against that.
     pub(crate) fn update_output_fake_sig(&mut self) {
         match self {
             Self::KVToKV {
@@ -769,6 +777,92 @@ impl TransformationInfo {
                     right_input_kv_layout,
                     output_kv_layout,
                 ));
+            }
+        }
+    }
+}
+
+// ========================
+// Canonical rehash (content-based fingerprints)
+// ========================
+impl TransformationInfo {
+    /// Lower this info through the real materialization constructors. The
+    /// canonical identity below hashes this form, so "equal key" means
+    /// "materializes to the same operator" by construction — any future
+    /// change to the constructors is reflected in the key automatically.
+    fn materialize(&self) -> Transformation {
+        match self {
+            Self::KVToKV { .. } => Transformation::kv_to_kv(self),
+            Self::JoinToKV { .. } => Transformation::join(self),
+            Self::AntiJoinToKV { .. } => Transformation::antijoin(self),
+        }
+    }
+
+    /// Canonical (content-based) output fingerprint: the materialized
+    /// operator (variant + positional flow) over the input fingerprints
+    /// resolved through `remap`. Pure — does not mutate `self`.
+    ///
+    /// The positional flow is the load-bearing piece: lowering erases the
+    /// rule-local atom coordinates (`AtomArgumentSignature`'s `rhs_id`) that
+    /// the lineage fingerprint hashes — while *preserving* the
+    /// occurrence→output-slot pairing that `rhs_id` also carries (hashing
+    /// layouts with `rhs_id` merely blinded merges swapped-column rules; see
+    /// `swapped_output_columns_stay_distinct`). Layouts keep their `rhs_id`s
+    /// for inspection — only fingerprints change.
+    pub(crate) fn canonical_fp(&self, remap: &HashMap<u64, u64>) -> u64 {
+        let tx = self.materialize();
+        let inputs: Vec<u64> = tx
+            .input_fingerprints()
+            .into_iter()
+            .map(|fp| remap.get(&fp).copied().unwrap_or(fp))
+            .collect();
+        compute_fp(("canonical", tx.operation_name(), inputs, tx.flow()))
+    }
+
+    /// True when two infos materialize to the same operator over the same
+    /// inputs. Debug guard for `deduplicate_transformation_infos`: equal
+    /// fingerprints must never cover different content (would indicate the
+    /// canonical hash is under-specified, or a 64-bit collision).
+    pub(crate) fn content_eq(&self, other: &Self) -> bool {
+        let (a, b) = (self.materialize(), other.materialize());
+        a.operation_name() == b.operation_name()
+            && a.input_fingerprints() == b.input_fingerprints()
+            && a.flow() == b.flow()
+    }
+
+    /// Substitute every fingerprint field — inputs and output uniformly —
+    /// through `remap`; fingerprints absent from the map (relation leaves)
+    /// pass through unchanged. The mechanical half of the two-phase rehash.
+    pub(crate) fn remap_fps(&mut self, remap: &HashMap<u64, u64>) {
+        let resolve = |fp: &mut u64| {
+            if let Some(&canon) = remap.get(fp) {
+                *fp = canon;
+            }
+        };
+        match self {
+            Self::KVToKV {
+                input_info_fp,
+                output_info_fp,
+                ..
+            } => {
+                resolve(input_info_fp);
+                resolve(output_info_fp);
+            }
+            Self::JoinToKV {
+                left_input_info_fp,
+                right_input_info_fp,
+                output_info_fp,
+                ..
+            }
+            | Self::AntiJoinToKV {
+                left_input_info_fp,
+                right_input_info_fp,
+                output_info_fp,
+                ..
+            } => {
+                resolve(left_input_info_fp);
+                resolve(right_input_info_fp);
+                resolve(output_info_fp);
             }
         }
     }

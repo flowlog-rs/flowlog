@@ -173,4 +173,84 @@ mod tests {
             "expected 8 non-recursive transformations after prune"
         );
     }
+
+    /// `P` and `Q` join the same relations on the same key but emit the
+    /// columns in swapped order: `P = (R.a, S.b)`, `Q = (S.a, R.b)`. Their
+    /// final transformations differ only in output-column *pairing* — every
+    /// signature multiset is identical. A fingerprint blind to that pairing
+    /// merges them and Q silently becomes P (wrong results). The two rules'
+    /// head fingerprints must therefore stay distinct.
+    const SWAPPED_COLUMNS_SRC: &str = "\
+        .decl R(k: int32, v: int32)\n\
+        .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+        .decl S(k: int32, v: int32)\n\
+        .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+        .decl P(a: int32, b: int32)\n\
+        .printsize P\n\
+        .decl Q(a: int32, b: int32)\n\
+        .printsize Q\n\
+        P(a, b) :- R(k, a), S(k, b).\n\
+        Q(a, b) :- R(k, b), S(k, a).\n";
+
+    /// Both rules consume `Edge` keyed on its first column, but `Edge` sits
+    /// at a different body position (2nd atom in `Reach`, 1st in `Step`), so
+    /// the lineage fingerprints differ (`rhs_id`) while the positional flows
+    /// are identical. The canonical rehash makes the fingerprints collide and
+    /// the stratum dedup shares the premap instead of building it twice.
+    const SLOT_POSITION_SRC: &str = "\
+        .decl Seed(x: int32)\n\
+        .input Seed(IO=\"file\", filename=\"Seed.csv\", delimiter=\",\")\n\
+        .decl Live(x: int32)\n\
+        .input Live(IO=\"file\", filename=\"Live.csv\", delimiter=\",\")\n\
+        .decl Edge(x: int32, y: int32)\n\
+        .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+        .decl Reach(x: int32, y: int32)\n\
+        .printsize Reach\n\
+        .decl Step(x: int32, y: int32)\n\
+        .printsize Step\n\
+        Reach(x, y) :- Seed(x), Edge(x, y).\n\
+        Step(x, y) :- Edge(x, y), Live(x).\n";
+
+    #[test]
+    fn canonical_rehash_shares_slot_position_duplicates() {
+        let pp = analyze(SLOT_POSITION_SRC);
+
+        // Content-optimality: no two surviving transformations in the program
+        // describe the same operator over the same inputs. Without the
+        // canonical rehash this fails — each rule builds its own `Edge`
+        // premap with a distinct lineage fingerprint but identical content.
+        let mut seen = std::collections::HashSet::new();
+        for stratum in pp.strata() {
+            for t in stratum
+                .non_recursive_transformations()
+                .iter()
+                .chain(stratum.recursive_transformations())
+            {
+                assert!(
+                    seen.insert((t.input_fingerprints(), t.flow(), t.operation_name())),
+                    "content-identical transformations were not shared:\n{t}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn swapped_output_columns_stay_distinct() {
+        let pp = analyze(SWAPPED_COLUMNS_SRC);
+
+        let mut head_fps: Vec<u64> = Vec::new();
+        for stratum in pp.strata() {
+            for fps in stratum.idb_to_heads_map().values() {
+                head_fps.extend(fps);
+            }
+        }
+        head_fps.sort_unstable();
+        head_fps.dedup();
+        assert_eq!(
+            head_fps.len(),
+            2,
+            "P and Q compute different relations but share a head fingerprint \
+             — the fingerprint is blind to output-column pairing (miscompile)"
+        );
+    }
 }

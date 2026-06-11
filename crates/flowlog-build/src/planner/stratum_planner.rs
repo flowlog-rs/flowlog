@@ -149,6 +149,22 @@ impl StratumPlanner {
             planner.post(catalog)?;
         }
 
+        // Phase 5.5: Canonical fingerprint rehash
+        // Lineage fingerprints encode rule-local atom positions (`rhs_id`),
+        // so content-identical transformations from differently-shaped rules
+        // hash apart and defeat sharing. Rehash every fingerprint bottom-up
+        // into a content-based value (the materialized operator over resolved
+        // inputs). The hash is a pure function of content, so per-rule walks
+        // need no coordination: equal content collides across rules and
+        // strata automatically, and the profiler below, the dedup in
+        // `materialize_transformations`, the cross-stratum prune, and
+        // codegen's fp-keyed arrangement reuse all share with no further
+        // changes. Must run after `post` (the last lineage-fingerprint
+        // mutation) and before any fingerprint reader.
+        for planner in rule_planners.iter_mut() {
+            planner.rehash_fingerprints()?;
+        }
+
         // Debug info for per-rule plan trees
         rule_planners.iter().for_each(|rp| {
             debug!("{}", rp);
@@ -385,14 +401,31 @@ impl StratumPlanner {
 
     /// Flatten and deduplicate transformation infos from all rules.
     /// Returns references to unique transformation infos (first occurrence wins).
+    ///
+    /// Fingerprints are canonical (content-based) after the Phase 5.5 rehash,
+    /// so this collapses content-identical transformations across rules even
+    /// when their rule shapes differ. The debug guard asserts the rehash's
+    /// soundness contract: equal fingerprint implies equal content.
     fn deduplicate_transformation_infos(&self) -> Vec<&TransformationInfo> {
-        let mut seen = HashSet::new();
+        use std::collections::hash_map::Entry;
+
+        let mut seen: HashMap<u64, &TransformationInfo> = HashMap::new();
         let mut unique_infos = Vec::new();
 
         for planner in &self.rule_planners {
             for info in planner.transformation_infos() {
-                if seen.insert(info) {
-                    unique_infos.push(info);
+                match seen.entry(info.output_info_fp()) {
+                    Entry::Vacant(slot) => {
+                        slot.insert(info);
+                        unique_infos.push(info);
+                    }
+                    Entry::Occupied(slot) => debug_assert!(
+                        info.content_eq(slot.get()),
+                        "fingerprint 0x{:016x} covers two different transformations:\n{}\nvs\n{}",
+                        info.output_info_fp(),
+                        info,
+                        slot.get(),
+                    ),
                 }
             }
         }
