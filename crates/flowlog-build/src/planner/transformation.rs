@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tracing::trace;
 
 use crate::catalog::JoinPredicates;
+use crate::common::compute_fp;
 use crate::planner::Collection;
 
 mod flow;
@@ -168,6 +169,51 @@ impl Transformation {
             | Self::NJnToRow { flow, .. }
             | Self::NJnToKv { flow, .. } => flow,
         }
+    }
+
+    /// Rule-independent identity of the *arrangement* this transformation's
+    /// output builds, given the canonical arrangement keys of its inputs
+    /// (`input_keys`, in `input_fingerprints()` order). This is the cross-rule
+    /// arrangement-sharing decision, and it lives in the planner: two
+    /// transformations with the same key index byte-identical data the same
+    /// way, so a single physical `arrange_by_*` can serve both.
+    ///
+    /// The key is rule-independent by construction. The flow is *positional* —
+    /// its arguments reference input key/value *positions*, never rule-local
+    /// atom signatures (`rhs_id`) — and `input_keys` identify the source data.
+    /// So two rules that re-key the same source the same way produce the same
+    /// key, even though their collection fingerprints (which embed rule-local
+    /// signatures) differ.
+    ///
+    /// Feeding *canonical* input keys (rather than raw input fingerprints)
+    /// makes sharing transitive: a join over two already-shared inputs shares
+    /// with another join over the same shared inputs. The arrange kind
+    /// (`is_k_only` → `arrange_by_self` vs `arrange_by_key`) is included so
+    /// key-only and keyed arrangements never collide.
+    ///
+    /// The flow contributes its [content key](TransformationFlow::arrangement_content_key),
+    /// which hashes conjunctive filters order-independently — so arrangements
+    /// that differ only in the textual order of `compares`/`fn_call_preds`
+    /// still share. Crucially, the *key/value layout positions stay ordered*,
+    /// so a self-join's two differently-keyed projections of one relation keep
+    /// distinct keys and are never fused (the soundness boundary).
+    pub(crate) fn arrangement_key(&self, input_keys: &[u64]) -> u64 {
+        compute_fp((
+            "arrangement_v1",
+            input_keys,
+            self.flow().arrangement_content_key(),
+            self.output().is_k_only(),
+        ))
+    }
+
+    /// Whether codegen materializes this transformation's output as an
+    /// arrangement (the KV-output variants). Only these participate in
+    /// arrangement sharing; row outputs are never arranged.
+    pub(crate) fn produces_arrangement(&self) -> bool {
+        matches!(
+            self,
+            Self::RowToKv { .. } | Self::KvToKv { .. } | Self::JnToKv { .. } | Self::NJnToKv { .. }
+        )
     }
 
     /// Return the transformation operation name.
@@ -427,5 +473,130 @@ impl fmt::Display for Transformation {
         }
         writeln!(f, "    Flow : {}", self.flow())?;
         writeln!(f, "    Out  : {}", self.output())
+    }
+}
+
+#[cfg(test)]
+mod arrangement_key_tests {
+    use super::*;
+    use crate::catalog::{
+        ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, KvPredicates,
+    };
+    use crate::parser::ComparisonOperator;
+
+    /// A leaf-style projection of a 2-column source relation `source_fp`,
+    /// re-keying it by `key_col` with `val_col` as value, with optional
+    /// comparison filters `(lcol, op, rcol)` over the source columns. `rhs_id`
+    /// is the source atom's (rule-local) position — varying it models the
+    /// *same* projection appearing in different rules. The same `rhs_id` is
+    /// used for the layout and the filters so they map to the same input
+    /// positions.
+    fn leaf_proj_filtered(
+        source_fp: u64,
+        rhs_id: usize,
+        key_col: usize,
+        val_col: usize,
+        filters: &[(usize, ComparisonOperator, usize)],
+    ) -> Transformation {
+        let sig = |arg| {
+            ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
+                AtomSignature::new(true, rhs_id),
+                arg,
+            ))
+        };
+        let input = KeyValueLayout::new(vec![], vec![sig(0), sig(1)]);
+        let output = KeyValueLayout::new(vec![sig(key_col)], vec![sig(val_col)]);
+        let compare_exprs = filters
+            .iter()
+            .map(|(l, op, r)| ComparisonExprPos::from_parts(sig(*l), op.clone(), sig(*r)))
+            .collect();
+        let predicates = KvPredicates {
+            compare_exprs,
+            ..KvPredicates::default()
+        };
+        let info = TransformationInfo::kv_to_kv(
+            source_fp,
+            "R".to_string(),
+            "pi".to_string(),
+            true,
+            input,
+            output,
+            predicates,
+        );
+        Transformation::kv_to_kv(&info)
+    }
+
+    /// A leaf projection with no filters.
+    fn leaf_proj(source_fp: u64, rhs_id: usize, key_col: usize, val_col: usize) -> Transformation {
+        leaf_proj_filtered(source_fp, rhs_id, key_col, val_col, &[])
+    }
+
+    /// The arrangement key is rule-independent: the same source re-keyed the
+    /// same way in two different rules (different rule-local `rhs_id`) yields
+    /// the same key, so codegen shares one physical arrangement. This is what
+    /// the per-collection fingerprint cannot do, since it embeds `rhs_id`.
+    ///
+    /// `input_keys` here is the source relation's fingerprint (a leaf has no
+    /// in-stratum producer), which is itself rule-independent.
+    #[test]
+    fn arrangement_key_is_rule_independent() {
+        let a = leaf_proj(100, 2, 0, 1);
+        let b = leaf_proj(100, 5, 0, 1);
+        // Sanity: the collection fingerprints *do* differ (rule-local sigs)…
+        assert_ne!(
+            a.output().fingerprint(),
+            b.output().fingerprint(),
+            "fingerprints should differ across rules (rule-local signatures)"
+        );
+        // …yet the arrangement key matches, enabling the share.
+        assert_eq!(
+            a.arrangement_key(&[100]),
+            b.arrangement_key(&[100]),
+            "same source + projection in different rules must share an arrangement key"
+        );
+    }
+
+    /// The key never over-shares: a different source relation or a different
+    /// key/value projection yields a different key.
+    #[test]
+    fn arrangement_key_distinguishes_real_differences() {
+        let base = leaf_proj(100, 2, 0, 1);
+        // Different source relation (different canonical input key).
+        assert_ne!(
+            base.arrangement_key(&[100]),
+            leaf_proj(200, 2, 0, 1).arrangement_key(&[200]),
+            "source relation must matter"
+        );
+        // Different key column (key on col1 instead of col0).
+        assert_ne!(
+            base.arrangement_key(&[100]),
+            leaf_proj(100, 2, 1, 0).arrangement_key(&[100]),
+            "key/value projection must matter"
+        );
+    }
+
+    /// Conjunctive filters commute, so two rules that apply the same filter set
+    /// in a different textual order build the same arrangement and must share
+    /// one key — but a *different* filter set must not. This is the extra
+    /// sharing a plain structural hash of the flow (which is order-sensitive)
+    /// leaves on the table.
+    #[test]
+    fn arrangement_key_ignores_filter_order() {
+        use ComparisonOperator::{GreaterThan, LessThan};
+        // Same two filters, opposite order, and in different rules (rhs_id).
+        let a = leaf_proj_filtered(100, 2, 0, 1, &[(0, LessThan, 1), (1, GreaterThan, 0)]);
+        let b = leaf_proj_filtered(100, 7, 0, 1, &[(1, GreaterThan, 0), (0, LessThan, 1)]);
+        assert_eq!(
+            a.arrangement_key(&[100]),
+            b.arrangement_key(&[100]),
+            "the same conjunctive filters in a different order must share an arrangement"
+        );
+        // A strictly different filter set must not collapse onto it.
+        let c = leaf_proj_filtered(100, 2, 0, 1, &[(0, LessThan, 1)]);
+        assert_ne!(
+            a.arrangement_key(&[100]),
+            c.arrangement_key(&[100]),
+            "a different filter set must not share an arrangement"
+        );
     }
 }

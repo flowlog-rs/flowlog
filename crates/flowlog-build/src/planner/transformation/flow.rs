@@ -15,6 +15,7 @@ use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, FnCallPredicatePos,
     JoinPredicates, KvPredicates,
 };
+use crate::common::compute_fp;
 use crate::parser::ConstType;
 use crate::planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
@@ -215,6 +216,36 @@ impl TransformationFlow {
             Self::KVToKV { fn_call_preds, .. } => fn_call_preds,
             Self::JnToKV { fn_call_preds, .. } => fn_call_preds,
         }
+    }
+
+    /// Content identity of the arrangement this flow builds, for cross-rule
+    /// arrangement sharing (see [`Transformation::arrangement_key`]).
+    ///
+    /// The output key/value position lists define the tuple layout, so they are
+    /// hashed in order. The `compares` and `fn_call_preds` lists are
+    /// *conjunctive filters* whose textual order does not affect the resulting
+    /// arrangement, so they are hashed as an order-independent multiset (sorted
+    /// by element fingerprint). This lets two rules that apply the same filters
+    /// in a different order share one arrangement — the redundancy a plain
+    /// structural hash of the flow leaves on the table.
+    pub(crate) fn arrangement_content_key(&self) -> u64 {
+        let mut compares: Vec<u64> = self.compares().iter().map(compute_fp).collect();
+        compares.sort_unstable();
+        let mut fn_call_preds: Vec<u64> = self.fn_call_preds().iter().map(compute_fp).collect();
+        fn_call_preds.sort_unstable();
+        let (tag, constraints_fp) = match self {
+            Self::KVToKV { constraints, .. } => ("kv_to_kv", compute_fp(constraints)),
+            Self::JnToKV { .. } => ("jn_to_kv", 0u64),
+        };
+        compute_fp((
+            "arrangement_flow_v1",
+            tag,
+            self.key(),
+            self.value(),
+            constraints_fp,
+            compares,
+            fn_call_preds,
+        ))
     }
 }
 

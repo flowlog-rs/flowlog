@@ -34,6 +34,15 @@ impl CodeGen {
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<TokenStream, CodegenError> {
+        // Arrangement sharing is decided in the planner. If this output's
+        // arrangement was marked a duplicate of an earlier one in this scope,
+        // resolve the canonical collection ident to clone instead of
+        // rebuilding the projection + sorted trace (see
+        // `ProgramPlanner::mark_shared_arrangements`).
+        let arr_alias = stratum
+            .arrangement_alias_of(transformation.output().fingerprint())
+            .map(|canon_fp| find_local_ident(local_fp_to_ident, canon_fp));
+
         // `atom_fps` decides *which* inputs are named atoms; the label
         // text comes from `display_name` (the user's spelling).
         let atom_fps = stratum.atom_fps();
@@ -213,18 +222,16 @@ impl CodeGen {
                         .flat_map(|#row_pat: #row_ty| { #flat_map_body });
                 };
 
-                // Arrangement registration
-                let arrange_stmt = self.register_arrangement(
+                // Arrangement registration (shares a byte-identical arrangement
+                // already built in this scope, if any).
+                Ok(self.register_arrangement(
                     arranged_map,
+                    arr_alias.as_ref(),
                     output.fingerprint(),
                     &out,
+                    transformation,
                     output.is_k_only(),
-                );
-
-                Ok(quote! {
-                    #transformation
-                    #arrange_stmt
-                })
+                ))
             }
 
             // KV -> Row
@@ -362,17 +369,14 @@ impl CodeGen {
                 };
 
                 // Arrangement registration
-                let arrange_stmt = self.register_arrangement(
+                Ok(self.register_arrangement(
                     arranged_map,
+                    arr_alias.as_ref(),
                     output.fingerprint(),
                     &out,
+                    transformation,
                     output.is_k_only(),
-                );
-
-                Ok(quote! {
-                    #transformation
-                    #arrange_stmt
-                })
+                ))
             }
 
             // Join: Key-value ⋈ Key-value -> Row
@@ -501,17 +505,14 @@ impl CodeGen {
                         .join_core(#r.clone(), |#jn_k, #jn_lv, #jn_rv| { #join_body });
                 };
 
-                let arrange_stmt = self.register_arrangement(
+                Ok(self.register_arrangement(
                     arranged_map,
+                    arr_alias.as_ref(),
                     output.fingerprint(),
                     &out,
+                    transformation,
                     output.is_k_only(),
-                );
-
-                Ok(quote! {
-                    #transformation
-                    #arrange_stmt
-                })
+                ))
             }
 
             // Antijoin: Key-value ¬ Key-only to Row
@@ -659,15 +660,14 @@ impl CodeGen {
 
                 let arrange_stmt = self.register_arrangement(
                     arranged_map,
+                    arr_alias.as_ref(),
                     output.fingerprint(),
                     &out,
+                    transformation,
                     output.is_k_only(),
                 );
 
-                Ok(quote! {
-                    #transformation
-                    #arrange_stmt
-                })
+                Ok(arrange_stmt)
             }
         }
     }
@@ -712,21 +712,43 @@ impl CodeGen {
         (pos, neg)
     }
 
+    /// Emit a collection plus its key/self arrangement, honoring the planner's
+    /// arrangement-sharing decision.
+    ///
+    /// `alias_canonical` is `Some(canonical_collection)` when the planner marked
+    /// this output's arrangement a duplicate of an earlier one in this scope
+    /// (see [`ProgramPlanner::mark_shared_arrangements`](crate::planner::ProgramPlanner)).
+    /// On an alias, the projection/join is **not** rebuilt: this ident is bound
+    /// to a cheap `clone()` of the canonical collection (so any direct,
+    /// non-arranged consumer still resolves) and its fingerprint is pointed at
+    /// the canonical's already-built sorted trace. Otherwise the collection is
+    /// built and arranged as the canonical for its key.
     fn register_arrangement(
         &mut self,
         arranged_map: &mut HashMap<u64, Ident>,
+        alias_canonical: Option<&Ident>,
         fingerprint: u64,
         collection_ident: &Ident,
+        transformation: TokenStream,
         only_key: bool,
     ) -> TokenStream {
+        if let Some(canonical) = alias_canonical {
+            // Planner marked this a duplicate: reuse the canonical collection's
+            // trace; bind this ident to a cheap clone of that collection.
+            let canonical_arrangement = format_ident!("{}_arr", canonical);
+            arranged_map.insert(fingerprint, canonical_arrangement);
+            return quote! { let #collection_ident = #canonical.clone(); };
+        }
+
         let arrangement_ident = format_ident!("{}_arr", collection_ident);
         arranged_map.insert(fingerprint, arrangement_ident.clone());
 
-        if only_key {
+        let arrange = if only_key {
             quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_self(); }
         } else {
             quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_key(); }
-        }
+        };
+        quote! { #transformation #arrange }
     }
 }
 

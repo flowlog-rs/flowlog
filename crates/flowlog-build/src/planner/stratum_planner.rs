@@ -31,6 +31,23 @@ pub struct StratumPlanner {
     /// Prefer `non_recursive_transformations` and `recursive_transformations` afterwards.
     transformations: Vec<Transformation>,
 
+    /// Output-fingerprint → canonical, rule-independent **arrangement key**.
+    /// Computed in topological order so the key is transitive (a join over
+    /// already-shared inputs shares with another join over the same shared
+    /// inputs). The whole-program planner turns these into `arrangement_alias`
+    /// marks; see [`Transformation::arrangement_key`].
+    arrangement_keys: HashMap<u64, u64>,
+
+    /// Output-fingerprint → **canonical** output-fingerprint, for every
+    /// arrangement-producing transformation whose arrangement is a duplicate of
+    /// an earlier one *in the same dataflow scope*. Populated by the
+    /// whole-program planner ([`ProgramPlanner::mark_shared_arrangements`]).
+    /// Codegen reads it directly: a marked output emits a cheap `.clone()` of
+    /// the canonical collection instead of rebuilding the projection + sorted
+    /// trace. Absence ⇒ this output is itself canonical. This is the entire
+    /// arrangement-sharing decision, resolved at plan time.
+    arrangement_alias: HashMap<u64, u64>,
+
     /// Transformations that depend only on EDB inputs; computed once.
     non_recursive_transformations: Vec<Transformation>,
 
@@ -189,6 +206,7 @@ impl StratumPlanner {
             ..Self::default()
         };
         stratum_planner.materialize_transformations();
+        stratum_planner.build_arrangement_keys();
 
         // Phase 7: Recursive split and metadata mappings
         // this phase to factoring optimizations
@@ -398,6 +416,55 @@ impl StratumPlanner {
         }
 
         unique_infos
+    }
+
+    /// Compute the canonical, rule-independent arrangement key for every
+    /// transformation output, in topological order.
+    ///
+    /// This is the cross-rule arrangement-sharing decision, owned entirely by
+    /// the planner. Each transformation's key is derived from the *canonical
+    /// keys of its inputs* (not their raw fingerprints), so sharing is
+    /// transitive: structurally-identical re-keying projections across rules
+    /// collapse to one key, and joins built over those shared inputs collapse
+    /// in turn. `self.transformations` is already in producer-before-consumer
+    /// order, so a single forward pass suffices. Inputs with no in-stratum
+    /// producer (EDBs, IDBs, recursion variables) fall back to their
+    /// fingerprint, which is itself rule-independent for declared relations.
+    fn build_arrangement_keys(&mut self) {
+        let mut keys: HashMap<u64, u64> = HashMap::with_capacity(self.transformations.len());
+        for transformation in &self.transformations {
+            let input_keys: Vec<u64> = transformation
+                .input_fingerprints()
+                .iter()
+                .map(|fp| keys.get(fp).copied().unwrap_or(*fp))
+                .collect();
+            let key = transformation.arrangement_key(&input_keys);
+            keys.insert(transformation.output().fingerprint(), key);
+        }
+        self.arrangement_keys = keys;
+    }
+
+    /// Canonical arrangement key for the collection with the given output
+    /// fingerprint. Falls back to the fingerprint itself for collections with
+    /// no recorded key (e.g. ones never arranged), keeping callers total.
+    pub(crate) fn arrangement_key(&self, output_fp: u64) -> u64 {
+        self.arrangement_keys
+            .get(&output_fp)
+            .copied()
+            .unwrap_or(output_fp)
+    }
+
+    /// Record the arrangement-sharing marks computed by the whole-program
+    /// planner (output fingerprint → canonical output fingerprint).
+    pub(crate) fn set_arrangement_alias(&mut self, alias: HashMap<u64, u64>) {
+        self.arrangement_alias = alias;
+    }
+
+    /// If this output's arrangement is a duplicate of an earlier one in the
+    /// same scope, the canonical output fingerprint it should reuse; otherwise
+    /// `None` (this output is canonical). Read by codegen.
+    pub(crate) fn arrangement_alias_of(&self, output_fp: u64) -> Option<u64> {
+        self.arrangement_alias.get(&output_fp).copied()
     }
 }
 

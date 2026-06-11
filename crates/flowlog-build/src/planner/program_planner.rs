@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use crate::common::{BoxError, Config};
 use crate::optimizer::Optimizer;
 use crate::parser::Program;
-use crate::planner::StratumPlanner;
+use crate::planner::{StratumPlanner, Transformation};
 use crate::profiler::Profiler;
 use crate::stratifier::Stratifier;
 
@@ -44,6 +44,7 @@ impl ProgramPlanner {
             })
             .collect::<Result<_, _>>()?;
         prune_cross_stratum_duplicates(&mut strata);
+        mark_shared_arrangements(&mut strata);
         Ok(Self { strata })
     }
 
@@ -101,6 +102,86 @@ fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
             }
             keep
         });
+    }
+}
+
+/// Mark each arrangement-producing transformation as either canonical or an
+/// alias of an earlier, content-identical one *in the same dataflow scope*.
+///
+/// This is the cross-rule arrangement-sharing decision, resolved entirely at
+/// plan time — a sibling of [`prune_cross_stratum_duplicates`], but keyed on
+/// the rule-independent [`arrangement_key`](crate::planner::Transformation::arrangement_key)
+/// rather than the lineage fingerprint, so it catches the same arrangement
+/// reached via differently-shaped rules (which carry distinct fingerprints).
+/// Codegen then merely renders the mark: canonical → build + `arrange_by_*`;
+/// alias → a cheap `clone()` of the canonical collection.
+///
+/// Scopes mirror codegen exactly, so the canonical is always emitted before
+/// its aliases:
+/// - **non-recursive** transformations share one program-wide outer scope, so
+///   they are deduplicated across strata in emission order (stratum, then
+///   in-stratum);
+/// - each stratum's **recursive** transformations share that stratum's
+///   `iterative` block, so they are deduplicated within the stratum.
+///
+/// Cross-scope reuse (an outer arrangement used inside recursion) is the
+/// separate `enter` mechanism and is intentionally not aliased here.
+fn mark_shared_arrangements(strata: &mut [StratumPlanner]) {
+    let mut aliases: Vec<HashMap<u64, u64>> = vec![HashMap::new(); strata.len()];
+
+    // Program-wide non-recursive (outer) scope: one canonical per key across
+    // all strata, in emission order (stratum, then in-stratum).
+    let mut outer_seen: HashMap<u64, u64> = HashMap::new();
+    for (idx, stratum) in strata.iter().enumerate() {
+        dedup_arrangements(
+            &mut outer_seen,
+            &mut aliases[idx],
+            stratum,
+            stratum.non_recursive_transformations(),
+        );
+    }
+
+    // Each stratum's recursive (iterative) scope is independent.
+    for (idx, stratum) in strata.iter().enumerate() {
+        let mut rec_seen: HashMap<u64, u64> = HashMap::new();
+        dedup_arrangements(
+            &mut rec_seen,
+            &mut aliases[idx],
+            stratum,
+            stratum.recursive_transformations(),
+        );
+    }
+
+    for (stratum, alias) in strata.iter_mut().zip(aliases) {
+        stratum.set_arrangement_alias(alias);
+    }
+}
+
+/// Within a single dataflow scope, mark each arrangement-producing
+/// transformation as either the canonical for its rule-independent arrangement
+/// key (first seen) or an alias of that canonical. `seen` maps an arrangement
+/// key to its canonical output fingerprint; `aliases` collects the
+/// `duplicate output fp → canonical output fp` marks codegen reads back.
+fn dedup_arrangements(
+    seen: &mut HashMap<u64, u64>,
+    aliases: &mut HashMap<u64, u64>,
+    stratum: &StratumPlanner,
+    transformations: &[Transformation],
+) {
+    use std::collections::hash_map::Entry;
+    for t in transformations {
+        if !t.produces_arrangement() {
+            continue;
+        }
+        let fp = t.output().fingerprint();
+        match seen.entry(stratum.arrangement_key(fp)) {
+            Entry::Occupied(canonical) => {
+                aliases.insert(fp, *canonical.get());
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(fp);
+            }
+        }
     }
 }
 
