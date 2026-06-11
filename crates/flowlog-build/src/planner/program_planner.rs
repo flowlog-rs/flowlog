@@ -120,7 +120,12 @@ fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
 /// its aliases:
 /// - **non-recursive** transformations share one program-wide outer scope, so
 ///   they are deduplicated across strata in emission order (stratum, then
-///   in-stratum);
+///   in-stratum) — but a *cross-stratum* reuse is additionally gated by the
+///   same transitive intervening-IDB-update check as
+///   [`prune_cross_stratum_duplicates`]: in extended mode a `fixpoint`/`loop`
+///   can rewrite an IDB between two strata, leaving an earlier arrangement
+///   stale, so the later one must not alias to it. (In `datalog-batch` no IDB
+///   is rewritten across strata, so this never blocks a share.);
 /// - each stratum's **recursive** transformations share that stratum's
 ///   `iterative` block, so they are deduplicated within the stratum.
 ///
@@ -129,16 +134,63 @@ fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
 fn mark_shared_arrangements(strata: &mut [StratumPlanner]) {
     let mut aliases: Vec<HashMap<u64, u64>> = vec![HashMap::new(); strata.len()];
 
-    // Program-wide non-recursive (outer) scope: one canonical per key across
-    // all strata, in emission order (stratum, then in-stratum).
-    let mut outer_seen: HashMap<u64, u64> = HashMap::new();
+    // Program-wide non-recursive (outer) scope: one canonical per arrangement
+    // key across all strata, in emission order (stratum, then in-stratum).
+    //
+    // A cross-stratum reuse is only sound while the canonical's value is still
+    // current at the alias's stratum. In extended mode a `fixpoint`/`loop` can
+    // rewrite an IDB between two strata, so we apply the same transitive
+    // intervening-update check as `prune_cross_stratum_duplicates`: reuse a
+    // canonical (emitted at `prev`) at stratum `idx` only if no IDB the
+    // arrangement transitively depends on was (re)written at a stratum `k` with
+    // `prev < k <= idx`. Otherwise the canonical is stale here and this
+    // transformation becomes the new canonical for the key going forward.
+    let mut idb_writes: HashMap<u64, Vec<usize>> = HashMap::new();
     for (idx, stratum) in strata.iter().enumerate() {
-        dedup_arrangements(
-            &mut outer_seen,
-            &mut aliases[idx],
-            stratum,
-            stratum.non_recursive_transformations(),
-        );
+        for fp in stratum.idb_to_heads_map().keys() {
+            idb_writes.entry(*fp).or_default().push(idx);
+        }
+    }
+    let mut idb_deps: HashMap<u64, HashSet<u64>> = idb_writes
+        .keys()
+        .map(|&fp| (fp, HashSet::from([fp])))
+        .collect();
+    // arrangement key → (canonical output fp, stratum it was emitted at)
+    let mut outer_seen: HashMap<u64, (u64, usize)> = HashMap::new();
+    for (idx, stratum) in strata.iter().enumerate() {
+        for t in stratum.non_recursive_transformations() {
+            // Transitive IDB-head deps of this output (mirrors prune); computed
+            // for every transformation so arrangement consumers resolve theirs.
+            let fp = t.output().fingerprint();
+            let t_deps: HashSet<u64> = t
+                .input_fingerprints()
+                .into_iter()
+                .filter_map(|f| idb_deps.get(&f))
+                .flatten()
+                .copied()
+                .collect();
+            idb_deps.entry(fp).or_default().extend(&t_deps);
+
+            if !t.produces_arrangement() {
+                continue;
+            }
+            let key = stratum.arrangement_key(fp);
+            match outer_seen.get(&key) {
+                Some(&(canonical_fp, prev)) => {
+                    let canonical_stale = t_deps
+                        .iter()
+                        .any(|idb| idb_writes[idb].iter().any(|&k| k > prev && k <= idx));
+                    if canonical_stale {
+                        outer_seen.insert(key, (fp, idx));
+                    } else {
+                        aliases[idx].insert(fp, canonical_fp);
+                    }
+                }
+                None => {
+                    outer_seen.insert(key, (fp, idx));
+                }
+            }
+        }
     }
 
     // Each stratum's recursive (iterative) scope is independent.
