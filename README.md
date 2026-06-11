@@ -121,7 +121,20 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 
 ## Testing
 
-See [`tests/README.md`](tests/README.md) for per-suite contracts and recipes.
+A green oracle run is the definition of correct — see [`tests/README.md`](tests/README.md) for per-suite contracts and recipes.
+
+### FlowLog vs Soufflé — DOOP context-insensitive
+
+An apple-to-apple comparison on the DOOP `context-insensitive` points-to analysis across 19 [DaCapo](https://www.dacapobench.org/) programs. Both engines run on **32 threads** (FlowLog `-w 32`; Soufflé compiled and run with `-j 32`) over the **same left-to-right join order** — Soufflé's `.plan` hints stripped and auto-scheduling off — so the numbers reflect the engine, not an optimiser. All 19 programs produce identical results.
+
+![DOOP run time — FlowLog vs Soufflé](docs/doop-time.png)
+
+![DOOP peak memory — FlowLog vs Soufflé](docs/doop-memory.png)
+
+- **Run time** (FlowLog's one-off compile excluded) — FlowLog faster on 17/19, geomean **1.95×** (range 0.56–4.75×).
+- **Peak memory** — Soufflé/FlowLog geomean **0.73×**: Soufflé is leaner on light apps, FlowLog on the densest (h2o, batik).
+
+Full methodology and per-program numbers live in [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
 
 ## Publication
 
