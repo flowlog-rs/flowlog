@@ -93,6 +93,18 @@ impl RulePlanner {
         for info in &mut self.transformation_infos {
             info.remap_fps(&remap);
         }
+
+        // Soundness invariant: every stored fingerprint must now be reproducible
+        // as the canonical fp of the info's own (already-canonical) fields. This
+        // is what makes "equal fingerprint ⇒ equal content" hold for the dedup
+        // downstream; it would fire if a later phase clobbered a canonical fp or
+        // left an input fp un-remapped.
+        debug_assert!(
+            self.transformation_infos
+                .iter()
+                .all(|info| info.canonical_fp(&HashMap::new()) == info.output_info_fp()),
+            "canonicalize_fingerprints: canonical fingerprint not reproducible from final state"
+        );
     }
 }
 

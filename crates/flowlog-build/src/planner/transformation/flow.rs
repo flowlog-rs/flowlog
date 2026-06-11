@@ -15,7 +15,7 @@ use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, FnCallPredicatePos,
     JoinPredicates, KvPredicates,
 };
-use crate::common::compute_fp;
+use crate::common::{compute_fp, compute_fp_unordered};
 use crate::parser::ConstType;
 use crate::planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
@@ -222,18 +222,26 @@ impl TransformationFlow {
     /// fingerprint canonicalization (see
     /// [`TransformationInfo::canonical_fp`](super::info::TransformationInfo::canonical_fp)).
     ///
-    /// Key/value lists are hashed *in order* — with the input fingerprints they
-    /// pin which input column lands in which output slot, so swapped-column
-    /// rules stay distinct. Conjunctive filters (`compares`, `fn_call_preds`)
-    /// are hashed as an order-independent multiset; the variant tag separates
-    /// unary from join flows.
+    /// Two halves, matching how the flow keeps vs. discards rows:
+    /// - **Positional layout** — the output `key`/`value` lists are hashed *in
+    ///   order*. With the input fingerprints they pin which input column lands
+    ///   in which output slot, so a self-join's two differently-keyed
+    ///   projections and swapped-column rules stay distinct.
+    /// - **Conjunctive filters** — `constraints` (equalities), `compares`, and
+    ///   `fn_call_preds` only drop rows, and `A ∧ B` keeps the same rows as
+    ///   `B ∧ A`, so each is hashed order-independently (the equality kinds via
+    ///   [`Constraints::content_key`], the others as sorted multisets). Two
+    ///   rules that state the same filters in a different order therefore share.
+    ///
+    /// The variant tag separates unary (`KVToKV`) from join (`JnToKV`) flows;
+    /// only the former carries equality constraints.
+    ///
+    /// [`Constraints::content_key`]: crate::planner::Constraints::content_key
     pub(crate) fn content_key(&self) -> u64 {
-        let mut compares: Vec<u64> = self.compares().iter().map(compute_fp).collect();
-        compares.sort_unstable();
-        let mut fn_call_preds: Vec<u64> = self.fn_call_preds().iter().map(compute_fp).collect();
-        fn_call_preds.sort_unstable();
+        let compares = compute_fp_unordered(self.compares());
+        let fn_call_preds = compute_fp_unordered(self.fn_call_preds());
         let (tag, constraints) = match self {
-            Self::KVToKV { constraints, .. } => ("kv_to_kv", compute_fp(constraints)),
+            Self::KVToKV { constraints, .. } => ("kv_to_kv", constraints.content_key()),
             Self::JnToKV { .. } => ("jn_to_kv", 0),
         };
         compute_fp((

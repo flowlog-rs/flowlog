@@ -31,6 +31,21 @@ pub(crate) fn compute_fp<T: Hash>(t: T) -> u64 {
     h.finish()
 }
 
+/// Order-independent fingerprint of a collection of hashable items: each item
+/// is fingerprinted, the fingerprints are sorted, then combined. Two
+/// collections that differ only in order produce the same value (duplicates are
+/// preserved, so this is a multiset). Used for conjunctive filters, whose
+/// textual order does not affect the rows they keep.
+pub(crate) fn compute_fp_unordered<I>(items: I) -> u64
+where
+    I: IntoIterator,
+    I::Item: Hash,
+{
+    let mut fps: Vec<u64> = items.into_iter().map(compute_fp).collect();
+    fps.sort_unstable();
+    compute_fp(fps)
+}
+
 /// Parse a `TokenStream` into a `syn::File` and pretty-print it via `prettyplease`.
 pub fn pretty_print(ts: proc_macro2::TokenStream) -> String {
     let ast: syn::File = syn::parse2(ts).expect("valid token stream");
