@@ -197,9 +197,22 @@ impl Transformation {
     /// still share. Crucially, the *key/value layout positions stay ordered*,
     /// so a self-join's two differently-keyed projections of one relation keep
     /// distinct keys and are never fused (the soundness boundary).
+    ///
+    /// The transformation's [`operation_name`](Self::operation_name) is mixed in
+    /// so that arrangements built by *different operators* can never alias, even
+    /// if they coincide on inputs and layout. This matters for the
+    /// join-vs-antijoin pair: both lower to a [`TransformationFlow::JnToKV`], so
+    /// the flow content key alone does not distinguish a semijoin
+    /// (`B(x,y), C(x)`) from an antijoin (`B(x,y), !C(x)`) over the same inputs
+    /// — yet they hold *complementary* data and must never share a trace. The
+    /// operator tag makes that distinction explicit rather than incidental.
+    /// (`Row`→KV vs `KV`→KV never coincide anyway: their inputs are different
+    /// collections, so this only ever *prevents* unsound shares, never sound
+    /// ones.)
     pub(crate) fn arrangement_key(&self, input_keys: &[u64]) -> u64 {
         compute_fp((
             "arrangement_v1",
+            self.operation_name(),
             input_keys,
             self.flow().arrangement_content_key(),
             self.output().is_k_only(),
