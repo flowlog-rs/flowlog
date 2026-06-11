@@ -15,7 +15,7 @@ use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, FnCallPredicatePos,
     JoinPredicates, KvPredicates,
 };
-use crate::common::compute_fp;
+use crate::common::{compute_fp, compute_fp_unordered};
 use crate::parser::ConstType;
 use crate::planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
@@ -221,20 +221,14 @@ impl TransformationFlow {
     /// Content identity of the arrangement this flow builds, for cross-rule
     /// arrangement sharing (see [`Transformation::arrangement_key`]).
     ///
-    /// The output key/value position lists define the tuple layout, so they are
-    /// hashed in order. The `compares` and `fn_call_preds` lists are
-    /// *conjunctive filters* whose textual order does not affect the resulting
-    /// arrangement, so they are hashed as an order-independent multiset (sorted
-    /// by element fingerprint). This lets two rules that apply the same filters
-    /// in a different order share one arrangement — the redundancy a plain
-    /// structural hash of the flow leaves on the table.
+    /// The output key/value positions define the tuple layout and are hashed in
+    /// order. The three conjunctive-filter sets — `constraints`, `compares`,
+    /// `fn_call_preds` — do not depend on textual order, so each is hashed
+    /// order-independently ([`compute_fp_unordered`] / [`Constraints::content_key`]),
+    /// letting two rules that apply the same filters in a different order share.
     pub(crate) fn arrangement_content_key(&self) -> u64 {
-        let mut compares: Vec<u64> = self.compares().iter().map(compute_fp).collect();
-        compares.sort_unstable();
-        let mut fn_call_preds: Vec<u64> = self.fn_call_preds().iter().map(compute_fp).collect();
-        fn_call_preds.sort_unstable();
         let (tag, constraints_fp) = match self {
-            Self::KVToKV { constraints, .. } => ("kv_to_kv", compute_fp(constraints)),
+            Self::KVToKV { constraints, .. } => ("kv_to_kv", constraints.content_key()),
             Self::JnToKV { .. } => ("jn_to_kv", 0u64),
         };
         compute_fp((
@@ -243,8 +237,8 @@ impl TransformationFlow {
             self.key(),
             self.value(),
             constraints_fp,
-            compares,
-            fn_call_preds,
+            compute_fp_unordered(self.compares().iter()),
+            compute_fp_unordered(self.fn_call_preds().iter()),
         ))
     }
 }

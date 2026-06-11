@@ -192,11 +192,12 @@ impl Transformation {
     /// key-only and keyed arrangements never collide.
     ///
     /// The flow contributes its [content key](TransformationFlow::arrangement_content_key),
-    /// which hashes conjunctive filters order-independently — so arrangements
-    /// that differ only in the textual order of `compares`/`fn_call_preds`
-    /// still share. Crucially, the *key/value layout positions stay ordered*,
-    /// so a self-join's two differently-keyed projections of one relation keep
-    /// distinct keys and are never fused (the soundness boundary).
+    /// which hashes the conjunctive filters (`constraints`, `compares`,
+    /// `fn_call_preds`) order-independently — so arrangements that differ only
+    /// in the textual order of their filters still share. Crucially, the
+    /// *key/value layout positions stay ordered*, so a self-join's two
+    /// differently-keyed projections of one relation keep distinct keys and are
+    /// never fused (the soundness boundary).
     ///
     /// The transformation's [`operation_name`](Self::operation_name) is mixed in
     /// so that arrangements built by *different operators* can never alias, even
