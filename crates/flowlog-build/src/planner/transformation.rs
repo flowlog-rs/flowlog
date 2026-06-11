@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use tracing::trace;
 
-use crate::catalog::JoinPredicates;
 use crate::planner::Collection;
 
 mod flow;
@@ -233,12 +232,7 @@ impl Transformation {
     /// - `KvToKv`: Key-value input → Key-value output (re-keying / re-structuring)
     pub(crate) fn kv_to_kv(info: &TransformationInfo) -> Self {
         trace!("Creating kv_to_kv transformation with info:\n{}", info);
-        // Create the transformation flow that defines how data moves through the operation
-        let flow = TransformationFlow::kv_to_kv(
-            info.input_kv_layout().0,
-            info.output_kv_layout(),
-            info.kv_predicates(),
-        );
+        let flow = info.flow();
 
         let input = Arc::new(Collection::new(
             info.input_info_fp().0,
@@ -297,13 +291,7 @@ impl Transformation {
     /// - `JnToRow`: Key-value ⋈ Key-value producing a flat row output
     /// - `JnToKv`:  Key-value ⋈ Key-value producing a key-value output
     pub(crate) fn join(info: &TransformationInfo) -> Self {
-        // Create transformation flow that defines how the join operation processes data
-        let flow = TransformationFlow::join_to_kv(
-            info.input_kv_layout().0,
-            info.input_kv_layout().1.unwrap(),
-            info.output_kv_layout(),
-            info.join_predicates(),
-        );
+        let flow = info.flow();
 
         let input = (
             Arc::new(Collection::new(
@@ -369,13 +357,7 @@ impl Transformation {
             "Planner error: antijoin - left collection must be key-only"
         );
 
-        // Create transformation flow (no comparison expressions for antijoins)
-        let flow = TransformationFlow::join_to_kv(
-            info.input_kv_layout().0,
-            info.input_kv_layout().1.unwrap(),
-            info.output_kv_layout(),
-            &JoinPredicates::default(), // No predicates for antijoins
-        );
+        let flow = info.flow();
 
         let input = (
             Arc::new(Collection::new(

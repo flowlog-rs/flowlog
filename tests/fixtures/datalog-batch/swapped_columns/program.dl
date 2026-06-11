@@ -1,0 +1,22 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : swapped_columns
+// Feature : arrangement sharing must NOT merge two joins that differ only in
+//           output-column order — the canonical fingerprint is positional.
+// Covers  : P and Q join the same relations on the same key but emit the two
+//           value columns in swapped order. If the shared-arrangement
+//           canonicalization were blind to the input→output-slot pairing it
+//           would fuse the two joins and Q would wrongly equal P.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl R(k: int32, v: int32)
+.input R(IO="file", filename="R.csv", delimiter=",")
+.decl S(k: int32, v: int32)
+.input S(IO="file", filename="S.csv", delimiter=",")
+
+.decl P(a: int32, b: int32)
+P(a, b) :- R(k, a), S(k, b).
+.output P
+
+.decl Q(a: int32, b: int32)
+Q(a, b) :- R(k, b), S(k, a).
+.output Q

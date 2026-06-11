@@ -12,6 +12,7 @@
 //! replaced with real ones once they are known. This allows building
 //! a transformation plan before all details are finalized.
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::catalog::{
@@ -21,6 +22,7 @@ use crate::catalog::{
 use crate::common::compute_fp;
 use crate::parser::ConstType;
 
+use super::TransformationFlow;
 use crate::planner::{Collection, PlanError};
 
 /// Key/Value layout of a collection: which positions form the key-value.
@@ -486,6 +488,31 @@ impl TransformationInfo {
             _ => panic!("Planner error: join_predicates is only available for JoinToKV"),
         }
     }
+
+    /// The data-movement flow this info materializes into — the single source
+    /// of truth shared by the `Transformation` constructors and the
+    /// content-canonical [`canonical_fp`](Self::canonical_fp). Antijoins reuse
+    /// the join flow with no predicates (the negation is applied downstream).
+    pub(crate) fn flow(&self) -> TransformationFlow {
+        let (left, right) = self.input_kv_layout();
+        match self {
+            Self::KVToKV { .. } => {
+                TransformationFlow::kv_to_kv(left, self.output_kv_layout(), self.kv_predicates())
+            }
+            Self::JoinToKV { .. } => TransformationFlow::join_to_kv(
+                left,
+                right.unwrap(),
+                self.output_kv_layout(),
+                self.join_predicates(),
+            ),
+            Self::AntiJoinToKV { .. } => TransformationFlow::join_to_kv(
+                left,
+                right.unwrap(),
+                self.output_kv_layout(),
+                &JoinPredicates::default(),
+            ),
+        }
+    }
 }
 
 // ========================
@@ -797,6 +824,71 @@ impl TransformationInfo {
                 } else {
                     "[AntiJoin -> KV]"
                 }
+            }
+        }
+    }
+}
+
+// ========================
+// Content-canonical fingerprints
+// ========================
+impl TransformationInfo {
+    /// Content-based output fingerprint: operator kind, input fingerprints
+    /// resolved through `remap`, and the positional [`flow`](Self::flow)'s
+    /// [content key](TransformationFlow::content_key). Pure.
+    ///
+    /// The lineage [`output_info_fp`](Self::output_info_fp) hashes rule-coordinate
+    /// layouts, embedding each atom's body position (`rhs_id`); this hashes only
+    /// content, so content-identical transformations from differently-shaped
+    /// rules collide and the existing dedup/prune/codegen layers share them. The
+    /// flow is positional, so swapped-column rules keep distinct keys.
+    pub(crate) fn canonical_fp(&self, remap: &HashMap<u64, u64>) -> u64 {
+        let (left, right) = self.input_info_fp();
+        let inputs: Vec<u64> = std::iter::once(left)
+            .chain(right)
+            .map(|fp| remap.get(&fp).copied().unwrap_or(fp))
+            .collect();
+        compute_fp((
+            "canonical_v1",
+            self.operation_name(),
+            inputs,
+            self.flow().content_key(),
+        ))
+    }
+
+    /// Substitute every fingerprint field — inputs and output — through `remap`;
+    /// fingerprints absent from the map (relation leaves) pass through. The
+    /// mechanical half of `RulePlanner::canonicalize_fingerprints`.
+    pub(crate) fn remap_fps(&mut self, remap: &HashMap<u64, u64>) {
+        let resolve = |fp: &mut u64| {
+            if let Some(&canon) = remap.get(fp) {
+                *fp = canon;
+            }
+        };
+        match self {
+            Self::KVToKV {
+                input_info_fp,
+                output_info_fp,
+                ..
+            } => {
+                resolve(input_info_fp);
+                resolve(output_info_fp);
+            }
+            Self::JoinToKV {
+                left_input_info_fp,
+                right_input_info_fp,
+                output_info_fp,
+                ..
+            }
+            | Self::AntiJoinToKV {
+                left_input_info_fp,
+                right_input_info_fp,
+                output_info_fp,
+                ..
+            } => {
+                resolve(left_input_info_fp);
+                resolve(right_input_info_fp);
+                resolve(output_info_fp);
             }
         }
     }

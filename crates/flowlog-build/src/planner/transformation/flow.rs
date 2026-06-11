@@ -15,6 +15,7 @@ use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, FnCallPredicatePos,
     JoinPredicates, KvPredicates,
 };
+use crate::common::compute_fp;
 use crate::parser::ConstType;
 use crate::planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
@@ -215,6 +216,35 @@ impl TransformationFlow {
             Self::KVToKV { fn_call_preds, .. } => fn_call_preds,
             Self::JnToKV { fn_call_preds, .. } => fn_call_preds,
         }
+    }
+
+    /// Content identity of the collection this flow builds, for content-based
+    /// fingerprint canonicalization (see
+    /// [`TransformationInfo::canonical_fp`](super::info::TransformationInfo::canonical_fp)).
+    ///
+    /// Key/value lists are hashed *in order* — with the input fingerprints they
+    /// pin which input column lands in which output slot, so swapped-column
+    /// rules stay distinct. Conjunctive filters (`compares`, `fn_call_preds`)
+    /// are hashed as an order-independent multiset; the variant tag separates
+    /// unary from join flows.
+    pub(crate) fn content_key(&self) -> u64 {
+        let mut compares: Vec<u64> = self.compares().iter().map(compute_fp).collect();
+        compares.sort_unstable();
+        let mut fn_call_preds: Vec<u64> = self.fn_call_preds().iter().map(compute_fp).collect();
+        fn_call_preds.sort_unstable();
+        let (tag, constraints) = match self {
+            Self::KVToKV { constraints, .. } => ("kv_to_kv", compute_fp(constraints)),
+            Self::JnToKV { .. } => ("jn_to_kv", 0),
+        };
+        compute_fp((
+            "flow_content_v1",
+            tag,
+            self.key(),
+            self.value(),
+            constraints,
+            compares,
+            fn_call_preds,
+        ))
     }
 }
 

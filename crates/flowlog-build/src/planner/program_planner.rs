@@ -173,4 +173,41 @@ mod tests {
             "expected 8 non-recursive transformations after prune"
         );
     }
+
+    /// Both rules re-key `Edge` on its first column, but `Edge` sits at a
+    /// different body position (2nd atom in `Reach`, 1st in `Step`), so their
+    /// lineage fingerprints differ while their positional flows are identical.
+    /// After the canonical rehash no two surviving transformations describe the
+    /// same operator over the same inputs — the duplicate `Edge` re-key is shared.
+    const SLOT_POSITION_SRC: &str = "\
+        .decl Seed(x: int32)\n\
+        .input Seed(IO=\"file\", filename=\"Seed.csv\", delimiter=\",\")\n\
+        .decl Live(x: int32)\n\
+        .input Live(IO=\"file\", filename=\"Live.csv\", delimiter=\",\")\n\
+        .decl Edge(x: int32, y: int32)\n\
+        .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+        .decl Reach(x: int32, y: int32)\n\
+        .printsize Reach\n\
+        .decl Step(x: int32, y: int32)\n\
+        .printsize Step\n\
+        Reach(x, y) :- Seed(x), Edge(x, y).\n\
+        Step(x, y) :- Edge(x, y), Live(x).\n";
+
+    #[test]
+    fn canonical_rehash_shares_slot_position_duplicates() {
+        let pp = analyze(SLOT_POSITION_SRC);
+        let mut seen = std::collections::HashSet::new();
+        for stratum in pp.strata() {
+            for t in stratum
+                .non_recursive_transformations()
+                .iter()
+                .chain(stratum.recursive_transformations())
+            {
+                assert!(
+                    seen.insert((t.input_fingerprints(), t.flow().clone(), t.operation_name())),
+                    "content-identical transformations were not shared:\n{t}"
+                );
+            }
+        }
+    }
 }

@@ -74,6 +74,26 @@ impl RulePlanner {
     pub(crate) fn rule(&self) -> &FlowLogRule {
         &self.rule
     }
+
+    /// Rehash every transformation's lineage fingerprint into its
+    /// content-based [canonical fingerprint](TransformationInfo::canonical_fp),
+    /// so content-identical transformations across rules and strata share.
+    ///
+    /// `transformation_infos` is producer-before-consumer, so a single forward
+    /// pass computes each canonical fingerprint with its inputs already
+    /// canonical; a second pass substitutes uniformly. Splitting the passes
+    /// avoids reading a half-rewritten state. Must run after `post` (the final
+    /// lineage mutation) and before any fingerprint reader.
+    pub(crate) fn canonicalize_fingerprints(&mut self) {
+        let mut remap: HashMap<u64, u64> = HashMap::with_capacity(self.transformation_infos.len());
+        for info in &self.transformation_infos {
+            let canonical = info.canonical_fp(&remap);
+            remap.insert(info.output_info_fp(), canonical);
+        }
+        for info in &mut self.transformation_infos {
+            info.remap_fps(&remap);
+        }
+    }
 }
 
 /// =========================================================================

@@ -149,6 +149,18 @@ impl StratumPlanner {
             planner.post(catalog)?;
         }
 
+        // Phase 5.5: Canonical fingerprint rehash.
+        // Lineage fingerprints embed rule-local atom positions (`rhs_id`), so
+        // content-identical transformations from differently-shaped rules hash
+        // apart and defeat sharing. Rehashing each into its content-based
+        // canonical value (operator + inputs + positional flow) makes equal
+        // content collide across rules and strata, so the dedup below, the
+        // cross-stratum prune, and codegen's fp-keyed arrangement reuse all
+        // share with no further changes.
+        for planner in rule_planners.iter_mut() {
+            planner.canonicalize_fingerprints();
+        }
+
         // Debug info for per-rule plan trees
         rule_planners.iter().for_each(|rp| {
             debug!("{}", rp);

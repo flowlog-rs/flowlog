@@ -1,0 +1,30 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : semijoin_antijoin_share
+// Feature : arrangement sharing must NOT alias a semijoin with an antijoin,
+//           while the shared *anti-side input* arrangement is legitimately reused.
+// Covers  : `B(x,y), C2(x,_)` (semijoin) and `B(x,y), !C2(x,_)` (antijoin) both
+//           project C2 to a key-only `(x)` arrangement over the SAME input, then
+//           each feeds a join with D. The C2-by-key arrangement is shared (it is
+//           the identical projection); the antijoin's negation/dedup happens
+//           DOWNSTREAM of it, so sharing the input is sound. But the two rule
+//           OUTPUTS are complementary and must stay distinct — they both lower to
+//           a `JnToKV` flow, so the planner keeps them apart by operator tag.
+//           C2 carries multiplicities (multiple z per x) to prove the shared
+//           anti-side arrangement handles them identically for both consumers.
+//           If the outputs were aliased, Out2 would wrongly equal Out.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl B(x: int32, y: int32)
+.input B(IO="file", filename="B.csv", delimiter=",")
+.decl C2(x: int32, z: int32)
+.input C2(IO="file", filename="C2.csv", delimiter=",")
+.decl D(x: int32, w: int32)
+.input D(IO="file", filename="D.csv", delimiter=",")
+
+.decl Out(x: int32, w: int32)
+Out(x, w)  :- B(x, y), C2(x, _),  D(x, w).
+.output Out
+
+.decl Out2(x: int32, w: int32)
+Out2(x, w) :- B(x, y), !C2(x, _), D(x, w).
+.output Out2
