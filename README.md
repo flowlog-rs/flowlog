@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="#end-to-end-example">Quick Start</a> •
+  <a href="#quick-start">Quick Start</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#compiler-cli">Compiler CLI</a> •
   <a href="https://www.vldb.org/pvldb/vol19/p361-zhao.pdf">FlowLog Paper</a>
@@ -21,63 +21,80 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"/></a>
 </p>
 
-**Status:** Under active development; interfaces may change without notice.
+> **Status** · Under active development; interfaces may change without notice.
 
-## Architecture
+## Quick Start
 
-A `.dl` program flows through five sequential stages (solid arrows), assisted by side modules (dashed).
-
-```mermaid
-flowchart LR
-    src[".dl"] --> p[parser] --> t[typechecker] --> s[stratifier] --> pl[planner] --> cg[codegen] --> exe[executable]
-    cat[catalog]:::side -.-> pl
-    opt[optimizer]:::side -.-> pl
-    prof[profiler]:::side -.-> cg
-    classDef side fill:#fff8e1,stroke:#a80,stroke-dasharray:3 3
-```
-
-**Stages:**
-
-- **parser** — `.dl` source → typed AST, each node tagged with its source location.
-- **typechecker** — resolves each literal's type (`1` → `int32`).
-- **stratifier** — groups rules into strata (one per `loop`/`fixpoint`) so recursion runs in order.
-- **planner** — lowers each rule to a Differential Dataflow plan, sharing common sub-plans to reuse arrangements.
-- **codegen** — emits the plan as Timely + Differential Dataflow Rust.
-
-**Side modules:**
-
-- **catalog** — per-rule metadata (signatures, pushdown filters, range checks) for the planner.
-- **optimizer** — cardinality-based join ordering and worst-case optimal joins (WIP).
-- **profiler** — runtime metrics from Timely / Differential Dataflow operators.
-
-Three crates make up the workspace:
-
-- **`flowlog-build`** — library; call from `build.rs` to compile `.dl` to Rust at build time.
-- **`flowlog-compiler`** — CLI; compile `.dl` into a standalone executable.
-- **`flowlog-runtime`** — linked into generated output (interning, IO, sort/merge, incremental-txn state); not a direct dependency.
-
-## Getting Started
-
-### Prerequisites
+**1 — Install the toolchain.** One-time setup: installs a stable Rust toolchain (1.80+) and the required OS packages, then runs `cargo check --workspace` as a smoke test.
 
 ```bash
-$ bash env/env.sh     # Linux / macOS — one-time machine setup
-PS> .\env\env.ps1     # or, on Windows (elevated PowerShell)
+$ bash env/env.sh     # Linux / macOS
+PS> .\env\env.ps1     # Windows (elevated PowerShell)
 ```
 
-One-time setup: installs a stable Rust toolchain (1.80+) and the required OS packages, then runs `cargo check --workspace` as a smoke test.
-
-### Build the Workspace
+**2 — Build.** The compiler lands at `target/release/flowlog-compiler`.
 
 ```bash
 $ cargo build --release
 ```
 
-The compiler binary lands at `target/release/flowlog-compiler`.
+**3 — Run an example.** `example/graph_analysis/reach.dl` computes the nodes reachable from a seed set:
+
+```datalog
+.decl Source(id: int32)
+.input Source(IO="file", filename="Source.csv", delimiter=",")
+.decl Arc(x: int32, y: int32)
+.input Arc(IO="file", filename="Arc.csv", delimiter=",")
+
+.decl Reach(id: int32)
+Reach(y) :- Source(y).
+Reach(y) :- Reach(x), Arc(x,y).
+.printsize Reach
+```
+
+Create a tiny dataset, then compile and run it:
+
+```bash
+$ mkdir -p reach
+$ printf '1\n'        > reach/Source.csv
+$ printf '1,2\n2,3\n' > reach/Arc.csv
+
+# Compile to a binary, then run it on 4 worker threads
+$ target/release/flowlog-compiler example/graph_analysis/reach.dl -F reach -o reach_bin -D -
+$ ./reach_bin -w 4
+```
+
+See [Compiler CLI](#compiler-cli) for every flag. Batch mode is shown here; for incremental mode and the profiler, see <https://www.flowlog-rs.com/>.
+
+## Architecture
+
+A `.dl` program compiles through five stages, with three side modules assisting the planner and codegen:
+
+```text
+.dl → parser → typechecker → stratifier → planner → codegen → executable
+```
+
+**Pipeline**
+
+- **parser** — reads `.dl` into a typed AST, each node tagged with its source location.
+- **typechecker** — resolves each literal's type (`1` → `int32`).
+- **stratifier** — groups rules into strata (one per `loop` / `fixpoint`) so recursion runs in order.
+- **planner** — lowers each rule to a Differential Dataflow plan, sharing common sub-plans to reuse arrangements.
+- **codegen** — emits the plan as Timely + Differential Dataflow Rust.
+
+**Side modules**
+
+- **catalog** — supplies the planner with per-rule metadata (signatures, pushdown filters, range checks).
+- **optimizer** — gives the planner cardinality-based join ordering and worst-case optimal joins (WIP).
+- **profiler** — instruments codegen to collect runtime metrics from Timely / Differential Dataflow operators.
+
+**Crates**
+
+- **`flowlog-build`** — library; call from `build.rs` to compile `.dl` to Rust at build time.
+- **`flowlog-compiler`** — CLI; compiles `.dl` into a standalone executable.
+- **`flowlog-runtime`** — linked into the generated output (interning, IO, sort/merge, incremental-txn state); not a direct dependency.
 
 ## Compiler CLI
-
-Compile a FlowLog program into a Timely/Differential Dataflow executable.
 
 ```bash
 $ flowlog-compiler <PROGRAM> [OPTIONS]
@@ -94,51 +111,18 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 - `-P, --profile` — collect execution statistics (Datalog modes only).
 - `-h, --help` — full help text.
 
-## End-to-End Example
-
-The `example/graph_analysis/reach.dl` program computes nodes reachable from a small seed set:
-
-```datalog
-.decl Source(id: int32)
-.input Source(IO="file", filename="Source.csv", delimiter=",")
-.decl Arc(x: int32, y: int32)
-.input Arc(IO="file", filename="Arc.csv", delimiter=",")
-
-.decl Reach(id: int32)
-Reach(y) :- Source(y).
-Reach(y) :- Reach(x), Arc(x,y).
-.printsize Reach
-```
-
-> Batch mode is shown here; for incremental mode and the profiler, see <https://www.flowlog-rs.com/>.
-
-### 1. Prepare a Tiny Dataset
-
-```bash
-$ mkdir -p reach
-$ printf '1\n'        > reach/Source.csv
-$ printf '1,2\n2,3\n' > reach/Arc.csv
-```
-
-### 2. Compile and Run
-
-```bash
-# Compile the .dl program to a binary (compiler flags are listed above)
-$ target/release/flowlog-compiler example/graph_analysis/reach.dl -F reach -o reach_bin -D -
-
-# Run it on 4 worker threads
-$ ./reach_bin -w 4
-```
-
 ## Testing
 
 See [`tests/README.md`](tests/README.md) for per-suite contracts and recipes.
 
-## Background Reading
+## Publication
 
-> **FlowLog: Efficient and Extensible Datalog via Incrementality**  \
-> Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  \
-> VLDB 2026 (Boston) — [pVLDB](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf) • [VLDB 2026 Artifacts](https://github.com/flowlog-rs/vldb26-artifact)
+> **FlowLog: Efficient and Extensible Datalog via Incrementality**  
+> Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  
+> VLDB 2026, Boston
+
+- **Paper** — [PVLDB Vol. 19](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf)
+- **Artifacts** — [flowlog-rs/vldb26-artifact](https://github.com/flowlog-rs/vldb26-artifact)
 
 ## Contributing
 
