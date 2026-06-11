@@ -14,16 +14,18 @@
 </p>
 
 <p align="center">
-  <a href="https://crates.io/crates/flowlog-build"><img alt="flowlog-build on crates.io" src="https://img.shields.io/crates/v/flowlog-build?style=flat-square&logo=rust&label=flowlog-build"/></a>
-  <a href="https://docs.rs/flowlog-build"><img alt="flowlog-build docs" src="https://img.shields.io/docsrs/flowlog-build?style=flat-square&logo=docsdotrs&label=docs"/></a>
+  <a href="https://crates.io/crates/flowlog-build"><img alt="flowlog-build on crates.io" src="https://img.shields.io/crates/v/flowlog-build?style=flat-square&logo=rust&label=flowlog-build&color=76B900"/></a>
+  <a href="https://docs.rs/flowlog-build"><img alt="flowlog-build docs" src="https://img.shields.io/docsrs/flowlog-build?style=flat-square&logo=docsdotrs&label=docs&color=76B900"/></a>
   &nbsp;
-  <a href="https://crates.io/crates/flowlog-runtime"><img alt="flowlog-runtime on crates.io" src="https://img.shields.io/crates/v/flowlog-runtime?style=flat-square&logo=rust&label=flowlog-runtime"/></a>
-  <a href="https://docs.rs/flowlog-runtime"><img alt="flowlog-runtime docs" src="https://img.shields.io/docsrs/flowlog-runtime?style=flat-square&logo=docsdotrs&label=docs"/></a>
+  <a href="https://crates.io/crates/flowlog-runtime"><img alt="flowlog-runtime on crates.io" src="https://img.shields.io/crates/v/flowlog-runtime?style=flat-square&logo=rust&label=flowlog-runtime&color=76B900"/></a>
+  <a href="https://docs.rs/flowlog-runtime"><img alt="flowlog-runtime docs" src="https://img.shields.io/docsrs/flowlog-runtime?style=flat-square&logo=docsdotrs&label=docs&color=76B900"/></a>
   &nbsp;
-  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"/></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-76B900?style=flat-square"/></a>
 </p>
 
 > **Status** · Under active development; interfaces may change without notice.
+
+Built on [Timely](https://github.com/TimelyDataflow/timely-dataflow) and [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow), FlowLog pairs fast batch Datalog with first-class **incremental maintenance** — outputs update without recomputation as facts change. On the DOOP points-to analysis it runs **~2× faster than Soufflé** across all 20 DaCapo programs at 32 threads, with identical results.
 
 ## Quick Start
 
@@ -148,3 +150,5 @@ Full methodology and per-program numbers live in [`flowlog-bench`](https://githu
 ## Contributing
 
 Issues and pull requests are welcome. PRs must pass CI before merge.
+
+**Let's make Datalog fast — and incremental.**
