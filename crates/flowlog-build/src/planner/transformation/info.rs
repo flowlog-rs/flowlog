@@ -23,6 +23,8 @@ use crate::parser::ConstType;
 
 use crate::planner::{Collection, PlanError};
 
+use super::canonical;
+
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
 pub(crate) struct KeyValueLayout {
@@ -202,13 +204,10 @@ impl TransformationInfo {
         output_fake_kv_layout: KeyValueLayout,
         predicates: KvPredicates,
     ) -> Self {
-        let fake_output_sig = compute_fp((
-            "kv_to_kv",
-            &input_fake_sig,
-            &input_kv_layout,
-            &output_fake_kv_layout,
-            &predicates,
-        ));
+        let (c_in, c_out, c_preds) =
+            canonical::canon_unary(&input_kv_layout, &output_fake_kv_layout, &predicates);
+        let fake_output_sig =
+            compute_fp(("kv_to_kv", &input_fake_sig, &c_in, &c_out, &c_preds));
         Self::KVToKV {
             input_info_fp: input_fake_sig,
             input_name,
@@ -250,14 +249,20 @@ impl TransformationInfo {
         output_fake_kv_layout: KeyValueLayout,
         predicates: JoinPredicates,
     ) -> Self {
-        let fake_output_sig = compute_fp((
-            "join_to_kv",
-            &left_fake_sig,
-            &right_fake_sig,
+        let (c_left, c_right, c_out, c_preds) = canonical::canon_join(
             &left_kv_layout,
             &right_kv_layout,
             &output_fake_kv_layout,
             &predicates,
+        );
+        let fake_output_sig = compute_fp((
+            "join_to_kv",
+            &left_fake_sig,
+            &right_fake_sig,
+            &c_left,
+            &c_right,
+            &c_out,
+            &c_preds,
         ));
         Self::JoinToKV {
             left_input_info_fp: left_fake_sig,
@@ -286,13 +291,18 @@ impl TransformationInfo {
         right_kv_layout: KeyValueLayout,
         output_fake_kv_layout: KeyValueLayout,
     ) -> Self {
+        let (c_left, c_right, c_out) = canonical::canon_anti_join(
+            &left_kv_layout,
+            &right_kv_layout,
+            &output_fake_kv_layout,
+        );
         let fake_output_sig = compute_fp((
             "anti_join_to_kv",
             &left_fake_sig,
             &right_fake_sig,
-            &left_kv_layout,
-            &right_kv_layout,
-            &output_fake_kv_layout,
+            &c_left,
+            &c_right,
+            &c_out,
         ));
 
         Self::AntiJoinToKV {
@@ -718,14 +728,16 @@ impl TransformationInfo {
                 output_info_fp,
                 ..
             } => {
+                let (c_in, c_out, c_preds) =
+                    canonical::canon_unary(input_kv_layout, output_kv_layout, predicates);
                 *output_info_fp = compute_fp((
                     "kv_to_kv",
                     input_info_fp,
                     is_row_input,
                     is_row_output,
-                    input_kv_layout,
-                    output_kv_layout,
-                    predicates,
+                    &c_in,
+                    &c_out,
+                    &c_preds,
                 ));
             }
             Self::JoinToKV {
@@ -739,15 +751,21 @@ impl TransformationInfo {
                 output_info_fp,
                 ..
             } => {
+                let (c_left, c_right, c_out, c_preds) = canonical::canon_join(
+                    left_input_kv_layout,
+                    right_input_kv_layout,
+                    output_kv_layout,
+                    predicates,
+                );
                 *output_info_fp = compute_fp((
                     "join_to_kv",
                     left_input_info_fp,
                     right_input_info_fp,
                     is_row_output,
-                    left_input_kv_layout,
-                    right_input_kv_layout,
-                    output_kv_layout,
-                    predicates,
+                    &c_left,
+                    &c_right,
+                    &c_out,
+                    &c_preds,
                 ));
             }
             Self::AntiJoinToKV {
@@ -760,14 +778,19 @@ impl TransformationInfo {
                 output_info_fp,
                 ..
             } => {
+                let (c_left, c_right, c_out) = canonical::canon_anti_join(
+                    left_input_kv_layout,
+                    right_input_kv_layout,
+                    output_kv_layout,
+                );
                 *output_info_fp = compute_fp((
                     "anti_join_to_kv",
                     left_input_info_fp,
                     right_input_info_fp,
                     is_row_output,
-                    left_input_kv_layout,
-                    right_input_kv_layout,
-                    output_kv_layout,
+                    &c_left,
+                    &c_right,
+                    &c_out,
                 ));
             }
         }

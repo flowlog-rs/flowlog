@@ -12,6 +12,7 @@ use tracing::trace;
 use crate::catalog::JoinPredicates;
 use crate::planner::Collection;
 
+mod canonical;
 mod flow;
 mod info;
 
