@@ -25,11 +25,11 @@
 
 > **Status** · Under active development; interfaces may change without notice.
 
-Built on [Timely](https://github.com/TimelyDataflow/timely-dataflow) and [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow), FlowLog pairs fast batch Datalog with first-class **incremental maintenance** — outputs update without recomputation as facts change. On the DOOP points-to analysis it runs **~2× faster than Soufflé** across all 20 DaCapo programs at 32 threads, with identical results.
+Built on [Timely](https://github.com/TimelyDataflow/timely-dataflow) and [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow), FlowLog pairs batch Datalog with first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to it runs **~2× faster than Soufflé** across 20 DaCapo programs (32 threads), with identical results.
 
 ## Quick Start
 
-**1 — Install the toolchain.** One-time setup: installs a stable Rust toolchain (1.80+) and the required OS packages, then runs `cargo check --workspace` as a smoke test.
+**1 — Install the toolchain.** One-time setup — Rust (1.80+) and required OS packages, then a `cargo check` smoke test.
 
 ```bash
 $ bash env/env.sh     # Linux / macOS
@@ -42,7 +42,7 @@ PS> .\env\env.ps1     # Windows (elevated PowerShell)
 $ cargo build --release
 ```
 
-**3 — Run an example.** `example/graph_analysis/reach.dl` computes the nodes reachable from a seed set:
+**3 — Run an example.** `example/graph_analysis/reach.dl` — nodes reachable from a seed set:
 
 ```datalog
 .decl Source(id: int32)
@@ -56,7 +56,7 @@ Reach(y) :- Reach(x), Arc(x,y).
 .printsize Reach
 ```
 
-Create a tiny dataset, then compile and run it:
+Make a tiny dataset, then compile and run:
 
 ```bash
 $ mkdir -p reach
@@ -68,11 +68,11 @@ $ target/release/flowlog-compiler example/graph_analysis/reach.dl -F reach -o re
 $ ./reach_bin -w 4
 ```
 
-See [Compiler CLI](#compiler-cli) for every flag. Batch mode is shown here; for incremental mode and the profiler, see <https://www.flowlog-rs.com/>.
+Flag reference: [Compiler CLI](#compiler-cli). For incremental mode and the profiler, see <https://www.flowlog-rs.com/>.
 
 ## Architecture
 
-A `.dl` program compiles through five stages, with three side modules assisting the planner and codegen:
+A `.dl` program compiles through five stages; three side modules assist the planner and codegen:
 
 ```text
                                                    profiler
@@ -86,23 +86,23 @@ A `.dl` program compiles through five stages, with three side modules assisting 
 
 **Pipeline**
 
-- **parser** — reads `.dl` into a typed AST, each node tagged with its source location.
-- **typechecker** — resolves each literal's type (`1` → `int32`).
-- **stratifier** — groups rules into strata (one per `loop` / `fixpoint`) so recursion runs in order.
-- **planner** — lowers each rule to a Differential Dataflow plan, sharing common sub-plans to reuse arrangements.
+- **parser** — `.dl` → typed AST, each node source-located.
+- **typechecker** — resolves literal types (`1` → `int32`).
+- **stratifier** — groups rules into strata (one per `loop` / `fixpoint`) for ordered recursion.
+- **planner** — lowers rules to a Differential Dataflow plan, sharing sub-plans to reuse arrangements.
 - **codegen** — emits the plan as Timely + Differential Dataflow Rust.
 
 **Side modules**
 
-- **catalog** — supplies the planner with per-rule metadata (signatures, pushdown filters, range checks).
-- **optimizer** — gives the planner cardinality-based join ordering and worst-case optimal joins (WIP).
-- **profiler** — instruments codegen to collect runtime metrics from Timely / Differential Dataflow operators.
+- **catalog** — per-rule metadata for the planner (signatures, pushdown filters, range checks).
+- **optimizer** — cardinality-based join ordering and worst-case optimal joins (WIP).
+- **profiler** — runtime metrics from Timely / Differential Dataflow operators.
 
 **Crates**
 
-- **`flowlog-build`** — library; call from `build.rs` to compile `.dl` to Rust at build time.
-- **`flowlog-compiler`** — CLI; compiles `.dl` into a standalone executable.
-- **`flowlog-runtime`** — linked into the generated output (interning, IO, sort/merge, incremental-txn state); not a direct dependency.
+- **`flowlog-build`** — library; compile `.dl` to Rust from `build.rs`.
+- **`flowlog-compiler`** — CLI; compile `.dl` to a standalone executable.
+- **`flowlog-runtime`** — linked into output (interning, IO, sort/merge, incremental-txn state); not a direct dep.
 
 ## Compiler CLI
 
@@ -127,7 +127,7 @@ A green oracle run is the definition of correct — see [`tests/README.md`](test
 
 ### FlowLog vs Soufflé — DOOP points-to
 
-An apple-to-apple comparison on the DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo](https://www.dacapobench.org/) programs. Both engines run on **32 threads** (FlowLog `-w 32`; Soufflé compiled and run with `-j 32`) over identical tab-delimited facts. The Soufflé program is the *same* `default.dl` with only type-keyword renames (`:string`→`:symbol`, `:int32`→`:number`) — identical rules and written join order, so the numbers reflect the engine. All 20 programs produce **identical VarPointsTo**.
+Apple-to-apple on the DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo](https://www.dacapobench.org/) programs at **32 threads** (FlowLog `-w 32`, Soufflé `-j 32`). The Soufflé program is the same `default.dl` with only type-keyword renames (`:string`→`:symbol`, `:int32`→`:number`) — identical rules and join order. All 20 produce **identical VarPointsTo**.
 
 ![DOOP run time — FlowLog vs Soufflé](docs/doop-time.png)
 
@@ -136,7 +136,7 @@ An apple-to-apple comparison on the DOOP **default** points-to analysis (`doop/d
 - **Run time** (run only; one-off compile excluded) — FlowLog faster on **20/20**, geomean **1.95×** (range 1.41–3.27×).
 - **Peak memory** — Soufflé is leaner: Soufflé/FlowLog geomean **0.42×** (FlowLog trades memory for speed).
 
-Full methodology and per-program numbers live in [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
+Full methodology and numbers: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
 
 ## Publication
 
