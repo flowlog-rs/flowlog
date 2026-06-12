@@ -12,7 +12,7 @@
 
   // Weekly Cargo.lock refresh: CI builds against the same fresh in-range
   // resolution that users of generated crates always get (they have no lockfile).
-  lockFileMaintenance: { enabled: true },
+  lockFileMaintenance: { enabled: true, automerge: true },
 
   customManagers: [
     {
@@ -42,6 +42,12 @@
       // the final binary links two incompatible copies of timely.
       matchPackageNames: ["timely", "differential-dataflow"],
       groupName: "timely + differential-dataflow",
+    },
+    {
+      // Lockfile-only bumps (in-range releases) are fully CI-gated and need
+      // no human judgment — merge automatically once checks are green.
+      matchUpdateTypes: ["lockFileUpdate"],
+      automerge: true,
     },
   ],
 }
