@@ -1,0 +1,47 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+
+  // Scan & open PRs against the integration branch; `main` (release-only)
+  // is never checked — updates reach it via the normal release merge.
+  baseBranchPatterns: ["main-next"],
+  // Overlay the renovate.json5 found on main-next, so config changes take
+  // effect without waiting for a release merge to main (the default branch,
+  // which is where Renovate bootstraps its config from).
+  useBaseBranchConfig: "merge",
+
+  // Weekly Cargo.lock refresh: CI builds against the same fresh in-range
+  // resolution that users of generated crates always get (they have no lockfile).
+  lockFileMaintenance: { enabled: true },
+
+  customManagers: [
+    {
+      // Crate versions the compiler embeds into generated Cargo.toml scaffolds
+      // (crates/flowlog-compiler/src/scaffold.rs::render_cargo_toml).
+      customType: "regex",
+      managerFilePatterns: ["/crates/flowlog-compiler/src/scaffold\\.rs$/"],
+      matchStrings: [
+        'deps\\["(?<depName>[a-z0-9_-]+)"\\] = "(?<currentValue>[^"]+)"\\.into\\(\\)',
+        'deps\\["(?<depName>[a-z0-9_-]+)"\\] = value\\(inline_versioned_dep\\(\\s*"(?<currentValue>[^"]+)"',
+      ],
+      datasourceTemplate: "crates",
+      versioningTemplate: "cargo",
+    },
+  ],
+
+  packageRules: [
+    {
+      // Self-dependency: the scaffold's flowlog-runtime pin is a deliberate
+      // compatibility floor, bumped manually when codegen starts needing a
+      // newer runtime API. Renovate must never touch it.
+      matchPackageNames: ["flowlog-runtime"],
+      enabled: false,
+    },
+    {
+      // Paired releases: runtime crate and generated crates must agree, or
+      // the final binary links two incompatible copies of timely.
+      matchPackageNames: ["timely", "differential-dataflow"],
+      groupName: "timely + differential-dataflow",
+    },
+  ],
+}
