@@ -2,16 +2,6 @@
   <img src="https://raw.githubusercontent.com/flowlog-rs/flowlog/main/FlowLog.png" alt="FlowLog Logo" width="320"/>
 </p>
 
-<p align="center">
-  <h3 align="center">Composable Datalog engine that compiles programs into efficient and scalable Differential Dataflow executables.</h3>
-</p>
-
-<p align="center">
-  <a href="#quick-start">Quick&nbsp;Start</a> &nbsp;·&nbsp;
-  <a href="#architecture">Architecture</a> &nbsp;·&nbsp;
-  <a href="#compiler-cli">Compiler&nbsp;CLI</a> &nbsp;·&nbsp;
-  <a href="https://www.vldb.org/pvldb/vol19/p361-zhao.pdf">Paper</a>
-</p>
 
 <p align="center">
   <a href="https://crates.io/crates/flowlog-build"><img alt="flowlog-build on crates.io" src="https://img.shields.io/crates/v/flowlog-build?style=flat-square&logo=rust&label=flowlog-build&color=76B900"/></a>
@@ -23,9 +13,9 @@
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-76B900?style=flat-square"/></a>
 </p>
 
-> **Status** · Under active development; interfaces may change without notice.
+> **status** · under active development; interfaces may change.
 
-Built on [Timely](https://github.com/TimelyDataflow/timely-dataflow) and [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow), FlowLog pairs batch Datalog with first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to it runs **~2× faster than Soufflé** across 20 DaCapo programs (32 threads), with identical results.
+FlowLog compiles Datalog into efficient and scalable [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow) rust executables.</h3>. As such, FlowLog has first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to it runs **~2× faster than Soufflé** across 20 DaCapo programs (32 threads).
 
 ## Quick Start
 
