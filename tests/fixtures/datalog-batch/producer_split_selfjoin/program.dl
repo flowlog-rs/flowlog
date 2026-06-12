@@ -1,0 +1,21 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : producer_split_selfjoin
+// Feature : split relation `A` self-joined in a later stratum
+// Why     : `A :- E1` (stratum 0) and `A :- B` (stratum 1) split A's producers;
+//           `P :- A(x,z), A(z,y)` self-joins A in stratum 2. The arrangement(s)
+//           built for that join must cover the COMPLETE A (both producers), not
+//           the stratum-0-only seed. Stresses cross-stratum arrangement reuse.
+// ════════════════════════════════════════════════════════════════════════════
+.decl E1(x: int32, y: int32)
+.input E1(IO="file", filename="E1.csv", delimiter=",")
+.decl E2(x: int32, y: int32)
+.input E2(IO="file", filename="E2.csv", delimiter=",")
+.decl A(x: int32, y: int32)
+.decl B(x: int32, y: int32)
+.decl P(x: int32, y: int32)
+A(x, y) :- E1(x, y).
+B(x, y) :- E2(x, y).
+A(x, y) :- B(x, y).
+P(x, y) :- A(x, z), A(z, y).
+.output A
+.output P

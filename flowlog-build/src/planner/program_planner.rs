@@ -57,11 +57,17 @@ impl ProgramPlanner {
 ///
 /// Soundness: the earlier binding only stays correct as long as none of the
 /// IDBs its value transitively depends on have been updated between the two
-/// strata. Under standard Datalog stratification, all consumers come after
-/// all definers, so this is automatic; in extended mode the user controls
-/// the segment order and may update an IDB *between* two consumers with the
-/// same content-addressed transformation. The transitive check below keeps
-/// the later emission whenever that's the case.
+/// strata. Under standard Datalog stratification this is automatic — a
+/// *consumer* of a relation depends on **every** producer of it and is
+/// therefore stratified strictly after all of them, so whatever it reads is
+/// already complete. (A relation's *producer* rules may themselves split
+/// across strata — `R :- A.` and `R :- B.` can land in different strata — so a
+/// relation is not "fixed" after an arbitrary stratum; but that only grows it
+/// *before* any consumer reads it. See the stratifier test
+/// `producer_rules_split_across_strata`.) In extended mode the user controls
+/// the segment order and a `loop`/`fixpoint` may rewrite an IDB *between* two
+/// consumers with the same content-addressed transformation; the transitive
+/// check below keeps the later emission whenever that's the case.
 fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
     let mut idb_writes: HashMap<u64, Vec<usize>> = HashMap::new();
     for (idx, stratum) in strata.iter().enumerate() {

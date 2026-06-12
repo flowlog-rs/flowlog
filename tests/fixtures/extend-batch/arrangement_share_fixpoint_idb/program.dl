@@ -1,0 +1,32 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : arrangement_share_fixpoint_idb
+// Feature : cross-stratum arrangement sharing must NOT reuse a stale IDB.
+// Covers  : Z is read (re-keyed by its 2nd col) in a plain segment BEFORE a
+//           `fixpoint` that grows Z, and again AFTER it. The two re-keys have
+//           the same rule-independent arrangement key, so naive program-wide
+//           sharing would alias the post-fixpoint read to the pre-fixpoint
+//           (seed) arrangement — yielding stale results. R3 re-keys Z on its
+//           1st col (a different arrangement key) to also exercise the
+//           cross-alias path. All post-fixpoint reads must see the grown Z.
+//   E = 1→2→3→4
+//   R1 (seed Z):  {1→3, 2→4}
+//   R2 (grown Z, same re-key as R1): {1→3, 1→4, 2→4}
+//   R3 (grown Z, different re-key):  full reachable composition
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl E(a: int32, b: int32)
+.input E(IO="file", filename="E.csv", delimiter=",")
+.decl Z(a: int32, b: int32)
+.decl R1(a: int32, c: int32)
+.decl R2(a: int32, c: int32)
+.decl R3(a: int32, c: int32)
+
+Z(a, b) :- E(a, b).
+R1(a, c) :- Z(a, b), E(b, c).
+fixpoint { Z(a, c) :- Z(a, b), E(b, c). }
+R2(a, c) :- Z(a, b), E(b, c).
+R3(a, c) :- E(c, b), Z(a, b).
+
+.output R1
+.output R2
+.output R3

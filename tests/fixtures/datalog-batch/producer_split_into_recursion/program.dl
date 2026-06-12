@@ -1,0 +1,23 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : producer_split_into_recursion
+// Feature : split relation `A` used as a fixed input inside a recursive stratum
+// Why     : `A :- E1` (stratum 0) and `A :- B` (stratum 1) split A's producers;
+//           the transitive-closure loop `T :- A`, `T :- T, A` then reads A as a
+//           loop-invariant (factored-out / `.enter()`'d) input. That factored
+//           input must be the COMPLETE A, the textbook case behind the user's
+//           "freeze parts into the next strata" question.
+// ════════════════════════════════════════════════════════════════════════════
+.decl E1(x: int32, y: int32)
+.input E1(IO="file", filename="E1.csv", delimiter=",")
+.decl E2(x: int32, y: int32)
+.input E2(IO="file", filename="E2.csv", delimiter=",")
+.decl A(x: int32, y: int32)
+.decl B(x: int32, y: int32)
+.decl T(x: int32, y: int32)
+A(x, y) :- E1(x, y).
+B(x, y) :- E2(x, y).
+A(x, y) :- B(x, y).
+T(x, y) :- A(x, y).
+T(x, y) :- T(x, z), A(z, y).
+.output A
+.output T

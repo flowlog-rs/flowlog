@@ -1,0 +1,21 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : producer_split_union
+// Feature : a relation's producer rules split across non-recursive strata
+// Why     : rule-level stratification puts `IDB1 :- EDB1` in stratum 0 (no IDB
+//           dep) and `IDB1 :- IDB2` in stratum 1 (waits for IDB2). So IDB1 is
+//           NOT "fixed" after stratum 0 — it grows in stratum 1. The final
+//           relation must be the UNION of both strata's contributions.
+//           Guards the union-across-strata materialization. See the stratifier
+//           unit test `producer_rules_split_across_strata`.
+// ════════════════════════════════════════════════════════════════════════════
+.decl EDB1(x: int32)
+.input EDB1(IO="file", filename="EDB1.csv", delimiter=",")
+.decl EDB2(x: int32)
+.input EDB2(IO="file", filename="EDB2.csv", delimiter=",")
+.decl IDB1(x: int32)
+.decl IDB2(x: int32)
+IDB1(x) :- EDB1(x).
+IDB2(x) :- EDB2(x).
+IDB1(x) :- IDB2(x).
+.output IDB1
+.output IDB2

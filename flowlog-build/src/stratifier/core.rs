@@ -58,7 +58,7 @@ use tracing::{debug, info, warn};
 /// |----------|---------|
 /// | *recursive* | Self-referential relations that grow monotonically each round. |
 /// | *leave* | Relations whose values must be retained after the stratum finishes, because a later stratum or an IDB output needs them. |
-/// | *available* | Relations that are already fully computed before this stratum begins (EDBs + leaves from all prior strata). |
+/// | *available* | Relations produced by some earlier stratum and thus readable here (EDBs + leaves from all prior strata). Not necessarily *complete* — a split producer keeps growing — but consumers are always stratified after all producers. |
 #[derive(Debug, Clone)]
 pub struct Stratifier {
     /// The original program being stratified.
@@ -99,10 +99,16 @@ pub struct Stratifier {
     /// Parallel with `stratum`.
     stratum_leave_relation: Vec<Vec<u64>>,
 
-    /// Relations that are fully computed before a stratum begins.
+    /// Relations available to read in a stratum: EDBs ∪ leaves of prior strata.
     ///
-    /// Always includes all EDB relations. For stratum *i*, this is the union
-    /// of the leave sets of strata *0 … i-1*.  Parallel with `stratum`.
+    /// "Available" means *some* earlier stratum has already produced the
+    /// relation — not necessarily that it is *complete*: a relation whose
+    /// producer rules split across strata (e.g. `R :- A.` in stratum 0,
+    /// `R :- B.` in stratum 1) appears here from stratum 1 on while still
+    /// growing. This is sound because a *consumer* of `R` depends on every
+    /// producer of `R` and is therefore stratified strictly after all of them,
+    /// so it never reads a partially-built `R`. For stratum *i* this set is the
+    /// union of the leave sets of strata *0 … i-1*.  Parallel with `stratum`.
     stratum_available_relations: Vec<HashSet<u64>>,
 }
 
@@ -170,9 +176,9 @@ impl Stratifier {
         &self.stratum_leave_relation[idx]
     }
 
-    /// Relations that are fully computed before stratum `idx` begins.
-    ///
-    /// Always includes EDB relations and the leave sets of all earlier strata.
+    /// Relations readable in stratum `idx`: EDBs plus the leave sets of all
+    /// earlier strata. "Readable", not necessarily "complete" — see the field
+    /// docs on [`Self::stratum_available_relations`].
     #[must_use]
     pub(crate) fn stratum_available_relations(&self, idx: usize) -> &HashSet<u64> {
         &self.stratum_available_relations[idx]
@@ -1391,6 +1397,73 @@ mod tests {
         assert!(
             !logs_contain("Negation in recursive stratum"),
             "non-recursive negation should not fire the recursive-stratum warning"
+        );
+    }
+
+    /// A relation's *producer* rules can legitimately land in **different**
+    /// strata: `IDB1 :- EDB1` has no IDB dependency (stratum 0) while
+    /// `IDB1 :- IDB2` must wait for `IDB2` (stratum 1). So `IDB1` is **not**
+    /// "fixed" after stratum 0 — it grows again in stratum 1. This is the exact
+    /// shape that makes the "a finished stratum's relations never change again"
+    /// framing imprecise for *producers*.
+    ///
+    /// Cross-stratum arrangement reuse stays sound despite this because the
+    /// *dual* property holds: any *consumer* of `IDB1` depends on **every**
+    /// producer of it, so it is stratified strictly later than all of them and
+    /// thus only ever reads the completed relation (see
+    /// `planner::program_planner::prune_cross_stratum_duplicates`). This test
+    /// pins both the producer-split and the consumer-comes-later guarantee, so
+    /// a future stratifier change that violated either would fail here rather
+    /// than silently invalidating the `producer_split_*` end-to-end fixtures.
+    #[test]
+    fn producer_rules_split_across_strata() {
+        let src = "\
+            .decl EDB1(x: int32)\n\
+            .decl EDB2(x: int32)\n\
+            .decl IDB1(x: int32)\n\
+            .decl IDB2(x: int32)\n\
+            .decl Out(x: int32)\n\
+            .input EDB1(IO=\"file\", filename=\"EDB1.csv\", delimiter=\",\")\n\
+            .input EDB2(IO=\"file\", filename=\"EDB2.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            IDB1(x) :- EDB1(x).\n\
+            IDB2(x) :- EDB2(x).\n\
+            IDB1(x) :- IDB2(x).\n\
+            Out(x) :- IDB1(x), EDB1(x).\n";
+        let program = parse_program(src);
+        let s = Stratifier::from_program(&program, false).expect("stratify should succeed");
+
+        let strata_heading = |fp: u64| -> Vec<usize> {
+            s.stratum
+                .iter()
+                .enumerate()
+                .filter(|(_, rules)| {
+                    rules
+                        .iter()
+                        .any(|&rid| program.rule(rid).head().head_fingerprint() == fp)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        };
+
+        // Producer split: IDB1's two rules land in two distinct strata, so IDB1
+        // is not "fixed" after the first.
+        let idb1_strata = strata_heading(fp_of(&program, "idb1"));
+        assert_eq!(
+            idb1_strata.len(),
+            2,
+            "IDB1's two producer rules must land in two different strata, got {idb1_strata:?}"
+        );
+
+        // Dual guarantee: the consumer `Out` is stratified strictly after *all*
+        // of IDB1's producers, so it reads the completed relation. This is what
+        // keeps cross-stratum arrangement reuse sound in `datalog-batch`.
+        let out_strata = strata_heading(fp_of(&program, "out"));
+        assert_eq!(out_strata.len(), 1, "Out has a single producer rule");
+        assert!(
+            out_strata[0] > *idb1_strata.iter().max().unwrap(),
+            "consumer Out (stratum {:?}) must come after every IDB1 producer ({idb1_strata:?})",
+            out_strata
         );
     }
 }
