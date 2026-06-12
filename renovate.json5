@@ -24,7 +24,7 @@
         'deps\\["(?<depName>[a-z0-9_-]+)"\\] = "(?<currentValue>[^"]+)"\\.into\\(\\)',
         'deps\\["(?<depName>[a-z0-9_-]+)"\\] = value\\(inline_versioned_dep\\(\\s*"(?<currentValue>[^"]+)"',
       ],
-      datasourceTemplate: "crates",
+      datasourceTemplate: "crate",
       versioningTemplate: "cargo",
     },
   ],
