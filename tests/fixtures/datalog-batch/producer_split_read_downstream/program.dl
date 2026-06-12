@@ -1,0 +1,25 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : producer_split_read_downstream
+// Feature : producers of `A` in NON-adjacent strata, consumed even later
+// Why     : `A :- E1` (stratum 0) and `A :- N` (stratum 2, after N:-M:-E2) put
+//           A's two producers two strata apart; `Out :- A, K` reads A in a
+//           still-later stratum. The consumer depends on BOTH producers, so it
+//           is stratified after both and must see the complete A.
+// ════════════════════════════════════════════════════════════════════════════
+.decl E1(x: int32)
+.input E1(IO="file", filename="E1.csv", delimiter=",")
+.decl E2(x: int32)
+.input E2(IO="file", filename="E2.csv", delimiter=",")
+.decl K(x: int32)
+.input K(IO="file", filename="K.csv", delimiter=",")
+.decl A(x: int32)
+.decl M(x: int32)
+.decl N(x: int32)
+.decl Out(x: int32)
+A(x) :- E1(x).
+M(x) :- E2(x).
+N(x) :- M(x).
+A(x) :- N(x).
+Out(x) :- A(x), K(x).
+.output A
+.output Out
