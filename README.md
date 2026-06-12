@@ -7,92 +7,42 @@
 </p>
 
 <p align="center">
-  <a href="#end-to-end-example">Quick Start</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#compiler-cli">Compiler CLI</a> •
-  <a href="https://www.vldb.org/pvldb/vol19/p361-zhao.pdf">FlowLog Paper</a>
+  <a href="#quick-start">Quick&nbsp;Start</a> &nbsp;·&nbsp;
+  <a href="#architecture">Architecture</a> &nbsp;·&nbsp;
+  <a href="#compiler-cli">Compiler&nbsp;CLI</a> &nbsp;·&nbsp;
+  <a href="https://www.vldb.org/pvldb/vol19/p361-zhao.pdf">Paper</a>
 </p>
 
 <p align="center">
-  <a href="https://crates.io/crates/flowlog-build"><img src="https://img.shields.io/crates/v/flowlog-build.svg?label=flowlog-build" alt="flowlog-build on crates.io"/></a>
-  <a href="https://docs.rs/flowlog-build"><img src="https://docs.rs/flowlog-build/badge.svg" alt="flowlog-build docs"/></a>
-  <a href="https://crates.io/crates/flowlog-runtime"><img src="https://img.shields.io/crates/v/flowlog-runtime.svg?label=flowlog-runtime" alt="flowlog-runtime on crates.io"/></a>
-  <a href="https://docs.rs/flowlog-runtime"><img src="https://docs.rs/flowlog-runtime/badge.svg" alt="flowlog-runtime docs"/></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"/></a>
+  <a href="https://crates.io/crates/flowlog-build"><img alt="flowlog-build on crates.io" src="https://img.shields.io/crates/v/flowlog-build?style=flat-square&logo=rust&label=flowlog-build&color=76B900"/></a>
+  <a href="https://docs.rs/flowlog-build"><img alt="flowlog-build docs" src="https://img.shields.io/docsrs/flowlog-build?style=flat-square&logo=docsdotrs&label=docs&color=76B900"/></a>
+  &nbsp;
+  <a href="https://crates.io/crates/flowlog-runtime"><img alt="flowlog-runtime on crates.io" src="https://img.shields.io/crates/v/flowlog-runtime?style=flat-square&logo=rust&label=flowlog-runtime&color=76B900"/></a>
+  <a href="https://docs.rs/flowlog-runtime"><img alt="flowlog-runtime docs" src="https://img.shields.io/docsrs/flowlog-runtime?style=flat-square&logo=docsdotrs&label=docs&color=76B900"/></a>
+  &nbsp;
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-76B900?style=flat-square"/></a>
 </p>
 
-**Status:** FlowLog is under active development; interfaces may change without notice. 
+> **Status** · Under active development; interfaces may change without notice.
 
-## Architecture
+Built on [Timely](https://github.com/TimelyDataflow/timely-dataflow) and [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow), FlowLog pairs batch Datalog with first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to it runs **~2× faster than Soufflé** across 20 DaCapo programs (32 threads), with identical results.
 
-A `.dl` program flows through five sequential stages, supported by side modules.
+## Quick Start
 
-```mermaid
-flowchart LR
-    src[".dl"] --> p[parser] --> t[typechecker] --> s[stratifier] --> pl[planner] --> cg[codegen] --> exe[executable]
-    cat[catalog]:::side -.-> pl
-    opt[optimizer]:::side -.-> pl
-    prof[profiler]:::side -.-> cg
-    classDef side fill:#fff8e1,stroke:#a80,stroke-dasharray:3 3
-```
-
-- **parser** — Reads `.dl` source into a typed AST, each node tagged with its source location.
-- **typechecker** — Resolves every literal's type (e.g. `1` becomes `int32`).
-- **stratifier** — Groups rules into evaluation strata (one per `loop`/`fixpoint` block) so recursion runs in the right order.
-- **planner** — Lowers each rule to a Differential Dataflow plan; common sub-plans are shared across rules to reuse arrangements.
-- **codegen** — Emits the plan as Rust code using Timely + Differential Dataflow.
-- **catalog** — Caches per-rule metadata (relation signatures, pushdown filters, range-restriction checks) for the planner.
-- **optimizer** — Picks join order based on cardinalities and worst-case optimal joins (WIP).
-- **profiler** — Collects runtime metrics from Timely + Differential Dataflow operators.
-- **common** — Small helpers shared across the rest of the pipeline.
-
-The workspace is split across three crates:
-
-- **`flowlog-build`** — Library form. Use from `build.rs` to compile `.dl` programs into Rust at build time.
-- **`flowlog-compiler`** — CLI binary. Use to compile `.dl` programs into standalone executables.
-- **`flowlog-runtime`** — Linked into the generated output for interning, IO, sort/merge, and incremental-txn state. Not depended on directly.
-
-## Getting Started
-
-### Prerequisites
+**1 — Install the toolchain.** One-time setup — Rust (1.80+) and required OS packages, then a `cargo check` smoke test.
 
 ```bash
-$ bash env/env.sh     # Linux / macOS — one-time machine setup
-PS> .\env\env.ps1     # or, on Windows (elevated PowerShell)
+$ bash env/env.sh     # Linux / macOS
+PS> .\env\env.ps1     # Windows (elevated PowerShell)
 ```
 
-One-time machine setup: installs a stable Rust toolchain and the OS packages the build/tests need, then runs `cargo check --workspace` as a smoke test. Rust 1.80+ recommended.
-
-### Build the Workspace
+**2 — Build.** The compiler lands at `target/release/flowlog-compiler`.
 
 ```bash
 $ cargo build --release
 ```
 
-The compiler binary lands at `target/release/flowlog-compiler`.
-
-## Compiler CLI
-
-Compile a FlowLog program into a Timely/Differential Dataflow executable.
-
-```bash
-$ flowlog-compiler <PROGRAM> [OPTIONS]
-```
-
-`<PROGRAM>` is a path to a `.dl` file (or `all` / `--all` to iterate over every program in `example/`). Optional flags:
-
-- `-F, --fact-dir <DIR>` — prepend `<DIR>` to every `filename=` in `.input` directives. Required when `.input` uses relative filenames.
-- `-o <PATH>` — output executable path; defaults to the program stem (e.g. `reach.dl` → `./reach`).
-- `-D, --output-dir <DIR>` — where to materialize `.output` relations. Pass `-` to print tuples to stderr. Required when any relation uses `.output`.
-- `--mode <MODE>` — `datalog-batch` (default; uses `Present` diff), `datalog-inc`, `extend-batch`, or `extend-inc`. Extended modes are WIP.
-- `--sip` — Sideways Information Passing: filter later body atoms by bindings from earlier ones to shrink intermediate joins. Off by default.
-- `--str-intern` — intern string columns at load for faster joins / lower memory. Off by default.
-- `-P, --profile` — collect execution statistics. Datalog modes only; temporarily unsupported under Extended.
-- `-h, --help` — full Clap help text.
-
-## End-to-End Example
-
-The `example/graph_analysis/reach.dl` program computes nodes reachable from a small seed set:
+**3 — Run an example.** `example/graph_analysis/reach.dl` — nodes reachable from a seed set:
 
 ```datalog
 .decl Source(id: int32)
@@ -106,43 +56,98 @@ Reach(y) :- Reach(x), Arc(x,y).
 .printsize Reach
 ```
 
-> Below shows batch mode only. For incremental mode and profiler usage see <https://www.flowlog-rs.com/>.
-
-### 1. Prepare a Tiny Dataset
+Make a tiny dataset, then compile and run:
 
 ```bash
 $ mkdir -p reach
 $ printf '1\n'        > reach/Source.csv
 $ printf '1,2\n2,3\n' > reach/Arc.csv
-```
 
-### 2. Compile and Run
-
-```bash
-# Compile the .dl program into a binary executable
+# Compile to a binary, then run it on 4 worker threads
 $ target/release/flowlog-compiler example/graph_analysis/reach.dl -F reach -o reach_bin -D -
-
-# Run the generated executable
 $ ./reach_bin -w 4
 ```
 
-Key flags:
+Flag reference: [Compiler CLI](#compiler-cli). For incremental mode and the profiler, see <https://www.flowlog-rs.com/>.
 
-- `-F reach` points the compiler at the directory holding `Source.csv` and `Arc.csv`.
-- `-o reach_bin` names the output executable.
-- `-D -` prints IDB tuples and sizes to stderr; pass a directory path to materialize CSV output files instead.
-- `-w 4` tells the generated executable to use 4 worker threads.
+## Architecture
+
+A `.dl` program compiles through five stages; three side modules assist the planner and codegen:
+
+```text
+                                                   profiler
+                                                       ┊
+                                                       ↓
+.dl → parser → typechecker → stratifier → planner → codegen → executable
+                                             ↑
+                                             ┊
+                                    catalog · optimizer
+```
+
+**Pipeline**
+
+- **parser** — `.dl` → typed AST, each node source-located.
+- **typechecker** — resolves literal types (`1` → `int32`).
+- **stratifier** — groups rules into strata (one per `loop` / `fixpoint`) for ordered recursion.
+- **planner** — lowers rules to a Differential Dataflow plan, sharing sub-plans to reuse arrangements.
+- **codegen** — emits the plan as Timely + Differential Dataflow Rust.
+
+**Side modules**
+
+- **catalog** — per-rule metadata for the planner (signatures, pushdown filters, range checks).
+- **optimizer** — cardinality-based join ordering and worst-case optimal joins (WIP).
+- **profiler** — runtime metrics from Timely / Differential Dataflow operators.
+
+**Crates**
+
+- **`flowlog-build`** — library; compile `.dl` to Rust from `build.rs`.
+- **`flowlog-compiler`** — CLI; compile `.dl` to a standalone executable.
+- **`flowlog-runtime`** — linked into output (interning, IO, sort/merge, incremental-txn state); not a direct dep.
+
+## Compiler CLI
+
+```bash
+$ flowlog-compiler <PROGRAM> [OPTIONS]
+```
+
+`<PROGRAM>` is a path to a `.dl` file, or `all` / `--all` to compile every program in `example/`. Common options:
+
+- `-F, --fact-dir <DIR>` — prepend `<DIR>` to relative `filename=` paths in `.input` directives.
+- `-o <PATH>` — output executable path; defaults to the program stem (`reach.dl` → `./reach`).
+- `-D, --output-dir <DIR>` — where to materialize `.output` relations; `-` prints tuples to stderr.
+- `--mode <MODE>` — `datalog-batch` (default), `datalog-inc`, `extend-batch`, or `extend-inc` (extended modes WIP).
+- `--sip` — sideways information passing: filter later body atoms by earlier bindings to shrink joins (off by default).
+- `--str-intern` — intern string columns at load for faster joins and lower memory (off by default).
+- `-P, --profile` — collect execution statistics (Datalog modes only).
+- `-h, --help` — full help text.
 
 ## Testing
 
-See [`tests/README.md`](tests/README.md) for the per-suite contracts and recipes.
+A green oracle run is the definition of correct — see [`tests/README.md`](tests/README.md) for per-suite contracts and recipes.
 
-## Background Reading
+### FlowLog vs Soufflé — DOOP points-to
 
-> **FlowLog: Efficient and Extensible Datalog via Incrementality**  \
-> Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  \
-> VLDB 2026 (Boston) — [pVLDB](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf) • [VLDB 2026 Artifacts](https://github.com/flowlog-rs/vldb26-artifact)
+Apple-to-apple on the DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo](https://www.dacapobench.org/) programs at **32 threads** (FlowLog `-w 32`, Soufflé `-j 32`). The Soufflé program is the same `default.dl` with only type-keyword renames (`:string`→`:symbol`, `:int32`→`:number`) — identical rules and join order. All 20 produce **identical VarPointsTo**.
+
+<p align="center">
+  <img src="docs/doop-time.png" alt="DOOP run time — FlowLog vs Soufflé" width="820"/>
+</p>
+
+**Run time** (run only; one-off compile excluded) — FlowLog is faster on **20/20**, geomean **1.95×** (range 1.41–3.27×).
+
+Full methodology and numbers — including peak memory: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
+
+## Publication
+
+> **FlowLog: Efficient and Extensible Datalog via Incrementality**  
+> Hangdong Zhao, Zhenghong Yu, Srinag Rao, Simon Frisk, Zhiwei Fan, Paraschos Koutris  
+> VLDB 2026, Boston
+
+- **Paper** — [PVLDB Vol. 19](https://www.vldb.org/pvldb/vol19/p361-zhao.pdf)
+- **Artifacts** — [flowlog-rs/vldb26-artifact](https://github.com/flowlog-rs/vldb26-artifact)
 
 ## Contributing
 
-Contributions and bug reports are welcome. Open an issue or submit a pull request — PRs must pass CI before merge.
+Issues and pull requests are welcome. PRs must pass CI before merge.
+
+**Let's make Datalog fast — and incremental.**
