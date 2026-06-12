@@ -39,6 +39,10 @@ pub(crate) struct RulePlanner {
     /// Linear list of planned transformation infos for the current rule.
     transformation_infos: Vec<TransformationInfo>,
 
+    /// Materialized transformations with content-canonical fingerprints.
+    /// Empty until [`RulePlanner::materialize`] runs after the post phase.
+    transformations: Vec<Transformation>,
+
     /// Mapping from a fingerprint to its producer indices and optional
     /// list of consumer indices.
     ///
@@ -59,6 +63,7 @@ impl RulePlanner {
         Self {
             rule,
             transformation_infos: Vec::new(),
+            transformations: Vec::new(),
             producer_consumer: HashMap::new(),
         }
     }
@@ -67,6 +72,24 @@ impl RulePlanner {
     #[inline]
     pub(crate) fn transformation_infos(&self) -> &Vec<TransformationInfo> {
         &self.transformation_infos
+    }
+
+    /// Returns the materialized transformations (empty before [`RulePlanner::materialize`]).
+    #[inline]
+    pub(crate) fn transformations(&self) -> &[Transformation] {
+        &self.transformations
+    }
+
+    /// Materialize all infos into [`Transformation`]s with content-canonical
+    /// fingerprints (see [`Transformation::from_info`]). Must run after post,
+    /// in pipeline order so inputs resolve to their producers' fingerprints.
+    pub(crate) fn materialize(&mut self) {
+        let mut fp_map: HashMap<u64, u64> = HashMap::new();
+        self.transformations = self
+            .transformation_infos
+            .iter()
+            .map(|info| Transformation::from_info(info, &mut fp_map))
+            .collect();
     }
 
     /// Returns the original rule.
@@ -83,20 +106,15 @@ impl RulePlanner {
     pub(crate) fn generate_rule_plan_tree_debug_map(&self) -> BTreeMap<u64, (String, Vec<u64>)> {
         let mut debug_info_map: BTreeMap<u64, (String, Vec<u64>)> = BTreeMap::new();
 
-        if self.transformation_infos.is_empty() {
+        if self.transformations.is_empty() {
             return debug_info_map;
         }
 
         let atom_labels = self.rhs_atom_labels();
         let mut referenced_children = BTreeSet::new();
 
-        for info in &self.transformation_infos {
-            let tx = match info {
-                TransformationInfo::KVToKV { .. } => Transformation::kv_to_kv(info),
-                TransformationInfo::JoinToKV { .. } => Transformation::join(info),
-                TransformationInfo::AntiJoinToKV { .. } => Transformation::antijoin(info),
-            };
-            let (label, children) = Self::build_transformation_debug_entry(&tx);
+        for tx in &self.transformations {
+            let (label, children) = Self::build_transformation_debug_entry(tx);
             referenced_children.extend(children.iter().copied());
             debug_info_map.insert(tx.output().fingerprint(), (label, children));
         }
@@ -171,10 +189,10 @@ impl RulePlanner {
 
 impl std::fmt::Display for RulePlanner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Some(last) = self.transformation_infos.last() else {
+        let Some(last) = self.transformations.last() else {
             return writeln!(f, "Plan Tree: (empty)");
         };
-        let root = last.output_info_fp();
+        let root = last.output().fingerprint();
         let debug_map = self.generate_rule_plan_tree_debug_map();
 
         writeln!(f)?;
