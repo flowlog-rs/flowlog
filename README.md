@@ -15,7 +15,7 @@
 
 > **status** · under active development; interfaces may change.
 
-FlowLog compiles Datalog into efficient and scalable [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow) rust executables.</h3>. As such, FlowLog has first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to it runs **~2× faster than Soufflé** across 20 DaCapo programs (32 threads).
+FlowLog compiles Datalog into efficient and scalable [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow) rust executables.</h3> As such, FlowLog has first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to it runs **~2× faster than Soufflé** across 20 DaCapo programs (32 threads).
 
 ## Quick Start
 
