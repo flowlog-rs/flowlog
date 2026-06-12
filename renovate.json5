@@ -44,9 +44,11 @@
       groupName: "timely + differential-dataflow",
     },
     {
-      // Lockfile-only bumps (in-range releases) are fully CI-gated and need
-      // no human judgment — merge automatically once checks are green.
-      matchUpdateTypes: ["lockFileUpdate"],
+      // Cargo patch bumps are lockfile-only for our caret ranges and fully
+      // CI-gated — merge automatically. Minor stays manual on purpose: for
+      // 0.x crates (timely 0.30→0.31) "minor" is cargo's breaking boundary.
+      matchManagers: ["cargo"],
+      matchUpdateTypes: ["patch"],
       automerge: true,
     },
   ],
