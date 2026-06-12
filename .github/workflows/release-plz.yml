@@ -1,16 +1,21 @@
 name: release-plz
 
-# Replaces the older release-crates.yml. release-plz watches main, opens a
-# "chore: release" PR with the version bumps + changelog updates, and on
-# merge of that PR publishes flowlog-runtime / flowlog-build to crates.io
-# in dependency order (waiting for the index between publishes).
+# Two-branch release flow:
+#   push to main-next → release-pr: opens/updates the rolling "chore: release"
+#   PR against main-next (version bumps + changelogs computed from conventional
+#   commits since the last crates.io release). Merging it, then merging
+#   main-next into main, is the release act.
+#   push to main → release: publishes flowlog-runtime / flowlog-build to
+#   crates.io in dependency order (waiting for the index between publishes),
+#   tags, and creates GitHub Releases. No PR is ever opened from main, so a
+#   release merge cannot re-trigger another release PR.
 #
 # flowlog-compiler is publish=false; release-compiler.yml still handles its
 # tag + cross-platform binary uploads.
 
 on:
   push:
-    branches: [main]
+    branches: [main, main-next]
 
 concurrency:
   group: release-plz-${{ github.ref }}
@@ -22,6 +27,7 @@ env:
 jobs:
   release-plz-pr:
     name: Open / update Release PR
+    if: github.ref == 'refs/heads/main-next'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -48,7 +54,8 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   release-plz-release:
-    name: Publish on release PR merge
+    name: Publish on release merge to main
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
