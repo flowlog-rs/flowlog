@@ -10,7 +10,7 @@ use crate::parser::{AggregationOperator, FlowLogRule, HeadArg, LoopCondition};
 use crate::profiler::{Profiler, with_profiler};
 use crate::stratifier::Stratifier;
 
-use crate::planner::{PlanError, RulePlanner, Transformation, TransformationInfo};
+use crate::planner::{PlanError, RulePlanner, Transformation};
 
 /// Planner for a single stratum (a group of parallel rules).
 ///
@@ -149,6 +149,13 @@ impl StratumPlanner {
             planner.post(catalog)?;
         }
 
+        // Phase 6: Materialize per-rule transformations, rewriting lineage
+        // (rhs_id-laden) fingerprints to content-canonical ones so identical
+        // operations dedup across rules.
+        for planner in rule_planners.iter_mut() {
+            planner.materialize();
+        }
+
         // Debug info for per-rule plan trees
         rule_planners.iter().for_each(|rp| {
             debug!("{}", rp);
@@ -160,16 +167,24 @@ impl StratumPlanner {
                 profiler.insert_rule(
                     rule_planner.rule().to_string(),
                     rule_planner
-                        .transformation_infos()
+                        .transformations()
                         .iter()
-                        .map(|info| (info.input_info_fp(), info.output_info_fp()))
+                        .map(|tx| {
+                            let inputs = if tx.is_unary() {
+                                (tx.unary_input().fingerprint(), None)
+                            } else {
+                                let (left, right) = tx.binary_input();
+                                (left.fingerprint(), Some(right.fingerprint()))
+                            };
+                            (inputs, tx.output().fingerprint())
+                        })
                         .collect(),
                 );
             }
         });
 
-        // Phase 6: Materialize deduplicated transformations
-        // this phase also do sharing optimization across rules
+        // Phase 7: Cross-rule sharing — dedup the per-rule transformations
+        // by content fingerprint
         let atom_fps: HashSet<u64> = rule_planners
             .iter()
             .flat_map(RulePlanner::rhs_atom_fps)
@@ -188,9 +203,9 @@ impl StratumPlanner {
             atom_fps,
             ..Self::default()
         };
-        stratum_planner.materialize_transformations();
+        stratum_planner.deduplicate_transformations();
 
-        // Phase 7: Recursive split and metadata mappings
+        // Phase 8: Recursive split and metadata mappings
         // this phase to factoring optimizations
         stratum_planner.build_idb_to_heads_map(&catalogs);
         stratum_planner.identify_recursive_transformations(is_recursive);
@@ -306,6 +321,12 @@ impl StratumPlanner {
     pub(crate) fn is_recursive(&self) -> bool {
         self.is_recursive
     }
+
+    /// Test-only: per-rule transformations before cross-rule dedup.
+    #[cfg(test)]
+    pub(crate) fn rule_planners(&self) -> &[RulePlanner] {
+        &self.rule_planners
+    }
 }
 
 impl std::fmt::Display for StratumPlanner {
@@ -369,35 +390,17 @@ impl std::fmt::Display for StratumPlanner {
 // Sharing Optimization
 // =========================================================================
 impl StratumPlanner {
-    /// Deduplicate transformation infos across all rules and build executable transformations.
-    fn materialize_transformations(&mut self) {
-        let unique_infos = self.deduplicate_transformation_infos();
-
-        self.transformations = unique_infos
-            .iter()
-            .map(|&info| match info {
-                TransformationInfo::KVToKV { .. } => Transformation::kv_to_kv(info),
-                TransformationInfo::JoinToKV { .. } => Transformation::join(info),
-                TransformationInfo::AntiJoinToKV { .. } => Transformation::antijoin(info),
-            })
-            .collect();
-    }
-
-    /// Flatten and deduplicate transformation infos from all rules.
-    /// Returns references to unique transformation infos (first occurrence wins).
-    fn deduplicate_transformation_infos(&self) -> Vec<&TransformationInfo> {
+    /// Dedup the per-rule materialized transformations by content
+    /// fingerprint (first occurrence wins; order stays topological).
+    fn deduplicate_transformations(&mut self) {
         let mut seen = HashSet::new();
-        let mut unique_infos = Vec::new();
-
-        for planner in &self.rule_planners {
-            for info in planner.transformation_infos() {
-                if seen.insert(info) {
-                    unique_infos.push(info);
-                }
-            }
-        }
-
-        unique_infos
+        self.transformations = self
+            .rule_planners
+            .iter()
+            .flat_map(|planner| planner.transformations())
+            .filter(|tx| seen.insert(tx.output().fingerprint()))
+            .cloned()
+            .collect();
     }
 }
 
@@ -425,11 +428,10 @@ impl StratumPlanner {
     fn identify_recursive_transformations(&mut self, is_recursive: bool) {
         if !is_recursive {
             // Non-recursive stratum: all transformations are non-recursive
-            self.non_recursive_transformations
-                .extend(self.transformations.iter().cloned());
+            self.non_recursive_transformations = std::mem::take(&mut self.transformations);
             debug!(
                 "Non-recursive stratum: all {} transformations are non-recursive",
-                self.transformations.len()
+                self.non_recursive_transformations.len()
             );
             return;
         }
@@ -462,12 +464,14 @@ impl StratumPlanner {
         }
 
         // Step 3: Separate transformations into non-recursive and recursive vectors
-        for (i, transformation) in self.transformations.iter().enumerate() {
+        for (i, transformation) in std::mem::take(&mut self.transformations)
+            .into_iter()
+            .enumerate()
+        {
             if dynamic_indices.contains(&i) {
-                self.recursive_transformations.push(transformation.clone());
+                self.recursive_transformations.push(transformation);
             } else {
-                self.non_recursive_transformations
-                    .push(transformation.clone());
+                self.non_recursive_transformations.push(transformation);
             }
         }
 
@@ -475,7 +479,7 @@ impl StratumPlanner {
             "Recursive stratum: separated {} non-recursive, {} recursive transformations (total: {})",
             self.non_recursive_transformations.len(),
             self.recursive_transformations.len(),
-            self.transformations.len()
+            self.non_recursive_transformations.len() + self.recursive_transformations.len()
         );
     }
 }
@@ -525,15 +529,15 @@ impl StratumPlanner {
     fn build_idb_to_heads_map(&mut self, catalogs: &[Catalog]) {
         for (rule_idx, catalog) in catalogs.iter().enumerate() {
             let head_idb_fp = catalog.head_idb_fingerprint();
-            let Some(final_info) = self.rule_planners[rule_idx].transformation_infos().last()
-            else {
+            let Some(final_tx) = self.rule_planners[rule_idx].transformations().last() else {
                 continue;
             };
-            let head_fp = final_info.output_info_fp();
-            self.idb_to_heads_map
-                .entry(head_idb_fp)
-                .or_default()
-                .push(head_fp);
+            let head_fp = final_tx.output().fingerprint();
+            // Rules with identical pipelines share one head fp; record it once.
+            let heads = self.idb_to_heads_map.entry(head_idb_fp).or_default();
+            if !heads.contains(&head_fp) {
+                heads.push(head_fp);
+            }
             self.head_to_idb_map.insert(head_fp, head_idb_fp);
         }
     }

@@ -4,12 +4,14 @@
 //! through query execution plans. Transformations represent operations like filtering,
 //! projection, joins, and aggregation that convert input collections into output collections.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
 use tracing::trace;
 
 use crate::catalog::JoinPredicates;
+use crate::common::compute_fp;
 use crate::planner::Collection;
 
 mod flow;
@@ -211,10 +213,68 @@ impl Transformation {
     }
 }
 
+/// Lineage fp → content fp; absent entries (name-based atom fps) pass through.
+fn resolve_fp(fp_map: &HashMap<u64, u64>, fp: u64) -> u64 {
+    fp_map.get(&fp).copied().unwrap_or(fp)
+}
+
 // ========================
 // Constructors
 // ========================
 impl Transformation {
+    /// Materialize a [`TransformationInfo`] into a [`Transformation`] whose
+    /// output fingerprint is content-canonical — `hash(variant tag, resolved
+    /// input fps, flow)`, all rhs_id-free — unlike the lineage info
+    /// fingerprints, which embed rule-local atom positions and defeat
+    /// cross-rule sharing.
+    ///
+    /// `fp_map` (per rule, threaded in pipeline order) maps info fp →
+    /// content fp so inputs resolve to their producers; many info fps
+    /// mapping to one content fp is the intended sharing.
+    pub(crate) fn from_info(info: &TransformationInfo, fp_map: &mut HashMap<u64, u64>) -> Self {
+        // Tag mirrors the variant picked below, so equal fingerprints
+        // imply the same variant.
+        let (left, right) = info.input_info_fp();
+        let left_fp = resolve_fp(fp_map, left);
+        let right_fp = right.map(|fp| resolve_fp(fp_map, fp));
+        let tag = match info {
+            TransformationInfo::KVToKV { .. } => {
+                match (info.is_row_input(), info.is_row_output()) {
+                    (true, true) => "row_to_row",
+                    (true, false) => "row_to_kv",
+                    (false, true) => "kv_to_row",
+                    (false, false) => "kv_to_kv",
+                }
+            }
+            TransformationInfo::JoinToKV { .. } => {
+                if info.is_row_output() {
+                    "jn_to_row"
+                } else {
+                    "jn_to_kv"
+                }
+            }
+            TransformationInfo::AntiJoinToKV { .. } => {
+                if info.is_row_output() {
+                    "njn_to_row"
+                } else {
+                    "njn_to_kv"
+                }
+            }
+        };
+
+        let tx = match info {
+            TransformationInfo::KVToKV { .. } => Self::kv_to_kv(info, tag, left_fp),
+            TransformationInfo::JoinToKV { .. } => {
+                Self::join(info, tag, left_fp, right_fp.unwrap())
+            }
+            TransformationInfo::AntiJoinToKV { .. } => {
+                Self::antijoin(info, tag, left_fp, right_fp.unwrap())
+            }
+        };
+        fp_map.insert(info.output_info_fp(), tx.output().fingerprint());
+        tx
+    }
+
     /// Creates a unary transformation from input/output key-value layouts.
     ///
     /// This method analyzes the input and output layouts to determine the specific
@@ -231,7 +291,7 @@ impl Transformation {
     /// - `RowToKv`: Row input → Key-value output (structuring rows into KV pairs)
     /// - `KvToRow`: Key-value input → Row output (flattening KV pairs into rows)
     /// - `KvToKv`: Key-value input → Key-value output (re-keying / re-structuring)
-    pub(crate) fn kv_to_kv(info: &TransformationInfo) -> Self {
+    fn kv_to_kv(info: &TransformationInfo, tag: &'static str, input_fp: u64) -> Self {
         trace!("Creating kv_to_kv transformation with info:\n{}", info);
         // Create the transformation flow that defines how data moves through the operation
         let flow = TransformationFlow::kv_to_kv(
@@ -240,14 +300,16 @@ impl Transformation {
             info.kv_predicates(),
         );
 
+        let output_fp = compute_fp((tag, input_fp, &flow));
+
         let input = Arc::new(Collection::new(
-            info.input_info_fp().0,
+            input_fp,
             info.input_name().0.to_string(),
             info.input_kv_layout().0.key(),
             info.input_kv_layout().0.value(),
         ));
         let output = Arc::new(Collection::new(
-            info.output_info_fp(),
+            output_fp,
             info.output_name().to_string(),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
@@ -296,7 +358,7 @@ impl Transformation {
     /// A binary join Transformation variant chosen by the output layout:
     /// - `JnToRow`: Key-value ⋈ Key-value producing a flat row output
     /// - `JnToKv`:  Key-value ⋈ Key-value producing a key-value output
-    pub(crate) fn join(info: &TransformationInfo) -> Self {
+    fn join(info: &TransformationInfo, tag: &'static str, left_fp: u64, right_fp: u64) -> Self {
         // Create transformation flow that defines how the join operation processes data
         let flow = TransformationFlow::join_to_kv(
             info.input_kv_layout().0,
@@ -305,15 +367,17 @@ impl Transformation {
             info.join_predicates(),
         );
 
+        let output_fp = compute_fp((tag, left_fp, right_fp, &flow));
+
         let input = (
             Arc::new(Collection::new(
-                info.input_info_fp().0,
+                left_fp,
                 info.input_name().0.to_string(),
                 info.input_kv_layout().0.key(),
                 info.input_kv_layout().0.value(),
             )),
             Arc::new(Collection::new(
-                info.input_info_fp().1.unwrap(),
+                right_fp,
                 info.input_name().1.unwrap().to_string(),
                 info.input_kv_layout().1.unwrap().key(),
                 info.input_kv_layout().1.unwrap().value(),
@@ -321,7 +385,7 @@ impl Transformation {
         );
 
         let output = Arc::new(Collection::new(
-            info.output_info_fp(),
+            output_fp,
             info.output_name().to_string(),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),
@@ -362,7 +426,7 @@ impl Transformation {
     ///
     /// Panics if the left collection is not key-only, as antijoins require the left
     /// collection to contain only keys for filtering purposes.
-    pub(crate) fn antijoin(info: &TransformationInfo) -> Self {
+    fn antijoin(info: &TransformationInfo, tag: &'static str, left_fp: u64, right_fp: u64) -> Self {
         // Antijoins require the left collection to be key-only (used for filtering)
         assert!(
             info.input_kv_layout().0.value().is_empty(),
@@ -377,15 +441,17 @@ impl Transformation {
             &JoinPredicates::default(), // No predicates for antijoins
         );
 
+        let output_fp = compute_fp((tag, left_fp, right_fp, &flow));
+
         let input = (
             Arc::new(Collection::new(
-                info.input_info_fp().0,
+                left_fp,
                 info.input_name().0.to_string(),
                 info.input_kv_layout().0.key(),
                 info.input_kv_layout().0.value(),
             )),
             Arc::new(Collection::new(
-                info.input_info_fp().1.unwrap(),
+                right_fp,
                 info.input_name().1.unwrap().to_string(),
                 info.input_kv_layout().1.unwrap().key(),
                 info.input_kv_layout().1.unwrap().value(),
@@ -393,7 +459,7 @@ impl Transformation {
         );
 
         let output = Arc::new(Collection::new(
-            info.output_info_fp(),
+            output_fp,
             info.output_name().to_string(),
             info.output_kv_layout().key(),
             info.output_kv_layout().value(),

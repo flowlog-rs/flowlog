@@ -173,4 +173,121 @@ mod tests {
             "expected 8 non-recursive transformations after prune"
         );
     }
+
+    /// Both rules key `B` on its first column, but at different rhs
+    /// positions (1 vs 0). Lineage fps embed that position; content-canonical
+    /// materialization must share one arrangement.
+    const RHS_ID_SHARING_SRC: &str = "\
+        .decl A(x: int32, y: int32)\n\
+        .decl B(x: int32, y: int32)\n\
+        .decl C(x: int32, y: int32)\n\
+        .decl Out1(x: int32, y: int32)\n\
+        .decl Out2(x: int32, y: int32)\n\
+        .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+        .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+        .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+        .output Out1\n\
+        .output Out2\n\
+        Out1(x, y) :- A(x, z), B(z, y).\n\
+        Out2(x, y) :- B(z, y), C(x, z).\n";
+
+    #[test]
+    fn rhs_id_does_not_split_identical_arrangements() {
+        let pp = analyze(RHS_ID_SHARING_SRC);
+        let b_fp = crate::common::compute_fp("b");
+
+        let b_arrangements: Vec<_> = pp
+            .strata()
+            .iter()
+            .flat_map(|s| s.non_recursive_transformations())
+            .filter(|t| t.is_unary() && t.unary_input().fingerprint() == b_fp)
+            .collect();
+        assert_eq!(
+            b_arrangements.len(),
+            1,
+            "both rules key B on its first column; the arrangement must be shared"
+        );
+
+        // Sharing must be wired in: both joins consume the shared output.
+        let shared_fp = b_arrangements[0].output().fingerprint();
+        let consumers = pp
+            .strata()
+            .iter()
+            .flat_map(|s| s.non_recursive_transformations())
+            .filter(|t| !t.is_unary())
+            .filter(|t| {
+                let (left, right) = t.binary_input();
+                left.fingerprint() == shared_fp || right.fingerprint() == shared_fp
+            })
+            .count();
+        assert_eq!(
+            consumers, 2,
+            "both joins must consume the shared B arrangement"
+        );
+    }
+
+    /// Tripwire against rhs_id-blind hashing: P and Q pair the same
+    /// occurrences to swapped output slots. The positional flow preserves
+    /// the pairing, so the heads must stay distinct (merging makes Q = P).
+    #[test]
+    fn swapped_output_columns_stay_distinct() {
+        let pp = analyze(
+            "\
+            .decl R(k: int32, v: int32)\n\
+            .decl S(k: int32, v: int32)\n\
+            .decl P(a: int32, b: int32)\n\
+            .decl Q(a: int32, b: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output P\n\
+            .output Q\n\
+            P(a, b) :- R(k, a), S(k, b).\n\
+            Q(a, b) :- R(k, b), S(k, a).\n",
+        );
+
+        let heads: Vec<u64> = pp
+            .strata()
+            .iter()
+            .flat_map(|s| s.idb_to_heads_map().values().flatten().copied())
+            .collect();
+        assert_eq!(heads.len(), 2, "P and Q must each keep their own head");
+        assert_ne!(
+            heads[0], heads[1],
+            "swapped output columns must not collapse into one head"
+        );
+    }
+
+    /// Equal output fingerprint must imply equal content (operation, input
+    /// fps, flow) across all per-rule transformations — otherwise dedup
+    /// would substitute a different transformation.
+    #[test]
+    fn equal_fingerprint_implies_equal_content() {
+        use crate::planner::TransformationFlow;
+
+        for src in [DYCK_SRC, RHS_ID_SHARING_SRC] {
+            let pp = analyze(src);
+            let mut seen: HashMap<u64, (&str, Vec<u64>, TransformationFlow)> = HashMap::new();
+            for stratum in pp.strata() {
+                for planner in stratum.rule_planners() {
+                    for tx in planner.transformations() {
+                        let fp = tx.output().fingerprint();
+                        let content = (
+                            tx.operation_name(),
+                            tx.input_fingerprints(),
+                            tx.flow().clone(),
+                        );
+                        match seen.get(&fp) {
+                            None => {
+                                seen.insert(fp, content);
+                            }
+                            Some(prev) => assert_eq!(
+                                *prev, content,
+                                "fingerprint 0x{fp:016x} maps to two different contents"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
