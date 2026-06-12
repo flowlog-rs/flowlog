@@ -91,7 +91,15 @@ pub(crate) fn gen_batch_main(
                         r.close();
                     }
 
-                    while worker.step() {}
+                    // Inputs are closed, so the only remaining work is draining
+                    // the dataflow to fixpoint. Park (rather than busy-spin on
+                    // `worker.step()`) whenever a worker has no pending
+                    // activations: all further progress arrives as buzzing
+                    // channel messages, so parked workers are always re-awoken.
+                    // This is timely's own batch-drain idiom (`execute.rs`) and
+                    // cuts the per-round progress-barrier spin that otherwise
+                    // dominates CPU on large recursive programs.
+                    while worker.step_or_park(None) {}
 
                     // Flush per-worker output buffers into the shared ones,
                     // then worker 0 merges and writes results.
