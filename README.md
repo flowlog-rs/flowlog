@@ -115,9 +115,9 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 
 A green oracle run is the definition of correct — see [`tests/README.md`](tests/README.md) for per-suite contracts and recipes.
 
-### FlowLog vs Soufflé — DOOP points-to
+### vs Soufflé — DOOP
 
-Apple-to-apple on the DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo](https://www.dacapobench.org/) programs at **32 threads** (FlowLog `-w 32`, Soufflé `-j 32`). The Soufflé program is the same `default.dl` with only type-keyword renames (`:string`→`:symbol`, `:int32`→`:number`) — identical rules and join order. All 20 produce **identical VarPointsTo**.
+On DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo](https://www.dacapobench.org/) programs at **32 threads** (FlowLog `-w 32`, Soufflé `-j 32`). The Soufflé program is the same `default.dl` of identical rules and join order.
 
 <p align="center">
   <img src="docs/doop-time.png" alt="DOOP run time — FlowLog vs Soufflé" width="820"/>
@@ -125,7 +125,7 @@ Apple-to-apple on the DOOP **default** points-to analysis (`doop/default.dl`) ac
 
 **Run time** (run only; one-off compile excluded) — FlowLog is faster on **20/20**, geomean **1.95×** (range 1.41–3.27×).
 
-Full methodology and numbers — including peak memory: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
+Benchmark suite: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
 
 ## Publication
 
