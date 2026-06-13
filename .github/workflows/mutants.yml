@@ -60,3 +60,59 @@ jobs:
           name: mutants-shard-${{ matrix.shard }}
           path: mutants.out/
           if-no-files-found: ignore
+
+  # Aggregate every shard's surviving mutants into one self-updating issue.
+  report:
+    name: 📋 Report surviving mutants
+    needs: mutants
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: 📥 Download shard reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mutants-shard-*
+          path: shards
+
+      - name: 🧮 Aggregate missed mutants
+        id: agg
+        run: |
+          cat shards/*/missed.txt 2>/dev/null | sort -u > missed-all.txt || true
+          count=$(grep -vc '^$' missed-all.txt 2>/dev/null) || count=0
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          head -200 missed-all.txt > issue-body.txt
+          if [ "$count" -gt 200 ]; then
+            echo "... and $((count - 200)) more — see the run artifacts for the full list." >> issue-body.txt
+          fi
+
+      - name: 📣 Create / update / close the report issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const count = Number('${{ steps.agg.outputs.count }}') || 0;
+            const marker = '<!-- cargo-mutants-report -->';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { owner, repo } = context.repo;
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'mutation-testing', per_page: 50,
+            });
+            const existing = open.find(i => (i.body || '').includes(marker));
+            if (count === 0) {
+              if (existing) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: existing.number,
+                  body: `All mutants caught as of ${runUrl} — closing.` });
+                await github.rest.issues.update({ owner, repo, issue_number: existing.number, state: 'closed' });
+              }
+              return;
+            }
+            const list = fs.readFileSync('issue-body.txt', 'utf8');
+            const body = `${marker}\n**${count} mutant(s) survived the test suite** — each marks a change no test catches. [Latest run](${runUrl}).\n\n\`\`\`\n${list}\n\`\`\`\n\nTriage: add a test that fails when the change is made, or accept the survivor if the mutation is equivalent/unimportant.`;
+            if (existing) {
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title: 'Mutation testing: surviving mutants',
+                body, labels: ['mutation-testing'] });
+            }
