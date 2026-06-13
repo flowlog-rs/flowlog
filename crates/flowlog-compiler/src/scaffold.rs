@@ -128,26 +128,26 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
             ));
             // Fast, non-cryptographic hasher for the interner (keys are
             // program-controlled, so SipHash's HashDoS resistance is wasted).
-            deps["rustc-hash"] = "2".into();
+            deps["rustc-hash"] = "2.0".into();
         }
         if features.ordered_float() {
-            deps["ordered-float"] = value(inline_versioned_dep("5", &["serde"]));
+            deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
         }
         if features.parallel_output() {
             // The parallel `.output` file drain formats worker buffers with rayon.
-            deps["rayon"] = "1".into();
+            deps["rayon"] = "1.0".into();
         }
         if features.itoa() {
             // Integer formatting on the parallel file-output path; emitted
             // fully qualified (`::itoa::Buffer`), so no `use` import exists
             // to trip `-Dwarnings`.
-            deps["itoa"] = "1".into();
+            deps["itoa"] = "1.0".into();
         }
         if features.agg_semiring() || features.string_intern() {
-            deps["serde"] = value(inline_versioned_dep("1", &["derive"]));
+            deps["serde"] = value(inline_versioned_dep("1.0", &["derive"]));
         }
         if config.is_incremental() {
-            deps["rustyline"] = "17".into();
+            deps["rustyline"] = "17.0".into();
         }
     }
 
