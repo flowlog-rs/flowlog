@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.2...flowlog-build-v0.3.3) - 2026-06-13
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.3.2](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.1...flowlog-build-v0.3.2) - 2026-06-12
 
 ### Other

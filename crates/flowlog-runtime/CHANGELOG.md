@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.2.4...flowlog-runtime-v0.2.5) - 2026-06-13
+
+### Other
+
+- normalize dependency requirements to x.y style
+
 ## [0.2.4](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.2.3...flowlog-runtime-v0.2.4) - 2026-06-12
 
 ### Other
