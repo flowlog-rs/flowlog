@@ -1,0 +1,58 @@
+name: Fuzz
+
+# Coverage-guided fuzzing of the Datalog parser. Not a PR gate — fuzzing is
+# open-ended, so it runs on a schedule and on manual dispatch, persisting its
+# corpus across runs and uploading any crash/timeout artifacts it finds.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # daily, 03:00 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  # Queue rather than cancel, so a run builds on the previous corpus.
+  group: fuzz
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: ⚙️ Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: 🦀 Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: 🐝 Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      - name: 💾 Persist fuzz corpus across runs
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: 🐝 Fuzz ${{ matrix.target }} (10 min)
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=600
+
+      - name: 📤 Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
