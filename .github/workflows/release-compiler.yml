@@ -106,7 +106,7 @@ jobs:
           echo "ASSET_CHECKSUM=${STAGE}.tar.gz.sha256" >> "$GITHUB_ENV"
 
       - name: 📤 Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flowlog-compiler-${{ matrix.target }}
           path: |
@@ -124,7 +124,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: 📥 Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
