@@ -26,9 +26,9 @@
   customManagers: [
     {
       // Crate versions the compiler embeds into generated Cargo.toml scaffolds
-      // (crates/flowlog-compiler/src/scaffold.rs::render_cargo_toml).
+      // (flowlog-compiler/src/scaffold.rs::render_cargo_toml).
       customType: "regex",
-      managerFilePatterns: ["/crates/flowlog-compiler/src/scaffold\\.rs$/"],
+      managerFilePatterns: ["/flowlog-compiler/src/scaffold\\.rs$/"],
       matchStrings: [
         'deps\\["(?<depName>[a-z0-9_-]+)"\\] = "(?<currentValue>[^"]+)"\\.into\\(\\)',
         'deps\\["(?<depName>[a-z0-9_-]+)"\\] = value\\(inline_versioned_dep\\(\\s*"(?<currentValue>[^"]+)"',

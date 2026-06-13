@@ -32,7 +32,7 @@ readonly BUILD_DIR="${ROOT_DIR}/target/e2e"
 # Build generated crates against the workspace runtime instead of crates.io,
 # so unpublished flowlog-runtime additions are testable (scaffold emits a
 # [patch.crates-io] entry when this is set).
-export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/crates/flowlog-runtime"
+export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
 
 usage() {
     cat <<EOF

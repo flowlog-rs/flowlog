@@ -1,14 +1,14 @@
 [package]
 name = "flowlog-runtime"
-# Explicit version (not `version.workspace = true`) because the runtime
-# releases on its own cadence — generated code depends on it by
-# published version, so any additive change ships as an independent bump.
+# The runtime releases on its own cadence — generated code depends on it
+# by published version, so any additive change ships as an independent bump.
 version = "0.2.4"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 description = "Runtime support crate for FlowLog — re-exports timely/differential-dataflow and provides helpers used by flowlog-build-generated code."
-repository = "https://github.com/flowlog-rs/flowlog"
 readme = "README.md"
 keywords = ["datalog", "dataflow", "differential", "timely"]
 categories = ["database", "compilers"]
