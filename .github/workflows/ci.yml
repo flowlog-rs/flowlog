@@ -41,3 +41,12 @@ jobs:
         run: |
           bash tests/fixtures/run_compiler.sh -j 4
           bash tests/fixtures/run_lib.sh -j 4
+
+  deny:
+    name: 🛡️ cargo-deny (licenses + advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

@@ -1,0 +1,51 @@
+# cargo-deny — supply-chain gate run in CI (see .github/workflows/ci.yml).
+# Vets every dependency for license, known security advisories, and source
+# registry. Complements Renovate: Renovate keeps deps fresh, cargo-deny
+# enforces they stay legally and security-acceptable.
+
+[graph]
+all-features = true
+
+[advisories]
+# Security vulnerabilities are denied everywhere (the default). Unmaintained
+# advisories only fail for crates we directly depend on — bincode and paste,
+# for example, arrive transitively through timely/differential-dataflow, are
+# unmaintained-but-not-vulnerable, and have no upgrade available, so flagging
+# them is unactionable noise.
+unmaintained = "workspace"
+# Triaged advisory IDs go here (with a comment saying why they're tolerated).
+ignore = []
+
+[licenses]
+# Allow-list derived from the licenses actually present in the tree
+# (`cargo metadata`). Anything not listed fails the build. `Zlib` and
+# `Unicode-3.0` are mandatory — one dependency each requires them with no
+# OR-alternative. LGPL appears only as an OR-alternative to MIT, so it is
+# deliberately absent (we never have to accept it).
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions usually arrive through transitive deps and aren't
+# always fixable, so surface them without failing the build.
+multiple-versions = "warn"
+# Fail on real `*` version requirements, but allow intra-workspace path
+# deps (flowlog-compiler -> flowlog-build by path), which count as wildcards.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# All deps come from crates.io; reject anything from an unknown registry
+# or a git source.
+unknown-registry = "deny"
+unknown-git = "deny"
