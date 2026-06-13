@@ -14,6 +14,11 @@
   // resolution that users of generated crates always get (they have no lockfile).
   lockFileMaintenance: { enabled: true, automerge: true },
 
+  // GitHub's native auto-merge proved unreliable here (armed PRs with green
+  // required checks sat unmerged for hours); have Renovate merge green
+  // automerge PRs itself during its visits instead.
+  platformAutomerge: false,
+
   customManagers: [
     {
       // Crate versions the compiler embeds into generated Cargo.toml scaffolds
@@ -47,6 +52,7 @@
       // Cargo patch bumps are lockfile-only for our caret ranges and fully
       // CI-gated — merge automatically. Minor stays manual on purpose: for
       // 0.x crates (timely 0.30→0.31) "minor" is cargo's breaking boundary.
+      // Conflicted siblings are fine: Renovate rebases them on each visit.
       matchManagers: ["cargo"],
       matchUpdateTypes: ["patch"],
       automerge: true,
