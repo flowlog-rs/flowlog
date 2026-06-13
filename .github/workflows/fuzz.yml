@@ -5,6 +5,8 @@ name: Fuzz
 # corpus across runs and uploading any crash/timeout artifacts it finds.
 
 on:
+  push:
+    branches: [main-next]
   schedule:
     - cron: "0 3 * * *" # daily, 03:00 UTC
   workflow_dispatch: {}
@@ -46,8 +48,9 @@ jobs:
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
 
-      - name: 🐝 Fuzz ${{ matrix.target }} (10 min)
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=600
+      - name: 🐝 Fuzz ${{ matrix.target }}
+        # Short smoke on push; the deeper run happens on the daily schedule.
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ github.event_name == 'schedule' && '600' || '120' }}
 
       - name: 📤 Upload crash artifacts
         if: failure()
