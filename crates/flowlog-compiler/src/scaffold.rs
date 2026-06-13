@@ -147,7 +147,7 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
             deps["serde"] = value(inline_versioned_dep("1.0", &["derive"]));
         }
         if config.is_incremental() {
-            deps["rustyline"] = "17.0".into();
+            deps["rustyline"] = "18".into();
         }
     }
 
