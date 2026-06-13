@@ -1,0 +1,18 @@
+# cargo-mutants configuration.
+#
+# Mutation testing checks whether the test suite actually *catches* bugs:
+# it mutates the code (flip an operator, replace a return value) and reruns
+# the tests — a surviving ("MISSED") mutant means nothing tested that line.
+#
+# Run locally, scoped, to investigate one area:
+#   cargo mutants --file "**/typechecker/**"
+# CI runs it sharded on a weekly schedule (.github/workflows/mutants.yml).
+
+# Mutate only flowlog-build — it holds the parser/catalog/planner/codegen
+# logic and all 218 unit tests. flowlog-runtime has no unit tests (its code is
+# exercised by the e2e fixtures, so every mutant would falsely read as MISSED)
+# and flowlog-compiler is thin CLI plumbing; mutating either is just noise.
+exclude_globs = [
+    "flowlog-runtime/**",
+    "flowlog-compiler/**",
+]

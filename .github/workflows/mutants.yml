@@ -1,0 +1,62 @@
+name: Mutants
+
+# Mutation testing — does the test suite actually catch bugs? cargo-mutants
+# mutates the code and reruns the tests; a surviving ("MISSED") mutant means
+# nothing tested that change. Deterministic and expensive, so it runs weekly
+# (results change only when code or tests change) and uploads a report rather
+# than gating PRs. For a real-time gate on changed lines, `cargo mutants
+# --in-diff` on PRs is the lighter alternative.
+
+on:
+  schedule:
+    - cron: "0 4 * * 1" # weekly, Monday 04:00 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  group: mutants
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: ⚙️ Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: 🧬 Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: 🧬 Mutation test (shard ${{ matrix.shard }}/8)
+        run: |
+          set +e
+          cargo mutants --no-shuffle --shard ${{ matrix.shard }}/8
+          code=$?
+          # 0 caught · 2 missed · 3 timeout — all ran fine; findings go to the
+          # uploaded report. 1 usage error · 4 baseline failed — real problems.
+          case "$code" in 0 | 2 | 3) exit 0 ;; *) exit 1 ;; esac
+
+      - name: 📤 Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out/
+          if-no-files-found: ignore
