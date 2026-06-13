@@ -35,6 +35,10 @@ jobs:
 
       - name: 🦀 Install nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
+        with:
+          # gnu (dynamic libc) is required — the fuzzer's sanitizer is
+          # incompatible with musl's statically linked libc.
+          targets: x86_64-unknown-linux-gnu
 
       - name: 🐝 Install cargo-fuzz
         uses: taiki-e/install-action@v2
@@ -50,7 +54,9 @@ jobs:
 
       - name: 🐝 Fuzz ${{ matrix.target }}
         # Short smoke on push; the deeper run happens on the daily schedule.
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ github.event_name == 'schedule' && '600' || '120' }}
+        # Pin gnu explicitly — the runner otherwise defaults to musl, whose
+        # static libc breaks the sanitizer.
+        run: cargo fuzz run ${{ matrix.target }} --target x86_64-unknown-linux-gnu -- -max_total_time=${{ github.event_name == 'schedule' && '600' || '120' }}
 
       - name: 📤 Upload crash artifacts
         if: failure()
