@@ -23,6 +23,9 @@ jobs:
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
     strategy:
       fail-fast: false
       matrix:
@@ -65,3 +68,44 @@ jobs:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/
           if-no-files-found: ignore
+
+      - name: 📣 File an issue on crash
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const target = '${{ matrix.target }}';
+            const dir = `fuzz/artifacts/${target}`;
+            let files = [];
+            try {
+              files = fs.readdirSync(dir).filter(f => /^(crash|timeout|oom|leak)-/.test(f));
+            } catch (e) {}
+            // No crash artifact => the failure was infra/build, not a fuzz find.
+            if (files.length === 0) return;
+            const { owner, repo } = context.repo;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const marker = `<!-- fuzz-crash-${target} -->`;
+            const file = files[0];
+            const buf = fs.readFileSync(`${dir}/${file}`);
+            const hex = buf.toString('hex').replace(/(..)/g, '$1 ').trim().slice(0, 800);
+            const text = buf.toString('utf8');
+            const printable = /^[\x09\x0a\x0d\x20-\x7e]*$/.test(text)
+              ? text.slice(0, 1000) : '(non-UTF-8 — see hex)';
+            const body = `${marker}\n**Fuzzing found a crash in \`${target}\`** ([run](${runUrl})).\n\n`
+              + `Artifact \`${file}\` (${buf.length} bytes).\n\n`
+              + `Input (text):\n\`\`\`\n${printable}\n\`\`\`\n\n`
+              + `Input (hex):\n\`\`\`\n${hex}\n\`\`\`\n\n`
+              + `Reproduce — download the artifact from the run, then:\n`
+              + `\`\`\`\ncargo +nightly fuzz run ${target} <artifact>\n\`\`\``;
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'fuzz-crash', per_page: 50,
+            });
+            const existing = open.find(i => (i.body || '').includes(marker));
+            if (existing) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: existing.number,
+                body: `Still crashing as of ${runUrl} (artifact \`${file}\`).` });
+            } else {
+              await github.rest.issues.create({ owner, repo, title: `Fuzz: crash in \`${target}\``,
+                body, labels: ['fuzz-crash', 'bug'] });
+            }
