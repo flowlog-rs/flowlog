@@ -1,6 +1,10 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  extends: ["config:recommended"],
+  // Batch update PRs into one quiet weekly sweep (vortex-style cadence).
+  extends: ["config:recommended", "schedule:earlyMondays"],
+
+  // With a weekly schedule there is no reason to trickle PRs out.
+  prHourlyLimit: 0,
 
   // Scan & open PRs against the integration branch; `main` (release-only)
   // is never checked — updates reach it via the normal release merge.
@@ -55,6 +59,15 @@
       // Conflicted siblings are fine: Renovate rebases them on each visit.
       matchManagers: ["cargo"],
       matchUpdateTypes: ["patch"],
+      automerge: true,
+    },
+    {
+      // Stable (>=1.x) crates: minors are semver-compatible and in-range
+      // under our caret requirements, so they are lockfile-only too. 0.x
+      // crates never match this rule — their "minor" is the breaking slot.
+      matchManagers: ["cargo"],
+      matchUpdateTypes: ["minor"],
+      matchCurrentVersion: ">=1.0.0",
       automerge: true,
     },
   ],
