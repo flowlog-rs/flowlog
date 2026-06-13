@@ -18,7 +18,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: ⚙️ Install protobuf-compiler + bsdmainutils
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler bsdmainutils
@@ -39,5 +39,5 @@ jobs:
 
       - name: 🏁 End-to-end fixture tests
         run: |
-          bash tests/fixtures/run_compiler.sh
-          bash tests/fixtures/run_lib.sh
+          bash tests/fixtures/run_compiler.sh -j 4
+          bash tests/fixtures/run_lib.sh -j 4

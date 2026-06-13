@@ -1,6 +1,10 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  extends: ["config:recommended"],
+  // Batch update PRs into one quiet weekly sweep (vortex-style cadence).
+  extends: ["config:recommended", "schedule:earlyMondays"],
+
+  // With a weekly schedule there is no reason to trickle PRs out.
+  prHourlyLimit: 0,
 
   // Scan & open PRs against the integration branch; `main` (release-only)
   // is never checked — updates reach it via the normal release merge.
@@ -12,19 +16,24 @@
 
   // Weekly Cargo.lock refresh: CI builds against the same fresh in-range
   // resolution that users of generated crates always get (they have no lockfile).
-  lockFileMaintenance: { enabled: true },
+  lockFileMaintenance: { enabled: true, automerge: true },
+
+  // GitHub's native auto-merge proved unreliable here (armed PRs with green
+  // required checks sat unmerged for hours); have Renovate merge green
+  // automerge PRs itself during its visits instead.
+  platformAutomerge: false,
 
   customManagers: [
     {
       // Crate versions the compiler embeds into generated Cargo.toml scaffolds
-      // (crates/flowlog-compiler/src/scaffold.rs::render_cargo_toml).
+      // (flowlog-compiler/src/scaffold.rs::render_cargo_toml).
       customType: "regex",
-      managerFilePatterns: ["/crates/flowlog-compiler/src/scaffold\\.rs$/"],
+      managerFilePatterns: ["/flowlog-compiler/src/scaffold\\.rs$/"],
       matchStrings: [
         'deps\\["(?<depName>[a-z0-9_-]+)"\\] = "(?<currentValue>[^"]+)"\\.into\\(\\)',
         'deps\\["(?<depName>[a-z0-9_-]+)"\\] = value\\(inline_versioned_dep\\(\\s*"(?<currentValue>[^"]+)"',
       ],
-      datasourceTemplate: "crates",
+      datasourceTemplate: "crate",
       versioningTemplate: "cargo",
     },
   ],
@@ -42,6 +51,24 @@
       // the final binary links two incompatible copies of timely.
       matchPackageNames: ["timely", "differential-dataflow"],
       groupName: "timely + differential-dataflow",
+    },
+    {
+      // Cargo patch bumps are lockfile-only for our caret ranges and fully
+      // CI-gated — merge automatically. Minor stays manual on purpose: for
+      // 0.x crates (timely 0.30→0.31) "minor" is cargo's breaking boundary.
+      // Conflicted siblings are fine: Renovate rebases them on each visit.
+      matchManagers: ["cargo"],
+      matchUpdateTypes: ["patch"],
+      automerge: true,
+    },
+    {
+      // Stable (>=1.x) crates: minors are semver-compatible and in-range
+      // under our caret requirements, so they are lockfile-only too. 0.x
+      // crates never match this rule — their "minor" is the breaking slot.
+      matchManagers: ["cargo"],
+      matchUpdateTypes: ["minor"],
+      matchCurrentVersion: ">=1.0.0",
+      automerge: true,
     },
   ],
 }

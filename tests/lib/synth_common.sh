@@ -104,7 +104,7 @@ find_csv_case_insensitive() {
 ###############################################################################
 
 # Map a FlowLog `.decl` data type to its Rust equivalent. Aliases mirror
-# `crates/flowlog-build/src/parser/grammar.pest`:
+# `flowlog-build/src/parser/grammar.pest`:
 #   number  → int32   unsigned → uint32
 #   float   → f32     symbol   → string
 dl_to_rust_type() {
@@ -126,7 +126,7 @@ dl_to_rust_type() {
 }
 
 # Convert a snake_case / lowercase name to PascalCase, mirroring
-# `crates/flowlog-build/src/build/relation/mod.rs::pascal_case`. Capitalize
+# `flowlog-build/src/build/relation/mod.rs::pascal_case`. Capitalize
 # the first character and any character after `_` / `-`, dropping separators.
 pascal_case() {
     local input="$1"

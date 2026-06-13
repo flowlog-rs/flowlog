@@ -51,7 +51,7 @@ all_dl_files() {
 # whitespace) so `// .input Foo` comments are skipped. The `.` in the
 # name pattern admits component-instance relations like `a.P`; on output
 # the dot is rewritten to `·` (U+00B7) to mirror the inliner's rename
-# in `crates/flowlog-build/src/parser/program.rs::normalize_inliner_dots`.
+# in `flowlog-build/src/parser/program.rs::normalize_inliner_dots`.
 parse_input_relations() {
     local dl_file="$1"
     while IFS= read -r f; do
@@ -83,7 +83,7 @@ parse_input_filename() {
 # (modulo whitespace) so commented directives are skipped. The `.` in the
 # name pattern admits component-instance relations like `a.P`; on output
 # the dot is rewritten to `·` (U+00B7) to mirror the inliner's rename
-# in `crates/flowlog-build/src/parser/program.rs::normalize_inliner_dots`.
+# in `flowlog-build/src/parser/program.rs::normalize_inliner_dots`.
 parse_output_relations() {
     local dl_file="$1"
     while IFS= read -r f; do
@@ -160,7 +160,7 @@ _parse_decl() {
     inside=$(echo "$line" | sed -E 's/^[^(]*\(([^)]*)\).*$/\1/')
     [[ -n "$inside" ]] || { echo ""; return 0; }  # nullary
     # Attribute names are lowercased to mirror parser normalization
-    # (crates/flowlog-build/src/parser/declaration/attribute.rs). The
+    # (flowlog-build/src/parser/declaration/attribute.rs). The
     # generated struct exposes lowercase field names; loaders / writers
     # must match.
     if [[ "$mode" == "both" ]]; then
@@ -205,11 +205,11 @@ publish = false
 # crates so a local change to either is exercised by the lib-mode test
 # suites. (Pre-leanness this pinned flowlog-runtime to crates.io 0.2,
 # which silently masked any local-only runtime change.)
-flowlog-runtime = { path = "${ROOT_DIR}/crates/flowlog-runtime" }
+flowlog-runtime = { path = "${ROOT_DIR}/flowlog-runtime" }
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
-flowlog-build = { path = "${ROOT_DIR}/crates/flowlog-build" }
+flowlog-build = { path = "${ROOT_DIR}/flowlog-build" }
 
 [workspace]
 
