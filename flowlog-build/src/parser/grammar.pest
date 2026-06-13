@@ -348,7 +348,7 @@ atom_arg = { constant | variable | placeholder }
 fact = { head ~ "." }
 
 // Rule with optional multi-head and multi-body (Souffle-style).
-// Commas separate alternative heads, semicolons seperate alternative bodies:
+// Commas separate alternative heads, semicolons separate alternative bodies:
 //   h1, h2 :- b1; b2.  →  h1:-b1. h1:-b2. h2:-b1. h2:-b2.
 rule = { rule_heads ~ ":-" ~ rule_bodies ~ "." }
 
