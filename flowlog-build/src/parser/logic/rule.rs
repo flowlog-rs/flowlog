@@ -173,25 +173,29 @@ impl FlowLogRule {
 
     /// Extract constants from a fact's head.
     ///
-    /// Panics if any head argument is not a simple constant.
-    #[must_use]
-    pub(crate) fn extract_constants_from_head(&self) -> Vec<ConstType> {
+    /// Returns [`ParseError::GroundRuleNotConst`] if any head argument is not a
+    /// simple constant — e.g. an unbound variable (`k(E).`), an aggregation, or
+    /// a non-constant arithmetic expression. Such a head names no ground tuple,
+    /// so it is rejected here rather than panicking downstream.
+    pub(crate) fn extract_constants_from_head(&self) -> Result<Vec<ConstType>, ParseError> {
         let args = self.head.head_arguments();
         let mut out = Vec::with_capacity(args.len());
+        let not_const = || ParseError::GroundRuleNotConst {
+            span: self.head.span(),
+        };
         for arg in args {
             let HeadArg::Arith(arith) = arg else {
-                panic!("Fact head must contain only constants: {self}");
+                return Err(not_const());
             };
             let Factor::Const(c) = arith.init() else {
-                panic!("Fact head must contain only constants: {self}");
+                return Err(not_const());
             };
-            assert!(
-                arith.is_const(),
-                "Fact head must contain only constants: {self}"
-            );
+            if !arith.is_const() {
+                return Err(not_const());
+            }
             out.push(c.clone());
         }
-        out
+        Ok(out)
     }
 
     /// Expand a multi-head / multi-body rule into one rule per
@@ -381,31 +385,35 @@ mod tests {
             ],
         );
         let r = FlowLogRule::new(head, vec![]);
-        let c = r.extract_constants_from_head();
+        let c = r.extract_constants_from_head().expect("all-const head");
         assert_eq!(c, vec![ConstType::Int(42), ConstType::Text("hello".into())]);
     }
 
-    #[test]
-    #[should_panic(expected = "Fact head must contain only constants")]
-    fn extract_constants_panics_on_var() {
-        let head = head_named(
-            "invalid",
-            vec![head_const(ConstType::Int(1)), HeadArg::Var("X".into())],
+    // A head argument that is not a bare constant — a variable, an aggregation,
+    // or an arithmetic expression with operators — must yield
+    // `GroundRuleNotConst`, not a panic.
+    fn assert_head_arg_rejected(invalid: HeadArg) {
+        let head = head_named("invalid", vec![head_const(ConstType::Int(1)), invalid]);
+        let err = FlowLogRule::new(head, vec![])
+            .extract_constants_from_head()
+            .expect_err("non-constant head arg must be rejected");
+        assert!(
+            matches!(err, ParseError::GroundRuleNotConst { .. }),
+            "expected GroundRuleNotConst, got {err:?}"
         );
-        let _ = FlowLogRule::new(head, vec![]).extract_constants_from_head();
     }
 
     #[test]
-    #[should_panic(expected = "Fact head must contain only constants")]
-    fn extract_constants_panics_on_aggregation() {
+    fn extract_constants_rejects_var() {
+        assert_head_arg_rejected(HeadArg::Var("X".into()));
+    }
+
+    #[test]
+    fn extract_constants_rejects_aggregation() {
         let agg = Aggregation::new(
             AggregationOperator::Sum,
             Arithmetic::new(Factor::Var("X".into()), vec![]),
         );
-        let head = head_named(
-            "invalid",
-            vec![head_const(ConstType::Int(1)), HeadArg::Aggregation(agg)],
-        );
-        let _ = FlowLogRule::new(head, vec![]).extract_constants_from_head();
+        assert_head_arg_rejected(HeadArg::Aggregation(agg));
     }
 }
