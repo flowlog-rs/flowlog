@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.3...flowlog-build-v0.3.4) - 2026-06-18
+
+### Fixed
+
+- *(parser)* reject non-constant ground facts instead of panicking ([#184](https://github.com/flowlog-rs/flowlog/pull/184))
+
+### Other
+
+- add typos spell-check gate
+
 ## [0.3.3](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.2...flowlog-build-v0.3.3) - 2026-06-13
 
 ### Other
