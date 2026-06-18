@@ -91,6 +91,18 @@ fn undeclared_in_fact() {
     );
 }
 
+// A ground fact whose head holds a variable (`k(E).`) names no tuple. It must
+// be a clean parse error, not a panic. Regression for the fuzz-found crash in
+// https://github.com/flowlog-rs/flowlog/issues/182.
+#[test]
+fn ground_fact_not_const() {
+    assert_err!(
+        parse("ground_fact_not_const.dl", true),
+        ParseError::GroundRuleNotConst { .. },
+        ["not a constant fact"]
+    );
+}
+
 #[test]
 fn non_nullary_loop_condition() {
     assert_err!(

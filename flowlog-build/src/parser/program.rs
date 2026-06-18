@@ -929,7 +929,7 @@ impl Program {
             ..Self::default()
         };
         for fact in raw_facts {
-            program.extract_fact(fact);
+            program.extract_fact(fact)?;
         }
 
         program.validate_relation_references()?;
@@ -1268,11 +1268,12 @@ impl Program {
 
     /// Insert a ground-tuple fact into `self.facts`, preserving the head
     /// span so the typechecker can cite the offending source position.
-    fn extract_fact(&mut self, fact_rule: FlowLogRule) {
+    fn extract_fact(&mut self, fact_rule: FlowLogRule) -> Result<(), ParseError> {
         let rel_name = fact_rule.head().name().to_string();
         let span = fact_rule.head().span();
-        let tuple = fact_rule.extract_constants_from_head();
+        let tuple = fact_rule.extract_constants_from_head()?;
         self.facts.entry(rel_name).or_default().push((span, tuple));
+        Ok(())
     }
 }
 

@@ -49,7 +49,7 @@ jobs:
           tool: cargo-fuzz
 
       - name: 💾 Persist fuzz corpus across runs
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: fuzz/corpus
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -63,7 +63,7 @@ jobs:
 
       - name: 📤 Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/
@@ -71,7 +71,7 @@ jobs:
 
       - name: 📣 File an issue on crash
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
