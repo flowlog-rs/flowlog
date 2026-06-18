@@ -43,8 +43,11 @@ pub(crate) fn gen_incremental_main(
         ..
     } = rp;
 
+    let max_map_guard = super::gen_max_map_count_guard();
+
     quote! {
         fn main() {
+            #max_map_guard
             let args: Vec<String> = std::env::args().collect();
 
             let shared_txn: Arc<RwLock<TxnState>> =

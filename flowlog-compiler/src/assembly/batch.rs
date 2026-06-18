@@ -45,8 +45,11 @@ pub(crate) fn gen_batch_main(
         ..
     } = input;
 
+    let max_map_guard = super::gen_max_map_count_guard();
+
     quote! {
         fn main() {
+            #max_map_guard
             let args: Vec<String> = std::env::args().collect();
             let barrier = worker_barrier_from_args(&args);
 
