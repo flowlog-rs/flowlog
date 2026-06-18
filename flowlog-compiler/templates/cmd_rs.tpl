@@ -42,6 +42,10 @@ Commands:
       <tuple> is comma-separated (e.g., 1,2 or 7).
       [diff] defaults to +1.
 
+      Quote a tuple to preserve internal spaces; \t inside quotes is a
+      column tab (for tab-delimited relations like DOOP):
+        put _loadinstancefield "<base>\t<field>\t<to>\t<method>" -1
+
       Nullary relations (arity 0):
         Use boolean tuples to toggle presence:
           put <rel> True    # insert (diff = +1)
@@ -94,9 +98,42 @@ fn parse_diff(maybe: Option<&str>) -> Option<Diff> {
     }
 }
 
+/// Shell-style tokenizer: whitespace separates tokens, but a `"..."` run is a
+/// single token whose interior whitespace is preserved. Inside quotes,
+/// `\t` `\n` `\\` `\"` unescape — this is how a tuple whose columns are
+/// tab-delimited and whose values contain spaces (a DOOP `_LoadInstanceField`
+/// row) reaches `apply_tuple` as one `<tuple>` argument.
+fn tokenize(line: &str) -> Result<Vec<String>, String> {
+    let mut toks = Vec::new();
+    let mut cur = String::new();
+    let (mut in_tok, mut quoted) = (false, false);
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => { quoted = !quoted; in_tok = true; }
+            '\\' if quoted => match chars.next() {
+                Some('t')  => cur.push('\t'),
+                Some('n')  => cur.push('\n'),
+                Some('\\') => cur.push('\\'),
+                Some('"')  => cur.push('"'),
+                Some(o)    => { cur.push('\\'); cur.push(o); }
+                None       => return Err("trailing backslash".into()),
+            },
+            c if c.is_whitespace() && !quoted => {
+                if in_tok { toks.push(std::mem::take(&mut cur)); in_tok = false; }
+            }
+            c => { cur.push(c); in_tok = true; }
+        }
+    }
+    if quoted { return Err("unterminated quote".into()); }
+    if in_tok { toks.push(cur); }
+    Ok(toks)
+}
+
 /// Parse one input line into an optional Cmd.
 /// - Empty line => None (caller should do nothing)
-/// - No quoting support: tokens are whitespace-split.
+/// - Tokens are whitespace-split; quote a token to preserve interior spaces
+///   and use `\t` for embedded tabs (see `tokenize`).
 /// - On invalid input => prints an error and returns None.
 pub fn parse_line(line: &str) -> Option<Cmd> {
     let line = line.trim();
@@ -104,10 +141,14 @@ pub fn parse_line(line: &str) -> Option<Cmd> {
         return None;
     }
 
-    let parts: Vec<&str> = line.split_whitespace().collect();
+    let parts: Vec<String> = match tokenize(line) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
     if parts.is_empty() {
         return None;
     }
+    let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
 
     let head = parts[0].to_ascii_lowercase();
 
