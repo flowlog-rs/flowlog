@@ -18,7 +18,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: ⚙️ Install protobuf-compiler + bsdmainutils
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler bsdmainutils
@@ -46,7 +46,7 @@ jobs:
     name: 🛡️ cargo-deny (licenses + advisories)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
@@ -55,5 +55,5 @@ jobs:
     name: 📝 typos (spell check)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: crate-ci/typos@v1.47.2
