@@ -154,11 +154,12 @@ impl CodeGen {
                     let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
                     let reduce_stmt =
                         aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type)?;
+                    let agg_arr_name = format!("{}_agg_arr", output);
                     block = quote! {
                         #block
                         let #output = #output
                             .map(#row_chop)
-                            .arrange_by_key()
+                            .arrange_by_key_named(#agg_arr_name)
                             #reduce_stmt
                             .as_collection(#merge_kv);
                     };

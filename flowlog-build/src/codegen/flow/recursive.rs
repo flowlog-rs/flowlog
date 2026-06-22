@@ -323,11 +323,12 @@ impl CodeGen {
                     // Aggregate after union + dedup.
                     let reduce_stmt =
                         aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type)?;
+                    let agg_arr_name = format!("{}_agg_arr", next_ident);
                     block = quote! {
                         #block
                         let #next_ident = #next_ident
                             .map(#row_chop)
-                            .arrange_by_key()
+                            .arrange_by_key_named(#agg_arr_name)
                             #reduce_stmt
                             .as_collection(#merge_kv);
                     };
@@ -675,10 +676,15 @@ impl CodeGen {
 
             let combined = format_ident!("rel_sig_comb_{}", fp);
             match conn {
-                LoopConnective::And => stmts.push(quote! {
-                    let #combined = #gate.arrange_by_self()
-                        .join_core(#sig.arrange_by_self(), |(), _, _| std::iter::once(()));
-                }),
+                LoopConnective::And => {
+                    // Gate-so-far semijoined with this relation's signature.
+                    let gate_arr_name = format!("until_gate_pre_{}_arr", rel.name());
+                    let sig_arr_name = format!("until_{}_arr", rel.name());
+                    stmts.push(quote! {
+                        let #combined = #gate.arrange_by_self_named(#gate_arr_name)
+                            .join_core(#sig.arrange_by_self_named(#sig_arr_name), |(), _, _| std::iter::once(()));
+                    })
+                }
                 LoopConnective::Or => {
                     stmts.push(quote! { let #combined = #gate.concat(#sig.clone()) #dedup; });
                 }
@@ -687,7 +693,7 @@ impl CodeGen {
         }
 
         let arr = format_ident!("{}_arr", gate);
-        stmts.push(quote! { let #arr = #gate.clone().arrange_by_self(); });
+        stmts.push(quote! { let #arr = #gate.clone().arrange_by_self_named("until_gate_arr"); });
         Ok((stmts, Some(arr)))
     }
 }
@@ -751,6 +757,7 @@ fn build_feedback_expr(
     dedup: &TokenStream,
     normalize: &TokenStream,
 ) -> TokenStream {
+    let rel_label = next.to_string();
     match (
         plan.iter_while_conditions.as_deref(),
         plan.boolean_until_conditions.as_ref(),
@@ -761,6 +768,7 @@ fn build_feedback_expr(
             quote! { #next.clone() },
             recursive,
             arr,
+            &rel_label,
             pos,
             neg,
             normalize,
@@ -775,6 +783,7 @@ fn build_feedback_expr(
                     continue_stmt(next, quote! { !(#range_cond) }),
                     recursive,
                     arr,
+                    &rel_label,
                     pos,
                     neg,
                     normalize,
@@ -786,6 +795,7 @@ fn build_feedback_expr(
                     continue_stmt(next, range_cond),
                     recursive,
                     arr,
+                    &rel_label,
                     pos,
                     neg,
                     normalize,
@@ -817,16 +827,19 @@ fn stop_stmt(
     input: TokenStream,
     recursive: &Ident,
     gate: &Ident,
+    rel_label: &str,
     pos: &TokenStream,
     neg: &TokenStream,
     normalize: &TokenStream,
 ) -> TokenStream {
+    let input_arr_name = format!("{}_feedback_arr", rel_label);
+    let rec_arr_name = format!("{}_feedback_delta_arr", rel_label);
     quote! {
         {
             let keyed = (#input).map(|t| ((), t));
-            let keyed_arr = keyed.clone().arrange_by_key();
+            let keyed_arr = keyed.clone().arrange_by_key_named(#input_arr_name);
             let keyed_rec = #recursive.clone().map(|t| ((), t));
-            let keyed_rec_arr = keyed_rec.arrange_by_key();
+            let keyed_rec_arr = keyed_rec.arrange_by_key_named(#rec_arr_name);
             keyed
                 #pos
                 .concat({

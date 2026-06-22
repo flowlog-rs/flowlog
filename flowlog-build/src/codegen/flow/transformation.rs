@@ -721,11 +721,12 @@ impl CodeGen {
     ) -> TokenStream {
         let arrangement_ident = format_ident!("{}_arr", collection_ident);
         arranged_map.insert(fingerprint, arrangement_ident.clone());
+        let name = arrangement_ident.to_string();
 
         if only_key {
-            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_self(); }
+            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_self_named(#name); }
         } else {
-            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_key(); }
+            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_key_named(#name); }
         }
     }
 }
