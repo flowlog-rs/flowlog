@@ -34,8 +34,7 @@ pub(crate) fn gen_batch_main(
         size_cell_decls,
         size_cell_clones,
         profile_init,
-        time_profile_write_batch: time_profile_write,
-        memory_profile_write_batch: memory_profile_write,
+        metrics_write_batch: metrics_write,
         ..
     } = parts;
     let Input {
@@ -98,8 +97,7 @@ pub(crate) fn gen_batch_main(
                     #(#flush)*
                     barrier.wait();
 
-                    #time_profile_write
-                    #memory_profile_write
+                    #metrics_write
 
                     if index == 0 {
                         println!("{:?}:\tDataflow executed", timer.elapsed());

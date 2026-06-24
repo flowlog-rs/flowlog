@@ -33,8 +33,7 @@ pub(crate) fn gen_incremental_main(
         size_cell_decls,
         size_cell_clones,
         profile_init,
-        time_profile_write_incremental: time_profile_write,
-        memory_profile_write_incremental: memory_profile_write,
+        metrics_write_incremental: metrics_write,
         ..
     } = p;
     let Input {
@@ -153,8 +152,7 @@ pub(crate) fn gen_incremental_main(
                                         worker.step();
                                     }
 
-                                    #time_profile_write
-                                    #memory_profile_write
+                                    #metrics_write
 
                                     // Flush thread-local buffers into shared buffers.
                                     #(#flush)*
@@ -258,8 +256,7 @@ pub(crate) fn gen_incremental_main(
                                     worker.step();
                                 }
 
-                                #time_profile_write
-                                #memory_profile_write
+                                #metrics_write
 
                                 // Flush thread-local buffers into shared buffers.
                                 #(#flush)*
