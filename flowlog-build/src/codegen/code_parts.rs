@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 
 use proc_macro2::TokenStream;
-use quote::quote;
 
 use crate::codegen::idb_buffers::InspectorCodegen;
 use crate::codegen::profile::render_profile_ops_const;
@@ -49,14 +48,10 @@ pub struct CodeParts {
     pub profile_ops: TokenStream,
     /// Logger registration code (emitted inside worker closure).
     pub profile_init: TokenStream,
-    /// Time profiling write-out code for batch mode.
-    pub time_profile_write_batch: TokenStream,
-    /// Time profiling write-out code for incremental mode.
-    pub time_profile_write_incremental: TokenStream,
-    /// Memory profiling write-out code for batch mode.
-    pub memory_profile_write_batch: TokenStream,
-    /// Memory profiling write-out code for incremental mode.
-    pub memory_profile_write_incremental: TokenStream,
+    /// Unified metrics write-out code for batch mode.
+    pub metrics_write_batch: TokenStream,
+    /// Unified metrics write-out code for incremental mode.
+    pub metrics_write_incremental: TokenStream,
 
     /// Type aliases and constants for the `(Data, Diff, Time)` triple.
     pub type_declarations: TokenStream,
@@ -81,10 +76,8 @@ impl CodeGen {
         // Static sections.
         let edb_decls = self.gen_edb_decls(profiler);
         let (handle_binding, dataflow_return) = self.gen_handle_binding();
-        let time_profile_struct = self.gen_time_profile_struct();
-        let memory_profile_struct = self.gen_memory_profile_struct();
-        let time_profile_init = self.gen_time_profile_init();
-        let memory_profile_init = self.gen_memory_profile_init();
+        let profile_structs = self.gen_metrics_struct();
+        let profile_init = self.gen_metrics_init();
 
         // Relations whose outer ident is already bound — by `gen_edb_decls`
         // (seeded here) or by a prior stratum. Without EDB seeding, a rule
@@ -121,21 +114,9 @@ impl CodeGen {
             size_cell_clones,
         } = self.collect_inspectors(profiler);
 
-        let profile_structs = quote! {
-            #time_profile_struct
-            #memory_profile_struct
-        };
-
-        let profile_init = quote! {
-            #time_profile_init
-            #memory_profile_init
-        };
-
-        // -- Profile write code (mode-specific) --
-        let time_profile_write_batch = self.gen_time_profile_write_batch();
-        let time_profile_write_incremental = self.gen_time_profile_write_incremental();
-        let memory_profile_write_batch = self.gen_memory_profile_write_batch();
-        let memory_profile_write_incremental = self.gen_memory_profile_write_incremental();
+        // -- Unified metrics write code (mode-specific) --
+        let metrics_write_batch = self.gen_metrics_write_batch();
+        let metrics_write_incremental = self.gen_metrics_write_incremental();
 
         // Rendered after the codegen loop so the profiler is fully
         // populated. Empty when profile is off.
@@ -159,10 +140,8 @@ impl CodeGen {
             profile_structs,
             profile_ops,
             profile_init,
-            time_profile_write_batch,
-            time_profile_write_incremental,
-            memory_profile_write_batch,
-            memory_profile_write_incremental,
+            metrics_write_batch,
+            metrics_write_incremental,
             type_declarations,
             semiring_modules,
         })

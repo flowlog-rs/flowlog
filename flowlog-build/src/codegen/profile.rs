@@ -1,27 +1,22 @@
-//! Profiling code generation for FlowLog.
+//! Profiling codegen: emits an optional per-operator metrics table, folding
+//! three sources keyed by timely operator id / address:
 //!
-//! This module emits optional profiling support into the generated source.
+//! - **Time** (timely `Schedule`): active time + activations.
+//! - **Flow** (timely `Channels`+`Messages`): tuples in/out — makes a join's
+//!   intermediate-result size visible, which the differential stream can't
+//!   (a join owns no arrangement).
+//! - **Arrangement** (differential `Batch`/`Merge`/`Drop`/`Batcher`): trace
+//!   residency, compaction churn, batcher bytes.
 //!
-//! **Time profiling** (timely dataflow level):
-//! Registers a timely logger to aggregate per-operator active time and
-//! activation count on each worker.
+//! Both loggers fold into one `HashMap<operator_id, OpMetrics>`. A `Messages`
+//! event carries only a channel id, so flow is buffered and resolved to
+//! operator addresses at write time. Cells that don't apply print `n/a`, not `0`.
 //!
-//! **Memory profiling** (differential dataflow level):
-//! Registers a differential dataflow arrangement logger to track batch,
-//! merge, drop, and batcher events per operator (arrangement memory usage).
-//!
-//! Output layout — all paths are cwd-relative at runtime, namespaced by
-//! the program stem so multiple compiled programs don't collide:
-//!
-//! - `<stem>_log/ops.json`                                 (static plan graph)
-//! - `<stem>_log/time/time_worker_t0_{index}.log`          (batch)
-//! - `<stem>_log/time/time_worker_t{time_stamp}_{index}.log`  (incremental)
-//! - `<stem>_log/memory/memory_worker_t0_{index}.log`      (batch)
-//! - `<stem>_log/memory/memory_worker_t{time_stamp}_{index}.log` (incremental)
-//!
-//! `ops.json` is baked into the generated source as a `const &str` and
-//! written on engine startup by worker 0, so it lands in the same folder
-//! as the runtime logs without any compile-time disk write.
+//! Output (per worker, cwd-relative, namespaced by program stem):
+//! - `<stem>_log/ops.json` — static plan graph, baked in as a `const &str` and
+//!   written by worker 0 at startup.
+//! - `<stem>_log/metrics/metrics_worker_t{t}_{index}.log` — `t`=0 batch, txn
+//!   time incremental.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -30,58 +25,80 @@ use crate::codegen::CodeGen;
 use crate::profiler::Profiler;
 
 impl CodeGen {
-    /// Top-level profiler directory for this program — `<stem>_log`. Used
-    /// by both compile-time path-string formatting and runtime ops.json
-    /// emission. Stem disambiguates multiple programs sharing a process.
+    /// Profiler output directory, `<stem>_log` (stem disambiguates programs
+    /// sharing a process).
     fn profile_log_dir(&self) -> String {
         format!("{}_log", self.config.program_name())
     }
 
-    // =================================================================
-    // Time profiling (timely dataflow level)
-    // =================================================================
-
-    /// Generates the per-operator time profiling data structure.
-    ///
-    /// This is emitted into the generated `main.rs` only when profiling is enabled.
-    /// The struct stores worker-local aggregate timing and activation statistics per operator.
-    pub(crate) fn gen_time_profile_struct(&self) -> TokenStream {
+    /// Emits the per-operator metrics structs (profiling builds only).
+    pub(crate) fn gen_metrics_struct(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
         quote! {
-            /// Worker-local aggregate profiling stats for a timely operator.
+            /// Scheduling stats (from `TimelyEvent::Schedule`).
             #[derive(Clone, Debug, Default)]
-            struct OpStats {
-                /// Human-readable operator name (captured from `TimelyEvent::Operates`).
-                name: String,
-                /// Debug-printed operator address path (e.g. `[0, 8, 4]`).
-                addr: String,
-                /// Total time the operator spent scheduled/running on this worker.
+            struct TimeStats {
+                /// Total time the operator spent scheduled on this worker.
                 total_active: Duration,
-                /// Number of times the operator was scheduled (Stop events counted).
+                /// Number of times the operator was scheduled (Stop events).
                 activations: u64,
-                /// Timestamp of the last Start event (if any), used to compute deltas.
+                /// Timestamp of the last Start event, used to compute deltas.
                 current_start: Option<Duration>,
+            }
+
+            /// Arrangement stats (from `DifferentialEvent`).
+            #[derive(Clone, Debug, Default)]
+            struct ArrangeStats {
+                /// Total records entering the arrangement (summed over batches).
+                batch_total_len: usize,
+                /// Number of completed merge (compaction) events.
+                merge_completes: u64,
+                /// Sum of input lengths across merge completions.
+                merge_input_total: usize,
+                /// Sum of output lengths across merge completions.
+                merge_output_total: usize,
+                /// Total records freed across drops.
+                drop_total_len: usize,
+                /// Running batcher bytes used / allocated (net of deltas), kept
+                /// only to derive the peaks.
+                batcher_size: isize,
+                batcher_capacity: isize,
+                /// Peak batcher bytes used / allocated — the byte-level signal
+                /// (the running values return to ~0 once batchers flush).
+                batcher_size_peak: isize,
+                batcher_capacity_peak: isize,
+            }
+
+            /// Tuple flow, resolved from channels at write time. Each direction
+            /// is `None` when the operator has no edge there (a source has no
+            /// `tup_in`, a sink no `tup_out`).
+            #[derive(Clone, Debug, Default)]
+            struct FlowStats {
+                tup_in: Option<i64>,
+                tup_out: Option<i64>,
+            }
+
+            /// Per-operator metrics. `time`/`arrange` are `None` until the first
+            /// event (a dimension that doesn't apply writes `n/a`); `flow` is
+            /// per-direction.
+            #[derive(Clone, Debug, Default)]
+            struct OpMetrics {
+                /// Operator name and address path (from `TimelyEvent::Operates`).
+                name: String,
+                addr: Vec<usize>,
+                time: Option<TimeStats>,
+                arrange: Option<ArrangeStats>,
+                flow: FlowStats,
             }
         }
     }
 
-    /// Generates timely logging registration code for time profiling.
-    ///
-    /// The generated code registers a timely logger under the `"timely"` stream and aggregates:
-    /// - `Operates` events (operator name + address)
-    /// - `Schedule` events (Start/Stop pairs → total active time + activation count)
-    ///
-    /// Worker 0 also drops `<stem>_log/ops.json` (the static plan graph baked
-    /// in as `__FLOWLOG_OPS_JSON`) so the visualizer finds it next to the
-    /// runtime logs.
-    ///
-    /// Notes:
-    /// - This is worker-local aggregation: each worker maintains its own `HashMap<operator_id, OpStats>`.
-    /// - Timely's log callback may deliver multiple events per batch; we fold them into aggregates.
-    pub(crate) fn gen_time_profile_init(&self) -> TokenStream {
+    /// Emits the two logger registrations (timely + differential) that fold
+    /// into the shared metrics map, plus worker 0's `ops.json` write.
+    pub(crate) fn gen_metrics_init(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
@@ -90,10 +107,23 @@ impl CodeGen {
         let ops_path = format!("{log_dir}/ops.json");
 
         quote! {
-            // Per-operator aggregate stats, keyed by operator id (worker-local).
-            let op_stats: Rc<RefCell<HashMap<usize, OpStats>>> =
+            // Per-operator metrics, keyed by operator id (worker-local).
+            let metrics: Rc<RefCell<HashMap<usize, OpMetrics>>> =
                 Rc::new(RefCell::new(HashMap::new()));
-            let op_stats_in_log = Rc::clone(&op_stats);
+            // Channel topology: id -> (scope_addr, source idx, target idx).
+            let chan_info: Rc<RefCell<HashMap<usize, (Vec<usize>, usize, usize)>>> =
+                Rc::new(RefCell::new(HashMap::new()));
+            // Per-channel volume by direction: sends → tup_out, receives →
+            // tup_in. Each lands on the operator's own worker (correct for >1).
+            let chan_send: Rc<RefCell<HashMap<usize, i64>>> =
+                Rc::new(RefCell::new(HashMap::new()));
+            let chan_recv: Rc<RefCell<HashMap<usize, i64>>> =
+                Rc::new(RefCell::new(HashMap::new()));
+
+            let metrics_timely = Rc::clone(&metrics);
+            let chan_info_log = Rc::clone(&chan_info);
+            let chan_send_log = Rc::clone(&chan_send);
+            let chan_recv_log = Rc::clone(&chan_recv);
 
             // Worker 0 plants the static plan graph beside the runtime logs.
             // Best-effort — a write failure here shouldn't take down the dataflow.
@@ -102,154 +132,67 @@ impl CodeGen {
                 let _ = std::fs::write(#ops_path, __FLOWLOG_OPS_JSON);
             }
 
-            // Register a logger that receives timely events and folds them into `op_stats`.
+            // Timely stream: identity, time, and flow.
             worker
                 .log_register()
                 .expect("failed to get log_register")
                 .insert::<TimelyEventBuilder, _>("timely", move |_batch_time, data| {
-                    let Some(data) = data else {
-                        // Flush marker: we don't write per-event logs; we only aggregate.
-                        return;
-                    };
-
+                    let Some(data) = data else { return; };
                     for (ts, event) in data.iter() {
                         match event {
-                            // Operator metadata: capture name and address.
                             TimelyEvent::Operates(op) => {
-                                let mut map = op_stats_in_log.borrow_mut();
-                                let entry = map.entry(op.id).or_default();
-                                entry.name = op.name.to_string();
-                                entry.addr = format!("{:?}", op.addr);
+                                let mut map = metrics_timely.borrow_mut();
+                                let e = map.entry(op.id).or_default();
+                                e.name = op.name.to_string();
+                                e.addr = op.addr.clone();
                             }
-
-                            // Scheduling activity: Start/Stop pairs determine "active time".
                             TimelyEvent::Schedule(sched) => {
-                                let mut map = op_stats_in_log.borrow_mut();
-                                let entry = map.entry(sched.id).or_default();
-
+                                let mut map = metrics_timely.borrow_mut();
+                                let t = map
+                                    .entry(sched.id)
+                                    .or_default()
+                                    .time
+                                    .get_or_insert_with(Default::default);
                                 match sched.start_stop {
                                     StartStop::Start => {
-                                        // Record the start timestamp (overwrites if nested/duplicated).
-                                        entry.current_start = Some(*ts);
+                                        t.current_start = Some(*ts);
                                     }
                                     StartStop::Stop => {
-                                        // Accumulate duration if we saw a corresponding Start.
-                                        if let Some(st) = entry.current_start.take() {
+                                        if let Some(st) = t.current_start.take() {
                                             let delta = ts
                                                 .checked_sub(st)
                                                 .unwrap_or(Duration::ZERO);
-                                            entry.total_active += delta;
-                                            entry.activations += 1;
+                                            t.total_active += delta;
+                                            t.activations += 1;
                                         }
                                     }
                                 }
                             }
-
+                            // source/target are scope-local indices; the full
+                            // operator addr is `scope_addr ++ [index]`.
+                            TimelyEvent::Channels(c) => {
+                                chan_info_log.borrow_mut().insert(
+                                    c.id,
+                                    (c.scope_addr.clone(), c.source.0, c.target.0),
+                                );
+                            }
+                            // Accumulate send/receive volume per channel.
+                            TimelyEvent::Messages(m) => {
+                                let map = if m.is_send {
+                                    &chan_send_log
+                                } else {
+                                    &chan_recv_log
+                                };
+                                *map.borrow_mut().entry(m.channel).or_default() +=
+                                    m.record_count;
+                            }
                             _ => {}
                         }
                     }
                 });
-        }
-    }
 
-    /// Emits time profiling write-out logic for **batch** mode.
-    ///
-    /// Writes one file per worker under `<stem>_log/time/`:
-    /// `<stem>_log/time/time_worker_t0_{index}.log`
-    pub(crate) fn gen_time_profile_write_batch(&self) -> TokenStream {
-        if !self.config.profiling_enabled() {
-            return quote! {};
-        }
-
-        let dir = format!("{}/time", self.profile_log_dir());
-        let path_fmt = format!("{dir}/time_worker_t0_{{}}.log");
-        gen_time_profile_write_core(&dir, quote! { format!(#path_fmt, index) })
-    }
-
-    /// Emits time profiling write-out logic for **incremental** mode.
-    ///
-    /// Writes one file per worker per committed transaction time:
-    /// `<stem>_log/time/time_worker_t{time_stamp}_{index}.log`
-    pub(crate) fn gen_time_profile_write_incremental(&self) -> TokenStream {
-        if !self.config.profiling_enabled() {
-            return quote! {};
-        }
-
-        let dir = format!("{}/time", self.profile_log_dir());
-        let path_fmt = format!("{dir}/time_worker_t{{}}_{{}}.log");
-        let write =
-            gen_time_profile_write_core(&dir, quote! { format!(#path_fmt, time_stamp - 1, index) });
-
-        // Reset timing counters after each write so stats are per-transaction,
-        // but keep operator metadata (name, addr) for the next round.
-        // Note: { #write } scopes the op_stats.borrow() inside gen_time_profile_write_core
-        // so it drops before the borrow_mut() below. The memory path doesn't need this
-        // because gen_memory_profile_write_core already wraps its body in a block.
-        quote! {
-            { #write }
-
-            for (_id, st) in op_stats.borrow_mut().iter_mut() {
-                st.total_active = Duration::ZERO;
-                st.activations = 0;
-                st.current_start = None;
-            }
-        }
-    }
-
-    // =================================================================
-    // Memory profiling (differential dataflow arrangement level)
-    // =================================================================
-
-    /// Generates the per-operator memory profiling data structure.
-    ///
-    /// Emitted alongside `OpStats` when profiling is enabled.
-    pub(crate) fn gen_memory_profile_struct(&self) -> TokenStream {
-        if !self.config.profiling_enabled() {
-            return quote! {};
-        }
-
-        quote! {
-            /// Per-operator differential-dataflow arrangement memory statistics.
-            #[derive(Clone, Debug, Default)]
-            struct DdArrangeStats {
-                /// Number of Batch events received.
-                batch_count: u64,
-                /// Total number of records entering the arrangement (summed across batches).
-                batch_total_len: usize,
-                /// Number of completed merge (compaction) events.
-                merge_completes: u64,
-                /// Sum of input lengths across merge completions.
-                merge_input_total: usize,
-                /// Sum of output lengths across merge completions.
-                merge_output_total: usize,
-                /// Number of Drop events (records freed).
-                drop_count: u64,
-                /// Total number of records freed across drops.
-                drop_total_len: usize,
-                /// Batcher size delta (bytes) – positive = allocated, negative = freed.
-                batcher_size: isize,
-                /// Batcher capacity delta (bytes).
-                batcher_capacity: isize,
-            }
-        }
-    }
-
-    /// Generates DD arrangement logging registration code for memory profiling.
-    ///
-    /// The generated code registers a logger under the `"differential/arrange"` stream
-    /// and aggregates Batch, Merge (complete), Drop, and Batcher events per operator.
-    pub(crate) fn gen_memory_profile_init(&self) -> TokenStream {
-        if !self.config.profiling_enabled() {
-            return quote! {};
-        }
-
-        quote! {
-            // Per-operator DD arrangement stats, keyed by operator id (worker-local).
-            let dd_stats: Rc<RefCell<HashMap<usize, DdArrangeStats>>> =
-                Rc::new(RefCell::new(HashMap::new()));
-            let dd_stats_in_log = Rc::clone(&dd_stats);
-
-            // Register a logger for differential dataflow arrangement events.
+            // Differential stream: arrangement residency + compaction.
+            let metrics_diff = Rc::clone(&metrics);
             worker
                 .log_register()
                 .expect("failed to get log_register")
@@ -257,38 +200,42 @@ impl CodeGen {
                     "differential/arrange",
                     move |_batch_time, data| {
                         let Some(data) = data else { return; };
-
                         for (_ts, event) in data.iter() {
                             match event {
                                 DifferentialEvent::Batch(b) => {
-                                    let mut map = dd_stats_in_log.borrow_mut();
-                                    let e = map.entry(b.operator).or_default();
-                                    e.batch_count += 1;
-                                    e.batch_total_len += b.length;
+                                    let mut map = metrics_diff.borrow_mut();
+                                    let a = map.entry(b.operator).or_default()
+                                        .arrange.get_or_insert_with(Default::default);
+                                    a.batch_total_len += b.length;
                                 }
                                 DifferentialEvent::Merge(m) => {
                                     if let Some(complete_len) = m.complete {
-                                        let mut map = dd_stats_in_log.borrow_mut();
-                                        let e = map.entry(m.operator).or_default();
-                                        e.merge_completes += 1;
-                                        e.merge_input_total += m.length1 + m.length2;
-                                        e.merge_output_total += complete_len;
+                                        let mut map = metrics_diff.borrow_mut();
+                                        let a = map.entry(m.operator).or_default()
+                                            .arrange.get_or_insert_with(Default::default);
+                                        a.merge_completes += 1;
+                                        a.merge_input_total += m.length1 + m.length2;
+                                        a.merge_output_total += complete_len;
                                     }
                                     // ignore merge-start (no size info)
                                 }
                                 DifferentialEvent::Drop(d) => {
-                                    let mut map = dd_stats_in_log.borrow_mut();
-                                    let e = map.entry(d.operator).or_default();
-                                    e.drop_count += 1;
-                                    e.drop_total_len += d.length;
+                                    let mut map = metrics_diff.borrow_mut();
+                                    let a = map.entry(d.operator).or_default()
+                                        .arrange.get_or_insert_with(Default::default);
+                                    a.drop_total_len += d.length;
                                 }
                                 DifferentialEvent::Batcher(b) => {
-                                    let mut map = dd_stats_in_log.borrow_mut();
-                                    let e = map.entry(b.operator).or_default();
-                                    e.batcher_size += b.size_diff;
-                                    e.batcher_capacity += b.capacity_diff;
+                                    let mut map = metrics_diff.borrow_mut();
+                                    let a = map.entry(b.operator).or_default()
+                                        .arrange.get_or_insert_with(Default::default);
+                                    a.batcher_size += b.size_diff;
+                                    a.batcher_capacity += b.capacity_diff;
+                                    a.batcher_size_peak = a.batcher_size_peak.max(a.batcher_size);
+                                    a.batcher_capacity_peak =
+                                        a.batcher_capacity_peak.max(a.batcher_capacity);
                                 }
-                                _ => {} // MergeShortfall, TraceShare: not memory-related
+                                _ => {} // MergeShortfall, TraceShare: not tracked
                             }
                         }
                     },
@@ -296,41 +243,47 @@ impl CodeGen {
         }
     }
 
-    /// Emits memory profiling write-out logic for **batch** mode.
+    /// Emits the unified metrics write-out for **batch** mode.
     ///
-    /// Writes `<stem>_log/memory/memory_worker_t0_{index}.log` per worker.
-    pub(crate) fn gen_memory_profile_write_batch(&self) -> TokenStream {
+    /// Writes one file per worker: `<stem>_log/metrics/metrics_worker_t0_{index}.log`.
+    pub(crate) fn gen_metrics_write_batch(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
-        let dir = format!("{}/memory", self.profile_log_dir());
-        let path_fmt = format!("{dir}/memory_worker_t0_{{}}.log");
-        gen_memory_profile_write_core(&dir, quote! { format!(#path_fmt, index) })
+        let dir = format!("{}/metrics", self.profile_log_dir());
+        let path_fmt = format!("{dir}/metrics_worker_t0_{{}}.log");
+        gen_metrics_write_core(&dir, quote! { format!(#path_fmt, index) })
     }
 
-    /// Emits memory profiling write-out logic for **incremental** mode.
-    ///
-    /// Writes `<stem>_log/memory/memory_worker_t{time_stamp}_{index}.log` per worker per txn.
-    pub(crate) fn gen_memory_profile_write_incremental(&self) -> TokenStream {
+    /// Emits the **incremental** write-out: one file per worker per committed
+    /// transaction, then resets per-transaction counters (keeping identity and
+    /// topology).
+    pub(crate) fn gen_metrics_write_incremental(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
-        let dir = format!("{}/memory", self.profile_log_dir());
-        let path_fmt = format!("{dir}/memory_worker_t{{}}_{{}}.log");
-        let write = gen_memory_profile_write_core(
-            &dir,
-            quote! { format!(#path_fmt, time_stamp - 1, index) },
-        );
+        let dir = format!("{}/metrics", self.profile_log_dir());
+        let path_fmt = format!("{dir}/metrics_worker_t{{}}_{{}}.log");
+        let write =
+            gen_metrics_write_core(&dir, quote! { format!(#path_fmt, time_stamp - 1, index) });
 
-        // Reset memory counters after each write so stats are per-transaction.
         quote! {
             #write
 
-            for (_id, st) in dd_stats.borrow_mut().iter_mut() {
-                *st = DdArrangeStats::default();
+            // Zero each dimension's contents in place (not back to `None`), so
+            // an operator idle this round still reads `0`, not `n/a`.
+            for (_id, m) in metrics.borrow_mut().iter_mut() {
+                if let Some(t) = m.time.as_mut() {
+                    *t = TimeStats::default();
+                }
+                if let Some(a) = m.arrange.as_mut() {
+                    *a = ArrangeStats::default();
+                }
             }
+            chan_send.borrow_mut().clear();
+            chan_recv.borrow_mut().clear();
         }
     }
 }
@@ -340,11 +293,10 @@ impl CodeGen {
 // =================================================================
 
 /// Render the static plan-graph profiler as a `const &str` baked into the
-/// generated module. Worker 0 writes it to `<stem>_log/ops.json` on
-/// startup (see [`CodeGen::gen_time_profile_init`]).
+/// generated module. Worker 0 writes it to `<stem>_log/ops.json` on startup
+/// (see [`CodeGen::gen_metrics_init`]).
 ///
-/// `None` profiler → empty token stream so non-profile builds carry no
-/// dead const.
+/// `None` profiler → empty token stream so non-profile builds carry no dead const.
 pub(crate) fn render_profile_ops_const(profiler: Option<&Profiler>) -> TokenStream {
     let Some(profiler) = profiler else {
         return quote! {};
@@ -355,108 +307,106 @@ pub(crate) fn render_profile_ops_const(profiler: Option<&Profiler>) -> TokenStre
     }
 }
 
-/// Shared implementation for writing time profiling stats to a file.
-fn gen_time_profile_write_core(dir: &str, file_path_expr: TokenStream) -> TokenStream {
+/// Resolve flow, then write one row per operator. A block so borrows drop.
+fn gen_metrics_write_core(dir: &str, file_path_expr: TokenStream) -> TokenStream {
     let create_msg = format!("failed to create {dir} directory");
+    let header =
+        "{:<20} {:<6} {:<11} {:<10} {:<10} {:<10} {:<7} {:<11} {:<11} {:<10} {:<12} {:<12} {}";
     quote! {
-        // Snapshot + sort for deterministic output.
-        let map = op_stats.borrow();
-        let mut rows: Vec<(usize, OpStats)> =
-            map.iter().map(|(id, st)| (*id, st.clone())).collect();
-        rows.sort_by_key(|(id, _st)| *id);
-
-        std::fs::create_dir_all(#dir).expect(#create_msg);
-
-        let stats_file = File::create(#file_path_expr)
-            .expect("failed to create operator stats log file");
-        let mut stats_writer = BufWriter::new(stats_file);
-
-        // Header row.
-        writeln!(
-            stats_writer,
-            "{:<20} {:<12} {:<16} {}",
-            "addr", "activations", "total_active_ms", "name"
-        )
-        .ok();
-
-        // Data rows.
-        for (_id, st) in rows {
-            let total_ms = st.total_active.as_secs_f64() * 1000.0;
-            writeln!(
-                stats_writer,
-                "{:<20} {:<12} {:<16.3} {}",
-                st.addr, st.activations, total_ms, st.name
-            )
-            .ok();
-        }
-
-        stats_writer.flush().ok();
-    }
-}
-
-/// Shared implementation for writing memory profiling stats to a file.
-fn gen_memory_profile_write_core(dir: &str, file_path_expr: TokenStream) -> TokenStream {
-    let create_msg = format!("failed to create {dir} directory");
-    quote! {
-        // --- DD arrangement stats write-out ---
         {
-            let op_map = op_stats.borrow();
-            let dd_map = dd_stats.borrow();
+            // Resolve buffered channel volume into per-operator flow (a
+            // `Messages` event only knows its channel, so it's joined against
+            // the topology here, not accumulated live like time/arrange).
+            {
+                let info = chan_info.borrow();
+                let sends = chan_send.borrow();
+                let recvs = chan_recv.borrow();
 
-            // Build rows with (addr_nums, addr_string, name, stats)
-            let mut rows: Vec<(Vec<usize>, String, String, DdArrangeStats)> = dd_map
-                .iter()
-                .map(|(id, st)| {
-                    let (addr, name) = op_map
-                        .get(id)
-                        .map(|o| (o.addr.clone(), o.name.clone()))
-                        .unwrap_or_else(|| (
-                            format!("[id={}]", id),
-                            "<unknown>".to_string(),
-                        ));
-                    // Parse "[0, 8, 9]" -> vec![0, 8, 9] for numeric sort
-                    let nums: Vec<usize> = addr
-                        .trim_matches(|c| c == '[' || c == ']')
-                        .split(',')
-                        .filter_map(|s| s.trim().parse().ok())
-                        .collect();
-                    (nums, addr, name, st.clone())
-                })
-                .collect();
-            // Sort numerically by address components
-            rows.sort_by(|a, b| a.0.cmp(&b.0));
+                // Operator address of a channel endpoint, `scope_addr ++ [idx]`;
+                // `None` for index 0 — the scope boundary, not a leaf operator
+                // (its I/O is on the parent-scope edges).
+                let endpoint_addr = |scope_addr: &Vec<usize>, idx: usize| -> Option<Vec<usize>> {
+                    (idx != 0).then(|| {
+                        let mut a = scope_addr.clone();
+                        a.push(idx);
+                        a
+                    })
+                };
+                let mut out_by_addr: HashMap<Vec<usize>, i64> = HashMap::new();
+                let mut in_by_addr: HashMap<Vec<usize>, i64> = HashMap::new();
+
+                // `or_insert(0)` seeds connected endpoints (zero flow → `0`,
+                // missing edge → `n/a`), then add this channel's volume.
+                for (chan, (scope_addr, src, tgt)) in info.iter() {
+                    if let Some(a) = endpoint_addr(scope_addr, *src) {
+                        *out_by_addr.entry(a).or_insert(0) +=
+                            sends.get(chan).copied().unwrap_or(0);
+                    }
+                    if let Some(a) = endpoint_addr(scope_addr, *tgt) {
+                        *in_by_addr.entry(a).or_insert(0) +=
+                            recvs.get(chan).copied().unwrap_or(0);
+                    }
+                }
+                for m in metrics.borrow_mut().values_mut() {
+                    m.flow.tup_out = out_by_addr.get(&m.addr).copied();
+                    m.flow.tup_in = in_by_addr.get(&m.addr).copied();
+                }
+            }
+
+            // Sort by numeric address for stable output.
+            let map = metrics.borrow();
+            let mut rows: Vec<&OpMetrics> = map.values().collect();
+            rows.sort_by(|a, b| a.addr.cmp(&b.addr));
 
             std::fs::create_dir_all(#dir).expect(#create_msg);
+            let f = File::create(#file_path_expr)
+                .expect("failed to create metrics log file");
+            let mut w = BufWriter::new(f);
 
-            let dd_file = File::create(#file_path_expr)
-                .expect("failed to create DD arrange stats log file");
-            let mut w = BufWriter::new(dd_file);
-
-            // Table header
             writeln!(
                 w,
-                "{:<20} {:<14} {:<10} {:<14} {:<14} {:<14} {}",
-                "addr", "batched_in", "merges", "merge_in", "merge_out", "dropped", "name"
+                #header,
+                "addr", "acts", "active_ms", "tup_in", "tup_out",
+                "arr_in", "merges", "merge_in", "merge_out", "dropped",
+                "bat_bytes", "bat_cap", "name"
             ).ok();
 
-            for (_nums, addr, name, st) in &rows {
+            // Non-applicable dimensions print `n/a`.
+            let na = || "n/a".to_string();
+            for m in &rows {
+                let (acts, active_ms) = m.time.as_ref().map_or_else(
+                    || (na(), na()),
+                    |t| (
+                        t.activations.to_string(),
+                        format!("{:.3}", t.total_active.as_secs_f64() * 1000.0),
+                    ),
+                );
+                let tup_in = m.flow.tup_in.map_or_else(na, |v| v.to_string());
+                let tup_out = m.flow.tup_out.map_or_else(na, |v| v.to_string());
+                let (arr_in, merges, merge_in, merge_out, dropped, bat_bytes, bat_cap) =
+                    m.arrange.as_ref().map_or_else(
+                        || (na(), na(), na(), na(), na(), na(), na()),
+                        |a| (
+                            a.batch_total_len.to_string(),
+                            a.merge_completes.to_string(),
+                            a.merge_input_total.to_string(),
+                            a.merge_output_total.to_string(),
+                            a.drop_total_len.to_string(),
+                            a.batcher_size_peak.to_string(),
+                            a.batcher_capacity_peak.to_string(),
+                        ),
+                    );
                 writeln!(
                     w,
-                    "{:<20} {:<14} {:<10} {:<14} {:<14} {:<14} {}",
-                    addr,
-                    st.batch_total_len,
-                    st.merge_completes,
-                    st.merge_input_total,
-                    st.merge_output_total,
-                    st.drop_total_len,
-                    name
+                    #header,
+                    format!("{:?}", m.addr), acts, active_ms, tup_in, tup_out,
+                    arr_in, merges, merge_in, merge_out, dropped, bat_bytes, bat_cap, m.name
                 ).ok();
             }
 
             if rows.is_empty() {
-                writeln!(w, "(no differential arrangement events recorded)").ok();
+                writeln!(w, "(no operators recorded)").ok();
             }
-
             w.flush().ok();
         }
     }
