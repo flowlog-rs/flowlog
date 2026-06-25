@@ -4,15 +4,10 @@
 [files]
 # Datalog programs use arbitrary user-defined relation names, not prose;
 # fact/fixture/oracle dirs are data. None are worth spell-checking.
-extend-exclude = [
-    "*.dl",
-    "facts/**",
-    "tests/fixtures/**",
-    "tests/oracle/**",
-]
+extend-exclude = ["*.dl", "facts/**", "tests/fixtures/**", "tests/oracle/**"]
 
 [default.extend-words]
 # Valid technical terms typos flags as misspellings (mapped to themselves).
-seeked = "seeked"            # file-I/O jargon: "pre-seeked to the start ..."
-unparseable = "unparseable"  # accepted variant of "unparsable"
-pn = "pn"                    # subscript in `head :- p1, p2, ..., pn.`
+seeked = "seeked"           # file-I/O jargon: "pre-seeked to the start ..."
+unparseable = "unparseable" # accepted variant of "unparsable"
+pn = "pn"                   # subscript in `head :- p1, p2, ..., pn.`

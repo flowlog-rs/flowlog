@@ -18,7 +18,7 @@ use crate::codegen::arg::{
 use crate::codegen::ident::find_local_ident;
 use crate::codegen::{CodeGen, CodegenError, data_type_tokens};
 use crate::planner::{StratumPlanner, Transformation};
-use crate::profiler::{Profiler, with_profiler};
+use flowlog_profiler::{Profiler, with_profiler};
 
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.

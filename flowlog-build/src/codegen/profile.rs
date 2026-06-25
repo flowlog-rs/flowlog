@@ -22,7 +22,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::codegen::CodeGen;
-use crate::profiler::Profiler;
+use flowlog_profiler::Profiler;
 
 impl CodeGen {
     /// Profiler output directory, `<stem>_log` (stem disambiguates programs
@@ -335,17 +335,53 @@ fn gen_metrics_write_core(dir: &str, file_path_expr: TokenStream) -> TokenStream
                 let mut out_by_addr: HashMap<Vec<usize>, i64> = HashMap::new();
                 let mut in_by_addr: HashMap<Vec<usize>, i64> = HashMap::new();
 
+                // Tuple length of each arrangement, keyed by operator addr.
+                // An arrangement's output ships batches (one message = one batch),
+                // so its `record_count` is a batch count, not tuples; substitute
+                // the real `batch_total_len` on those edges.
+                let arrange_len: HashMap<Vec<usize>, i64> = metrics
+                    .borrow()
+                    .values()
+                    .filter_map(|m| {
+                        m.arrange
+                            .as_ref()
+                            .map(|a| (m.addr.clone(), a.batch_total_len as i64))
+                    })
+                    .collect();
+
                 // `or_insert(0)` seeds connected endpoints (zero flow → `0`,
-                // missing edge → `n/a`), then add this channel's volume.
+                // missing edge → `n/a`), then add this channel's volume, always
+                // in tuples.
                 for (chan, (scope_addr, src, tgt)) in info.iter() {
-                    if let Some(a) = endpoint_addr(scope_addr, *src) {
-                        *out_by_addr.entry(a).or_insert(0) +=
-                            sends.get(chan).copied().unwrap_or(0);
+                    let src_addr = endpoint_addr(scope_addr, *src);
+                    let tgt_addr = endpoint_addr(scope_addr, *tgt);
+                    // Tuples crossing this edge: the source arrangement's batch
+                    // length if the source arranges, else the message tuple count.
+                    let src_arr_len = src_addr.as_ref().and_then(|a| arrange_len.get(a).copied());
+
+                    if let Some(a) = &src_addr {
+                        // Collection sources accumulate per-edge sends; arrangement
+                        // sources have their cardinality set once below, so fanning
+                        // a shared arrangement to several consumers doesn't multiply
+                        // its reported output.
+                        if src_arr_len.is_none() {
+                            *out_by_addr.entry(a.clone()).or_insert(0) +=
+                                sends.get(chan).copied().unwrap_or(0);
+                        }
                     }
-                    if let Some(a) = endpoint_addr(scope_addr, *tgt) {
-                        *in_by_addr.entry(a).or_insert(0) +=
-                            recvs.get(chan).copied().unwrap_or(0);
+                    if let Some(a) = &tgt_addr {
+                        let vol =
+                            src_arr_len.unwrap_or_else(|| recvs.get(chan).copied().unwrap_or(0));
+                        *in_by_addr.entry(a.clone()).or_insert(0) += vol;
                     }
+                }
+                // Set each arrangement's output once (assign, not accumulate): a
+                // shared trace produces its tuples once but is read by every
+                // consumer, so per-edge accumulation would multiply tup_out by the
+                // fanout. The loop above skipped these via `src_arr_len.is_none()`.
+                // Consumes `arrange_len` (last use).
+                for (addr, len) in arrange_len {
+                    out_by_addr.insert(addr, len);
                 }
                 for m in metrics.borrow_mut().values_mut() {
                     m.flow.tup_out = out_by_addr.get(&m.addr).copied();

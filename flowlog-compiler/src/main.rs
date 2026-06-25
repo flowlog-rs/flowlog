@@ -13,7 +13,7 @@ use tracing_subscriber::EnvFilter;
 use flowlog_build::common::{Config, SECTION_BAR, SourceMap, emit_and_exit, get_example_files};
 use flowlog_build::parser::Program;
 use flowlog_build::planner::ProgramPlanner;
-use flowlog_build::profiler::Profiler;
+use flowlog_profiler::Profiler;
 use flowlog_compiler::Compiler;
 
 fn main() {
@@ -152,7 +152,7 @@ fn parse_program(config: &Config) -> (Program, SourceMap) {
 fn new_profiler(config: &Config) -> Option<Profiler> {
     config
         .profiling_enabled()
-        .then(|| Profiler::new(config.mode()))
+        .then(|| Profiler::new(config.mode().profile_mode()))
 }
 
 // =========================================================================

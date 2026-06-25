@@ -8,7 +8,7 @@ use crate::codegen::idb_buffers::InspectorCodegen;
 use crate::codegen::profile::render_profile_ops_const;
 use crate::codegen::{CodeGen, CodegenError};
 use crate::planner::StratumPlanner;
-use crate::profiler::{Profiler, with_profiler};
+use flowlog_profiler::{Profiler, with_profiler};
 
 /// Token-stream fragments and rendered source files produced by
 /// [`CodeGen::generate`]. All fields are `pub` so consumers can

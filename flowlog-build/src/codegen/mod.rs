@@ -36,7 +36,7 @@ use proc_macro2::Ident;
 use crate::common::Config;
 use crate::parser::{DataType, Program};
 use crate::planner::ProgramPlanner;
-use crate::profiler::Profiler;
+use flowlog_profiler::Profiler;
 
 pub struct CodeGen {
     pub(crate) config: Config,

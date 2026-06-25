@@ -37,7 +37,7 @@ use flowlog_build::common::BoxError;
 use flowlog_build::common::Config;
 use flowlog_build::parser::Program;
 use flowlog_build::planner::ProgramPlanner;
-use flowlog_build::profiler::Profiler;
+use flowlog_profiler::Profiler;
 
 /// Drives code generation + build for a single FlowLog program.
 pub struct Compiler {

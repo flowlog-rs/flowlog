@@ -6,7 +6,7 @@ use quote::{format_ident, quote};
 use crate::codegen::CodeGen;
 use crate::codegen::ty::data::data_type_tokens;
 use crate::parser::DataType;
-use crate::profiler::{Profiler, with_profiler};
+use flowlog_profiler::{Profiler, with_profiler};
 
 impl CodeGen {
     /// Generate per-EDB declarations as `(handle, collection)` pairs:

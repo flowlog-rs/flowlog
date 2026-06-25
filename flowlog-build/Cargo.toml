@@ -15,6 +15,7 @@ categories = ["compilers", "database", "development-tools::build-utils"]
 clap = { workspace = true, features = ["derive"] }
 codespan-reporting.workspace = true
 itertools.workspace = true
+ordered-float.workspace = true
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
@@ -25,9 +26,10 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Parser grammar.
-pest = "2.8"
-pest_derive = "2.8"
-ordered-float = "5.1"
+pest.workspace = true
+pest_derive.workspace = true
+
+flowlog-profiler.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
