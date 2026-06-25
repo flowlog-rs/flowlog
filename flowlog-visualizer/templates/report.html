@@ -1,0 +1,2517 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FlowLog Profile</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    @font-face {
+      font-family: 'Maple Mono';
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: swap;
+      src: url('https://cdn.jsdelivr.net/gh/subframe7536/Maple-font@latest/woff2/var/MapleMono%5Bwght%5D-VF.woff2') format('woff2');
+    }
+    @font-face {
+      font-family: 'Maple Mono';
+      font-style: italic;
+      font-weight: 100 900;
+      font-display: swap;
+      src: url('https://cdn.jsdelivr.net/gh/subframe7536/Maple-font@latest/woff2/var/MapleMono-Italic%5Bwght%5D-VF.woff2') format('woff2');
+    }
+    :root {
+      --c-accent: #2563eb;
+      --c-accent-light: #eff6ff;
+      --c-bg: #fafbfc;
+      --c-surface: #ffffff;
+      --c-border: #e5e7eb;
+      --c-border-light: #f3f4f6;
+      --c-text: #1a1a1a;
+      --c-text-secondary: #4b5563;
+      --c-text-muted: #9ca3af;
+      --c-selected: #eff6ff;
+      --c-selected-border: #bfdbfe;
+      --radius: 8px;
+      --radius-sm: 5px;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+      --transition: 150ms ease;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      font-family: "Outfit", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      background: var(--c-bg);
+      color: var(--c-text);
+      font-size: 13px;
+      line-height: 1.5;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--c-surface);
+      padding: 0 20px;
+      height: 44px;
+      border-bottom: 1px solid var(--c-border);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      flex-shrink: 0;
+    }
+
+    .header-brand img {
+      height: 22px;
+      width: auto;
+      display: block;
+    }
+
+    .header-title {
+      font-family: "Ubuntu", "Cambay", sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--c-text);
+      letter-spacing: -0.02em;
+    }
+
+    .header-title .brand-flow { color: #0087b9; }
+    .header-title .brand-log { color: #5f2d12; }
+
+    .header-title span.brand-sub {
+      font-family: "Ubuntu", "Cambay", sans-serif;
+      font-weight: 500;
+      color: var(--c-text-muted);
+      margin-left: 7px;
+      letter-spacing: 0;
+    }
+
+    .header-sep {
+      width: 1px;
+      height: 18px;
+      background: var(--c-border);
+      flex-shrink: 0;
+    }
+
+    .summary {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .pill {
+      padding: 2px 9px;
+      border: 1px solid var(--c-border);
+      border-radius: 999px;
+      background: var(--c-bg);
+      color: var(--c-text-secondary);
+      font-size: 11px;
+      white-space: nowrap;
+      transition: background var(--transition);
+    }
+
+    .pill:hover { background: var(--c-border-light); }
+
+    .pill b {
+      color: var(--c-text);
+      font-weight: 600;
+    }
+
+    /* ── Layout ── */
+    .container {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .sidebar {
+      width: 460px;
+      min-width: 200px;
+      max-width: 80vw;
+      border-right: none;
+      padding: 12px;
+      overflow: auto;
+      background: var(--c-surface);
+      flex-shrink: 0;
+    }
+
+    .split-handle {
+      width: 5px;
+      cursor: col-resize;
+      background: var(--c-border);
+      flex-shrink: 0;
+      position: relative;
+      transition: background 150ms ease;
+    }
+
+    .split-handle:hover,
+    .split-handle.dragging {
+      background: var(--c-accent);
+    }
+
+    .split-handle::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 3px;
+      height: 32px;
+      border-radius: 2px;
+      background: inherit;
+      opacity: 0;
+      transition: opacity 150ms ease;
+    }
+
+    .split-handle:hover::after {
+      opacity: 0.5;
+    }
+
+    .main {
+      flex: 1;
+      padding: 16px 20px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: var(--c-bg);
+    }
+
+    #detailPane {
+      flex: 1;
+      overflow: auto;
+      min-height: 0;
+    }
+
+    /* ── Legend ── */
+    .legend {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--c-text-secondary);
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .legend-swatch {
+      width: 160px;
+      height: 12px;
+      border-radius: 6px;
+      border: 1px solid #ccd3e0;
+      background: linear-gradient(90deg, #e9f2ff 0%, #5b8def 100%);
+    }
+
+    .legend-swatch-red {
+      width: 160px;
+      height: 12px;
+      border-radius: 6px;
+      border: 1px solid #e0ccd0;
+      background: linear-gradient(90deg, #fff 0%, #dc1e1e 100%);
+    }
+
+    /* ── Tree nodes ── */
+    .tree-node {
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: stretch;
+      min-height: 25px;
+      padding: 0 6px 0 0;
+      border-radius: var(--radius-sm);
+      transition: background var(--transition);
+    }
+
+    .tree-node:hover {
+      background: var(--c-border-light);
+    }
+
+    .tree-node.selected {
+      background: var(--c-selected);
+      box-shadow: inset 0 0 0 1px var(--c-selected-border);
+    }
+
+    /* Each indent slot draws one vertical guide line for an ancestor level.
+       align-self:stretch + zero row vgap makes the lines continuous. */
+    .indent {
+      flex: 0 0 16px;
+      align-self: stretch;
+      border-left: 1px solid #e6e8ec;
+    }
+
+    /* Disclosure control: a thin chevron that rotates 90° when open.
+       `.toggle` (no chevron) is just a blank alignment spacer for leaves. */
+    .toggle {
+      flex: 0 0 16px;
+      align-self: center;
+    }
+    .tw {
+      flex: 0 0 16px;
+      width: 16px;
+      align-self: center;
+      vertical-align: middle;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 16px;
+      border-radius: 4px;
+      color: var(--c-text-muted);
+      transition: background var(--transition), color var(--transition);
+    }
+    .tw:hover {
+      background: rgba(0,0,0,0.07);
+      color: var(--c-text);
+    }
+    .tw svg {
+      width: 9px;
+      height: 9px;
+      transition: transform 0.15s ease;
+    }
+    .tw.open svg {
+      transform: rotate(90deg);
+    }
+    /* Vertically center the label/badges against the stretched guide lines. */
+    .tree-node > .indent + *:not(.indent):not(.toggle):not(.tw),
+    .tree-node {
+      line-height: 25px;
+    }
+
+    .muted {
+      color: var(--c-text-muted);
+      font-size: 12px;
+    }
+
+    /* Shared-operator badge: a shared plan node whose arrangement is
+       computed once and reused across multiple rules in the same block. */
+    .shared-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      margin-left: 7px;
+      padding: 1px 7px 1px 5px;
+      font-size: 10.5px;
+      font-weight: 600;
+      line-height: 1.5;
+      color: #7c3aed;
+      background: #f3eefe;
+      border: 1px solid #ddccf7;
+      border-radius: 10px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .shared-badge svg {
+      width: 10px;
+      height: 10px;
+      flex: 0 0 auto;
+    }
+
+    /* ── Rules ── */
+    #rulePicker {
+      margin: 8px 0 10px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .rule-list {
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .rule-item {
+      text-align: left;
+      padding: 7px 12px;
+      border: 1px solid var(--c-border);
+      background: var(--c-surface);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-family: "Maple Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.6;
+      transition: all var(--transition);
+    }
+
+    .rule-item:hover {
+      border-color: var(--c-selected-border);
+      background: var(--c-accent-light);
+    }
+
+    .rule-item.active {
+      background: var(--c-selected);
+      border-color: var(--c-selected-border);
+      font-weight: 600;
+    }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .tab {
+      padding: 5px 12px;
+      border: 1px solid var(--c-border);
+      background: var(--c-surface);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--c-text-secondary);
+      transition: all var(--transition);
+    }
+
+    .tab:hover {
+      border-color: var(--c-selected-border);
+    }
+
+    .tab.active {
+      background: var(--c-selected);
+      border-color: var(--c-selected-border);
+      color: var(--c-accent);
+    }
+
+    /* ── Top-list ── */
+    .toplist {
+      margin: 8px 0 14px;
+      padding: 10px;
+      border: 1px solid var(--c-border);
+      border-radius: var(--radius);
+      background: var(--c-bg);
+    }
+
+    .toplist-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--c-text-muted);
+      margin-bottom: 8px;
+    }
+
+    .toplist-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 12px;
+      transition: background var(--transition);
+      border: 1px solid transparent;
+    }
+
+    .toplist-item:hover {
+      background: var(--c-accent-light);
+    }
+
+    .toplist-item.active {
+      background: var(--c-selected);
+      border-color: var(--c-selected-border);
+    }
+
+    .toplist-name {
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .toplist-ms {
+      font-variant-numeric: tabular-nums;
+      color: var(--c-text-secondary);
+      font-weight: 500;
+    }
+
+    /* ── Graph ── */
+    #graphPane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #graphView {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      min-height: 420px;
+      border: 1px solid var(--c-border);
+      border-radius: var(--radius);
+      overflow: auto;
+      background: var(--c-surface);
+    }
+
+    svg { width: 100%; height: 100%; }
+    #graphView svg { cursor: grab; will-change: transform; }
+    #graphView svg:active { cursor: grabbing; }
+
+    .g-edge {
+      stroke: #8fa3c7;
+      stroke-width: 1.2;
+      fill: none;
+      pointer-events: none;
+      opacity: 0.8;
+    }
+
+    .g-edge.dim { opacity: 0.12; }
+
+    .g-edge.highlight {
+      stroke: var(--c-accent);
+      stroke-width: 2;
+      opacity: 1;
+    }
+
+    /* Memory-mode red tones */
+    .memory-mode .g-edge { stroke: #c78f8f; }
+    .memory-mode .g-edge.highlight { stroke: #d32f2f; }
+    .memory-mode .g-block rect { stroke: #ffc9c9; fill: rgba(255,248,248,0.6); }
+    .memory-mode .g-node rect { stroke: #d45555; }
+
+    .g-block rect {
+      fill: rgba(248,250,255,0.6);
+      stroke: #c9d7ff;
+      stroke-width: 1;
+      stroke-dasharray: 6 4;
+      rx: 10; ry: 10;
+    }
+
+    .g-node rect {
+      rx: 6; ry: 6;
+      stroke: #5570d4;
+      stroke-width: 1;
+    }
+
+    .g-node text {
+      font-size: 12px;
+      fill: var(--c-text);
+      pointer-events: none;
+    }
+
+    .g-node.selected rect {
+      stroke: var(--c-text);
+      stroke-width: 2;
+    }
+
+    .g-node.dim { opacity: 0.18; }
+
+    .g-node-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: #445;
+      box-sizing: border-box;
+    }
+
+    /* ── Rule headers ── */
+    .rule-header {
+      padding: 6px 8px 5px;
+      margin-top: 6px;
+      font-family: "Maple Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--c-accent);
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      transition: background var(--transition);
+      letter-spacing: -0.3px;
+      line-height: 1.6;
+    }
+
+    .rule-header:hover {
+      background: var(--c-accent-light);
+    }
+
+    .rule-header.active {
+      background: #dbeafe;
+      border: 1px solid #93c5fd;
+    }
+
+    /* Plan tree of a rule: nested one level under its header, with a vertical
+       guide line descending from the header's chevron so each rule visibly
+       owns its plan nodes within the stratum. */
+    .rule-body {
+      margin-left: 15px;
+      padding-left: 3px;
+      border-left: 1px solid #e6e8ec;
+    }
+    .rule-body:last-child {
+      margin-bottom: 2px;
+    }
+
+    /* ── Tables ── */
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 8px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--c-border-light);
+      padding: 7px 10px;
+      text-align: left;
+      font-size: 12px;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: var(--c-surface);
+      border-bottom: 1px solid var(--c-border);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      color: var(--c-text-muted);
+    }
+
+    .num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    code {
+      font-family: "Maple Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    /* ── Stats bars ── */
+    .stats-cell {
+      min-width: 160px;
+      padding: 4px 0;
+    }
+
+    .stats-value {
+      font-size: 12px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--c-text);
+      margin-bottom: 2px;
+    }
+
+    .stats-bar-wrap {
+      position: relative;
+      height: 12px;
+      border-radius: 6px;
+      background: var(--c-border-light);
+      overflow: hidden;
+    }
+
+    .stats-range {
+      position: absolute;
+      top: 1px;
+      height: 10px;
+      border-radius: 5px;
+      opacity: 0.3;
+    }
+
+    .stats-sigma {
+      position: absolute;
+      top: 0;
+      height: 12px;
+      border-radius: 6px;
+      opacity: 0.6;
+    }
+
+    .stats-mean {
+      position: absolute;
+      top: 0;
+      width: 2px;
+      height: 12px;
+      border-radius: 1px;
+    }
+
+    .stats-label-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--c-text-muted);
+      margin-top: 1px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Stat cards ── */
+    .detail-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 12px 0;
+    }
+
+    .stat-card {
+      flex: 1;
+      min-width: 140px;
+      max-width: 220px;
+      padding: 12px 14px;
+      border: 1px solid var(--c-border);
+      border-radius: var(--radius);
+      background: var(--c-surface);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .stat-card-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--c-text-muted);
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .stat-card-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--c-text);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.5px;
+    }
+
+    .stat-card-sub {
+      font-size: 11px;
+      color: var(--c-text-muted);
+      margin-top: 2px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Snapshot slider ── */
+    .snapshot-slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 20px;
+      background: var(--c-accent-light);
+      border-bottom: 1px solid var(--c-selected-border);
+      font-size: 12px;
+      color: var(--c-text-secondary);
+      flex-shrink: 0;
+    }
+
+    .snapshot-slider-wrap label {
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .snapshot-slider-wrap input[type="range"] {
+      flex: 1;
+      max-width: 400px;
+      accent-color: var(--c-accent);
+    }
+
+    .snapshot-label {
+      font-weight: 700;
+      color: var(--c-accent);
+      min-width: 40px;
+    }
+
+    /* ── Detail pane headings ── */
+    #title {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 4px;
+      color: var(--c-text);
+    }
+
+    /* ── Scrollbar (webkit) ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+  </style>
+</head>
+
+<body>
+  <div id="snapshotSlider" class="snapshot-slider-wrap" style="display:none;">
+    <label>Snapshot:</label>
+    <input type="range" id="snapshotRange" min="0" max="0" value="0" step="1">
+    <span class="snapshot-label" id="snapshotLabel">—</span>
+  </div>
+  <header>
+    <div class="header-brand">
+      <img src="https://www.flowlog-rs.com/img/flowlog.png" alt="FlowLog">
+      <div class="header-title"><span class="brand-flow">Flow</span><span class="brand-log">Log</span><span class="brand-sub">Profiler</span></div>
+    </div>
+    <div class="header-sep"></div>
+    <div class="summary" id="summary"></div>
+  </header>
+
+  <div class="container">
+    <div class="sidebar">
+      <div style="display:flex; gap: 6px; margin-bottom: 10px;">
+        <input id="search" placeholder="Search operators..."
+          style="flex:1; padding: 7px 12px; border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-bg); font-size: 12px; outline: none; transition: border-color 150ms ease; color: var(--c-text);"
+          onfocus="this.style.borderColor='var(--c-accent)'" onblur="this.style.borderColor='var(--c-border)'">
+        <button id="expandAll" style="padding: 5px 12px; border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-surface); font-size: 11px; cursor: pointer; color: var(--c-text-secondary);">Expand</button>
+        <button id="collapseAll" style="padding: 5px 12px; border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-surface); font-size: 11px; cursor: pointer; color: var(--c-text-secondary);">Collapse</button>
+      </div>
+      <div class="toplist">
+        <div class="toplist-title">Top 10 Operators</div>
+        <div id="topNodes"></div>
+      </div>
+      <div id="tree"></div>
+    </div>
+
+    <div class="split-handle" id="splitHandle"></div>
+
+    <div class="main">
+      <div class="tabs" style="justify-content:space-between;">
+        <div style="display:flex;gap:8px;">
+          <button class="tab active" id="tabTree">Nodes</button>
+          <button class="tab" id="tabGraph">Graph</button>
+        </div>
+        <div id="modeToggle" style="display:none;gap:4px;align-items:center;">
+          <span style="font-size:11px;color:var(--c-text-muted);">Show:</span>
+          <button class="tab active" id="modeTime">Time</button>
+          <button class="tab" id="modeMemory">Memory</button>
+        </div>
+      </div>
+
+      <div id="detailPane">
+        <h2 id="title">Select a node</h2>
+        <div id="meta" class="muted"></div>
+        <div id="detailStats"></div>
+        <div id="rulePicker"></div>
+
+        <table id="opsTable" style="display:none;">
+          <thead id="opsTableHead">
+            <tr>
+              <th>addr</th>
+              <th>operator</th>
+              <th class="num">activations</th>
+              <th class="num">active time</th>
+            </tr>
+          </thead>
+          <tbody id="opsBody"></tbody>
+        </table>
+      </div>
+
+      <div id="graphPane" style="display:none;">
+        <div id="legend" class="legend"></div>
+        <div id="graphView"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Embedded report data (JSON wrapper with snapshots)
+    const _RAW = __DATA__;
+    const SNAPSHOTS = _RAW.snapshots;
+    const SNAPSHOT_LABELS = _RAW.snapshot_labels;
+    let DATA = SNAPSHOTS[0];
+
+    // Inline chain-link glyph used by the "shared" badge.
+    const LINK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>';
+    // Thin chevron for expand/collapse — rotates 90° when open (see .tw.open).
+    const CHEVRON_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
+
+    const state = {
+      expanded: new Set(),
+      selected: null,
+      selectedRule: null,
+      highlightedRule: null, // rule text clicked in left panel to highlight in graph
+      search: "",
+      view: "tree",
+      graph: { tx: 0, ty: 0, scale: 1 }, // pan/zoom
+      defaultExpanded: true,
+      displayMode: "time", // "time" or "memory"
+      snapshotIdx: 0,
+      selectedRuleContext: null,
+    };
+
+    // Unique key for rule plan nodes (rule text + fingerprint).
+    const planKey = (ruleText, fp) => `${ruleText}::${fp}`;
+
+    const NODE = {
+      padX: 12,
+      padY: 8,
+      lineH: 16,
+      minW: 140,
+      maxW: 360,
+      minH: 36,
+      font: '12px "Outfit", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+    };
+
+    const _measureCanvas = document.createElement("canvas");
+    const _measureCtx = _measureCanvas.getContext("2d");
+
+    function fmtMs(x) {
+      return (Math.round(x * 1000) / 1000).toFixed(3);
+    }
+
+    /** Normalize a value to a Stats object. Handles null, numbers, and Stats objects. */
+    function ensureStats(s) {
+      if (s && typeof s === "object") return s;
+      const v = s || 0;
+      return { mean: v, var: 0, min: v, max: v };
+    }
+
+    function stddev(s) { return Math.sqrt((s && s.var) || 0); }
+
+    function getFormatter(fmt) {
+      return fmt === "ms" ? fmtMs : (v) => Math.round(v).toLocaleString();
+    }
+
+    /** Format a Stats object as text */
+    function fmtStats(s, fmt) {
+      const st = ensureStats(s);
+      const f = getFormatter(fmt);
+      if (DATA.num_workers <= 1) return f(st.mean);
+      return `${f(st.mean)} (±${f(stddev(st))}) [${f(st.min)}..${f(st.max)}]`;
+    }
+
+    /** Short format: just the mean */
+    function fmtMean(s, fmt) {
+      return getFormatter(fmt)(ensureStats(s).mean);
+    }
+
+    /** Get the mean from a Stats object or a raw number */
+    function getMean(s) {
+      return ensureStats(s).mean;
+    }
+
+    /** Safe max over an array (avoids stack overflow from spread on large arrays) */
+    function arrayMax(arr, fallback) {
+      return arr.reduce((a, b) => Math.max(a, b), fallback ?? -Infinity);
+    }
+
+    /** Auto-format a number: use ms format for small floats, locale for large ints */
+    function fmtAuto(v) {
+      if (v === 0) return "0";
+      if (Math.abs(v) < 100 && v !== Math.floor(v)) return fmtMs(v);
+      return Math.round(v).toLocaleString();
+    }
+
+    /**
+     * Render an inline bar chart for a Stats object.
+     * colMax: the max value in this column (for consistent scaling across rows).
+     * color: CSS color for the bar.
+     * Returns HTML string.
+     */
+    function renderStatsBar(s, colMax, color) {
+      s = ensureStats(s);
+      if (DATA.num_workers <= 1) {
+        // Single worker: simple proportional bar
+        const pct = colMax > 0 ? (s.mean / colMax) * 100 : 0;
+        return `<div class="stats-cell">
+          <div class="stats-value">${fmtAuto(s.mean)}</div>
+          <div class="stats-bar-wrap">
+            <div class="stats-sigma" style="left:0;width:${pct}%;background:${color};opacity:0.5;border-radius:2px;"></div>
+          </div>
+        </div>`;
+      }
+      // Multi-worker: range chart
+      const std = stddev(s);
+      const lo = Math.max(0, s.mean - std);
+      const hi = s.mean + std;
+      const scale = colMax > 0 ? 100 / colMax : 0;
+
+      const minPct = s.min * scale;
+      const maxPct = s.max * scale;
+      const loPct = lo * scale;
+      const hiPct = hi * scale;
+      const meanPct = s.mean * scale;
+
+      return `<div class="stats-cell">
+        <div class="stats-value">${fmtAuto(s.mean)}</div>
+        <div class="stats-bar-wrap" title="mean: ${fmtAuto(s.mean)}  σ: ${fmtAuto(std)}  min: ${fmtAuto(s.min)}  max: ${fmtAuto(s.max)}">
+          <div class="stats-range" style="left:${minPct}%;width:${Math.max(0.5, maxPct - minPct)}%;background:${color};"></div>
+          <div class="stats-sigma" style="left:${loPct}%;width:${Math.max(0.5, hiPct - loPct)}%;background:${color};"></div>
+          <div class="stats-mean" style="left:${meanPct}%;background:${color};"></div>
+        </div>
+        <div class="stats-label-row">
+          <span>${fmtAuto(s.min)}</span>
+          <span>±${fmtAuto(std)}</span>
+          <span>${fmtAuto(s.max)}</span>
+        </div>
+      </div>`;
+    }
+
+    /** Render a stat card for the detail header */
+    function renderStatCard(label, stats, fmt, color) {
+      if (!stats) return "";
+      const mean = getMean(stats);
+      const f = fmt === "ms" ? fmtMs : fmtAuto;
+      let sub = "";
+      if (DATA.num_workers > 1) {
+        const st = ensureStats(stats);
+        sub = `σ ${f(stddev(st))} &nbsp; min ${f(st.min)} &nbsp; max ${f(st.max)}`;
+      }
+      const suffix = fmt === "ms" ? " ms" : "";
+      return `<div class="stat-card">
+        <div class="stat-card-label">${label}</div>
+        <div class="stat-card-value" style="color:${color || '#111'}">${f(mean)}${suffix}</div>
+        ${sub ? `<div class="stat-card-sub">${sub}</div>` : ""}
+      </div>`;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    /** Render K, V, F as subtle muted inline type hints — no badge, just dimmed text. */
+    function colorizeHtml(label) {
+      return escapeHtml(label).replace(
+        /\b([KVF]):\(/g,
+        (_, letter) => {
+          return `<span style="color:#9ca3af;font-size:0.85em;font-weight:500;letter-spacing:0.2px">${letter}</span>(`;
+        }
+      );
+    }
+
+    function measureTextPx(s) {
+      _measureCtx.font = NODE.font;
+      return _measureCtx.measureText(String(s)).width;
+    }
+
+    // colorizeHtml() no longer adds padding/border, just a styled span with
+    // no dimensional change, so no extra compensation needed.
+    const BADGE_EXTRA_PX = 0;
+    function measureLabelPx(s) {
+      const badgeCount = (String(s).match(/\b[KVF]:\(/g) || []).length;
+      return measureTextPx(s) + badgeCount * BADGE_EXTRA_PX;
+    }
+
+    function wrapLines(text, maxContentW) {
+      const words = String(text).split(/\s+/).filter(Boolean);
+      if (!words.length) return [""];
+
+      const lines = [];
+      let cur = words[0];
+
+      for (let i = 1; i < words.length; i++) {
+        const next = `${cur} ${words[i]}`;
+        if (measureLabelPx(next) <= maxContentW) {
+          cur = next;
+        } else {
+          lines.push(cur);
+          cur = words[i];
+        }
+      }
+      lines.push(cur);
+      return lines;
+    }
+
+    function nodeBox(label) {
+      const maxContentW = NODE.maxW - 2 * NODE.padX;
+      const lines = wrapLines(label, maxContentW);
+
+      const contentW = Math.min(
+        maxContentW,
+        arrayMax(lines.map(measureLabelPx), 0)
+      );
+
+      const w = Math.max(NODE.minW, Math.min(NODE.maxW, contentW + 2 * NODE.padX));
+      const h = Math.max(NODE.minH, lines.length * NODE.lineH + 2 * NODE.padY);
+      return { w, h, lines };
+    }
+
+    function renderSummary() {
+      const t = DATA.totals;
+      const el = document.getElementById("summary");
+      const workerPill = DATA.num_workers > 1 ? `<span class="pill">workers: <b>${DATA.num_workers}</b></span>` : "";
+      el.innerHTML = `
+    <span class="pill">names: <b>${t.names}</b></span>
+    <span class="pill">operators in time log: <b>${t.operators_in_time}</b></span>
+    <span class="pill">operators mapped: <b>${t.operators_mapped}</b></span>
+    <span class="pill">mapped ms: <b>${fmtStats(t.total_mapped_ms, "ms")}</b></span>
+    <span class="pill">mapped activations: <b>${fmtStats(t.total_mapped_activations)}</b></span>
+    <span class="pill">total batched_in: <b>${fmtStats(t.total_batched_in)}</b></span>
+    ${workerPill}
+  `;
+    }
+
+    function nodeMatches(name, node) {
+      if (!state.search) return true;
+      const s = state.search.toLowerCase();
+      return (
+        name.toLowerCase().includes(s) ||
+        (node.label || "").toLowerCase().includes(s)
+      );
+    }
+
+    // --- Per-snapshot caches (rebuilt on snapshot switch) ---
+    let _fpToRules = new Map();   // fingerprint -> [ruleText, ...]
+    let _rulesByText = new Map(); // ruleText -> rule object
+    let _ruleToBlock = new Map(); // ruleText -> block string
+    let _blockToRules = new Map(); // block -> Set<ruleText>
+
+    function getBlock(node) { return (node?.block || "other").toString(); }
+
+    function blockRank(block) {
+      const b = String(block || "").toLowerCase();
+      if (b.startsWith("input")) return 0;
+      const m = b.match(/^stratum\s*(\d+)/);
+      if (m) return 1 + parseInt(m[1], 10);
+      if (b.includes("inspect")) return 1000;
+      return 500;
+    }
+
+    function rebuildCaches() {
+      const nodes = DATA.nodes || {};
+      const rules = DATA.rules || [];
+
+      _fpToRules = new Map();
+      for (const r of rules) {
+        for (const fp of Object.keys(r.nodes || {})) {
+          if (!_fpToRules.has(fp)) _fpToRules.set(fp, []);
+          _fpToRules.get(fp).push(r.text);
+        }
+      }
+
+      _rulesByText = new Map(rules.map((r) => [r.text, r]));
+
+      _ruleToBlock = new Map();
+      for (const rule of rules) {
+        const rootPn = rule.root ? rule.nodes?.[rule.root] : null;
+        const rootNode = rootPn?.node ? nodes[rootPn.node] : null;
+        if (rootNode) {
+          _ruleToBlock.set(rule.text, getBlock(rootNode));
+        } else {
+          const counts = new Map();
+          for (const pn of Object.values(rule.nodes || {})) {
+            const nn = pn.node ? nodes[pn.node] : null;
+            if (nn) {
+              const b = getBlock(nn);
+              counts.set(b, (counts.get(b) || 0) + 1);
+            }
+          }
+          let best = null, bestC = 0;
+          for (const [b, c] of counts) {
+            if (c > bestC) { best = b; bestC = c; }
+          }
+          if (best) _ruleToBlock.set(rule.text, best);
+        }
+      }
+
+      _blockToRules = new Map();
+      for (const [rt, blk] of _ruleToBlock) {
+        if (!_blockToRules.has(blk)) _blockToRules.set(blk, new Set());
+        _blockToRules.get(blk).add(rt);
+      }
+
+      // Invalidate DAG caches (same structure across snapshots, but be safe).
+      _dagChildren = undefined;
+      _dagParents = undefined;
+      _nodesForRuleCache.clear();
+    }
+
+    // Cached DAG adjacency and rule-node mapping (invalidated via rebuildCaches).
+    let _dagChildren, _dagParents;
+    const _nodesForRuleCache = new Map();
+
+    rebuildCaches();
+
+    function rulesForFingerprint(fp) {
+      return fp ? (_fpToRules.get(fp) || []) : [];
+    }
+
+    function findRuleByText(text) {
+      return _rulesByText.get(text) || null;
+    }
+    function dagAdj() {
+      if (_dagChildren) return { childrenOf: _dagChildren, parentsOf: _dagParents };
+      _dagChildren = new Map();
+      _dagParents = new Map();
+      const nodes = DATA.nodes || {};
+      for (const [name, node] of Object.entries(nodes)) {
+        for (const p of (node.dag_parents || [])) {
+          if (!nodes[p]) continue;
+          if (!_dagChildren.has(p)) _dagChildren.set(p, []);
+          _dagChildren.get(p).push(name);
+          if (!_dagParents.has(name)) _dagParents.set(name, []);
+          _dagParents.get(name).push(p);
+        }
+      }
+      return { childrenOf: _dagChildren, parentsOf: _dagParents };
+    }
+
+    /** Return set of node names that belong to a rule (by fingerprint mapping),
+     *  plus any intermediary non-fingerprinted nodes (like "enter") that bridge
+     *  rule nodes in the DAG. */
+    function nodesForRule(ruleText) {
+      if (_nodesForRuleCache.has(ruleText)) return _nodesForRuleCache.get(ruleText);
+
+      const rule = findRuleByText(ruleText);
+      if (!rule || !rule.nodes) { _nodesForRuleCache.set(ruleText, new Set()); return _nodesForRuleCache.get(ruleText); }
+      const nodes = DATA.nodes || {};
+      const coreNodes = new Set();
+      for (const [fp, pn] of Object.entries(rule.nodes)) {
+        if (pn.node) coreNodes.add(pn.node);
+      }
+
+      const { childrenOf, parentsOf } = dagAdj();
+
+      // Two bulk BFS passes from core nodes through non-fingerprinted nodes.
+      function reachable(seeds, adjFn) {
+        const reached = new Set();
+        const q = [...seeds];
+        while (q.length) {
+          const n = q.pop();
+          if (reached.has(n)) continue;
+          reached.add(n);
+          for (const next of (adjFn(n) || [])) {
+            if (!reached.has(next) && !nodes[next]?.fingerprint) q.push(next);
+          }
+        }
+        return reached;
+      }
+
+      const reachDown = reachable(coreNodes, (n) => childrenOf.get(n));
+      const reachUp = reachable(coreNodes, (n) => parentsOf.get(n));
+
+      const result = new Set(coreNodes);
+      for (const [name, node] of Object.entries(nodes)) {
+        if (!coreNodes.has(name) && !node.fingerprint && reachDown.has(name) && reachUp.has(name)) {
+          result.add(name);
+        }
+      }
+
+      _nodesForRuleCache.set(ruleText, result);
+      return result;
+    }
+
+    function renderTree() {
+      let root = document.getElementById("tree");
+      root.innerHTML = "";
+
+      const nodes = DATA.nodes;
+      const rules = DATA.rules || [];
+      let currentBlockRules = new Set();
+
+      const autoExpand = !state.defaultExpanded && state.expanded.size === 0;
+
+      const idOf = (name) => {
+        const n = parseInt(name, 10);
+        return Number.isNaN(n) ? null : n;
+      };
+      const cmpById = (a, b) => {
+        const ia = idOf(a);
+        const ib = idOf(b);
+        if (ia !== null && ib !== null && ia !== ib) return ia - ib;
+        if (ia !== null && ib === null) return -1;
+        if (ia === null && ib !== null) return 1;
+        return a.localeCompare(b);
+      };
+
+      const blocks = new Map();
+      for (const [name, node] of Object.entries(nodes)) {
+        const blk = getBlock(node);
+        if (!blocks.has(blk)) blocks.set(blk, []);
+        blocks.get(blk).push(name);
+      }
+
+      const sortedBlocks = Array.from(blocks.keys()).sort((a, b) =>
+        blockRank(a) - blockRank(b) || a.localeCompare(b)
+      );
+
+      const nodeMetaStr = (node) => {
+        if (state.displayMode === "memory") {
+          return node.has_memory_data
+            ? `batched_in: ${fmtStats(node.self_batched_in)}, merges: ${fmtStats(node.self_merges)}, merge_in: ${fmtStats(node.self_merge_in)}, merge_out: ${fmtStats(node.self_merge_out)}, dropped: ${fmtStats(node.self_dropped)}`
+            : "no memory data";
+        }
+        return `${fmtStats(node.self_total_active_ms, "ms")} ms, ${fmtStats(node.self_activations)} act`;
+      };
+
+      function renderNodeRow(name, depth = 0) {
+        const node = nodes[name];
+        if (state.search && !nodeMatches(name, node)) return;
+        const row = document.createElement("div");
+        row.className = "tree-node" + (state.selected === name ? " selected" : "");
+        row.dataset.name = name;
+        const indent = '<span class="indent"></span>'.repeat(depth);
+        const spacer = '<span class="toggle"></span>';
+        row.innerHTML = `${indent}${spacer}${colorizeHtml(node.label)}`;
+        row.onclick = () => selectNode(name);
+        root.appendChild(row);
+      }
+
+      function renderRuleHeader(title) {
+        const key = `rule-fold::${title}`;
+        const collapsed = state._ruleCollapsed || (state._ruleCollapsed = new Set());
+        const isCollapsed = collapsed.has(key);
+
+        const hdr = document.createElement("div");
+        hdr.className = "rule-header" + (state.highlightedRule === title ? " active" : "");
+
+        const arrow = document.createElement("span");
+        arrow.className = "tw" + (isCollapsed ? "" : " open");
+        arrow.innerHTML = CHEVRON_ICON;
+        arrow.style.marginRight = "4px";
+        hdr.appendChild(arrow);
+
+        const label = document.createElement("span");
+        label.textContent = title;
+        hdr.appendChild(label);
+
+        // Toggle fold on arrow click
+        arrow.onclick = (e) => {
+          e.stopPropagation();
+          if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+          renderTree();
+        };
+
+        // Highlight rule on header click (existing behavior)
+        hdr.onclick = (e) => {
+          e.stopPropagation();
+          if (state.highlightedRule === title) {
+            state.highlightedRule = null;
+          } else {
+            state.highlightedRule = title;
+          }
+          state.selected = null;
+          state.selectedRule = null;
+          renderTree();
+          renderGraph();
+        };
+        root.appendChild(hdr);
+
+        // Create a container for children; hide if collapsed
+        const body = document.createElement("div");
+        body.className = "rule-body";
+        body.style.display = isCollapsed ? "none" : "block";
+        root.appendChild(body);
+
+        // Return the body so callers can append children into it
+        return body;
+      }
+
+      const planMatchMemo = new Map();
+
+      function planNodeMatches(rule, fp, visiting = new Set()) {
+        const key = planKey(rule.text, fp);
+        if (planMatchMemo.has(key)) return planMatchMemo.get(key);
+        const pn = rule.nodes?.[fp];
+        if (!pn) {
+          planMatchMemo.set(key, false);
+          return false;
+        }
+        if (visiting.has(fp)) return false; // avoid cycles
+
+        const useParents = (rule.nodes?.[rule.root]?.children || []).length === 0;
+        const nextEdges = useParents ? pn.parents || [] : pn.children || [];
+
+        let matched = false;
+        const name = pn.node;
+        if (name && nodes[name] && nodeMatches(name, nodes[name])) {
+          matched = true;
+        }
+
+        if (!matched) {
+          visiting.add(fp);
+          for (const child of nextEdges) {
+            if (planNodeMatches(rule, child, visiting)) {
+              matched = true;
+              break;
+            }
+          }
+          visiting.delete(fp);
+        }
+
+        planMatchMemo.set(key, matched);
+        return matched;
+      }
+
+      function renderPlanNode(rule, fp, depth, visiting = new Set()) {
+        const pn = rule.nodes?.[fp];
+        if (!pn) return;
+
+        if (state.search && !planNodeMatches(rule, fp, new Set())) return;
+
+        const useParents = (rule.nodes?.[rule.root]?.children || []).length === 0;
+        const nextEdges = useParents ? pn.parents || [] : pn.children || [];
+
+        const key = planKey(rule.text, fp);
+        if (autoExpand && nextEdges.length) {
+          state.expanded.add(key);
+        }
+
+        const name = pn.node;
+        const node = name ? nodes[name] : null;
+        const hasChildren = nextEdges.length > 0;
+        const expanded = hasChildren && state.expanded.has(key);
+
+        // Shared within same block: fingerprint used by another rule in this block.
+        const fpRules = rulesForFingerprint(fp);
+        const sameBlockShared = fpRules.length > 1 && fpRules.some(
+          (r) => r !== rule.text && currentBlockRules.has(r)
+        );
+
+        const row = document.createElement("div");
+        // Highlight: shared nodes highlight in all sharing rules within the block.
+        let isSelected = false;
+        if (state.selected === name) {
+          if (!state.selectedRuleContext) {
+            isSelected = true;
+          } else if (state.selectedRuleContext === rule.text) {
+            isSelected = true;
+          } else if (sameBlockShared && currentBlockRules.has(state.selectedRuleContext)) {
+            isSelected = true;
+          }
+        }
+        row.className = "tree-node" + (isSelected ? " selected" : "");
+        row.dataset.name = name || fp;
+        row.dataset.rule = rule.text;
+        row.dataset.fp = fp;
+
+        const indent = '<span class="indent"></span>'.repeat(depth);
+        const toggle = hasChildren
+          ? `<span class="tw${expanded ? " open" : ""}" data-toggle="1">${CHEVRON_ICON}</span>`
+          : '<span class="toggle"></span>';
+
+        const labelText = node?.label || pn.label || name || pn.fingerprint || fp;
+        const shareCount = fpRules.filter((r) => currentBlockRules.has(r)).length;
+        const shared = sameBlockShared
+          ? ` <span class="shared-badge" title="Shared plan node: this operator's arrangement is built once and reused across ${shareCount} rules in this block.">${LINK_ICON}shared${shareCount > 1 ? " ×" + shareCount : ""}</span>`
+          : "";
+
+        row.innerHTML = `${indent}${toggle}${colorizeHtml(labelText)}${shared}`;
+
+        row.onclick = (e) => {
+          if (e.target?.closest?.('[data-toggle="1"]')) {
+            if (expanded) state.expanded.delete(key);
+            else state.expanded.add(key);
+            renderTree();
+            return;
+          }
+          if (name) selectNode(name, rule.text);
+        };
+
+        root.appendChild(row);
+
+        if (!hasChildren || !expanded) return;
+
+        const ordered = [...nextEdges].sort((a, b) => a.localeCompare(b));
+        for (const child of ordered) {
+          if (visiting.has(child)) {
+            const cyc = document.createElement("div");
+            cyc.className = "tree-node muted";
+            cyc.style.paddingLeft = `${12 + (depth + 1) * 16}px`;
+            cyc.textContent = `(cycle to ${child})`;
+            root.appendChild(cyc);
+            continue;
+          }
+          const next = new Set(visiting);
+          next.add(fp);
+          renderPlanNode(rule, child, depth + 1, next);
+        }
+      }
+
+      for (const blk of sortedBlocks) {
+        const card = document.createElement("div");
+        card.style.background = "#f8f9fb";
+        card.style.border = "1px solid #e8eaed";
+        card.style.borderRadius = "8px";
+        card.style.padding = "8px 10px";
+        card.style.marginBottom = "8px";
+
+        const title = document.createElement("div");
+        title.style.fontWeight = "600";
+        title.style.padding = "2px 0 4px 0";
+        title.textContent = blk;
+        card.appendChild(title);
+
+        // Temporarily redirect root so renderRuleHeader/renderNodeRow/renderPlanNode append to card
+        const origRoot = root;
+        root = card;
+
+        const names = blocks.get(blk) || [];
+        const isStratum = /^stratum\s+/i.test(blk);
+
+        if (isStratum) {
+          const rulesForBlock = _blockToRules.get(blk) || new Set();
+          currentBlockRules = rulesForBlock;
+
+          // Collect named nodes owned by rules in this block vs runtime.
+          const ruleOwnedNodes = new Set();
+          for (const rule of rules) {
+            if (!rulesForBlock.has(rule.text)) continue;
+            for (const pn of Object.values(rule.nodes || {})) {
+              if (pn.node) ruleOwnedNodes.add(pn.node);
+            }
+          }
+          const runtimeNodes = names.filter((n) => !ruleOwnedNodes.has(n));
+
+          // Render rules assigned to this block (in spec order).
+          for (const rule of rules) {
+            if (!rulesForBlock.has(rule.text)) continue;
+
+            const ruleBody = renderRuleHeader(rule.text);
+            const prevRoot = root;
+            root = ruleBody;
+
+            if (rule.root && rule.nodes?.[rule.root]) {
+              renderPlanNode(rule, rule.root, 0);
+            }
+
+            root = prevRoot;
+          }
+
+          if (runtimeNodes.length) {
+            const runtimeBody = renderRuleHeader("runtime");
+            const prevRoot = root;
+            root = runtimeBody;
+            runtimeNodes.sort(cmpById).forEach((n) => renderNodeRow(n));
+            root = prevRoot;
+          }
+        } else {
+          names.sort(cmpById).forEach((n) => renderNodeRow(n));
+        }
+
+        root = origRoot;
+        root.appendChild(card);
+      }
+
+      if (autoExpand) state.defaultExpanded = true;
+    }
+
+    function renderGraph() {
+      const container = document.getElementById("graphView");
+      const nodes = DATA.nodes;
+      const allNames = Object.keys(nodes);
+
+      // Uses shared getBlock() and blockRank() defined at module scope.
+
+      function uniqueBlocksInOrder() {
+        const set = new Set();
+        for (const name of allNames) set.add(getBlock(nodes[name]));
+        return Array.from(set).sort(
+          (a, b) =>
+            blockRank(a) - blockRank(b) || String(a).localeCompare(String(b))
+        );
+      }
+
+      function nodeLabelFor(name) {
+        const n = nodes[name];
+        return n?.label || name;
+      }
+
+      const sizeByName = new Map();
+      for (const name of allNames) {
+        sizeByName.set(name, nodeBox(nodeLabelFor(name)));
+      }
+
+      function nodeHalfH(name) {
+        const { h } = sizeByName.get(name) || { h: NODE.minH };
+        return h / 2;
+      }
+
+      const hasDagParents = allNames.some((n) => nodes[n]?.dag_parents !== undefined);
+
+      // --- Build DAG edges (parent -> child) ---
+      const parents = new Map(); // child -> [parents...]
+      const children = new Map(); // parent -> [children...]
+      const indeg = new Map();
+
+      for (const n of allNames) {
+        parents.set(n, []);
+        children.set(n, []);
+        indeg.set(n, 0);
+      }
+
+      if (!hasDagParents) {
+        throw new Error("Missing dag_parents in report data");
+      }
+
+      for (const v of allNames) {
+        const ps = nodes[v]?.dag_parents || [];
+        for (const p of ps) {
+          if (!nodes[p]) continue;
+          parents.get(v).push(p);
+          children.get(p).push(v);
+          indeg.set(v, (indeg.get(v) ?? 0) + 1);
+        }
+      }
+
+      // --- Topological order (Kahn). If cycle exists, still render with fallback. ---
+      const q = [];
+      for (const n of allNames) {
+        if ((indeg.get(n) ?? 0) === 0) q.push(n);
+      }
+
+      const topo = [];
+      while (q.length) {
+        const u = q.shift();
+        topo.push(u);
+        for (const v of children.get(u) || []) {
+          indeg.set(v, indeg.get(v) - 1);
+          if (indeg.get(v) === 0) q.push(v);
+        }
+      }
+
+      if (topo.length !== allNames.length) {
+        const seen = new Set(topo);
+        const rest = allNames.filter((n) => !seen.has(n)).sort();
+        topo.push(...rest);
+      }
+
+      // --- Depth = max(parent depth) + 1 (ensures below *all* parents) ---
+      const depth = new Map();
+      for (const n of allNames) {
+        const blk = getBlock(nodes[n]);
+        depth.set(n, blockRank(blk));
+      }
+      for (const r of DATA.roots || []) {
+        const blk = getBlock(nodes[r]);
+        depth.set(r, blockRank(blk));
+      }
+
+      for (const v of topo) {
+        let d = depth.get(v) ?? 0;
+        for (const p of parents.get(v) || []) {
+          const pd = depth.get(p) ?? 0;
+          d = Math.max(d, pd + 1);
+        }
+        const blk = getBlock(nodes[v]);
+        d = Math.max(d, blockRank(blk));
+        depth.set(v, d);
+      }
+
+      // --- Group into layers by depth ---
+      const layers = new Map(); // depth -> [names]
+      for (const n of allNames) {
+        const d = depth.get(n) ?? 0;
+        if (!layers.has(d)) layers.set(d, []);
+        layers.get(d).push(n);
+      }
+
+      for (const list of layers.values()) list.sort();
+      const layerKeys = [...layers.keys()].sort((a, b) => a - b);
+
+      // --- Order within layers: barycenter heuristic to reduce crossings ---
+      function barycenterSortDown() {
+        for (let i = 1; i < layerKeys.length; i++) {
+          const d = layerKeys[i];
+          const prev = layers.get(layerKeys[i - 1]) || [];
+          const idxPrev = new Map(prev.map((n, j) => [n, j]));
+
+          const cur = layers.get(d) || [];
+          cur.sort((a, b) => {
+            const pa = parents.get(a) || [];
+            const pb = parents.get(b) || [];
+            const ba =
+              pa.length === 0
+                ? Number.POSITIVE_INFINITY
+                : pa.reduce((s, p) => s + (idxPrev.get(p) ?? 0), 0) / pa.length;
+            const bb =
+              pb.length === 0
+                ? Number.POSITIVE_INFINITY
+                : pb.reduce((s, p) => s + (idxPrev.get(p) ?? 0), 0) / pb.length;
+
+            if (ba !== bb) return ba - bb;
+            return a.localeCompare(b);
+          });
+        }
+      }
+
+      function barycenterSortUp() {
+        for (let i = layerKeys.length - 2; i >= 0; i--) {
+          const d = layerKeys[i];
+          const next = layers.get(layerKeys[i + 1]) || [];
+          const idxNext = new Map(next.map((n, j) => [n, j]));
+
+          const cur = layers.get(d) || [];
+          cur.sort((a, b) => {
+            const ca = children.get(a) || [];
+            const cb = children.get(b) || [];
+            const ba =
+              ca.length === 0
+                ? Number.POSITIVE_INFINITY
+                : ca.reduce((s, c) => s + (idxNext.get(c) ?? 0), 0) / ca.length;
+            const bb =
+              cb.length === 0
+                ? Number.POSITIVE_INFINITY
+                : cb.reduce((s, c) => s + (idxNext.get(c) ?? 0), 0) / cb.length;
+
+            if (ba !== bb) return ba - bb;
+            return a.localeCompare(b);
+          });
+        }
+      }
+
+      barycenterSortDown();
+      barycenterSortUp();
+      barycenterSortDown();
+
+      // --- Compute positions (initial centers) ---
+      const layerGap = 150;
+      const minGap = 40;
+      const layerWidths = new Map();
+      let width = 960;
+      for (const d of layerKeys) {
+        const list = layers.get(d) || [];
+        const totalNodesW = list.reduce((s, n) => s + (sizeByName.get(n)?.w || NODE.minW), 0);
+        const totalW = totalNodesW + (list.length + 1) * minGap;
+        layerWidths.set(d, totalW);
+        width = Math.max(width, totalW);
+      }
+
+      const pos = new Map();
+      for (let li = 0; li < layerKeys.length; li++) {
+        const d = layerKeys[li];
+        const list = layers.get(d) || [];
+        const totalW = layerWidths.get(d) || width;
+        let x = (width - totalW) / 2 + minGap;
+        list.forEach((name) => {
+          const w = sizeByName.get(name)?.w || NODE.minW;
+          x += w / 2;
+          pos.set(name, { x, y: 40 + li * layerGap });
+          x += w / 2 + minGap;
+        });
+      }
+
+      // --- Separate blocks vertically to avoid overlapping group rectangles ---
+      const BLOCK_PAD = 28; // should match your block padding below
+      const BLOCK_GAP = 64; // extra spacing between blocks (tweak)
+      const blocksOrdered = uniqueBlocksInOrder();
+
+      // Map block -> [node names]
+      const namesByBlock = new Map();
+      for (const name of allNames) {
+        const blk = getBlock(nodes[name]);
+        if (!namesByBlock.has(blk)) namesByBlock.set(blk, []);
+        namesByBlock.get(blk).push(name);
+      }
+
+      let prevMaxY = -Infinity;
+
+      for (const blk of blocksOrdered) {
+        const names = namesByBlock.get(blk) || [];
+        if (names.length === 0) continue;
+
+        let minY = Infinity;
+        let maxY = -Infinity;
+
+        for (const name of names) {
+          const p = pos.get(name);
+          if (!p) continue;
+          const hh = nodeHalfH(name);
+          minY = Math.min(minY, p.y - hh - BLOCK_PAD);
+          maxY = Math.max(maxY, p.y + hh + BLOCK_PAD);
+        }
+
+        if (prevMaxY !== -Infinity && minY < prevMaxY + BLOCK_GAP) {
+          const delta = prevMaxY + BLOCK_GAP - minY;
+
+          for (const name of names) {
+            const p = pos.get(name);
+            if (p) p.y += delta;
+          }
+
+          minY += delta;
+          maxY += delta;
+        }
+
+        prevMaxY = Math.max(prevMaxY, maxY);
+      }
+
+      // Adjust height after shifting blocks.
+      let maxY = 0;
+      for (const p of pos.values()) maxY = Math.max(maxY, p.y);
+      const height = Math.max(layerKeys.length * layerGap + 80, maxY + 160);
+
+      // --- Measure + place nodes (auto-sized) ---
+      const boxByName = new Map(); // name -> {x0,y0,w,h,cx,cy,lines}
+      for (const [name, node] of Object.entries(nodes)) {
+        const p = pos.get(name);
+        if (!p) continue;
+        const { w, h, lines } = sizeByName.get(name) || nodeBox(node.label || name);
+        boxByName.set(name, {
+          x0: p.x - w / 2,
+          y0: p.y - h / 2,
+          w,
+          h,
+          cx: p.x,
+          cy: p.y,
+          lines,
+        });
+      }
+
+
+      // --- Compute block bounding boxes (with padding) ---
+      const blockBoxes = new Map(); // block -> {x0,y0,x1,y1}
+      const pad = BLOCK_PAD;
+      for (const [name, node] of Object.entries(nodes)) {
+        const b = boxByName.get(name);
+        if (!b) continue;
+        const blk = getBlock(node);
+        const bb = blockBoxes.get(blk) || {
+          x0: Infinity,
+          y0: Infinity,
+          x1: -Infinity,
+          y1: -Infinity,
+        };
+        bb.x0 = Math.min(bb.x0, b.x0 - pad);
+        bb.y0 = Math.min(bb.y0, b.y0 - pad);
+        bb.x1 = Math.max(bb.x1, b.x0 + b.w + pad);
+        bb.y1 = Math.max(bb.y1, b.y0 + b.h + pad);
+        blockBoxes.set(blk, bb);
+      }
+
+      // Node color scale based on self time or memory (batched_in).
+      const maxMs = arrayMax(
+        Object.values(nodes).map((n) => getMean(n.self_total_active_ms)),
+        0.0001
+      );
+      const maxBatchedIn = arrayMax(
+        Object.values(nodes).map((n) => getMean(n.self_batched_in)),
+        1
+      );
+
+      function nodeColor(node) {
+        if (state.displayMode === "memory") {
+          if (!node.has_memory_data) return "rgb(255,255,255)";
+          const t = Math.min(1, getMean(node.self_batched_in) / maxBatchedIn);
+          const c1 = [255, 255, 255];
+          const c2 = [220, 30, 30];
+          const mix = c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
+          return `rgb(${mix[0]},${mix[1]},${mix[2]})`;
+        }
+        const t = Math.min(1, getMean(node.self_total_active_ms) / maxMs);
+        const c1 = [233, 242, 255];
+        const c2 = [91, 141, 239];
+        const mix = c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
+        return `rgb(${mix[0]},${mix[1]},${mix[2]})`;
+      }
+
+      const childOrder = new Map();
+      const parentOrder = new Map();
+
+      for (const [p, kids] of children.entries()) {
+        const ordered = [...kids].sort((a, b) => {
+          const ax = pos.get(a)?.x ?? 0;
+          const bx = pos.get(b)?.x ?? 0;
+          return ax - bx || a.localeCompare(b);
+        });
+        childOrder.set(p, ordered);
+      }
+
+      for (const [c, ps] of parents.entries()) {
+        const ordered = [...ps].sort((a, b) => {
+          const ax = pos.get(a)?.x ?? 0;
+          const bx = pos.get(b)?.x ?? 0;
+          return ax - bx || a.localeCompare(b);
+        });
+        parentOrder.set(c, ordered);
+      }
+
+      function edgeOffset(list, name) {
+        const n = list.length;
+        if (n <= 1) return 0;
+        const i = Math.max(0, list.indexOf(name));
+        return (i - (n - 1) / 2) * 8;
+      }
+
+      function edgePath(x1, y1, x2, y2) {
+        const dy = Math.max(30, (y2 - y1) / 2);
+        return `M ${x1} ${y1} C ${x1} ${y1 + dy} ${x2} ${y2 - dy} ${x2} ${y2}`;
+      }
+
+      // --- Build edges as paths from box boundary to box boundary ---
+      let edges = "";
+      for (const [name, node] of Object.entries(nodes)) {
+        const from = boxByName.get(name);
+        if (!from) continue;
+        const kids = children.get(name) || [];
+        for (const c of kids) {
+          const to = boxByName.get(c);
+          if (!to) continue;
+          const fromList = childOrder.get(name) || [];
+          const toList = parentOrder.get(c) || [];
+          const x1 = from.cx + edgeOffset(fromList, c);
+          const y1 = from.y0 + from.h;
+          const x2 = to.cx + edgeOffset(toList, name);
+          const y2 = to.y0;
+          edges += `<path class="g-edge" data-from="${name}" data-to="${c}" d="${edgePath(
+            x1,
+            y1,
+            x2,
+            y2
+          )}" />`;
+        }
+      }
+
+      // --- Build block rectangles ---
+      let blocks = "";
+      const blockPalette = [
+        "rgba(233, 242, 255, 0.55)",
+        "rgba(248, 241, 255, 0.55)",
+        "rgba(240, 252, 244, 0.55)",
+        "rgba(255, 248, 235, 0.55)",
+      ];
+      const blockNames = Array.from(blockBoxes.keys()).sort(
+        (a, b) =>
+          blockRank(a) - blockRank(b) || String(a).localeCompare(String(b))
+      );
+
+      // Legend: show color scale appropriate to display mode.
+      const legendEl = document.getElementById("legend");
+      if (legendEl) {
+        if (state.displayMode === "memory") {
+          legendEl.innerHTML = `<span class="legend-item"><span class="legend-swatch-red"></span><span>memory (batched_in): none (white) → high (red, max ${maxBatchedIn.toLocaleString()})</span></span>`;
+        } else {
+          legendEl.innerHTML = `<span class="legend-item"><span class="legend-swatch"></span><span>time (ms): low → high (max ${fmtMs(
+            maxMs
+          )})</span></span>`;
+        }
+      }
+
+      blockNames.forEach((blk, idx) => {
+        const bb = blockBoxes.get(blk);
+        if (!bb) return;
+        const fill = blockPalette[idx % blockPalette.length];
+        const w = Math.max(120, bb.x1 - bb.x0);
+        const h = Math.max(80, bb.y1 - bb.y0);
+        const labelX = bb.x0 + 10;
+        const labelY = bb.y0 - 8;
+        blocks += `
+      <g class="g-block">
+        <rect x="${bb.x0}" y="${bb.y0}" width="${w}" height="${h}" fill="${fill}"></rect>
+        <text x="${labelX}" y="${labelY}" font-size="12" fill="#445" font-weight="600">${escapeHtml(
+          blk
+        )}</text>
+      </g>`;
+      });
+
+      // --- Build vertices with wrapped text ---
+      let verts = "";
+      for (const [name, node] of Object.entries(nodes)) {
+        const b = boxByName.get(name);
+        if (!b) continue;
+
+        const isSel = state.selected === name;
+        const labelEsc = escapeHtml(node.label || name);
+
+        let nodeTip;
+        if (state.displayMode === "memory") {
+          if (node.has_memory_data) {
+            nodeTip = `${labelEsc}\nbatched_in: ${fmtStats(node.self_batched_in)}\nmerges: ${fmtStats(node.self_merges)}\nmerge_in: ${fmtStats(node.self_merge_in)}\nmerge_out: ${fmtStats(node.self_merge_out)}\ndropped: ${fmtStats(node.self_dropped)}`;
+          } else {
+            nodeTip = `${labelEsc}\n(no memory data)`;
+          }
+        } else {
+          nodeTip = `${labelEsc}\ntime: ${fmtStats(node.self_total_active_ms, "ms")}\nactivations: ${fmtStats(node.self_activations)}`;
+        }
+
+        const colorizedLines = b.lines.map((ln) => colorizeHtml(ln)).join("<br>");
+
+        verts += `
+      <g class="g-node${isSel ? " selected" : ""}" data-name="${name}" transform="translate(${b.x0}, ${b.y0})">
+        <rect width="${b.w}" height="${b.h}" fill="${nodeColor(node)}"></rect>
+        <foreignObject width="${b.w}" height="${b.h}">
+          <div xmlns="http://www.w3.org/1999/xhtml" class="g-node-label" style="width:${b.w}px;height:${b.h}px;font:${NODE.font};line-height:${NODE.lineH}px;padding:0 ${NODE.padX}px">${colorizedLines}</div>
+        </foreignObject>
+        <title>${nodeTip}</title>
+      </g>`;
+      }
+
+      container.innerHTML = `
+    <svg id="graphSvg" viewBox="0 0 ${width} ${height}">
+      <g id="viewport">
+        ${blocks}
+        ${edges}
+        ${verts}
+      </g>
+    </svg>
+  `;
+
+      const svg = document.getElementById("graphSvg");
+      const viewport = document.getElementById("viewport");
+      const edgeEls = Array.from(svg.querySelectorAll(".g-edge"));
+      const nodeEls = Array.from(svg.querySelectorAll(".g-node"));
+
+      function applyTransform() {
+        viewport.setAttribute(
+          "transform",
+          `translate(${state.graph.tx} ${state.graph.ty}) scale(${state.graph.scale})`
+        );
+      }
+      let rafPending = false;
+      function scheduleApplyTransform() {
+        if (rafPending) return;
+        rafPending = true;
+        requestAnimationFrame(() => {
+          rafPending = false;
+          applyTransform();
+        });
+      }
+
+      applyTransform();
+
+      // Click-to-select still works.
+      svg.addEventListener("click", (e) => {
+        const g = e.target.closest(".g-node");
+        if (!g) return;
+        const name = g.getAttribute("data-name");
+        if (name) selectNode(name);
+      });
+
+      // Double-click on blank area resets selection.
+      svg.addEventListener("dblclick", (e) => {
+        const g = e.target.closest(".g-node");
+        if (g) return;
+        state.selected = null;
+        state.selectedRule = null;
+        state.highlightedRule = null;
+        clearEdgeFocus();
+        clearNodeFocus();
+        renderTree();
+        renderTopNodes();
+        renderGraph();
+      });
+
+      function focusEdges(name) {
+        edgeEls.forEach((el) => {
+          const from = el.getAttribute("data-from");
+          const to = el.getAttribute("data-to");
+          if (from === name || to === name) {
+            el.classList.add("highlight");
+            el.classList.remove("dim");
+          } else {
+            el.classList.add("dim");
+            el.classList.remove("highlight");
+          }
+        });
+      }
+
+      function clearEdgeFocus() {
+        edgeEls.forEach((el) => {
+          el.classList.remove("dim");
+          el.classList.remove("highlight");
+        });
+      }
+
+      function focusConnectedNodes(name) {
+        const connected = new Set([name]);
+        edgeEls.forEach((el) => {
+          const from = el.getAttribute("data-from");
+          const to = el.getAttribute("data-to");
+          if (from === name) connected.add(to);
+          if (to === name) connected.add(from);
+        });
+        nodeEls.forEach((el) => {
+          const n = el.getAttribute("data-name");
+          if (connected.has(n)) {
+            el.classList.remove("dim");
+          } else {
+            el.classList.add("dim");
+          }
+        });
+      }
+
+      function clearNodeFocus() {
+        nodeEls.forEach((el) => {
+          el.classList.remove("dim");
+        });
+      }
+
+      // --- Pan (drag) ---
+      let dragging = false;
+      let lastX = 0;
+      let lastY = 0;
+
+      svg.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        if (e.target.closest(".g-node")) return; // avoid starting pan on node click
+        dragging = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        svg.setPointerCapture(e.pointerId);
+      });
+
+      svg.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+
+        // Pan in screen-space with a boost at higher zoom levels.
+        const panBoost = Math.max(1, Math.sqrt(state.graph.scale));
+        state.graph.tx += dx * panBoost;
+        state.graph.ty += dy * panBoost;
+        scheduleApplyTransform();
+      });
+
+      svg.addEventListener("pointerup", () => {
+        dragging = false;
+      });
+      svg.addEventListener("pointercancel", () => {
+        dragging = false;
+      });
+
+      // --- Zoom (wheel) ---
+      svg.addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+
+          const oldScale = state.graph.scale;
+          const factor = Math.exp(-e.deltaY * 0.0012);
+          let newScale = oldScale * factor;
+          newScale = Math.max(0.1, Math.min(10.0, newScale));
+          if (newScale === oldScale) return;
+
+          // Zoom around cursor (keep point under mouse stable).
+          const pt = svg.createSVGPoint();
+          pt.x = e.clientX;
+          pt.y = e.clientY;
+          const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
+
+          const k = newScale / oldScale;
+          state.graph.tx = state.graph.tx + (cursor.x - state.graph.tx) * (1 - k);
+          state.graph.ty = state.graph.ty + (cursor.y - state.graph.ty) * (1 - k);
+          state.graph.scale = newScale;
+
+          scheduleApplyTransform();
+        },
+        { passive: false }
+      );
+
+      if (state.selected) {
+        focusEdges(state.selected);
+        focusConnectedNodes(state.selected);
+      } else if (state.highlightedRule) {
+        const ruleNodes = nodesForRule(state.highlightedRule);
+        nodeEls.forEach((el) => {
+          const n = el.getAttribute("data-name");
+          if (ruleNodes.has(n)) {
+            el.classList.remove("dim");
+            el.classList.add("selected");
+          } else {
+            el.classList.add("dim");
+            el.classList.remove("selected");
+          }
+        });
+        // Highlight edges between rule nodes, dim others.
+        edgeEls.forEach((el) => {
+          const from = el.getAttribute("data-from");
+          const to = el.getAttribute("data-to");
+          if (ruleNodes.has(from) && ruleNodes.has(to)) {
+            el.classList.add("highlight");
+            el.classList.remove("dim");
+          } else {
+            el.classList.add("dim");
+            el.classList.remove("highlight");
+          }
+        });
+      }
+    }
+
+    // Ensure a selected node is visible in the left list and scroll to it.
+    function expandRulePlanTree(ruleText) {
+      const ruleObj = findRuleByText(ruleText);
+      if (ruleObj && ruleObj.nodes) {
+        for (const [rfp, pn] of Object.entries(ruleObj.nodes)) {
+          const hasEdges = (pn.children && pn.children.length) || (pn.parents && pn.parents.length);
+          if (hasEdges) state.expanded.add(planKey(ruleText, rfp));
+        }
+      }
+    }
+
+    function ensureTreeVisible(name, ruleText = null, fp = null) {
+      let row = null;
+      // 1) Exact match: fingerprint + rule
+      if (fp && ruleText) {
+        row = document.querySelector(
+          `#tree .tree-node[data-fp="${CSS.escape(fp)}"][data-rule="${CSS.escape(ruleText)}"]`
+        );
+      }
+      // 2) Name + rule (for nodes without fingerprint, or fp not in this rule)
+      if (!row && ruleText) {
+        row = document.querySelector(
+          `#tree .tree-node[data-name="${CSS.escape(name)}"][data-rule="${CSS.escape(ruleText)}"]`
+        );
+      }
+      // 3) Just name (last resort)
+      if (!row) {
+        row = document.querySelector(`#tree .tree-node[data-name="${CSS.escape(name)}"]`);
+      }
+      row?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+
+    function renderRulePicker(name, fp, matches, selectedRule) {
+      const el = document.getElementById("rulePicker");
+      if (!fp || !matches.length) {
+        el.innerHTML = "";
+        return;
+      }
+      if (matches.length === 1) {
+        el.innerHTML = `<div class="rule-single">${escapeHtml(matches[0])}</div>`;
+        return;
+      }
+
+      const buttons = matches
+        .map((r) => {
+          const active = r === selectedRule;
+          return `<button data-rule="${escapeHtml(r)}" class="rule-item${active ? " active" : ""
+            }">${escapeHtml(r)}</button>`;
+        })
+        .join("");
+
+      el.innerHTML = `<span class="shared-badge">${LINK_ICON}shared in ${matches.length} rules</span><div class="rule-list">${buttons}</div>`;
+      el.querySelectorAll("button[data-rule]").forEach((btn) => {
+        btn.onclick = () => selectNode(name, btn.dataset.rule);
+      });
+    }
+
+    function renderTopNodes() {
+      const container = document.getElementById("topNodes");
+      const titleEl = document.querySelector(".toplist-title");
+
+      // Memory mode
+      if (state.displayMode === "memory") {
+        if (titleEl) titleEl.textContent = "Top 10 by Memory";
+        const memNodes = Object.entries(DATA.nodes || {})
+          .map(([name, node]) => ({ name, node }))
+          .filter((x) => x.node.has_memory_data)
+          .sort((a, b) => getMean(b.node.self_batched_in) - getMean(a.node.self_batched_in))
+          .slice(0, 10);
+
+        if (!memNodes.length) {
+          container.innerHTML = "<div class=\"muted\">No memory data.</div>";
+          return;
+        }
+
+        container.innerHTML = memNodes
+          .map(({ name, node }) => {
+            const active = state.selected === name ? " active" : "";
+            const label = node.label || name;
+            return `
+        <div class="toplist-item${active}" data-name="${escapeHtml(name)}">
+          <div class="toplist-name" title="${escapeHtml(label)}">${colorizeHtml(label)}</div>
+          <div class="toplist-ms">${fmtMean(node.self_batched_in)}</div>
+        </div>`;
+          })
+          .join("");
+
+        container.querySelectorAll(".toplist-item").forEach((row) => {
+          row.onclick = () => selectNode(row.dataset.name);
+        });
+        return;
+      }
+
+      // Time mode (default)
+      if (titleEl) titleEl.textContent = "Top 10 by Time";
+      const nodes = Object.entries(DATA.nodes || {})
+        .map(([name, node]) => ({ name, node }))
+        .filter((x) => x.node?.self_total_active_ms)
+        .sort((a, b) => getMean(b.node.self_total_active_ms) - getMean(a.node.self_total_active_ms))
+        .slice(0, 10);
+
+      if (!nodes.length) {
+        container.innerHTML = "<div class=\"muted\">No timing data.</div>";
+        return;
+      }
+
+      container.innerHTML = nodes
+        .map(({ name, node }) => {
+          const active = state.selected === name ? " active" : "";
+          const label = node.label || name;
+          return `
+        <div class="toplist-item${active}" data-name="${escapeHtml(name)}">
+          <div class="toplist-name" title="${escapeHtml(label)}">${colorizeHtml(label)}</div>
+          <div class="toplist-ms">${fmtMean(node.self_total_active_ms, "ms")} ms</div>
+        </div>`;
+        })
+        .join("");
+
+      container.querySelectorAll(".toplist-item").forEach((row) => {
+        row.onclick = () => selectNode(row.dataset.name);
+      });
+    }
+
+    function selectNode(name, preferredRule = null) {
+      state.highlightedRule = null;
+      state.selected = name;
+      // Track which rule the user clicked from, so the sidebar only highlights there.
+      state.selectedRuleContext = preferredRule || null;
+
+      const node = DATA.nodes[name];
+      document.getElementById("title").textContent = node.label;
+
+      const fp = node.fingerprint || null;
+      const matches = fp ? rulesForFingerprint(fp) : [];
+
+      // Pick the rule for the detail pane (must contain this fingerprint).
+      let chosenRule = null;
+      if (preferredRule && matches.includes(preferredRule)) {
+        chosenRule = preferredRule;
+      } else if (state.selectedRule && matches.includes(state.selectedRule)) {
+        chosenRule = state.selectedRule;
+      } else {
+        chosenRule = matches[0] || null;
+      }
+      state.selectedRule = chosenRule;
+
+      // For sidebar scroll: stay in the rule the user clicked from.
+      const scrollRule = preferredRule || chosenRule;
+
+      // Expand the clicked rule + same-block siblings that share this fingerprint.
+      const expandRule = scrollRule || chosenRule;
+      if (expandRule) expandRulePlanTree(expandRule);
+      if (fp && expandRule) {
+        const nodeBlock = getBlock(node);
+        for (const sr of rulesForFingerprint(fp)) {
+          if (sr !== expandRule && _ruleToBlock.get(sr) === nodeBlock) {
+            expandRulePlanTree(sr);
+          }
+        }
+      }
+
+      const extra =
+        node.extra_parents && node.extra_parents.length
+          ? ` extra parents: ${node.extra_parents.join(", ")}`
+          : "";
+      const sharedLabel = matches.length > 1 ? ` | shared in ${matches.length} rules` : "";
+
+      const metaParts = [`id: ${name}`];
+      if (sharedLabel) metaParts.push(sharedLabel.trim());
+      if (extra) metaParts.push(extra.trim());
+      document.getElementById("meta").textContent = metaParts.join(" | ");
+
+      // Render stat cards
+      const statsEl = document.getElementById("detailStats");
+      let cardsHtml = "";
+      cardsHtml += renderStatCard("Active Time", node.self_total_active_ms, "ms", "#2563eb");
+      cardsHtml += renderStatCard("Activations", node.self_activations, "", "#6366f1");
+      if (node.has_flow_data) {
+        cardsHtml += renderStatCard("Tuples In", node.self_tup_in, "", "#0891b2");
+        cardsHtml += renderStatCard("Tuples Out", node.self_tup_out, "", "#0d9488");
+      }
+      if (node.has_memory_data) {
+        // Headline memory metric only; the per-operator table below carries the
+        // full arrangement detail (merges / merge_in / merge_out / dropped).
+        cardsHtml += renderStatCard("Batched In", node.self_batched_in, "", "#dc2626");
+      }
+      statsEl.innerHTML = `<div class="detail-stats">${cardsHtml}</div>`;
+
+      renderRulePicker(name, fp, matches, chosenRule);
+
+      const tbl = document.getElementById("opsTable");
+      const body = document.getElementById("opsBody");
+      body.innerHTML = "";
+
+      const head = document.getElementById("opsTableHead");
+      const showMemCol = node.has_memory_data;
+      head.innerHTML = `<tr>
+        <th>addr</th>
+        <th>operator</th>
+        <th>active time</th>
+        <th>activations</th>
+        <th>tup_in</th>
+        <th>tup_out</th>
+        ${showMemCol ? '<th>batched_in</th><th>merges</th><th>merge_in</th><th>merge_out</th><th>dropped</th><th>bat_bytes</th><th>bat_cap</th>' : ""}
+      </tr>`;
+
+      if (!node.operators || node.operators.length === 0) {
+        tbl.style.display = "none";
+      } else {
+        // Compute per-column max for consistent bar scaling
+        const ops = node.operators;
+        const colMax = {
+          activations: arrayMax(ops.map(o => getMean(o.activations)), 0.001),
+          total_active_ms: arrayMax(ops.map(o => getMean(o.total_active_ms)), 0.001),
+          tup_in: arrayMax(ops.map(o => getMean(o.tup_in)), 0.001),
+          tup_out: arrayMax(ops.map(o => getMean(o.tup_out)), 0.001),
+          batched_in: arrayMax(ops.map(o => getMean(o.batched_in)), 0.001),
+          merges: arrayMax(ops.map(o => getMean(o.merges)), 0.001),
+          merge_in: arrayMax(ops.map(o => getMean(o.merge_in)), 0.001),
+          merge_out: arrayMax(ops.map(o => getMean(o.merge_out)), 0.001),
+          dropped: arrayMax(ops.map(o => getMean(o.dropped)), 0.001),
+          bat_bytes: arrayMax(ops.map(o => getMean(o.bat_bytes)), 0.001),
+          bat_cap: arrayMax(ops.map(o => getMean(o.bat_cap)), 0.001),
+        };
+
+        tbl.style.display = "table";
+        for (const op of ops) {
+          const tr = document.createElement("tr");
+          const memBar = (v, key, color) => (v !== null && v !== undefined
+            ? renderStatsBar(v, colMax[key], color)
+            : "—");
+          const flowCells = `<td>${memBar(op.tup_in, "tup_in", "#0891b2")}</td><td>${memBar(op.tup_out, "tup_out", "#0d9488")}</td>`;
+          const memCells = showMemCol
+            ? `<td>${memBar(op.batched_in, "batched_in", "#dc2626")}</td><td>${memBar(op.merges, "merges", "#ea580c")}</td><td>${memBar(op.merge_in, "merge_in", "#d97706")}</td><td>${memBar(op.merge_out, "merge_out", "#059669")}</td><td>${memBar(op.dropped, "dropped", "#7c3aed")}</td><td>${memBar(op.bat_bytes, "bat_bytes", "#9333ea")}</td><td>${memBar(op.bat_cap, "bat_cap", "#c026d3")}</td>`
+            : "";
+          tr.innerHTML = `
+        <td><code>[${op.addr.join(", ")}]</code></td>
+        <td>${escapeHtml(op.op_name)}</td>
+        <td>${renderStatsBar(op.total_active_ms, colMax.total_active_ms, "#2563eb")}</td>
+        <td>${renderStatsBar(op.activations, colMax.activations, "#6366f1")}</td>
+        ${flowCells}
+        ${memCells}
+      `;
+          body.appendChild(tr);
+        }
+      }
+
+      renderTree();
+      ensureTreeVisible(name, scrollRule, fp);
+      renderGraph();
+      renderTopNodes();
+    }
+
+    function expandAll() {
+      state.expanded.clear();
+      for (const rule of DATA.rules || []) {
+        if (!rule.nodes) continue;
+        for (const [fp, pn] of Object.entries(rule.nodes)) {
+          if (pn.children && pn.children.length) {
+            state.expanded.add(planKey(rule.text, fp));
+          }
+        }
+      }
+      state.defaultExpanded = true;
+      renderTree();
+    }
+
+    function collapseAll() {
+      state.expanded.clear();
+      state.defaultExpanded = true;
+      renderTree();
+    }
+
+    document.getElementById("search").addEventListener("input", (e) => {
+      state.search = e.target.value || "";
+      renderTree();
+    });
+
+    document.getElementById("expandAll").onclick = expandAll;
+    document.getElementById("collapseAll").onclick = collapseAll;
+
+    document.getElementById("tabTree").onclick = () => {
+      state.view = "tree";
+      document.getElementById("detailPane").style.display = "block";
+      document.getElementById("graphPane").style.display = "none";
+      document.getElementById("tabTree").classList.add("active");
+      document.getElementById("tabGraph").classList.remove("active");
+    };
+
+    document.getElementById("tabGraph").onclick = () => {
+      state.view = "graph";
+      document.getElementById("detailPane").style.display = "none";
+      document.getElementById("graphPane").style.display = "flex"; // important
+      document.getElementById("tabGraph").classList.add("active");
+      document.getElementById("tabTree").classList.remove("active");
+      renderGraph();
+    };
+
+    function setDisplayMode(mode) {
+      state.displayMode = mode;
+      document.getElementById("modeTime").classList.toggle("active", mode === "time");
+      document.getElementById("modeMemory").classList.toggle("active", mode === "memory");
+      document.getElementById("graphView").classList.toggle("memory-mode", mode === "memory");
+      renderTree();
+      renderTopNodes();
+      if (state.view === "graph") renderGraph();
+    }
+
+    document.getElementById("modeTime").onclick = () => setDisplayMode("time");
+    document.getElementById("modeMemory").onclick = () => setDisplayMode("memory");
+
+    // --- Snapshot slider ---
+    function setSnapshot(idx) {
+      state.snapshotIdx = idx;
+      DATA = SNAPSHOTS[idx];
+      rebuildCaches();
+      document.getElementById("snapshotLabel").textContent = SNAPSHOT_LABELS[idx];
+      document.getElementById("snapshotRange").value = idx;
+      renderAll();
+    }
+
+    function renderAll() {
+      renderSummary();
+      if (state.selected && DATA.nodes[state.selected]) {
+        // selectNode already calls renderTree + renderGraph + renderTopNodes.
+        selectNode(state.selected);
+      } else {
+        renderTree();
+        renderTopNodes();
+        if (state.view === "graph") renderGraph();
+      }
+    }
+
+    if (SNAPSHOTS.length > 1) {
+      const slider = document.getElementById("snapshotSlider");
+      slider.style.display = "flex";
+      const range = document.getElementById("snapshotRange");
+      range.max = SNAPSHOTS.length - 1;
+      range.value = 0;
+      document.getElementById("snapshotLabel").textContent = SNAPSHOT_LABELS[0];
+      range.addEventListener("input", (e) => setSnapshot(parseInt(e.target.value, 10)));
+    }
+
+    renderSummary();
+    renderTree();
+    renderTopNodes();
+
+    // Show mode toggle only when memory data is available.
+    document.getElementById("modeToggle").style.display = "flex";
+
+    if (DATA.roots.length) selectNode(DATA.roots[0]);
+
+    // ── Resizable split pane ──
+    (function() {
+      const handle = document.getElementById('splitHandle');
+      const sidebar = document.querySelector('.sidebar');
+      const container = document.querySelector('.container');
+      let dragging = false;
+
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        dragging = true;
+        handle.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+      });
+
+      document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const rect = container.getBoundingClientRect();
+        let newWidth = e.clientX - rect.left;
+        newWidth = Math.max(200, Math.min(newWidth, rect.width * 0.8));
+        sidebar.style.width = newWidth + 'px';
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      });
+    })();
+  </script>
+</body>
+
+</html>

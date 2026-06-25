@@ -7,22 +7,22 @@ type PlanTreeInfo = [((u64, Option<u64>), u64)];
 
 /// A node entry in the rendered plan tree for a rule.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct PlanTreeNodeProfile {
+pub struct PlanTreeNodeProfile {
     /// The output fingerprint for this plan node.
-    fingerprint: String,
+    pub fingerprint: String,
     /// Parent output fingerprints (only if they appear in the plan tree outputs).
-    parents: Vec<String>,
+    pub parents: Vec<String>,
 }
 
 /// A rule profile including the original rule text and a rendered plan tree.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(super) struct RuleProfile {
-    text: String,
-    plan_tree: Vec<PlanTreeNodeProfile>,
+pub struct RuleProfile {
+    pub text: String,
+    pub plan_tree: Vec<PlanTreeNodeProfile>,
 }
 
 impl RuleProfile {
-    pub(super) fn new(text: String, plan_tree_info: Vec<((u64, Option<u64>), u64)>) -> Self {
+    pub(crate) fn new(text: String, plan_tree_info: Vec<((u64, Option<u64>), u64)>) -> Self {
         let plan_tree = Self::render_plan_tree(&plan_tree_info);
         Self { text, plan_tree }
     }

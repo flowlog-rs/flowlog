@@ -3,7 +3,7 @@
 //! Each method records a logical operator node in the profiler's plan graph,
 //! advancing the address counter by the correct number of timely operators.
 
-use crate::profiler::Profiler;
+use crate::Profiler;
 
 const TAG_INPUT: &str = "Input";
 const TAG_STAGE: &str = "Stage";
@@ -15,7 +15,7 @@ const TAG_INSPECT: &str = "Inspect";
 // =========================================================================
 
 impl Profiler {
-    pub(crate) fn input_edb_operator(&mut self, edb_name: String, output_variable_name: String) {
+    pub fn input_edb_operator(&mut self, edb_name: String, output_variable_name: String) {
         self.push_node(
             format!("{}: input", edb_name),
             vec![],
@@ -26,7 +26,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn input_dedup_operator(
+    pub fn input_dedup_operator(
         &mut self,
         edb_name: String,
         input_variable_name: String,
@@ -49,7 +49,7 @@ impl Profiler {
 // =========================================================================
 
 impl Profiler {
-    pub(crate) fn map_join_operator(
+    pub fn map_join_operator(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,
@@ -66,7 +66,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn map_join_arrange_operator(
+    pub fn map_join_arrange_operator(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,
@@ -85,7 +85,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn anti_join_operator(
+    pub fn anti_join_operator(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,
@@ -103,7 +103,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn anti_join_arrange_operator(
+    pub fn anti_join_arrange_operator(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,
@@ -122,7 +122,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn general_aggregate_operator(
+    pub fn general_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -138,7 +138,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn opt_aggregate_operator(
+    pub fn opt_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -166,7 +166,7 @@ impl Profiler {
         self.push_node(name, vec![input], Some(output), TAG_RUNTIME, 1, None);
     }
 
-    pub(crate) fn concat_dedup_operator(
+    pub fn concat_dedup_operator(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,
@@ -189,7 +189,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn recursive_enter_operator(
+    pub fn recursive_enter_operator(
         &mut self,
         input_variable_name: String,
         output_variable_name: String,
@@ -201,7 +201,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn recursive_feedback_operator(
+    pub fn recursive_feedback_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -214,7 +214,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn recursive_resultsin_operator(
+    pub fn recursive_resultsin_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -227,7 +227,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn recursive_pre_leave_opt_aggregate_operator(
+    pub fn recursive_pre_leave_opt_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -240,7 +240,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn recursive_leave_operator(
+    pub fn recursive_leave_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -253,7 +253,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn recursive_post_leave_opt_aggregate_operator(
+    pub fn recursive_post_leave_opt_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -290,7 +290,7 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn inspect_size_operator(&mut self, input_variable_name: String, name: String) {
+    pub fn inspect_size_operator(&mut self, input_variable_name: String, name: String) {
         let steps = self.inspect_size_steps();
         self.push_node(
             format!("{}: inspect size", name),
@@ -302,19 +302,11 @@ impl Profiler {
         );
     }
 
-    pub(crate) fn inspect_content_terminal_operator(
-        &mut self,
-        input_variable_name: String,
-        name: String,
-    ) {
+    pub fn inspect_content_terminal_operator(&mut self, input_variable_name: String, name: String) {
         self.push_inspect_content("terminal", input_variable_name, name);
     }
 
-    pub(crate) fn inspect_content_file_operator(
-        &mut self,
-        input_variable_name: String,
-        name: String,
-    ) {
+    pub fn inspect_content_file_operator(&mut self, input_variable_name: String, name: String) {
         self.push_inspect_content("file", input_variable_name, name);
     }
 }

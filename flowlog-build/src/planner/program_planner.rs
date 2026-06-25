@@ -7,7 +7,7 @@ use crate::common::{BoxError, Config};
 use crate::optimizer::Optimizer;
 use crate::parser::Program;
 use crate::planner::StratumPlanner;
-use crate::profiler::Profiler;
+use flowlog_profiler::Profiler;
 use crate::stratifier::Stratifier;
 
 /// Whole-program planning.

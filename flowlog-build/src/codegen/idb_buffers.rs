@@ -13,7 +13,7 @@ use syn::Index;
 use crate::codegen::CodeGen;
 use crate::codegen::ty::tuple_type;
 use crate::parser::{DataType, Relation};
-use crate::profiler::{Profiler, with_profiler};
+use flowlog_profiler::{Profiler, with_profiler};
 
 // =========================================================================
 // Output struct

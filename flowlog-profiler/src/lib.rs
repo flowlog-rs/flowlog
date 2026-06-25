@@ -1,8 +1,11 @@
-//! Profiling utilities for FlowLog compilation and execution.
+//! Plan-graph profiler shared by the FlowLog compiler and the profile visualizer.
 //!
-//! The profiler records the logical operator plan graph during compilation,
-//! mapping each operator to its predicted timely dataflow address range.
-//! At runtime, this is cross-referenced with timely's actual operator logs.
+//! The compiler (`flowlog-build`) drives the builder API to record the logical
+//! operator plan graph during compilation, mapping each operator to its
+//! predicted timely dataflow address range, and serializes it to `ops.json`.
+//! The visualizer (`flowlog-visualizer`) deserializes that same `ops.json` into
+//! these types — so the two ends of the wire format share one definition and
+//! cannot silently drift.
 //!
 //! # Module structure
 //!
@@ -22,9 +25,29 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use crate::common::ExecutionMode;
-use crate::profiler::node::{NodeManager, NodeProfile};
-use crate::profiler::rule::RuleProfile;
+pub use addr::Addr;
+pub use node::NodeProfile;
+pub use rule::{PlanTreeNodeProfile, RuleProfile};
+
+use crate::node::NodeManager;
+
+/// Execution mode, as far as the profiler's operator step counts care.
+///
+/// Mirrors the compiler's `ExecutionMode` but is kept local so this crate has
+/// no dependency on `flowlog-build`; the compiler maps its mode onto this when
+/// constructing a [`Profiler`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub enum ProfileMode {
+    /// Datalog single-pass batch execution.
+    #[default]
+    DatalogBatch,
+    /// Datalog incremental execution.
+    DatalogInc,
+    /// Extended batch execution with explicit `loop` blocks.
+    ExtendBatch,
+    /// Extended incremental execution with explicit `loop` blocks.
+    ExtendInc,
+}
 
 /// Profiler that records the operator plan graph during compilation.
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -36,11 +59,11 @@ pub struct Profiler {
     node_manager: NodeManager,
 
     #[serde(skip)]
-    mode: ExecutionMode,
+    mode: ProfileMode,
 }
 
 /// Run a closure if a profiler instance is present.
-pub(crate) fn with_profiler<F>(profiler: &mut Option<Profiler>, f: F)
+pub fn with_profiler<F>(profiler: &mut Option<Profiler>, f: F)
 where
     F: FnOnce(&mut Profiler),
 {
@@ -63,11 +86,21 @@ where
 
 impl Profiler {
     /// Create a new profiler with the given execution mode.
-    pub fn new(mode: ExecutionMode) -> Self {
+    pub fn new(mode: ProfileMode) -> Self {
         Self {
             mode,
             ..Default::default()
         }
+    }
+
+    /// Logical nodes recorded so far (read side, used by the visualizer).
+    pub fn nodes(&self) -> &[NodeProfile] {
+        &self.nodes
+    }
+
+    /// Rule plan trees recorded so far (read side, used by the visualizer).
+    pub fn rules(&self) -> &[RuleProfile] {
+        &self.rules
     }
 
     /// Serialize profiler data to a pretty JSON file.
@@ -84,7 +117,7 @@ impl Profiler {
     }
 
     /// Insert a rule using raw plan tree info; the plan tree is rendered internally.
-    pub(crate) fn insert_rule(
+    pub fn insert_rule(
         &mut self,
         rule_text: String,
         plan_tree_info: Vec<((u64, Option<u64>), u64)>,
@@ -96,23 +129,23 @@ impl Profiler {
     // Node manager delegation (scope & block tracking)
     // =================================================================
 
-    pub(crate) fn update_input_block(&mut self) {
+    pub fn update_input_block(&mut self) {
         self.node_manager.update_input_block();
     }
 
-    pub(crate) fn update_stratum_block(&mut self, stratum_id: usize) {
+    pub fn update_stratum_block(&mut self, stratum_id: usize) {
         self.node_manager.update_stratum_block(stratum_id);
     }
 
-    pub(crate) fn update_inspect_block(&mut self) {
+    pub fn update_inspect_block(&mut self) {
         self.node_manager.update_inspect_block();
     }
 
-    pub(crate) fn enter_scope(&mut self) {
+    pub fn enter_scope(&mut self) {
         self.node_manager.enter_scope();
     }
 
-    pub(crate) fn leave_scope(&mut self) {
+    pub fn leave_scope(&mut self) {
         self.node_manager.leave_scope();
     }
 

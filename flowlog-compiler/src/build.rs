@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::{env, fs, io, process};
 
 use flowlog_build::planner::ProgramPlanner;
-use flowlog_build::profiler::Profiler;
+use flowlog_profiler::Profiler;
 use quote::quote;
 use tracing::info;
 

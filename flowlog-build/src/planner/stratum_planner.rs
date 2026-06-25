@@ -7,7 +7,7 @@ use crate::catalog::Catalog;
 use crate::common::{Config, SECTION_BAR, SUBSECTION_BAR};
 use crate::optimizer::Optimizer;
 use crate::parser::{AggregationOperator, FlowLogRule, HeadArg, LoopCondition};
-use crate::profiler::{Profiler, with_profiler};
+use flowlog_profiler::{Profiler, with_profiler};
 use crate::stratifier::Stratifier;
 
 use crate::planner::{PlanError, RulePlanner, Transformation};
