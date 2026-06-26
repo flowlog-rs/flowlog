@@ -54,7 +54,7 @@ use crate::common::{Config, Span};
 use crate::parser::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg, BuiltinCall,
     BuiltinOperator, ComparisonExpr, ComparisonOperator, ConstType, DataType, Factor, FlowLogRule,
-    FnCall, HeadArg, Predicate, Program,
+    FnCall, HeadArg, Predicate, Program, TupleElem, TupleLit,
 };
 
 /// Type-check every rule and pin each polymorphic literal to its
@@ -78,7 +78,7 @@ pub fn check_program(program: &mut Program, config: &Config) -> Result<(), TypeC
                 (
                     u.params()
                         .iter()
-                        .map(|p| (p.name().to_string(), *p.data_type()))
+                        .map(|p| (p.name().to_string(), p.data_type().clone()))
                         .collect(),
                     u.ret_type(),
                 ),
@@ -145,6 +145,8 @@ fn check_builtin_config_requirements(
             }
             Factor::Cast(c) => check_factor(c.inner()),
             Factor::Group(a) => check_arith(a),
+            Factor::Tuple(r) => r.exprs().try_for_each(check_arith),
+            Factor::TupleProj { tuple, .. } => check_arith(tuple),
         }
     }
     for segment in program.segments() {
@@ -192,7 +194,7 @@ type Bindings = HashMap<String, (DataType, Span)>;
 /// Numeric literals stay polymorphic within their family (`IntLit` /
 /// `FloatLit`) until a concrete context fixes the type. Concrete literals
 /// carry their resolved [`DataType`] directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum LitKind {
     IntLit,
     FloatLit,
@@ -200,7 +202,7 @@ enum LitKind {
 }
 
 impl LitKind {
-    fn fits(self, expected: DataType) -> bool {
+    fn fits(&self, expected: &DataType) -> bool {
         match self {
             LitKind::IntLit => expected.is_integer(),
             LitKind::FloatLit => expected.is_float(),
@@ -208,7 +210,7 @@ impl LitKind {
         }
     }
 
-    fn is_numeric(self) -> bool {
+    fn is_numeric(&self) -> bool {
         match self {
             LitKind::IntLit | LitKind::FloatLit => true,
             LitKind::Concrete(t) => t.is_numeric(),
@@ -217,29 +219,29 @@ impl LitKind {
 
     /// Representative concrete type for diagnostic rendering **and** for
     /// pinning all-literal expressions that never met a concrete partner.
-    fn report_ty(self) -> DataType {
+    fn report_ty(&self) -> DataType {
         match self {
             LitKind::IntLit => DataType::Int32,
             LitKind::FloatLit => DataType::Float32,
-            LitKind::Concrete(t) => t,
+            LitKind::Concrete(t) => t.clone(),
         }
     }
 }
 
 /// Combine two operand kinds across an arithmetic operator. `None` on
 /// a family mismatch.
-fn merge_lit(a: LitKind, b: LitKind) -> Option<LitKind> {
+fn merge_lit(a: &LitKind, b: &LitKind) -> Option<LitKind> {
     match (a, b) {
-        (x, y) if x == y => Some(x),
+        (x, y) if x == y => Some(x.clone()),
         (LitKind::Concrete(t), LitKind::IntLit) | (LitKind::IntLit, LitKind::Concrete(t))
             if t.is_integer() =>
         {
-            Some(LitKind::Concrete(t))
+            Some(LitKind::Concrete(t.clone()))
         }
         (LitKind::Concrete(t), LitKind::FloatLit) | (LitKind::FloatLit, LitKind::Concrete(t))
             if t.is_float() =>
         {
-            Some(LitKind::Concrete(t))
+            Some(LitKind::Concrete(t.clone()))
         }
         _ => None,
     }
@@ -293,11 +295,11 @@ fn bind_atom_vars(
                 None => {
                     bindings.insert(v.clone(), (col_ty, atom.span()));
                 }
-                Some(&(first_ty, first_span)) if first_ty != col_ty => {
+                Some((first_ty, first_span)) if first_ty != &col_ty => {
                     return Err(TypeCheckError::TypeMismatch {
                         var: v.clone(),
-                        first_ty,
-                        first_span,
+                        first_ty: first_ty.clone(),
+                        first_span: *first_span,
                         later_ty: col_ty,
                         later_span: atom.span(),
                     });
@@ -305,7 +307,7 @@ fn bind_atom_vars(
                 Some(_) => {}
             },
             AtomArg::Const(c) => {
-                if !lit_kind(c)?.fits(col_ty) {
+                if !lit_kind(c)?.fits(&col_ty) {
                     return Err(TypeCheckError::LiteralColumnMismatch {
                         span: atom.span(),
                         literal: c.to_string(),
@@ -330,20 +332,20 @@ fn check_atom_uses(
         let col_ty = resolve_atom_column(atom, i, decls)?;
         match arg {
             AtomArg::Var(v) => {
-                if let Some(&(bound_ty, bound_span)) = bindings.get(v)
-                    && bound_ty != col_ty
+                if let Some((bound_ty, bound_span)) = bindings.get(v)
+                    && bound_ty != &col_ty
                 {
                     return Err(TypeCheckError::TypeMismatch {
                         var: v.clone(),
-                        first_ty: bound_ty,
-                        first_span: bound_span,
+                        first_ty: bound_ty.clone(),
+                        first_span: *bound_span,
                         later_ty: col_ty,
                         later_span: atom.span(),
                     });
                 }
             }
             AtomArg::Const(c) => {
-                if !lit_kind(c)?.fits(col_ty) {
+                if !lit_kind(c)?.fits(&col_ty) {
                     return Err(TypeCheckError::LiteralColumnMismatch {
                         span: atom.span(),
                         literal: c.to_string(),
@@ -374,7 +376,7 @@ fn pin_atom_consts(atom: &mut Atom, decls: &DeclTypes) -> Result<(), TypeCheckEr
         if let AtomArg::Const(c) = arg
             && c.is_polymorphic()
         {
-            c.pin(*col_ty);
+            c.pin(col_ty.clone());
         }
     }
     Ok(())
@@ -388,7 +390,7 @@ fn resolve_atom_column(
     let decl = decls
         .get(atom.name())
         .ok_or_else(|| TypeCheckError::internal(format!("atom `{}` not declared", atom.name())))?;
-    decl.get(i).copied().ok_or_else(|| {
+    decl.get(i).cloned().ok_or_else(|| {
         TypeCheckError::internal(format!(
             "atom `{}` has {} arguments but `.decl` has {}",
             atom.name(),
@@ -408,7 +410,7 @@ fn check_comparison(
     let op = cmp.operator().clone();
     let span = cmp.span();
 
-    if let (Some(l), Some(r)) = (left, right)
+    if let (Some(l), Some(r)) = (&left, &right)
         && merge_lit(l, r).is_none()
     {
         return Err(TypeCheckError::ComparisonTypeMismatch {
@@ -421,7 +423,7 @@ fn check_comparison(
 
     // Ordering comparisons additionally require an ordered type.
     if !matches!(op, ComparisonOperator::Equal | ComparisonOperator::NotEqual)
-        && let Some(kind) = left.or(right)
+        && let Some(kind) = left.as_ref().or(right.as_ref())
     {
         let is_ordered = kind.is_numeric() || matches!(kind, LitKind::Concrete(DataType::String));
         if !is_ordered {
@@ -435,14 +437,14 @@ fn check_comparison(
 
     // Pin: both sides unify to the same concrete type. Fall back to the
     // family's representative width when both sides are polymorphic.
-    let target = match (left, right) {
-        (Some(l), Some(r)) => merge_lit(l, r).map(LitKind::report_ty),
+    let target = match (&left, &right) {
+        (Some(l), Some(r)) => merge_lit(l, r).map(|k| k.report_ty()),
         (Some(k), None) | (None, Some(k)) => Some(k.report_ty()),
         (None, None) => None,
     };
     if let Some(t) = target {
-        pin_arith_literals(cmp.left_mut(), t, udfs)?;
-        pin_arith_literals(cmp.right_mut(), t, udfs)?;
+        pin_arith_literals(cmp.left_mut(), &t, udfs)?;
+        pin_arith_literals(cmp.right_mut(), &t, udfs)?;
     }
     Ok(())
 }
@@ -478,27 +480,42 @@ fn check_head(
     for (col, (arg, expected)) in head
         .head_arguments_mut()
         .iter_mut()
-        .zip(col_types.iter().copied())
+        .zip(col_types.iter().cloned())
         .enumerate()
     {
         match arg {
             HeadArg::Aggregation(agg) => check_aggregation(agg, expected, udfs, bindings)?,
             HeadArg::Var(v) => {
-                if let Some(&(found, _)) = bindings.get(v)
-                    && found != expected
+                if let Some((found, _)) = bindings.get(v)
+                    && found != &expected
                 {
                     return Err(TypeCheckError::HeadColumnType {
                         span: head_span,
                         rel: rel_display.clone(),
                         col,
+                        found: found.clone(),
                         expected,
-                        found,
                     });
                 }
             }
             HeadArg::Arith(a) => {
+                // A bare tuple construct against a tuple column is checked
+                // field-wise (so a polymorphic literal fits any same-family
+                // field width, exactly as it would in a scalar column) and
+                // pinned per field — avoiding the eager width-collapse that
+                // `infer_factor_type`'s Record arm does for the general case.
+                if a.rest().is_empty()
+                    && matches!(a.init(), Factor::Tuple(_))
+                    && let DataType::FixedTuple(field_types) = &expected
+                {
+                    let field_types = field_types.clone();
+                    if let Factor::Tuple(lit) = a.init_mut() {
+                        check_tuple_construct(lit, &field_types, udfs, bindings)?;
+                    }
+                    continue;
+                }
                 if let Some(kind) = infer_expr_type(a, bindings, udfs)?
-                    && !kind.fits(expected)
+                    && !kind.fits(&expected)
                 {
                     return Err(head_or_literal_mismatch(
                         a,
@@ -508,7 +525,70 @@ fn check_head(
                         kind,
                     ));
                 }
-                pin_arith_literals(a, expected, udfs)?;
+                pin_arith_literals(a, &expected, udfs)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Field-wise check + pin of a tuple construct `[e0, …]` against a declared
+/// tuple column type. Each field is checked like a scalar column (a
+/// polymorphic literal fits any same-family width) and then pinned to its
+/// field type — avoiding the eager width-collapse `infer_factor_type` does
+/// when it builds a single `Concrete(FixedTuple(..))`. Recurses for nested
+/// tuple-literal fields.
+fn check_tuple_construct(
+    lit: &mut TupleLit,
+    expected_fields: &[DataType],
+    udfs: &UdfSigs,
+    bindings: &Bindings,
+) -> Result<(), TypeCheckError> {
+    if lit.fields().len() != expected_fields.len() {
+        return Err(TypeCheckError::TupleConstruct {
+            span: lit.span(),
+            detail: format!(
+                "tuple has {} field(s) but {} value(s) were given",
+                expected_fields.len(),
+                lit.fields().len()
+            ),
+        });
+    }
+    let span = lit.span();
+    for (elem, fty) in lit.fields_mut().iter_mut().zip(expected_fields.iter()) {
+        match elem {
+            TupleElem::Placeholder => {
+                return Err(TypeCheckError::TuplePlaceholderInConstruct { span });
+            }
+            // Nested tuple literal → recurse so its fields get the same
+            // literal-width leniency.
+            TupleElem::Expr(a)
+                if a.rest().is_empty() && matches!(a.init(), Factor::Tuple(_)) =>
+            {
+                let DataType::FixedTuple(sub) = fty else {
+                    return Err(TypeCheckError::TupleConstruct {
+                        span,
+                        detail: format!("a tuple literal does not fit field type `{fty}`"),
+                    });
+                };
+                let Factor::Tuple(inner) = a.init_mut() else {
+                    unreachable!("guard matched Factor::Tuple")
+                };
+                check_tuple_construct(inner, sub, udfs, bindings)?;
+            }
+            TupleElem::Expr(a) => {
+                if let Some(kind) = infer_expr_type(a, bindings, udfs)?
+                    && !kind.fits(fty)
+                {
+                    return Err(TypeCheckError::TupleConstruct {
+                        span: a.span(),
+                        detail: format!(
+                            "field value of type `{}` does not fit field type `{fty}`",
+                            kind.report_ty()
+                        ),
+                    });
+                }
+                pin_arith_literals(a, fty, udfs)?;
             }
         }
     }
@@ -556,7 +636,7 @@ fn check_aggregation(
             return Err(TypeCheckError::AggregationOutputType { span, op, declared });
         }
         if let Some(k) = arg_kind {
-            pin_arith_literals(agg.arithmetic_mut(), k.report_ty(), udfs)?;
+            pin_arith_literals(agg.arithmetic_mut(), &k.report_ty(), udfs)?;
         }
         return Ok(());
     }
@@ -570,11 +650,11 @@ fn check_aggregation(
                 ty: kind.report_ty(),
             });
         }
-        if !kind.fits(declared) {
+        if !kind.fits(&declared) {
             return Err(TypeCheckError::AggregationOutputType { span, op, declared });
         }
     }
-    pin_arith_literals(agg.arithmetic_mut(), declared, udfs)?;
+    pin_arith_literals(agg.arithmetic_mut(), &declared, udfs)?;
     Ok(())
 }
 
@@ -593,7 +673,7 @@ fn infer_expr_type(
         if let Some(k) = infer_factor_type(factor, bindings, udfs)? {
             inferred = match inferred {
                 None => Some(k),
-                Some(existing) => Some(merge_lit(existing, k).ok_or(
+                Some(existing) => Some(merge_lit(&existing, &k).ok_or(
                     TypeCheckError::ArithmeticTypeMismatch {
                         span,
                         left: existing.report_ty(),
@@ -602,7 +682,7 @@ fn infer_expr_type(
                 )?),
             };
         }
-        if let Some(k) = inferred {
+        if let Some(k) = &inferred {
             check_arith_op(k, op, span)?;
         }
     }
@@ -615,7 +695,7 @@ fn infer_factor_type(
     udfs: &UdfSigs,
 ) -> Result<Option<LitKind>, TypeCheckError> {
     Ok(match factor {
-        Factor::Var(v) => bindings.get(v).map(|&(ty, _)| LitKind::Concrete(ty)),
+        Factor::Var(v) => bindings.get(v).map(|(ty, _)| LitKind::Concrete(ty.clone())),
         Factor::Const(c) => Some(lit_kind(c)?),
         Factor::FnCall(fc) => Some(LitKind::Concrete(infer_fn_call_type(fc, bindings, udfs)?)),
         Factor::Builtin(bc) => Some(LitKind::Concrete(infer_builtin_call_type(
@@ -625,6 +705,54 @@ fn infer_factor_type(
         // enforces the cast rules separately.
         Factor::Cast(c) => infer_factor_type(c.inner(), bindings, udfs)?,
         Factor::Group(a) => infer_expr_type(a, bindings, udfs)?,
+        // Tuple construct `(e0, …)`: the type is the fixed tuple of the
+        // components' concrete types. (Destructures are desugared to `TupleProj`s,
+        // so a surviving placeholder here is a `_` in a construct — invalid.)
+        Factor::Tuple(r) => {
+            let mut fields = Vec::with_capacity(r.fields().len());
+            for elem in r.fields() {
+                match elem {
+                    TupleElem::Expr(a) => match infer_expr_type(a, bindings, udfs)? {
+                        Some(k) => fields.push(k.report_ty()),
+                        // A component is unbound — the range-restriction pass
+                        // reports it; we can't determine the tuple type yet.
+                        None => return Ok(None),
+                    },
+                    TupleElem::Placeholder => {
+                        return Err(TypeCheckError::TuplePlaceholderInConstruct { span: r.span() });
+                    }
+                }
+            }
+            Some(LitKind::Concrete(DataType::FixedTuple(fields)))
+        }
+        // Projection `tuple.index` (synthesized by the destructure desugar):
+        // the type is the indexed field's type. A non-tuple base or an
+        // out-of-range index means the user destructured something that isn't a
+        // tuple of that shape — a clean user error, not an internal bug.
+        Factor::TupleProj { tuple, index } => match infer_expr_type(tuple, bindings, udfs)? {
+            Some(LitKind::Concrete(DataType::FixedTuple(fields))) => match fields.get(*index) {
+                Some(ty) => Some(LitKind::Concrete(ty.clone())),
+                None => {
+                    return Err(TypeCheckError::TupleDestructure {
+                        span: tuple.span(),
+                        detail: format!(
+                            "destructure pattern has more than {} field(s)",
+                            fields.len()
+                        ),
+                    });
+                }
+            },
+            Some(other) => {
+                return Err(TypeCheckError::TupleDestructure {
+                    span: tuple.span(),
+                    detail: format!(
+                        "cannot destructure `{}`, which is not a tuple",
+                        other.report_ty()
+                    ),
+                });
+            }
+            None => None,
+        },
     })
 }
 
@@ -646,12 +774,12 @@ fn infer_builtin_call_type(
         let Some(kind) = infer_expr_type(arg, bindings, udfs)? else {
             continue;
         };
-        if !kind.fits(*expected) {
+        if !kind.fits(expected) {
             return Err(TypeCheckError::BuiltinArgType {
                 span: arg.span(),
                 op,
                 arg_index: i,
-                expected: *expected,
+                expected: expected.clone(),
                 found: kind.report_ty(),
             });
         }
@@ -685,18 +813,18 @@ fn infer_fn_call_type(
         let Some(kind) = infer_expr_type(arg, bindings, udfs)? else {
             continue;
         };
-        if !kind.fits(*expected) {
+        if !kind.fits(expected) {
             return Err(TypeCheckError::UdfArgType {
                 span: arg.span(),
                 name: fc.name().to_string(),
                 param: param_name.clone(),
-                expected: *expected,
+                expected: expected.clone(),
                 found: kind.report_ty(),
             });
         }
     }
 
-    Ok(*ret_ty)
+    Ok(ret_ty.clone())
 }
 
 fn lit_kind(c: &ConstType) -> Result<LitKind, TypeCheckError> {
@@ -722,15 +850,13 @@ fn bare_const(a: &Arithmetic) -> Option<&ConstType> {
 /// Numeric ops (`+`, `-`, `*`, `/`, `%`) require numeric factors.
 /// String / bool factors can't appear in arithmetic.
 fn check_arith_op(
-    kind: LitKind,
+    kind: &LitKind,
     op: &ArithmeticOperator,
     span: Span,
 ) -> Result<(), TypeCheckError> {
-    let allowed = !matches!(
-        kind,
-        LitKind::Concrete(DataType::Bool) | LitKind::Concrete(DataType::String)
-    );
-    if allowed {
+    // Arithmetic requires a numeric operand. This rejects `Bool`/`String` and
+    // also tuple operands.
+    if kind.is_numeric() {
         Ok(())
     } else {
         Err(TypeCheckError::ArithmeticOpNotAllowed {
@@ -746,7 +872,7 @@ fn check_arith_op(
 /// types are independent of the enclosing expression's `target`.
 fn pin_arith_literals(
     a: &mut Arithmetic,
-    target: DataType,
+    target: &DataType,
     udfs: &UdfSigs,
 ) -> Result<(), TypeCheckError> {
     pin_factor(a.init_mut(), target, udfs)?;
@@ -756,11 +882,11 @@ fn pin_arith_literals(
     Ok(())
 }
 
-fn pin_factor(factor: &mut Factor, target: DataType, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
+fn pin_factor(factor: &mut Factor, target: &DataType, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
     match factor {
         Factor::Const(c) => {
             if c.is_polymorphic() {
-                c.pin(target);
+                c.pin(target.clone());
             }
             Ok(())
         }
@@ -771,6 +897,19 @@ fn pin_factor(factor: &mut Factor, target: DataType, udfs: &UdfSigs) -> Result<(
         // polymorphic literals inside accordingly.
         Factor::Cast(c) => pin_factor(c.inner_mut(), target, udfs),
         Factor::Group(a) => pin_arith_literals(a, target, udfs),
+        // Tuple construct: pin each component against its declared field type.
+        Factor::Tuple(r) => {
+            if let DataType::FixedTuple(field_types) = target {
+                for (elem, fty) in r.fields_mut().iter_mut().zip(field_types.iter()) {
+                    if let TupleElem::Expr(a) = elem {
+                        pin_arith_literals(a, fty, udfs)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        // Projection's base is a synthesized bound variable — no literals.
+        Factor::TupleProj { .. } => Ok(()),
     }
 }
 
@@ -779,7 +918,7 @@ fn pin_factor(factor: &mut Factor, target: DataType, udfs: &UdfSigs) -> Result<(
 fn pin_builtin_call_args(bc: &mut BuiltinCall, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
     let op = bc.op();
     for (arg, pty) in bc.args_mut().iter_mut().zip(op.param_types().iter()) {
-        pin_arith_literals(arg, *pty, udfs)?;
+        pin_arith_literals(arg, pty, udfs)?;
     }
     Ok(())
 }
@@ -790,7 +929,7 @@ fn pin_fn_call_args(fc: &mut FnCall, udfs: &UdfSigs) -> Result<(), TypeCheckErro
     // the recursion would block the reborrow.
     let param_types: Vec<DataType> = udfs
         .get(fc.name())
-        .map(|(params, _)| params.iter().map(|(_, ty)| *ty).collect())
+        .map(|(params, _)| params.iter().map(|(_, ty)| ty.clone()).collect())
         .ok_or_else(|| {
             TypeCheckError::internal(format!(
                 "pin_fn_call_args: UDF `{}` not declared",
@@ -798,7 +937,7 @@ fn pin_fn_call_args(fc: &mut FnCall, udfs: &UdfSigs) -> Result<(), TypeCheckErro
             ))
         })?;
     for (arg, pty) in fc.args_mut().iter_mut().zip(param_types.iter()) {
-        pin_arith_literals(arg, *pty, udfs)?;
+        pin_arith_literals(arg, pty, udfs)?;
     }
     Ok(())
 }
@@ -826,15 +965,15 @@ fn check_and_pin_facts(
                 });
             }
             for (c, col_ty) in tuple.iter_mut().zip(col_types.iter()) {
-                if !lit_kind(c)?.fits(*col_ty) {
+                if !lit_kind(c)?.fits(col_ty) {
                     return Err(TypeCheckError::LiteralColumnMismatch {
                         span: *span,
                         literal: c.to_string(),
-                        expected: *col_ty,
+                        expected: col_ty.clone(),
                     });
                 }
                 if c.is_polymorphic() {
-                    c.pin(*col_ty);
+                    c.pin(col_ty.clone());
                 }
             }
         }
@@ -976,26 +1115,26 @@ mod tests {
         // Both sides polymorphic: must stay polymorphic so outer context
         // can still pin. Collapsing to Concrete(Int32) would break
         // narrow-width columns consuming `1 + 2`.
-        assert_eq!(merge_lit(IntLit, IntLit), Some(IntLit));
-        assert_eq!(merge_lit(FloatLit, FloatLit), Some(FloatLit));
+        assert_eq!(merge_lit(&IntLit, &IntLit), Some(IntLit));
+        assert_eq!(merge_lit(&FloatLit, &FloatLit), Some(FloatLit));
 
         // Polymorphic meets concrete: concrete wins, picks the exact width.
-        assert_eq!(merge_lit(IntLit, Concrete(Int8)), Some(Concrete(Int8)));
-        assert_eq!(merge_lit(Concrete(UInt16), IntLit), Some(Concrete(UInt16)));
+        assert_eq!(merge_lit(&IntLit, &Concrete(Int8)), Some(Concrete(Int8)));
+        assert_eq!(merge_lit(&Concrete(UInt16), &IntLit), Some(Concrete(UInt16)));
         assert_eq!(
-            merge_lit(FloatLit, Concrete(Float64)),
+            merge_lit(&FloatLit, &Concrete(Float64)),
             Some(Concrete(Float64))
         );
 
         // Same family, different width: rejects. Any "promote to wider"
         // rule added here would silently accept type-mismatched programs.
-        assert_eq!(merge_lit(Concrete(Int8), Concrete(Int16)), None);
-        assert_eq!(merge_lit(Concrete(Float32), Concrete(Float64)), None);
+        assert_eq!(merge_lit(&Concrete(Int8), &Concrete(Int16)), None);
+        assert_eq!(merge_lit(&Concrete(Float32), &Concrete(Float64)), None);
 
         // Cross-family: rejects.
-        assert_eq!(merge_lit(IntLit, FloatLit), None);
-        assert_eq!(merge_lit(Concrete(Int32), Concrete(Float32)), None);
-        assert_eq!(merge_lit(Concrete(Bool), IntLit), None);
+        assert_eq!(merge_lit(&IntLit, &FloatLit), None);
+        assert_eq!(merge_lit(&Concrete(Int32), &Concrete(Float32)), None);
+        assert_eq!(merge_lit(&Concrete(Bool), &IntLit), None);
     }
 
     /// `check_arith_op` rejects every non-numeric type around an
@@ -1013,15 +1152,15 @@ mod tests {
         let span = Span::DUMMY;
 
         // Positive: numeric with numeric ops is fine.
-        assert!(check_arith_op(Concrete(Int32), &Plus, span).is_ok());
-        assert!(check_arith_op(Concrete(Float64), &Multiply, span).is_ok());
+        assert!(check_arith_op(&Concrete(Int32), &Plus, span).is_ok());
+        assert!(check_arith_op(&Concrete(Float64), &Multiply, span).is_ok());
 
         // Negative: numeric op on strings → error.
-        assert!(check_arith_op(Concrete(String), &Plus, span).is_err());
+        assert!(check_arith_op(&Concrete(String), &Plus, span).is_err());
 
         // Negative: Bool rejects every arithmetic op.
-        assert!(check_arith_op(Concrete(Bool), &Plus, span).is_err());
-        assert!(check_arith_op(Concrete(Bool), &Multiply, span).is_err());
+        assert!(check_arith_op(&Concrete(Bool), &Plus, span).is_err());
+        assert!(check_arith_op(&Concrete(Bool), &Multiply, span).is_err());
     }
 
     /// `report_ty` on polymorphic literals returns the default width used
@@ -1134,6 +1273,197 @@ mod tests {
                     "cast should have been lowered after typecheck"
                 );
             }
+        }
+    }
+
+    // ── Tuples ─────────────────────────────────────────────────────────
+
+    /// Construct (`p = (x, y)`) and destructure (`p = (a, b)`) of a tuple
+    /// column both type-check against the declared tuple type.
+    #[test]
+    fn tuple_construct_and_destructure_typecheck() {
+        let src = "\
+            .type Pair = ( a: symbol, b: symbol )\n\
+            .decl In(x: symbol, y: symbol)\n\
+            .decl Out(p: Pair)\n\
+            .decl Back(a: symbol, b: symbol)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Back\n\
+            Out(p) :- In(x, y), p = (x, y).\n\
+            Back(a, b) :- Out(p), p = (a, b).\n";
+        parse_and_check_result(src).expect("tuple construct + destructure must type-check");
+    }
+
+    /// A construct with the wrong number of fields is rejected (here a 3-field
+    /// literal flowing into an arity-2 tuple column).
+    #[test]
+    fn tuple_construct_wrong_arity_rejected() {
+        let src = "\
+            .type Pair = ( a: symbol, b: symbol )\n\
+            .decl In(x: symbol, y: symbol, z: symbol)\n\
+            .decl Out(p: Pair)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(p) :- In(x, y, z), p = (x, y, z).\n";
+        assert!(
+            parse_and_check_result(src).is_err(),
+            "3-field tuple into an arity-2 tuple column must be rejected"
+        );
+    }
+
+    /// A field of the wrong type is rejected (a `number` field given a symbol).
+    #[test]
+    fn tuple_field_type_mismatch_rejected() {
+        let src = "\
+            .type Tv = ( t: symbol, v: number )\n\
+            .decl In(s: symbol, n: symbol)\n\
+            .decl Out(p: Tv)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(p) :- In(s, n), p = (s, n).\n";
+        assert!(
+            parse_and_check_result(src).is_err(),
+            "a symbol in a `number` tuple field must be rejected"
+        );
+    }
+
+    /// A tuple literal flowing into a scalar column (and vice-versa) is
+    /// rejected — tuples are not interchangeable with their fields.
+    #[test]
+    fn tuple_vs_scalar_mismatch_rejected() {
+        let src = "\
+            .decl In(x: symbol, y: symbol)\n\
+            .decl Out(p: symbol)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(p) :- In(x, y), p = (x, y).\n";
+        assert!(
+            parse_and_check_result(src).is_err(),
+            "a tuple literal into a scalar column must be rejected"
+        );
+    }
+
+    /// A polymorphic numeric literal in a tuple field whose declared width is
+    /// not the family default (here `int64`) must be accepted and pinned — the
+    /// same leniency a scalar `int64` column gets. (Regression: an earlier
+    /// version collapsed the literal to `Int32` and rejected it.)
+    #[test]
+    fn tuple_field_non_default_width_literal_accepted() {
+        let src = "\
+            .type Tv = ( t: symbol, v: int64 )\n\
+            .decl In(s: symbol)\n\
+            .decl Out(p: Tv)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(p) :- In(s), p = (s, 5).\n";
+        parse_and_check_result(src).expect("an int literal in an int64 tuple field must be accepted");
+    }
+
+    /// Arithmetic on a tuple operand is rejected at type-check (a clean
+    /// diagnostic, not a generated-Rust `Add`-not-satisfied error).
+    #[test]
+    fn tuple_arithmetic_rejected() {
+        let src = "\
+            .type Pair = ( a: number, b: number )\n\
+            .decl In(x: number, y: number)\n\
+            .decl Out(q: Pair)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(q) :- In(x, y), p = (x, y), q = p + p.\n";
+        assert!(
+            parse_and_check_result(src).is_err(),
+            "arithmetic on a tuple operand must be rejected"
+        );
+    }
+
+    /// Destructuring a non-tuple bound variable is a clean user error, not an
+    /// internal compiler panic.
+    #[test]
+    fn destructure_of_non_tuple_is_clean_error() {
+        let src = "\
+            .decl In(x: symbol)\n\
+            .decl Out(a: symbol)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(a) :- In(x), x = (a, b).\n";
+        match parse_and_check_result(src) {
+            Err(TypeCheckError::TupleDestructure { .. }) => {}
+            other => panic!("expected a clean TupleDestructure error, got {other:?}"),
+        }
+    }
+
+    /// `.input` on a relation with a tuple column is rejected (tuples are
+    /// constructed by rules, never read from facts) — a clean parse error, not
+    /// a codegen panic.
+    #[test]
+    fn tuple_edb_input_rejected() {
+        let src = "\
+            .type Pair = ( a: symbol, b: symbol )\n\
+            .decl In(p: Pair)\n\
+            .decl Out(p: Pair)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(p) :- In(p).\n";
+        // The `.input` rejection is a ParseError, so it surfaces from parsing.
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        tmp.write_all(src.as_bytes()).expect("write");
+        let mut sm = SourceMap::new();
+        assert!(
+            Program::parse(&tmp.path().to_string_lossy(), true, &mut sm).is_err(),
+            "`.input` on a tuple-column relation must be rejected"
+        );
+    }
+
+    /// A destructure with only placeholders against a non-tuple is rejected
+    /// (the placeholder still witnesses tuple-ness/arity), not silently
+    /// accepted.
+    #[test]
+    fn placeholder_only_destructure_of_non_tuple_rejected() {
+        let src = "\
+            .decl In(x: symbol)\n\
+            .decl Out(x: symbol)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- In(x), x = (_,).\n";
+        assert!(
+            parse_and_check_result(src).is_err(),
+            "`x = [_]` on a non-tuple `x` must be rejected"
+        );
+    }
+
+    /// A trailing placeholder past the tuple's arity is rejected, not ignored.
+    #[test]
+    fn extra_placeholder_past_arity_rejected() {
+        let src = "\
+            .type Pair = ( a: symbol, b: symbol )\n\
+            .decl In(x: symbol, y: symbol)\n\
+            .decl P(p: Pair)\n\
+            .decl Out(a: symbol)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            P(p)   :- In(x, y), p = (x, y).\n\
+            Out(a) :- P(p), p = (a, b, _).\n";
+        assert!(
+            parse_and_check_result(src).is_err(),
+            "a trailing `_` past the tuple's arity must be rejected"
+        );
+    }
+
+    /// A destructure pattern wider than the tuple is a clean error, not a panic.
+    #[test]
+    fn over_arity_destructure_is_clean_error() {
+        let src = "\
+            .type Pair = ( a: symbol, b: symbol )\n\
+            .decl In(x: symbol, y: symbol)\n\
+            .decl P(p: Pair)\n\
+            .decl Out(c: symbol)\n\
+            .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            P(p)   :- In(x, y), p = (x, y).\n\
+            Out(c) :- P(p), p = (a, b, c).\n";
+        match parse_and_check_result(src) {
+            Err(TypeCheckError::TupleDestructure { .. }) => {}
+            other => panic!("expected a clean TupleDestructure error, got {other:?}"),
         }
     }
 }

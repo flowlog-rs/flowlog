@@ -29,6 +29,15 @@ pub(crate) enum FactorArgument {
 
     /// Parenthesised sub-expression, preserving its grouping.
     Group(Box<ArithmeticArgument>),
+
+    /// Tuple construction `(e0, e1, …)`.
+    Tuple { fields: Vec<ArithmeticArgument> },
+
+    /// Tuple component projection `tuple.index`.
+    TupleProj {
+        tuple: Box<ArithmeticArgument>,
+        index: usize,
+    },
 }
 
 impl FactorArgument {
@@ -43,6 +52,11 @@ impl FactorArgument {
                 .flat_map(|a| a.transformation_arguments())
                 .collect(),
             Self::Group(a) => a.transformation_arguments(),
+            Self::Tuple { fields } => fields
+                .iter()
+                .flat_map(|a| a.transformation_arguments())
+                .collect(),
+            Self::TupleProj { tuple, .. } => tuple.transformation_arguments(),
         }
     }
 }
@@ -69,6 +83,15 @@ impl fmt::Display for FactorArgument {
                 write!(f, "{op}({args_str})")
             }
             Self::Group(a) => write!(f, "({a})"),
+            Self::Tuple { fields } => {
+                let inner = fields
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "[{inner}]")
+            }
+            Self::TupleProj { tuple, index } => write!(f, "({tuple}).{index}"),
         }
     }
 }
@@ -130,6 +153,17 @@ impl ArithmeticArgument {
                         a, sub_args,
                     )))
                 }
+                FactorPos::Tuple { fields } => FactorArgument::Tuple {
+                    fields: map_call_args(fields, var_id),
+                },
+                FactorPos::TupleProj { tuple, index } => FactorArgument::TupleProj {
+                    tuple: Box::new(
+                        map_call_args(std::slice::from_ref(tuple), var_id)
+                            .pop()
+                            .expect("proj lowering yields exactly one arithmetic"),
+                    ),
+                    index: *index,
+                },
             }
         }
 

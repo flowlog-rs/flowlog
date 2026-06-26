@@ -7,10 +7,11 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::Index;
 
 use crate::parser::{DataType, Program, Relation};
 
-use crate::codegen::user_tuple_tokens;
+use crate::codegen::{tuple_tokens, user_tuple_tokens};
 
 use super::user_struct_ident;
 
@@ -57,9 +58,17 @@ pub(crate) fn user_to_tuple_expr(
     string_intern: bool,
     src: TokenStream,
 ) -> TokenStream {
-    match *dt {
+    match dt {
         DataType::Float32 | DataType::Float64 => quote! { OrderedFloat(#src) },
         DataType::String if string_intern => quote! { intern(&#src) },
+        // A tuple column is a nested tuple — convert each field positionally.
+        DataType::FixedTuple(fields) => {
+            let elems = fields.iter().enumerate().map(|(i, f)| {
+                let idx = Index::from(i);
+                user_to_tuple_expr(f, string_intern, quote! { #src.#idx })
+            });
+            tuple_tokens(elems)
+        }
         _ => src,
     }
 }
@@ -72,9 +81,17 @@ pub(crate) fn tuple_to_user_expr(
     string_intern: bool,
     src: TokenStream,
 ) -> TokenStream {
-    match *dt {
+    match dt {
         DataType::Float32 | DataType::Float64 => quote! { (#src).into_inner() },
         DataType::String if string_intern => quote! { resolve_out(#src).to_string() },
+        // Inverse of `user_to_tuple_expr` for a tuple column (nested tuple).
+        DataType::FixedTuple(fields) => {
+            let elems = fields.iter().enumerate().map(|(i, f)| {
+                let idx = Index::from(i);
+                tuple_to_user_expr(f, string_intern, quote! { #src.#idx })
+            });
+            tuple_tokens(elems)
+        }
         _ => src,
     }
 }

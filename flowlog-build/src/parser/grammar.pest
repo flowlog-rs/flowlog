@@ -36,9 +36,18 @@ relation_name = @{ identifier }
 // code can refer to inliner-produced relations like `c.Holds`.
 relation_ref = @{ identifier ~ ("." ~ identifier)* }
 
-// Type at a `.decl` attribute. `data_type` must come first so reserved
-// keywords (`number`, `symbol`, …) win over the catch-all identifier.
-type_ref = { data_type | alias_name }
+// An attribute's type, one of three forms (the `T` in `.decl R(x: T)`):
+//   tuple_type   `(a: symbol, b: number)`    a fixed tuple
+//   data_type    `symbol`                    a built-in primitive
+//   alias_name   `MyType`                    a user-defined `.type`
+// data_type before alias_name so primitives win over the catch-all identifier.
+// (`[ … ]` is reserved for a future array type.)
+type_ref = { tuple_type | data_type | alias_name }
+
+// A fixed tuple type, e.g. `(a: symbol, b: number)`: one or more fields, each a
+// `type_ref` (so tuples nest). Recursion is rejected by the type registry.
+tuple_type  = { "(" ~ tuple_field ~ ("," ~ tuple_field)* ~ ")" }
+tuple_field = { attribute_name ~ ":" ~ type_ref }
 
 // A user-declared type name at a *use* site. Resolved against the
 // [`TypeRegistry`] after parsing — includes top-level `.type` aliases
@@ -204,7 +213,21 @@ arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 // `paren_expr` gives explicit grouping: since arithmetic has no operator
 // precedence (it folds strictly left-to-right), parentheses are the only
 // way to override evaluation order, e.g. `x * (a + b)`.
-factor = { as_cast | builtin_fn_call | fn_call_expr | paren_expr | constant | variable }
+// One operand of an expression. Ordered choice: `tuple_lit` precedes
+// `paren_expr` because both open with `(`; the comma in a tuple literal is the
+// tiebreaker.
+factor = { as_cast | builtin_fn_call | fn_call_expr | tuple_lit | paren_expr | constant | variable }
+
+// A fixed-tuple literal. Constructs a tuple, or destructures one when matched
+// against a bound variable; a `_` element ignores that component on destructure:
+//   x = (a, b)     construct a 2-tuple
+//   (a, b) = x     destructure into `a` and `b`
+//   (a, _) = x     destructure, ignoring the second component
+//   (a,)           1-tuple — the trailing comma is required
+//   (a)            not a tuple: plain grouping, handled by `paren_expr`
+// The mandatory comma keeps `tuple_lit` distinct from `paren_expr`.
+tuple_lit  = { "(" ~ tuple_elem ~ (("," ~ tuple_elem)+ | ",") ~ ")" }
+tuple_elem = { arithmetic_expr | placeholder }
 
 // Parenthesised sub-expression. Both wrappers are silent (`_`): a
 // single-factor `(x)` surfaces as the bare inner factor, while a

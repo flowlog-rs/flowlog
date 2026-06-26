@@ -36,8 +36,6 @@ LIB_RUNNER_DIR_BASE="${ROOT_DIR}/target/e2e-lib"
 LIB_RUNNER_DIR="${LIB_RUNNER_DIR_BASE}/runner"
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 
-skipped=0
-
 usage() {
     cat <<EOF
 Usage:
@@ -345,9 +343,6 @@ main() {
     echo ""
 
     print_summary
-    if (( skipped > 0 )); then
-        echo -e "  ${DIM}(${skipped} tests skipped — incremental / UDF / not yet supported)${NC}"
-    fi
 
     echo ""
     (( failed == 0 ))

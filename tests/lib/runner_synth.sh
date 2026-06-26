@@ -185,6 +185,65 @@ _parse_decl() {
     fi
 }
 
+# If `typename` names a tuple `.type` (`.type T = ( a: U, b: V )`), echo its
+# field type sources space-separated (`U V`) and return 0. Otherwise return 1.
+# A bare `=` alias (`.type T = Other`) is followed transitively; a `<:` subtype
+# erases to a primitive, so it is not a tuple here.
+tuple_field_types() {
+    local dl_file="$1"
+    local typename="$2"
+    local f line inside
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        # Component-prefixed names (`a·Pair`) declare the bare type inside the
+        # `.comp` body, so match on the post-`·` tail too.
+        local search="${typename##*·}"
+        line=$(grep -iE "^[[:space:]]*\.type[[:space:]]+${search}[[:space:]]*=" "$f" 2>/dev/null | head -1 || true)
+        [[ -n "$line" ]] || continue
+        if [[ "$line" == *'('* ]]; then
+            inside=$(echo "$line" | sed -E 's/^[^(]*\(([^)]*)\).*$/\1/')
+            echo "$inside" \
+                | tr ',' '\n' \
+                | awk -F: '{ ty=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", ty); print ty }' \
+                | tr '\n' ' '
+            return 0
+        fi
+        # Bare alias RHS — follow it.
+        local rhs
+        rhs=$(echo "$line" | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]+$//')
+        [[ "$rhs" == *'<:'* || -z "$rhs" ]] && return 1
+        tuple_field_types "$dl_file" "$rhs"
+        return $?
+    done < <(all_dl_files "$dl_file")
+    return 1
+}
+
+# Rust expression that formats the value at `access` (a place expr like `r.0`)
+# for output. A primitive column is its bare `Display`; a tuple column resolves
+# to the Soufflé bracket form `[a, b]` (comma-space separated, recursing into
+# nested tuples) so lib-mode output matches the binary-mode serializer.
+fmt_col_expr() {
+    local dl_file="$1"
+    local access="$2"
+    local dltype="$3"
+    local field_types
+    if field_types=$(tuple_field_types "$dl_file" "$dltype") && [[ -n "$field_types" ]]; then
+        local inner_fmt="" inner_args="" j=0 first=1 ft sub
+        for ft in $field_types; do
+            sub=$(fmt_col_expr "$dl_file" "${access}.${j}" "$ft")
+            if (( first )); then
+                inner_fmt="{}"; inner_args="$sub"; first=0
+            else
+                inner_fmt+=", {}"; inner_args+=", $sub"
+            fi
+            j=$((j + 1))
+        done
+        printf 'format!("[%s]", %s)' "$inner_fmt" "$inner_args"
+    else
+        printf '%s' "$access"
+    fi
+}
+
 ###############################################################################
 # Runner crate management
 ###############################################################################
@@ -416,26 +475,20 @@ EOF
     local delim
     delim=$(output_delimiter_for "$dl_file" "$lower_name")
 
-    local field_count
-    field_count=$(echo "$fields" | wc -w)
-    local fmt=""
-    local i
-    for ((i=0; i<field_count; i++)); do
-        (( i > 0 )) && fmt+="${delim}"
-        fmt+="{}"
-    done
-
-    # Tuple indexing: `r.0, r.1, r.2 …`. Attribute names don't exist as
-    # Rust fields anymore — the user-facing shape is a tuple alias.
-    local accessors=""
-    local i=0
-    local first=1
-    for _ in $fields; do
+    # Per-column formatting. The user-facing relation is a positional tuple
+    # (`r.0, r.1, …`); a column whose declared type is itself a `.type` tuple is
+    # rendered in the Soufflé bracket form `[a, b]` (via `fmt_col_expr`) so the
+    # output matches the binary-mode serializer. Other columns use `Display`.
+    local typed_fields
+    typed_fields=$(parse_decl_typed_fields "$dl_file" "$lower_name")
+    local fmt="" accessors="" i=0 first=1 pair dltype expr
+    for pair in $typed_fields; do
+        dltype="${pair#*:}"
+        expr=$(fmt_col_expr "$dl_file" "r.${i}" "$dltype")
         if (( first )); then
-            accessors+="r.${i}"
-            first=0
+            fmt="{}"; accessors="$expr"; first=0
         else
-            accessors+=", r.${i}"
+            fmt+="${delim}{}"; accessors+=", $expr"
         fi
         i=$((i + 1))
     done

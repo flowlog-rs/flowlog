@@ -9,6 +9,7 @@ use std::fmt;
 
 use pest::iterators::Pair;
 
+use super::tuple::TupleLit;
 use super::{BuiltinCall, FnCall};
 use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
@@ -80,6 +81,18 @@ pub(crate) enum Factor {
     /// and parse as the bare factor), so a `Group` exists only when the
     /// grouping affects the fold.
     Group(Box<Arithmetic>),
+    /// Tuple literal `(e0, e1, …)` — constructs a tuple from its (bound)
+    /// components, or, matched against a bound variable, destructures one.
+    Tuple(TupleLit),
+    /// Projection of tuple component `index` out of `tuple`. **Synthesized
+    /// by the destructure desugar only** — there is no surface syntax for it.
+    /// `(a, b) = x` (with `x` bound) lowers to `a = TupleProj{Var(x), 0}`,
+    /// `b = TupleProj{Var(x), 1}`; codegen emits a Rust tuple field access
+    /// (`x.0`, `x.1`).
+    TupleProj {
+        tuple: Box<Arithmetic>,
+        index: usize,
+    },
 }
 
 /// `as(factor, target_type)`. `inner` is a single [`Factor`] (not a
@@ -154,6 +167,8 @@ impl Factor {
             Self::Builtin(bc) => bc.vars(),
             Self::Cast(c) => c.inner().vars(),
             Self::Group(a) => a.vars(),
+            Self::Tuple(r) => r.vars(),
+            Self::TupleProj { tuple, .. } => tuple.vars(),
         }
     }
 }
@@ -167,6 +182,8 @@ impl fmt::Display for Factor {
             Self::Builtin(bc) => write!(f, "{bc}"),
             Self::Cast(c) => write!(f, "{c}"),
             Self::Group(a) => write!(f, "({a})"),
+            Self::Tuple(r) => write!(f, "{r}"),
+            Self::TupleProj { tuple, index } => write!(f, "({tuple}).{index}"),
         }
     }
 }
@@ -183,6 +200,7 @@ impl Lexeme for Factor {
             Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner, file)?),
             Rule::variable => Self::Var(inner.as_str().to_string()),
             Rule::constant => Self::Const(ConstType::from_parsed_rule(inner, file)?),
+            Rule::tuple_lit => Self::Tuple(TupleLit::from_parsed_rule(inner, file)?),
             // Multi-term parenthesised sub-expression — the grammar's
             // `group_expr` requires at least one operator, so `Group` is
             // constructed only when grouping affects the fold.
@@ -239,6 +257,12 @@ impl Arithmetic {
             rest,
             span: Ignored(Span::DUMMY),
         }
+    }
+
+    /// A bare variable as an expression: `Factor::Var(name)` with no operators.
+    #[must_use]
+    pub(crate) fn var(name: &str) -> Self {
+        Self::new(Factor::Var(name.to_string()), vec![])
     }
 
     /// Source location this expression was parsed from (`Span::DUMMY` for

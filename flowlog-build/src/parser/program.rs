@@ -601,6 +601,9 @@ fn build_type_registry(parsed_rule: Pair<Rule>, file: FileId) -> Result<TypeRegi
             RawTypeOp::Alias => {
                 registry.register_alias(&name, &parent, span)?;
             }
+            RawTypeOp::Tuple(fields) => {
+                registry.register_tuple(&name, &fields, span)?;
+            }
         }
     }
     Ok(registry)
@@ -1061,7 +1064,18 @@ impl Program {
 
         for d in input_directives {
             match relations.iter_mut().find(|r| r.name() == d.relation_name()) {
-                Some(rel) => rel.set_input_params(d.parameters().clone()),
+                Some(rel) => {
+                    // Tuples are constructed by rules, never read from EDB
+                    // facts — reject `.input` on a record-column relation here
+                    // rather than panicking the fact-reader codegen later.
+                    if rel.data_type().iter().any(|dt| dt.is_tuple()) {
+                        return Err(ParseError::TupleInInput {
+                            span: d.span(),
+                            name: rel.raw_name().to_string(),
+                        });
+                    }
+                    rel.set_input_params(d.parameters().clone());
+                }
                 None => {
                     return Err(ParseError::UndeclaredInDirective {
                         span: d.span(),

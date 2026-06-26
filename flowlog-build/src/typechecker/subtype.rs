@@ -20,6 +20,7 @@ use super::{DisplayNames, TypeCheckError, display_name};
 use crate::common::Span;
 use crate::parser::{
     Arithmetic, Atom, AtomArg, ComparisonExpr, Factor, FlowLogRule, HeadArg, Predicate, Program,
+    TupleElem,
 };
 use crate::parser::{TypeId, TypeRegistry};
 
@@ -173,14 +174,15 @@ fn check_head(
             HeadArg::Arith(a) => {
                 // Widening rule only applies when a single value flows
                 // through. Multi-factor arithmetic drops subtype identity.
-                if let Some(found_id) = single_var_type(a, reg, bindings)
-                    && !reg.is_widening(found_id, expected_id)
+                // Tuple constructs descend field-wise (see `check_head_widen`).
+                if let Err((found_id, expected_field)) =
+                    check_head_widen(a, expected_id, reg, bindings)
                 {
                     return Err(TypeCheckError::HeadSubtypeMismatch {
                         span: head.span(),
                         rel: rel_display.clone(),
                         col,
-                        expected: reg.name_of(expected_id).to_string(),
+                        expected: reg.name_of(expected_field).to_string(),
                         found: reg.name_of(found_id).to_string(),
                     });
                 }
@@ -205,8 +207,50 @@ fn single_var_type(a: &Arithmetic, reg: &TypeRegistry, bindings: &Bindings) -> O
     match a.init() {
         Factor::Var(v) => bindings.get(v).map(|&(id, _)| id),
         Factor::Cast(c) => reg.lookup(c.target_type()),
-        Factor::Const(_) | Factor::FnCall(_) | Factor::Builtin(_) | Factor::Group(_) => None,
+        // A projection carries the declared identity of the indexed field:
+        // resolve the base tuple's type, then read its field's `TypeId`.
+        Factor::TupleProj { tuple, index } => {
+            let rec_id = single_var_type(tuple, reg, bindings)?;
+            reg.tuple_field_ids(rec_id)?.get(*index).copied()
+        }
+        // A tuple construct has no single identity (validated field-wise by
+        // `check_head_widen`); constants/arithmetic/calls carry none either.
+        Factor::Const(_)
+        | Factor::FnCall(_)
+        | Factor::Builtin(_)
+        | Factor::Group(_)
+        | Factor::Tuple(_) => None,
     }
+}
+
+/// Recursively check that the value produced by head-arg `a` widens into the
+/// declared column/field type `expected_id`. A tuple construct flowing into a
+/// tuple column descends field-wise, so nominal field identities — which the
+/// erased primitive pass collapses to bare roots — are still validated.
+/// Returns the `(found, expected)` pair on the first mismatch.
+fn check_head_widen(
+    a: &Arithmetic,
+    expected_id: TypeId,
+    reg: &TypeRegistry,
+    bindings: &Bindings,
+) -> Result<(), (TypeId, TypeId)> {
+    if a.rest().is_empty()
+        && let Factor::Tuple(lit) = a.init()
+        && let Some(field_ids) = reg.tuple_field_ids(expected_id)
+    {
+        for (elem, &fid) in lit.fields().iter().zip(field_ids) {
+            if let TupleElem::Expr(fa) = elem {
+                check_head_widen(fa, fid, reg, bindings)?;
+            }
+        }
+        return Ok(());
+    }
+    if let Some(found_id) = single_var_type(a, reg, bindings)
+        && !reg.is_widening(found_id, expected_id)
+    {
+        return Err((found_id, expected_id));
+    }
+    Ok(())
 }
 
 /// Comparison operands with determinate type identity must have a meet.
@@ -283,6 +327,10 @@ fn check_factor_casts(
             check_factor_casts(c.inner(), reg, bindings)
         }
         Factor::Group(a) => check_arith_casts(a, reg, bindings),
+        Factor::Tuple(r) => r
+            .exprs()
+            .try_for_each(|a| check_arith_casts(a, reg, bindings)),
+        Factor::TupleProj { tuple, .. } => check_arith_casts(tuple, reg, bindings),
     }
 }
 
@@ -301,7 +349,8 @@ fn inner_factor_primitive_root(
         Factor::Cast(c) => reg.lookup(c.target_type()).map(|id| reg.root_primitive(id)),
         // A grouped expression drops subtype identity, like multi-factor
         // arithmetic; the primitive pass already validated its contents.
-        Factor::Group(_) => None,
+        // Tuples / projections likewise carry no single primitive root here.
+        Factor::Group(_) | Factor::Tuple(_) | Factor::TupleProj { .. } => None,
     }
 }
 
@@ -367,6 +416,12 @@ fn lower_factor(f: &mut Factor) {
             }
         }
         Factor::Group(a) => lower_arith(a),
+        Factor::Tuple(r) => {
+            for a in r.exprs_mut() {
+                lower_arith(a);
+            }
+        }
+        Factor::TupleProj { tuple, .. } => lower_arith(tuple),
         Factor::Cast(_) => unreachable!("cast was peeled above"),
     }
 }

@@ -69,15 +69,17 @@ impl CodeGen {
                 ));
             }
 
-            if data_type
-                .iter()
-                .any(|dt| matches!(dt, DataType::Float32 | DataType::Float64))
-            {
+            // Leaf-aware checks: a tuple column's float / string / integer
+            // sub-fields need the same feature flags as a scalar column would.
+            if data_type.iter().any(|dt| dt.any_leaf(&DataType::is_float)) {
                 self.features.mark_ordered_float();
             }
 
             if idb.output() {
-                if data_type.contains(&DataType::String) {
+                if data_type
+                    .iter()
+                    .any(|dt| dt.any_leaf(&|l| matches!(l, DataType::String)))
+                {
                     self.features.mark_string_resolve_out();
                 }
 
@@ -88,7 +90,9 @@ impl CodeGen {
                 // parallel drain. Stderr uses neither. The scaffold gates the
                 // deps on these marks.
                 if !self.config.output_to_stdout() && !data_type.is_empty() {
-                    if data_type.iter().any(DataType::is_integer) || self.config.is_incremental() {
+                    if data_type.iter().any(|dt| dt.any_leaf(&DataType::is_integer))
+                        || self.config.is_incremental()
+                    {
                         self.features.mark_itoa();
                     }
                     if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
@@ -381,10 +385,29 @@ pub fn field_accessor(
 ) -> TokenStream {
     let idx = Index::from(col_idx);
     let inner = quote! { #base.0.#idx };
-    if matches!(data_type, DataType::String) && string_intern {
-        quote! { resolve_out(#inner) }
+    // Resolve interned-string leaves so comparisons/formatting see the actual
+    // strings. For a tuple column this descends every leaf: ORDER BY on a tuple
+    // must compare resolved strings, not their (run-dependent) intern IDs.
+    if string_intern && data_type.any_leaf(&|l| matches!(l, DataType::String)) {
+        resolve_string_leaves(&inner, data_type)
     } else {
         inner
+    }
+}
+
+/// Rebuild `access` with every interned-string leaf wrapped in `resolve_out`,
+/// recursing through tuple columns. Non-string leaves pass through unchanged.
+fn resolve_string_leaves(access: &TokenStream, data_type: &DataType) -> TokenStream {
+    match data_type {
+        DataType::String => quote! { resolve_out(#access) },
+        DataType::FixedTuple(fields) => {
+            let elems = fields.iter().enumerate().map(|(j, fdt)| {
+                let jdx = Index::from(j);
+                resolve_string_leaves(&quote! { (#access).#jdx }, fdt)
+            });
+            quote! { ( #(#elems,)* ) }
+        }
+        _ => access.clone(),
     }
 }
 

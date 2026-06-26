@@ -31,9 +31,10 @@ use std::collections::{HashMap, HashSet};
 use super::segment::Segment;
 use crate::parser::error::ParseError;
 use crate::parser::{
-    Arithmetic, ArithmeticOperator, AtomArg, ComparisonOperator, ConstType, Factor, FlowLogRule,
-    HeadArg, Predicate,
+    Arithmetic, ArithmeticOperator, AtomArg, ComparisonExpr, ComparisonOperator, ConstType, Factor,
+    FlowLogRule, HeadArg, Predicate, TupleElem, TupleLit,
 };
+use crate::common::Span;
 
 /// Rewrite every rule in `segments`, removing equality assignments by
 /// substitution. Rules that reduce to a fully-ground fact are appended to
@@ -77,10 +78,13 @@ fn desugar_rule(rule: &mut FlowLogRule) -> Result<bool, ParseError> {
     }
 
     // Discover assignment comparisons to a fixpoint. `assignment_idx` records
-    // which `rhs` slots are assignments (to drop later); `order` preserves
-    // discovery order so chains resolve correctly.
+    // which `rhs` slots are consumed (assignments and destructures, dropped
+    // later); `order` preserves discovery order so chains resolve correctly.
+    // `destructure_filters` holds synthesized `proj(x,i) = comp` predicates for
+    // tuple destructure components that were already bound.
     let mut assignment_idx: HashSet<usize> = HashSet::new();
     let mut order: Vec<(String, Arithmetic)> = Vec::new();
+    let mut destructure_filters: Vec<Predicate> = Vec::new();
     loop {
         let mut progressed = false;
         for (i, pred) in rule.rhs().iter().enumerate() {
@@ -98,6 +102,19 @@ fn desugar_rule(rule: &mut FlowLogRule) -> Result<bool, ParseError> {
                 assignment_idx.insert(i);
                 order.push((var, value));
                 progressed = true;
+            } else if let Some((rec_var, lit)) =
+                as_destructure(expr.left(), expr.right(), &bound)
+            {
+                expand_destructure(
+                    &rec_var,
+                    &lit,
+                    expr.span(),
+                    &mut bound,
+                    &mut order,
+                    &mut destructure_filters,
+                )?;
+                assignment_idx.insert(i);
+                progressed = true;
             }
         }
         if !progressed {
@@ -105,7 +122,7 @@ fn desugar_rule(rule: &mut FlowLogRule) -> Result<bool, ParseError> {
         }
     }
 
-    if order.is_empty() {
+    if order.is_empty() && assignment_idx.is_empty() {
         return Ok(false);
     }
 
@@ -126,7 +143,7 @@ fn desugar_rule(rule: &mut FlowLogRule) -> Result<bool, ParseError> {
         subst_head(rule, var, &resolved[var]);
     }
 
-    // Substitute into every non-assignment body predicate.
+    // Substitute into every non-consumed body predicate.
     let mut new_rhs: Vec<Predicate> = Vec::with_capacity(rule.rhs().len());
     for (i, pred) in rule.rhs_mut().iter_mut().enumerate() {
         if assignment_idx.contains(&i) {
@@ -136,6 +153,14 @@ fn desugar_rule(rule: &mut FlowLogRule) -> Result<bool, ParseError> {
             subst_predicate(pred, var, &resolved[var])?;
         }
         new_rhs.push(pred.clone());
+    }
+    // Append destructure filters (i.e., `proj(x, i) = comp` for already-bound
+    // components), substituting any resolved variables first.
+    for mut filt in destructure_filters {
+        for var in &resolved_order {
+            subst_predicate(&mut filt, var, &resolved[var])?;
+        }
+        new_rhs.push(filt);
     }
     rule.set_rhs(new_rhs);
 
@@ -219,6 +244,81 @@ fn as_assignment(
         };
 
     try_side(lhs, rhs).or_else(|| try_side(rhs, lhs))
+}
+
+/// Recognise a tuple **destructure**: `x = (a, b, c)` (or `(a, b, c) = x`) where `x`
+/// is a single **bound** variable and the other side is a bare tuple literal.
+/// Returns the bound tuple variable and a clone of the literal.
+fn as_destructure(
+    lhs: &Arithmetic,
+    rhs: &Arithmetic,
+    bound: &HashSet<String>,
+) -> Option<(String, TupleLit)> {
+    let try_side = |var_side: &Arithmetic, rec_side: &Arithmetic| -> Option<(String, TupleLit)> {
+        if !var_side.is_var() {
+            return None;
+        }
+        let var = var_side.vars().into_iter().next()?.clone();
+        if !bound.contains(&var) {
+            return None;
+        }
+        if !rec_side.rest().is_empty() {
+            return None;
+        }
+        match rec_side.init() {
+            Factor::Tuple(r) => Some((var, r.clone())),
+            _ => None,
+        }
+    };
+    try_side(lhs, rhs).or_else(|| try_side(rhs, lhs))
+}
+
+/// Expand a destructure of bound tuple `rec_var` against `lit`. Each component:
+/// a placeholder is ignored; a fresh variable becomes an assignment
+/// `comp := proj(rec_var, i)`; an already-bound variable or constant becomes a
+/// filter `proj(rec_var, i) = component`.
+fn expand_destructure(
+    rec_var: &str,
+    lit: &TupleLit,
+    span: Span,
+    bound: &mut HashSet<String>,
+    order: &mut Vec<(String, Arithmetic)>,
+    filters: &mut Vec<Predicate>,
+) -> Result<(), ParseError> {
+    for (idx, elem) in lit.fields().iter().enumerate() {
+        let proj = Arithmetic::new(
+            Factor::TupleProj {
+                tuple: Box::new(Arithmetic::var(rec_var)),
+                index: idx,
+            },
+            vec![],
+        );
+        // A fresh variable component binds to the projection; everything else
+        // (already-bound var, constant, or placeholder) becomes an equality
+        // filter. The placeholder's filter is `proj = proj` — trivially true at
+        // runtime, but it makes the type-checker witness that the tuple really
+        // has a field at this index (so `[_]` on a non-tuple, or a trailing
+        // `_` past the tuple's arity, is rejected rather than silently dropped).
+        let (lhs, rhs) = match elem {
+            TupleElem::Expr(component)
+                if component.is_var() && !bound.contains(component.vars()[0]) =>
+            {
+                let comp_var = component.vars()[0].clone();
+                bound.insert(comp_var.clone());
+                order.push((comp_var, proj));
+                continue;
+            }
+            TupleElem::Expr(component) => (proj, component.clone()),
+            TupleElem::Placeholder => (proj.clone(), proj),
+        };
+        filters.push(Predicate::Compare(ComparisonExpr::new(
+            lhs,
+            ComparisonOperator::Equal,
+            rhs,
+            span,
+        )));
+    }
+    Ok(())
 }
 
 /// `Factor` form of a resolved value: a lone factor is inlined directly; a
@@ -318,5 +418,11 @@ fn subst_factor(factor: &mut Factor, var: &str, value: &Arithmetic) {
         }
         Factor::Cast(c) => subst_factor(c.inner_mut(), var, value),
         Factor::Group(a) => subst_arith(a, var, value),
+        Factor::Tuple(r) => {
+            for a in r.exprs_mut() {
+                subst_arith(a, var, value);
+            }
+        }
+        Factor::TupleProj { tuple, .. } => subst_arith(tuple, var, value),
     }
 }

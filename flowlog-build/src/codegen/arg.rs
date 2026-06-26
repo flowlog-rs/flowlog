@@ -907,6 +907,20 @@ impl CodeGen {
                 let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
                 Ok(quote! { ( #inner ) })
             }
+            // Tuple construct → Rust tuple literal `(a, b)` (singleton `(a,)`).
+            FactorArgument::Tuple { fields } => {
+                let field_toks = fields
+                    .iter()
+                    .map(|f| self.build_arithmetic_expr(f, string_intern, resolve_var))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(tuple_tokens(field_toks))
+            }
+            // Tuple projection → Rust tuple field access `(tuple).i`.
+            FactorArgument::TupleProj { tuple, index } => {
+                let rec = self.build_arithmetic_expr(tuple, string_intern, resolve_var)?;
+                let idx = Index::from(*index);
+                Ok(quote! { (#rec).#idx })
+            }
         }
     }
 
@@ -962,6 +976,25 @@ impl CodeGen {
                 // (string concat is `cat`) — no display resolution needed.
                 let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
                 Ok(quote! { ( #inner ) })
+            }
+            // A projected field reaching a `cat`/display context is a string
+            // (typecheck-enforced); resolve the interned `Spur` to display text,
+            // exactly as the `Var` arm does for a bound string variable.
+            FactorArgument::TupleProj { tuple, index } => {
+                let rec = self.build_arithmetic_expr(tuple, string_intern, resolve_var)?;
+                let idx = Index::from(*index);
+                let proj = quote! { (#rec).#idx };
+                Ok(if string_intern {
+                    self.features.mark_string_resolve();
+                    quote! { resolve(#proj) }
+                } else {
+                    proj
+                })
+            }
+            // A whole tuple is not a string, so the typechecker rejects it in a
+            // `cat` context; reuse the value lowering to stay total (unreached).
+            FactorArgument::Tuple { .. } => {
+                self.factor_to_token(factor, string_intern, resolve_var)
             }
         }
     }
@@ -1203,7 +1236,7 @@ impl CodeGen {
             .udfs()
             .iter()
             .find(|f| f.name() == name)
-            .map(|f| f.params().iter().map(|p| *p.data_type()).collect())
+            .map(|f| f.params().iter().map(|p| p.data_type().clone()).collect())
             .unwrap_or_default()
     }
 
@@ -1221,7 +1254,7 @@ impl CodeGen {
 /// Param-type lookup with graceful out-of-bounds. Variadic-style mismatches
 /// shouldn't happen post-typecheck, but a panic here would be surprising.
 fn param_type_at(types: &[DataType], idx: usize) -> Option<DataType> {
-    types.get(idx).copied()
+    types.get(idx).cloned()
 }
 
 /// Wrap a UDF argument token so it matches the declared param type at the

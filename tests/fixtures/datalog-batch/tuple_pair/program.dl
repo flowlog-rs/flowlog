@@ -1,0 +1,22 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_pair
+// Feature : fixed tuple types — construct, destructure, and the Soufflé bracket
+//           output form `[a, b]` (the value serialization stays Soufflé-shaped
+//           for oracle compatibility, even though the source syntax is `( … )`).
+//   Out   exercises construct  (p = (x, y)) and tuple-column output.
+//   Back  exercises destructure (p = (a, b)) of a bound tuple column.
+// ════════════════════════════════════════════════════════════════════════════
+
+.type Pair = ( a: symbol, b: symbol )
+
+.decl In(x: symbol, y: symbol)
+.decl Out(p: Pair)
+.decl Back(a: symbol, b: symbol)
+
+In("p", "q").
+
+Out(p)    :- In(x, y), p = (x, y).
+Back(a, b) :- Out(p), p = (a, b).
+
+.output Out
+.output Back

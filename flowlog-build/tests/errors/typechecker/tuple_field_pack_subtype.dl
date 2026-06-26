@@ -1,0 +1,8 @@
+.type UserId    <: symbol
+.type ProductId <: symbol
+.type Box = (u: UserId)
+.decl In(p: ProductId)
+.decl Out(b: Box)
+.input In(IO="file", filename="In.csv", delimiter=",")
+.output Out
+Out(box) :- In(p), box = (p,).

@@ -1,7 +1,7 @@
 //! Arithmetic expression signatures for FlowLog Datalog programs.
 
 use crate::catalog::AtomArgumentSignature;
-use crate::parser::{Arithmetic, ArithmeticOperator, BuiltinOperator, ConstType, Factor};
+use crate::parser::{Arithmetic, ArithmeticOperator, BuiltinOperator, ConstType, Factor, TupleElem};
 use std::fmt;
 
 /// A factor in an arithmetic expression with variables resolved to their
@@ -24,6 +24,14 @@ pub(crate) enum FactorPos {
     },
     /// Parenthesised sub-expression, preserving its grouping.
     Group(Box<ArithmeticPos>),
+    /// Tuple construction `(e0, e1, …)` (one column). Only constructs reach
+    /// here — destructures are desugared to [`FactorPos::TupleProj`] before catalog.
+    Tuple { fields: Vec<ArithmeticPos> },
+    /// Projection of tuple component `index` (`tuple.index`).
+    TupleProj {
+        tuple: Box<ArithmeticPos>,
+        index: usize,
+    },
 }
 
 impl FactorPos {
@@ -34,12 +42,14 @@ impl FactorPos {
             FactorPos::Const(_)
             | FactorPos::FnCall { .. }
             | FactorPos::Builtin { .. }
-            | FactorPos::Group(_) => None,
+            | FactorPos::Group(_)
+            | FactorPos::Tuple { .. }
+            | FactorPos::TupleProj { .. } => None,
         }
     }
 
     /// Returns all argument signatures referenced in this factor
-    /// (including nested in FnCall / Builtin args).
+    /// (including nested in FnCall / Builtin / Tuple / TupleProj args).
     pub(crate) fn signatures(&self) -> Vec<&AtomArgumentSignature> {
         match self {
             FactorPos::Var(sig) => vec![sig],
@@ -48,11 +58,15 @@ impl FactorPos {
                 args.iter().flat_map(|a| a.signatures()).collect()
             }
             FactorPos::Group(a) => a.signatures(),
+            FactorPos::Tuple { fields } => {
+                fields.iter().flat_map(|a| a.signatures()).collect()
+            }
+            FactorPos::TupleProj { tuple, .. } => tuple.signatures(),
         }
     }
 
     /// Transform every variable in this factor using `f`, recursing into
-    /// FnCall / Builtin args.
+    /// FnCall / Builtin / Tuple / TupleProj args.
     pub(crate) fn map_vars(&self, f: &impl Fn(&AtomArgumentSignature) -> FactorPos) -> FactorPos {
         match self {
             FactorPos::Var(sig) => f(sig),
@@ -66,6 +80,13 @@ impl FactorPos {
                 args: args.iter().map(|a| a.map_vars(f)).collect(),
             },
             FactorPos::Group(a) => FactorPos::Group(Box::new(a.map_vars(f))),
+            FactorPos::Tuple { fields } => FactorPos::Tuple {
+                fields: fields.iter().map(|a| a.map_vars(f)).collect(),
+            },
+            FactorPos::TupleProj { tuple, index } => FactorPos::TupleProj {
+                tuple: Box::new(tuple.map_vars(f)),
+                index: *index,
+            },
         }
     }
 }
@@ -92,6 +113,15 @@ impl fmt::Display for FactorPos {
                 write!(f, "{op}({args_str})")
             }
             FactorPos::Group(a) => write!(f, "({a})"),
+            FactorPos::Tuple { fields } => {
+                let inner = fields
+                    .iter()
+                    .map(ArithmeticPos::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "[{inner}]")
+            }
+            FactorPos::TupleProj { tuple, index } => write!(f, "({tuple}).{index}"),
         }
     }
 }
@@ -168,6 +198,37 @@ impl ArithmeticPos {
                     *var_id += num_vars;
                     FactorPos::Group(Box::new(ArithmeticPos::from_arithmetic(a, sigs)))
                 }
+                // A tuple construct: each element is an expression (placeholders
+                // only occur in destructures, which are desugared to `TupleProj`s
+                // before catalog construction). Consume each element's variable
+                // signatures in source order, mirroring call-arg handling.
+                Factor::Tuple(r) => {
+                    let fields = r
+                        .fields()
+                        .iter()
+                        .map(|elem| match elem {
+                            TupleElem::Expr(a) => {
+                                let num_vars = a.vars().len();
+                                let sigs = &var_signatures[*var_id..*var_id + num_vars];
+                                *var_id += num_vars;
+                                ArithmeticPos::from_arithmetic(a, sigs)
+                            }
+                            TupleElem::Placeholder => unreachable!(
+                                "tuple placeholder reached catalog; destructures \
+                                 are desugared and constructs reject `_`"
+                            ),
+                        })
+                        .collect();
+                    FactorPos::Tuple { fields }
+                }
+                Factor::TupleProj { tuple, index } => FactorPos::TupleProj {
+                    tuple: Box::new(
+                        map_call_args(std::slice::from_ref(tuple.as_ref()), var_id)
+                            .pop()
+                            .expect("proj lowering yields exactly one arithmetic"),
+                    ),
+                    index: *index,
+                },
             }
         }
 

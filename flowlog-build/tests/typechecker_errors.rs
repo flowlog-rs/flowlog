@@ -187,6 +187,30 @@ fn head_narrowing_without_cast() {
 }
 
 #[test]
+fn tuple_field_pack_subtype() {
+    // Packing a `ProductId` into a `(u: UserId)` tuple field must be rejected:
+    // the erased primitive pass sees `symbol` on both sides, so only the
+    // field-wise subtype descent catches the nominal mismatch.
+    assert_err!(
+        typecheck("tuple_field_pack_subtype.dl"),
+        TypeCheckError::HeadSubtypeMismatch { .. },
+        ["expects `userid`", "productid"]
+    );
+}
+
+#[test]
+fn tuple_field_destructure_subtype() {
+    // Destructuring a `UserId` field into a `ProductId` head column: the
+    // projection carries the field's declared identity, so the subtype pass
+    // rejects the narrowing.
+    assert_err!(
+        typecheck("tuple_field_destructure_subtype.dl"),
+        TypeCheckError::HeadSubtypeMismatch { .. },
+        ["expects `productid`", "userid"]
+    );
+}
+
+#[test]
 fn cast_unknown_type() {
     assert_err!(
         typecheck("cast_unknown_type.dl"),

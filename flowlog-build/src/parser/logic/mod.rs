@@ -19,6 +19,7 @@ mod head;
 mod loop_block;
 mod predicate;
 mod rule;
+mod tuple;
 
 // Re-exports for a flat intra-crate path; the outer parser/mod.rs
 // re-re-exports the externally-needed ones at `parser::*`.
@@ -33,6 +34,7 @@ pub use rule::FlowLogRule;
 // Intra-crate only.
 pub(crate) use aggregation::Aggregation;
 pub(crate) use arithmetic::{Arithmetic, Factor};
+pub(crate) use tuple::{TupleElem, TupleLit};
 pub(crate) use atom::{Atom, AtomArg};
 pub(crate) use builtin::BuiltinCall;
 pub(crate) use comparison::ComparisonExpr;
