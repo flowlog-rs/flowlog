@@ -1,0 +1,6 @@
+.type P = (a: number, b: number)
+.decl In(x: number, y: number)
+.decl Out(s: P)
+.input In(IO="file", filename="In.csv", delimiter=",")
+.output Out
+Out(sum(p)) :- In(x, y), p = (x, y).

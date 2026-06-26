@@ -1,8 +1,8 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : tuple_pair
-// Feature : fixed tuple types — construct, destructure, and the Soufflé bracket
-//           output form `[a, b]` (the value serialization stays Soufflé-shaped
-//           for oracle compatibility, even though the source syntax is `( … )`).
+// Feature : fixed tuple types — construct, destructure, and the FlowLog tuple
+//           output form `(a, b)` (matches the source syntax; `[ … ]` is
+//           reserved for a future array type).
 //   Out   exercises construct  (p = (x, y)) and tuple-column output.
 //   Back  exercises destructure (p = (a, b)) of a bound tuple column.
 // ════════════════════════════════════════════════════════════════════════════

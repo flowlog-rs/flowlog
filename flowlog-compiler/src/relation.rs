@@ -282,7 +282,7 @@ fn gen_one_rel_nonnullary(
         // Records never appear in EDB input, so an input relation cannot have
         // a record first column to shard on.
         DataType::FixedTuple(_) => {
-            unreachable!("record-typed columns cannot appear in EDB input relations")
+            unreachable!("tuple-typed columns cannot appear in EDB input relations")
         }
     };
     let tuple_parse_stmts = gen_parse_from_str(raw_name, &dts, string_intern);
@@ -504,7 +504,7 @@ fn gen_parse_from_str(rel_label: &str, dts: &[DataType], string_intern: bool) ->
                 }
                 // Records never appear in EDB facts (constructed by rules only).
                 DataType::FixedTuple(_) => {
-                    unreachable!("record-typed columns cannot be parsed from EDB facts")
+                    unreachable!("tuple-typed columns cannot be parsed from EDB facts")
                 }
             }
         })
@@ -632,7 +632,7 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                 }
                 // Records never appear in EDB facts (constructed by rules only).
                 DataType::FixedTuple(_) => {
-                    unreachable!("record-typed columns cannot be parsed from EDB facts")
+                    unreachable!("tuple-typed columns cannot be parsed from EDB facts")
                 }
             }
         })

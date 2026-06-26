@@ -112,17 +112,17 @@ pub enum TypeCheckError {
 
     /// A `_` placeholder appears in a tuple *construct* (`x = (a, _)`).
     /// Placeholders are only meaningful when destructuring.
-    #[error("`_` placeholder is not allowed when constructing a record")]
+    #[error("`_` placeholder is not allowed when constructing a tuple")]
     TuplePlaceholderInConstruct { span: Span },
 
-    /// A record destructure (`[a, b] = x`) doesn't match `x`'s type — `x` is
-    /// not a record, or the pattern has more fields than the record.
-    #[error("invalid record destructure: {detail}")]
+    /// A tuple destructure (`(a, b) = x`) doesn't match `x`'s type — `x` is
+    /// not a tuple, or the pattern has more fields than the tuple.
+    #[error("invalid tuple destructure: {detail}")]
     TupleDestructure { span: Span, detail: String },
 
-    /// A tuple construct (`[e0, …]`) doesn't match the declared record type —
+    /// A tuple construct (`(e0, …)`) doesn't match the declared tuple type —
     /// wrong field count or a field whose value type doesn't fit.
-    #[error("invalid record construct: {detail}")]
+    #[error("invalid tuple construct: {detail}")]
     TupleConstruct { span: Span, detail: String },
 
     /// `sum` / `avg` / `min` / `max` applied to a non-numeric input.
@@ -328,7 +328,7 @@ impl Diagnostic for TypeCheckError {
                 .with_labels(labels(*span, "`_` placeholder here"))
                 .with_notes(vec![
                     "a `_` can only ignore a component when destructuring a bound \
-                     record (`[a, _] = x`); a construct must supply every field."
+                     tuple (`(a, _) = x`); a construct must supply every field."
                         .into(),
                 ]),
 

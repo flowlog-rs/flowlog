@@ -1,0 +1,28 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_placeholder
+// Feature : destructure with a `_` placeholder (ignore a component); a
+//           re-used var in a pattern (`(a, a) = p`) → already-bound component
+//           becomes an equality filter; and a 1-tuple `(x,)` construct/output.
+// ════════════════════════════════════════════════════════════════════════════
+
+.type Pair = ( a: symbol, b: symbol )
+.type One  = ( s: symbol )
+
+.decl In(x: symbol, y: symbol)
+.decl First(a: symbol)
+.decl MatchEq(a: symbol)
+.decl Single(o: One)
+
+In("p", "q").
+In("p", "p").
+
+// `_` discards the second component
+First(a)   :- In(x, y), p = (x, y), (a, _) = p.
+// re-using `a` binds component 0, then filters component 1 == a
+MatchEq(a) :- In(x, y), p = (x, y), (a, a) = p.
+// 1-tuple construct + output
+Single(o)  :- In(x, y), o = (x,).
+
+.output First
+.output MatchEq
+.output Single

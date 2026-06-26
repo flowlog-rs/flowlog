@@ -1066,7 +1066,7 @@ impl Program {
             match relations.iter_mut().find(|r| r.name() == d.relation_name()) {
                 Some(rel) => {
                     // Tuples are constructed by rules, never read from EDB
-                    // facts — reject `.input` on a record-column relation here
+                    // facts — reject `.input` on a tuple-column relation here
                     // rather than panicking the fact-reader codegen later.
                     if rel.data_type().iter().any(|dt| dt.is_tuple()) {
                         return Err(ParseError::TupleInInput {

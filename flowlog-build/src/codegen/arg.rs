@@ -5,9 +5,6 @@
 //! embedded in closures, predicates, and key-value builders across every
 //! flow operator (row / KV / join-core).
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::Index;
@@ -65,45 +62,6 @@ pub(super) fn row_pattern_and_fields(
 }
 
 // ==================================================
-// Multi-use variable detection
-// ==================================================
-
-/// Row field → total reference count across the argument lists. Callers
-/// decrement as they emit uses and skip the final `.clone()` when count
-/// hits 1 (no future uses).
-pub(super) fn row_use_counts(arg_lists: &[&[ArithmeticArgument]]) -> HashMap<usize, usize> {
-    arg_lists
-        .iter()
-        .flat_map(|args| args.iter())
-        .flat_map(|arg| arg.transformation_arguments())
-        .filter_map(|ta| match ta {
-            TransformationArgument::KV((_, idx)) => Some(*idx),
-            _ => None,
-        })
-        .fold(HashMap::new(), |mut acc, idx| {
-            *acc.entry(idx).or_insert(0) += 1;
-            acc
-        })
-}
-
-/// KV slot (`is_key`, idx) → total reference count, used identically to
-/// [`row_use_counts`] to elide the last-use clone.
-pub(super) fn kv_use_counts(arg_lists: &[&[ArithmeticArgument]]) -> HashMap<(bool, usize), usize> {
-    arg_lists
-        .iter()
-        .flat_map(|args| args.iter())
-        .flat_map(|arg| arg.transformation_arguments())
-        .map(|ta| match ta {
-            TransformationArgument::KV((is_key, idx))
-            | TransformationArgument::Jn((_, is_key, idx)) => (*is_key, *idx),
-        })
-        .fold(HashMap::new(), |mut acc, key| {
-            *acc.entry(key).or_insert(0) += 1;
-            acc
-        })
-}
-
-// ==================================================
 // Tuple builder utilities
 // ==================================================
 
@@ -115,11 +73,10 @@ impl CodeGen {
         args: &[ArithmeticArgument],
         fields: &[Ident],
         string_intern: bool,
-        remaining: Option<&RefCell<HashMap<usize, usize>>>,
     ) -> Result<TokenStream, CodegenError> {
         let parts: Vec<TokenStream> = args
             .iter()
-            .map(|arg| self.build_row_args_arithmetic_expr(arg, fields, string_intern, remaining))
+            .map(|arg| self.build_row_args_arithmetic_expr(arg, fields, string_intern))
             .collect::<Result<_, _>>()?;
         Ok(tuple_tokens(parts))
     }
@@ -130,11 +87,10 @@ impl CodeGen {
         &mut self,
         args: &[ArithmeticArgument],
         string_intern: bool,
-        remaining: Option<&RefCell<HashMap<(bool, usize), usize>>>,
     ) -> Result<TokenStream, CodegenError> {
         let parts: Vec<TokenStream> = args
             .iter()
-            .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern, remaining))
+            .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern))
             .collect::<Result<_, _>>()?;
         Ok(tuple_tokens(parts))
     }
@@ -344,8 +300,8 @@ impl CodeGen {
         let parts: Vec<TokenStream> = comps
             .iter()
             .map(|c| {
-                let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern, None)?;
-                let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern, None)?;
+                let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern)?;
+                let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern)?;
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
@@ -365,7 +321,8 @@ impl CodeGen {
         Ok(Some(quote! { #( #parts )&&* }))
     }
 
-    /// `join_core`-closure comparison predicate, combined with `&&`.
+    /// `join_core`-closure comparison predicate, combined with `&&`. The join
+    /// operand builder always clones (`k`/`lv`/`rv` are references).
     pub(super) fn build_join_compare_predicate(
         &mut self,
         comps: &[ComparisonExprArgument],
@@ -413,17 +370,14 @@ impl CodeGen {
         if comps.is_empty() {
             return Ok(None);
         }
+        // Operands are always cloned (see `build_kv_compare_predicate`): keeps
+        // tuple-literal operands move-safe and the three compare paths uniform;
+        // free for `Copy`/interned leaves.
         let parts: Vec<TokenStream> = comps
             .iter()
             .map(|c| {
-                let l =
-                    self.build_row_args_arithmetic_expr(c.left(), row_fields, string_intern, None)?;
-                let r = self.build_row_args_arithmetic_expr(
-                    c.right(),
-                    row_fields,
-                    string_intern,
-                    None,
-                )?;
+                let l = self.build_row_args_arithmetic_expr(c.left(), row_fields, string_intern)?;
+                let r = self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern)?;
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
@@ -434,7 +388,7 @@ impl CodeGen {
                         self.features.mark_string_resolve();
                         quote! { resolve(#l) #op resolve(#r) }
                     } else {
-                        quote! { #l #op #r }
+                        quote! { (#l) #op (#r) }
                     },
                 )
             })
@@ -471,7 +425,7 @@ impl CodeGen {
                     .iter()
                     .enumerate()
                     .map(|(i, a)| {
-                        let token = self.build_kv_args_arithmetic_expr(a, string_intern, None)?;
+                        let token = self.build_kv_args_arithmetic_expr(a, string_intern)?;
                         Ok(wrap_udf_arg(
                             token,
                             param_type_at(&param_types, i),
@@ -554,12 +508,8 @@ impl CodeGen {
                     .iter()
                     .enumerate()
                     .map(|(i, a)| {
-                        let token = self.build_row_args_arithmetic_expr(
-                            a,
-                            row_fields,
-                            string_intern,
-                            None,
-                        )?;
+                        let token =
+                            self.build_row_args_arithmetic_expr(a, row_fields, string_intern)?;
                         Ok(wrap_udf_arg(
                             token,
                             param_type_at(&param_types, i),
@@ -1136,7 +1086,6 @@ impl CodeGen {
         expr: &ArithmeticArgument,
         fields: &[Ident],
         string_intern: bool,
-        remaining: Option<&RefCell<HashMap<usize, usize>>>,
     ) -> Result<TokenStream, CodegenError> {
         self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
             TransformationArgument::KV((_, idx)) => {
@@ -1146,21 +1095,7 @@ impl CodeGen {
                         fields.len()
                     ))
                 })?;
-                // Clone only when future uses remain; the last use moves.
-                let needs_clone = remaining.is_some_and(|rem| {
-                    rem.borrow_mut()
-                        .get_mut(idx)
-                        .map(|count| {
-                            *count -= 1;
-                            *count > 0
-                        })
-                        .unwrap_or(false)
-                });
-                Ok(if needs_clone {
-                    quote! { #ident.clone() }
-                } else {
-                    quote! { #ident }
-                })
+                Ok(quote! { #ident.clone() })
             }
             _ => Err(CodegenError::internal(
                 "non-KV argument in row arithmetic builder",
@@ -1172,26 +1107,15 @@ impl CodeGen {
         &mut self,
         expr: &ArithmeticArgument,
         string_intern: bool,
-        remaining: Option<&RefCell<HashMap<(bool, usize), usize>>>,
     ) -> Result<TokenStream, CodegenError> {
         self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
             TransformationArgument::KV((is_key, idx))
             | TransformationArgument::Jn((_, is_key, idx)) => {
                 let i = Index::from(*idx);
-                let needs_clone = remaining.is_some_and(|rem| {
-                    let mut map = rem.borrow_mut();
-                    map.get_mut(&(*is_key, *idx))
-                        .map(|count| {
-                            *count -= 1;
-                            *count > 0
-                        })
-                        .unwrap_or(false)
-                });
-                Ok(match (is_key, needs_clone) {
-                    (true, true) => quote! { k.#i.clone() },
-                    (true, false) => quote! { k.#i },
-                    (false, true) => quote! { v.#i.clone() },
-                    (false, false) => quote! { v.#i },
+                Ok(if *is_key {
+                    quote! { k.#i.clone() }
+                } else {
+                    quote! { v.#i.clone() }
                 })
             }
         })

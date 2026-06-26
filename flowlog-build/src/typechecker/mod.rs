@@ -503,7 +503,7 @@ fn check_head(
                 // field-wise (so a polymorphic literal fits any same-family
                 // field width, exactly as it would in a scalar column) and
                 // pinned per field — avoiding the eager width-collapse that
-                // `infer_factor_type`'s Record arm does for the general case.
+                // `infer_factor_type`'s Tuple arm does for the general case.
                 if a.rest().is_empty()
                     && matches!(a.init(), Factor::Tuple(_))
                     && let DataType::FixedTuple(field_types) = &expected
@@ -532,7 +532,7 @@ fn check_head(
     Ok(())
 }
 
-/// Field-wise check + pin of a tuple construct `[e0, …]` against a declared
+/// Field-wise check + pin of a tuple construct `(e0, …)` against a declared
 /// tuple column type. Each field is checked like a scalar column (a
 /// polymorphic literal fits any same-family width) and then pinned to its
 /// field type — avoiding the eager width-collapse `infer_factor_type` does
@@ -1427,7 +1427,7 @@ mod tests {
             Out(x) :- In(x), x = (_,).\n";
         assert!(
             parse_and_check_result(src).is_err(),
-            "`x = [_]` on a non-tuple `x` must be rejected"
+            "`x = (_,)` on a non-tuple `x` must be rejected"
         );
     }
 

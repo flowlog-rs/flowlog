@@ -296,7 +296,7 @@ fn gen_write_row_stderr(idb: &Relation, string_intern: bool) -> TokenStream {
 }
 
 /// Token streams that read `row.0.<i>` for each data column, wrapping
-/// interned-string leaves in `resolve_out()` so they format as `&str`. Record
+/// interned-string leaves in `resolve_out()` so they format as `&str`. Tuple
 /// columns recurse into a nested tuple of resolved leaves (`(resolve_out(..), …)`),
 /// which `{:?}` renders readably and, crucially, keeps `resolve_out` *used*
 /// (the generated crate builds under `-Dwarnings`).
@@ -427,9 +427,8 @@ fn gen_parallel_file_drain(
 /// Append the file-form bytes of a single value at `access` to `bytes`.
 /// Scalars match each value's `Display` (integers via `itoa`, floats/bool via
 /// `write!`, strings raw — interned columns resolved through `resolve_out`).
-/// A record serializes in Soufflé bracket form `[e0, e1, …]` (comma-space
-/// separator), recursing into its fields. Sets `*uses_itoa` when an integer leaf
-/// is emitted.
+/// A tuple serializes in FlowLog form `(e0, e1, …)` (comma-space separator),
+/// recursing into its fields. Sets `*uses_itoa` when an integer leaf is emitted.
 fn gen_value_bytes(
     access: &TokenStream,
     dt: &DataType,
@@ -452,10 +451,11 @@ fn gen_value_bytes(
             // text `write!("{}")` produces.
             quote! { write!(bytes, "{}", #access).expect("write failed"); }
         }
-        // Record column → Soufflé bracket form `[e0, e1, …]`. The `, ` separator
-        // is the record's own, independent of the column delimiter.
+        // Tuple column → FlowLog tuple form `(e0, e1, …)` (matches the source
+        // syntax; `[ … ]` is reserved for a future array type). The `, `
+        // separator is the tuple's own, independent of the column delimiter.
         DataType::FixedTuple(fields) => {
-            let mut inner: Vec<TokenStream> = vec![quote! { bytes.push(b'['); }];
+            let mut inner: Vec<TokenStream> = vec![quote! { bytes.push(b'('); }];
             for (j, fdt) in fields.iter().enumerate() {
                 if j > 0 {
                     inner.push(quote! { bytes.extend_from_slice(b", "); });
@@ -464,7 +464,10 @@ fn gen_value_bytes(
                 let sub = quote! { (#access).#jdx };
                 inner.push(gen_value_bytes(&sub, fdt, string_intern, uses_itoa));
             }
-            inner.push(quote! { bytes.push(b']'); });
+            if fields.len() == 1 {
+                inner.push(quote! { bytes.push(b','); });
+            }
+            inner.push(quote! { bytes.push(b')'); });
             quote! { #(#inner)* }
         }
         // The eight integer types.
@@ -487,7 +490,7 @@ fn gen_row_bytes(idb: &Relation, string_intern: bool, is_incremental: bool) -> (
         let idx = Literal::usize_unsuffixed(i);
         // Column value, accessed raw as `row.0.<i>`. `gen_value_bytes` applies
         // `resolve_out` at each interned-string leaf (mirroring `field_accessor`)
-        // and recurses into tuple columns, which serialize as `[a, b]`.
+        // and recurses into tuple columns, which serialize as `(a, b)`.
         let access = quote! { row.0.#idx };
         stmts.push(gen_value_bytes(&access, dt, string_intern, &mut uses_itoa));
     }
