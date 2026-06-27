@@ -115,7 +115,7 @@ impl CodeGen {
                 // arrangement that `reduce_core` would introduce.
                 if self.config.is_datalog_batch() {
                     self.features.mark_as_collection();
-                    self.features.mark_agg_semiring(*agg_op, agg_type);
+                    self.features.mark_agg_semiring(*agg_op, agg_type.clone());
                     self.features.mark_threshold_total();
                     self.features.mark_timely_map();
                     let pipeline = match agg_op {

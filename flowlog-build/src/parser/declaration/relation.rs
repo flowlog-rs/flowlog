@@ -271,7 +271,7 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn data_type(&self) -> Vec<DataType> {
-        self.attributes.iter().map(|a| *a.data_type()).collect()
+        self.attributes.iter().map(|a| a.data_type().clone()).collect()
     }
 
     /// Per-attribute declared `TypeId`s. Used by the typechecker;
@@ -435,7 +435,7 @@ impl Relation {
                             self.raw_name
                         ))
                     })?;
-                parsed.push((idx, *attr.data_type(), ascending));
+                parsed.push((idx, attr.data_type().clone(), ascending));
             }
             Some(parsed)
         } else {

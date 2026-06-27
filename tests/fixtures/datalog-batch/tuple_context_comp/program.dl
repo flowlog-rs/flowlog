@@ -1,0 +1,34 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_context_comp
+// Feature : tuple types exercised the way DOOP uses them — a (caller, site)
+//           *context* tuple, built inside a `.comp`, used as a whole-tuple
+//           JOIN KEY, and output in FlowLog tuple form. Also covers a
+//           top-level `.type` referenced inside a component body, and an
+//           external relation (`Call`) used un-prefixed inside the comp.
+// ════════════════════════════════════════════════════════════════════════════
+
+.type Ctx = ( caller: symbol, site: symbol )
+
+.comp Analysis {
+  .decl Reaches(c: Ctx, callee: symbol)
+  .decl SameCtx(a: symbol, b: symbol)
+
+  // construct a context tuple from each call
+  Reaches(ctx, callee) :- Call(caller, callee, site), ctx = (caller, site).
+
+  // join two facts on the WHOLE tuple `ctx` (content equality as a join key)
+  SameCtx(x, y) :- Reaches(ctx, x), Reaches(ctx, y).
+}
+
+.decl Call(caller: symbol, callee: symbol, site: symbol)
+.input Call(IO="file", filename="Call.csv", delimiter=",")
+
+.init a = Analysis
+
+.decl Out(c: Ctx, callee: symbol)
+.decl SameCtx(a: symbol, b: symbol)
+.output Out
+.output SameCtx
+
+Out(c, callee)  :- a.Reaches(c, callee).
+SameCtx(x, y)   :- a.SameCtx(x, y).

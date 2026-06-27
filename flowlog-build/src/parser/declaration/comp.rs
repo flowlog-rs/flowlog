@@ -12,11 +12,12 @@ use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::logic::{FlowLogRule, Head, apply_indices_to_rule, parse_plan_indices};
 use crate::parser::{Lexeme, Rule, span_of, type_ref_name};
 
-/// `.type` operator: `=` (alias) or `<:` (subtype).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `.type` operator: `=` (alias), `<:` (subtype), or a tuple declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RawTypeOp {
     Alias,
     Subtype,
+    Tuple(Vec<(String, String)>),
 }
 
 /// `.comp Name<T1, T2, ...> [: Super<args>] { body... }`.
@@ -318,17 +319,62 @@ pub(crate) fn split_type_alias(
         .into_inner()
         .next()
         .ok_or_else(|| grammar_bug("type_decl_op missing inner op"))?;
+    let rhs = inner
+        .next()
+        .ok_or_else(|| grammar_bug("type_alias_decl missing RHS type"))?;
+
+    // A tuple RHS (`( f0: T0, … )`) is its own kind of `.type`. It must be
+    // defined with `=`: tuples cannot be subtyped.
+    if let Some(tuple_type) = rhs
+        .clone()
+        .into_inner()
+        .find(|p| p.as_rule() == Rule::tuple_type)
+    {
+        if op_inner.as_rule() != Rule::alias_op {
+            return Err(ParseError::TupleSubtypeDecl { span, name });
+        }
+        let fields = parse_tuple_fields(tuple_type)?;
+        return Ok((name, RawTypeOp::Tuple(fields), String::new(), span));
+    }
+
     let op = match op_inner.as_rule() {
         Rule::subtype_op => RawTypeOp::Subtype,
         Rule::alias_op => RawTypeOp::Alias,
         other => return Err(grammar_bug(format!("unexpected type op: {other:?}"))),
     };
-    let parent = type_ref_name(
-        &inner
-            .next()
-            .ok_or_else(|| grammar_bug("type_alias_decl missing parent"))?,
-    );
+    let parent = type_ref_name(&rhs);
     Ok((name, op, parent, span))
+}
+
+/// Parse a `tuple_type` pest node into `(field_name, field_type_source)` pairs.
+/// Field types are kept as source strings and resolved (and recursion-checked)
+/// by [`crate::parser::primitive::TypeRegistry::register_tuple`].
+pub(crate) fn parse_tuple_fields(
+    tuple_type: Pair<Rule>,
+) -> Result<Vec<(String, String)>, ParseError> {
+    debug_assert_eq!(tuple_type.as_rule(), Rule::tuple_type);
+    let mut fields = Vec::new();
+    for field in tuple_type.into_inner() {
+        if field.as_rule() != Rule::tuple_field {
+            return Err(grammar_bug(format!(
+                "unexpected child of tuple_type: {:?}",
+                field.as_rule()
+            )));
+        }
+        let mut parts = field.into_inner();
+        let fname = parts
+            .next()
+            .ok_or_else(|| grammar_bug("tuple_field missing name"))?
+            .as_str()
+            .to_string();
+        let ftype = type_ref_name(
+            &parts
+                .next()
+                .ok_or_else(|| grammar_bug("tuple_field missing type"))?,
+        );
+        fields.push((fname, ftype));
+    }
+    Ok(fields)
 }
 
 /// Reuse the standard rule parser, expanding multi-head / multi-body

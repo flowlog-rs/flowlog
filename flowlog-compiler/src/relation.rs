@@ -256,7 +256,7 @@ fn gen_one_rel_nonnullary(
 
     let tuple_ty = data_type_tokens(&dts, string_intern);
 
-    let shard_tuple = match dts[0] {
+    let shard_tuple = match &dts[0] {
         DataType::Int8 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
         DataType::Int16 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
         DataType::Int32 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
@@ -279,6 +279,11 @@ fn gen_one_rel_nonnullary(
             }
         }
         DataType::Bool => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        // Records never appear in EDB input, so an input relation cannot have
+        // a record first column to shard on.
+        DataType::FixedTuple(_) => {
+            unreachable!("tuple-typed columns cannot appear in EDB input relations")
+        }
     };
     let tuple_parse_stmts = gen_parse_from_str(raw_name, &dts, string_intern);
     let file_parse_stmts = gen_parse_from_bytes(raw_name, &dts, string_intern);
@@ -477,7 +482,7 @@ fn gen_parse_from_str(rel_label: &str, dts: &[DataType], string_intern: bool) ->
                     }
                 };
             };
-            match *dt {
+            match dt {
                 DataType::Int8 => parse_str_scalar(&v, quote! { i8 }, "i8", rel_label, idx, &get),
                 DataType::Int16 => parse_str_scalar(&v, quote! { i16 }, "i16", rel_label, idx, &get),
                 DataType::Int32 => parse_str_scalar(&v, quote! { i32 }, "i32", rel_label, idx, &get),
@@ -496,6 +501,10 @@ fn gen_parse_from_str(rel_label: &str, dts: &[DataType], string_intern: bool) ->
                         quote! { let #v: String = s.to_string(); }
                     };
                     quote! { #get #field }
+                }
+                // Records never appear in EDB facts (constructed by rules only).
+                DataType::FixedTuple(_) => {
+                    unreachable!("tuple-typed columns cannot be parsed from EDB facts")
                 }
             }
         })
@@ -574,7 +583,7 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                     }
                 };
             };
-            match *dt {
+            match dt {
                 DataType::Int8 => {
                     parse_scalar_bytes(&v, quote! { i8 }, "i8", rel_label, idx, &get_raw)
                 }
@@ -620,6 +629,10 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                         #utf8
                         #field
                     }
+                }
+                // Records never appear in EDB facts (constructed by rules only).
+                DataType::FixedTuple(_) => {
+                    unreachable!("tuple-typed columns cannot be parsed from EDB facts")
                 }
             }
         })

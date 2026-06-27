@@ -1,0 +1,8 @@
+begin
+put in 1,2 +1
+put in 3,4 +1
+commit
+begin
+put in 1,2 -1
+commit
+quit

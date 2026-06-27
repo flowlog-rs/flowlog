@@ -368,6 +368,18 @@ impl TransformationFlow {
                                 .expect("group lowering yields exactly one arithmetic");
                             FactorArgument::Group(Box::new(inner))
                         }
+                        FactorPos::Tuple { fields } => FactorArgument::Tuple {
+                            fields: lower_call_args(fields),
+                        },
+                        FactorPos::TupleProj { tuple, index } => {
+                            let inner = lower_call_args(std::slice::from_ref(tuple))
+                                .pop()
+                                .expect("proj lowering yields exactly one arithmetic");
+                            FactorArgument::TupleProj {
+                                tuple: Box::new(inner),
+                                index: *index,
+                            }
+                        }
                     }
                 };
 

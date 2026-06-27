@@ -188,6 +188,38 @@ pub enum ParseError {
     #[error("attribute references unknown type `{name}`")]
     UnknownAttributeType { span: Span, name: String },
 
+    /// `.type T = ( f: U, … )` where field type `U` is undeclared.
+    #[error("tuple type `{tuple}` field `{field}` references unknown type `{field_type}`")]
+    TupleFieldUnknownType {
+        span: Span,
+        tuple: String,
+        field: String,
+        field_type: String,
+    },
+
+    /// `.type T = ( …, f: T, … )` — a tuple that references its own type.
+    /// Recursive tuples (cons-lists / trees) are not supported.
+    #[error("tuple type `{name}` is recursive; recursive tuples are not supported")]
+    RecursiveTuple { span: Span, name: String },
+
+    /// `.type X <: Y` where `Y` is a tuple type. Tuples are not subtypeable.
+    #[error("`.type {name} <: {parent}` — tuples cannot be subtyped")]
+    SubtypeOfTuple {
+        span: Span,
+        name: String,
+        parent: String,
+    },
+
+    /// `.type T <: ( … )` — an inline tuple RHS declared with `<:`. A tuple
+    /// definition is its own kind of `.type` and must use `=`.
+    #[error("`.type {name} <: ( … )` — a tuple type must be defined with `=`, not `<:`")]
+    TupleSubtypeDecl { span: Span, name: String },
+
+    /// `.input R` where `R` has a tuple-typed column. Tuples are constructed
+    /// by rules, never read from EDB facts.
+    #[error("`.input {name}` is not allowed: relation `{name}` has a tuple-typed column")]
+    TupleInInput { span: Span, name: String },
+
     /// `.init c = Foo<...>` where `Foo` was never declared as a `.comp`.
     #[error("unknown component `{name}`")]
     UnknownComponent { span: Span, name: String },
@@ -470,6 +502,37 @@ impl Diagnostic for ParseError {
                     "`.plan` must be a permutation: each positive-atom index appears exactly once"
                         .into(),
                 ]),
+
+            ParseError::TupleFieldUnknownType {
+                span, field_type, ..
+            } => base.with_labels(primary_only(*span)).with_notes(vec![format!(
+                "declare `{field_type}` earlier (a built-in primitive or a `.type`)"
+            )]),
+
+            ParseError::RecursiveTuple { span, name } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "`{name}` references its own type; recursive tuples (cons-lists / trees) are not supported"
+                )]),
+
+            ParseError::SubtypeOfTuple { span, parent, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "`{parent}` is a tuple type; use `=` to alias it instead of `<:` to subtype it"
+                )]),
+
+            ParseError::TupleSubtypeDecl { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "tuples cannot be subtyped; define the tuple with `=`".into(),
+                ]),
+
+            ParseError::TupleInInput { span, name } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "tuples are constructed by rules, not read from facts; remove `.input {name}` \
+                     or change the column to a non-tuple type"
+                )]),
 
             ParseError::Syntax { span, .. }
             | ParseError::LoopBlockInStandardMode { span }
