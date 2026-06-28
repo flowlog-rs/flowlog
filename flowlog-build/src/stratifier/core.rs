@@ -3,13 +3,13 @@
 //! See the crate-level documentation for an overview of strata, recursion, and
 //! the Extended Datalog mode.
 
-use crate::common::Span;
 use crate::parser::{
     AggregationOperator, FlowLogRule, HeadArg, IterativeDirective, LoopCondition, Predicate,
     Program, Segment,
 };
 use crate::stratifier::dependency_graph::DependencyGraph;
 use crate::stratifier::error::StratifyError;
+use flowlog_common::Span;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -290,9 +290,9 @@ impl Stratifier {
             .segments()
             .iter()
             .flat_map(|seg| match seg {
-                Segment::Plain(rules) => rules.iter().map(|r| r.span().start).collect::<Vec<_>>(),
+                Segment::Plain(rules) => rules.iter().map(|r| r.span().start()).collect::<Vec<_>>(),
                 Segment::Loop(block) | Segment::Fixpoint(block) => {
-                    block.rules().iter().map(|r| r.span().start).collect()
+                    block.rules().iter().map(|r| r.span().start()).collect()
                 }
             })
             .collect();
@@ -1027,7 +1027,7 @@ mod tests {
     use tracing_test::traced_test;
 
     fn parse_program(source: &str) -> Program {
-        use crate::common::SourceMap;
+        use flowlog_common::SourceMap;
         let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())
             .expect("failed to write temp file");

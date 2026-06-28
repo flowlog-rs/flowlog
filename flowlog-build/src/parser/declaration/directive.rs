@@ -1,18 +1,21 @@
 //! Input/Output directive types for FlowLog Datalog programs.
 
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule, span_of};
+use educe::Educe;
+use flowlog_common::{FileId, Span};
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
 /// Represents an input directive (EDB source + parameters like file path)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq)]
 pub(crate) struct InputDirective {
     relation_name: String,
     parameters: HashMap<String, String>,
     /// Span of the directive's target relation-name token.
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore))]
+    span: Span,
 }
 
 impl InputDirective {
@@ -27,7 +30,7 @@ impl InputDirective {
         Self {
             relation_name,
             parameters,
-            span: Ignored(span),
+            span,
         }
     }
 
@@ -47,7 +50,7 @@ impl InputDirective {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 }
 
@@ -113,17 +116,19 @@ impl Lexeme for InputDirective {
         Ok(Self {
             relation_name,
             parameters,
-            span: Ignored(span),
+            span,
         })
     }
 }
 
 /// Represents an output directive (which relation to write, with optional parameters)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq)]
 pub(crate) struct OutputDirective {
     relation_name: String,
     parameters: HashMap<String, String>,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore))]
+    span: Span,
 }
 
 impl OutputDirective {
@@ -136,7 +141,7 @@ impl OutputDirective {
         Self {
             relation_name,
             parameters,
-            span: Ignored(span),
+            span,
         }
     }
 
@@ -156,7 +161,7 @@ impl OutputDirective {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 }
 
@@ -167,16 +172,18 @@ impl Lexeme for OutputDirective {
         Ok(Self {
             relation_name,
             parameters,
-            span: Ignored(span),
+            span,
         })
     }
 }
 
 /// Directive for printing the size of an EDB relation
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq)]
 pub(crate) struct PrintSizeDirective {
     relation_name: String,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore))]
+    span: Span,
 }
 
 impl PrintSizeDirective {
@@ -184,7 +191,7 @@ impl PrintSizeDirective {
     pub(crate) fn new(relation_name: String, span: Span) -> Self {
         Self {
             relation_name,
-            span: Ignored(span),
+            span,
         }
     }
 
@@ -198,7 +205,7 @@ impl PrintSizeDirective {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 }
 
@@ -215,7 +222,7 @@ impl Lexeme for PrintSizeDirective {
 
         Ok(Self {
             relation_name,
-            span: Ignored(span),
+            span,
         })
     }
 }

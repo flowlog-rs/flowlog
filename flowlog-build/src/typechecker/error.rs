@@ -7,11 +7,11 @@
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use thiserror::Error;
 
-use crate::common::{
-    BUG_URL, Diagnostic, FileId, InternalError, Span, labels, primary_label, secondary_label,
-};
 use crate::parser::{
     AggregationOperator, ArithmeticOperator, BuiltinOperator, ComparisonOperator, DataType,
+};
+use flowlog_common::{
+    BUG_URL, Diagnostic, FileId, InternalError, Span, labels, primary_label, secondary_label,
 };
 
 #[derive(Debug, Error)]

@@ -12,6 +12,8 @@ keywords = ["datalog", "dataflow", "compiler", "build-script"]
 categories = ["compilers", "database", "development-tools::build-utils"]
 
 [dependencies]
+flowlog-common.workspace = true
+
 clap = { workspace = true, features = ["derive"] }
 codespan-reporting.workspace = true
 itertools.workspace = true
@@ -25,9 +27,10 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Parser grammar.
-pest = "2.8"
-pest_derive = "2.8"
-ordered-float = "5.1"
+pest = { workspace = true }
+pest_derive = { workspace = true }
+ordered-float = { workspace = true }
+educe = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true

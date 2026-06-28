@@ -4,11 +4,11 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, trace};
 
 use crate::catalog::Catalog;
-use crate::common::{Config, SECTION_BAR, SUBSECTION_BAR};
 use crate::optimizer::Optimizer;
 use crate::parser::{AggregationOperator, FlowLogRule, HeadArg, LoopCondition};
 use crate::profiler::{Profiler, with_profiler};
 use crate::stratifier::Stratifier;
+use flowlog_common::{Config, SECTION_BAR, SUBSECTION_BAR};
 
 use crate::planner::{PlanError, RulePlanner, Transformation};
 
@@ -552,7 +552,7 @@ impl StratumPlanner {
     ) -> Result<(), PlanError> {
         // Side map of first-seen head spans used only when constructing
         // the `InconsistentAggregation` diagnostic's `prior_span`.
-        let mut prior_spans: HashMap<u64, crate::common::Span> = HashMap::new();
+        let mut prior_spans: HashMap<u64, flowlog_common::Span> = HashMap::new();
 
         for catalog in catalogs {
             let head_args = catalog.head_arguments();
@@ -603,7 +603,7 @@ impl StratumPlanner {
                         prior_span: prior_spans
                             .get(&head_idb_fp)
                             .copied()
-                            .unwrap_or(crate::common::Span::DUMMY),
+                            .unwrap_or(flowlog_common::Span::DUMMY),
                         rel: stratifier.display_name(head_idb_fp, catalog.rule().head().name()),
                         existing_op,
                         existing_pos,

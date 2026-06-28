@@ -4,9 +4,10 @@
 //! - [`Aggregation`]: `op(expr)` (e.g., `sum(price * qty)`)
 
 use super::Arithmetic;
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule, span_of};
+use educe::Educe;
+use flowlog_common::{FileId, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -97,11 +98,13 @@ impl Lexeme for AggregationOperator {
 }
 
 /// `op(expr)` aggregation (e.g., `sum(price * qty)`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct Aggregation {
     operator: AggregationOperator,
     arithmetic: Arithmetic,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl Aggregation {
@@ -110,7 +113,7 @@ impl Aggregation {
         Self {
             operator,
             arithmetic,
-            span: Ignored(Span::DUMMY),
+            span: Span::DUMMY,
         }
     }
 
@@ -118,7 +121,7 @@ impl Aggregation {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// Variables referenced by the arithmetic expression.
@@ -172,7 +175,7 @@ impl Lexeme for Aggregation {
         Ok(Self {
             operator,
             arithmetic,
-            span: Ignored(span),
+            span,
         })
     }
 }
@@ -180,14 +183,14 @@ impl Lexeme for Aggregation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::FileId;
     use crate::parser::{FlowLogParser, Lexeme, Rule};
+    use flowlog_common::FileId;
     use pest::Parser;
 
     #[test]
     fn parse_aggregate_expr() {
         let mut pairs = FlowLogParser::parse(Rule::aggregate_expr, "sum(price * qty)").unwrap();
-        let agg = Aggregation::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
+        let agg = Aggregation::from_parsed_rule(pairs.next().unwrap(), FileId::new(0)).unwrap();
         assert_eq!(*agg.operator(), AggregationOperator::Sum);
         assert_eq!(agg.vars().len(), 2);
     }

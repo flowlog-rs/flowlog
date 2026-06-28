@@ -4,10 +4,10 @@
 //!
 //! 1. **`emit_sources`** — run the generator over the program and write a
 //!    complete Cargo project (`main.rs`, `relation.rs`, `Cargo.toml`, etc.)
-//!    under [`Config::build_dir`]. No external tools are invoked.
+//!    under [`CompileOptions::build_dir`]. No external tools are invoked.
 //! 2. **`build`** — shell out to `cargo build --release` in that directory,
-//!    copy the resulting binary to [`Config::executable_path`], and remove
-//!    the intermediate crate unless [`Config::save_temps`] is set.
+//!    copy the resulting binary to [`CompileOptions::executable_path`], and remove
+//!    the intermediate crate unless [`CompileOptions::save_temps`] is set.
 //!
 //! Both are `pub(crate)`; external callers use [`Compiler::compile`] which
 //! runs them in sequence.
@@ -23,7 +23,7 @@ use tracing::info;
 use crate::{Compiler, imports, relation, scaffold};
 
 impl Compiler {
-    /// Produce the scaffolded Rust crate in [`Config::build_dir`].
+    /// Produce the scaffolded Rust crate in [`CompileOptions::build_dir`].
     ///
     /// Runs all code-generation passes (dataflow graph, relation handlers,
     /// output drain, imports) and writes the resulting source files to disk.
@@ -32,7 +32,7 @@ impl Compiler {
         &mut self,
         program_planner: &ProgramPlanner,
         profiler: &mut Option<Profiler>,
-    ) -> Result<(), flowlog_build::common::BoxError> {
+    ) -> Result<(), flowlog_common::BoxError> {
         let parts = self.codegen.generate(program_planner, profiler)?;
         let features = self.codegen.features();
 
@@ -40,7 +40,7 @@ impl Compiler {
         let relation_body =
             relation::gen_relation(&self.program, features, self.config.is_batch())?;
         let relation_extras = imports::gen_binary_relation_extras(&self.program, features);
-        let relation_rs = flowlog_build::common::pretty_print(quote! {
+        let relation_rs = flowlog_common::pretty_print(quote! {
             #![allow(non_camel_case_types)]
             #relation_body
             #relation_extras
@@ -52,7 +52,8 @@ impl Compiler {
         let main_rs = self.assemble_main(&parts, &bin_imports, &worker_helpers)?;
 
         // Cargo project metadata.
-        let cargo_toml = scaffold::render_cargo_toml(&self.config, features);
+        let cargo_toml =
+            scaffold::render_cargo_toml(&self.options.crate_name(), &self.config, features);
         let cargo_config = scaffold::render_cargo_config();
 
         self.write_project(&parts, &main_rs, &relation_rs, &cargo_toml, &cargo_config)
@@ -61,12 +62,12 @@ impl Compiler {
     }
 
     /// Compile the emitted crate with `cargo build --release`, install the
-    /// binary at [`Config::executable_path`], and (unless `--save-temps`)
+    /// binary at [`CompileOptions::executable_path`], and (unless `--save-temps`)
     /// remove the intermediate crate directory.
     pub(crate) fn build(&self) -> io::Result<()> {
-        let build_dir = self.config.build_dir();
-        let crate_name = self.config.crate_name();
-        let executable_path = self.config.executable_path();
+        let build_dir = self.options.build_dir();
+        let crate_name = self.options.crate_name();
+        let executable_path = self.options.executable_path();
 
         run_cargo_build(&build_dir)?;
 
@@ -77,11 +78,11 @@ impl Compiler {
             .join("target")
             .join("release")
             .join(format!("{crate_name}{}", env::consts::EXE_SUFFIX));
-        let dest = exe_with_platform_suffix(&executable_path);
+        let dest = exe_with_platform_suffix(executable_path);
         install_binary(&built, &dest)?;
         info!("Executable written to '{}'", dest.display());
 
-        if !self.config.save_temps() {
+        if !self.options.save_temps() {
             fs::remove_dir_all(&build_dir).map_err(|e| {
                 io::Error::new(
                     e.kind(),

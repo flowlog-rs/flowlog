@@ -4,16 +4,18 @@
 
 use std::fmt;
 
+use educe::Educe;
 use pest::iterators::Pair;
 
 use super::Attribute;
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::{DataType, TypeRegistry};
 use crate::parser::{Rule, span_of};
+use flowlog_common::{FileId, Span};
 
 /// Common data for an external (user-defined) function declaration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq)]
 pub(crate) struct ExternFn {
     /// Function name (must be a valid Rust identifier).
     name: String,
@@ -22,7 +24,8 @@ pub(crate) struct ExternFn {
     /// Return type.
     ret_type: DataType,
     /// Span of the `.extern fn` declaration.
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore))]
+    span: Span,
 }
 
 impl ExternFn {
@@ -45,6 +48,13 @@ impl ExternFn {
     #[inline]
     pub(crate) fn ret_type(&self) -> DataType {
         self.ret_type.clone()
+    }
+
+    /// Span of the `.extern fn` declaration.
+    #[must_use]
+    #[inline]
+    pub(crate) fn span(&self) -> Span {
+        self.span
     }
 
     /// Number of parameters (arity). Tests only; production code uses `params().len()`.
@@ -118,7 +128,7 @@ impl ExternFn {
             name,
             params,
             ret_type,
-            span: Ignored(span),
+            span,
         })
     }
 }
@@ -144,8 +154,8 @@ fn parse_param(param_node: Pair<Rule>, registry: &TypeRegistry) -> Result<Attrib
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::FileId;
     use crate::parser::FlowLogParser;
+    use flowlog_common::FileId;
     use pest::Parser;
 
     #[test]
@@ -153,7 +163,8 @@ mod tests {
         let input = ".extern fn get_time() -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, input).unwrap();
         let registry = TypeRegistry::new();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0), &registry).unwrap();
+        let ext =
+            ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId::new(0), &registry).unwrap();
         assert_eq!(ext.name(), "get_time");
         assert!(ext.params().is_empty());
         assert_eq!(ext.ret_type(), DataType::Int64);
@@ -164,7 +175,8 @@ mod tests {
         let input = ".extern fn my_hash(x: int64, y: int32) -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, input).unwrap();
         let registry = TypeRegistry::new();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0), &registry).unwrap();
+        let ext =
+            ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId::new(0), &registry).unwrap();
         assert_eq!(ext.name(), "my_hash");
         assert_eq!(ext.arity(), 2);
         assert_eq!(ext.params()[0].name(), "x");
@@ -179,13 +191,15 @@ mod tests {
         let no_params = ".extern fn get_time() -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, no_params).unwrap();
         let registry = TypeRegistry::new();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0), &registry).unwrap();
+        let ext =
+            ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId::new(0), &registry).unwrap();
         assert_eq!(ext.to_string(), no_params);
 
         let with_params = ".extern fn my_hash(x: int64, y: int32) -> int64";
         let mut pairs = FlowLogParser::parse(Rule::extern_fn, with_params).unwrap();
         let registry = TypeRegistry::new();
-        let ext = ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId(0), &registry).unwrap();
+        let ext =
+            ExternFn::from_parsed_rule(pairs.next().unwrap(), FileId::new(0), &registry).unwrap();
         assert_eq!(ext.to_string(), with_params);
     }
 }

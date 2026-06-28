@@ -281,10 +281,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "educe"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d7bc049e1bd8cdeb31b68bbd586a9464ecf9f3944af3958a7a9d0f8b9799417"
+dependencies = [
+ "enum-ordinalize",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
+
+[[package]]
+name = "enum-ordinalize"
+version = "4.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07f808d588c10e464ea6f7d3eaed500049eff30aaac103460f61828c2d65b3eb"
+dependencies = [
+ "enum-ordinalize-derive",
+]
+
+[[package]]
+name = "enum-ordinalize-derive"
+version = "4.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42e528e2d34ba8a67a1a650b86beae8ef69fc5fdb638016f386b973226590432"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "equivalent"
@@ -314,6 +346,8 @@ version = "0.3.4"
 dependencies = [
  "clap",
  "codespan-reporting",
+ "educe",
+ "flowlog-common",
  "itertools 0.15.0",
  "ordered-float",
  "pest",
@@ -331,12 +365,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowlog-common"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "codespan-reporting",
+ "prettyplease",
+ "proc-macro2",
+ "syn",
+ "tempfile",
+]
+
+[[package]]
 name = "flowlog-compiler"
 version = "0.4.4"
 dependencies = [
  "clap",
  "codespan-reporting",
  "flowlog-build",
+ "flowlog-common",
  "proc-macro2",
  "quote",
  "thiserror",

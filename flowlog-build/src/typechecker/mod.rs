@@ -50,12 +50,12 @@ pub use error::TypeCheckError;
 
 use std::collections::HashMap;
 
-use crate::common::{Config, Span};
 use crate::parser::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg, BuiltinCall,
     BuiltinOperator, ComparisonExpr, ComparisonOperator, ConstType, DataType, Factor, FlowLogRule,
     FnCall, HeadArg, Predicate, Program, TupleElem, TupleLit,
 };
+use flowlog_common::{Config, Span};
 
 /// Type-check every rule and pin each polymorphic literal to its
 /// concrete width. Stops at the first failure; on `Ok(())` the program's
@@ -562,9 +562,7 @@ fn check_tuple_construct(
             }
             // Nested tuple literal → recurse so its fields get the same
             // literal-width leniency.
-            TupleElem::Expr(a)
-                if a.rest().is_empty() && matches!(a.init(), Factor::Tuple(_)) =>
-            {
+            TupleElem::Expr(a) if a.rest().is_empty() && matches!(a.init(), Factor::Tuple(_)) => {
                 let DataType::FixedTuple(sub) = fty else {
                     return Err(TypeCheckError::TupleConstruct {
                         span,
@@ -882,7 +880,11 @@ fn pin_arith_literals(
     Ok(())
 }
 
-fn pin_factor(factor: &mut Factor, target: &DataType, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
+fn pin_factor(
+    factor: &mut Factor,
+    target: &DataType,
+    udfs: &UdfSigs,
+) -> Result<(), TypeCheckError> {
     match factor {
         Factor::Const(c) => {
             if c.is_polymorphic() {
@@ -989,7 +991,7 @@ mod tests {
     //! pinning outcomes are not observable through those assertions.
 
     use super::*;
-    use crate::common::SourceMap;
+    use flowlog_common::SourceMap;
     use std::io::Write;
 
     fn parse_and_check(src: &str) -> Program {
@@ -1120,7 +1122,10 @@ mod tests {
 
         // Polymorphic meets concrete: concrete wins, picks the exact width.
         assert_eq!(merge_lit(&IntLit, &Concrete(Int8)), Some(Concrete(Int8)));
-        assert_eq!(merge_lit(&Concrete(UInt16), &IntLit), Some(Concrete(UInt16)));
+        assert_eq!(
+            merge_lit(&Concrete(UInt16), &IntLit),
+            Some(Concrete(UInt16))
+        );
         assert_eq!(
             merge_lit(&FloatLit, &Concrete(Float64)),
             Some(Concrete(Float64))
@@ -1356,7 +1361,8 @@ mod tests {
             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
             .output Out\n\
             Out(p) :- In(s), p = (s, 5).\n";
-        parse_and_check_result(src).expect("an int literal in an int64 tuple field must be accepted");
+        parse_and_check_result(src)
+            .expect("an int literal in an int64 tuple field must be accepted");
     }
 
     /// Arithmetic on a tuple operand is rejected at type-check (a clean

@@ -40,7 +40,7 @@ use super::{
     primitive::TypeRegistry,
     segment::Segment,
 };
-use crate::common::{FileId, SourceMap, Span};
+use flowlog_common::{FileId, SourceMap, Span};
 use pest::{Parser, iterators::Pair};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -732,12 +732,12 @@ impl Program {
         let mut type_registry = build_type_registry(parsed_rule.clone(), file)?;
 
         let mut relations: Vec<Relation> = Vec::new();
-        // Local to the parse loop; not threaded into the returned `Program`.
         let mut decl_spans: HashMap<String, (String, Span)> = HashMap::new();
         let mut input_directives: Vec<InputDirective> = Vec::new();
         let mut output_directives: Vec<OutputDirective> = Vec::new();
         let mut printsize_directives: Vec<PrintSizeDirective> = Vec::new();
         let mut udfs: Vec<ExternFn> = Vec::new();
+        let mut udf_spans: HashMap<String, Span> = HashMap::new();
         let mut raw_facts: Vec<FlowLogRule> = Vec::new();
         let mut current_rules: Vec<FlowLogRule> = Vec::new();
         let mut segments: Vec<Segment> = Vec::new();
@@ -770,7 +770,16 @@ impl Program {
                     relations.push(rel);
                 }
                 Rule::extern_fn => {
-                    udfs.push(ExternFn::from_parsed_rule(node, file, &type_registry)?)
+                    let ext = ExternFn::from_parsed_rule(node, file, &type_registry)?;
+                    if let Some(prior) = udf_spans.get(ext.name()) {
+                        return Err(ParseError::DuplicateExternFn {
+                            span: ext.span(),
+                            prior: *prior,
+                            name: ext.name().to_string(),
+                        });
+                    }
+                    udf_spans.insert(ext.name().to_string(), ext.span());
+                    udfs.push(ext);
                 }
                 Rule::type_alias_decl => {} // handled by build_type_registry
                 Rule::comp_decl => {
@@ -1622,6 +1631,21 @@ mod tests {
         let err = parse_program_result(".decl edge(x: number, X: number)").unwrap_err();
         assert!(
             matches!(err, ParseError::DuplicateAttribute { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_extern_fn_rejected() {
+        let err = parse_program_result(
+            "
+            .extern fn f(x: int64) -> int64
+            .extern fn f(y: int64) -> int64
+            ",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ParseError::DuplicateExternFn { .. }),
             "got {err:?}"
         );
     }

@@ -180,14 +180,12 @@ impl CodeGen {
             // Tuple projection → the indexed field's type.
             FactorArgument::TupleProj { tuple, index } => {
                 match self.infer_expr_type(tuple, left_type, right_type)? {
-                    DataType::FixedTuple(fields) => {
-                        fields.get(*index).cloned().ok_or_else(|| {
-                            CodegenError::internal(format!(
-                                "tuple projection index {index} out of bounds (arity {})",
-                                fields.len()
-                            ))
-                        })
-                    }
+                    DataType::FixedTuple(fields) => fields.get(*index).cloned().ok_or_else(|| {
+                        CodegenError::internal(format!(
+                            "tuple projection index {index} out of bounds (arity {})",
+                            fields.len()
+                        ))
+                    }),
                     other => Err(CodegenError::internal(format!(
                         "tuple projection of a non-tuple type {other:?}"
                     ))),
@@ -265,8 +263,8 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::Config;
     use crate::parser::{ArithmeticOperator, ConstType, Program};
+    use flowlog_common::Config;
 
     fn make_codegen() -> CodeGen {
         CodeGen::new(Config::default(), Program::default())

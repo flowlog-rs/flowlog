@@ -22,9 +22,9 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use crate::common::ExecutionMode;
 use crate::profiler::node::{NodeManager, NodeProfile};
 use crate::profiler::rule::RuleProfile;
+use flowlog_common::ExecutionMode;
 
 /// Profiler that records the operator plan graph during compilation.
 #[derive(Serialize, Deserialize, Debug, Default)]

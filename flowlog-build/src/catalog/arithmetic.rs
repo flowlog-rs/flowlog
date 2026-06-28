@@ -1,7 +1,9 @@
 //! Arithmetic expression signatures for FlowLog Datalog programs.
 
 use crate::catalog::AtomArgumentSignature;
-use crate::parser::{Arithmetic, ArithmeticOperator, BuiltinOperator, ConstType, Factor, TupleElem};
+use crate::parser::{
+    Arithmetic, ArithmeticOperator, BuiltinOperator, ConstType, Factor, TupleElem,
+};
 use std::fmt;
 
 /// A factor in an arithmetic expression with variables resolved to their
@@ -58,9 +60,7 @@ impl FactorPos {
                 args.iter().flat_map(|a| a.signatures()).collect()
             }
             FactorPos::Group(a) => a.signatures(),
-            FactorPos::Tuple { fields } => {
-                fields.iter().flat_map(|a| a.signatures()).collect()
-            }
+            FactorPos::Tuple { fields } => fields.iter().flat_map(|a| a.signatures()).collect(),
             FactorPos::TupleProj { tuple, .. } => tuple.signatures(),
         }
     }

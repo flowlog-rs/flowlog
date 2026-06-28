@@ -1,9 +1,9 @@
 //! Constant value types for FlowLog Datalog programs.
 
 use super::DataType;
-use crate::common::FileId;
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule};
+use flowlog_common::FileId;
 use ordered_float::OrderedFloat;
 use pest::iterators::Pair;
 use std::fmt;

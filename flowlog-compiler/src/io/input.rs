@@ -58,7 +58,7 @@ impl Compiler {
                 let rel_name = rel.name();
                 let file_name = rel.input_file_name();
                 let path = self
-                    .config
+                    .options
                     .fact_dir()
                     .map(|dir| {
                         std::path::Path::new(dir)

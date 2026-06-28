@@ -17,12 +17,12 @@ use std::collections::HashMap;
 use std::mem;
 
 use super::{DisplayNames, TypeCheckError, display_name};
-use crate::common::Span;
 use crate::parser::{
     Arithmetic, Atom, AtomArg, ComparisonExpr, Factor, FlowLogRule, HeadArg, Predicate, Program,
     TupleElem,
 };
 use crate::parser::{TypeId, TypeRegistry};
+use flowlog_common::Span;
 
 type DeclIds = HashMap<String, Vec<TypeId>>;
 

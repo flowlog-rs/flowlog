@@ -3,12 +3,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::common::{BoxError, Config};
 use crate::optimizer::Optimizer;
 use crate::parser::Program;
 use crate::planner::StratumPlanner;
 use crate::profiler::Profiler;
 use crate::stratifier::Stratifier;
+use flowlog_common::{BoxError, Config};
 
 /// Whole-program planning.
 #[derive(Debug)]
@@ -109,7 +109,7 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    use crate::common::SourceMap;
+    use flowlog_common::SourceMap;
 
     /// Round-trip a tiny program through parse → typecheck → program-plan,
     /// mirroring the temp-file pattern used by `stratifier::core::tests`.
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn rhs_id_does_not_split_identical_arrangements() {
         let pp = analyze(RHS_ID_SHARING_SRC);
-        let b_fp = crate::common::compute_fp("b");
+        let b_fp = flowlog_common::compute_fp("b");
 
         let b_arrangements: Vec<_> = pp
             .strata()

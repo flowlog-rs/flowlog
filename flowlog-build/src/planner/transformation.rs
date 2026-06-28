@@ -11,8 +11,8 @@ use std::sync::Arc;
 use tracing::trace;
 
 use crate::catalog::JoinPredicates;
-use crate::common::compute_fp;
 use crate::planner::Collection;
+use flowlog_common::compute_fp;
 
 mod flow;
 mod info;

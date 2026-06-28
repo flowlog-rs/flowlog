@@ -17,7 +17,7 @@
 //! - `.threshold(...)`                     = 4 ops (FlatMap + Arrange:Threshold + Threshold + AsCollection)
 //! - `.threshold_semigroup(...)`           = 3 ops (FlatMap + Arrange:ThresholdTotal + ThresholdTotal)
 
-use crate::common::ExecutionMode;
+use flowlog_common::ExecutionMode;
 
 use crate::profiler::Profiler;
 

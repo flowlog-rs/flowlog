@@ -5,15 +5,17 @@
 
 use std::fmt;
 
+use educe::Educe;
 use pest::iterators::Pair;
 
 use super::Arithmetic;
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule, span_of};
+use flowlog_common::{FileId, Span};
 
 /// A user-defined function call in a rule head or body predicates.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct FnCall {
     /// Function name.
     name: String,
@@ -21,7 +23,8 @@ pub(crate) struct FnCall {
     args: Vec<Arithmetic>,
     /// Whether the result is negated (i.e. `!fn_name(...)`).
     is_negated: bool,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl FnCall {
@@ -32,14 +35,14 @@ impl FnCall {
             name,
             args,
             is_negated,
-            span: Ignored(Span::DUMMY),
+            span: Span::DUMMY,
         }
     }
 
     /// Attach a source span to this call.
     #[must_use]
     pub(crate) fn with_span(mut self, span: Span) -> Self {
-        self.span = Ignored(span);
+        self.span = span;
         self
     }
 
@@ -47,7 +50,7 @@ impl FnCall {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// Function name.
@@ -117,7 +120,7 @@ impl Lexeme for FnCall {
             name: fn_name,
             args,
             is_negated: false,
-            span: Ignored(span),
+            span,
         })
     }
 }
@@ -125,15 +128,15 @@ impl Lexeme for FnCall {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::FileId;
     use crate::parser::{FlowLogParser, Lexeme, Rule};
+    use flowlog_common::FileId;
     use pest::Parser;
 
     #[test]
     fn parse_fn_call_expr() {
         let input = "my_udf(x, y)";
         let mut pairs = FlowLogParser::parse(Rule::fn_call_expr, input).unwrap();
-        let fc = FnCall::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap();
+        let fc = FnCall::from_parsed_rule(pairs.next().unwrap(), FileId::new(0)).unwrap();
         assert_eq!(fc.name(), "my_udf");
         assert_eq!(fc.args().len(), 2);
         assert!(!fc.is_negated());

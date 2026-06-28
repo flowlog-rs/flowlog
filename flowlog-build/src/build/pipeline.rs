@@ -14,11 +14,11 @@ use proc_macro2::TokenStream;
 
 use crate::build::relation::{gen_input_module, validate_api_surface};
 use crate::codegen::Features;
-use crate::common::{BoxError, Config, SourceMap};
 use crate::parser::Program;
 use crate::planner::ProgramPlanner;
 use crate::profiler::Profiler;
 use crate::{BuildError, Builder, CodeGen, CodeParts};
+use flowlog_common::{BoxError, Config, SourceMap};
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
 pub(crate) struct Pipeline {
@@ -79,16 +79,13 @@ fn parse(
         .map_err(Into::into)
 }
 
-/// Project a [`Builder`] onto the shared compiler [`Config`].
+/// Project a [`Builder`] onto the shared pipeline [`Config`].
 ///
-/// `output_dir` is `None` in library mode — outputs drain through
-/// `BatchResults` rather than stdout or a file.
+/// Library mode never drains to stdout (`output_to_stdout = false`) — outputs
+/// flow through `BatchResults` rather than stdout or a file.
 fn build_config(builder: &Builder, program: &str) -> Config {
     Config {
         program: program.to_string(),
-        fact_dir: None,
-        executable_path: None,
-        output_dir: None,
         mode: builder.mode,
         profile: builder.profile,
         sip: builder.sip,
@@ -97,11 +94,11 @@ fn build_config(builder: &Builder, program: &str) -> Config {
             .udf_file
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
-        save_temps: false,
         include_dirs: builder
             .include_dirs
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect(),
+        output_to_stdout: false,
     }
 }

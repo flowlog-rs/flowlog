@@ -6,12 +6,13 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use educe::Educe;
 use pest::iterators::Pair;
 
 use super::Arithmetic;
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule, span_of};
+use flowlog_common::{FileId, Span};
 
 /// Comparison operator.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -73,12 +74,14 @@ impl Lexeme for ComparisonOperator {
 }
 
 /// `{left} {op} {right}` boolean comparison.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct ComparisonExpr {
     left: Arithmetic,
     operator: ComparisonOperator,
     right: Arithmetic,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl ComparisonExpr {
@@ -94,7 +97,7 @@ impl ComparisonExpr {
             left,
             operator,
             right,
-            span: Ignored(span),
+            span,
         }
     }
 
@@ -102,7 +105,7 @@ impl ComparisonExpr {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// Left-hand expression.
@@ -175,7 +178,7 @@ impl Lexeme for ComparisonExpr {
             left,
             operator,
             right,
-            span: Ignored(span),
+            span,
         })
     }
 }

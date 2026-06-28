@@ -1,10 +1,10 @@
 mod errors;
 
-use flowlog_build::common::{Config, SourceMap};
 use flowlog_build::optimizer::Optimizer;
 use flowlog_build::parser::Program;
 use flowlog_build::planner::{PlanError, StratumPlanner};
 use flowlog_build::stratifier::Stratifier;
+use flowlog_common::{Config, SourceMap};
 
 use errors::{fixture, render};
 
@@ -17,7 +17,7 @@ fn plan_fixture(name: &str) -> (Result<(), PlanError>, SourceMap) {
 
     let config = Config {
         program: path,
-        output_dir: Some("-".into()),
+        output_to_stdout: true,
         ..Default::default()
     };
     let mut optimizer = Optimizer::new();

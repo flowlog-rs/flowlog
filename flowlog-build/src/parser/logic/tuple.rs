@@ -12,18 +12,22 @@ use std::fmt;
 
 use pest::iterators::Pair;
 
+use educe::Educe;
+
 use super::Arithmetic;
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule, span_of};
+use flowlog_common::{FileId, Span};
 
 /// A tuple literal `( e0, e1, … )` (value/pattern position). Each element is
 /// either an expression or a `_` placeholder (only meaningful when
 /// destructuring — it discards the matched component).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct TupleLit {
     fields: Vec<TupleElem>,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 /// One element of a [`TupleLit`].
@@ -36,10 +40,7 @@ pub(crate) enum TupleElem {
 impl TupleLit {
     #[must_use]
     pub(crate) fn new(fields: Vec<TupleElem>, span: Span) -> Self {
-        Self {
-            fields,
-            span: Ignored(span),
-        }
+        Self { fields, span }
     }
 
     #[must_use]
@@ -55,7 +56,7 @@ impl TupleLit {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// The element expressions, skipping `_` placeholders, in order.
@@ -119,7 +120,9 @@ impl Lexeme for TupleLit {
                 .next()
                 .ok_or_else(|| grammar_bug("tuple_elem missing inner token"))?;
             let parsed = match inner.as_rule() {
-                Rule::arithmetic_expr => TupleElem::Expr(Arithmetic::from_parsed_rule(inner, file)?),
+                Rule::arithmetic_expr => {
+                    TupleElem::Expr(Arithmetic::from_parsed_rule(inner, file)?)
+                }
                 Rule::placeholder => TupleElem::Placeholder,
                 other => {
                     return Err(grammar_bug(format!("invalid tuple element: {other:?}")));

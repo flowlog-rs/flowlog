@@ -90,7 +90,9 @@ impl CodeGen {
                 // parallel drain. Stderr uses neither. The scaffold gates the
                 // deps on these marks.
                 if !self.config.output_to_stdout() && !data_type.is_empty() {
-                    if data_type.iter().any(|dt| dt.any_leaf(&DataType::is_integer))
+                    if data_type
+                        .iter()
+                        .any(|dt| dt.any_leaf(&DataType::is_integer))
                         || self.config.is_incremental()
                     {
                         self.features.mark_itoa();

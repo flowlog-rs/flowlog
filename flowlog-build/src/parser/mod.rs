@@ -36,7 +36,7 @@ pub(crate) use logic::{
 };
 pub(crate) use segment::Segment;
 
-use crate::common::{FileId, Span};
+use flowlog_common::{FileId, Span};
 use pest::iterators::Pair;
 use pest_derive::Parser;
 

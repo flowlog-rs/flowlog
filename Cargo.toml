@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "flowlog-runtime",
+    "flowlog-common",
     "flowlog-build",
     "flowlog-compiler",
 ]
@@ -29,3 +30,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-test = "0.2"
 tempfile = "3.0"
+pest = "2.8"
+pest_derive = "2.8"
+ordered-float = "5.1"
+educe = "0.6"
+
+# Internal crates
+flowlog-common = { path = "flowlog-common", version = "0.1.0" }

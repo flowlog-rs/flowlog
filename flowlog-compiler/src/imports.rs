@@ -7,7 +7,10 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use flowlog_build::Features;
-use flowlog_build::common::{Config, INTERN_MAX_RETRIES};
+use flowlog_common::Config;
+
+/// Maximum number of retries for transient string-interner allocation failures.
+const INTERN_MAX_RETRIES: usize = 1024;
 
 pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     let inc = config.is_incremental();

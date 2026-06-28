@@ -10,9 +10,9 @@ use std::fmt;
 
 use pest::iterators::Pair;
 
-use crate::common::FileId;
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule};
+use flowlog_common::FileId;
 
 use super::{Atom, ComparisonExpr, FnCall};
 
