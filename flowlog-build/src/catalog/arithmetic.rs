@@ -1,7 +1,7 @@
 //! Arithmetic expression signatures for FlowLog Datalog programs.
 
 use crate::catalog::AtomArgumentSignature;
-use crate::parser::{
+use flowlog_parser::{
     Arithmetic, ArithmeticOperator, BuiltinOperator, ConstType, Factor, TupleElem,
 };
 use std::fmt;

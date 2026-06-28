@@ -17,7 +17,7 @@
 //! fingerprint back to the declaration and uses the user's original
 //! spelling ([`Relation::raw_name`]).
 //!
-//! [`Relation::raw_name`]: crate::parser::Relation::raw_name
+//! [`Relation::raw_name`]: flowlog_parser::Relation::raw_name
 
 use std::collections::HashMap;
 
@@ -65,7 +65,7 @@ impl CodeGen {
 
     /// Human-facing name for a fingerprint (profiler labels, diagnostics):
     /// the declared relation's original spelling
-    /// ([`Relation::raw_name`](crate::parser::Relation::raw_name)), or the
+    /// ([`Relation::raw_name`](flowlog_parser::Relation::raw_name)), or the
     /// binding ident's text for synthesized intermediates.
     pub(super) fn display_name(&self, fp: u64) -> String {
         self.program

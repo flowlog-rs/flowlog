@@ -21,7 +21,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::parser::Program;
+use flowlog_parser::Program;
 
 use crate::build::relation::{printsize_field_ident, results_field_ident, user_struct_ident};
 

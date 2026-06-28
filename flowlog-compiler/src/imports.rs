@@ -122,25 +122,25 @@ pub(crate) fn gen_worker_helpers() -> TokenStream {
 /// unqualified. The actual implementations live in the `flowlog` runtime
 /// crate (same crate library mode pulls in).
 pub(crate) fn gen_binary_relation_extras(
-    program: &flowlog_build::parser::Program,
+    program: &flowlog_parser::Program,
     features: &Features,
 ) -> TokenStream {
-    let non_nullary_edbs: Vec<&flowlog_build::parser::Relation> = program
+    let non_nullary_edbs: Vec<&flowlog_parser::Relation> = program
         .edbs()
         .iter()
         .filter(|r| r.arity() > 0)
         .copied()
         .collect();
-    let first_cols: Vec<flowlog_build::parser::DataType> = non_nullary_edbs
+    let first_cols: Vec<flowlog_parser::DataType> = non_nullary_edbs
         .iter()
         .filter_map(|r| r.data_type().first().cloned())
         .collect();
     let needs_int = first_cols
         .iter()
-        .any(|dt| !matches!(dt, flowlog_build::parser::DataType::String));
+        .any(|dt| !matches!(dt, flowlog_parser::DataType::String));
     let has_string = first_cols
         .iter()
-        .any(|dt| matches!(dt, flowlog_build::parser::DataType::String));
+        .any(|dt| matches!(dt, flowlog_parser::DataType::String));
     let needs_str = has_string && !features.string_intern();
     let needs_spur = has_string && features.string_intern();
     let needs_byte_range = !non_nullary_edbs.is_empty();

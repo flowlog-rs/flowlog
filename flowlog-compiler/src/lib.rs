@@ -37,7 +37,7 @@ pub use error::CompilerError;
 pub use options::CompileOptions;
 
 use flowlog_build::CodeGen;
-use flowlog_build::parser::Program;
+use flowlog_parser::Program;
 use flowlog_build::planner::ProgramPlanner;
 use flowlog_common::{BoxError, Config};
 use flowlog_profiler::Profiler;

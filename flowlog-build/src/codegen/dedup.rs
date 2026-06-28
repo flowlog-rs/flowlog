@@ -58,7 +58,7 @@ fn threshold_nonzero() -> TokenStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Program;
+    use flowlog_parser::Program;
     use flowlog_common::{Config, ExecutionMode};
 
     fn codegen_with_mode(mode: ExecutionMode) -> CodeGen {

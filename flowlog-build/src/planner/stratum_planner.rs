@@ -5,7 +5,7 @@ use tracing::{debug, trace};
 
 use crate::catalog::Catalog;
 use crate::optimizer::Optimizer;
-use crate::parser::{AggregationOperator, FlowLogRule, HeadArg, LoopCondition};
+use flowlog_parser::{AggregationOperator, FlowLogRule, HeadArg, LoopCondition};
 use flowlog_profiler::{Profiler, with_profiler};
 use crate::stratifier::Stratifier;
 use flowlog_common::{Config, SECTION_BAR, SUBSECTION_BAR};

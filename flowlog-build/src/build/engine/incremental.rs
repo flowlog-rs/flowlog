@@ -29,7 +29,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::parser::{Program, Relation};
+use flowlog_parser::{Program, Relation};
 
 use super::{per_position_tuple, user_to_tuple_convert};
 use crate::build::relation::user::tuple_to_user_expr;

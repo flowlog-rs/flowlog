@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 
 use crate::codegen::CodeGen;
 use crate::codegen::ty::data::data_type_tokens;
-use crate::parser::DataType;
+use flowlog_parser::DataType;
 use flowlog_profiler::{Profiler, with_profiler};
 
 impl CodeGen {

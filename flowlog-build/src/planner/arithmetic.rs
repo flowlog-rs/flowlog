@@ -3,7 +3,7 @@
 use std::fmt;
 
 use crate::catalog::{ArithmeticPos, FactorPos};
-use crate::parser::{ArithmeticOperator, BuiltinOperator, ConstType};
+use flowlog_parser::{ArithmeticOperator, BuiltinOperator, ConstType};
 use crate::planner::TransformationArgument;
 
 /// Represents a basic factor in an arithmetic expression

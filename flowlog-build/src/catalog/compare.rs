@@ -1,7 +1,7 @@
 //! Comparison expression signatures for FlowLog Datalog programs.
 
 use crate::catalog::{arithmetic::ArithmeticPos, atom::AtomArgumentSignature};
-use crate::parser::{ComparisonExpr, ComparisonOperator};
+use flowlog_parser::{ComparisonExpr, ComparisonOperator};
 use std::fmt;
 
 /// A comparison expression with variables resolved to their concrete positions.

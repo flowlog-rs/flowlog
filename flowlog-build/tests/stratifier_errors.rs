@@ -1,6 +1,6 @@
 mod errors;
 
-use flowlog_build::parser::Program;
+use flowlog_parser::Program;
 use flowlog_build::stratifier::{Stratifier, StratifyError};
 use flowlog_common::SourceMap;
 

@@ -1,6 +1,6 @@
 //! Dependency graph construction for FlowLog Datalog programs.
 
-use crate::parser::{FlowLogRule, Predicate};
+use flowlog_parser::{FlowLogRule, Predicate};
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;

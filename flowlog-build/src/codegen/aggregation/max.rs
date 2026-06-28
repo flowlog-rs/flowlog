@@ -6,7 +6,7 @@
 //!
 //! Mirror of the min-semiring pipeline with `>` instead of `<`.
 
-use crate::parser::{AggregationOperator, DataType};
+use flowlog_parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 
 use super::common::{

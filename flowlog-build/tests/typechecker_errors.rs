@@ -1,6 +1,6 @@
 mod errors;
 
-use flowlog_build::parser::{DataType, Program};
+use flowlog_parser::{DataType, Program};
 use flowlog_build::typechecker::{TypeCheckError, check_program};
 use flowlog_common::{Config, SourceMap};
 

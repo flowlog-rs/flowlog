@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::optimizer::Optimizer;
-use crate::parser::Program;
+use flowlog_parser::Program;
 use crate::planner::StratumPlanner;
 use flowlog_profiler::Profiler;
 use crate::stratifier::Stratifier;

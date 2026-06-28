@@ -5,7 +5,7 @@
 //! to write into the generated project.
 
 use crate::codegen::CodeGen;
-use crate::parser::AggregationOperator;
+use flowlog_parser::AggregationOperator;
 
 /// Embed a `templates/semiring/<name>.tpl` file at this crate's compile time.
 macro_rules! tpl {

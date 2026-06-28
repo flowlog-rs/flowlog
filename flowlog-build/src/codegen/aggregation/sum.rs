@@ -7,7 +7,7 @@
 //! Unlike min/max, sum uses real `Multiply` (`value * rhs`) because sum is not
 //! idempotent.  The threshold emits whenever the accumulated sum changes.
 
-use crate::parser::{AggregationOperator, DataType};
+use flowlog_parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 
 use super::common::{

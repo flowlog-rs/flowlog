@@ -3,7 +3,7 @@
 use std::fmt;
 
 use crate::catalog::{AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos};
-use crate::parser::ConstType;
+use flowlog_parser::ConstType;
 
 /// Write `" and "` before every term except the first. Toggles `first` to
 /// `false` after running, so callers can reuse it across heterogeneous

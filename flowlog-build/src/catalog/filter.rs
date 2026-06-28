@@ -1,7 +1,7 @@
 //! Filter expression for FlowLog Datalog programs.
 
 use crate::catalog::AtomArgumentSignature;
-use crate::parser::ConstType;
+use flowlog_parser::ConstType;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 

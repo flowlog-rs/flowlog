@@ -1,7 +1,7 @@
 //! Comparison expression representation for query planning in FlowLog Datalog programs.
 
 use crate::catalog::ComparisonExprPos;
-use crate::parser::ComparisonOperator;
+use flowlog_parser::ComparisonOperator;
 use crate::planner::{argument::TransformationArgument, arithmetic::ArithmeticArgument};
 use std::fmt;
 

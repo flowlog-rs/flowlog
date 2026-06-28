@@ -20,7 +20,7 @@ use quote::quote;
 
 use crate::build::relation::user::user_to_tuple_expr;
 use crate::codegen::tuple_tokens;
-use crate::parser::{DataType, Relation};
+use flowlog_parser::{DataType, Relation};
 
 pub(crate) fn needs_conversion(rel: &Relation, string_intern: bool) -> bool {
     // Leaf-aware: a tuple column needs conversion when any of its (possibly

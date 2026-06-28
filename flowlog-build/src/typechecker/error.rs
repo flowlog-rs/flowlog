@@ -7,7 +7,7 @@
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use thiserror::Error;
 
-use crate::parser::{
+use flowlog_parser::{
     AggregationOperator, ArithmeticOperator, BuiltinOperator, ComparisonOperator, DataType,
 };
 use flowlog_common::{

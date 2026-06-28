@@ -9,10 +9,12 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::Index;
 
-use crate::parser::{ArithmeticOperator, BuiltinOperator, ComparisonOperator, ConstType, DataType};
 use crate::planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
     FnCallPredicateArgument, TransformationArgument,
+};
+use flowlog_parser::{
+    ArithmeticOperator, BuiltinOperator, ComparisonOperator, ConstType, DataType,
 };
 
 use crate::codegen::CodeGen;

@@ -50,7 +50,7 @@ pub use error::TypeCheckError;
 
 use std::collections::HashMap;
 
-use crate::parser::{
+use flowlog_parser::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg, BuiltinCall,
     BuiltinOperator, ComparisonExpr, ComparisonOperator, ConstType, DataType, Factor, FlowLogRule,
     FnCall, HeadArg, Predicate, Program, TupleElem, TupleLit,

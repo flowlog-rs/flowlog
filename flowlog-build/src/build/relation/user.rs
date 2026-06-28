@@ -9,7 +9,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Index;
 
-use crate::parser::{DataType, Program, Relation};
+use flowlog_parser::{DataType, Program, Relation};
 
 use crate::codegen::{tuple_tokens, user_tuple_tokens};
 

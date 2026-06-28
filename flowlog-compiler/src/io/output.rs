@@ -14,7 +14,7 @@ use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 
 use flowlog_build::gen_drain_block;
-use flowlog_build::parser::{DataType, Relation};
+use flowlog_parser::{DataType, Relation};
 
 use crate::{Compiler, CompilerError};
 

@@ -12,7 +12,7 @@ use syn::Index;
 
 use crate::codegen::CodeGen;
 use crate::codegen::ty::tuple_type;
-use crate::parser::{DataType, Relation};
+use flowlog_parser::{DataType, Relation};
 use flowlog_profiler::{Profiler, with_profiler};
 
 // =========================================================================

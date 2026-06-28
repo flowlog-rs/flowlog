@@ -22,7 +22,7 @@
 
 use super::Catalog;
 use crate::catalog::{AtomArgumentSignature, AtomSignature, CatalogError};
-use crate::parser::{Atom, AtomArg, FlowLogRule, Predicate};
+use flowlog_parser::{Atom, AtomArg, FlowLogRule, Predicate};
 
 /// Public API for modifying rules and updating catalog metadata accordingly.
 impl Catalog {

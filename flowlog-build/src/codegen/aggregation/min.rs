@@ -4,7 +4,7 @@
 //! replacing expensive reduce arrangements with lightweight `threshold_semigroup` or
 //! `consolidate` pipelines.
 
-use crate::parser::{AggregationOperator, DataType};
+use flowlog_parser::{AggregationOperator, DataType};
 use proc_macro2::TokenStream;
 
 use super::common::{

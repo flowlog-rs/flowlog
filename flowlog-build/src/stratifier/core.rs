@@ -3,7 +3,7 @@
 //! See the crate-level documentation for an overview of strata, recursion, and
 //! the Extended Datalog mode.
 
-use crate::parser::{
+use flowlog_parser::{
     AggregationOperator, FlowLogRule, HeadArg, IterativeDirective, LoopCondition, Predicate,
     Program, Segment,
 };

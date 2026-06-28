@@ -7,7 +7,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::parser::Relation;
+use flowlog_parser::Relation;
 
 use crate::codegen::CodeGen;
 use data::data_type_tokens;

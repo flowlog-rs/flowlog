@@ -1,7 +1,7 @@
 mod errors;
 
 use flowlog_build::catalog::{Catalog, CatalogError};
-use flowlog_build::parser::Program;
+use flowlog_parser::Program;
 use flowlog_common::SourceMap;
 
 use errors::{fixture, render};

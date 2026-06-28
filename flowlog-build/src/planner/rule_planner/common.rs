@@ -1010,7 +1010,7 @@ impl RulePlanner {
 /// `tests/catalog_errors.rs`.
 #[cfg(test)]
 pub(super) fn test_setup(src: &str) -> (RulePlanner, Catalog) {
-    use crate::parser::Program;
+    use flowlog_parser::Program;
     use flowlog_common::SourceMap;
     use std::io::Write;
 

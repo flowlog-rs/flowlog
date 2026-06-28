@@ -21,7 +21,7 @@ use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, FactorPos,
     FnCallPredicatePos, KvPredicates,
 };
-use crate::parser::ConstType;
+use flowlog_parser::ConstType;
 use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
 
 /// Ordered consumer indices alongside their key/value index selections.

@@ -17,11 +17,11 @@ use std::collections::HashMap;
 use std::mem;
 
 use super::{DisplayNames, TypeCheckError, display_name};
-use crate::parser::{
+use flowlog_parser::{
     Arithmetic, Atom, AtomArg, ComparisonExpr, Factor, FlowLogRule, HeadArg, Predicate, Program,
     TupleElem,
 };
-use crate::parser::{TypeId, TypeRegistry};
+use flowlog_parser::{TypeId, TypeRegistry};
 use flowlog_common::Span;
 
 type DeclIds = HashMap<String, Vec<TypeId>>;
@@ -341,7 +341,7 @@ fn inner_factor_primitive_root(
     f: &Factor,
     reg: &TypeRegistry,
     bindings: &Bindings,
-) -> Option<crate::parser::DataType> {
+) -> Option<flowlog_parser::DataType> {
     match f {
         Factor::Var(v) => bindings.get(v).map(|&(id, _)| reg.root_primitive(id)),
         Factor::Const(_) => None,
@@ -396,7 +396,7 @@ fn lower_factor(f: &mut Factor) {
         if let Factor::Cast(c) = f {
             let inner = mem::replace(
                 c.inner_mut(),
-                Factor::Const(crate::parser::ConstType::Int(0)),
+                Factor::Const(flowlog_parser::ConstType::Int(0)),
             );
             *f = inner;
             continue;

@@ -9,7 +9,7 @@ use tracing::trace;
 
 use super::RulePlanner;
 use crate::catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
-use crate::parser::HeadArg;
+use flowlog_parser::HeadArg;
 use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
 
 // =========================================================================

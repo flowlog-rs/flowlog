@@ -9,10 +9,10 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::parser::DataType;
 use crate::planner::{
     ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
 };
+use flowlog_parser::DataType;
 
 use crate::codegen::{CodeGen, CodegenError};
 
@@ -263,8 +263,8 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{ArithmeticOperator, ConstType, Program};
     use flowlog_common::Config;
+    use flowlog_parser::{ArithmeticOperator, ConstType, Program};
 
     fn make_codegen() -> CodeGen {
         CodeGen::new(Config::default(), Program::default())

@@ -33,7 +33,7 @@ use std::collections::HashMap;
 
 use proc_macro2::Ident;
 
-use crate::parser::{DataType, Program};
+use flowlog_parser::{DataType, Program};
 use crate::planner::ProgramPlanner;
 use flowlog_common::Config;
 use flowlog_profiler::Profiler;

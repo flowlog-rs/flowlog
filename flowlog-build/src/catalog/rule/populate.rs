@@ -10,7 +10,7 @@ use super::Catalog;
 use crate::catalog::{
     AtomArgumentSignature, AtomSignature, CatalogError, Filters, UnsafePredicateKind,
 };
-use crate::parser::{AtomArg, Predicate};
+use flowlog_parser::{AtomArg, Predicate};
 
 /// Internal API for populating all metadata fields given a parsed rule.
 impl Catalog {

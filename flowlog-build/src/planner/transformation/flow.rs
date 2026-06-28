@@ -15,7 +15,7 @@ use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, FnCallPredicatePos,
     JoinPredicates, KvPredicates,
 };
-use crate::parser::ConstType;
+use flowlog_parser::ConstType;
 use crate::planner::{
     ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
     FnCallPredicateArgument, TransformationArgument,

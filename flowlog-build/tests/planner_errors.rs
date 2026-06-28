@@ -1,7 +1,7 @@
 mod errors;
 
 use flowlog_build::optimizer::Optimizer;
-use flowlog_build::parser::Program;
+use flowlog_parser::Program;
 use flowlog_build::planner::{PlanError, StratumPlanner};
 use flowlog_build::stratifier::Stratifier;
 use flowlog_common::{Config, SourceMap};

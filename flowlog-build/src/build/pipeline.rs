@@ -14,7 +14,7 @@ use proc_macro2::TokenStream;
 
 use crate::build::relation::{gen_input_module, validate_api_surface};
 use crate::codegen::Features;
-use crate::parser::Program;
+use flowlog_parser::Program;
 use crate::planner::ProgramPlanner;
 use flowlog_profiler::Profiler;
 use crate::{BuildError, Builder, CodeGen, CodeParts};

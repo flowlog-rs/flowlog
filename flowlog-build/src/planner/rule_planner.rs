@@ -20,7 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
-use crate::parser::{Atom, FlowLogRule, Predicate};
+use flowlog_parser::{Atom, FlowLogRule, Predicate};
 use crate::planner::{Transformation, TransformationInfo};
 
 mod common; // small utilities shared by planner phases
