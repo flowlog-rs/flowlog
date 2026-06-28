@@ -7,10 +7,10 @@ use std::collections::HashMap;
 
 use pest::iterators::Pair;
 
-use crate::common::{FileId, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::logic::{FlowLogRule, Head, apply_indices_to_rule, parse_plan_indices};
 use crate::parser::{Lexeme, Rule, span_of, type_ref_name};
+use flowlog_common::{FileId, Span};
 
 /// `.type` operator: `=` (alias), `<:` (subtype), or a tuple declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]

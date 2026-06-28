@@ -18,7 +18,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::common::Span;
 use crate::parser::declaration::{
     Attribute, CompDecl, InitDecl, InputDirective, OutputDirective, PrintSizeDirective, RawItem,
     RawRelation, RawTypeOp, Relation, SuperRef,
@@ -26,6 +25,7 @@ use crate::parser::declaration::{
 use crate::parser::error::ParseError;
 use crate::parser::logic::{FlowLogRule, Predicate};
 use crate::parser::primitive::TypeRegistry;
+use flowlog_common::Span;
 
 /// Output of inlining one `.init`.
 #[derive(Default)]

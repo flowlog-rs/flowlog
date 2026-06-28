@@ -5,12 +5,13 @@
 
 use std::fmt;
 
+use educe::Educe;
 use pest::iterators::Pair;
 
-use crate::common::{FileId, Ignored, Span, compute_fp};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::ConstType;
 use crate::parser::{Lexeme, Rule, span_of};
+use flowlog_common::{FileId, Span, compute_fp};
 
 /// An argument to an atom: variable, constant, or `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -52,12 +53,14 @@ impl Lexeme for AtomArg {
 }
 
 /// `name(arg1, ..., argN)` predicate.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct Atom {
     name: String,
     arguments: Vec<AtomArg>,
     fingerprint: u64,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl Atom {
@@ -70,7 +73,7 @@ impl Atom {
             name: name.to_lowercase(),
             arguments,
             fingerprint,
-            span: Ignored(Span::DUMMY),
+            span: Span::DUMMY,
         }
     }
 
@@ -78,7 +81,7 @@ impl Atom {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// Relation name.
@@ -162,7 +165,7 @@ impl Lexeme for Atom {
             name,
             arguments,
             fingerprint,
-            span: Ignored(span),
+            span,
         })
     }
 }

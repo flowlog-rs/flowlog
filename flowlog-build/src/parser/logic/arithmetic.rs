@@ -7,14 +7,15 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use educe::Educe;
 use pest::iterators::Pair;
 
 use super::tuple::TupleLit;
 use super::{BuiltinCall, FnCall};
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::ConstType;
 use crate::parser::{Lexeme, Rule, span_of, type_ref_name};
+use flowlog_common::{FileId, Span};
 
 /// Arithmetic operator.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -98,12 +99,14 @@ pub(crate) enum Factor {
 /// `as(factor, target_type)`. `inner` is a single [`Factor`] (not a
 /// full [`Arithmetic`]) so the typechecker can lower `Cast(inner)` to
 /// `inner` after subtype validation — downstream never sees a cast.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct Cast {
     inner: Box<Factor>,
     /// User-written target type name; resolved by the typechecker.
     target_type: String,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl Cast {
@@ -112,7 +115,7 @@ impl Cast {
         Self {
             inner: Box::new(inner),
             target_type,
-            span: Ignored(span),
+            span,
         }
     }
 
@@ -136,7 +139,7 @@ impl Cast {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 }
 
@@ -242,11 +245,13 @@ impl Lexeme for Cast {
 }
 
 /// `factor (op, factor)*` expression (left-associative pretty print).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct Arithmetic {
     init: Factor,
     rest: Vec<(ArithmeticOperator, Factor)>,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl Arithmetic {
@@ -255,7 +260,7 @@ impl Arithmetic {
         Self {
             init,
             rest,
-            span: Ignored(Span::DUMMY),
+            span: Span::DUMMY,
         }
     }
 
@@ -270,7 +275,7 @@ impl Arithmetic {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// First term.
@@ -353,11 +358,7 @@ impl Lexeme for Arithmetic {
             rest.push((op, factor));
         }
 
-        Ok(Self {
-            init,
-            rest,
-            span: Ignored(span),
-        })
+        Ok(Self { init, rest, span })
     }
 }
 
@@ -396,7 +397,8 @@ mod tests {
 
         let mut pairs = FlowLogParser::parse(Rule::arithmetic_expr, "a * (b + c)").unwrap();
         let arith =
-            Arithmetic::from_parsed_rule(pairs.next().unwrap(), crate::common::FileId(0)).unwrap();
+            Arithmetic::from_parsed_rule(pairs.next().unwrap(), flowlog_common::FileId::new(0))
+                .unwrap();
 
         // init = `a`; rest = [(*, Group(b + c))].
         assert!(matches!(arith.init(), Factor::Var(v) if v == "a"));
@@ -426,7 +428,7 @@ mod tests {
 
         let parse = |src: &str| -> Factor {
             let mut pairs = FlowLogParser::parse(Rule::arithmetic_expr, src).unwrap();
-            Arithmetic::from_parsed_rule(pairs.next().unwrap(), crate::common::FileId(0))
+            Arithmetic::from_parsed_rule(pairs.next().unwrap(), flowlog_common::FileId::new(0))
                 .unwrap()
                 .init()
                 .clone()

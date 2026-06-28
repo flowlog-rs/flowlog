@@ -377,7 +377,8 @@ impl CodeGen {
             .iter()
             .map(|c| {
                 let l = self.build_row_args_arithmetic_expr(c.left(), row_fields, string_intern)?;
-                let r = self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern)?;
+                let r =
+                    self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern)?;
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern

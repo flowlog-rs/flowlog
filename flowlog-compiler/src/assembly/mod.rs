@@ -13,7 +13,7 @@ pub(crate) mod inc;
 use quote::quote;
 
 use flowlog_build::CodeParts;
-use flowlog_build::common::ExecutionMode;
+use flowlog_common::ExecutionMode;
 
 use crate::{Compiler, CompilerError};
 
@@ -49,6 +49,6 @@ impl Compiler {
             #main_fn
         };
 
-        Ok(flowlog_build::common::pretty_print(file_ts))
+        Ok(flowlog_common::pretty_print(file_ts))
     }
 }

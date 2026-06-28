@@ -5,12 +5,13 @@
 
 use std::fmt;
 
+use educe::Educe;
 use pest::iterators::Pair;
 
 use super::{Aggregation, Arithmetic};
-use crate::common::{FileId, Ignored, Span, compute_fp};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule, span_of};
+use flowlog_common::{FileId, Span, compute_fp};
 
 /// Argument in a rule head.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -82,12 +83,14 @@ impl Lexeme for HeadArg {
 }
 
 /// `rel(arg1, ..., argN)`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct Head {
     name: String,
     head_fingerprint: u64,
     head_arguments: Vec<HeadArg>,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl Head {
@@ -99,7 +102,7 @@ impl Head {
             name,
             head_fingerprint,
             head_arguments,
-            span: Ignored(Span::DUMMY),
+            span: Span::DUMMY,
         }
     }
 
@@ -114,7 +117,7 @@ impl Head {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// Relation name.
@@ -185,7 +188,7 @@ impl Lexeme for Head {
             name,
             head_fingerprint,
             head_arguments,
-            span: Ignored(span),
+            span,
         })
     }
 }

@@ -34,7 +34,6 @@ pub use rule::FlowLogRule;
 // Intra-crate only.
 pub(crate) use aggregation::Aggregation;
 pub(crate) use arithmetic::{Arithmetic, Factor};
-pub(crate) use tuple::{TupleElem, TupleLit};
 pub(crate) use atom::{Atom, AtomArg};
 pub(crate) use builtin::BuiltinCall;
 pub(crate) use comparison::ComparisonExpr;
@@ -43,3 +42,4 @@ pub(crate) use head::{Head, HeadArg};
 pub(crate) use loop_block::{IterativeDirective, LoopBlock, LoopCondition, LoopConnective};
 pub(crate) use predicate::Predicate;
 pub(crate) use rule::{apply_indices_to_rule, consume_plan_directive, parse_plan_indices};
+pub(crate) use tuple::{TupleElem, TupleLit};

@@ -23,8 +23,8 @@ use std::path::Path;
 
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Value, value};
 
-use flowlog_build::common::Config;
 use flowlog_build::{CodeParts, Features};
+use flowlog_common::Config;
 
 use crate::Compiler;
 
@@ -33,7 +33,7 @@ use crate::Compiler;
 // =========================================================================
 
 impl Compiler {
-    /// Materialize the scaffolded crate under [`Config::build_dir`].
+    /// Materialize the scaffolded crate under [`CompileOptions::build_dir`].
     ///
     /// Arguments are pre-rendered file contents; this function only decides
     /// _where_ they go and creates intermediate directories. Optional files
@@ -48,7 +48,7 @@ impl Compiler {
         cargo_config: &str,
     ) -> io::Result<()> {
         let config = &self.config;
-        let root = config.build_dir();
+        let root = self.options.build_dir();
         let src_dir = root.join("src");
         ensure_dir(&src_dir)?;
 
@@ -96,13 +96,13 @@ impl Compiler {
 /// Dependencies are feature-gated: we emit only what the generated code
 /// actually references so the downstream `cargo build` pulls the minimum
 /// set of crates.
-pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String {
+pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Features) -> String {
     let mut doc = DocumentMut::new();
 
     doc["package"] = Item::Table(toml_edit::Table::new());
     {
         let pkg = doc["package"].as_table_mut().unwrap();
-        pkg["name"] = config.crate_name().into();
+        pkg["name"] = crate_name.into();
         pkg["version"] = "0.1.0".into();
         pkg["edition"] = "2024".into();
     }

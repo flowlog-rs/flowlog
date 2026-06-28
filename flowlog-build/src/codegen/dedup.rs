@@ -58,8 +58,8 @@ fn threshold_nonzero() -> TokenStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::{Config, ExecutionMode};
     use crate::parser::Program;
+    use flowlog_common::{Config, ExecutionMode};
 
     fn codegen_with_mode(mode: ExecutionMode) -> CodeGen {
         let config = Config {

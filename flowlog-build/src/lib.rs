@@ -51,10 +51,6 @@ mod build;
 // the re-exports below, by `flowlog-compiler`'s binary mode.
 mod codegen;
 
-// Shared primitives — previously the `common` crate, folded in here.
-#[doc(hidden)]
-pub mod common;
-
 // Pipeline stages — previously independent crates, folded in here so
 // `flowlog-build` ships as a single publishable library.
 //
@@ -89,8 +85,8 @@ pub use codegen::{
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub use crate::common::ExecutionMode;
-use crate::common::{BoxError, SourceMap, emit};
+pub use flowlog_common::ExecutionMode;
+use flowlog_common::{BoxError, SourceMap, emit};
 
 /// Compile a single `.dl` program with default options.
 ///

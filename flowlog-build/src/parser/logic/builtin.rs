@@ -6,13 +6,14 @@
 
 use std::fmt;
 
+use educe::Educe;
 use pest::iterators::Pair;
 
 use super::Arithmetic;
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::DataType;
 use crate::parser::{Lexeme, Rule, span_of};
+use flowlog_common::{FileId, Span};
 
 /// Built-in operator kinds; one per reserved keyword in `grammar.pest`.
 ///
@@ -95,11 +96,13 @@ impl fmt::Display for BuiltinOperator {
 }
 
 /// A built-in function call site: operator + argument expressions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct BuiltinCall {
     op: BuiltinOperator,
     args: Vec<Arithmetic>,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl BuiltinCall {
@@ -123,7 +126,7 @@ impl BuiltinCall {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     #[must_use]
@@ -176,11 +179,7 @@ impl Lexeme for BuiltinCall {
             });
         }
 
-        Ok(Self {
-            op,
-            args,
-            span: Ignored(span),
-        })
+        Ok(Self { op, args, span })
     }
 }
 
@@ -213,13 +212,13 @@ fn op_from_node(node: &Pair<Rule>) -> Result<BuiltinOperator, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::FileId;
     use crate::parser::{FlowLogParser, Lexeme, Rule};
+    use flowlog_common::FileId;
     use pest::Parser;
 
     fn try_parse(input: &str) -> Result<BuiltinCall, ParseError> {
         let mut pairs = FlowLogParser::parse(Rule::builtin_fn_call, input).unwrap();
-        BuiltinCall::from_parsed_rule(pairs.next().unwrap(), FileId(0))
+        BuiltinCall::from_parsed_rule(pairs.next().unwrap(), FileId::new(0))
     }
 
     #[test]

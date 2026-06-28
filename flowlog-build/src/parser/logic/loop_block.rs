@@ -66,10 +66,10 @@
 //! ```
 
 use super::FlowLogRule;
-use crate::common::compute_fp;
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::{Lexeme, Rule, span_of};
+use educe::Educe;
+use flowlog_common::{FileId, Span, compute_fp};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -92,11 +92,13 @@ pub(crate) enum LoopConnective {
 pub(crate) type IterWindows = Vec<(u16, u16)>;
 
 /// A single nullary (boolean) relation referenced in an `until` clause.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct StopRelation {
     name: String,
     fp: u64,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl StopRelation {
@@ -116,7 +118,7 @@ impl StopRelation {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 }
 
@@ -124,11 +126,13 @@ impl StopRelation {
 ///
 /// Iterative relations use replacement (`Variable::new_from`) semantics
 /// instead of the default accumulative semantics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct IterativeDirective {
     name: String,
     fp: u64,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl IterativeDirective {
@@ -148,7 +152,7 @@ impl IterativeDirective {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 }
 
@@ -234,7 +238,8 @@ impl LoopCondition {
 ///
 /// The `iterative` list is scoped per-block: the same relation can be
 /// iterative in one block and accumulative in another.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub(crate) struct LoopBlock {
     /// Relations using replacement (iterative) semantics — `Variable::new_from`.
     /// Relations absent from this list default to accumulative (`Variable::new`) semantics.
@@ -242,7 +247,8 @@ pub(crate) struct LoopBlock {
     /// `None` means a pure fixpoint loop (DD terminates when delta is empty).
     condition: Option<LoopCondition>,
     rules: Vec<FlowLogRule>,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
 }
 
 impl LoopBlock {
@@ -250,7 +256,7 @@ impl LoopBlock {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// Relations explicitly marked as iterative (replacement semantics).
@@ -518,11 +524,7 @@ fn parse_bool_relation(pair: Pair<Rule>, file: FileId) -> Result<StopRelation, P
         .as_str()
         .to_ascii_lowercase();
     let fp = compute_fp(&name);
-    Ok(StopRelation {
-        name,
-        fp,
-        span: Ignored(span),
-    })
+    Ok(StopRelation { name, fp, span })
 }
 
 // =============================================================================
@@ -644,7 +646,7 @@ impl Lexeme for LoopBlock {
                     iterative_relations.push(IterativeDirective {
                         name,
                         fp,
-                        span: Ignored(directive_span),
+                        span: directive_span,
                     });
                 }
                 Rule::rule => {
@@ -675,7 +677,7 @@ impl Lexeme for LoopBlock {
             iterative_relations,
             condition,
             rules,
-            span: Ignored(span),
+            span,
         })
     }
 }
@@ -687,14 +689,14 @@ mod tests {
     use pest::Parser;
 
     fn parse_loop_block(input: &str) -> LoopBlock {
-        use crate::common::FileId;
+        use flowlog_common::FileId;
         // Try as loop_block first, then fixpoint_block
         if let Ok(mut pairs) = FlowLogParser::parse(Rule::loop_block, input) {
-            LoopBlock::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap()
+            LoopBlock::from_parsed_rule(pairs.next().unwrap(), FileId::new(0)).unwrap()
         } else {
             let mut pairs = FlowLogParser::parse(Rule::fixpoint_block, input)
                 .unwrap_or_else(|e| panic!("parse error: {e}"));
-            LoopBlock::from_parsed_rule(pairs.next().unwrap(), FileId(0)).unwrap()
+            LoopBlock::from_parsed_rule(pairs.next().unwrap(), FileId::new(0)).unwrap()
         }
     }
 

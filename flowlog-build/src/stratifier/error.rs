@@ -10,7 +10,7 @@
 use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
 use thiserror::Error;
 
-use crate::common::{Diagnostic, FileId, Span, primary_label};
+use flowlog_common::{Diagnostic, FileId, Span, primary_label};
 
 /// Build one primary label per rule, annotated with `rule {id}`.
 fn rule_labels(rules: &[(usize, Span)]) -> Vec<Label<FileId>> {

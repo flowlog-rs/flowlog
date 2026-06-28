@@ -5,10 +5,11 @@
 //! - Body: predicates that must all be satisfied
 
 use super::{Factor, Head, HeadArg, Predicate};
-use crate::common::{FileId, Ignored, Span};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::ConstType;
 use crate::parser::{Lexeme, Rule, span_of};
+use educe::Educe;
+use flowlog_common::{FileId, Span};
 use pest::iterators::Pair;
 use std::fmt;
 
@@ -19,11 +20,13 @@ use std::fmt;
 /// callers (flowlog-compiler, integration tests) consume. The rule's
 /// inherent methods stay `pub(crate)` — external code only passes rules
 /// by reference without inspecting fields.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub struct FlowLogRule {
     head: Head,
     rhs: Vec<Predicate>,
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
     /// Tombstone for the future cost-based optimizer: when true, the user
     /// supplied a `.plan` hint and the positive-atom order in `rhs` has
     /// already been permuted to match it — the optimizer must not reorder.
@@ -67,7 +70,7 @@ impl FlowLogRule {
         Self {
             head,
             rhs,
-            span: Ignored(Span::DUMMY),
+            span: Span::DUMMY,
             plan_pinned: false,
         }
     }
@@ -136,7 +139,7 @@ impl FlowLogRule {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// Rule head.
@@ -227,7 +230,7 @@ impl FlowLogRule {
                 out.push(Self {
                     head: head.clone(),
                     rhs: body.clone(),
-                    span: Ignored(rule_span),
+                    span: rule_span,
                     plan_pinned: false,
                 });
             }

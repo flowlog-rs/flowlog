@@ -7,8 +7,8 @@ use crate::catalog::{
     ArithmeticPos, AtomArgumentSignature, AtomSignature, CatalogError, ComparisonExprPos, Filters,
     FnCallPredicatePos,
 };
-use crate::common::{SECTION_BAR, SUBSECTION_BAR};
 use crate::parser::{ComparisonExpr, FlowLogRule, FnCall, HeadArg, Predicate};
+use flowlog_common::{SECTION_BAR, SUBSECTION_BAR};
 use tracing::debug;
 
 // Implementation modules
@@ -714,8 +714,8 @@ mod tests {
     //! (`ConstType::Int(_)`), matching how `tests/catalog_errors.rs`
     //! drives the catalog.
     use super::*;
-    use crate::common::SourceMap;
     use crate::parser::{ConstType, Program};
+    use flowlog_common::SourceMap;
     use std::io::Write;
 
     fn catalog_for(src: &str) -> Catalog {

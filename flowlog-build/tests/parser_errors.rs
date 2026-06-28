@@ -1,7 +1,7 @@
 mod errors;
 
-use flowlog_build::common::SourceMap;
 use flowlog_build::parser::{DirectiveKind, ParseError, Program};
+use flowlog_common::SourceMap;
 
 use errors::{fixture, render};
 
@@ -21,6 +21,20 @@ fn duplicate_decl() {
             "redeclared here",
             "first declared here",
             "edge",
+        ]
+    );
+}
+
+#[test]
+fn duplicate_extern_fn() {
+    assert_err!(
+        parse("duplicate_extern_fn.dl", true),
+        ParseError::DuplicateExternFn { .. },
+        [
+            "duplicate declaration of extern function",
+            "redeclared here",
+            "first declared here",
+            "hash",
         ]
     );
 }

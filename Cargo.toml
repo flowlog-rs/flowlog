@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "flowlog-runtime",
+    "flowlog-common",
     "flowlog-build",
     "flowlog-compiler",
     "flowlog-profiler",
@@ -20,6 +21,7 @@ anyhow = "1.0"
 clap = "4.5"
 codespan-reporting = "0.13"
 differential-dataflow = "0.24"
+educe = "0.6"
 itertools = "0.15"
 lasso = "0.7"
 ordered-float = "5.1"
@@ -44,4 +46,5 @@ tracing-test = "0.2"
 
 # Internal crates.
 flowlog-build = { path = "flowlog-build", version = "0.3.4" }
+flowlog-common = { path = "flowlog-common", version = "0.1.0" }
 flowlog-profiler = { path = "flowlog-profiler", version = "0.1.0" }

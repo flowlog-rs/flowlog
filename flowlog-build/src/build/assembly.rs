@@ -11,7 +11,7 @@ use std::path::Path;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::common::pretty_print;
+use flowlog_common::pretty_print;
 
 use crate::build::engine::{gen_lib_engine, gen_lib_incremental_engine};
 use crate::build::imports::gen_lib_imports;

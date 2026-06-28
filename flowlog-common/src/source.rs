@@ -1,35 +1,7 @@
 //! Source location primitives — spans, file identifiers, and the source map.
-//!
-//! A [`Span`] is a byte-offset range into a file tracked by a [`FileId`].
-//! The [`SourceMap`] owns the loaded source text for each file and
-//! resolves byte offsets to `(line, column)` via [`SourceMap::line_col`].
-//! `SourceMap` implements [`codespan_reporting::files::Files`] so it can
-//! be passed directly to the diagnostic renderer.
 
 use std::io;
 use std::path::{Path, PathBuf};
-
-/// Opts a field out of derived `PartialEq` / `Eq` / `Hash` while leaving
-/// every other trait behaviour intact.
-///
-/// Wrap a field that carries metadata — source locations, profiling
-/// counters, debug-only state — whose value should not affect whether two
-/// enclosing values are considered "the same logical value". `Ignored<T>`
-/// always compares equal to itself and hashes to nothing; `Debug`,
-/// `Clone`, `Copy`, `Default` continue to delegate to `T`.
-///
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct Ignored<T>(pub(crate) T);
-
-impl<T> PartialEq for Ignored<T> {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-impl<T> Eq for Ignored<T> {}
-impl<T> std::hash::Hash for Ignored<T> {
-    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
-}
 
 /// Identifier for a source file registered with a [`SourceMap`].
 ///
@@ -39,6 +11,13 @@ pub struct FileId(pub(crate) u32);
 
 impl FileId {
     pub const DUMMY: FileId = FileId(u32::MAX);
+
+    /// Construct a `FileId` from a raw index. Ids normally come from a
+    /// [`SourceMap`]; exposed only so other crates' tests can mint placeholders.
+    #[doc(hidden)]
+    pub const fn new(raw: u32) -> Self {
+        FileId(raw)
+    }
 }
 
 /// A byte range within one file. Resolve to `(line, column)` via
@@ -66,6 +45,16 @@ impl Span {
 
     pub fn is_dummy(&self) -> bool {
         self.file == FileId::DUMMY
+    }
+
+    /// Byte offset where this span begins.
+    pub fn start(&self) -> u32 {
+        self.start
+    }
+
+    /// Byte offset one past where this span ends.
+    pub fn end(&self) -> u32 {
+        self.end
     }
 
     /// Smallest span that covers both. Both must come from the same file.
@@ -265,32 +254,6 @@ mod tests {
     fn snippet_dummy_is_empty() {
         let sm = SourceMap::new();
         assert_eq!(sm.snippet(Span::DUMMY), "");
-    }
-
-    #[test]
-    #[allow(clippy::clone_on_copy)]
-    fn ignored_collapses_eq_and_hash_but_preserves_debug_clone() {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let a = Ignored(42i32);
-        let b = Ignored(99i32);
-        assert_eq!(a, b); // values differ, but Ignored says equal
-        assert_eq!(a, a);
-
-        let hash_of = |x: &Ignored<i32>| {
-            let mut h = DefaultHasher::new();
-            x.hash(&mut h);
-            h.finish()
-        };
-        assert_eq!(hash_of(&a), hash_of(&b)); // hashes nothing → same hash
-
-        // Debug / Clone / Copy still delegate
-        assert_eq!(format!("{a:?}"), "Ignored(42)");
-        let c = a;
-        let d = a.clone();
-        assert_eq!(c.0, 42);
-        assert_eq!(d.0, 42);
     }
 
     #[test]

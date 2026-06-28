@@ -13,8 +13,8 @@
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 
-use flowlog_build::parser::{DataType, Relation};
 use flowlog_build::gen_drain_block;
+use flowlog_build::parser::{DataType, Relation};
 
 use crate::{Compiler, CompilerError};
 
@@ -68,7 +68,7 @@ impl Compiler {
     /// file-emitting block needs the same lookup with a slightly
     /// different message.
     fn require_output_dir(&self, context: &'static str) -> Result<&str, CompilerError> {
-        self.config.output_dir().ok_or_else(|| {
+        self.options.output_dir().ok_or_else(|| {
             CompilerError::internal(format!("binary mode {context} but `output_dir` is unset"))
         })
     }

@@ -5,7 +5,7 @@ use std::fmt;
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use thiserror::Error;
 
-use crate::common::{
+use flowlog_common::{
     BUG_URL, Diagnostic, FileId, InternalError, Span, primary_label, secondary_label,
 };
 

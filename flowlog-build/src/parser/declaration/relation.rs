@@ -3,16 +3,18 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use educe::Educe;
 use pest::iterators::Pair;
 
 use super::Attribute;
-use crate::common::{FileId, Ignored, Span, compute_fp};
 use crate::parser::error::{ParseError, grammar_bug};
 use crate::parser::primitive::{DataType, TypeRegistry};
 use crate::parser::{Rule, span_of, type_ref_name};
+use flowlog_common::{FileId, Span, compute_fp};
 
 /// A relation schema with input/output annotations.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq)]
 pub struct Relation {
     /// Canonical (lowercased) relation name.
     name: String,
@@ -49,7 +51,8 @@ pub struct Relation {
     printsize: bool,
 
     /// Span of the `.decl` declaration.
-    span: Ignored<Span>,
+    #[educe(PartialEq(ignore))]
+    span: Span,
 }
 
 /// Decode the standard Datalog delimiter escape sequences (`\t`, `\n`, `\r`,
@@ -173,7 +176,7 @@ impl Relation {
             output_limit_value: None,
             output_order_by_spec: None,
             printsize: false,
-            span: Ignored(span),
+            span,
         })
     }
 
@@ -204,7 +207,7 @@ impl Relation {
             output_limit_value: None,
             output_order_by_spec: None,
             printsize: false,
-            span: Ignored(span),
+            span,
         }
     }
 
@@ -212,7 +215,7 @@ impl Relation {
     #[must_use]
     #[inline]
     pub(crate) fn span(&self) -> Span {
-        self.span.0
+        self.span
     }
 
     /// Canonical (lowercased) relation name — the relation's **internal**
@@ -271,7 +274,10 @@ impl Relation {
     #[must_use]
     #[inline]
     pub fn data_type(&self) -> Vec<DataType> {
-        self.attributes.iter().map(|a| a.data_type().clone()).collect()
+        self.attributes
+            .iter()
+            .map(|a| a.data_type().clone())
+            .collect()
     }
 
     /// Per-attribute declared `TypeId`s. Used by the typechecker;

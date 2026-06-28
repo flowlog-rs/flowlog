@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::common::Span;
 use crate::parser::error::ParseError;
+use flowlog_common::Span;
 
 // =============================================================================
 // DataType — the closed set of runtime primitives
@@ -391,7 +391,10 @@ impl TypeRegistry {
 
         // Non-recursive: erase each field to its primitive (a nested tuple field
         // erases to its own already-computed fixed tuple).
-        let erased: Vec<DataType> = field_ids.iter().map(|&fid| self.root_primitive(fid)).collect();
+        let erased: Vec<DataType> = field_ids
+            .iter()
+            .map(|&fid| self.root_primitive(fid))
+            .collect();
         self.types[id.0].root_primitive = DataType::FixedTuple(erased);
         self.tuples.insert(id, TupleDef { fields: field_ids });
         Ok(id)
@@ -675,7 +678,11 @@ mod tests {
     fn flat_tuple_erases_to_fixed_tuple() {
         let mut r = reg();
         let id = r
-            .register_tuple("Pair", &fields(&[("a", "symbol"), ("b", "symbol")]), Span::DUMMY)
+            .register_tuple(
+                "Pair",
+                &fields(&[("a", "symbol"), ("b", "symbol")]),
+                Span::DUMMY,
+            )
             .unwrap();
         assert_eq!(
             r.root_primitive(id),
@@ -689,7 +696,11 @@ mod tests {
     fn tuple_fields_may_be_heterogeneous() {
         let mut r = reg();
         let id = r
-            .register_tuple("Mix", &fields(&[("a", "symbol"), ("b", "number")]), Span::DUMMY)
+            .register_tuple(
+                "Mix",
+                &fields(&[("a", "symbol"), ("b", "number")]),
+                Span::DUMMY,
+            )
             .unwrap();
         assert_eq!(
             r.root_primitive(id),
@@ -700,10 +711,18 @@ mod tests {
     #[test]
     fn tuple_fields_may_nest_non_recursively() {
         let mut r = reg();
-        r.register_tuple("Pair", &fields(&[("a", "symbol"), ("b", "symbol")]), Span::DUMMY)
-            .unwrap();
+        r.register_tuple(
+            "Pair",
+            &fields(&[("a", "symbol"), ("b", "symbol")]),
+            Span::DUMMY,
+        )
+        .unwrap();
         let outer = r
-            .register_tuple("Outer", &fields(&[("p", "Pair"), ("n", "number")]), Span::DUMMY)
+            .register_tuple(
+                "Outer",
+                &fields(&[("p", "Pair"), ("n", "number")]),
+                Span::DUMMY,
+            )
             .unwrap();
         assert_eq!(
             r.root_primitive(outer),
@@ -720,8 +739,9 @@ mod tests {
         // A >12 tuple still fails later in the generated crate until the nested
         // representation lands — that's intentional for now.
         let mut r = reg();
-        let wide: Vec<(String, String)> =
-            (0..13).map(|i| (format!("f{i}"), "symbol".to_string())).collect();
+        let wide: Vec<(String, String)> = (0..13)
+            .map(|i| (format!("f{i}"), "symbol".to_string()))
+            .collect();
         assert!(r.register_tuple("Wide", &wide, Span::DUMMY).is_ok());
     }
 
@@ -752,8 +772,12 @@ mod tests {
     #[test]
     fn subtyping_a_tuple_is_rejected() {
         let mut r = reg();
-        r.register_tuple("Pair", &fields(&[("a", "symbol"), ("b", "symbol")]), Span::DUMMY)
-            .unwrap();
+        r.register_tuple(
+            "Pair",
+            &fields(&[("a", "symbol"), ("b", "symbol")]),
+            Span::DUMMY,
+        )
+        .unwrap();
         assert!(matches!(
             r.register_subtype("P2", "Pair", Span::DUMMY),
             Err(ParseError::SubtypeOfTuple { .. })

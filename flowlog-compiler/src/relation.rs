@@ -8,9 +8,9 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use flowlog_build::common::Span;
 use flowlog_build::parser::{ConstType, DataType, Program, Relation};
 use flowlog_build::{CodegenError, Features, const_to_token, data_type_tokens};
+use flowlog_common::Span;
 
 /// Emit the shared relation-handler module body for binary mode.
 pub(crate) fn gen_relation(

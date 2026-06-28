@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
 use thiserror::Error;
 
-use crate::common::{
+use flowlog_common::{
     BUG_URL, Diagnostic, FileId, InternalError, Span, primary_label, secondary_label,
 };
 
@@ -67,6 +67,14 @@ pub enum ParseError {
     /// Two `.decl` declarations share a name (or case-colliding raw names).
     #[error("duplicate declaration of relation `{name}`")]
     DuplicateDecl {
+        span: Span,
+        prior: Span,
+        name: String,
+    },
+
+    /// Two `.extern fn` declarations share a name.
+    #[error("duplicate declaration of extern function `{name}`")]
+    DuplicateExternFn {
         span: Span,
         prior: Span,
         name: String,
@@ -348,7 +356,8 @@ impl Diagnostic for ParseError {
         }
         let base = CsDiagnostic::error().with_message(self.to_string());
         match self {
-            ParseError::DuplicateDecl { span, prior, .. } => {
+            ParseError::DuplicateDecl { span, prior, .. }
+            | ParseError::DuplicateExternFn { span, prior, .. } => {
                 base.with_labels(dup_labels(*span, *prior, "redeclared here", "first declared here"))
             }
 
@@ -565,8 +574,8 @@ pub(crate) fn grammar_bug(detail: impl Into<String>) -> ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::SourceMap;
-    use crate::common::{BoxError, emit};
+    use flowlog_common::SourceMap;
+    use flowlog_common::{BoxError, emit};
 
     fn make_sm_with(text: &str) -> (SourceMap, FileId) {
         let mut sm = SourceMap::new();
@@ -593,6 +602,26 @@ mod tests {
             &sm,
         );
         assert!(out.contains("duplicate declaration"), "got: {out}");
+        assert!(out.contains("redeclared here"), "got: {out}");
+        assert!(out.contains("first declared here"), "got: {out}");
+    }
+
+    #[test]
+    fn duplicate_extern_fn_labels_both_sites() {
+        let (sm, f) =
+            make_sm_with(".extern fn foo(x: int64) -> int64\n.extern fn foo(y: int64) -> int64\n");
+        let out = render(
+            ParseError::DuplicateExternFn {
+                span: Span::new(f, 34, 67),
+                prior: Span::new(f, 0, 33),
+                name: "foo".into(),
+            },
+            &sm,
+        );
+        assert!(
+            out.contains("duplicate declaration of extern function"),
+            "got: {out}"
+        );
         assert!(out.contains("redeclared here"), "got: {out}");
         assert!(out.contains("first declared here"), "got: {out}");
     }

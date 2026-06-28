@@ -34,7 +34,7 @@ use crate::parser::{
     Arithmetic, ArithmeticOperator, AtomArg, ComparisonExpr, ComparisonOperator, ConstType, Factor,
     FlowLogRule, HeadArg, Predicate, TupleElem, TupleLit,
 };
-use crate::common::Span;
+use flowlog_common::Span;
 
 /// Rewrite every rule in `segments`, removing equality assignments by
 /// substitution. Rules that reduce to a fully-ground fact are appended to
@@ -102,9 +102,7 @@ fn desugar_rule(rule: &mut FlowLogRule) -> Result<bool, ParseError> {
                 assignment_idx.insert(i);
                 order.push((var, value));
                 progressed = true;
-            } else if let Some((rec_var, lit)) =
-                as_destructure(expr.left(), expr.right(), &bound)
-            {
+            } else if let Some((rec_var, lit)) = as_destructure(expr.left(), expr.right(), &bound) {
                 expand_destructure(
                     &rec_var,
                     &lit,
