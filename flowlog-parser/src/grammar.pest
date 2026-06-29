@@ -15,11 +15,16 @@ main_grammar = {
 // BASIC ELEMENTS (IDENTIFIERS, LITERALS, TYPES)
 // =============================================================================
 
-// Identifier pattern - must start with letter or underscore, 
+// Identifier pattern - must start with letter or underscore,
 // can contain letters, numbers, underscores
 // Valid examples: x, _temp, myVar123, _private_var
 // Invalid examples: 1x, x-yz (hyphen not allowed)
 identifier = @{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// A keyword's trailing edge: the next char must NOT continue an identifier,
+// so a reserved word matches the whole token and not a prefix (`as` vs
+// `assert`, `match` vs `matches`). Silent: produces no node.
+word_boundary = _{ !(ASCII_ALPHANUMERIC | "_") }
 
 // Variable reference - variables used in rules and queries
 variable = { identifier }
@@ -111,14 +116,18 @@ integer = @{ ("+" | "-")? ~ ASCII_DIGIT+ }
 
 // String enclosed in double quotes
 // Example: "hello world"
-string = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+// Atomic so escapes and inner whitespace are matched literally. A `\` starts
+// an escape (consuming the next char, so `\"` does not terminate the string);
+// any other non-quote, non-backslash char is taken verbatim. Decoding of the
+// escapes happens in the parser (`primitive::unquote`), not the grammar.
+string = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
 
 // Placeholder for unused variables (underscore)
 // Used when you don't need to reference a variable
 placeholder = { "_" } 
 
 // Boolean literal values
-boolean = { ("True" | "False") ~ !(ASCII_ALPHANUMERIC | "_") } 
+boolean = { ("True" | "False") ~ word_boundary }
 
 // =============================================================================
 // RELATION DECLARATIONS
@@ -135,7 +144,7 @@ declaration = {
 }
 
 // Lets a subcomponent's `.override` replace this relation's rules.
-overridable_kw = @{ "overridable" ~ !(ASCII_ALPHANUMERIC | "_") }
+overridable_kw = @{ "overridable" ~ word_boundary }
 
 // Input directive for EDB relations - separate from declaration.
 // Parens are optional; an empty/missing param list means defaults
@@ -242,7 +251,7 @@ group_expr  =  { factor ~ (arithmetic_op ~ factor)+ }
 // single `factor` (not `arithmetic_expr`) so the typechecker can lower
 // `as(...)` away after validation; for `as(x + 1, T)`, bind first.
 as_cast = { as_kw ~ "(" ~ factor ~ "," ~ type_ref ~ ")" }
-as_kw = _{ "as" ~ !(ASCII_ALPHANUMERIC | "_") }
+as_kw = _{ "as" ~ word_boundary }
 
 // Arithmetic operators. String concatenation lives in the `cat(a, b)`
 // built-in — there is no infix `cat` operator.
@@ -296,8 +305,8 @@ less_than = { "<" }
 string_constraint = { not_op? ~ string_constraint_op ~ "(" ~ arithmetic_expr ~ "," ~ arithmetic_expr ~ ")" }
 string_constraint_op = { match_op | contains_op }
 not_op       = { "!" }
-match_op     = @{ "match"    ~ !(ASCII_ALPHANUMERIC | "_") }
-contains_op  = @{ "contains" ~ !(ASCII_ALPHANUMERIC | "_") }
+match_op     = @{ "match"    ~ word_boundary }
+contains_op  = @{ "contains" ~ word_boundary }
 
 // =============================================================================
 // AGGREGATE EXPRESSIONS
@@ -525,8 +534,8 @@ loop_bool_relation = { relation_ref }
 
 // Boolean connective joining clauses or sub-conditions.
 loop_connective = { loop_and | loop_or }
-loop_and        = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
-loop_or         = @{ "or"  ~ !(ASCII_ALPHANUMERIC | "_") }
+loop_and        = @{ "and" ~ word_boundary }
+loop_or         = @{ "or"  ~ word_boundary }
 
 // =============================================================================
 // TYPE DECLARATIONS (.type)

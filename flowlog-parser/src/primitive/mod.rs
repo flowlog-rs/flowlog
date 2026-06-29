@@ -15,4 +15,5 @@ mod const_type;
 mod data_type;
 
 pub use const_type::ConstType;
+pub(crate) use const_type::unquote;
 pub use data_type::{DataType, TypeId, TypeRegistry};

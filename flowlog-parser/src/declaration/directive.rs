@@ -1,6 +1,7 @@
 //! Input/Output directive types for FlowLog Datalog programs.
 
 use crate::error::{ParseError, grammar_bug};
+use crate::primitive::unquote;
 use crate::{Lexeme, Rule, span_of};
 use educe::Educe;
 use flowlog_common::{FileId, Span};
@@ -94,12 +95,11 @@ pub(super) fn parse_io_params_node(
             .ok_or_else(|| grammar_bug("io parameter missing name"))?
             .as_str()
             .to_string();
-        let value = kv
-            .next()
-            .ok_or_else(|| grammar_bug("io parameter missing value"))?
-            .as_str()
-            .trim_matches('"')
-            .to_string();
+        let value = unquote(
+            kv.next()
+                .ok_or_else(|| grammar_bug("io parameter missing value"))?
+                .as_str(),
+        );
         parameters.insert(key, value);
     }
     Ok(parameters)

@@ -34,7 +34,7 @@ use super::{
     error::{DirectiveKind, ParseError, grammar_bug},
     inliner,
     logic::{FlowLogRule, Head, LoopBlock, Predicate, consume_plan_directive},
-    primitive::TypeRegistry,
+    primitive::{TypeRegistry, unquote},
     segment::Segment,
 };
 use flowlog_common::{FileId, SourceMap, Span};
@@ -497,9 +497,9 @@ fn resolve_includes(
             .into_inner()
             .next()
             .ok_or_else(|| grammar_bug("include directive missing path"))?;
-        let raw = path_node.as_str().trim_matches('"');
+        let raw = unquote(path_node.as_str());
 
-        let full_path = resolve_one_include(raw, base_dir, include_dirs);
+        let full_path = resolve_one_include(&raw, base_dir, include_dirs);
         let canonical = fs::canonicalize(&full_path).unwrap_or_else(|_| full_path.clone());
 
         if in_progress.contains(&canonical) {

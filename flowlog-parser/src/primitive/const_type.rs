@@ -186,7 +186,7 @@ impl Lexeme for ConstType {
                     .map_err(|e| grammar_bug(format!("failed to parse integer literal: {e}")))?;
                 Self::Int(v)
             }
-            Rule::string => Self::Text(inner.as_str().trim_matches('"').to_string()),
+            Rule::string => Self::Text(unquote(inner.as_str())),
             Rule::boolean => match inner.as_str() {
                 "True" => Self::Bool(true),
                 "False" => Self::Bool(false),
@@ -201,6 +201,68 @@ impl Lexeme for ConstType {
             }
         })
     }
+}
+
+// =============================================================================
+// String-literal escape decoding
+// =============================================================================
+// Shared by every site that reads a quoted `string` lexeme: rule/fact string
+// literals (here), `match`/`contains` patterns, `.include` paths, and I/O
+// directive params (filename, delimiter). One alphabet, one decoder, applied
+// uniformly so an escaped quote means the same thing everywhere.
+//
+// Recognized escapes: `\\`, `\"`, `\n`, `\t`, `\r`, `\0`. An **unknown** `\x`
+// passes through as the two literal bytes — so a regex pattern keeps its
+// metacharacters (`match("a\.b", x)` → `a\.b`); a literal backslash in a
+// pattern uses the standard double-backslash (`\\`). A trailing lone `\` is
+// preserved.
+//
+// Scope: this decodes **source syntax** only. Data read from fact files
+// (`.facts`/`.csv` cells) is taken as raw bytes and is *not* decoded — a source
+// literal `"a\nb"` is a 3-char value, while a data cell `a\nb` is the 4 raw
+// bytes. CSV output is likewise raw. This matches Soufflé (source is escaped;
+// data/CSV is raw), which the oracle byte-compare depends on.
+
+/// Strip the surrounding quotes from a `string` lexeme and decode its escapes.
+///
+/// `lexeme` is the full matched token including the opening/closing `"`. The
+/// `string` grammar rule guarantees both ends are single ASCII `"` bytes, so
+/// slicing `[1..len - 1]` is UTF-8-safe.
+pub(crate) fn unquote(lexeme: &str) -> String {
+    debug_assert!(
+        lexeme.len() >= 2 && lexeme.starts_with('"') && lexeme.ends_with('"'),
+        "string lexeme must be quote-delimited, got {lexeme:?}"
+    );
+    unescape(&lexeme[1..lexeme.len() - 1])
+}
+
+/// Decode the recognized escape sequences in an already-unquoted string body.
+fn unescape(s: &str) -> String {
+    // Decoded output is never longer than the input (escapes only shrink).
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('t') => out.push('\t'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('0') => out.push('\0'),
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            // Unknown escape: keep both chars (regex-friendly, Soufflé-compatible).
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            // Trailing lone backslash is preserved.
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -280,5 +342,71 @@ mod tests {
         let mut c = ConstType::Text("hi".into());
         c.pin(DataType::String);
         assert_eq!(c, ConstType::Text("hi".into()));
+    }
+
+    #[test]
+    fn unescape_recognized_escapes() {
+        assert_eq!(unescape("\\t"), "\t");
+        assert_eq!(unescape("\\n"), "\n");
+        assert_eq!(unescape("\\r"), "\r");
+        assert_eq!(unescape("\\\\"), "\\");
+        assert_eq!(unescape("\\0"), "\0");
+        assert_eq!(unescape("\\\""), "\"");
+    }
+
+    #[test]
+    fn unescape_unknown_passes_through() {
+        // Regex metacharacters must survive for `match`/`contains`.
+        assert_eq!(unescape("a\\.b"), "a\\.b");
+        assert_eq!(unescape("\\d+"), "\\d+");
+        assert_eq!(unescape("\\x"), "\\x");
+    }
+
+    #[test]
+    fn unescape_trailing_backslash_and_plain() {
+        assert_eq!(unescape("\\"), "\\");
+        assert_eq!(unescape("plain"), "plain");
+        assert_eq!(unescape(""), "");
+        // Literal commas/spaces are untouched (CSV layer's concern, not ours).
+        assert_eq!(unescape("a, b"), "a, b");
+    }
+
+    #[test]
+    fn unquote_strips_one_quote_each_end() {
+        assert_eq!(unquote("\"abc\""), "abc");
+        assert_eq!(unquote("\"\""), "");
+        // A value ending in a quote (`"x\""` → `x"`): the old `trim_matches('"')`
+        // over-trimmed this; one-quote-each-end + decode is correct.
+        assert_eq!(unquote("\"x\\\"\""), "x\"");
+    }
+
+    #[test]
+    fn unescape_unicode_after_unknown_escape_stays_valid() {
+        // `\é` is an unknown escape; the backslash and the multibyte char survive.
+        assert_eq!(unescape("\\é"), "\\é");
+    }
+
+    /// A string literal is decoded end-to-end (grammar → parse): escaped
+    /// quotes/backslashes/control chars resolve, and an unknown escape (regex
+    /// metacharacter) passes through unchanged.
+    #[test]
+    fn string_literal_decodes_escapes() {
+        use crate::FlowLogParser;
+        use pest::Parser;
+        let cases = [
+            (r#""a\"b""#, "a\"b"),            // escaped quote
+            (r#""a\\b""#, "a\\b"),            // escaped backslash → one backslash
+            (r#""tab\there""#, "tab\there"),  // \t → real tab
+            (r#""a\.b""#, "a\\.b"),           // unknown escape passes through (regex-friendly)
+            (r#""plain""#, "plain"),
+        ];
+        for (src, expected) in cases {
+            let pair = FlowLogParser::parse(Rule::constant, src)
+                .unwrap_or_else(|e| panic!("parse {src}: {e}"))
+                .next()
+                .unwrap();
+            let c = ConstType::from_parsed_rule(pair, FileId::new(0)).unwrap();
+            assert_eq!(c, ConstType::Text(expected.to_string()), "src={src}");
+        }
     }
 }
