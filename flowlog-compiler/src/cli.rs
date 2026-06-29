@@ -6,7 +6,8 @@
 //! [`Cli::to_config`].
 
 use clap::Parser;
-use flowlog_common::{Config, ExecutionMode};
+use flowlog_common::Config;
+use flowlog_common::ExecutionMode;
 
 use crate::CompileOptions;
 

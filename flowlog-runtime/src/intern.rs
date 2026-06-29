@@ -1,8 +1,12 @@
 //! Thread-safe string interning via `lasso::ThreadedRodeo`.
 
-use lasso::{Key, Spur, ThreadedRodeo};
+use std::sync::LazyLock;
+use std::sync::OnceLock;
+
+use lasso::Key;
+use lasso::Spur;
+use lasso::ThreadedRodeo;
 use rustc_hash::FxBuildHasher;
-use std::sync::{LazyLock, OnceLock};
 
 /// Global string interner shared across all FlowLog engines in the process.
 ///

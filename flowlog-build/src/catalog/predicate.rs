@@ -2,8 +2,10 @@
 
 use std::fmt;
 
-use crate::catalog::{AtomArgumentSignature, ComparisonExprPos};
 use flowlog_parser::ConstType;
+
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::ComparisonExprPos;
 
 /// Write `" and "` before every term except the first. Toggles `first` to
 /// `false` after running, so callers can reuse it across heterogeneous

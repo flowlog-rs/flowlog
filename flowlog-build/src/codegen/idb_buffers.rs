@@ -6,14 +6,18 @@
 //! Buffers store `(data, time, diff)` triples. Batch mode hardcodes
 //! `diff = 1` (DD uses `Present`, not `i32`). Sort operates on data only.
 
-use proc_macro2::{Ident, Span, TokenStream};
+use flowlog_parser::DataType;
+use flowlog_parser::Relation;
+use proc_macro2::Ident;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Index;
 
 use crate::codegen::CodeGen;
 use crate::codegen::ty::tuple_type;
-use flowlog_parser::{DataType, Relation};
-use flowlog_profiler::{Profiler, with_profiler};
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 
 // =========================================================================
 // Output struct

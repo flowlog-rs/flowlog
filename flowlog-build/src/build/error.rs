@@ -9,7 +9,8 @@
 use std::io;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use flowlog_common::{Diagnostic, FileId};
+use flowlog_common::Diagnostic;
+use flowlog_common::FileId;
 use thiserror::Error;
 
 /// Infrastructure failure raised by the library-mode build flow.

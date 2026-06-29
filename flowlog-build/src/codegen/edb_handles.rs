@@ -1,12 +1,14 @@
 //! Per-EDB `(handle, collection)` declarations for the dataflow scope.
 
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::format_ident;
+use quote::quote;
 
 use crate::codegen::CodeGen;
 use crate::codegen::ty::data::data_type_tokens;
-use flowlog_parser::DataType;
-use flowlog_profiler::{Profiler, with_profiler};
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 
 impl CodeGen {
     /// Generate per-EDB declarations as `(handle, collection)` pairs:

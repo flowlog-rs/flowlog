@@ -3,13 +3,14 @@
 //! Parses a single Datalog program, runs the pipeline, and writes out the resulting executable.
 
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
-
 use flowlog_build::planner::ProgramPlanner;
 use flowlog_build::profiler::Profiler;
-use flowlog_common::{SourceMap, emit_and_exit};
-use flowlog_compiler::{Cli, Compiler};
+use flowlog_common::SourceMap;
+use flowlog_common::emit_and_exit;
+use flowlog_compiler::Cli;
+use flowlog_compiler::Compiler;
 use flowlog_parser::Program;
+use tracing_subscriber::EnvFilter;
 
 fn main() {
     // Tracing: silent on success; errors surface via codespan diagnostics.
@@ -25,7 +26,7 @@ fn main() {
 
     // Parse the source into an AST.
     let mut sm = SourceMap::new();
-    let mut program = Program::parse_with_includes(
+    let mut program = Program::parse(
         config.program(),
         config.is_extended(),
         &config.include_dirs(),

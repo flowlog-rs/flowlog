@@ -4,13 +4,18 @@
 //! needed for rule processing, including argument signatures, variable mappings,
 //! and dependency relationships between atoms.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use flowlog_parser::AtomArg;
+use flowlog_parser::Predicate;
 
 use super::Catalog;
-use crate::catalog::{
-    AtomArgumentSignature, AtomSignature, CatalogError, Filters, UnsafePredicateKind,
-};
-use flowlog_parser::{AtomArg, Predicate};
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::CatalogError;
+use crate::catalog::Filters;
+use crate::catalog::UnsafePredicateKind;
 
 /// Internal API for populating all metadata fields given a parsed rule.
 impl Catalog {

@@ -7,13 +7,16 @@
 //! Unlike min/max, sum uses real `Multiply` (`value * rhs`) because sum is not
 //! idempotent.  The threshold emits whenever the accumulated sum changes.
 
-use flowlog_parser::{AggregationOperator, DataType};
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
 
-use super::common::{
-    ThresholdCmp, agg_semiring_new, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
-    result_from_key, row_pattern,
-};
+use super::common::ThresholdCmp;
+use super::common::agg_semiring_new;
+use super::common::aggregation_optimize_pipeline;
+use super::common::aggregation_pre_leave_pipeline;
+use super::common::result_from_key;
+use super::common::row_pattern;
 
 /// Generates the Sum-semiring optimized aggregation pipeline.
 pub(crate) fn aggregation_sum_optimize(

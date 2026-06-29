@@ -6,14 +6,21 @@
 //! - Projection and unused argument removal
 //! - Producer-consumer relationship management
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
+
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
-};
-use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::Catalog;
+use crate::catalog::JoinPredicates;
+use crate::catalog::KvPredicates;
+use crate::planner::KeyValueLayout;
+use crate::planner::PlanError;
+use crate::planner::TransformationInfo;
 
 // =========================================================================
 // Semijoin & Comparison Operations
@@ -912,15 +919,16 @@ impl RulePlanner {
 /// `tests/catalog_errors.rs`.
 #[cfg(test)]
 pub(super) fn test_setup(src: &str) -> (RulePlanner, Catalog) {
+    use std::io::Write;
+
     use flowlog_common::SourceMap;
     use flowlog_parser::Program;
-    use std::io::Write;
 
     let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
     tmp.write_all(src.as_bytes()).expect("write");
     let mut sm = SourceMap::new();
     let program =
-        Program::parse(&tmp.path().to_string_lossy(), false, &mut sm).expect("parse failed");
+        Program::parse(&tmp.path().to_string_lossy(), false, &[], &mut sm).expect("parse failed");
     let rule = program.rules()[0].clone();
     let catalog = Catalog::from_rule(&rule).expect("catalog build failed");
     let planner = RulePlanner::new(rule);

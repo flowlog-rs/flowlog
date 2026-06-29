@@ -3,7 +3,9 @@
 //! module, not a separate integration binary. Fixtures sit as sibling
 //! subdirs (`tests/errors/<stage>/*.dl`).
 
-use flowlog_common::{BoxError, SourceMap, emit};
+use flowlog_common::BoxError;
+use flowlog_common::SourceMap;
+use flowlog_common::emit;
 
 pub fn fixture(stage: &str, name: &str) -> String {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

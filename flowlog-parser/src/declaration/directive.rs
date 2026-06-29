@@ -1,12 +1,18 @@
 //! Input/Output directive types for FlowLog Datalog programs.
 
-use crate::error::{ParseError, grammar_bug};
-use crate::primitive::unquote;
-use crate::{Lexeme, Rule, span_of};
-use educe::Educe;
-use flowlog_common::{FileId, Span};
-use pest::iterators::Pair;
 use std::collections::HashMap;
+
+use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
+use pest::iterators::Pair;
+
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
+use crate::primitive::unquote;
+use crate::span_of;
 
 /// Represents an input directive (EDB source + parameters like file path)
 #[derive(Debug, Clone, Educe)]

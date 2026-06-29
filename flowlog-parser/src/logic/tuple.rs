@@ -10,14 +10,17 @@
 
 use std::fmt;
 
+use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
 use pest::iterators::Pair;
 
-use educe::Educe;
-
 use super::Arithmetic;
-use crate::error::{ParseError, grammar_bug};
-use crate::{Lexeme, Rule, span_of};
-use flowlog_common::{FileId, Span};
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
+use crate::span_of;
 
 /// A tuple literal `( e0, e1, … )` (value/pattern position). Each element is
 /// either an expression or a `_` placeholder (only meaningful when

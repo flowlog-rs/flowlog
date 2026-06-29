@@ -9,18 +9,25 @@
 //! Library mode has no file I/O — users load their own data. See the
 //! top-level crate docs for the typical `build.rs` + `include!()` pattern.
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_parser::Program;
+use flowlog_parser::Relation;
+use proc_macro2::Ident;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 
-use flowlog_parser::{Program, Relation};
-
-use super::{needs_conversion, per_position_tuple, user_to_tuple_convert};
+use super::needs_conversion;
+use super::per_position_tuple;
+use super::user_to_tuple_convert;
+use crate::CodeParts;
+use crate::build::relation::input_struct_ident;
+use crate::build::relation::inputs_field_ident;
+use crate::build::relation::printsize_field_ident;
+use crate::build::relation::results_field_ident;
 use crate::build::relation::user::tuple_to_user_expr;
-use crate::build::relation::{
-    input_struct_ident, inputs_field_ident, printsize_field_ident, results_field_ident,
-    user_struct_ident,
-};
-use crate::{CodeParts, data_type_tokens, gen_drain_block};
+use crate::build::relation::user_struct_ident;
+use crate::data_type_tokens;
+use crate::gen_drain_block;
 
 pub(crate) fn gen_lib_engine(
     program: &Program,

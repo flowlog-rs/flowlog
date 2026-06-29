@@ -8,10 +8,9 @@
 //! 4. Flush worker-local output buffers into the shared buffers.
 //! 5. Worker 0 drains the shared buffers (sort / limit / write).
 
+use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
 use quote::quote;
-
-use flowlog_build::CodeParts;
 
 use crate::io::input::Input;
 

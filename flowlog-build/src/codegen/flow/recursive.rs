@@ -5,22 +5,34 @@
 
 use std::collections::HashMap;
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
-
-use crate::planner::StratumPlanner;
-use flowlog_parser::{AggregationOperator, LoopCondition, LoopConnective};
-use flowlog_profiler::{Profiler, with_profiler};
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::LoopCondition;
+use flowlog_parser::LoopConnective;
+use proc_macro2::Ident;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
-use crate::codegen::aggregation::{
-    aggregation_avg_optimize, aggregation_avg_post_leave, aggregation_avg_pre_leave,
-    aggregation_count_optimize, aggregation_count_pre_leave, aggregation_max_optimize,
-    aggregation_max_pre_leave, aggregation_merge_kv, aggregation_min_optimize,
-    aggregation_min_pre_leave, aggregation_opt_post_leave, aggregation_reduce_stmt,
-    aggregation_row_chop, aggregation_sum_optimize, aggregation_sum_pre_leave,
-};
+use crate::codegen::aggregation::aggregation_avg_optimize;
+use crate::codegen::aggregation::aggregation_avg_post_leave;
+use crate::codegen::aggregation::aggregation_avg_pre_leave;
+use crate::codegen::aggregation::aggregation_count_optimize;
+use crate::codegen::aggregation::aggregation_count_pre_leave;
+use crate::codegen::aggregation::aggregation_max_optimize;
+use crate::codegen::aggregation::aggregation_max_pre_leave;
+use crate::codegen::aggregation::aggregation_merge_kv;
+use crate::codegen::aggregation::aggregation_min_optimize;
+use crate::codegen::aggregation::aggregation_min_pre_leave;
+use crate::codegen::aggregation::aggregation_opt_post_leave;
+use crate::codegen::aggregation::aggregation_reduce_stmt;
+use crate::codegen::aggregation::aggregation_row_chop;
+use crate::codegen::aggregation::aggregation_sum_optimize;
+use crate::codegen::aggregation::aggregation_sum_pre_leave;
+use crate::planner::StratumPlanner;
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 
 // =========================================================================
 // Recursive Flow Generation

@@ -12,13 +12,16 @@
 //! replaced with real ones once they are known. This allows building
 //! a transformation plan before all details are finalized.
 
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, JoinPredicates, KvPredicates,
-};
 use flowlog_common::compute_fp;
 use flowlog_parser::ConstType;
 
-use crate::planner::{Collection, PlanError};
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::ComparisonExprPos;
+use crate::catalog::JoinPredicates;
+use crate::catalog::KvPredicates;
+use crate::planner::Collection;
+use crate::planner::PlanError;
 
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]

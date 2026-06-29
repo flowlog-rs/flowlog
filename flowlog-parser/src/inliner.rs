@@ -16,16 +16,26 @@
 //! [`TypeRegistry`] under a prefixed name; the typechecker runs
 //! unmodified against the lowered program.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 
-use crate::declaration::{
-    Attribute, CompDecl, InitDecl, InputDirective, OutputDirective, PrintSizeDirective, RawItem,
-    RawRelation, RawTypeOp, Relation, SuperRef,
-};
-use crate::error::ParseError;
-use crate::logic::{FlowLogRule, Predicate};
-use crate::primitive::TypeRegistry;
 use flowlog_common::Span;
+
+use crate::declaration::Attribute;
+use crate::declaration::CompDecl;
+use crate::declaration::InitDecl;
+use crate::declaration::InputDirective;
+use crate::declaration::OutputDirective;
+use crate::declaration::PrintSizeDirective;
+use crate::declaration::RawItem;
+use crate::declaration::RawRelation;
+use crate::declaration::RawTypeOp;
+use crate::declaration::Relation;
+use crate::declaration::SuperRef;
+use crate::error::ParseError;
+use crate::logic::FlowLogRule;
+use crate::logic::Predicate;
+use crate::primitive::TypeRegistry;
 
 /// Output of inlining one `.init`.
 #[derive(Default)]
@@ -77,7 +87,7 @@ struct Scope<'a> {
     enclosing_decls: &'a HashMap<String, String>,
 }
 
-pub fn inline_one(
+pub(crate) fn inline_one(
     parent_prefix: &str,
     enclosing: &HashMap<String, String>,
     enclosing_decls: &HashMap<String, String>,

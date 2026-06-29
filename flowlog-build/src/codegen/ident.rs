@@ -86,8 +86,9 @@ pub(crate) fn find_local_ident(local_fp_to_ident: &HashMap<u64, Ident>, fp: u64)
 
 #[cfg(test)]
 mod binding_ident_tests {
-    use super::binding_ident;
     use quote::quote;
+
+    use super::binding_ident;
 
     /// Keyword-named relations get ordinary, valid bindings — the `rel_<N>`
     /// prefix means no name can produce a keyword ident.

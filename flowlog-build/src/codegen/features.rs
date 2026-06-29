@@ -6,7 +6,8 @@
 
 use std::collections::HashSet;
 
-use flowlog_parser::{AggregationOperator, DataType};
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::DataType;
 
 // =========================================================================
 // AggSemiringNeeds

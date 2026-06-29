@@ -1,16 +1,17 @@
 mod errors;
 
-use flowlog_build::catalog::{Catalog, CatalogError};
+use errors::fixture;
+use errors::render;
+use flowlog_build::catalog::Catalog;
+use flowlog_build::catalog::CatalogError;
 use flowlog_common::SourceMap;
 use flowlog_parser::Program;
-
-use errors::{fixture, render};
 
 /// Parse `name` and build a catalog for each rule. Returns the first
 /// catalog error encountered (or `Ok(())` if none).
 fn catalog_for(name: &str) -> (Result<(), CatalogError>, SourceMap) {
     let mut sm = SourceMap::new();
-    let program = Program::parse(&fixture("catalog", name), false, &mut sm)
+    let program = Program::parse(&fixture("catalog", name), false, &[], &mut sm)
         .expect("fixture should parse cleanly");
     let mut result = Ok(());
     for rule in program.rules() {

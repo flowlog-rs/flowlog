@@ -6,17 +6,25 @@
 
 use std::collections::HashMap;
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
+use proc_macro2::Ident;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 
-use crate::codegen::arg::{
-    build_kv_constraints_predicate, build_row_constraints_predicate, combine_predicates,
-    compute_join_param_tokens, compute_kv_param_tokens, row_pattern_and_fields,
-};
+use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
+use crate::codegen::arg::build_kv_constraints_predicate;
+use crate::codegen::arg::build_row_constraints_predicate;
+use crate::codegen::arg::combine_predicates;
+use crate::codegen::arg::compute_join_param_tokens;
+use crate::codegen::arg::compute_kv_param_tokens;
+use crate::codegen::arg::row_pattern_and_fields;
+use crate::codegen::data_type_tokens;
 use crate::codegen::ident::find_local_ident;
-use crate::codegen::{CodeGen, CodegenError, data_type_tokens};
-use crate::planner::{StratumPlanner, Transformation};
-use flowlog_profiler::{Profiler, with_profiler};
+use crate::planner::StratumPlanner;
+use crate::planner::Transformation;
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.

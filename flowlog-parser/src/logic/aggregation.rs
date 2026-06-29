@@ -3,13 +3,19 @@
 //! - [`AggregationOperator`]: `min | max | count | sum | average`
 //! - [`Aggregation`]: `op(expr)` (e.g., `sum(price * qty)`)
 
-use super::Arithmetic;
-use crate::error::{ParseError, grammar_bug};
-use crate::{Lexeme, Rule, span_of};
-use educe::Educe;
-use flowlog_common::{FileId, Span};
-use pest::iterators::Pair;
 use std::fmt;
+
+use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
+use pest::iterators::Pair;
+
+use super::Arithmetic;
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
+use crate::span_of;
 
 /// Supported aggregation operators.
 ///
@@ -182,10 +188,13 @@ impl Lexeme for Aggregation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{FlowLogParser, Lexeme, Rule};
     use flowlog_common::FileId;
     use pest::Parser;
+
+    use super::*;
+    use crate::FlowLogParser;
+    use crate::Lexeme;
+    use crate::Rule;
 
     #[test]
     fn parse_aggregate_expr() {

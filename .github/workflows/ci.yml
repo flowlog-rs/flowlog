@@ -42,6 +42,18 @@ jobs:
           bash tests/fixtures/run_compiler.sh -j 4
           bash tests/fixtures/run_lib.sh -j 4
 
+  fmt:
+    name: 🎨 rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Nightly: rustfmt.toml uses group_imports / imports_granularity,
+      # which are nightly-only options.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - run: cargo +nightly fmt --all --check
+
   deny:
     name: 🛡️ cargo-deny (licenses + advisories)
     runs-on: ubuntu-latest

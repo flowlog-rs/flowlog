@@ -8,17 +8,22 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+
+use flowlog_parser::ConstType;
 use tracing::trace;
 
 use super::KeyValueLayout;
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, JoinPredicates,
-    KvPredicates,
-};
-use crate::planner::{
-    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
-};
-use flowlog_parser::ConstType;
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::ComparisonExprPos;
+use crate::catalog::FactorPos;
+use crate::catalog::JoinPredicates;
+use crate::catalog::KvPredicates;
+use crate::planner::ArithmeticArgument;
+use crate::planner::ComparisonExprArgument;
+use crate::planner::Constraints;
+use crate::planner::FactorArgument;
+use crate::planner::TransformationArgument;
 
 /// Represents data transformation flows in query execution.
 ///

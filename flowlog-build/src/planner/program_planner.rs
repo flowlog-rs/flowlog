@@ -1,14 +1,17 @@
 //! Whole-program planner: owns the per-stratum plans after cross-stratum
 //! dedup of redundant non-recursive transformations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use flowlog_common::BoxError;
+use flowlog_common::Config;
+use flowlog_parser::Program;
 
 use crate::optimizer::Optimizer;
 use crate::planner::StratumPlanner;
 use flowlog_profiler::Profiler;
 use crate::stratifier::Stratifier;
-use flowlog_common::{BoxError, Config};
-use flowlog_parser::Program;
 
 /// Whole-program planning.
 #[derive(Debug)]
@@ -106,10 +109,11 @@ fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
 
     use flowlog_common::SourceMap;
+
+    use super::*;
 
     /// Round-trip a tiny program through parse → typecheck → program-plan,
     /// mirroring the temp-file pattern used by `stratifier::core::tests`.
@@ -118,7 +122,7 @@ mod tests {
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
         let mut program =
-            Program::parse(&tmp.path().to_string_lossy(), false, &mut sm).expect("parse");
+            Program::parse(&tmp.path().to_string_lossy(), false, &[], &mut sm).expect("parse");
         crate::typechecker::check_program(&mut program, &Config::default()).expect("typecheck");
         ProgramPlanner::from_program(&Config::default(), &program, &mut None).expect("plan")
     }

@@ -1,9 +1,12 @@
 //! Filter expression for FlowLog Datalog programs.
 
-use crate::catalog::AtomArgumentSignature;
-use flowlog_parser::ConstType;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
+
+use flowlog_parser::ConstType;
+
+use crate::catalog::AtomArgumentSignature;
 
 /// Base constraint filters.
 #[derive(Debug, Clone, PartialEq, Eq)]

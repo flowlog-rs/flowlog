@@ -1,6 +1,7 @@
 //! Compile options for the build stage.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 use flowlog_common::program_stem;
 

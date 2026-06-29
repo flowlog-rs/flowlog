@@ -8,17 +8,18 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use flowlog_common::compute_fp;
 use tracing::trace;
 
 use crate::catalog::JoinPredicates;
 use crate::planner::Collection;
-use flowlog_common::compute_fp;
 
 mod flow;
 mod info;
 
 pub(crate) use flow::TransformationFlow;
-pub(crate) use info::{KeyValueLayout, TransformationInfo};
+pub(crate) use info::KeyValueLayout;
+pub(crate) use info::TransformationInfo;
 
 /// Represents a data transformation operation in a query execution plan.
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]

@@ -7,16 +7,17 @@
 //!
 //! There is no `apply_file` — library mode is a pure typed API.
 
+use flowlog_common::Span;
+use flowlog_parser::ConstType;
+use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use flowlog_common::Span;
-use flowlog_parser::{ConstType, Relation};
-
-use crate::codegen::{CodegenError, const_to_token, tuple_tokens};
-use crate::data_type_tokens;
-
 use super::input_struct_ident;
+use crate::codegen::CodegenError;
+use crate::codegen::const_to_token;
+use crate::codegen::tuple_tokens;
+use crate::data_type_tokens;
 
 pub(super) fn gen_input_struct(
     rel: &Relation,

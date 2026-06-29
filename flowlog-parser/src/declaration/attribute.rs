@@ -8,8 +8,10 @@
 //!   only by the typechecker to enforce subtype identity; dead weight
 //!   downstream.
 
-use crate::primitive::{DataType, TypeId};
 use std::fmt;
+
+use crate::primitive::DataType;
+use crate::primitive::TypeId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Attribute {

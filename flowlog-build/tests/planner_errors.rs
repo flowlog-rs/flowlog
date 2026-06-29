@@ -1,17 +1,19 @@
 mod errors;
 
+use errors::fixture;
+use errors::render;
 use flowlog_build::optimizer::Optimizer;
-use flowlog_build::planner::{PlanError, StratumPlanner};
+use flowlog_build::planner::PlanError;
+use flowlog_build::planner::StratumPlanner;
 use flowlog_build::stratifier::Stratifier;
-use flowlog_common::{Config, SourceMap};
+use flowlog_common::Config;
+use flowlog_common::SourceMap;
 use flowlog_parser::Program;
-
-use errors::{fixture, render};
 
 fn plan_fixture(name: &str) -> (Result<(), PlanError>, SourceMap) {
     let mut sm = SourceMap::new();
     let path = fixture("planner", name);
-    let program = Program::parse(&path, false, &mut sm).expect("fixture should parse cleanly");
+    let program = Program::parse(&path, false, &[], &mut sm).expect("fixture should parse cleanly");
     let stratifier =
         Stratifier::from_program(&program, false).expect("fixture should stratify cleanly");
 

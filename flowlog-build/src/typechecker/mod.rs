@@ -46,16 +46,31 @@
 mod error;
 mod subtype;
 
-pub use error::TypeCheckError;
-
 use std::collections::HashMap;
 
-use flowlog_common::{Config, Span};
-use flowlog_parser::{
-    Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg, BuiltinCall,
-    BuiltinOperator, ComparisonExpr, ComparisonOperator, ConstType, DataType, Factor, FlowLogRule,
-    FnCall, HeadArg, Predicate, Program, TupleElem, TupleLit,
-};
+pub use error::TypeCheckError;
+use flowlog_common::Config;
+use flowlog_common::Span;
+use flowlog_parser::Aggregation;
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::Arithmetic;
+use flowlog_parser::ArithmeticOperator;
+use flowlog_parser::Atom;
+use flowlog_parser::AtomArg;
+use flowlog_parser::BuiltinCall;
+use flowlog_parser::BuiltinOperator;
+use flowlog_parser::ComparisonExpr;
+use flowlog_parser::ComparisonOperator;
+use flowlog_parser::ConstType;
+use flowlog_parser::DataType;
+use flowlog_parser::Factor;
+use flowlog_parser::FlowLogRule;
+use flowlog_parser::FnCall;
+use flowlog_parser::HeadArg;
+use flowlog_parser::Predicate;
+use flowlog_parser::Program;
+use flowlog_parser::TupleElem;
+use flowlog_parser::TupleLit;
 
 /// Type-check every rule and pin each polymorphic literal to its
 /// concrete width. Stops at the first failure; on `Ok(())` the program's
@@ -1021,16 +1036,18 @@ mod tests {
     //! fixtures in `tests/errors/typechecker/` cover the check side;
     //! pinning outcomes are not observable through those assertions.
 
-    use super::*;
-    use flowlog_common::SourceMap;
     use std::io::Write;
+
+    use flowlog_common::SourceMap;
+
+    use super::*;
 
     fn parse_and_check(src: &str) -> Program {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
-        let mut program =
-            Program::parse(&tmp.path().to_string_lossy(), true, &mut sm).expect("parse failed");
+        let mut program = Program::parse(&tmp.path().to_string_lossy(), true, &[], &mut sm)
+            .expect("parse failed");
         check_program(&mut program, &Config::default()).expect("check failed");
         program
     }
@@ -1218,7 +1235,7 @@ mod tests {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
-        let mut program = Program::parse(&tmp.path().to_string_lossy(), true, &mut sm)
+        let mut program = Program::parse(&tmp.path().to_string_lossy(), true, &[], &mut sm)
             .expect("parse should succeed; this test exercises typecheck only");
         check_program(&mut program, &Config::default())?;
         Ok(program)
@@ -1446,7 +1463,7 @@ mod tests {
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
         assert!(
-            Program::parse(&tmp.path().to_string_lossy(), true, &mut sm).is_err(),
+            Program::parse(&tmp.path().to_string_lossy(), true, &[], &mut sm).is_err(),
             "`.input` on a tuple-column relation must be rejected"
         );
     }

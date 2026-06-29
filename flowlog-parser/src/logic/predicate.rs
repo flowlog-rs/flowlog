@@ -8,13 +8,15 @@
 
 use std::fmt;
 
+use flowlog_common::FileId;
 use pest::iterators::Pair;
 
-use crate::error::{ParseError, grammar_bug};
-use crate::{Lexeme, Rule};
-use flowlog_common::FileId;
-
-use super::{Atom, ComparisonExpr};
+use super::Atom;
+use super::ComparisonExpr;
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
 
 /// A predicate in a rule body.
 #[derive(Clone, PartialEq, Eq, Hash)]

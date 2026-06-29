@@ -18,9 +18,15 @@
 //! 5. **Comparison** ([`Catalog::comparison_modify`]): Fold a comparison
 //!    predicate into the atoms it filters, producing renamed copies.
 
+use flowlog_parser::Atom;
+use flowlog_parser::AtomArg;
+use flowlog_parser::FlowLogRule;
+use flowlog_parser::Predicate;
+
 use super::Catalog;
-use crate::catalog::{AtomArgumentSignature, AtomSignature, CatalogError};
-use flowlog_parser::{Atom, AtomArg, FlowLogRule, Predicate};
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::CatalogError;
 
 /// Public API for modifying rules and updating catalog metadata accordingly.
 impl Catalog {

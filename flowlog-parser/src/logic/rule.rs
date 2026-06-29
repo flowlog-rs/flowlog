@@ -4,14 +4,23 @@
 //! - Head: a single derived relation
 //! - Body: predicates that must all be satisfied
 
-use super::{Factor, Head, HeadArg, Predicate};
-use crate::error::{ParseError, grammar_bug};
-use crate::primitive::ConstType;
-use crate::{Lexeme, Rule, span_of};
-use educe::Educe;
-use flowlog_common::{FileId, Span};
-use pest::iterators::Pair;
 use std::fmt;
+
+use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
+use pest::iterators::Pair;
+
+use super::Factor;
+use super::Head;
+use super::HeadArg;
+use super::Predicate;
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
+use crate::primitive::ConstType;
+use crate::span_of;
 
 /// A complete FlowLog rule.
 ///
@@ -368,7 +377,9 @@ fn expand_predicates(node: Pair<Rule>, file: FileId) -> Result<Vec<Vec<Predicate
 mod tests {
     use super::*;
     use crate::AggregationOperator;
-    use crate::logic::{Aggregation, Arithmetic, Factor};
+    use crate::logic::Aggregation;
+    use crate::logic::Arithmetic;
+    use crate::logic::Factor;
     use crate::primitive::ConstType;
 
     fn head_const(v: ConstType) -> HeadArg {

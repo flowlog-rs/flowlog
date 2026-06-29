@@ -1,13 +1,15 @@
 mod errors;
 
+use errors::fixture;
+use errors::render;
 use flowlog_common::SourceMap;
-use flowlog_parser::{DirectiveKind, ParseError, Program};
-
-use errors::{fixture, render};
+use flowlog_parser::DirectiveKind;
+use flowlog_parser::ParseError;
+use flowlog_parser::Program;
 
 fn parse(name: &str, extended: bool) -> (Result<Program, ParseError>, SourceMap) {
     let mut sm = SourceMap::new();
-    let res = Program::parse(&fixture("parser", name), extended, &mut sm);
+    let res = Program::parse(&fixture("parser", name), extended, &[], &mut sm);
     (res, sm)
 }
 

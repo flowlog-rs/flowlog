@@ -7,12 +7,16 @@ use std::collections::HashSet;
 use std::fmt;
 
 use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
 use pest::iterators::Pair;
 
 use super::Arithmetic;
-use crate::error::{ParseError, grammar_bug};
-use crate::{Lexeme, Rule, span_of};
-use flowlog_common::{FileId, Span};
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
+use crate::span_of;
 
 /// Comparison operator. The arithmetic comparisons (`==`, `<`, …) are
 /// symmetric value tests; `Match`/`Contains` are the string constraints

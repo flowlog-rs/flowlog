@@ -6,12 +6,17 @@
 use std::fmt;
 
 use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
+use flowlog_common::compute_fp;
 use pest::iterators::Pair;
 
-use crate::error::{ParseError, grammar_bug};
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
 use crate::primitive::ConstType;
-use crate::{Lexeme, Rule, span_of};
-use flowlog_common::{FileId, Span, compute_fp};
+use crate::span_of;
 
 /// An argument to an atom: variable, constant, or `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

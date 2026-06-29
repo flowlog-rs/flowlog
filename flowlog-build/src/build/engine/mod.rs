@@ -13,14 +13,14 @@ mod batch;
 mod incremental;
 
 pub(crate) use batch::gen_lib_engine;
+use flowlog_parser::DataType;
+use flowlog_parser::Relation;
 pub(crate) use incremental::gen_lib_incremental_engine;
-
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::build::relation::user::user_to_tuple_expr;
 use crate::codegen::tuple_tokens;
-use flowlog_parser::{DataType, Relation};
 
 pub(crate) fn needs_conversion(rel: &Relation, string_intern: bool) -> bool {
     // Leaf-aware: a tuple column needs conversion when any of its (possibly

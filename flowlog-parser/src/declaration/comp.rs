@@ -5,12 +5,20 @@
 
 use std::collections::HashMap;
 
+use flowlog_common::FileId;
+use flowlog_common::Span;
 use pest::iterators::Pair;
 
-use crate::error::{ParseError, grammar_bug};
-use crate::logic::{FlowLogRule, Head, apply_indices_to_rule, parse_plan_indices};
-use crate::{Lexeme, Rule, span_of, type_ref_name};
-use flowlog_common::{FileId, Span};
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
+use crate::logic::FlowLogRule;
+use crate::logic::Head;
+use crate::logic::apply_indices_to_rule;
+use crate::logic::parse_plan_indices;
+use crate::span_of;
+use crate::type_ref_name;
 
 /// `.type` operator: `=` (alias), `<:` (subtype), or a tuple declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]

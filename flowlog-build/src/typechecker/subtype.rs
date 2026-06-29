@@ -16,13 +16,23 @@
 use std::collections::HashMap;
 use std::mem;
 
-use super::{DisplayNames, TypeCheckError, display_name};
 use flowlog_common::Span;
-use flowlog_parser::{
-    Arithmetic, Atom, AtomArg, ComparisonExpr, Factor, FlowLogRule, HeadArg, Predicate, Program,
-    TupleElem,
-};
-use flowlog_parser::{TypeId, TypeRegistry};
+use flowlog_parser::Arithmetic;
+use flowlog_parser::Atom;
+use flowlog_parser::AtomArg;
+use flowlog_parser::ComparisonExpr;
+use flowlog_parser::Factor;
+use flowlog_parser::FlowLogRule;
+use flowlog_parser::HeadArg;
+use flowlog_parser::Predicate;
+use flowlog_parser::Program;
+use flowlog_parser::TupleElem;
+use flowlog_parser::TypeId;
+use flowlog_parser::TypeRegistry;
+
+use super::DisplayNames;
+use super::TypeCheckError;
+use super::display_name;
 
 type DeclIds = HashMap<String, Vec<TypeId>>;
 

@@ -1,7 +1,8 @@
 //! Hashing helper.
 
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
+use std::hash::Hasher;
 
 /// Computes a derived fingerprint by hashing all identifying inputs together.
 ///

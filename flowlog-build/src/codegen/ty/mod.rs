@@ -4,13 +4,12 @@
 //! - [`diff`] — diff type alias (`Present` vs `i32`) and `SEMIRING_ONE` constant.
 //! - [`time`] — outer timestamp and inner iteration type aliases.
 
+use data::data_type_tokens;
+use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use flowlog_parser::Relation;
-
 use crate::codegen::CodeGen;
-use data::data_type_tokens;
 
 pub(crate) mod data;
 pub(super) mod diff;

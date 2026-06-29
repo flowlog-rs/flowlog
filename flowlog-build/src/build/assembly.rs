@@ -8,16 +8,17 @@
 use std::io;
 use std::path::Path;
 
+use flowlog_common::pretty_print;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use flowlog_common::pretty_print;
-
-use crate::build::engine::{gen_lib_engine, gen_lib_incremental_engine};
+use crate::build::engine::gen_lib_engine;
+use crate::build::engine::gen_lib_incremental_engine;
 use crate::build::imports::gen_lib_imports;
 use crate::build::pipeline::Pipeline;
 use crate::build::relation::user::gen_public_rel_module;
-use crate::build::results::{gen_batch_results, gen_incremental_results};
+use crate::build::results::gen_batch_results;
+use crate::build::results::gen_incremental_results;
 use crate::codegen::Features;
 
 /// Render the library-mode source file for one compiled program.

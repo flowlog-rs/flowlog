@@ -1,7 +1,8 @@
 //! Source location primitives — spans, file identifiers, and the source map.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Identifier for a source file registered with a [`SourceMap`].
 ///

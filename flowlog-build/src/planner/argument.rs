@@ -1,7 +1,9 @@
 //! Argument types for query planning transformations in FlowLog Datalog program.
 
-use crate::planner::{ArithmeticArgument, FactorArgument};
 use std::fmt;
+
+use crate::planner::ArithmeticArgument;
+use crate::planner::FactorArgument;
 
 /// Represents different types of transformation arguments used in query planning.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]

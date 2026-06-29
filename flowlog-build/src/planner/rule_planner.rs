@@ -17,11 +17,18 @@
 //! The planner maintains a vector of transformation descriptors along with
 //! dependency analyses.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
-use crate::planner::{Transformation, TransformationInfo};
-use flowlog_parser::{Atom, FlowLogRule, Predicate};
+use flowlog_parser::Atom;
+use flowlog_parser::FlowLogRule;
+use flowlog_parser::Predicate;
+
+use crate::planner::Transformation;
+use crate::planner::TransformationInfo;
 
 mod common; // small utilities shared by planner phases
 mod core; // core join, plus fixed-point of semijoin/pushdown and projection removal

@@ -10,9 +10,9 @@
 use std::fmt;
 
 use educe::Educe;
+use flowlog_common::Span;
 
 use super::Arithmetic;
-use flowlog_common::Span;
 
 /// A user-defined function call in a value position.
 #[derive(Debug, Clone, Educe)]
@@ -80,10 +80,13 @@ impl fmt::Display for FnCall {
 
 #[cfg(test)]
 mod tests {
-    use crate::logic::Factor;
-    use crate::{FlowLogParser, Lexeme, Rule};
     use flowlog_common::FileId;
     use pest::Parser;
+
+    use crate::FlowLogParser;
+    use crate::Lexeme;
+    use crate::Rule;
+    use crate::logic::Factor;
 
     /// A non-built-in `call_expr` resolves to a `FnCall` through the real
     /// factor-parsing path (`parse_call_expr`).

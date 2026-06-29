@@ -10,13 +10,17 @@
 //!   `LIMIT` and is shared with library mode.
 //! - **`.printsize`**: read the shared size cell and report it to stderr.
 
-use proc_macro2::{Ident, Literal, Span, TokenStream};
+use flowlog_build::gen_drain_block;
+use flowlog_parser::DataType;
+use flowlog_parser::Relation;
+use proc_macro2::Ident;
+use proc_macro2::Literal;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
 use quote::quote;
 
-use flowlog_build::gen_drain_block;
-use flowlog_parser::{DataType, Relation};
-
-use crate::{Compiler, CompilerError};
+use crate::Compiler;
+use crate::CompilerError;
 
 /// Capacity of each per-IDB output `BufWriter`, sized to amortize write
 /// syscalls over many small rows. A few drains run concurrently in file mode,
@@ -41,11 +45,6 @@ impl Compiler {
     /// stays sequential since all blocks share one stream.
     pub(crate) fn gen_merge_section(&self) -> Result<TokenStream, CompilerError> {
         let mut blocks = Vec::new();
-        if !self.config.output_to_stdout() {
-            for file_name in self.program.empty_output_files() {
-                blocks.push(self.gen_empty_output_touch(file_name)?);
-            }
-        }
         for idb in self.program.output_idbs() {
             blocks.push(self.gen_output_drain(idb)?);
         }
@@ -71,21 +70,6 @@ impl Compiler {
         self.options.output_dir().ok_or_else(|| {
             CompilerError::internal(format!("binary mode {context} but `output_dir` is unset"))
         })
-    }
-
-    /// Touch `<outdir>/<file_name>` as an empty file. Used for
-    /// `.output` relations the dataflow pruner dropped (no rules and
-    /// no facts) — Soufflé writes the file anyway so downstream
-    /// readers iterating declared outputs don't choke on a missing
-    /// path. `file_name` already encodes any user-supplied `filename=`
-    /// override; see [`flowlog_build::Program::empty_output_files`].
-    fn gen_empty_output_touch(&self, file_name: &str) -> Result<TokenStream, CompilerError> {
-        let base_dir = self.require_output_dir("touching empty `.output` file")?;
-        Ok(quote! {{
-            let out_path = format!("{}/{}", #base_dir, #file_name);
-            std::fs::File::create(&out_path)
-                .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e));
-        }})
     }
 
     /// Drain one `.output` relation's shared buffer through its sink.

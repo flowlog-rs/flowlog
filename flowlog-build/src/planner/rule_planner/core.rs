@@ -8,11 +8,14 @@
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates,
-};
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::Catalog;
+use crate::catalog::JoinPredicates;
+use crate::planner::KeyValueLayout;
 use crate::planner::PlanError;
-use crate::planner::{KeyValueLayout, TransformationInfo};
+use crate::planner::TransformationInfo;
 
 // =========================================================================
 // Core Planning

@@ -1,12 +1,16 @@
 //! Constant value types for FlowLog Datalog programs.
 
-use super::DataType;
-use crate::error::{ParseError, grammar_bug};
-use crate::{Lexeme, Rule};
+use std::fmt;
+
 use flowlog_common::FileId;
 use ordered_float::OrderedFloat;
 use pest::iterators::Pair;
-use std::fmt;
+
+use super::DataType;
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
 
 /// A literal constant in a FlowLog Datalog program.
 ///
@@ -391,13 +395,14 @@ mod tests {
     /// metacharacter) passes through unchanged.
     #[test]
     fn string_literal_decodes_escapes() {
-        use crate::FlowLogParser;
         use pest::Parser;
+
+        use crate::FlowLogParser;
         let cases = [
-            (r#""a\"b""#, "a\"b"),            // escaped quote
-            (r#""a\\b""#, "a\\b"),            // escaped backslash → one backslash
-            (r#""tab\there""#, "tab\there"),  // \t → real tab
-            (r#""a\.b""#, "a\\.b"),           // unknown escape passes through (regex-friendly)
+            (r#""a\"b""#, "a\"b"),           // escaped quote
+            (r#""a\\b""#, "a\\b"),           // escaped backslash → one backslash
+            (r#""tab\there""#, "tab\there"), // \t → real tab
+            (r#""a\.b""#, "a\\.b"),          // unknown escape passes through (regex-friendly)
             (r#""plain""#, "plain"),
         ];
         for (src, expected) in cases {

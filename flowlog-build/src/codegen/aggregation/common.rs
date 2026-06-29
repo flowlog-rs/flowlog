@@ -5,12 +5,14 @@
 //! generic `reduce_core` / `reduce_abelian` pipeline (batch + incremental
 //! fallback).
 
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::format_ident;
+use quote::quote;
 
-use flowlog_parser::{AggregationOperator, DataType};
-
-use crate::codegen::{CodegenError, tuple_tokens};
+use crate::codegen::CodegenError;
+use crate::codegen::tuple_tokens;
 
 // ==================================================
 // Semiring constructor helpers

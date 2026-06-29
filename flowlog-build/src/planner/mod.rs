@@ -10,17 +10,18 @@ mod stratum_planner;
 mod transformation;
 
 // External API — used by flowlog-compiler and integration tests.
-pub use error::PlanError;
-pub use program_planner::ProgramPlanner;
-pub use stratum_planner::StratumPlanner;
-
 // Intra-crate shortcuts.
 pub(crate) use argument::TransformationArgument;
-pub(crate) use arithmetic::{ArithmeticArgument, FactorArgument};
+pub(crate) use arithmetic::ArithmeticArgument;
+pub(crate) use arithmetic::FactorArgument;
 pub(crate) use collection::Collection;
 pub(crate) use compare::ComparisonExprArgument;
 pub(crate) use constraint::Constraints;
+pub use error::PlanError;
+pub use program_planner::ProgramPlanner;
 pub(crate) use rule_planner::RulePlanner;
-pub(crate) use transformation::{
-    KeyValueLayout, Transformation, TransformationFlow, TransformationInfo,
-};
+pub use stratum_planner::StratumPlanner;
+pub(crate) use transformation::KeyValueLayout;
+pub(crate) use transformation::Transformation;
+pub(crate) use transformation::TransformationFlow;
+pub(crate) use transformation::TransformationInfo;

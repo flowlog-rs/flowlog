@@ -12,15 +12,22 @@
 //! Both are `pub(crate)`; external callers use [`Compiler::compile`] which
 //! runs them in sequence.
 
-use std::path::{Path, PathBuf};
-use std::{env, fs, io, process};
+use std::env;
+use std::fs;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process;
 
 use flowlog_build::planner::ProgramPlanner;
 use flowlog_profiler::Profiler;
 use quote::quote;
 use tracing::info;
 
-use crate::{Compiler, imports, relation, scaffold};
+use crate::Compiler;
+use crate::imports;
+use crate::relation;
+use crate::scaffold;
 
 impl Compiler {
     /// Produce the scaffolded Rust crate in [`CompileOptions::build_dir`].

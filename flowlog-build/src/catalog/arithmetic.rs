@@ -1,10 +1,15 @@
 //! Arithmetic expression signatures for FlowLog Datalog programs.
 
-use crate::catalog::AtomArgumentSignature;
-use flowlog_parser::{
-    Arithmetic, ArithmeticOperator, BuiltinOperator, ConstType, Factor, TupleElem,
-};
 use std::fmt;
+
+use flowlog_parser::Arithmetic;
+use flowlog_parser::ArithmeticOperator;
+use flowlog_parser::BuiltinOperator;
+use flowlog_parser::ConstType;
+use flowlog_parser::Factor;
+use flowlog_parser::TupleElem;
+
+use crate::catalog::AtomArgumentSignature;
 
 /// A factor in an arithmetic expression with variables resolved to their
 /// concrete positions within atoms.

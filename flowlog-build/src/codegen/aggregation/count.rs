@@ -5,17 +5,18 @@
 //! consolidation computes the count via addition.  The threshold emits whenever
 //! the accumulated count changes.
 
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::format_ident;
+use quote::quote;
 
-use flowlog_parser::{AggregationOperator, DataType};
-
+use super::common::ThresholdCmp;
+use super::common::agg_semiring_unit;
+use super::common::aggregation_optimize_pipeline;
+use super::common::aggregation_pre_leave_pipeline;
+use super::common::result_from_key;
 use crate::codegen::tuple_tokens;
-
-use super::common::{
-    ThresholdCmp, agg_semiring_unit, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
-    result_from_key,
-};
 
 /// Row destructuring pattern with `_` at the aggregated position (count ignores the value).
 fn count_row_pattern(arity: usize, agg_pos: usize) -> TokenStream {

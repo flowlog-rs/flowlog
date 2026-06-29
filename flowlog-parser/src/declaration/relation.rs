@@ -4,13 +4,19 @@ use std::collections::HashMap;
 use std::fmt;
 
 use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
+use flowlog_common::compute_fp;
 use pest::iterators::Pair;
 
 use super::Attribute;
-use crate::error::{ParseError, grammar_bug};
-use crate::primitive::{DataType, TypeRegistry};
-use crate::{Rule, span_of, type_ref_name};
-use flowlog_common::{FileId, Span, compute_fp};
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
+use crate::primitive::DataType;
+use crate::primitive::TypeRegistry;
+use crate::span_of;
+use crate::type_ref_name;
 
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, Educe)]
@@ -244,6 +250,15 @@ impl Relation {
             .iter()
             .map(|a| a.data_type().clone())
             .collect()
+    }
+
+    /// The relation's declared attributes (column name + type), in order.
+    /// Use this to inspect column *names*; [`Self::data_type`] gives just the
+    /// types.
+    #[must_use]
+    #[inline]
+    pub fn attributes(&self) -> &[Attribute] {
+        &self.attributes
     }
 
     /// Per-attribute declared `TypeId`s. Used by the typechecker;
@@ -528,7 +543,8 @@ impl fmt::Display for Relation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitive::DataType::{Int32, String};
+    use crate::primitive::DataType::Int32;
+    use crate::primitive::DataType::String;
     use crate::primitive::TypeRegistry;
 
     fn attrs() -> Vec<Attribute> {

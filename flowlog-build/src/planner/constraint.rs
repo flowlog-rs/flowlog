@@ -1,9 +1,11 @@
 //! Constraints representation for query planning in FlowLog Datalog programs.
 
-use crate::planner::TransformationArgument;
-use flowlog_parser::ConstType;
 use std::fmt;
 use std::sync::Arc;
+
+use flowlog_parser::ConstType;
+
+use crate::planner::TransformationArgument;
 
 /// Represents constraints in a query plan.
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]

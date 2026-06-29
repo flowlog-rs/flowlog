@@ -13,15 +13,23 @@
 //!
 //! Not following these rules might introduce subtle bugs.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
+
+use flowlog_parser::ConstType;
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, FactorPos, KvPredicates,
-};
-use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
-use flowlog_parser::ConstType;
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::ComparisonExprPos;
+use crate::catalog::FactorPos;
+use crate::catalog::KvPredicates;
+use crate::planner::KeyValueLayout;
+use crate::planner::PlanError;
+use crate::planner::TransformationInfo;
 
 /// Ordered consumer indices alongside their key/value index selections.
 /// (minimum consumer id, consumer ids, key indices, value indices)
@@ -572,7 +580,7 @@ impl RulePlanner {
                 (consumers[0], consumers, key_ids, value_ids)
             })
             .collect();
-        consumer_collection.sort_by_key(|(first_consumer, _, _, _)| *first_consumer);
+        consumer_collection.sort_by_key(|(first_consumer, ..)| *first_consumer);
         Ok(consumer_collection)
     }
 
@@ -624,7 +632,7 @@ impl RulePlanner {
         // Randomly assign also works, for simplify code we just push to the first one.
         if !available.is_empty() {
             match assignments.first_mut() {
-                Some((producer_ids, _, _, _)) => {
+                Some((producer_ids, ..)) => {
                     producer_ids.extend(available);
                     producer_ids.sort_unstable();
                 }

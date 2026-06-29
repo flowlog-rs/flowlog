@@ -13,34 +13,54 @@ mod primitive;
 mod program;
 mod segment;
 
-pub use error::{DirectiveKind, ParseError};
-
-// External API (reached by flowlog-compiler and integration tests).
-// ArithmeticOperator / ComparisonOperator leak through TypeCheckError's
-// pub variants; AggregationOperator leaks through Features::agg_semirings.
+// Public API: the parsed AST.
+pub use declaration::Attribute;
+pub use declaration::ExternFn;
 pub use declaration::Relation;
-pub use logic::{
-    AggregationOperator, ArithmeticOperator, BuiltinOperator, ComparisonOperator, FlowLogRule,
-};
-pub use primitive::{ConstType, DataType, TypeId, TypeRegistry};
-pub use program::Program;
-
-// Consumed by the downstream pipeline crates (catalog, planner, codegen, …)
-// as `flowlog_parser::X`.
-pub use logic::{
-    Aggregation, Arithmetic, Atom, AtomArg, BuiltinCall, ComparisonExpr, Factor, FnCall, HeadArg,
-    IterativeDirective, LoopCondition, LoopConnective, Predicate, TupleElem, TupleLit,
-};
-pub use segment::Segment;
-
-use flowlog_common::{FileId, Span};
+pub use error::DirectiveKind;
+pub use error::ParseError;
+use flowlog_common::FileId;
+use flowlog_common::Span;
+pub use logic::Aggregation;
+pub use logic::AggregationOperator;
+pub use logic::Arithmetic;
+pub use logic::ArithmeticOperator;
+pub use logic::Atom;
+pub use logic::AtomArg;
+pub use logic::BuiltinCall;
+pub use logic::BuiltinOperator;
+pub use logic::Cast;
+pub use logic::ComparisonExpr;
+pub use logic::ComparisonOperator;
+pub use logic::Factor;
+pub use logic::FlowLogRule;
+pub use logic::FnCall;
+pub use logic::Head;
+pub use logic::HeadArg;
+pub use logic::IterativeDirective;
+pub use logic::LoopBlock;
+pub use logic::LoopCondition;
+pub use logic::LoopConnective;
+pub use logic::Predicate;
+pub use logic::StopGroup;
+pub use logic::StopRelation;
+pub use logic::TupleElem;
+pub use logic::TupleLit;
 use pest::iterators::Pair;
 use pest_derive::Parser;
+pub use primitive::ConstType;
+pub use primitive::DataType;
+pub use primitive::TypeId;
+pub use primitive::TypeRegistry;
+pub use program::Program;
+pub use segment::Segment;
 
-/// FlowLog Parser is powered by Pest, a PEG parser framework.
+/// Pest parser over individual grammar rules; most consumers want
+/// [`Program::parse`]. The generated [`Rule`] enum mirrors `grammar.pest` and
+/// is not a stability surface.
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
-pub(crate) struct FlowLogParser;
+pub struct FlowLogParser;
 
 /// Trait for converting Pest parse trees into FlowLog types.
 ///

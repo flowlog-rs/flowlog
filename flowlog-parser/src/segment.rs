@@ -4,7 +4,8 @@
 //! The stratifier cannot move rules across a [`Segment::Loop`] or
 //! [`Segment::Fixpoint`] boundary.
 
-use crate::logic::{FlowLogRule, LoopBlock};
+use crate::logic::FlowLogRule;
+use crate::logic::LoopBlock;
 
 /// An ordered element of a FlowLog program.
 ///

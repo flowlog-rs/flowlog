@@ -5,14 +5,20 @@
 //! (and, where helpful, a secondary site such as the original binding).
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
+use flowlog_common::BUG_URL;
+use flowlog_common::Diagnostic;
+use flowlog_common::FileId;
+use flowlog_common::InternalError;
+use flowlog_common::Span;
+use flowlog_common::labels;
+use flowlog_common::primary_label;
+use flowlog_common::secondary_label;
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::ArithmeticOperator;
+use flowlog_parser::BuiltinOperator;
+use flowlog_parser::ComparisonOperator;
+use flowlog_parser::DataType;
 use thiserror::Error;
-
-use flowlog_common::{
-    BUG_URL, Diagnostic, FileId, InternalError, Span, labels, primary_label, secondary_label,
-};
-use flowlog_parser::{
-    AggregationOperator, ArithmeticOperator, BuiltinOperator, ComparisonOperator, DataType,
-};
 
 #[derive(Debug, Error)]
 pub enum TypeCheckError {

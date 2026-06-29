@@ -23,5 +23,5 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let mut sm = SourceMap::new();
-    let _ = Program::parse(path_str, true, &mut sm);
+    let _ = Program::parse(path_str, true, &[], &mut sm);
 });

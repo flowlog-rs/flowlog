@@ -5,13 +5,17 @@
 use std::fmt;
 
 use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
 use pest::iterators::Pair;
 
 use super::Attribute;
-use crate::error::{ParseError, grammar_bug};
-use crate::primitive::{DataType, TypeRegistry};
-use crate::{Rule, span_of};
-use flowlog_common::{FileId, Span};
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
+use crate::primitive::DataType;
+use crate::primitive::TypeRegistry;
+use crate::span_of;
 
 /// Common data for an external (user-defined) function declaration.
 #[derive(Debug, Clone, Educe)]
@@ -153,10 +157,11 @@ fn parse_param(param_node: Pair<Rule>, registry: &TypeRegistry) -> Result<Attrib
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::FlowLogParser;
     use flowlog_common::FileId;
     use pest::Parser;
+
+    use super::*;
+    use crate::FlowLogParser;
 
     #[test]
     fn parse_scalar_no_params() {

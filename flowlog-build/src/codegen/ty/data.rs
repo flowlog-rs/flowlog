@@ -6,15 +6,17 @@
 //! emits, and (c) emits the Rust tuple types for both the internal
 //! (DD-facing) and user-facing shapes.
 
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::planner::{
-    ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
-};
-use flowlog_parser::DataType;
-
-use crate::codegen::{CodeGen, CodegenError};
+use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
+use crate::planner::ArithmeticArgument;
+use crate::planner::FactorArgument;
+use crate::planner::StratumPlanner;
+use crate::planner::TransformationArgument;
+use crate::planner::TransformationFlow;
 
 /// `(key_types, value_types)` — a relation's shape in key++value form.
 pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
@@ -262,9 +264,12 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flowlog_common::Config;
-    use flowlog_parser::{ArithmeticOperator, ConstType, Program};
+    use flowlog_parser::ArithmeticOperator;
+    use flowlog_parser::ConstType;
+    use flowlog_parser::Program;
+
+    use super::*;
 
     fn make_codegen() -> CodeGen {
         CodeGen::new(Config::default(), Program::default())
@@ -310,8 +315,9 @@ mod tests {
     /// codegen (see `agg_count_string` e2e).
     #[test]
     fn record_transformation_output_type_preserves_declared_idb_shape() {
-        use crate::planner::Constraints;
         use std::sync::Arc;
+
+        use crate::planner::Constraints;
 
         let mut cg = make_codegen();
         // IDB's declared shape: e.g. `DeptHeadcount(d: int32, cnt: int32)`.

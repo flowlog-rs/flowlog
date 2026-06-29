@@ -12,12 +12,16 @@
 
 use std::path::PathBuf;
 
-use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
+use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
+use codespan_reporting::diagnostic::Label;
+use flowlog_common::BUG_URL;
+use flowlog_common::Diagnostic;
+use flowlog_common::FileId;
+use flowlog_common::InternalError;
+use flowlog_common::Span;
+use flowlog_common::primary_label;
+use flowlog_common::secondary_label;
 use thiserror::Error;
-
-use flowlog_common::{
-    BUG_URL, Diagnostic, FileId, InternalError, Span, primary_label, secondary_label,
-};
 
 /// Which `.decl`-style directive is being reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -565,9 +569,11 @@ pub fn grammar_bug(detail: impl Into<String>) -> ParseError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use flowlog_common::BoxError;
     use flowlog_common::SourceMap;
-    use flowlog_common::{BoxError, emit};
+    use flowlog_common::emit;
+
+    use super::*;
 
     fn make_sm_with(text: &str) -> (SourceMap, FileId) {
         let mut sm = SourceMap::new();

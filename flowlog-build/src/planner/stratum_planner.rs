@@ -1,16 +1,26 @@
 //! Stratum planner that plans a stratum (a group of rules).
 
-use std::collections::{HashMap, HashSet};
-use tracing::{debug, trace};
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use flowlog_common::Config;
+use flowlog_common::SECTION_BAR;
+use flowlog_common::SUBSECTION_BAR;
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::FlowLogRule;
+use flowlog_parser::HeadArg;
+use flowlog_parser::LoopCondition;
+use tracing::debug;
+use tracing::trace;
 
 use crate::catalog::Catalog;
 use crate::optimizer::Optimizer;
-use flowlog_parser::{AggregationOperator, FlowLogRule, HeadArg, LoopCondition};
-use flowlog_profiler::{Profiler, with_profiler};
+use crate::planner::PlanError;
+use crate::planner::RulePlanner;
+use crate::planner::Transformation;
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 use crate::stratifier::Stratifier;
-use flowlog_common::{Config, SECTION_BAR, SUBSECTION_BAR};
-
-use crate::planner::{PlanError, RulePlanner, Transformation};
 
 /// Planner for a single stratum (a group of parallel rules).
 ///

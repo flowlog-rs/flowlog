@@ -1,7 +1,9 @@
 //! Rule profiling data and plan tree rendering helpers.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+use serde::Deserialize;
+use serde::Serialize;
 
 type PlanTreeInfo = [((u64, Option<u64>), u64)];
 

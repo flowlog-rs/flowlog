@@ -11,8 +11,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::error::ParseError;
 use flowlog_common::Span;
+
+use crate::error::ParseError;
 
 // =============================================================================
 // DataType — the closed set of runtime primitives
@@ -532,8 +533,9 @@ impl fmt::Display for TypeRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::str::FromStr;
+
+    use super::*;
 
     // ── DataType ───────────────────────────────────────────────────────
 

@@ -1,14 +1,22 @@
 //! Catalog of per-rule metadata and signatures for FlowLog Datalog programs.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 
-use crate::catalog::{
-    AtomArgumentSignature, AtomSignature, CatalogError, ComparisonExprPos, Filters,
-};
-use flowlog_common::{SECTION_BAR, SUBSECTION_BAR};
-use flowlog_parser::{ComparisonExpr, FlowLogRule, HeadArg, Predicate};
+use flowlog_common::SECTION_BAR;
+use flowlog_common::SUBSECTION_BAR;
+use flowlog_parser::ComparisonExpr;
+use flowlog_parser::FlowLogRule;
+use flowlog_parser::HeadArg;
+use flowlog_parser::Predicate;
 use tracing::debug;
+
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::CatalogError;
+use crate::catalog::ComparisonExprPos;
+use crate::catalog::Filters;
 
 // Implementation modules
 mod modify;
@@ -632,17 +640,20 @@ mod tests {
     //! Tests skip the typechecker pass so literals stay polymorphic
     //! (`ConstType::Int(_)`), matching how `tests/catalog_errors.rs`
     //! drives the catalog.
-    use super::*;
-    use flowlog_common::SourceMap;
-    use flowlog_parser::{ConstType, Program};
     use std::io::Write;
+
+    use flowlog_common::SourceMap;
+    use flowlog_parser::ConstType;
+    use flowlog_parser::Program;
+
+    use super::*;
 
     fn catalog_for(src: &str) -> Catalog {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
-        let program =
-            Program::parse(&tmp.path().to_string_lossy(), false, &mut sm).expect("parse failed");
+        let program = Program::parse(&tmp.path().to_string_lossy(), false, &[], &mut sm)
+            .expect("parse failed");
         Catalog::from_rule(program.rules()[0]).expect("catalog build failed")
     }
 

@@ -21,10 +21,15 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Value, value};
-
-use flowlog_build::{CodeParts, Features};
+use flowlog_build::CodeParts;
+use flowlog_build::Features;
 use flowlog_common::Config;
+use toml_edit::Array;
+use toml_edit::DocumentMut;
+use toml_edit::InlineTable;
+use toml_edit::Item;
+use toml_edit::Value;
+use toml_edit::value;
 
 use crate::Compiler;
 

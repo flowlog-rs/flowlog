@@ -23,25 +23,31 @@ mod tuple;
 
 // Operator enums — re-exported from the crate root; they leak through
 // downstream public types (e.g. `TypeCheckError` variants, `Features`).
-pub use aggregation::AggregationOperator;
-pub use arithmetic::ArithmeticOperator;
-pub use builtin::BuiltinOperator;
-pub use comparison::ComparisonOperator;
-pub use rule::FlowLogRule;
-
 // Re-exported from the crate root for downstream pipeline crates.
 pub use aggregation::Aggregation;
-pub use arithmetic::{Arithmetic, Factor};
-pub use atom::{Atom, AtomArg};
+pub use aggregation::AggregationOperator;
+pub use arithmetic::Arithmetic;
+pub use arithmetic::ArithmeticOperator;
+pub use arithmetic::Cast;
+pub use arithmetic::Factor;
+pub use atom::Atom;
+pub use atom::AtomArg;
 pub use builtin::BuiltinCall;
+pub use builtin::BuiltinOperator;
 pub use comparison::ComparisonExpr;
+pub use comparison::ComparisonOperator;
 pub use fn_call::FnCall;
+pub use head::Head;
 pub use head::HeadArg;
-pub use loop_block::{IterativeDirective, LoopCondition, LoopConnective};
+pub use loop_block::IterativeDirective;
+pub use loop_block::LoopBlock;
+pub use loop_block::LoopCondition;
+pub use loop_block::LoopConnective;
+pub use loop_block::StopGroup;
+pub use loop_block::StopRelation;
 pub use predicate::Predicate;
-pub use tuple::{TupleElem, TupleLit};
-
+pub use rule::FlowLogRule;
 // Intra-crate only.
-pub(crate) use head::Head;
-pub(crate) use loop_block::LoopBlock;
 pub(crate) use rule::{apply_indices_to_rule, consume_plan_directive, parse_plan_indices};
+pub use tuple::TupleElem;
+pub use tuple::TupleLit;

@@ -70,8 +70,11 @@ pub mod stratifier;
 #[doc(hidden)]
 pub mod typechecker;
 
-pub use build::BuildError;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
 
+pub use build::BuildError;
 // Internal codegen re-exports — only consumed by `flowlog-compiler`.
 // Hidden from docs.rs for the same reason as the pipeline modules above.
 #[doc(hidden)]
@@ -79,12 +82,10 @@ pub use codegen::{
     AggSemiringNeeds, CodeGen, CodeParts, CodegenError, Features, const_to_token, data_type_tokens,
     field_accessor, gen_drain_block,
 };
-
-use std::io;
-use std::path::{Path, PathBuf};
-
+use flowlog_common::BoxError;
 pub use flowlog_common::ExecutionMode;
-use flowlog_common::{BoxError, SourceMap, emit};
+use flowlog_common::SourceMap;
+use flowlog_common::emit;
 
 /// Compile a single `.dl` program with default options.
 ///

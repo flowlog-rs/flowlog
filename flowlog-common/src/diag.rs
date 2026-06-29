@@ -7,9 +7,12 @@
 use std::error::Error as StdError;
 use std::io;
 
-use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
+use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
+use codespan_reporting::diagnostic::Label;
 
-use crate::source::{FileId, SourceMap, Span};
+use crate::source::FileId;
+use crate::source::SourceMap;
+use crate::source::Span;
 
 /// Canonical bug-report URL for [`InternalError`] — shared by every stage
 /// so all "please file a bug" notes point at the same tracker.
@@ -115,7 +118,8 @@ pub fn emit(err: &BoxError, sources: &SourceMap, writer: &mut dyn io::Write) -> 
 /// for internal errors, `1` otherwise. For CLI binaries; libraries should use
 /// [`emit`] and propagate instead.
 pub fn emit_and_exit(err: impl Into<BoxError>, sources: &SourceMap) -> ! {
-    use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+    use codespan_reporting::term::termcolor::ColorChoice;
+    use codespan_reporting::term::termcolor::StandardStream;
     let boxed: BoxError = err.into();
     let code = if boxed.is_internal() { 2 } else { 1 };
     let writer = StandardStream::stderr(ColorChoice::Auto);
@@ -128,8 +132,9 @@ pub fn emit_and_exit(err: impl Into<BoxError>, sources: &SourceMap) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use codespan_reporting::diagnostic::Label;
+
+    use super::*;
 
     #[derive(Debug)]
     struct DemoError {

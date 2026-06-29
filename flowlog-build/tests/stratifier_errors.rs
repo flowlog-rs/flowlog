@@ -1,15 +1,16 @@
 mod errors;
 
-use flowlog_build::stratifier::{Stratifier, StratifyError};
+use errors::fixture;
+use errors::render;
+use flowlog_build::stratifier::Stratifier;
+use flowlog_build::stratifier::StratifyError;
 use flowlog_common::SourceMap;
 use flowlog_parser::Program;
-
-use errors::{fixture, render};
 
 /// Parse + stratify a fixture. `extended` selects Datalog mode.
 fn stratify(name: &str, extended: bool) -> (Result<Stratifier, StratifyError>, SourceMap) {
     let mut sm = SourceMap::new();
-    let program = Program::parse(&fixture("stratifier", name), extended, &mut sm)
+    let program = Program::parse(&fixture("stratifier", name), extended, &[], &mut sm)
         .expect("fixture should parse cleanly");
     let res = Stratifier::from_program(&program, extended);
     (res, sm)

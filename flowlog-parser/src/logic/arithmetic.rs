@@ -8,14 +8,21 @@ use std::collections::HashSet;
 use std::fmt;
 
 use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
 use pest::iterators::Pair;
 
+use super::BuiltinCall;
+use super::BuiltinOperator;
+use super::FnCall;
 use super::tuple::TupleLit;
-use super::{BuiltinCall, BuiltinOperator, FnCall};
-use crate::error::{ParseError, grammar_bug};
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
 use crate::primitive::ConstType;
-use crate::{Lexeme, Rule, span_of, type_ref_name};
-use flowlog_common::{FileId, Span};
+use crate::span_of;
+use crate::type_ref_name;
 
 /// Arithmetic operator.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -388,9 +395,10 @@ impl Lexeme for Arithmetic {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ArithmeticOperator::Plus;
     use Factor::Var;
+
+    use super::*;
 
     /// `vars()` preserves order and duplicates; `vars_set()` dedups. The
     /// two accessors exist because downstream passes need both: variable
@@ -416,8 +424,10 @@ mod tests {
     /// because arithmetic folds left-to-right with no operator precedence.
     #[test]
     fn parse_paren_group() {
-        use crate::{FlowLogParser, Rule};
         use pest::Parser;
+
+        use crate::FlowLogParser;
+        use crate::Rule;
 
         let mut pairs = FlowLogParser::parse(Rule::arithmetic_expr, "a * (b + c)").unwrap();
         let arith =
@@ -447,8 +457,10 @@ mod tests {
     /// Nested parens around a multi-term expression collapse to one `Group`.
     #[test]
     fn parse_single_factor_group_collapses() {
-        use crate::{FlowLogParser, Rule};
         use pest::Parser;
+
+        use crate::FlowLogParser;
+        use crate::Rule;
 
         let parse = |src: &str| -> Factor {
             let mut pairs = FlowLogParser::parse(Rule::arithmetic_expr, src).unwrap();

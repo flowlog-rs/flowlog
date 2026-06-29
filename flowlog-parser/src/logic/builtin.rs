@@ -6,11 +6,11 @@
 use std::fmt;
 
 use educe::Educe;
+use flowlog_common::Span;
 
 use super::Arithmetic;
 use crate::error::ParseError;
 use crate::primitive::DataType;
-use flowlog_common::Span;
 
 /// Built-in operator kinds; one per reserved keyword in `grammar.pest`.
 ///
@@ -195,10 +195,13 @@ impl fmt::Display for BuiltinCall {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{FlowLogParser, Lexeme, Rule};
     use flowlog_common::FileId;
     use pest::Parser;
+
+    use super::*;
+    use crate::FlowLogParser;
+    use crate::Lexeme;
+    use crate::Rule;
 
     /// Parse a unified `call_expr` and resolve it as a built-in (the same
     /// path the factor parser takes). Panics if the name is not a built-in.

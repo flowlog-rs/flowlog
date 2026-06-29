@@ -4,10 +4,11 @@
 //! model. Building it here keeps the generator free of mode-specific
 //! assumptions.
 
-use proc_macro2::{Ident, Span, TokenStream};
-use quote::quote;
-
 use flowlog_build::CodeParts;
+use proc_macro2::Ident;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
+use quote::quote;
 
 use crate::Compiler;
 

@@ -26,20 +26,30 @@
 //! inline facts (reusing the existing fact path) rather than being handed to the
 //! planner, which requires at least one positive atom.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use flowlog_common::Span;
 
 use super::segment::Segment;
+use crate::Arithmetic;
+use crate::ArithmeticOperator;
+use crate::AtomArg;
+use crate::ComparisonExpr;
+use crate::ComparisonOperator;
+use crate::ConstType;
+use crate::Factor;
+use crate::FlowLogRule;
+use crate::HeadArg;
+use crate::Predicate;
+use crate::TupleElem;
+use crate::TupleLit;
 use crate::error::ParseError;
-use crate::{
-    Arithmetic, ArithmeticOperator, AtomArg, ComparisonExpr, ComparisonOperator, ConstType, Factor,
-    FlowLogRule, HeadArg, Predicate, TupleElem, TupleLit,
-};
-use flowlog_common::Span;
 
 /// Rewrite every rule in `segments`, removing equality assignments by
 /// substitution. Rules that reduce to a fully-ground fact are appended to
 /// `raw_facts` instead of being kept in their segment.
-pub fn desugar_equality_assignments(
+pub(crate) fn desugar_equality_assignments(
     segments: &mut [Segment],
     raw_facts: &mut Vec<FlowLogRule>,
 ) -> Result<(), ParseError> {

@@ -5,12 +5,18 @@
 //! Shard helpers and the byte-range reader are supplied by the binary's
 //! `imports::gen_binary_relation_extras` (inlined into the same module).
 
-use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
-
-use flowlog_build::{CodegenError, Features, const_to_token, data_type_tokens};
+use flowlog_build::CodegenError;
+use flowlog_build::Features;
+use flowlog_build::const_to_token;
+use flowlog_build::data_type_tokens;
 use flowlog_common::Span;
-use flowlog_parser::{ConstType, DataType, Program, Relation};
+use flowlog_parser::ConstType;
+use flowlog_parser::DataType;
+use flowlog_parser::Program;
+use flowlog_parser::Relation;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 
 /// Emit the shared relation-handler module body for binary mode.
 pub(crate) fn gen_relation(

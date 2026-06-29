@@ -5,20 +5,26 @@
 //! predicates, and key-value builders across every flow operator
 //! (row / KV / join-core).
 
-use proc_macro2::{Ident, Span, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_parser::ArithmeticOperator;
+use flowlog_parser::BuiltinOperator;
+use flowlog_parser::ComparisonOperator;
+use flowlog_parser::ConstType;
+use flowlog_parser::DataType;
+use proc_macro2::Ident;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 use syn::Index;
-
-use crate::planner::{
-    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
-};
-use flowlog_parser::{
-    ArithmeticOperator, BuiltinOperator, ComparisonOperator, ConstType, DataType,
-};
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
 use crate::codegen::tuple_tokens;
+use crate::planner::ArithmeticArgument;
+use crate::planner::ComparisonExprArgument;
+use crate::planner::Constraints;
+use crate::planner::FactorArgument;
+use crate::planner::TransformationArgument;
 
 // ==================================================
 // Row pattern + field identifiers for RowToX transformations

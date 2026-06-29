@@ -2,9 +2,13 @@
 
 use std::fmt;
 
-use crate::catalog::{ArithmeticPos, FactorPos};
+use flowlog_parser::ArithmeticOperator;
+use flowlog_parser::BuiltinOperator;
+use flowlog_parser::ConstType;
+
+use crate::catalog::ArithmeticPos;
+use crate::catalog::FactorPos;
 use crate::planner::TransformationArgument;
-use flowlog_parser::{ArithmeticOperator, BuiltinOperator, ConstType};
 
 /// Represents a basic factor in an arithmetic expression
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
