@@ -49,7 +49,7 @@ jobs:
           tool: cargo-fuzz
 
       - name: 💾 Persist fuzz corpus across runs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: fuzz/corpus
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
