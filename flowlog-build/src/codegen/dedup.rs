@@ -58,8 +58,8 @@ fn threshold_nonzero() -> TokenStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flowlog_parser::Program;
     use flowlog_common::{Config, ExecutionMode};
+    use flowlog_parser::Program;
 
     fn codegen_with_mode(mode: ExecutionMode) -> CodeGen {
         let config = Config {

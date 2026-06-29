@@ -10,8 +10,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use flowlog_parser::{ConstType, Relation};
 use flowlog_common::Span;
+use flowlog_parser::{ConstType, Relation};
 
 use crate::codegen::{CodegenError, const_to_token, tuple_tokens};
 use crate::data_type_tokens;

@@ -50,12 +50,12 @@ pub use error::TypeCheckError;
 
 use std::collections::HashMap;
 
+use flowlog_common::{Config, Span};
 use flowlog_parser::{
     Aggregation, AggregationOperator, Arithmetic, ArithmeticOperator, Atom, AtomArg, BuiltinCall,
     BuiltinOperator, ComparisonExpr, ComparisonOperator, ConstType, DataType, Factor, FlowLogRule,
     FnCall, HeadArg, Predicate, Program, TupleElem, TupleLit,
 };
-use flowlog_common::{Config, Span};
 
 /// Type-check every rule and pin each polymorphic literal to its
 /// concrete width. Stops at the first failure; on `Ok(())` the program's
@@ -158,7 +158,6 @@ fn check_builtin_config_requirements(
                         check_arith(cmp.left())?;
                         check_arith(cmp.right())?;
                     }
-                    Predicate::FnCall(fc) => fc.args().iter().try_for_each(check_arith)?,
                 }
             }
             for head_arg in rule.head().head_arguments() {
@@ -269,11 +268,6 @@ fn check_rule(
                 pin_atom_consts(atom, decls)?;
             }
             Predicate::Compare(cmp) => check_comparison(cmp, &bindings, udfs)?,
-            Predicate::FnCall(fc) => {
-                // UDF predicate return is always bool; drop the inferred type.
-                infer_fn_call_type(fc, &bindings, udfs)?;
-                pin_fn_call_args(fc, udfs)?;
-            }
         }
     }
 
@@ -410,6 +404,21 @@ fn check_comparison(
     let op = cmp.operator().clone();
     let span = cmp.span();
 
+    // String constraints (`match`/`contains`) take two string operands and
+    // produce a bool — they don't pin operand widths like value comparisons.
+    if op.is_string_constraint() {
+        for ty in [&left, &right].into_iter().flatten() {
+            if !matches!(ty, LitKind::Concrete(DataType::String)) {
+                return Err(TypeCheckError::ComparisonOpNotAllowed {
+                    span,
+                    op,
+                    ty: ty.report_ty(),
+                });
+            }
+        }
+        return Ok(());
+    }
+
     if let (Some(l), Some(r)) = (&left, &right)
         && merge_lit(l, r).is_none()
     {
@@ -443,8 +452,8 @@ fn check_comparison(
         (None, None) => None,
     };
     if let Some(t) = target {
-        pin_arith_literals(cmp.left_mut(), &t, udfs)?;
-        pin_arith_literals(cmp.right_mut(), &t, udfs)?;
+        pin_arith_literals(cmp.left_mut(), &t, bindings, udfs)?;
+        pin_arith_literals(cmp.right_mut(), &t, bindings, udfs)?;
     }
     Ok(())
 }
@@ -525,7 +534,7 @@ fn check_head(
                         kind,
                     ));
                 }
-                pin_arith_literals(a, &expected, udfs)?;
+                pin_arith_literals(a, &expected, bindings, udfs)?;
             }
         }
     }
@@ -586,7 +595,7 @@ fn check_tuple_construct(
                         ),
                     });
                 }
-                pin_arith_literals(a, fty, udfs)?;
+                pin_arith_literals(a, fty, bindings, udfs)?;
             }
         }
     }
@@ -634,7 +643,7 @@ fn check_aggregation(
             return Err(TypeCheckError::AggregationOutputType { span, op, declared });
         }
         if let Some(k) = arg_kind {
-            pin_arith_literals(agg.arithmetic_mut(), &k.report_ty(), udfs)?;
+            pin_arith_literals(agg.arithmetic_mut(), &k.report_ty(), bindings, udfs)?;
         }
         return Ok(());
     }
@@ -652,7 +661,7 @@ fn check_aggregation(
             return Err(TypeCheckError::AggregationOutputType { span, op, declared });
         }
     }
-    pin_arith_literals(agg.arithmetic_mut(), &declared, udfs)?;
+    pin_arith_literals(agg.arithmetic_mut(), &declared, bindings, udfs)?;
     Ok(())
 }
 
@@ -764,20 +773,28 @@ fn infer_builtin_call_type(
     let op = bc.op();
     debug_assert_eq!(
         bc.args().len(),
-        op.param_types().len(),
+        op.param_allowed_types().len(),
         "parser should enforce builtin arity"
     );
 
-    for (i, (arg, expected)) in bc.args().iter().zip(op.param_types().iter()).enumerate() {
+    // An arg is valid if its type is in the parameter's allowed set. A
+    // multi-element set is a polymorphic parameter (e.g. `to_string` over any
+    // numeric/bool scalar); a tuple operand fits no scalar set and is rejected.
+    for (i, (arg, allowed)) in bc
+        .args()
+        .iter()
+        .zip(op.param_allowed_types().iter())
+        .enumerate()
+    {
         let Some(kind) = infer_expr_type(arg, bindings, udfs)? else {
             continue;
         };
-        if !kind.fits(expected) {
+        if !allowed.iter().any(|t| kind.fits(t)) {
             return Err(TypeCheckError::BuiltinArgType {
                 span: arg.span(),
                 op,
                 arg_index: i,
-                expected: expected.clone(),
+                expected: allowed.to_vec(),
                 found: kind.report_ty(),
             });
         }
@@ -871,11 +888,12 @@ fn check_arith_op(
 fn pin_arith_literals(
     a: &mut Arithmetic,
     target: &DataType,
+    bindings: &Bindings,
     udfs: &UdfSigs,
 ) -> Result<(), TypeCheckError> {
-    pin_factor(a.init_mut(), target, udfs)?;
+    pin_factor(a.init_mut(), target, bindings, udfs)?;
     for (_, f) in a.rest_mut() {
-        pin_factor(f, target, udfs)?;
+        pin_factor(f, target, bindings, udfs)?;
     }
     Ok(())
 }
@@ -883,6 +901,7 @@ fn pin_arith_literals(
 fn pin_factor(
     factor: &mut Factor,
     target: &DataType,
+    bindings: &Bindings,
     udfs: &UdfSigs,
 ) -> Result<(), TypeCheckError> {
     match factor {
@@ -893,18 +912,18 @@ fn pin_factor(
             Ok(())
         }
         Factor::Var(_) => Ok(()),
-        Factor::FnCall(fc) => pin_fn_call_args(fc, udfs),
-        Factor::Builtin(bc) => pin_builtin_call_args(bc, udfs),
+        Factor::FnCall(fc) => pin_fn_call_args(fc, bindings, udfs),
+        Factor::Builtin(bc) => pin_builtin_call_args(bc, bindings, udfs),
         // Cast asserts its inner has the target's primitive — pin
         // polymorphic literals inside accordingly.
-        Factor::Cast(c) => pin_factor(c.inner_mut(), target, udfs),
-        Factor::Group(a) => pin_arith_literals(a, target, udfs),
+        Factor::Cast(c) => pin_factor(c.inner_mut(), target, bindings, udfs),
+        Factor::Group(a) => pin_arith_literals(a, target, bindings, udfs),
         // Tuple construct: pin each component against its declared field type.
         Factor::Tuple(r) => {
             if let DataType::FixedTuple(field_types) = target {
                 for (elem, fty) in r.fields_mut().iter_mut().zip(field_types.iter()) {
                     if let TupleElem::Expr(a) = elem {
-                        pin_arith_literals(a, fty, udfs)?;
+                        pin_arith_literals(a, fty, bindings, udfs)?;
                     }
                 }
             }
@@ -915,17 +934,29 @@ fn pin_factor(
     }
 }
 
-/// Pin polymorphic literals in a built-in call against the per-param
-/// types on [`BuiltinOperator`].
-fn pin_builtin_call_args(bc: &mut BuiltinCall, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
-    let op = bc.op();
-    for (arg, pty) in bc.args_mut().iter_mut().zip(op.param_types().iter()) {
-        pin_arith_literals(arg, pty, udfs)?;
+/// Pin polymorphic literals in a built-in call. Every arg is pinned to its own
+/// inferred type: validation already guaranteed the arg fits the parameter's
+/// allowed set, so the operand's own type is the right (and only consistent)
+/// pin target — for fixed-type params it equals the declared type, and for
+/// polymorphic params (`to_string`) it's whatever the operand actually is.
+fn pin_builtin_call_args(
+    bc: &mut BuiltinCall,
+    bindings: &Bindings,
+    udfs: &UdfSigs,
+) -> Result<(), TypeCheckError> {
+    for arg in bc.args_mut() {
+        if let Some(kind) = infer_expr_type(arg, bindings, udfs)? {
+            pin_arith_literals(arg, &kind.report_ty(), bindings, udfs)?;
+        }
     }
     Ok(())
 }
 
-fn pin_fn_call_args(fc: &mut FnCall, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
+fn pin_fn_call_args(
+    fc: &mut FnCall,
+    bindings: &Bindings,
+    udfs: &UdfSigs,
+) -> Result<(), TypeCheckError> {
     // Collected by value so the recursive `pin_arith_literals` below can
     // reborrow `udfs` — holding `&param_types` from `udfs.get(...)` across
     // the recursion would block the reborrow.
@@ -939,7 +970,7 @@ fn pin_fn_call_args(fc: &mut FnCall, udfs: &UdfSigs) -> Result<(), TypeCheckErro
             ))
         })?;
     for (arg, pty) in fc.args_mut().iter_mut().zip(param_types.iter()) {
-        pin_arith_literals(arg, pty, udfs)?;
+        pin_arith_literals(arg, pty, bindings, udfs)?;
     }
     Ok(())
 }

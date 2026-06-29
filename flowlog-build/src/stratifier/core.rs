@@ -3,13 +3,13 @@
 //! See the crate-level documentation for an overview of strata, recursion, and
 //! the Extended Datalog mode.
 
+use crate::stratifier::dependency_graph::DependencyGraph;
+use crate::stratifier::error::StratifyError;
+use flowlog_common::Span;
 use flowlog_parser::{
     AggregationOperator, FlowLogRule, HeadArg, IterativeDirective, LoopCondition, Predicate,
     Program, Segment,
 };
-use crate::stratifier::dependency_graph::DependencyGraph;
-use crate::stratifier::error::StratifyError;
-use flowlog_common::Span;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::fmt;

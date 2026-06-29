@@ -371,11 +371,6 @@ fn subst_predicate(pred: &mut Predicate, var: &str, value: &Arithmetic) -> Resul
             subst_arith(expr.left_mut(), var, value);
             subst_arith(expr.right_mut(), var, value);
         }
-        Predicate::FnCall(fc) => {
-            for arg in fc.args_mut() {
-                subst_arith(arg, var, value);
-            }
-        }
     }
     Ok(())
 }

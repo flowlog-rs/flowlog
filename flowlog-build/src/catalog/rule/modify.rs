@@ -17,8 +17,6 @@
 //!    of right atoms with new joined atoms.
 //! 5. **Comparison** ([`Catalog::comparison_modify`]): Fold a comparison
 //!    predicate into the atoms it filters, producing renamed copies.
-//! 6. **FnCall** ([`Catalog::fn_call_modify`]): Same as comparison, but
-//!    folding a function-call predicate.
 
 use super::Catalog;
 use crate::catalog::{AtomArgumentSignature, AtomSignature, CatalogError};
@@ -258,60 +256,6 @@ impl Catalog {
 
         // Remove comparison predicate, then update rule with new filtered atoms
         self.remove_and_update_rule(comparison_rhs_index, right_indices, new_filtered_atoms)
-    }
-
-    /// Applies a fn_call predicate to atoms, creating filtered versions of the atoms.
-    pub(crate) fn fn_call_modify(
-        &mut self,
-        fn_call_index: usize,
-        right_atom_signatures: Vec<AtomSignature>,
-        new_names: Vec<String>,
-        new_fingerprints: Vec<u64>,
-    ) -> Result<(), CatalogError> {
-        // Ensure all parameter vectors have matching lengths
-        let num_atoms = right_atom_signatures.len();
-        if new_names.len() != num_atoms || new_fingerprints.len() != num_atoms {
-            return Err(CatalogError::internal(format!(
-                "fn_call_modify: parameter length mismatch — right_atom_signatures={}, \
-                 new_names={}, new_fingerprints={}",
-                num_atoms,
-                new_names.len(),
-                new_fingerprints.len()
-            )));
-        }
-
-        // Get the fn_call predicate and find its position in the rule RHS
-        let fn_call_predicate = &self.fn_call_predicates[fn_call_index];
-        let fn_call_rhs_index = self
-            .rule
-            .rhs()
-            .iter()
-            .enumerate()
-            .find_map(|(idx, p)| match p {
-                Predicate::FnCall(fc) if fc == fn_call_predicate => Some(idx),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                CatalogError::internal(format!(
-                    "fn_call_modify: fn_call predicate at index {fn_call_index} \
-                     not found in rule RHS"
-                ))
-            })?;
-
-        // Find and validate all target atoms
-        let right_indices =
-            self.validate_atom_rhs_indices(&right_atom_signatures, "fn_call_modify")?;
-
-        // Create filtered atoms by copying original atom arguments
-        let new_filtered_atoms = self.build_renamed_atom_copies(
-            &right_indices,
-            &new_names,
-            &new_fingerprints,
-            "fn_call_modify",
-        )?;
-
-        // Remove fn_call predicate, then update rule with new filtered atoms
-        self.remove_and_update_rule(fn_call_rhs_index, right_indices, new_filtered_atoms)
     }
 
     // ========================================================================================

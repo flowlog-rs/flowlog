@@ -10,12 +10,11 @@ use flowlog_common::{
 };
 
 /// Which body predicate carried an unsafe variable. Only affects the
-/// rendered wording; all three kinds share the same range-restriction rule.
+/// rendered wording; both kinds share the same range-restriction rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnsafePredicateKind {
     Negation,
     Comparison,
-    FnCall,
 }
 
 impl fmt::Display for UnsafePredicateKind {
@@ -23,7 +22,6 @@ impl fmt::Display for UnsafePredicateKind {
         match self {
             Self::Negation => write!(f, "negated atom"),
             Self::Comparison => write!(f, "comparison"),
-            Self::FnCall => write!(f, "function call"),
         }
     }
 }

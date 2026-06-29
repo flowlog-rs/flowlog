@@ -5,11 +5,11 @@
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use flowlog_parser::Program;
 use flowlog_build::planner::ProgramPlanner;
 use flowlog_build::profiler::Profiler;
 use flowlog_common::{SourceMap, emit_and_exit};
 use flowlog_compiler::{Cli, Compiler};
+use flowlog_parser::Program;
 
 fn main() {
     // Tracing: silent on success; errors surface via codespan diagnostics.

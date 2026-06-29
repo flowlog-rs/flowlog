@@ -216,7 +216,7 @@ arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 // One operand of an expression. Ordered choice: `tuple_lit` precedes
 // `paren_expr` because both open with `(`; the comma in a tuple literal is the
 // tiebreaker.
-factor = { as_cast | builtin_fn_call | fn_call_expr | tuple_lit | paren_expr | constant | variable }
+factor = { as_cast | call_expr | tuple_lit | paren_expr | constant | variable }
 
 // A fixed-tuple literal. Constructs a tuple, or destructures one when matched
 // against a bound variable; a `_` element ignores that component on destructure:
@@ -262,32 +262,7 @@ divide = { "/" }
 modulo = { "%" }
 
 // =============================================================================
-// BUILT-IN FUNCTIONS
-// =============================================================================
-// Reserved keyword call sites lowered inline by the codegen — they are
-// NOT user functions and share no infrastructure with `.extern fn`
-
-builtin_fn_call = {
-    builtin_op ~ "(" ~ (arithmetic_expr ~ ("," ~ arithmetic_expr)*)? ~ ")"
-}
-
-// `cat_op` is the Soufflé function form `cat(a, b)`. There is no
-// infix `cat`; chains nest as `cat(a, cat(b, c))`.
-builtin_op = {
-    strlen_op | substr_op | ord_op | contains_op | match_op | to_string_op | to_number_op | cat_op
-}
-
-strlen_op    = @{ "strlen"    ~ !(ASCII_ALPHANUMERIC | "_") }
-substr_op    = @{ "substr"    ~ !(ASCII_ALPHANUMERIC | "_") }
-ord_op       = @{ "ord"       ~ !(ASCII_ALPHANUMERIC | "_") }
-contains_op  = @{ "contains"  ~ !(ASCII_ALPHANUMERIC | "_") }
-match_op     = @{ "match"     ~ !(ASCII_ALPHANUMERIC | "_") }
-to_string_op = @{ "to_string" ~ !(ASCII_ALPHANUMERIC | "_") }
-to_number_op = @{ "to_number" ~ !(ASCII_ALPHANUMERIC | "_") }
-cat_op       = @{ "cat"       ~ !(ASCII_ALPHANUMERIC | "_") }
-
-// =============================================================================
-// COMPARISON EXPRESSIONS  
+// COMPARISON EXPRESSIONS
 // =============================================================================
 // Binary comparisons between arithmetic expressions
 
@@ -306,12 +281,23 @@ compare_op = {
 }
 
 // Individual comparison operators
-equal = { "=" } 
+equal = { "=" }
 not_equal = { "!=" }
 greater_equal_than = { ">=" }
 greater_than = { ">" }
 less_equal_than = { "<=" }
 less_than = { "<" }
+
+// String constraints. They may only appear bare in a rule body,
+// never inside an arithmetic expression. Optional leading `!` negates.
+//   match("a.*", s)        s fully matches the regex
+//   contains(sub, s)       s contains the substring sub
+//   !match("a.*", s)       s does NOT match
+string_constraint = { not_op? ~ string_constraint_op ~ "(" ~ arithmetic_expr ~ "," ~ arithmetic_expr ~ ")" }
+string_constraint_op = { match_op | contains_op }
+not_op       = { "!" }
+match_op     = @{ "match"    ~ !(ASCII_ALPHANUMERIC | "_") }
+contains_op  = @{ "contains" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // =============================================================================
 // AGGREGATE EXPRESSIONS
@@ -416,9 +402,12 @@ head = {
 // Can be aggregate functions or arithmetic expressions (UDF calls are parsed as factors within arithmetic)
 head_arg = { aggregate_expr | arithmetic_expr }
 
-// User-defined function call in rule head
-// Example: my_udf(x, y + 1)
-fn_call_expr = {
+// A value function call: `name(args...)`. The parser resolves the name
+// against the reserved built-in set ([`BuiltinOperator::from_keyword`]):
+// a hit becomes a built-in call, otherwise a UDF (`.extern fn`) call.
+// Appears inside expressions, never bare in a body.
+// Example: cat(a, b), strlen(x), my_udf(x, y + 1)
+call_expr = {
     identifier ~
     "(" ~
     (arithmetic_expr ~ ("," ~ arithmetic_expr)*)? ~
@@ -428,15 +417,17 @@ fn_call_expr = {
 // Comma-separated list of predicates in the rule body
 predicates = { predicate ~ ("," ~ predicate)* }
 
-// Types of predicates allowed in rule bodies
-// Note: compare_expr must come before atom because compare_expr can start with
-// fn_call_expr (e.g., "cost(x) > 5") which atom would greedily consume.
+// Types of predicates allowed in a rule body. Order matters (ordered choice):
+//   - compare_expr before atom: `cost(x) > 5` starts with a call that atom
+//     would otherwise consume as a relation.
+//   - string_constraint before atom/negative_atom: `match(...)` would parse
+//     as an atom named `match`, and `!match(...)` as a negative atom.
 predicate = {
-    compare_expr |  // Comparison: x > y, cost(x) > 5
-    atom |          // Positive atom: edge(x, y)
-    negative_atom | // Negative atom: !edge(x, y)
-    disjunction_group | // Nested disjunction: (A ; B)
-    fn_call_expr    // UDF predicate: is_valid(x + 1, y)
+    compare_expr |       // Comparison: x > y, cost(x) > 5, f(x) = True
+    string_constraint |  // match("a.*", x), !contains(x, y)
+    atom |               // Positive atom: edge(x, y)
+    negative_atom |      // Negative atom: !edge(x, y)
+    disjunction_group    // Nested disjunction: (A ; B)
 }
 
 // Parenthesised disjunction inside a body: `(A ; B)`.

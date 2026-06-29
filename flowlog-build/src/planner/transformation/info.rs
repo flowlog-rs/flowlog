@@ -13,11 +13,10 @@
 //! a transformation plan before all details are finalized.
 
 use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos, JoinPredicates,
-    KvPredicates,
+    ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, JoinPredicates, KvPredicates,
 };
-use flowlog_parser::ConstType;
 use flowlog_common::compute_fp;
+use flowlog_parser::ConstType;
 
 use crate::planner::{Collection, PlanError};
 
@@ -638,28 +637,6 @@ impl TransformationInfo {
             }
             Self::AntiJoinToKV { .. } => Err(PlanError::internal(
                 "update_comparisons: AntiJoinToKV has no comparisons to update",
-            )),
-        }
-    }
-
-    /// Update boolean UDF predicate filters for transformations that support them.
-    ///
-    /// UDF predicates should be added incrementally.
-    pub(crate) fn update_fn_call_preds(
-        &mut self,
-        new_fn_call_preds: Vec<FnCallPredicatePos>,
-    ) -> Result<(), PlanError> {
-        match self {
-            Self::KVToKV { predicates, .. } => {
-                predicates.fn_call_preds.extend(new_fn_call_preds);
-                Ok(())
-            }
-            Self::JoinToKV { predicates, .. } => {
-                predicates.fn_call_preds.extend(new_fn_call_preds);
-                Ok(())
-            }
-            Self::AntiJoinToKV { .. } => Err(PlanError::internal(
-                "update_fn_call_preds: AntiJoinToKV has no fn_call_preds to update",
             )),
         }
     }

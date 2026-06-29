@@ -33,9 +33,9 @@ use std::collections::HashMap;
 
 use proc_macro2::Ident;
 
-use flowlog_parser::{DataType, Program};
 use crate::planner::ProgramPlanner;
 use flowlog_common::Config;
+use flowlog_parser::{DataType, Program};
 use flowlog_profiler::Profiler;
 
 pub struct CodeGen {

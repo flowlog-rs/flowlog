@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use flowlog_parser::{AggregationOperator, LoopCondition, LoopConnective};
 use crate::planner::StratumPlanner;
+use flowlog_parser::{AggregationOperator, LoopCondition, LoopConnective};
 use flowlog_profiler::{Profiler, with_profiler};
 
 use crate::codegen::CodeGen;

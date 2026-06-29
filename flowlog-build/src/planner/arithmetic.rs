@@ -3,8 +3,8 @@
 use std::fmt;
 
 use crate::catalog::{ArithmeticPos, FactorPos};
-use flowlog_parser::{ArithmeticOperator, BuiltinOperator, ConstType};
 use crate::planner::TransformationArgument;
+use flowlog_parser::{ArithmeticOperator, BuiltinOperator, ConstType};
 
 /// Represents a basic factor in an arithmetic expression
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

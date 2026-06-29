@@ -1,10 +1,10 @@
 mod errors;
 
 use flowlog_build::optimizer::Optimizer;
-use flowlog_parser::Program;
 use flowlog_build::planner::{PlanError, StratumPlanner};
 use flowlog_build::stratifier::Stratifier;
 use flowlog_common::{Config, SourceMap};
+use flowlog_parser::Program;
 
 use errors::{fixture, render};
 

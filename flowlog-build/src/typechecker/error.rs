@@ -7,11 +7,11 @@
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use thiserror::Error;
 
-use flowlog_parser::{
-    AggregationOperator, ArithmeticOperator, BuiltinOperator, ComparisonOperator, DataType,
-};
 use flowlog_common::{
     BUG_URL, Diagnostic, FileId, InternalError, Span, labels, primary_label, secondary_label,
+};
+use flowlog_parser::{
+    AggregationOperator, ArithmeticOperator, BuiltinOperator, ComparisonOperator, DataType,
 };
 
 #[derive(Debug, Error)]
@@ -92,15 +92,17 @@ pub enum TypeCheckError {
         found: DataType,
     },
 
-    /// A built-in argument's type doesn't match the declared parameter.
+    /// A built-in argument's type isn't in the parameter's allowed set.
     /// Arity is enforced earlier by [`ParseError::BuiltinArity`](super::super::parser::ParseError),
-    /// so the typechecker only worries about per-arg type fit.
+    /// so the typechecker only worries about per-arg type fit. `expected` is the
+    /// set of accepted types (one element for a fixed param, several for a
+    /// polymorphic one like `to_string`).
     #[error("built-in `{op}` argument {arg_index} expects `{expected:?}` but got `{found:?}`")]
     BuiltinArgType {
         span: Span,
         op: BuiltinOperator,
         arg_index: usize,
-        expected: DataType,
+        expected: Vec<DataType>,
         found: DataType,
     },
 
@@ -307,12 +309,19 @@ impl Diagnostic for TypeCheckError {
                 arg_index,
                 expected,
                 found,
-            } => base.with_labels(labels(
-                *span,
-                format!(
-                    "built-in `{op}` arg {arg_index}: expected `{expected:?}`, got `{found:?}`"
-                ),
-            )),
+            } => {
+                let expected = expected
+                    .iter()
+                    .map(|t| format!("{t:?}"))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                base.with_labels(labels(
+                    *span,
+                    format!(
+                        "built-in `{op}` arg {arg_index}: expected `{expected}`, got `{found:?}`"
+                    ),
+                ))
+            }
 
             TypeCheckError::OrdRequiresStrIntern { span } => base
                 .with_labels(labels(*span, "`ord` used here"))

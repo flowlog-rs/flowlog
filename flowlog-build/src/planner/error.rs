@@ -12,10 +12,10 @@ use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use thiserror::Error;
 
 use crate::catalog::CatalogError;
-use flowlog_parser::AggregationOperator;
 use flowlog_common::{
     BUG_URL, Diagnostic, FileId, InternalError, Span, primary_label, secondary_label,
 };
+use flowlog_parser::AggregationOperator;
 
 #[non_exhaustive]
 #[derive(Debug, Error)]

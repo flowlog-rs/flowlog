@@ -20,8 +20,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
-use flowlog_parser::{Atom, FlowLogRule, Predicate};
 use crate::planner::{Transformation, TransformationInfo};
+use flowlog_parser::{Atom, FlowLogRule, Predicate};
 
 mod common; // small utilities shared by planner phases
 mod core; // core join, plus fixed-point of semijoin/pushdown and projection removal

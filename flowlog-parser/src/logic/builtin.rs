@@ -1,19 +1,16 @@
-//! Built-in function calls — Soufflé-style intrinsic functors. Each
-//! builtin is a reserved keyword in `grammar.pest` and parses into a
-//! distinct [`BuiltinCall`] node, never a [`FnCall`](super::FnCall).
-//! Per-op signatures live on [`BuiltinOperator`]; lowerings live in
-//! codegen.
+//! Built-in value functions — intrinsic functors resolved by name from a
+//! unified `call_expr` (see [`BuiltinOperator::from_keyword`]) and built via
+//! [`BuiltinCall::new`]. Per-op signatures live on [`BuiltinOperator`];
+//! lowerings live in codegen.
 
 use std::fmt;
 
 use educe::Educe;
-use pest::iterators::Pair;
 
 use super::Arithmetic;
-use crate::error::{ParseError, grammar_bug};
+use crate::error::ParseError;
 use crate::primitive::DataType;
-use crate::{Lexeme, Rule, span_of};
-use flowlog_common::{FileId, Span};
+use flowlog_common::Span;
 
 /// Built-in operator kinds; one per reserved keyword in `grammar.pest`.
 ///
@@ -26,11 +23,7 @@ pub enum BuiltinOperator {
     Substr,
     /// `ord(s) -> int32` — Soufflé symbol ordinal; requires `--str-intern`.
     Ord,
-    /// `contains(needle, hay) -> bool`.
-    Contains,
-    /// `match(pattern, s) -> bool` — full (anchored) regex match, Soufflé semantics.
-    Match,
-    /// `to_string(n: int32) -> string`.
+    /// `to_string(n) -> string` — renders any numeric/bool scalar.
     ToString,
     /// `to_number(s) -> int32` — 0 on parse failure.
     ToNumber,
@@ -45,33 +38,72 @@ impl BuiltinOperator {
             BuiltinOperator::Strlen => "strlen",
             BuiltinOperator::Substr => "substr",
             BuiltinOperator::Ord => "ord",
-            BuiltinOperator::Contains => "contains",
-            BuiltinOperator::Match => "match",
             BuiltinOperator::ToString => "to_string",
             BuiltinOperator::ToNumber => "to_number",
             BuiltinOperator::Cat => "cat",
         }
     }
 
-    /// Declared arity (number of arguments). Derived from
-    /// [`Self::param_types`] so both stay in sync.
-    pub fn arity(self) -> usize {
-        self.param_types().len()
+    /// Every built-in variant, scanned by [`Self::from_keyword`].
+    /// (`match`/`contains` are not here — they are boolean string
+    /// *constraints*, modeled as
+    /// [`ComparisonOperator`](super::ComparisonOperator) variants, not functors.)
+    const VALUE_BUILTINS: [BuiltinOperator; 6] = [
+        BuiltinOperator::Strlen,
+        BuiltinOperator::Substr,
+        BuiltinOperator::Ord,
+        BuiltinOperator::ToString,
+        BuiltinOperator::ToNumber,
+        BuiltinOperator::Cat,
+    ];
+
+    /// Resolve a built-in by its surface keyword. This is the reserved-name
+    /// lookup that distinguishes a built-in call from a UDF call when parsing
+    /// a unified `call_expr` (any `name(args)`). A name that is not a built-in
+    /// resolves to a UDF, which the typechecker validates against `.extern fn`.
+    #[must_use]
+    pub fn from_keyword(name: &str) -> Option<Self> {
+        Self::VALUE_BUILTINS
+            .into_iter()
+            .find(|op| op.keyword() == name)
     }
 
-    /// Per-parameter declared types, in argument order. Consulted by
-    /// the typechecker to validate each call site.
-    pub fn param_types(self) -> &'static [DataType] {
-        use DataType::{Int32, String as Str};
+    /// Declared arity (number of arguments). Derived from
+    /// [`Self::param_allowed_types`] so both stay in sync.
+    pub fn arity(self) -> usize {
+        self.param_allowed_types().len()
+    }
+
+    /// The set of types each parameter accepts, in argument
+    /// order. An arg is valid if its type is in the set. A multi-element set is
+    /// a polymorphic parameter (e.g. `to_string` over any numeric/bool scalar).
+    pub fn param_allowed_types(self) -> &'static [&'static [DataType]] {
+        // Scalars `to_string` renders. `string` is excluded: it would be a
+        // no-op and, under `--str-intern`, the operand is an interned key the
+        // codegen would have to `resolve` (it reads the raw token). Tuples are
+        // excluded (no `Display`).
+        const TO_STRING_INPUTS: &[DataType] = &[
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Bool,
+        ];
         match self {
-            BuiltinOperator::Strlen => &[Str],
-            BuiltinOperator::Substr => &[Str, Int32, Int32],
-            BuiltinOperator::Ord => &[Str],
-            BuiltinOperator::Contains => &[Str, Str],
-            BuiltinOperator::Match => &[Str, Str],
-            BuiltinOperator::ToString => &[Int32],
-            BuiltinOperator::ToNumber => &[Str],
-            BuiltinOperator::Cat => &[Str, Str],
+            BuiltinOperator::Strlen => &[&[DataType::String]],
+            BuiltinOperator::Substr => {
+                &[&[DataType::String], &[DataType::Int32], &[DataType::Int32]]
+            }
+            BuiltinOperator::Ord => &[&[DataType::String]],
+            BuiltinOperator::ToString => &[TO_STRING_INPUTS],
+            BuiltinOperator::ToNumber => &[&[DataType::String]],
+            BuiltinOperator::Cat => &[&[DataType::String], &[DataType::String]],
         }
     }
 
@@ -84,7 +116,6 @@ impl BuiltinOperator {
             BuiltinOperator::Substr | BuiltinOperator::ToString | BuiltinOperator::Cat => {
                 DataType::String
             }
-            BuiltinOperator::Contains | BuiltinOperator::Match => DataType::Bool,
         }
     }
 }
@@ -106,6 +137,21 @@ pub struct BuiltinCall {
 }
 
 impl BuiltinCall {
+    /// Build a value built-in call from an already-resolved operator and
+    /// argument list (the unified `call_expr` parser resolves the name via
+    /// [`BuiltinOperator::from_keyword`] first). Enforces per-op arity.
+    pub fn new(op: BuiltinOperator, args: Vec<Arithmetic>, span: Span) -> Result<Self, ParseError> {
+        if args.len() != op.arity() {
+            return Err(ParseError::BuiltinArity {
+                span,
+                op: op.keyword(),
+                expected: op.arity(),
+                found: args.len(),
+            });
+        }
+        Ok(Self { op, args, span })
+    }
+
     #[must_use]
     #[inline]
     pub fn op(&self) -> BuiltinOperator {
@@ -147,68 +193,6 @@ impl fmt::Display for BuiltinCall {
     }
 }
 
-impl Lexeme for BuiltinCall {
-    /// Parse a `builtin_fn_call` and enforce per-op arity (the grammar
-    /// accepts any positive arity uniformly).
-    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
-        if parsed_rule.as_rule() != Rule::builtin_fn_call {
-            return Err(grammar_bug(format!(
-                "expected builtin_fn_call, got {:?}",
-                parsed_rule.as_rule()
-            )));
-        }
-        let span = span_of(&parsed_rule, file);
-        let mut inner = parsed_rule.into_inner();
-
-        let op_node = inner
-            .next()
-            .ok_or_else(|| grammar_bug("builtin_fn_call missing operator"))?;
-        let op = op_from_node(&op_node)?;
-
-        let args: Vec<Arithmetic> = inner
-            .filter(|p| p.as_rule() == Rule::arithmetic_expr)
-            .map(|p| Arithmetic::from_parsed_rule(p, file))
-            .collect::<Result<_, _>>()?;
-
-        if args.len() != op.arity() {
-            return Err(ParseError::BuiltinArity {
-                span,
-                op: op.keyword(),
-                expected: op.arity(),
-                found: args.len(),
-            });
-        }
-
-        Ok(Self { op, args, span })
-    }
-}
-
-/// Map a `builtin_op` grammar node to its [`BuiltinOperator`] variant.
-fn op_from_node(node: &Pair<Rule>) -> Result<BuiltinOperator, ParseError> {
-    if node.as_rule() != Rule::builtin_op {
-        return Err(grammar_bug(format!(
-            "expected builtin_op, got {:?}",
-            node.as_rule()
-        )));
-    }
-    let kw = node
-        .clone()
-        .into_inner()
-        .next()
-        .ok_or_else(|| grammar_bug("builtin_op missing keyword"))?;
-    Ok(match kw.as_rule() {
-        Rule::strlen_op => BuiltinOperator::Strlen,
-        Rule::substr_op => BuiltinOperator::Substr,
-        Rule::ord_op => BuiltinOperator::Ord,
-        Rule::contains_op => BuiltinOperator::Contains,
-        Rule::match_op => BuiltinOperator::Match,
-        Rule::to_string_op => BuiltinOperator::ToString,
-        Rule::to_number_op => BuiltinOperator::ToNumber,
-        Rule::cat_op => BuiltinOperator::Cat,
-        other => return Err(grammar_bug(format!("unknown built-in operator: {other:?}"))),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,9 +200,18 @@ mod tests {
     use flowlog_common::FileId;
     use pest::Parser;
 
+    /// Parse a unified `call_expr` and resolve it as a built-in (the same
+    /// path the factor parser takes). Panics if the name is not a built-in.
     fn try_parse(input: &str) -> Result<BuiltinCall, ParseError> {
-        let mut pairs = FlowLogParser::parse(Rule::builtin_fn_call, input).unwrap();
-        BuiltinCall::from_parsed_rule(pairs.next().unwrap(), FileId::new(0))
+        let mut pairs = FlowLogParser::parse(Rule::call_expr, input).unwrap();
+        let mut children = pairs.next().unwrap().into_inner();
+        let name = children.next().unwrap().as_str().to_string();
+        let args = children
+            .filter(|p| p.as_rule() == Rule::arithmetic_expr)
+            .map(|p| Arithmetic::from_parsed_rule(p, FileId::new(0)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let op = BuiltinOperator::from_keyword(&name).expect("not a built-in keyword");
+        BuiltinCall::new(op, args, Span::DUMMY)
     }
 
     #[test]
@@ -230,7 +223,11 @@ mod tests {
 
     #[test]
     fn keyword_not_a_prefix() {
-        assert!(FlowLogParser::parse(Rule::builtin_fn_call, "strlen_foo(x)").is_err());
+        // `strlen_foo` is a distinct identifier — it resolves to a UDF, not
+        // the `strlen` built-in. Name resolution (not the grammar) enforces
+        // the keyword boundary now that calls share one `call_expr` rule.
+        assert!(BuiltinOperator::from_keyword("strlen_foo").is_none());
+        assert!(BuiltinOperator::from_keyword("strlen").is_some());
     }
 
     #[test]
@@ -260,8 +257,8 @@ mod tests {
         assert_eq!(bc.op(), BuiltinOperator::Cat);
         assert_eq!(bc.args().len(), 2);
         assert_eq!(
-            BuiltinOperator::Cat.param_types(),
-            &[DataType::String, DataType::String]
+            BuiltinOperator::Cat.param_allowed_types(),
+            &[&[DataType::String], &[DataType::String]]
         );
         assert_eq!(BuiltinOperator::Cat.ret_type(), DataType::String);
     }

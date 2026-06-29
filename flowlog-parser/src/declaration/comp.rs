@@ -113,10 +113,7 @@ pub(crate) struct RawRelation {
 
 impl CompDecl {
     /// Parse a `.comp` pest node.
-    pub fn from_parsed_rule(
-        parsed_rule: Pair<Rule>,
-        file: FileId,
-    ) -> Result<Self, ParseError> {
+    pub fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         debug_assert_eq!(parsed_rule.as_rule(), Rule::comp_decl);
         let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
@@ -210,10 +207,7 @@ impl SuperRef {
 
 impl InitDecl {
     /// Parse an `.init` pest node.
-    pub fn from_parsed_rule(
-        parsed_rule: Pair<Rule>,
-        file: FileId,
-    ) -> Result<Self, ParseError> {
+    pub fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         debug_assert_eq!(parsed_rule.as_rule(), Rule::init_decl);
         let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
@@ -349,9 +343,7 @@ pub fn split_type_alias(
 /// Parse a `tuple_type` pest node into `(field_name, field_type_source)` pairs.
 /// Field types are kept as source strings and resolved (and recursion-checked)
 /// by [`crate::primitive::TypeRegistry::register_tuple`].
-pub fn parse_tuple_fields(
-    tuple_type: Pair<Rule>,
-) -> Result<Vec<(String, String)>, ParseError> {
+pub fn parse_tuple_fields(tuple_type: Pair<Rule>) -> Result<Vec<(String, String)>, ParseError> {
     debug_assert_eq!(tuple_type.as_rule(), Rule::tuple_type);
     let mut fields = Vec::new();
     for field in tuple_type.into_inner() {
@@ -443,10 +435,7 @@ fn parse_raw_override(node: Pair<Rule>, file: FileId) -> Result<RawItem, ParseEr
 impl RawRelation {
     /// Parse a `.decl` pest node into raw form (attribute types stay
     /// as source strings — no [`TypeRegistry`] lookup).
-    pub fn from_parsed_rule(
-        parsed_rule: Pair<Rule>,
-        file: FileId,
-    ) -> Result<Self, ParseError> {
+    pub fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
         debug_assert_eq!(parsed_rule.as_rule(), Rule::declaration);
         let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();

@@ -58,11 +58,11 @@ impl Catalog {
         // Placeholders (wildcards) encountered
         let mut local_placeholder_set = HashSet::new();
 
-        // Partition RHS predicates into positive atoms, negative atoms, comparisons, and fn_call predicates
+        // Partition RHS predicates into positive atoms, negative atoms, and
+        // comparisons.
         let mut positive_atoms = Vec::new();
         let mut negative_atoms = Vec::new();
         let mut comparison_predicates = Vec::new();
-        let mut fn_call_predicates = Vec::new();
         for (i, p) in self.rule.rhs().iter().enumerate() {
             match p {
                 Predicate::PositiveAtom(a) => {
@@ -74,7 +74,6 @@ impl Catalog {
                     self.negative_atom_rhs_ids.push(i);
                 }
                 Predicate::Compare(expr) => comparison_predicates.push(expr.clone()),
-                Predicate::FnCall(fc) => fn_call_predicates.push(fc.clone()),
             }
         }
 
@@ -119,9 +118,9 @@ impl Catalog {
             local_var_first_occurrence_map.clear();
         }
 
-        // Range-restriction: every variable in a negative atom, comparison,
-        // or function call must appear in some positive body atom. Display
-        // strings and spans are fetched only on the error path.
+        // Range-restriction: every variable in a negative atom or comparison
+        // must appear in some positive body atom. Display strings and spans
+        // are fetched only on the error path.
         let rule_span = self.rule.span();
         for atom in &negative_atoms {
             for arg in atom.arguments() {
@@ -145,19 +144,6 @@ impl Catalog {
                         kind: UnsafePredicateKind::Comparison,
                         predicate: comp.to_string(),
                         predicate_span: comp.span(),
-                        rule_span,
-                        var: v.clone(),
-                    });
-                }
-            }
-        }
-        for fc in &fn_call_predicates {
-            for v in fc.vars() {
-                if !is_safe_set.contains(v) {
-                    return Err(CatalogError::UnsafeVariable {
-                        kind: UnsafePredicateKind::FnCall,
-                        predicate: fc.to_string(),
-                        predicate_span: fc.span(),
                         rule_span,
                         var: v.clone(),
                     });
@@ -213,13 +199,6 @@ impl Catalog {
             .collect();
         self.comparison_predicates = comparison_predicates;
 
-        // Build variable string sets for each fn_call predicate (used for superset analysis)
-        self.fn_call_predicates_vars_str_set = fn_call_predicates
-            .iter()
-            .map(|fc| fc.vars().into_iter().cloned().collect::<HashSet<String>>())
-            .collect();
-        self.fn_call_predicates = fn_call_predicates;
-
         Ok(())
     }
 
@@ -273,9 +252,6 @@ impl Catalog {
                 .into_iter()
                 .for_each(&mut bump);
         }
-        for fn_call_predicate in &self.fn_call_predicates {
-            fn_call_predicate.vars().into_iter().for_each(&mut bump);
-        }
 
         // Collect all head variables (never considered unused, even if single-occurrence)
         let head_variables = self.head_arguments_strs();
@@ -325,13 +301,6 @@ impl Catalog {
         // For each comparison predicate: positive atoms whose var set covers it
         self.comparison_supersets = self
             .comparison_predicates_vars_str_set
-            .iter()
-            .map(|set| pos_supersets_of(set, None))
-            .collect();
-
-        // For each fn_call predicate: positive atoms whose var set covers it
-        self.fn_call_supersets = self
-            .fn_call_predicates_vars_str_set
             .iter()
             .map(|set| pos_supersets_of(set, None))
             .collect();

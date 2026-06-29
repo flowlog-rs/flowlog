@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::catalog::{AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos};
+use crate::catalog::{AtomArgumentSignature, ComparisonExprPos};
 use flowlog_parser::ConstType;
 
 /// Write `" and "` before every term except the first. Toggles `first` to
@@ -20,12 +20,11 @@ fn write_and_sep(f: &mut fmt::Formatter<'_>, first: &mut bool) -> fmt::Result {
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct JoinPredicates {
     pub(crate) compare_exprs: Vec<ComparisonExprPos>,
-    pub(crate) fn_call_preds: Vec<FnCallPredicatePos>,
 }
 
 impl JoinPredicates {
     pub(crate) fn is_empty(&self) -> bool {
-        self.compare_exprs.is_empty() && self.fn_call_preds.is_empty()
+        self.compare_exprs.is_empty()
     }
 }
 
@@ -37,10 +36,6 @@ impl fmt::Display for JoinPredicates {
             write_and_sep(f, &mut first)?;
             write!(f, "{}", c)?;
         }
-        for fc in &self.fn_call_preds {
-            write_and_sep(f, &mut first)?;
-            write!(f, "{}", fc)?;
-        }
         Ok(())
     }
 }
@@ -51,15 +46,11 @@ pub(crate) struct KvPredicates {
     pub(crate) const_eq: Vec<(AtomArgumentSignature, ConstType)>,
     pub(crate) var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
     pub(crate) compare_exprs: Vec<ComparisonExprPos>,
-    pub(crate) fn_call_preds: Vec<FnCallPredicatePos>,
 }
 
 impl KvPredicates {
     pub(crate) fn is_empty(&self) -> bool {
-        self.const_eq.is_empty()
-            && self.var_eq.is_empty()
-            && self.compare_exprs.is_empty()
-            && self.fn_call_preds.is_empty()
+        self.const_eq.is_empty() && self.var_eq.is_empty() && self.compare_exprs.is_empty()
     }
 }
 
@@ -78,10 +69,6 @@ impl fmt::Display for KvPredicates {
         for c in &self.compare_exprs {
             write_and_sep(f, &mut first)?;
             write!(f, "{}", c)?;
-        }
-        for fc in &self.fn_call_preds {
-            write_and_sep(f, &mut first)?;
-            write!(f, "{}", fc)?;
         }
         Ok(())
     }

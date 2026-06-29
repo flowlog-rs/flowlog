@@ -4,11 +4,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::optimizer::Optimizer;
-use flowlog_parser::Program;
 use crate::planner::StratumPlanner;
 use flowlog_profiler::Profiler;
 use crate::stratifier::Stratifier;
 use flowlog_common::{BoxError, Config};
+use flowlog_parser::Program;
 
 /// Whole-program planning.
 #[derive(Debug)]

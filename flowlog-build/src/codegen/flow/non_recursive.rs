@@ -14,8 +14,8 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use tracing::trace;
 
-use flowlog_parser::AggregationOperator;
 use crate::planner::StratumPlanner;
+use flowlog_parser::AggregationOperator;
 use flowlog_profiler::{Profiler, with_profiler};
 
 use crate::codegen::CodeGen;

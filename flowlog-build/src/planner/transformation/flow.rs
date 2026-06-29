@@ -12,14 +12,13 @@ use tracing::trace;
 
 use super::KeyValueLayout;
 use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, FnCallPredicatePos,
-    JoinPredicates, KvPredicates,
+    ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FactorPos, JoinPredicates,
+    KvPredicates,
+};
+use crate::planner::{
+    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument, TransformationArgument,
 };
 use flowlog_parser::ConstType;
-use crate::planner::{
-    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
-    FnCallPredicateArgument, TransformationArgument,
-};
 
 /// Represents data transformation flows in query execution.
 ///
@@ -43,8 +42,6 @@ pub(crate) enum TransformationFlow {
         constraints: Constraints,
         /// Comparison filters (e.g., `x > y`)
         compares: Vec<ComparisonExprArgument>,
-        /// Boolean UDF predicate filters (e.g., `is_valid(x)`)
-        fn_call_preds: Vec<FnCallPredicateArgument>,
     },
 
     /// Join operations between two relations.
@@ -60,8 +57,6 @@ pub(crate) enum TransformationFlow {
         value: Arc<Vec<ArithmeticArgument>>,
         /// Join filters
         compares: Vec<ComparisonExprArgument>,
-        /// Boolean UDF predicate filters (e.g., `is_valid(x)`)
-        fn_call_preds: Vec<FnCallPredicateArgument>,
     },
 }
 
@@ -107,16 +102,11 @@ impl TransformationFlow {
         let flow_compares =
             Self::build_compare_arguments(&input_expr_map, &predicates.compare_exprs);
 
-        // Process fn_call predicate constraints
-        let flow_fn_call_preds =
-            Self::build_fn_call_arguments(&input_expr_map, &predicates.fn_call_preds);
-
         Self::KVToKV {
             key: Arc::new(flow_key_args),
             value: Arc::new(flow_value_args),
             constraints: Constraints::new(flow_const_args, flow_var_eq_args),
             compares: flow_compares,
-            fn_call_preds: flow_fn_call_preds,
         }
     }
 
@@ -154,15 +144,10 @@ impl TransformationFlow {
         let flow_compares =
             Self::build_compare_arguments(&input_expr_map, &predicates.compare_exprs);
 
-        // Process fn_call predicate constraints
-        let flow_fn_call_preds =
-            Self::build_fn_call_arguments(&input_expr_map, &predicates.fn_call_preds);
-
         Self::JnToKV {
             key: Arc::new(flow_key_args),
             value: Arc::new(flow_value_args),
             compares: flow_compares,
-            fn_call_preds: flow_fn_call_preds,
         }
     }
 }
@@ -206,14 +191,6 @@ impl TransformationFlow {
         match self {
             Self::KVToKV { compares, .. } => compares,
             Self::JnToKV { compares, .. } => compares,
-        }
-    }
-
-    /// Returns the boolean UDF predicate filters.
-    pub(crate) fn fn_call_preds(&self) -> &Vec<FnCallPredicateArgument> {
-        match self {
-            Self::KVToKV { fn_call_preds, .. } => fn_call_preds,
-            Self::JnToKV { fn_call_preds, .. } => fn_call_preds,
         }
     }
 }
@@ -461,26 +438,6 @@ impl TransformationFlow {
             })
             .collect()
     }
-
-    /// Helper to construct fn_call predicate arguments from input expression map and fn_call positions.
-    fn build_fn_call_arguments(
-        input_expr_map: &HashMap<ArithmeticPos, TransformationArgument>,
-        fn_call_preds: &[FnCallPredicatePos],
-    ) -> Vec<FnCallPredicateArgument> {
-        fn_call_preds
-            .iter()
-            .map(|fc| {
-                let per_arg_trans: Vec<Vec<TransformationArgument>> = fc
-                    .args()
-                    .iter()
-                    .map(|arg_pos| {
-                        Self::signatures_to_trans_args(input_expr_map, arg_pos.signatures())
-                    })
-                    .collect();
-                FnCallPredicateArgument::from_fn_call_pos(fc, &per_arg_trans)
-            })
-            .collect()
-    }
 }
 
 impl fmt::Display for TransformationFlow {
@@ -521,7 +478,6 @@ impl fmt::Display for TransformationFlow {
                 value,
                 constraints,
                 compares,
-                fn_call_preds,
             } => {
                 let mut filter_parts: Vec<String> = Vec::new();
                 if !constraints.is_empty() {
@@ -530,9 +486,6 @@ impl fmt::Display for TransformationFlow {
                 if !compares.is_empty() {
                     filter_parts.push(join_display(compares));
                 }
-                if !fn_call_preds.is_empty() {
-                    filter_parts.push(join_display(fn_call_preds));
-                }
                 write!(f, "{}", format_kv_parts(key, value, &filter_parts))
             }
 
@@ -540,14 +493,10 @@ impl fmt::Display for TransformationFlow {
                 key,
                 value,
                 compares,
-                fn_call_preds,
             } => {
                 let mut filter_parts: Vec<String> = Vec::new();
                 if !compares.is_empty() {
                     filter_parts.push(join_display(compares));
-                }
-                if !fn_call_preds.is_empty() {
-                    filter_parts.push(join_display(fn_call_preds));
                 }
                 write!(f, "{}", format_kv_parts(key, value, &filter_parts))
             }

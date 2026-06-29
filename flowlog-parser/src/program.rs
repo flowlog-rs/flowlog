@@ -33,10 +33,7 @@ use super::{
     },
     error::{DirectiveKind, ParseError, grammar_bug},
     inliner,
-    logic::{
-        Arithmetic, AtomArg, Factor, FlowLogRule, FnCall, Head, LoopBlock, Predicate,
-        consume_plan_directive,
-    },
+    logic::{FlowLogRule, Head, LoopBlock, Predicate, consume_plan_directive},
     primitive::TypeRegistry,
     segment::Segment,
 };
@@ -923,7 +920,6 @@ impl Program {
             printsize_directives,
         )?;
         Self::validate_output_printsize_exclusion(&relations)?;
-        Self::reclassify_udf_predicates(&mut segments, &udfs)?;
         Self::validate_loop_conditions(&segments, &relations)?;
 
         normalize_inliner_dots(&mut relations, &mut segments, &mut raw_facts);
@@ -1201,91 +1197,6 @@ impl Program {
                 }
             }
         }
-        Ok(())
-    }
-
-    /// Reclassify body atoms whose name matches an `.extern fn` as [`FnCall`].
-    ///
-    /// PEG grammars resolve `name(args...)` as `atom` before `fn_call_expr` since
-    /// they share identical syntax. The distinction is semantic (declared as a
-    /// relation vs. an extern function), so we correct it here after all
-    /// declarations have been collected.
-    ///
-    /// Processes rules in all items — both top-level rule segments and rules
-    /// inside loop blocks.
-    fn reclassify_udf_predicates(
-        items: &mut [Segment],
-        udfs: &[ExternFn],
-    ) -> Result<(), ParseError> {
-        let udf_names: HashSet<&str> = udfs.iter().map(ExternFn::name).collect();
-        if udf_names.is_empty() {
-            return Ok(());
-        }
-
-        let mut result = Ok(());
-        for_each_rule_mut(items, |rule| {
-            if result.is_ok() {
-                result = Self::reclassify_one_rule(rule, &udf_names);
-            }
-        });
-        result
-    }
-
-    /// Rewrite a single rule's body atoms that reference a UDF name
-    /// into [`FnCall`] predicates. See [`Self::reclassify_udf_predicates`]
-    /// for the rationale.
-    fn reclassify_one_rule(
-        rule: &mut FlowLogRule,
-        udf_names: &HashSet<&str>,
-    ) -> Result<(), ParseError> {
-        let needs_rewrite = rule.rhs().iter().any(|p| {
-            matches!(
-                p,
-                Predicate::PositiveAtom(a) | Predicate::NegativeAtom(a)
-                if udf_names.contains(a.name())
-            )
-        });
-        if !needs_rewrite {
-            return Ok(());
-        }
-
-        let mut new_rhs = Vec::with_capacity(rule.rhs().len());
-        for pred in rule.rhs() {
-            new_rhs.push(match pred {
-                Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom)
-                    if udf_names.contains(atom.name()) =>
-                {
-                    let mut args = Vec::with_capacity(atom.arguments().len());
-                    for a in atom.arguments() {
-                        match a {
-                            AtomArg::Var(v) => {
-                                args.push(Arithmetic::new(Factor::Var(v.clone()), vec![]));
-                            }
-                            AtomArg::Const(c) => {
-                                args.push(Arithmetic::new(Factor::Const(c.clone()), vec![]));
-                            }
-                            AtomArg::Placeholder => {
-                                return Err(ParseError::PlaceholderInUdf {
-                                    span: atom.span(),
-                                    udf_name: atom.name().to_string(),
-                                });
-                            }
-                        }
-                    }
-                    Predicate::FnCall(
-                        FnCall::new(
-                            atom.name().to_string(),
-                            args,
-                            matches!(pred, Predicate::NegativeAtom(_)),
-                        )
-                        .with_span(atom.span()),
-                    )
-                }
-                other => other.clone(),
-            });
-        }
-
-        *rule = FlowLogRule::new(rule.head().clone(), new_rhs);
         Ok(())
     }
 
@@ -2008,37 +1919,6 @@ mod tests {
             r.data_type(),
             vec![DataType::Int32, DataType::Int32, DataType::Int32]
         );
-    }
-
-    /// UDF reclassification must preserve negation: `!my_udf(x)` parses
-    /// first as `NegativeAtom`, then `reclassify_udf_predicates`
-    /// rewrites it to `FnCall` with `is_negated = true`. A bug
-    /// dropping the flag would turn a negated filter into a positive one
-    /// — wrong semantics, no compile error.
-    #[test]
-    fn negated_udf_reclassification_preserves_negation() {
-        let src = "
-            .decl edge(x: number, y: number)
-            .decl out(x: number, y: number)
-            .output out
-            .extern fn cost(x: number) -> number
-            out(X, Y) :- edge(X, Y), !cost(X).
-        ";
-        let program = parse_program(src);
-        let rule = program.rules()[0];
-        let fn_call = rule
-            .rhs()
-            .iter()
-            .find_map(|p| match p {
-                Predicate::FnCall(fc) => Some(fc),
-                _ => None,
-            })
-            .expect("udf body atom should be reclassified to FnCall");
-        assert!(
-            fn_call.is_negated(),
-            "negation lost during reclassification"
-        );
-        assert_eq!(fn_call.name(), "cost");
     }
 
     // =============================================================

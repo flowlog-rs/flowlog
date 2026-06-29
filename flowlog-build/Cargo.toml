@@ -19,6 +19,7 @@ flowlog-profiler.workspace = true
 clap = { workspace = true, features = ["derive"] }
 codespan-reporting.workspace = true
 itertools.workspace = true
+ordered-float = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
@@ -27,9 +28,6 @@ serde_json.workspace = true
 syn = { workspace = true, features = ["full"] }
 thiserror.workspace = true
 tracing.workspace = true
-
-# Float-keyed codegen (semiring constants).
-ordered-float = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true

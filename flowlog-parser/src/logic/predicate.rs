@@ -14,7 +14,7 @@ use crate::error::{ParseError, grammar_bug};
 use crate::{Lexeme, Rule};
 use flowlog_common::FileId;
 
-use super::{Atom, ComparisonExpr, FnCall};
+use super::{Atom, ComparisonExpr};
 
 /// A predicate in a rule body.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -23,10 +23,10 @@ pub enum Predicate {
     PositiveAtom(Atom),
     /// Negative atom (negation as failure), e.g. `!edge(X, Y)`.
     NegativeAtom(Atom),
-    /// Comparison expression, e.g. `X > 5`.
+    /// Comparison expression. Covers arithmetic comparisons (`X > 5`), UDF
+    /// filters (`f(X) == True`, since UDFs are value-only), and the string
+    /// constraints `match`/`contains` (whose operator carries the `!`).
     Compare(ComparisonExpr),
-    /// UDF predicate call, e.g. `is_valid(X, Y + 1)`.
-    FnCall(FnCall),
 }
 
 #[cfg(test)]
@@ -37,7 +37,6 @@ impl Predicate {
         match self {
             Self::PositiveAtom(atom) | Self::NegativeAtom(atom) => atom.name(),
             Self::Compare(_) => unreachable!("no name on Compare"),
-            Self::FnCall(_) => unreachable!("no name on FnCall"),
         }
     }
 }
@@ -48,7 +47,6 @@ impl fmt::Display for Predicate {
             Self::PositiveAtom(atom) => write!(f, "{atom}"),
             Self::NegativeAtom(atom) => write!(f, "!{atom}"),
             Self::Compare(expr) => write!(f, "{expr}"),
-            Self::FnCall(fc) => write!(f, "{fc}"),
         }
     }
 }
@@ -59,7 +57,6 @@ impl fmt::Debug for Predicate {
             Self::PositiveAtom(atom) => write!(f, "{atom:?}"),
             Self::NegativeAtom(atom) => write!(f, "!{atom:?}"),
             Self::Compare(expr) => write!(f, "{expr}"),
-            Self::FnCall(fc) => write!(f, "{fc}"),
         }
     }
 }
@@ -91,7 +88,11 @@ impl Predicate {
                 Self::NegativeAtom(Atom::from_parsed_rule(atom_rule, file)?)
             }
             Rule::compare_expr => Self::Compare(ComparisonExpr::from_parsed_rule(inner, file)?),
-            Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner, file)?),
+            // `match`/`contains` are binary boolean operators — a comparison
+            // whose operator is `Match`/`Contains` (the `!` folded in).
+            Rule::string_constraint => {
+                Self::Compare(ComparisonExpr::from_string_constraint(inner, file)?)
+            }
             other => return Err(grammar_bug(format!("invalid predicate type: {other:?}"))),
         })
     }

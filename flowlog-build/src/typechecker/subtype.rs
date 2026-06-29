@@ -17,12 +17,12 @@ use std::collections::HashMap;
 use std::mem;
 
 use super::{DisplayNames, TypeCheckError, display_name};
+use flowlog_common::Span;
 use flowlog_parser::{
     Arithmetic, Atom, AtomArg, ComparisonExpr, Factor, FlowLogRule, HeadArg, Predicate, Program,
     TupleElem,
 };
 use flowlog_parser::{TypeId, TypeRegistry};
-use flowlog_common::Span;
 
 type DeclIds = HashMap<String, Vec<TypeId>>;
 
@@ -83,11 +83,6 @@ fn check_rule(
                 check_arith_casts(cmp.left(), reg, &bindings)?;
                 check_arith_casts(cmp.right(), reg, &bindings)?;
                 check_compare(cmp, reg, &bindings)?;
-            }
-            Predicate::FnCall(fc) => {
-                for arg in fc.args() {
-                    check_arith_casts(arg, reg, &bindings)?;
-                }
             }
         }
     }
@@ -366,11 +361,6 @@ fn lower_rule(rule: &mut FlowLogRule) {
             Predicate::Compare(cmp) => {
                 lower_arith(cmp.left_mut());
                 lower_arith(cmp.right_mut());
-            }
-            Predicate::FnCall(fc) => {
-                for a in fc.args_mut() {
-                    lower_arith(a);
-                }
             }
         }
     }

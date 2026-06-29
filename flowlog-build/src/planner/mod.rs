@@ -4,7 +4,6 @@ mod collection;
 mod compare;
 mod constraint;
 mod error;
-mod fn_call;
 mod program_planner;
 mod rule_planner;
 mod stratum_planner;
@@ -21,7 +20,6 @@ pub(crate) use arithmetic::{ArithmeticArgument, FactorArgument};
 pub(crate) use collection::Collection;
 pub(crate) use compare::ComparisonExprArgument;
 pub(crate) use constraint::Constraints;
-pub(crate) use fn_call::FnCallPredicateArgument;
 pub(crate) use rule_planner::RulePlanner;
 pub(crate) use transformation::{
     KeyValueLayout, Transformation, TransformationFlow, TransformationInfo,

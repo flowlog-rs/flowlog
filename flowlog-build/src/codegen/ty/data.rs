@@ -335,7 +335,6 @@ mod tests {
             }]),
             constraints: Constraints::new(vec![], vec![]),
             compares: vec![],
-            fn_call_preds: vec![],
         };
         let stratum = StratumPlanner::default();
 

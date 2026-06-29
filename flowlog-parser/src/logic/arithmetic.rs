@@ -11,7 +11,7 @@ use educe::Educe;
 use pest::iterators::Pair;
 
 use super::tuple::TupleLit;
-use super::{BuiltinCall, FnCall};
+use super::{BuiltinCall, BuiltinOperator, FnCall};
 use crate::error::{ParseError, grammar_bug};
 use crate::primitive::ConstType;
 use crate::{Lexeme, Rule, span_of, type_ref_name};
@@ -199,8 +199,7 @@ impl Lexeme for Factor {
             .ok_or_else(|| grammar_bug("factor missing inner token"))?;
         Ok(match inner.as_rule() {
             Rule::as_cast => Self::Cast(Box::new(Cast::from_parsed_rule(inner, file)?)),
-            Rule::builtin_fn_call => Self::Builtin(BuiltinCall::from_parsed_rule(inner, file)?),
-            Rule::fn_call_expr => Self::FnCall(FnCall::from_parsed_rule(inner, file)?),
+            Rule::call_expr => parse_call_expr(inner, file)?,
             Rule::variable => Self::Var(inner.as_str().to_string()),
             Rule::constant => Self::Const(ConstType::from_parsed_rule(inner, file)?),
             Rule::tuple_lit => Self::Tuple(TupleLit::from_parsed_rule(inner, file)?),
@@ -213,6 +212,31 @@ impl Lexeme for Factor {
             Rule::factor => Self::from_parsed_rule(inner, file)?,
             other => return Err(grammar_bug(format!("invalid factor rule: {other:?}"))),
         })
+    }
+}
+
+/// Resolve a unified `call_expr` (`name(args...)`) into a [`Factor`]. The
+/// name is matched against the reserved value built-ins
+/// ([`BuiltinOperator::from_keyword`]); a hit yields a [`Factor::Builtin`]
+/// (arity-checked), otherwise a [`Factor::FnCall`] (a `.extern fn` call,
+/// validated against the UDF registry later by the typechecker).
+fn parse_call_expr(node: Pair<Rule>, file: FileId) -> Result<Factor, ParseError> {
+    let span = span_of(&node, file);
+    let mut children = node.into_inner();
+    let name = children
+        .next()
+        .ok_or_else(|| grammar_bug("call_expr missing function name"))?
+        .as_str()
+        .to_string();
+    let args = children
+        .filter(|p| p.as_rule() == Rule::arithmetic_expr)
+        .map(|p| Arithmetic::from_parsed_rule(p, file))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if let Some(op) = BuiltinOperator::from_keyword(&name) {
+        Ok(Factor::Builtin(BuiltinCall::new(op, args, span)?))
+    } else {
+        Ok(Factor::FnCall(FnCall::new(name, args, span)))
     }
 }
 

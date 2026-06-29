@@ -1,8 +1,8 @@
 mod errors;
 
 use flowlog_build::catalog::{Catalog, CatalogError};
-use flowlog_parser::Program;
 use flowlog_common::SourceMap;
+use flowlog_parser::Program;
 
 use errors::{fixture, render};
 
@@ -54,6 +54,8 @@ fn unsafe_variable_in_comparison() {
 
 #[test]
 fn unsafe_variable_in_fn_call() {
+    // UDFs are value-only, so a UDF filter is a comparison (`f(z) = True`).
+    // An unbound var inside it is reported through the comparison predicate.
     assert_err!(
         catalog_for("unsafe_variable_in_fn_call.dl"),
         CatalogError::UnsafeVariable { ref var, ref predicate, .. }
@@ -61,7 +63,7 @@ fn unsafe_variable_in_fn_call() {
         [
             "unsafe variable",
             "`z`",
-            "function call",
+            "comparison",
             "unsafe_variable_in_fn_call.dl",
         ]
     );

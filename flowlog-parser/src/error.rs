@@ -143,10 +143,6 @@ pub enum ParseError {
         arity: usize,
     },
 
-    /// A UDF call uses `_` as an argument; wildcards aren't allowed in UDF args.
-    #[error("`_` placeholder is not allowed in arguments to UDF `{udf_name}`")]
-    PlaceholderInUdf { span: Span, udf_name: String },
-
     /// A built-in call passes the wrong number of arguments. Carries the
     /// keyword string instead of the enum to keep this error layer
     /// independent of `crate::logic::BuiltinOperator`.
@@ -333,10 +329,7 @@ pub enum ParseError {
 impl ParseError {
     /// Construct a [`ParseError::Syntax`] from a Pest error, anchoring the
     /// span to `file`.
-    pub fn syntax_from_pest(
-        err: &pest::error::Error<crate::Rule>,
-        file: FileId,
-    ) -> Self {
+    pub fn syntax_from_pest(err: &pest::error::Error<crate::Rule>, file: FileId) -> Self {
         use pest::error::InputLocation;
         let (start, end) = match err.location {
             InputLocation::Pos(p) => (p as u32, p as u32),
@@ -546,7 +539,6 @@ impl Diagnostic for ParseError {
             ParseError::Syntax { span, .. }
             | ParseError::LoopBlockInStandardMode { span }
             | ParseError::NonNullaryLoopCondition { span, .. }
-            | ParseError::PlaceholderInUdf { span, .. }
             | ParseError::BuiltinArity { span, .. }
             | ParseError::AssignmentVarInNegation { span, .. }
             | ParseError::GroundRuleNotConst { span }

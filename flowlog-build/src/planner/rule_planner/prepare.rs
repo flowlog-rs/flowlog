@@ -13,9 +13,9 @@
 
 use super::RulePlanner;
 use crate::catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
-use flowlog_parser::ConstType;
 use crate::planner::PlanError;
 use crate::planner::{KeyValueLayout, TransformationInfo};
+use flowlog_parser::ConstType;
 use tracing::trace;
 
 // =========================================================================

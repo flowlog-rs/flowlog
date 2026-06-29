@@ -1,7 +1,7 @@
 mod errors;
 
-use flowlog_parser::{DirectiveKind, ParseError, Program};
 use flowlog_common::SourceMap;
+use flowlog_parser::{DirectiveKind, ParseError, Program};
 
 use errors::{fixture, render};
 
@@ -123,15 +123,6 @@ fn non_nullary_loop_condition() {
         parse("non_nullary_loop_condition.dl", true),
         ParseError::NonNullaryLoopCondition { .. },
         ["must be nullary", "done_flag"]
-    );
-}
-
-#[test]
-fn placeholder_in_udf() {
-    assert_err!(
-        parse("placeholder_in_udf.dl", true),
-        ParseError::PlaceholderInUdf { .. },
-        ["`_` placeholder", "my_udf"]
     );
 }
 

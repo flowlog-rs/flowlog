@@ -22,11 +22,7 @@ impl InputDirective {
     /// Construct directly (used by the inliner to defer a comp-internal
     /// directive whose target is a relation in the enclosing/global scope,
     /// so it is applied alongside top-level directives).
-    pub fn new(
-        relation_name: String,
-        parameters: HashMap<String, String>,
-        span: Span,
-    ) -> Self {
+    pub fn new(relation_name: String, parameters: HashMap<String, String>, span: Span) -> Self {
         Self {
             relation_name,
             parameters,
@@ -133,11 +129,7 @@ pub(crate) struct OutputDirective {
 
 impl OutputDirective {
     /// Construct directly. See [`InputDirective::new`].
-    pub fn new(
-        relation_name: String,
-        parameters: HashMap<String, String>,
-        span: Span,
-    ) -> Self {
+    pub fn new(relation_name: String, parameters: HashMap<String, String>, span: Span) -> Self {
         Self {
             relation_name,
             parameters,
