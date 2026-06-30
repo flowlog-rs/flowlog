@@ -1,15 +1,19 @@
 //! Aggregation model: combine UI tree (from ops.json) with time and memory logs.
 
-use crate::Result;
-use crate::log::{MemoryIndex, TimeIndex};
-use crate::ops::{NodeSpec, RuleSpec, normalize_parents};
-use crate::stats::Stats;
-use flowlog_profiler::Addr;
-
-use anyhow::bail;
-use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+
+use anyhow::bail;
+use flowlog_profiler::Addr;
+use serde::Serialize;
+
+use crate::Result;
+use crate::log::MemoryIndex;
+use crate::log::TimeIndex;
+use crate::ops::NodeSpec;
+use crate::ops::RuleSpec;
+use crate::ops::normalize_parents;
+use crate::stats::Stats;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OperatorView {

@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::format_ident;
@@ -23,8 +25,6 @@ use crate::codegen::data_type_tokens;
 use crate::codegen::ident::find_local_ident;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
 
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.

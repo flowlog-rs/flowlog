@@ -9,6 +9,8 @@ repository.workspace = true
 description = "FlowLog profiling model: the plan graph runtime metrics attach to."
 
 [dependencies]
+flowlog-common.workspace = true
+
 serde = { workspace = true }
 serde_json.workspace = true
 tracing.workspace = true

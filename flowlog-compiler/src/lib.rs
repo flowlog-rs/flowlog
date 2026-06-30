@@ -36,10 +36,10 @@ pub use cli::Cli;
 pub use error::CompilerError;
 use flowlog_build::CodeGen;
 use flowlog_build::planner::ProgramPlanner;
-use flowlog_build::profiler::Profiler;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_parser::Program;
+use flowlog_profiler::Profiler;
 pub use options::CompileOptions;
 
 /// Drives code generation + build for a single FlowLog program.

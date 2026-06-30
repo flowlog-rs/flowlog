@@ -7,10 +7,10 @@ use std::collections::HashSet;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_parser::Program;
+use flowlog_profiler::Profiler;
 
 use crate::optimizer::Optimizer;
 use crate::planner::StratumPlanner;
-use flowlog_profiler::Profiler;
 use crate::stratifier::Stratifier;
 
 /// Whole-program planning.

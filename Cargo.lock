@@ -424,6 +424,7 @@ dependencies = [
 name = "flowlog-profiler"
 version = "0.1.0"
 dependencies = [
+ "flowlog-common",
  "serde",
  "serde_json",
  "tracing",

@@ -1,7 +1,9 @@
 //! Node profiling structures.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::Addr;
 

@@ -19,16 +19,20 @@
 //! columns are new in the unified log; they are parsed past but not yet surfaced
 //! in the report.
 
-use crate::Result;
-use crate::stats::Stats;
-use flowlog_profiler::Addr;
-
-use anyhow::{Context, anyhow, bail};
-use regex::Regex;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
+
+use anyhow::Context;
+use anyhow::anyhow;
+use anyhow::bail;
+use flowlog_profiler::Addr;
+use regex::Regex;
+
+use crate::Result;
+use crate::stats::Stats;
 
 // ---------------------------------------------------------------------------
 // Aggregated row types (mean + variance across workers)

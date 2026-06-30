@@ -2,13 +2,15 @@
 
 use std::collections::HashSet;
 
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 use proc_macro2::TokenStream;
 
+use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
 use crate::codegen::idb_buffers::InspectorCodegen;
 use crate::codegen::profile::render_profile_ops_const;
-use crate::codegen::{CodeGen, CodegenError};
 use crate::planner::StratumPlanner;
-use flowlog_profiler::{Profiler, with_profiler};
 
 /// Token-stream fragments and rendered source files produced by
 /// [`CodeGen::generate`]. All fields are `pub` so consumers can

@@ -8,17 +8,24 @@
 //! against the parsed source on both success and failure.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
+use flowlog_common::BoxError;
+use flowlog_common::Config;
+use flowlog_common::SourceMap;
+use flowlog_parser::Program;
+use flowlog_profiler::Profiler;
 use proc_macro2::TokenStream;
 
-use crate::build::relation::{gen_input_module, validate_api_surface};
+use crate::BuildError;
+use crate::Builder;
+use crate::CodeGen;
+use crate::CodeParts;
+use crate::build::relation::gen_input_module;
+use crate::build::relation::validate_api_surface;
 use crate::codegen::Features;
 use crate::planner::ProgramPlanner;
-use flowlog_profiler::Profiler;
-use crate::{BuildError, Builder, CodeGen, CodeParts};
-use flowlog_common::{BoxError, Config, SourceMap};
-use flowlog_parser::Program;
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
 pub(crate) struct Pipeline {
@@ -51,7 +58,7 @@ impl Pipeline {
         validate_api_surface(&program)?;
         let mut profiler = config
             .profiling_enabled()
-            .then(|| Profiler::new(config.mode().profile_mode()));
+            .then(|| Profiler::new(config.mode()));
         let program_planner = ProgramPlanner::from_program(&config, &program, &mut profiler)?;
 
         let mut cg = CodeGen::new(config.clone(), program.clone());
@@ -75,8 +82,7 @@ fn parse(
     sm: &mut SourceMap,
 ) -> Result<Program, BoxError> {
     let include_refs: Vec<&Path> = include_dirs.iter().map(PathBuf::as_path).collect();
-    Program::parse_with_includes(config.program(), config.is_extended(), &include_refs, sm)
-        .map_err(Into::into)
+    Program::parse(config.program(), config.is_extended(), &include_refs, sm).map_err(Into::into)
 }
 
 /// Project a [`Builder`] onto the shared pipeline [`Config`].

@@ -7,7 +7,8 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tracing::error;
 
 /// Address in a Timely Dataflow log, representing nested scopes.

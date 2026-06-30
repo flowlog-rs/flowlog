@@ -8,6 +8,8 @@
 
 use flowlog_parser::DataType;
 use flowlog_parser::Relation;
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 use proc_macro2::Ident;
 use proc_macro2::Span;
 use proc_macro2::TokenStream;
@@ -16,8 +18,6 @@ use syn::Index;
 
 use crate::codegen::CodeGen;
 use crate::codegen::ty::tuple_type;
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
 
 // =========================================================================
 // Output struct

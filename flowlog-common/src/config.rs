@@ -25,18 +25,6 @@ pub enum ExecutionMode {
 }
 
 impl ExecutionMode {
-    /// Map onto the profiler's local mode enum (the profiler crate is
-    /// independent of `flowlog-build`, so it carries its own copy).
-    pub fn profile_mode(self) -> flowlog_profiler::ProfileMode {
-        use flowlog_profiler::ProfileMode;
-        match self {
-            Self::DatalogBatch => ProfileMode::DatalogBatch,
-            Self::DatalogInc => ProfileMode::DatalogInc,
-            Self::ExtendBatch => ProfileMode::ExtendBatch,
-            Self::ExtendInc => ProfileMode::ExtendInc,
-        }
-    }
-
     pub(crate) fn is_incremental(self) -> bool {
         matches!(self, Self::DatalogInc | Self::ExtendInc)
     }

@@ -1,10 +1,10 @@
 //! Report rendering (HTML).
 
-use crate::Result;
-use crate::view::ReportData;
-
 use serde::Serialize;
 use serde_json::to_string;
+
+use crate::Result;
+use crate::view::ReportData;
 
 const TEMPLATE: &str = include_str!("../templates/report.html");
 

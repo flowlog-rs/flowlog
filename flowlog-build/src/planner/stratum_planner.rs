@@ -10,6 +10,8 @@ use flowlog_parser::AggregationOperator;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::HeadArg;
 use flowlog_parser::LoopCondition;
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 use tracing::debug;
 use tracing::trace;
 
@@ -18,8 +20,6 @@ use crate::optimizer::Optimizer;
 use crate::planner::PlanError;
 use crate::planner::RulePlanner;
 use crate::planner::Transformation;
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
 use crate::stratifier::Stratifier;
 
 /// Planner for a single stratum (a group of parallel rules).

@@ -29,6 +29,7 @@ pub use features::Features;
 use flowlog_common::Config;
 use flowlog_parser::DataType;
 use flowlog_parser::Program;
+use flowlog_profiler::Profiler;
 pub use idb_buffers::field_accessor;
 pub use idb_buffers::gen_drain_block;
 use proc_macro2::Ident;
@@ -37,7 +38,6 @@ pub use ty::data::data_type_tokens;
 pub(crate) use ty::data::{tuple_tokens, user_tuple_tokens};
 
 use crate::planner::ProgramPlanner;
-use flowlog_profiler::Profiler;
 
 pub struct CodeGen {
     pub(crate) config: Config,

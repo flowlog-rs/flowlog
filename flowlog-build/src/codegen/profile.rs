@@ -18,11 +18,11 @@
 //! - `<stem>_log/metrics/metrics_worker_t{t}_{index}.log` — `t`=0 batch, txn
 //!   time incremental.
 
+use flowlog_profiler::Profiler;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::codegen::CodeGen;
-use flowlog_profiler::Profiler;
 
 impl CodeGen {
     /// Profiler output directory, `<stem>_log` (stem disambiguates programs

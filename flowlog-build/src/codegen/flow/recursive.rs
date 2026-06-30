@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::LoopCondition;
 use flowlog_parser::LoopConnective;
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::format_ident;
@@ -31,8 +33,6 @@ use crate::codegen::aggregation::aggregation_row_chop;
 use crate::codegen::aggregation::aggregation_sum_optimize;
 use crate::codegen::aggregation::aggregation_sum_pre_leave;
 use crate::planner::StratumPlanner;
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
 
 // =========================================================================
 // Recursive Flow Generation

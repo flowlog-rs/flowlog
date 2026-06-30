@@ -13,11 +13,11 @@ repository.workspace = true
 clap = ["dep:clap"]
 
 [dependencies]
+clap = { workspace = true, optional = true }
 codespan-reporting.workspace = true
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 syn = { workspace = true, features = ["full"] }
-clap = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

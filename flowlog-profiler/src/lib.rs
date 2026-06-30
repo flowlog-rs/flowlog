@@ -23,31 +23,15 @@ mod steps;
 
 use std::io;
 
-use serde::{Deserialize, Serialize};
-
 pub use addr::Addr;
+use flowlog_common::ExecutionMode;
 pub use node::NodeProfile;
-pub use rule::{PlanTreeNodeProfile, RuleProfile};
+pub use rule::PlanTreeNodeProfile;
+pub use rule::RuleProfile;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::node::NodeManager;
-
-/// Execution mode, as far as the profiler's operator step counts care.
-///
-/// Mirrors the compiler's `ExecutionMode` but is kept local so this crate has
-/// no dependency on `flowlog-build`; the compiler maps its mode onto this when
-/// constructing a [`Profiler`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
-pub enum ProfileMode {
-    /// Datalog single-pass batch execution.
-    #[default]
-    DatalogBatch,
-    /// Datalog incremental execution.
-    DatalogInc,
-    /// Extended batch execution with explicit `loop` blocks.
-    ExtendBatch,
-    /// Extended incremental execution with explicit `loop` blocks.
-    ExtendInc,
-}
 
 /// Profiler that records the operator plan graph during compilation.
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -59,7 +43,7 @@ pub struct Profiler {
     node_manager: NodeManager,
 
     #[serde(skip)]
-    mode: ProfileMode,
+    mode: ExecutionMode,
 }
 
 /// Run a closure if a profiler instance is present.
@@ -86,7 +70,7 @@ where
 
 impl Profiler {
     /// Create a new profiler with the given execution mode.
-    pub fn new(mode: ProfileMode) -> Self {
+    pub fn new(mode: ExecutionMode) -> Self {
         Self {
             mode,
             ..Default::default()
