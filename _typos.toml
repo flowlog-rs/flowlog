@@ -3,8 +3,15 @@
 
 [files]
 # Datalog programs use arbitrary user-defined relation names, not prose;
-# fact/fixture/oracle dirs are data. None are worth spell-checking.
-extend-exclude = ["*.dl", "facts/**", "tests/fixtures/**", "tests/oracle/**"]
+# fact/fixture/oracle dirs are data; the visualizer templates are vendored
+# HTML/JS (arbitrary identifiers like `ba`/`bb`). None are worth spell-checking.
+extend-exclude = [
+    "*.dl",
+    "facts/**",
+    "tests/fixtures/**",
+    "tests/oracle/**",
+    "flowlog-visualizer/templates/**",
+]
 
 [default.extend-words]
 # Valid technical terms typos flags as misspellings (mapped to themselves).
