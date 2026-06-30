@@ -65,7 +65,8 @@ impl Compiler {
 
     /// Emit the scaffolded Rust crate, run `cargo build --release`, copy the
     /// binary to [`CompileOptions::executable_path`], and clean up build artifacts
-    /// unless [`CompileOptions::save_temps`] is set.
+    /// unless [`CompileOptions::save_temps`] is set. When [`CompileOptions::check_only`]
+    /// is set, the crate is type-checked with `cargo check` instead.
     ///
     /// Returns a [`BoxError`] on failure — user-facing codegen diagnostics
     /// propagate directly, and infrastructure failures (cargo shell-out,
@@ -76,7 +77,11 @@ impl Compiler {
         profiler: &mut Option<Profiler>,
     ) -> Result<(), BoxError> {
         self.emit_sources(program_planner, profiler)?;
-        self.build().map_err(CompilerError::from)?;
+        if self.options.check_only() {
+            self.check().map_err(CompilerError::from)?;
+        } else {
+            self.build().map_err(CompilerError::from)?;
+        }
         Ok(())
     }
 }

@@ -62,6 +62,11 @@ pub struct Cli {
     #[arg(long)]
     pub save_temps: bool,
 
+    /// Type-check the generated crate with `cargo check` instead of building
+    /// an executable. Faster; conflicts with `-o`.
+    #[arg(long, conflicts_with = "executable_path")]
+    pub check: bool,
+
     /// Extra search directory for `.include` directives. May be specified
     /// multiple times. Includes are resolved by trying the parent file's
     /// directory first, then each `-I` directory in order.
@@ -92,6 +97,7 @@ impl Cli {
             self.output_dir.clone(),
             self.fact_dir.clone(),
             self.save_temps,
+            self.check,
         )
     }
 }

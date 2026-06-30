@@ -76,7 +76,7 @@ impl Compiler {
         let crate_name = self.options.crate_name();
         let executable_path = self.options.executable_path();
 
-        run_cargo_build(&build_dir)?;
+        run_cargo(&build_dir, &["build", "--release"])?;
 
         // Cargo produces the binary under the sanitized crate name; copy it
         // to the user's requested path (appending `.exe` on Windows if the
@@ -89,8 +89,23 @@ impl Compiler {
         install_binary(&built, &dest)?;
         info!("Executable written to '{}'", dest.display());
 
+        self.cleanup_build_dir(&build_dir)?;
+
+        Ok(())
+    }
+
+    /// Type-check the emitted crate with `cargo check`.
+    pub(crate) fn check(&self) -> io::Result<()> {
+        let build_dir = self.options.build_dir();
+        run_cargo(&build_dir, &["check"])?;
+        self.cleanup_build_dir(&build_dir)?;
+        Ok(())
+    }
+
+    /// Remove the intermediate crate directory unless `--save-temps` is set.
+    fn cleanup_build_dir(&self, build_dir: &Path) -> io::Result<()> {
         if !self.options.save_temps() {
-            fs::remove_dir_all(&build_dir).map_err(|e| {
+            fs::remove_dir_all(build_dir).map_err(|e| {
                 io::Error::new(
                     e.kind(),
                     format!(
@@ -100,19 +115,18 @@ impl Compiler {
                 )
             })?;
         }
-
         Ok(())
     }
 }
 
-/// Invoke `cargo build --release` in `build_dir` and propagate any failure.
+/// Invoke `cargo <args>` in `build_dir` and propagate any failure.
 ///
 /// Surfaces a friendly "install Rust via rustup" hint if `cargo` isn't on
 /// `PATH`, and otherwise forwards cargo's stderr so users can see the
 /// underlying compiler error.
-fn run_cargo_build(build_dir: &Path) -> io::Result<()> {
+fn run_cargo(build_dir: &Path, args: &[&str]) -> io::Result<()> {
     let output = process::Command::new("cargo")
-        .args(["build", "--release"])
+        .args(args)
         .current_dir(build_dir)
         .output()
         .map_err(|e| match e.kind() {
@@ -120,13 +134,14 @@ fn run_cargo_build(build_dir: &Path) -> io::Result<()> {
                 io::ErrorKind::NotFound,
                 "cargo not found — install Rust via https://rustup.rs",
             ),
-            kind => io::Error::new(kind, format!("failed to run cargo build: {e}")),
+            kind => io::Error::new(kind, format!("failed to run cargo: {e}")),
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(io::Error::other(format!(
-            "cargo build --release failed:\n{stderr}"
+            "cargo {} failed:\n{stderr}",
+            args.join(" ")
         )));
     }
     Ok(())

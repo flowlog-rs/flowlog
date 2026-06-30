@@ -16,6 +16,8 @@ pub struct CompileOptions {
     fact_dir: Option<String>,
     /// Keep the intermediate generated Rust crate instead of cleaning it up.
     save_temps: bool,
+    /// Type-check the emitted crate with `cargo check`.
+    check_only: bool,
 }
 
 impl CompileOptions {
@@ -27,6 +29,7 @@ impl CompileOptions {
         output_dir: Option<String>,
         fact_dir: Option<String>,
         save_temps: bool,
+        check_only: bool,
     ) -> Self {
         let executable_path = executable_path
             .map(PathBuf::from)
@@ -36,6 +39,7 @@ impl CompileOptions {
             output_dir,
             fact_dir,
             save_temps,
+            check_only,
         }
     }
 
@@ -93,5 +97,9 @@ impl CompileOptions {
 
     pub fn save_temps(&self) -> bool {
         self.save_temps
+    }
+
+    pub fn check_only(&self) -> bool {
+        self.check_only
     }
 }
