@@ -32,7 +32,7 @@ pub use program::Program;
 // submodule paths and don't need a shortcut here.
 pub(crate) use logic::{
     Aggregation, Arithmetic, Atom, AtomArg, BuiltinCall, ComparisonExpr, Factor, FnCall, HeadArg,
-    IterativeDirective, LoopCondition, LoopConnective, Predicate,
+    IterativeDirective, LoopCondition, LoopConnective, Predicate, TupleElem, TupleLit,
 };
 pub(crate) use segment::Segment;
 

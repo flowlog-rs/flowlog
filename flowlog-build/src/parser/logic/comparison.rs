@@ -82,6 +82,22 @@ pub(crate) struct ComparisonExpr {
 }
 
 impl ComparisonExpr {
+    /// Build a comparison directly.
+    #[must_use]
+    pub(crate) fn new(
+        left: Arithmetic,
+        operator: ComparisonOperator,
+        right: Arithmetic,
+        span: Span,
+    ) -> Self {
+        Self {
+            left,
+            operator,
+            right,
+            span: Ignored(span),
+        }
+    }
+
     /// Source location this comparison was parsed from.
     #[must_use]
     #[inline]

@@ -1,0 +1,10 @@
+.type UserId    <: symbol
+.type ProductId <: symbol
+.type Box = (u: UserId)
+.decl In(u: UserId)
+.decl Boxed(b: Box)
+.decl Out(x: ProductId)
+.input In(IO="file", filename="In.csv", delimiter=",")
+.output Out
+Boxed(box) :- In(u), box = (u,).
+Out(p) :- Boxed(box), (p,) = box.

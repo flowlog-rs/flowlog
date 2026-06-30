@@ -53,7 +53,7 @@ impl CodeGen {
         keys.iter()
             .chain(vals)
             .nth(agg_pos)
-            .copied()
+            .cloned()
             .ok_or_else(|| {
                 CodegenError::internal(format!(
                     "aggregation position {agg_pos} out of bounds for \
@@ -129,7 +129,7 @@ impl CodeGen {
     ) -> Result<DataType, CodegenError> {
         match factor {
             FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => {
-                slot(left_type, *is_key).get(*idx).copied().ok_or_else(|| {
+                slot(left_type, *is_key).get(*idx).cloned().ok_or_else(|| {
                     CodegenError::internal(format!(
                         "KV slot out of bounds: is_key={is_key}, idx={idx}, \
                      left shape=({}, {})",
@@ -149,7 +149,7 @@ impl CodeGen {
                         )
                     })?
                 };
-                slot(base, *is_key).get(*idx).copied().ok_or_else(|| {
+                slot(base, *is_key).get(*idx).cloned().ok_or_else(|| {
                     CodegenError::internal(format!(
                         "join slot out of bounds: is_left={is_left}, is_key={is_key}, idx={idx}"
                     ))
@@ -169,6 +169,30 @@ impl CodeGen {
                 .ok_or_else(|| CodegenError::internal(format!("UDF `{name}` not declared"))),
             FactorArgument::Builtin { op, .. } => Ok(op.ret_type()),
             FactorArgument::Group(a) => self.infer_expr_type(a, left_type, right_type),
+            // Tuple construct → fixed tuple of the components' types.
+            FactorArgument::Tuple { fields } => {
+                let dts = fields
+                    .iter()
+                    .map(|f| self.infer_expr_type(f, left_type, right_type))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(DataType::FixedTuple(dts))
+            }
+            // Tuple projection → the indexed field's type.
+            FactorArgument::TupleProj { tuple, index } => {
+                match self.infer_expr_type(tuple, left_type, right_type)? {
+                    DataType::FixedTuple(fields) => {
+                        fields.get(*index).cloned().ok_or_else(|| {
+                            CodegenError::internal(format!(
+                                "tuple projection index {index} out of bounds (arity {})",
+                                fields.len()
+                            ))
+                        })
+                    }
+                    other => Err(CodegenError::internal(format!(
+                        "tuple projection of a non-tuple type {other:?}"
+                    ))),
+                }
+            }
         }
     }
 }
@@ -198,7 +222,7 @@ pub(crate) fn user_tuple_tokens(input_types: &[DataType]) -> TokenStream {
 }
 
 pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
-    match *dt {
+    match dt {
         DataType::Int8 => quote! { i8 },
         DataType::Int16 => quote! { i16 },
         DataType::Int32 => quote! { i32 },
@@ -211,14 +235,19 @@ pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
         DataType::Float64 => quote! { f64 },
         DataType::String => quote! { String },
         DataType::Bool => quote! { bool },
+        // A tuple column is a nested tuple of its fields' user types.
+        DataType::FixedTuple(fields) => user_tuple_tokens(fields),
     }
 }
 
 fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
-    match *dt {
+    match dt {
         DataType::Float32 => quote! { OrderedFloat<f32> },
         DataType::Float64 => quote! { OrderedFloat<f64> },
         DataType::String if string_intern => quote! { Spur },
+        // A tuple column is a nested tuple of its fields' internal types
+        // (strings intern to `Spur`, floats wrap, nested records recurse).
+        DataType::FixedTuple(fields) => data_type_tokens(fields, string_intern),
         _ => user_column_tokens(dt),
     }
 }

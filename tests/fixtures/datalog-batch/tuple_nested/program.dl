@@ -1,0 +1,29 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_nested
+// Feature : nested tuples — construct two levels deep `(p, (q, r))`, output the
+//           nested form `(p, (q, r))`, then destructure both levels back to
+//           scalars. Exercises recursive construct + recursive destructure.
+//           `Nest1` also covers a nested *singleton* `(p, (q,))`, where the
+//           trailing comma must appear at the inner level too.
+// ════════════════════════════════════════════════════════════════════════════
+
+.type Inner = ( a: symbol, b: symbol )
+.type Outer = ( x: symbol, inner: Inner )
+
+.type One     = ( a: symbol )
+.type OuterOne = ( x: symbol, inner: One )
+
+.decl In(p: symbol, q: symbol, r: symbol)
+.decl Built(o: Outer)
+.decl Unpacked(x: symbol, a: symbol, b: symbol)
+.decl Nest1(o: OuterOne)
+
+In("p", "q", "r").
+
+Built(o) :- In(p, q, r), o = (p, (q, r)).
+Unpacked(x, a, b) :- Built(o), (x, inner) = o, (a, b) = inner.
+Nest1(o) :- In(p, q, r), o = (p, (q,)).
+
+.output Built
+.output Unpacked
+.output Nest1

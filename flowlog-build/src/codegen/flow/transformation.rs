@@ -4,7 +4,6 @@
 //! such as Row-to-Row, Row-to-KV, KV-to-KV, KV-to-Row, Joins, and Antijoins
 //! in the differential dataflow pipelines.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 use proc_macro2::{Ident, TokenStream};
@@ -12,8 +11,7 @@ use quote::{format_ident, quote};
 
 use crate::codegen::arg::{
     build_kv_constraints_predicate, build_row_constraints_predicate, combine_predicates,
-    compute_join_param_tokens, compute_kv_param_tokens, kv_use_counts, row_pattern_and_fields,
-    row_use_counts,
+    compute_join_param_tokens, compute_kv_param_tokens, row_pattern_and_fields,
 };
 use crate::codegen::ident::find_local_ident;
 use crate::codegen::{CodeGen, CodegenError, data_type_tokens};
@@ -104,13 +102,7 @@ impl CodeGen {
 
                 // Output expression + predicates
                 let row_ty = data_type_tokens(&itype, si);
-                let remaining = RefCell::new(row_use_counts(&[flow.value()]));
-                let out_val = self.build_key_val_from_row_args(
-                    flow.value(),
-                    &row_fields,
-                    si,
-                    Some(&remaining),
-                )?;
+                let out_val = self.build_key_val_from_row_args(flow.value(), &row_fields, si)?;
                 let cmp_pred = self.build_row_compare_predicate(
                     flow.compares(),
                     &row_fields,
@@ -174,19 +166,8 @@ impl CodeGen {
 
                 // Output expression + predicates
                 let row_ty = data_type_tokens(&itype, si);
-                let remaining = RefCell::new(row_use_counts(&[flow.key(), flow.value()]));
-                let out_key = self.build_key_val_from_row_args(
-                    flow.key(),
-                    &row_fields,
-                    si,
-                    Some(&remaining),
-                )?;
-                let out_val = self.build_key_val_from_row_args(
-                    flow.value(),
-                    &row_fields,
-                    si,
-                    Some(&remaining),
-                )?;
+                let out_key = self.build_key_val_from_row_args(flow.key(), &row_fields, si)?;
+                let out_val = self.build_key_val_from_row_args(flow.value(), &row_fields, si)?;
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
@@ -258,9 +239,7 @@ impl CodeGen {
 
                 // Output value + predicates
                 let input_type = self.find_global_data_type(input.fingerprint())?.clone();
-                let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
-                let out_val =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
+                let out_val = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type)?;
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si)?;
                 let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si)?;
@@ -314,10 +293,8 @@ impl CodeGen {
 
                 // Output expression + predicates
                 let input_type = self.find_global_data_type(input.fingerprint())?.clone();
-                let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
-                let out_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining))?;
-                let out_val =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
+                let out_key = self.build_key_val_from_kv_args(flow.key(), si)?;
+                let out_val = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
@@ -555,9 +532,7 @@ impl CodeGen {
                 // Output expression
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
-                let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
-                let out_map_value =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
+                let out_map_value = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let inter_dedup = self.dedup_antijoin();
                 let final_normalize = self.dedup_recursive();
 
@@ -624,11 +599,8 @@ impl CodeGen {
                 // Output expression
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
-                let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
-                let out_map_key =
-                    self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining))?;
-                let out_map_value =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
+                let out_map_key = self.build_key_val_from_kv_args(flow.key(), si)?;
+                let out_map_value = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let out_map_expr = if output.is_k_only() {
                     quote! { #out_map_key }
                 } else {

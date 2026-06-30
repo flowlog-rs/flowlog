@@ -234,10 +234,28 @@ fn collect_instance(
         } = item
         {
             let prefixed = qualify(scope.prefix, name);
-            let resolved = resolve_qualified(parent, *span, scope, false)?;
             match op {
-                RawTypeOp::Alias => registry.register_alias(&prefixed, &resolved, *span)?,
-                RawTypeOp::Subtype => registry.register_subtype(&prefixed, &resolved, *span)?,
+                RawTypeOp::Alias => {
+                    let resolved = resolve_qualified(parent, *span, scope, false)?;
+                    registry.register_alias(&prefixed, &resolved, *span)?;
+                }
+                RawTypeOp::Subtype => {
+                    let resolved = resolve_qualified(parent, *span, scope, false)?;
+                    registry.register_subtype(&prefixed, &resolved, *span)?;
+                }
+                RawTypeOp::Tuple(fields) => {
+                    // Resolve each field type against the instance scope, then register.
+                    let resolved_fields = fields
+                        .iter()
+                        .map(|(fname, ftype)| {
+                            Ok::<_, ParseError>((
+                                fname.clone(),
+                                resolve_qualified(ftype, *span, scope, false)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    registry.register_tuple(&prefixed, &resolved_fields, *span)?;
+                }
             };
         }
     }
@@ -338,6 +356,8 @@ fn resolve_attributes(
                         span,
                         name: resolved.clone(),
                     })?;
+            // Recursive tuples were rejected at registration, so this erases to
+            // a finite fixed tuple.
             Ok(Attribute::with_type(
                 aname.clone(),
                 registry.root_primitive(tid),

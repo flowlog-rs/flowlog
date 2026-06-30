@@ -23,9 +23,15 @@ use crate::codegen::tuple_tokens;
 use crate::parser::{DataType, Relation};
 
 pub(crate) fn needs_conversion(rel: &Relation, string_intern: bool) -> bool {
+    // Leaf-aware: a tuple column needs conversion when any of its (possibly
+    // nested) leaves is a float or an interned string, since the public
+    // `rel::*` tuple alias holds `f32`/`String` while the internal tuple holds
+    // `OrderedFloat`/`Spur`.
     rel.data_type().iter().any(|dt| {
-        matches!(dt, DataType::Float32 | DataType::Float64)
-            || (string_intern && matches!(dt, DataType::String))
+        dt.any_leaf(&|l| {
+            matches!(l, DataType::Float32 | DataType::Float64)
+                || (string_intern && matches!(l, DataType::String))
+        })
     })
 }
 

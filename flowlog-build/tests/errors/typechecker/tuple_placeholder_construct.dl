@@ -1,0 +1,6 @@
+.type P = (a: symbol, b: symbol)
+.decl In(x: symbol, y: symbol)
+.decl Out(p: P)
+.input In(IO="file", filename="In.csv", delimiter=",")
+.output Out
+Out(p) :- In(x, y), p = (x, _).

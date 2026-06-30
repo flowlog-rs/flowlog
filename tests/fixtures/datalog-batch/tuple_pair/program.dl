@@ -1,0 +1,22 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_pair
+// Feature : fixed tuple types — construct, destructure, and the FlowLog tuple
+//           output form `(a, b)` (matches the source syntax; `[ … ]` is
+//           reserved for a future array type).
+//   Out   exercises construct  (p = (x, y)) and tuple-column output.
+//   Back  exercises destructure (p = (a, b)) of a bound tuple column.
+// ════════════════════════════════════════════════════════════════════════════
+
+.type Pair = ( a: symbol, b: symbol )
+
+.decl In(x: symbol, y: symbol)
+.decl Out(p: Pair)
+.decl Back(a: symbol, b: symbol)
+
+In("p", "q").
+
+Out(p)    :- In(x, y), p = (x, y).
+Back(a, b) :- Out(p), p = (a, b).
+
+.output Out
+.output Back

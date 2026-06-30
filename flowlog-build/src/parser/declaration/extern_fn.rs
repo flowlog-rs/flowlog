@@ -44,7 +44,7 @@ impl ExternFn {
     #[must_use]
     #[inline]
     pub(crate) fn ret_type(&self) -> DataType {
-        self.ret_type
+        self.ret_type.clone()
     }
 
     /// Number of parameters (arity). Tests only; production code uses `params().len()`.
@@ -137,11 +137,8 @@ fn parse_param(param_node: Pair<Rule>, registry: &TypeRegistry) -> Result<Attrib
         .as_str()
         .parse::<DataType>()
         .map_err(|e| grammar_bug(format!("invalid type in extern fn param: {e}")))?;
-    Ok(Attribute::with_type(
-        name,
-        data_type,
-        registry.primitive_id(data_type),
-    ))
+    let declared_id = registry.primitive_id(data_type.clone());
+    Ok(Attribute::with_type(name, data_type, declared_id))
 }
 
 #[cfg(test)]

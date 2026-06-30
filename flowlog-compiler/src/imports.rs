@@ -130,7 +130,7 @@ pub(crate) fn gen_binary_relation_extras(
         .collect();
     let first_cols: Vec<flowlog_build::parser::DataType> = non_nullary_edbs
         .iter()
-        .filter_map(|r| r.data_type().first().copied())
+        .filter_map(|r| r.data_type().first().cloned())
         .collect();
     let needs_int = first_cols
         .iter()

@@ -174,6 +174,17 @@ fn type_decl_unknown_parent() {
 }
 
 #[test]
+fn tuple_subtype_decl() {
+    // `.type T <: ( … )` must error: a tuple is defined with `=`, and the `<:`
+    // operator can't be silently dropped (it would register an ordinary tuple).
+    assert_err!(
+        parse("tuple_subtype_decl.dl", true),
+        ParseError::TupleSubtypeDecl { .. },
+        ["must be defined with `=`"]
+    );
+}
+
+#[test]
 fn attribute_unknown_type() {
     assert_err!(
         parse("attribute_unknown_type.dl", true),

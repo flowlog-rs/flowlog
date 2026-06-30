@@ -187,6 +187,74 @@ fn head_narrowing_without_cast() {
 }
 
 #[test]
+fn tuple_field_pack_subtype() {
+    // Packing a `ProductId` into a `(u: UserId)` tuple field must be rejected:
+    // the erased primitive pass sees `symbol` on both sides, so only the
+    // field-wise subtype descent catches the nominal mismatch.
+    assert_err!(
+        typecheck("tuple_field_pack_subtype.dl"),
+        TypeCheckError::HeadSubtypeMismatch { .. },
+        ["expects `userid`", "productid"]
+    );
+}
+
+#[test]
+fn tuple_field_destructure_subtype() {
+    // Destructuring a `UserId` field into a `ProductId` head column: the
+    // projection carries the field's declared identity, so the subtype pass
+    // rejects the narrowing.
+    assert_err!(
+        typecheck("tuple_field_destructure_subtype.dl"),
+        TypeCheckError::HeadSubtypeMismatch { .. },
+        ["expects `productid`", "userid"]
+    );
+}
+
+#[test]
+fn tuple_ordering_op_rejected() {
+    // Tuples support only `=`/`!=`; ordering (`< > <= >=`) has no defined
+    // meaning and is rejected at type-check rather than emitting bad Rust.
+    assert_err!(
+        typecheck("tuple_ordering_op.dl"),
+        TypeCheckError::ComparisonOpNotAllowed { .. },
+        ["not allowed", "FixedTuple"]
+    );
+}
+
+#[test]
+fn tuple_string_builtin_rejected() {
+    // A string built-in (`cat`) applied to a whole tuple: the arg-type check
+    // rejects it (tuple is not `String`).
+    assert_err!(
+        typecheck("tuple_string_builtin.dl"),
+        TypeCheckError::BuiltinArgType { .. },
+        ["cat", "expects", "FixedTuple"]
+    );
+}
+
+#[test]
+fn tuple_placeholder_in_construct_rejected() {
+    // `_` is only meaningful when destructuring; a placeholder in a construct
+    // (`p = (x, _)`) has no value to supply and is rejected.
+    assert_err!(
+        typecheck("tuple_placeholder_construct.dl"),
+        TypeCheckError::TuplePlaceholderInConstruct { .. },
+        ["placeholder", "constructing a tuple"]
+    );
+}
+
+#[test]
+fn tuple_aggregation_rejected() {
+    // `sum`/`avg`/`min`/`max` require a numeric input; a tuple column is not
+    // numeric, so aggregating over it is rejected.
+    assert_err!(
+        typecheck("tuple_aggregation.dl"),
+        TypeCheckError::AggregationInputNotNumeric { .. },
+        ["numeric input", "FixedTuple"]
+    );
+}
+
+#[test]
 fn cast_unknown_type() {
     assert_err!(
         typecheck("cast_unknown_type.dl"),

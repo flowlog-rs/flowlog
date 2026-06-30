@@ -35,7 +35,7 @@ use crate::parser::error::ParseError;
 /// - `"bool"` → [`DataType::Bool`]
 ///
 /// They are used as attribute types in relations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DataType {
     /// 8-bit signed integer type.
     Int8,
@@ -61,6 +61,8 @@ pub enum DataType {
     String,
     /// Boolean type.
     Bool,
+    /// A fixed tuple type.
+    FixedTuple(Vec<DataType>),
 }
 
 impl DataType {
@@ -87,6 +89,20 @@ impl DataType {
     /// Returns `true` for floating-point types (`Float32`, `Float64`).
     pub fn is_float(&self) -> bool {
         matches!(self, Self::Float32 | Self::Float64)
+    }
+
+    /// `true` if this column type is a fixed tuple.
+    pub(crate) fn is_tuple(&self) -> bool {
+        matches!(self, DataType::FixedTuple(_))
+    }
+
+    /// `true` if `pred` holds for any scalar leaf of this type, recursing
+    /// through tuple (`FixedTuple`) columns.
+    pub(crate) fn any_leaf(&self, pred: &impl Fn(&DataType) -> bool) -> bool {
+        match self {
+            DataType::FixedTuple(fields) => fields.iter().any(|f| f.any_leaf(pred)),
+            other => pred(other),
+        }
     }
 
     /// Returns the semiring type suffix, e.g. `"I32"`, `"U64"`, `"F32"`.
@@ -158,6 +174,14 @@ impl fmt::Display for DataType {
             Self::Float64 => "f64",
             Self::String => "string",
             Self::Bool => "bool",
+            Self::FixedTuple(fields) => {
+                let inner = fields
+                    .iter()
+                    .map(DataType::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return write!(f, "({inner})");
+            }
         };
         write!(f, "{type_str}")
     }
@@ -205,11 +229,19 @@ const PRIM_NAMES: [(DataType, &[&str]); 12] = [
     (DataType::Bool, &["bool"]),
 ];
 
+/// Definition of a tuple type, keyed by its [`TypeId`] in [`TypeRegistry`].
+#[derive(Debug, Clone)]
+pub(crate) struct TupleDef {
+    /// Field types, as `TypeId`s.
+    pub(crate) fields: Vec<TypeId>,
+}
+
 /// Interned table of every type the program can refer to.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
     types: Vec<TypeDef>,
     by_name: HashMap<String, TypeId>,
+    tuples: HashMap<TypeId, TupleDef>,
 }
 
 impl TypeRegistry {
@@ -219,12 +251,13 @@ impl TypeRegistry {
         let mut reg = Self {
             types: Vec::with_capacity(16),
             by_name: HashMap::with_capacity(20),
+            tuples: HashMap::new(),
         };
         for (i, (prim, names)) in PRIM_NAMES.iter().enumerate() {
             reg.types.push(TypeDef {
                 name: names[0].to_string(),
                 parent: None,
-                root_primitive: *prim,
+                root_primitive: prim.clone(),
                 span: Span::DUMMY,
             });
             for n in *names {
@@ -248,7 +281,7 @@ impl TypeRegistry {
     #[must_use]
     #[inline]
     pub(crate) fn root_primitive(&self, id: TypeId) -> DataType {
-        self.types[id.0].root_primitive
+        self.types[id.0].root_primitive.clone()
     }
 
     /// Canonical `TypeId` for a built-in primitive. O(1) — primitives
@@ -257,7 +290,7 @@ impl TypeRegistry {
     pub(crate) fn primitive_id(&self, dt: DataType) -> TypeId {
         let idx = PRIM_NAMES
             .iter()
-            .position(|(p, _)| *p == dt)
+            .position(|(p, _)| p == &dt)
             .expect("every DataType variant is in PRIM_NAMES");
         TypeId(idx)
     }
@@ -286,7 +319,15 @@ impl TypeRegistry {
     ) -> Result<TypeId, ParseError> {
         let canonical = self.reject_duplicate(name, span)?;
         let parent_id = self.resolve_parent(name, parent_name, span)?;
-        let root = self.types[parent_id.0].root_primitive;
+        // A subtype of a tuple type is not allowed.
+        if self.tuples.contains_key(&parent_id) {
+            return Err(ParseError::SubtypeOfTuple {
+                span,
+                name: name.to_string(),
+                parent: parent_name.to_string(),
+            });
+        }
+        let root = self.types[parent_id.0].root_primitive.clone();
         let id = TypeId(self.types.len());
         self.types.push(TypeDef {
             name: canonical.clone(),
@@ -296,6 +337,85 @@ impl TypeRegistry {
         });
         self.by_name.insert(canonical, id);
         Ok(id)
+    }
+
+    /// `.type T = (f0:T0, …, fk:Tk)` — register a fixed tuple type. `fields` is
+    /// the list of `(field_name, field_type_name)` in source order.
+    ///
+    /// Two-phase so a self-reference can be *detected*: the tuple's own `TypeId`
+    /// and name are reserved *before* its field types are looked up, so a field
+    /// typed as this very tuple resolves to it. **Rejects recursion** (a field
+    /// transitively reaching this tuple).
+    pub(crate) fn register_tuple(
+        &mut self,
+        name: &str,
+        fields: &[(String, String)],
+        span: Span,
+    ) -> Result<TypeId, ParseError> {
+        let canonical = self.reject_duplicate(name, span)?;
+
+        // Phase 1: reserve id + name before resolving fields, so a self-typed
+        // field resolves to this tuple and the recursion check below sees it.
+        let id = TypeId(self.types.len());
+        self.types.push(TypeDef {
+            name: canonical.clone(),
+            parent: None,
+            // Overwritten below once fields are erased.
+            root_primitive: DataType::FixedTuple(Vec::new()),
+            span,
+        });
+        self.by_name.insert(canonical, id);
+
+        // Phase 2: resolve field types (self-name now resolves to `id`).
+        let mut field_ids = Vec::with_capacity(fields.len());
+        for (fname, ftype) in fields {
+            let fid = self
+                .lookup(ftype)
+                .ok_or_else(|| ParseError::TupleFieldUnknownType {
+                    span,
+                    tuple: name.to_string(),
+                    field: fname.clone(),
+                    field_type: ftype.clone(),
+                })?;
+            field_ids.push(fid);
+        }
+
+        // Recursive tuples are not supported — reject at definition with a clean
+        // error rather than carrying a representation we can't lower.
+        if self.tuple_reaches(id, &field_ids) {
+            return Err(ParseError::RecursiveTuple {
+                span,
+                name: name.to_string(),
+            });
+        }
+
+        // Non-recursive: erase each field to its primitive (a nested tuple field
+        // erases to its own already-computed fixed tuple).
+        let erased: Vec<DataType> = field_ids.iter().map(|&fid| self.root_primitive(fid)).collect();
+        self.types[id.0].root_primitive = DataType::FixedTuple(erased);
+        self.tuples.insert(id, TupleDef { fields: field_ids });
+        Ok(id)
+    }
+
+    /// Does any of `fields` transitively reach `target` (i.e. is the tuple being
+    /// registered recursive)? Follows nested tuple fields through the `tuples`
+    /// table. The target's own `TupleDef` is not yet inserted during
+    /// registration, so a direct self-reference is caught by `t == target`.
+    fn tuple_reaches(&self, target: TypeId, fields: &[TypeId]) -> bool {
+        let mut stack: Vec<TypeId> = fields.to_vec();
+        let mut seen: std::collections::HashSet<TypeId> = std::collections::HashSet::new();
+        while let Some(t) = stack.pop() {
+            if t == target {
+                return true;
+            }
+            if !seen.insert(t) {
+                continue;
+            }
+            if let Some(def) = self.tuples.get(&t) {
+                stack.extend(def.fields.iter().copied());
+            }
+        }
+        false
     }
 
     fn reject_duplicate(&self, name: &str, span: Span) -> Result<String, ParseError> {
@@ -361,6 +481,12 @@ impl TypeRegistry {
     #[must_use]
     pub(crate) fn name_of(&self, id: TypeId) -> &str {
         &self.types[id.0].name
+    }
+
+    /// Field `TypeId`s of a tuple type, or `None` if `id` is not a tuple.
+    #[must_use]
+    pub(crate) fn tuple_field_ids(&self, id: TypeId) -> Option<&[TypeId]> {
+        self.tuples.get(&id).map(|def| def.fields.as_slice())
     }
 }
 
@@ -534,5 +660,103 @@ mod tests {
         let n = r.primitive_id(DataType::Int32);
         assert!(r.is_widening(s, n));
         assert!(!r.is_widening(n, s));
+    }
+
+    // ── Tuples ─────────────────────────────────────────────────────────
+
+    fn fields(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(n, t)| (n.to_string(), t.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn flat_tuple_erases_to_fixed_tuple() {
+        let mut r = reg();
+        let id = r
+            .register_tuple("Pair", &fields(&[("a", "symbol"), ("b", "symbol")]), Span::DUMMY)
+            .unwrap();
+        assert_eq!(
+            r.root_primitive(id),
+            DataType::FixedTuple(vec![DataType::String, DataType::String])
+        );
+        // A `.decl` column of this type resolves to one tuple column.
+        assert_eq!(r.lookup("Pair"), Some(id));
+    }
+
+    #[test]
+    fn tuple_fields_may_be_heterogeneous() {
+        let mut r = reg();
+        let id = r
+            .register_tuple("Mix", &fields(&[("a", "symbol"), ("b", "number")]), Span::DUMMY)
+            .unwrap();
+        assert_eq!(
+            r.root_primitive(id),
+            DataType::FixedTuple(vec![DataType::String, DataType::Int32])
+        );
+    }
+
+    #[test]
+    fn tuple_fields_may_nest_non_recursively() {
+        let mut r = reg();
+        r.register_tuple("Pair", &fields(&[("a", "symbol"), ("b", "symbol")]), Span::DUMMY)
+            .unwrap();
+        let outer = r
+            .register_tuple("Outer", &fields(&[("p", "Pair"), ("n", "number")]), Span::DUMMY)
+            .unwrap();
+        assert_eq!(
+            r.root_primitive(outer),
+            DataType::FixedTuple(vec![
+                DataType::FixedTuple(vec![DataType::String, DataType::String]),
+                DataType::Int32,
+            ])
+        );
+    }
+
+    #[test]
+    fn tuple_arity_is_not_capped_at_registration() {
+        // No arity cap yet (see `register_tuple`): a wide tuple registers fine.
+        // A >12 tuple still fails later in the generated crate until the nested
+        // representation lands — that's intentional for now.
+        let mut r = reg();
+        let wide: Vec<(String, String)> =
+            (0..13).map(|i| (format!("f{i}"), "symbol".to_string())).collect();
+        assert!(r.register_tuple("Wide", &wide, Span::DUMMY).is_ok());
+    }
+
+    #[test]
+    fn unknown_field_type_is_rejected() {
+        let mut r = reg();
+        assert!(matches!(
+            r.register_tuple("R", &fields(&[("a", "Nope")]), Span::DUMMY),
+            Err(ParseError::TupleFieldUnknownType { .. })
+        ));
+    }
+
+    #[test]
+    fn self_referential_tuple_is_rejected() {
+        let mut r = reg();
+        // `.type List = ( head: symbol, tail: List )` — a tuple referencing its
+        // own type is recursive and rejected at registration.
+        assert!(matches!(
+            r.register_tuple(
+                "List",
+                &fields(&[("head", "symbol"), ("tail", "List")]),
+                Span::DUMMY,
+            ),
+            Err(ParseError::RecursiveTuple { .. })
+        ));
+    }
+
+    #[test]
+    fn subtyping_a_tuple_is_rejected() {
+        let mut r = reg();
+        r.register_tuple("Pair", &fields(&[("a", "symbol"), ("b", "symbol")]), Span::DUMMY)
+            .unwrap();
+        assert!(matches!(
+            r.register_subtype("P2", "Pair", Span::DUMMY),
+            Err(ParseError::SubtypeOfTuple { .. })
+        ));
     }
 }

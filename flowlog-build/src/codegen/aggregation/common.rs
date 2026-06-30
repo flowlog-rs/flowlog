@@ -17,7 +17,7 @@ use crate::codegen::{CodegenError, tuple_tokens};
 // ==================================================
 
 /// Semiring type ident, e.g. `MinI32`, `SumF64`.
-fn agg_semiring_type_ident(op: AggregationOperator, dt: DataType) -> proc_macro2::Ident {
+fn agg_semiring_type_ident(op: AggregationOperator, dt: &DataType) -> proc_macro2::Ident {
     format_ident!("{}{}", op.semiring_prefix(), dt.semiring_suffix())
 }
 
@@ -28,7 +28,7 @@ pub(super) fn agg_semiring_new(
     agg_type: DataType,
 ) -> TokenStream {
     let field = format_ident!("x{}", agg_pos);
-    let ty = agg_semiring_type_ident(op, agg_type);
+    let ty = agg_semiring_type_ident(op, &agg_type);
     quote! { #ty::new(#field) }
 }
 
@@ -36,7 +36,7 @@ pub(super) fn agg_semiring_new(
 ///
 /// Float types use `OrderedFloat(1.0)` as the argument.
 pub(super) fn agg_semiring_unit(op: AggregationOperator, agg_type: DataType) -> TokenStream {
-    let ty = agg_semiring_type_ident(op, agg_type);
+    let ty = agg_semiring_type_ident(op, &agg_type);
     if agg_type.is_float() {
         quote! { #ty::new(OrderedFloat(1.0)) }
     } else {
