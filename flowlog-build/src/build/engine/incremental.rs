@@ -381,8 +381,7 @@ fn gen_worker_closure(
     let inspectors = &parts.inspectors;
     let flush = &parts.flush;
     let profile_init = &parts.profile_init;
-    let time_profile_write = &parts.time_profile_write_incremental;
-    let memory_profile_write = &parts.memory_profile_write_incremental;
+    let metrics_write = &parts.metrics_write_incremental;
 
     let inputs_new_args = gen_inputs_new_args(program);
 
@@ -472,8 +471,7 @@ fn gen_worker_closure(
                             worker.step();
                         }
 
-                        #time_profile_write
-                        #memory_profile_write
+                        #metrics_write
 
                         #(#flush)*
 

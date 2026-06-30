@@ -10,7 +10,7 @@ use quote::{format_ident, quote};
 
 use crate::parser::{AggregationOperator, LoopCondition, LoopConnective};
 use crate::planner::StratumPlanner;
-use crate::profiler::{Profiler, with_profiler};
+use flowlog_profiler::{Profiler, with_profiler};
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;

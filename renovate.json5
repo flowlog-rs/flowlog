@@ -1,7 +1,8 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   // Batch update PRs into one quiet weekly sweep (vortex-style cadence).
-  extends: ["config:recommended", "schedule:earlyMondays"],
+  // `:gitSignOff` adds a DCO `Signed-off-by` trailer so bot PRs pass the DCO check.
+  extends: ["config:recommended", "schedule:earlyMondays", ":gitSignOff"],
 
   // With a weekly schedule there is no reason to trickle PRs out.
   prHourlyLimit: 0,

@@ -3,30 +3,30 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::profiler::addr::Addr;
+use crate::Addr;
 
 /// A profiled node in the dataflow plan graph.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub(super) struct NodeProfile {
+pub struct NodeProfile {
     /// Node id.
-    id: usize,
+    pub id: usize,
     /// Human-friendly node name.
-    name: String,
+    pub name: String,
     /// Block label (e.g., input/stratum/inspect) for grouping in UI.
-    block: String,
+    pub block: String,
     /// Optional fingerprint used to identify the rule transformation.
-    fingerprint: Option<String>,
+    pub fingerprint: Option<String>,
     /// Tags for presentation and filtering.
-    tags: Vec<String>,
+    pub tags: Vec<String>,
     /// Operator addresses associated with this node.
-    operators: Vec<Addr>,
+    pub operators: Vec<Addr>,
     /// Parent node ids (upstream dependencies).
-    parents: Vec<usize>,
+    pub parents: Vec<usize>,
 }
 
 /// Internal nodes manager that tracks ids, scope addresses, and dependencies.
 #[derive(Debug, Clone, Default)]
-pub(super) struct NodeManager {
+pub(crate) struct NodeManager {
     /// Next node id to allocate.
     id_cnt: usize,
     /// Address counter used to create operator addresses.
@@ -40,33 +40,33 @@ pub(super) struct NodeManager {
 
 impl NodeManager {
     /// Switch to the input block label.
-    pub(super) fn update_input_block(&mut self) {
+    pub(crate) fn update_input_block(&mut self) {
         self.block = "input".to_string();
     }
 
     /// Switch to a stratum block label.
-    pub(super) fn update_stratum_block(&mut self, stratum_id: usize) {
+    pub(crate) fn update_stratum_block(&mut self, stratum_id: usize) {
         self.block = format!("stratum {}", stratum_id);
     }
 
     /// Switch to the inspect block label.
-    pub(super) fn update_inspect_block(&mut self) {
+    pub(crate) fn update_inspect_block(&mut self) {
         self.block = "inspect".to_string();
     }
 
     /// Enter a nested scope for address generation.
-    pub(super) fn enter_scope(&mut self) {
+    pub(crate) fn enter_scope(&mut self) {
         self.addr_cnt.enter_scope();
     }
 
     /// Leave the current scope for address generation.
-    pub(super) fn leave_scope(&mut self) {
+    pub(crate) fn leave_scope(&mut self) {
         self.addr_cnt.leave_scope();
         self.addr_cnt.advance(1);
     }
 
     /// Build a node with common metadata, optional fingerprint, and parents.
-    pub(super) fn build_node(
+    pub(crate) fn build_node(
         &mut self,
         name: String,
         input_variable_names: Vec<String>,

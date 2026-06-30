@@ -1,0 +1,39 @@
+addr                 acts   active_ms   tup_in     tup_out    arr_in     merges  merge_in    merge_out   dropped    bat_bytes    bat_cap      name
+[0]                  28     0.464       n/a        n/a        n/a        n/a     n/a         n/a         n/a        n/a          n/a          Dataflow
+[0, 1]               2      0.000       n/a        1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          Input
+[0, 2]               2      0.017       1          1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 3]               3      0.016       1          1          0          0       0           0           0          0            0            Consolidate
+[0, 4]               3      0.005       1          1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          AsCollection
+[0, 5]               2      0.000       n/a        1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          Input
+[0, 6]               2      0.011       1          1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 7]               3      0.013       2          1          0          0       0           0           0          0            0            Consolidate
+[0, 8]               3      0.002       1          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          AsCollection
+[0, 9]               3      0.002       1          1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 10]              3      0.004       1          1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 11]              4      0.003       1          1          0          0       0           0           0          0            0            Consolidate
+[0, 12]              3      0.003       1          1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          AsCollection
+[0, 13]              3      0.007       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 14]              4      0.013       1          1          1          0       0           0           1          0            0            ArrangeByKey
+[0, 15]              21     0.221       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          Iterative
+[0, 15, 1]           4      0.004       1          1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          Enter
+[0, 15, 2]           4      0.008       1          1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 15, 3]           6      0.003       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          Feedback
+[0, 15, 4]           6      0.004       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 15, 5]           6      0.004       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 15, 6]           9      0.014       2          2          0          0       0           0           0          0            0            ArrangeBySelf
+[0, 15, 7]           10     0.036       3          1          n/a        n/a     n/a         n/a         n/a        n/a          n/a          Join
+[0, 15, 8]           6      0.002       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          Concatenate
+[0, 15, 9]           6      0.013       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 15, 10]          9      0.012       2          2          2          2       3           3           2          0            0            Arrange: ThresholdTotal
+[0, 15, 11]          7      0.016       2          4          n/a        n/a     n/a         n/a         n/a        n/a          n/a          ThresholdTotal
+[0, 15, 12]          6      0.005       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          ResultsIn
+[0, 16]              7      0.003       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          Leave
+[0, 17]              6      0.004       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 18]              8      0.004       2          1          0          0       0           0           0          0            0            Consolidate
+[0, 19]              4      0.001       1          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          AsCollection
+[0, 20]              4      0.003       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 21]              4      0.003       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 22]              4      0.004       2          2          n/a        n/a     n/a         n/a         n/a        n/a          n/a          FlatMap
+[0, 23]              5      0.004       0          0          0          0       0           0           0          0            0            Consolidate
+[0, 24]              2      0.002       0          0          n/a        n/a     n/a         n/a         n/a        n/a          n/a          AsCollection
+[0, 25]              2      0.001       0          n/a        n/a        n/a     n/a         n/a         n/a        n/a          n/a          InspectBatch

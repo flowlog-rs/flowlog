@@ -16,7 +16,7 @@ use tracing::trace;
 
 use crate::parser::AggregationOperator;
 use crate::planner::StratumPlanner;
-use crate::profiler::{Profiler, with_profiler};
+use flowlog_profiler::{Profiler, with_profiler};
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;

@@ -54,9 +54,9 @@ pub(crate) fn gen_lib_imports(
     quote! { #(#out)* }
 }
 
-/// Items the generated `OpStats` / `DdArrangeStats` structs and their
-/// loggers reference unqualified — kept conditional so non-profile builds
-/// don't drag in `HashMap` / `File` / timely+DD logging for nothing.
+/// Items the generated `OpMetrics` struct and its loggers reference
+/// unqualified — kept conditional so non-profile builds don't drag in
+/// `HashMap` / `File` / timely+DD logging for nothing.
 fn profile_imports(profile: bool) -> TokenStream {
     if !profile {
         return quote! {};

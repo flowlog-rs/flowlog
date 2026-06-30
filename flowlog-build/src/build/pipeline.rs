@@ -17,7 +17,7 @@ use crate::codegen::Features;
 use crate::common::{BoxError, Config, SourceMap};
 use crate::parser::Program;
 use crate::planner::ProgramPlanner;
-use crate::profiler::Profiler;
+use flowlog_profiler::Profiler;
 use crate::{BuildError, Builder, CodeGen, CodeParts};
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
@@ -51,7 +51,7 @@ impl Pipeline {
         validate_api_surface(&program)?;
         let mut profiler = config
             .profiling_enabled()
-            .then(|| Profiler::new(config.mode()));
+            .then(|| Profiler::new(config.mode().profile_mode()));
         let program_planner = ProgramPlanner::from_program(&config, &program, &mut profiler)?;
 
         let mut cg = CodeGen::new(config.clone(), program.clone());

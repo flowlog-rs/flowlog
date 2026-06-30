@@ -57,3 +57,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: crate-ci/typos@v1.47.2
+
+  lint-toml:
+    name: 🧹 taplo (TOML format + lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: ⬇️ Install taplo
+        run: |
+          curl -fsSL https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz \
+            | gunzip | sudo tee /usr/local/bin/taplo > /dev/null
+          sudo chmod +x /usr/local/bin/taplo
+          taplo --version
+      - name: 🎨 taplo fmt --check
+        run: taplo fmt --check --diff
+      - name: 🔍 taplo lint
+        run: taplo lint

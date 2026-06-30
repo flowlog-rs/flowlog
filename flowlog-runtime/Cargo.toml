@@ -14,10 +14,10 @@ keywords = ["datalog", "dataflow", "differential", "timely"]
 categories = ["database", "compilers"]
 
 [dependencies]
-timely = "0.30"
-differential-dataflow = "0.24"
-ordered-float = { version = "5.0", features = ["serde"] }
-lasso = { version = "0.7", features = ["multi-threaded", "serialize"] }
-regex = "1.0"
-rustc-hash = "2.0"
+differential-dataflow.workspace = true
+lasso = { workspace = true, features = ["multi-threaded", "serialize"] }
+ordered-float = { workspace = true, features = ["serde"] }
+regex.workspace = true
+rustc-hash.workspace = true
 serde = { workspace = true }
+timely.workspace = true

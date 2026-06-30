@@ -72,8 +72,6 @@ pub mod parser;
 #[doc(hidden)]
 pub mod planner;
 #[doc(hidden)]
-pub mod profiler;
-#[doc(hidden)]
 pub mod stratifier;
 #[doc(hidden)]
 pub mod typechecker;
