@@ -2,10 +2,13 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt;
+use std::mem;
 
 use flowlog_common::Config;
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
+use flowlog_common::Span;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::HeadArg;
@@ -339,8 +342,8 @@ impl StratumPlanner {
     }
 }
 
-impl std::fmt::Display for StratumPlanner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for StratumPlanner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", SECTION_BAR)?;
 
         let stratum_name = if self.is_recursive {
@@ -438,7 +441,7 @@ impl StratumPlanner {
     fn identify_recursive_transformations(&mut self, is_recursive: bool) {
         if !is_recursive {
             // Non-recursive stratum: all transformations are non-recursive
-            self.non_recursive_transformations = std::mem::take(&mut self.transformations);
+            self.non_recursive_transformations = mem::take(&mut self.transformations);
             debug!(
                 "Non-recursive stratum: all {} transformations are non-recursive",
                 self.non_recursive_transformations.len()
@@ -474,10 +477,7 @@ impl StratumPlanner {
         }
 
         // Step 3: Separate transformations into non-recursive and recursive vectors
-        for (i, transformation) in std::mem::take(&mut self.transformations)
-            .into_iter()
-            .enumerate()
-        {
+        for (i, transformation) in mem::take(&mut self.transformations).into_iter().enumerate() {
             if dynamic_indices.contains(&i) {
                 self.recursive_transformations.push(transformation);
             } else {
@@ -562,7 +562,7 @@ impl StratumPlanner {
     ) -> Result<(), PlanError> {
         // Side map of first-seen head spans used only when constructing
         // the `InconsistentAggregation` diagnostic's `prior_span`.
-        let mut prior_spans: HashMap<u64, flowlog_common::Span> = HashMap::new();
+        let mut prior_spans: HashMap<u64, Span> = HashMap::new();
 
         for catalog in catalogs {
             let head_args = catalog.head_arguments();
@@ -613,7 +613,7 @@ impl StratumPlanner {
                         prior_span: prior_spans
                             .get(&head_idb_fp)
                             .copied()
-                            .unwrap_or(flowlog_common::Span::DUMMY),
+                            .unwrap_or(Span::DUMMY),
                         rel: stratifier.display_name(head_idb_fp, catalog.rule().head().name()),
                         existing_op,
                         existing_pos,

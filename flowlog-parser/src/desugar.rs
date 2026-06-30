@@ -28,6 +28,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::mem;
 
 use flowlog_common::Span;
 
@@ -60,7 +61,7 @@ pub(crate) fn desugar_equality_assignments(
         };
 
         let mut kept = Vec::with_capacity(rules.len());
-        for mut rule in std::mem::take(rules) {
+        for mut rule in mem::take(rules) {
             if desugar_rule(&mut rule)? {
                 raw_facts.push(rule);
             } else {
@@ -244,11 +245,10 @@ fn as_assignment(
             if value_vars.iter().any(|v| **v == var) {
                 return None;
             }
-            if value_vars.iter().all(|v| bound.contains(*v)) {
-                Some((var, value_side.clone()))
-            } else {
-                None
-            }
+            value_vars
+                .iter()
+                .all(|v| bound.contains(*v))
+                .then(move || (var, value_side.clone()))
         };
 
     try_side(lhs, rhs).or_else(|| try_side(rhs, lhs))

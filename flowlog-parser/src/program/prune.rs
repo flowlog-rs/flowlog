@@ -148,11 +148,11 @@ impl Program {
             if !processed.insert(rule_id) {
                 continue;
             }
-            for &(dep_rule_id, ref pred_name) in dep_map.get(&rule_id).into_iter().flatten() {
+            for (dep_rule_id, pred_name) in dep_map.get(&rule_id).into_iter().flatten() {
                 needed_preds.insert(pred_name.clone());
-                if dep_rule_id != NO_TOP_LEVEL_RULE_ID && !processed.contains(&dep_rule_id) {
-                    needed_rules.insert(dep_rule_id);
-                    stack.push(dep_rule_id);
+                if *dep_rule_id != NO_TOP_LEVEL_RULE_ID && !processed.contains(dep_rule_id) {
+                    needed_rules.insert(*dep_rule_id);
+                    stack.push(*dep_rule_id);
                 }
             }
         }

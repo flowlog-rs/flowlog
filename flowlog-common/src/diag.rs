@@ -5,10 +5,13 @@
 //! `codespan-reporting`.
 
 use std::error::Error as StdError;
+use std::fmt;
 use std::io;
+use std::process;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use codespan_reporting::diagnostic::Label;
+use codespan_reporting::term;
 
 use crate::source::FileId;
 use crate::source::SourceMap;
@@ -78,8 +81,8 @@ impl InternalError {
     }
 }
 
-impl std::fmt::Display for InternalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for InternalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "internal compiler error at stage `{}`: {}",
@@ -109,25 +112,23 @@ impl Diagnostic for InternalError {
 /// diagnostic. CLI binaries usually want [`emit_and_exit`] instead.
 pub fn emit(err: &BoxError, sources: &SourceMap, writer: &mut dyn io::Write) -> io::Result<()> {
     let diag = err.to_diagnostic();
-    let config = codespan_reporting::term::Config::default();
-    codespan_reporting::term::emit_to_io_write(writer, &config, sources, &diag)
-        .map_err(io::Error::other)
+    let config = term::Config::default();
+    term::emit_to_io_write(writer, &config, sources, &diag).map_err(io::Error::other)
 }
 
 /// Render `err` to stderr (colored when stderr is a TTY) and exit: code `2`
 /// for internal errors, `1` otherwise. For CLI binaries; libraries should use
 /// [`emit`] and propagate instead.
 pub fn emit_and_exit(err: impl Into<BoxError>, sources: &SourceMap) -> ! {
-    use codespan_reporting::term::termcolor::ColorChoice;
-    use codespan_reporting::term::termcolor::StandardStream;
+    use term::termcolor::ColorChoice;
+    use term::termcolor::StandardStream;
     let boxed: BoxError = err.into();
     let code = if boxed.is_internal() { 2 } else { 1 };
     let writer = StandardStream::stderr(ColorChoice::Auto);
     let diag = boxed.to_diagnostic();
-    let config = codespan_reporting::term::Config::default();
-    let _ =
-        codespan_reporting::term::emit_to_write_style(&mut writer.lock(), &config, sources, &diag);
-    std::process::exit(code);
+    let config = term::Config::default();
+    let _ = term::emit_to_write_style(&mut writer.lock(), &config, sources, &diag);
+    process::exit(code);
 }
 
 #[cfg(test)]
@@ -138,12 +139,12 @@ mod tests {
 
     #[derive(Debug)]
     struct DemoError {
-        span: crate::source::Span,
+        span: Span,
         msg: &'static str,
     }
 
-    impl std::fmt::Display for DemoError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl fmt::Display for DemoError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{}", self.msg)
         }
     }
@@ -162,7 +163,7 @@ mod tests {
     fn question_mark_boxes_stage_error() {
         fn inner() -> Result<(), DemoError> {
             Err(DemoError {
-                span: crate::source::Span::new(FileId(0), 0, 1),
+                span: Span::new(FileId(0), 0, 1),
                 msg: "inner",
             })
         }
@@ -180,7 +181,7 @@ mod tests {
         let mut sm = SourceMap::new();
         let f = sm.add("demo.dl".into(), "abc def ghi".into());
         let err: BoxError = DemoError {
-            span: crate::source::Span::new(f, 4, 7),
+            span: Span::new(f, 4, 7),
             msg: "bad token",
         }
         .into();

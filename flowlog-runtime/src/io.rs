@@ -31,6 +31,8 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::path::Path;
 
+use lasso::Spur;
+
 // =========================================================================
 // Per-worker partitioning
 // =========================================================================
@@ -166,6 +168,6 @@ pub fn shard_str(first: &str, peers: usize, index: usize) -> bool {
 
 /// Shard an interned-string first column ([`lasso::Spur`]) across `peers`.
 #[inline]
-pub fn shard_spur(first: lasso::Spur, peers: usize, index: usize) -> bool {
+pub fn shard_spur(first: Spur, peers: usize, index: usize) -> bool {
     (first.into_inner().get() as usize) % peers == index
 }

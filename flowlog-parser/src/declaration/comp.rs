@@ -11,6 +11,7 @@ use pest::iterators::Pair;
 
 use crate::Lexeme;
 use crate::Rule;
+use crate::declaration::directive::parse_io_params_node;
 use crate::error::ParseError;
 use crate::error::grammar_bug;
 use crate::logic::FlowLogRule;
@@ -412,7 +413,7 @@ fn parse_io_parts(
         .as_str()
         .to_string();
     let params = match inner.next() {
-        Some(params_node) => super::directive::parse_io_params_node(params_node)?,
+        Some(params_node) => parse_io_params_node(params_node)?,
         None => HashMap::new(),
     };
     Ok((name, params, span))

@@ -27,7 +27,7 @@ fn catalog_for(name: &str) -> (Result<(), CatalogError>, SourceMap) {
 fn unsafe_variable_in_negation() {
     assert_err!(
         catalog_for("unsafe_variable_in_negation.dl"),
-        CatalogError::UnsafeVariable { ref var, ref predicate, .. }
+        CatalogError::UnsafeVariable { var, predicate, .. }
             if var == "other" && predicate.contains("blocked"),
         [
             "unsafe variable",
@@ -42,7 +42,7 @@ fn unsafe_variable_in_negation() {
 fn unsafe_variable_in_comparison() {
     assert_err!(
         catalog_for("unsafe_variable_in_comparison.dl"),
-        CatalogError::UnsafeVariable { ref var, ref predicate, .. }
+        CatalogError::UnsafeVariable { var, predicate, .. }
             if var == "z" && predicate.contains("z"),
         [
             "unsafe variable",
@@ -59,7 +59,7 @@ fn unsafe_variable_in_fn_call() {
     // An unbound var inside it is reported through the comparison predicate.
     assert_err!(
         catalog_for("unsafe_variable_in_fn_call.dl"),
-        CatalogError::UnsafeVariable { ref var, ref predicate, .. }
+        CatalogError::UnsafeVariable { var, predicate, .. }
             if var == "z" && predicate.contains("is_positive"),
         [
             "unsafe variable",

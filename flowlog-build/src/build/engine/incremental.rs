@@ -29,6 +29,7 @@
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
+use proc_macro2::Literal;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
@@ -807,7 +808,7 @@ fn tuple_to_user_from_row(rel: &Relation, string_intern: bool) -> TokenStream {
         string_intern,
         quote! { row.0 },
         |i| {
-            let idx = proc_macro2::Literal::usize_unsuffixed(i);
+            let idx = Literal::usize_unsuffixed(i);
             quote! { row.0.#idx }
         },
         |dt, src| tuple_to_user_expr(dt, string_intern, src),

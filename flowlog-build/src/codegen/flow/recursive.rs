@@ -11,6 +11,7 @@ use flowlog_parser::LoopConnective;
 use flowlog_profiler::Profiler;
 use flowlog_profiler::with_profiler;
 use proc_macro2::Ident;
+use proc_macro2::Literal;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
@@ -733,16 +734,16 @@ fn build_iter_conditions(ranges: &[(u16, u16)]) -> TokenStream {
         .map(|&(lo, hi)| match (lo, hi) {
             (0, u16::MAX) => quote! { true },
             (0, hi) => {
-                let h = proc_macro2::Literal::u16_suffixed(hi);
+                let h = Literal::u16_suffixed(hi);
                 quote! { i <= #h }
             }
             (lo, u16::MAX) => {
-                let l = proc_macro2::Literal::u16_suffixed(lo);
+                let l = Literal::u16_suffixed(lo);
                 quote! { i >= #l }
             }
             (lo, hi) => {
-                let l = proc_macro2::Literal::u16_suffixed(lo);
-                let h = proc_macro2::Literal::u16_suffixed(hi);
+                let l = Literal::u16_suffixed(lo);
+                let h = Literal::u16_suffixed(hi);
                 quote! { (i >= #l && i <= #h) }
             }
         })

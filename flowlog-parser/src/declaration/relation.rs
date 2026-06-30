@@ -14,6 +14,7 @@ use crate::Rule;
 use crate::error::ParseError;
 use crate::error::grammar_bug;
 use crate::primitive::DataType;
+use crate::primitive::TypeId;
 use crate::primitive::TypeRegistry;
 use crate::span_of;
 use crate::type_ref_name;
@@ -264,7 +265,7 @@ impl Relation {
     /// Per-attribute declared `TypeId`s. Used by the typechecker;
     /// downstream stages use [`Self::data_type`].
     #[must_use]
-    pub fn attribute_declared_ids(&self) -> Vec<crate::primitive::TypeId> {
+    pub fn attribute_declared_ids(&self) -> Vec<TypeId> {
         self.attributes.iter().map(|a| a.declared_id()).collect()
     }
 

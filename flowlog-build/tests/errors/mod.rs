@@ -32,7 +32,7 @@ macro_rules! assert_err {
     ($res_sm:expr, $pat:pat $(if $guard:expr)?, [$($expected:expr),* $(,)?]) => {{
         let (res, sm) = $res_sm;
         let err = res.expect_err("expected stage error");
-        assert!(matches!(err, $pat $(if $guard)?), "got {err:?}");
+        assert!(matches!(&err, $pat $(if $guard)?), "got {err:?}");
         let out = render(err, &sm);
         $(
             assert!(

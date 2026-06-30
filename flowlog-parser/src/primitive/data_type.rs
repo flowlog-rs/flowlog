@@ -8,6 +8,7 @@
 //!   Subtypes are zero-cost compile-time phantom types.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -407,7 +408,7 @@ impl TypeRegistry {
     /// registration, so a direct self-reference is caught by `t == target`.
     fn tuple_reaches(&self, target: TypeId, fields: &[TypeId]) -> bool {
         let mut stack: Vec<TypeId> = fields.to_vec();
-        let mut seen: std::collections::HashSet<TypeId> = std::collections::HashSet::new();
+        let mut seen: HashSet<TypeId> = HashSet::new();
         while let Some(t) = stack.pop() {
             if t == target {
                 return true;

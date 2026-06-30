@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::slice;
 use std::sync::Arc;
 
 use flowlog_parser::ConstType;
@@ -345,7 +346,7 @@ impl TransformationFlow {
                         FactorPos::Group(a) => {
                             // Reuse the call-arg lowering: a grouped expression
                             // resolves its inner signatures the same way.
-                            let inner = lower_call_args(std::slice::from_ref(a))
+                            let inner = lower_call_args(slice::from_ref(a))
                                 .pop()
                                 .expect("group lowering yields exactly one arithmetic");
                             FactorArgument::Group(Box::new(inner))
@@ -354,7 +355,7 @@ impl TransformationFlow {
                             fields: lower_call_args(fields),
                         },
                         FactorPos::TupleProj { tuple, index } => {
-                            let inner = lower_call_args(std::slice::from_ref(tuple))
+                            let inner = lower_call_args(slice::from_ref(tuple))
                                 .pop()
                                 .expect("proj lowering yields exactly one arithmetic");
                             FactorArgument::TupleProj {

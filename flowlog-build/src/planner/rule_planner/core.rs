@@ -162,7 +162,7 @@ impl RulePlanner {
             rhs_name,
             new_name.clone(),
             KeyValueLayout::new(lhs_keys.clone(), lhs_vals.clone()),
-            KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
+            KeyValueLayout::new(rhs_keys, rhs_vals.clone()),
             KeyValueLayout::new(
                 lhs_keys,
                 lhs_vals.iter().chain(rhs_vals.iter()).cloned().collect(),
@@ -238,9 +238,7 @@ mod tests {
             .find(|t| matches!(t, TransformationInfo::JoinToKV { .. }))
             .expect("JoinToKV transformation missing");
 
-        let sig_of = |pos: &crate::catalog::ArithmeticPos| {
-            *pos.init().as_var_signature().expect("var signature")
-        };
+        let sig_of = |pos: &ArithmeticPos| *pos.init().as_var_signature().expect("var signature");
 
         let out = join.output_kv_layout();
         assert_eq!(out.key().len(), 1, "exactly one join key");

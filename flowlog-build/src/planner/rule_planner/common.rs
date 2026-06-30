@@ -845,7 +845,7 @@ impl RulePlanner {
         self.producer_consumer
             .entry(producer_fp)
             .and_modify(|(producers, _)| producers.push(producer_idx))
-            .or_insert((vec![producer_idx], vec![]));
+            .or_insert_with(|| (vec![producer_idx], vec![]));
     }
 
     /// Registers a consumer transformation for data with a given fingerprint.
@@ -923,8 +923,9 @@ pub(super) fn test_setup(src: &str) -> (RulePlanner, Catalog) {
 
     use flowlog_common::SourceMap;
     use flowlog_parser::Program;
+    use tempfile::NamedTempFile;
 
-    let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+    let mut tmp = NamedTempFile::new().expect("tempfile");
     tmp.write_all(src.as_bytes()).expect("write");
     let mut sm = SourceMap::new();
     let program =

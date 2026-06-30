@@ -21,7 +21,9 @@ mod operators;
 mod rule;
 mod steps;
 
+use std::fs;
 use std::io;
+use std::path::Path;
 
 pub use addr::Addr;
 use flowlog_common::ExecutionMode;
@@ -88,8 +90,8 @@ impl Profiler {
     }
 
     /// Serialize profiler data to a pretty JSON file.
-    pub fn write_json<P: AsRef<std::path::Path>>(&self, path: P) -> io::Result<()> {
-        std::fs::write(path, self.to_json_string())
+    pub fn write_json<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        fs::write(path, self.to_json_string())
     }
 
     /// Serialize profiler data to a pretty JSON string. Used by codegen to

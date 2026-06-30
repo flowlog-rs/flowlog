@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use anyhow::bail;
 use flowlog_profiler::Addr;
 use serde::Serialize;
+use tracing::warn;
 
 use crate::Result;
 use crate::log::MemoryIndex;
@@ -238,10 +239,9 @@ pub fn build_report_data(
                     )
                 }
                 None => {
-                    tracing::warn!(
+                    warn!(
                         "ops.json maps name '{}' to addr {:?}, but addr not found in time log",
-                        name,
-                        addr.0
+                        name, addr.0
                     );
                     (
                         Stats::default(),

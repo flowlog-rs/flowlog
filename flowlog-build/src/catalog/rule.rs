@@ -645,11 +645,12 @@ mod tests {
     use flowlog_common::SourceMap;
     use flowlog_parser::ConstType;
     use flowlog_parser::Program;
+    use tempfile::NamedTempFile;
 
     use super::*;
 
     fn catalog_for(src: &str) -> Catalog {
-        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut tmp = NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
         let program = Program::parse(&tmp.path().to_string_lossy(), false, &[], &mut sm)

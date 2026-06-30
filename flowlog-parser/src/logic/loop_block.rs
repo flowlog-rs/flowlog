@@ -66,14 +66,17 @@
 //! ```
 
 use std::fmt;
+use std::iter;
 
 use educe::Educe;
 use flowlog_common::FileId;
 use flowlog_common::Span;
 use flowlog_common::compute_fp;
 use pest::iterators::Pair;
+use pest::iterators::Pairs;
 
 use super::FlowLogRule;
+use super::consume_plan_directive;
 use crate::Lexeme;
 use crate::Rule;
 use crate::error::ParseError;
@@ -188,7 +191,7 @@ impl StopGroup {
 
     /// Iterator over all `until` relations (first + rest).
     pub fn relations(&self) -> impl Iterator<Item = &StopRelation> {
-        std::iter::once(&self.first).chain(self.rest.iter().map(|(_, r)| r))
+        iter::once(&self.first).chain(self.rest.iter().map(|(_, r)| r))
     }
 }
 
@@ -478,7 +481,7 @@ fn parse_iter_expr(pair: Pair<Rule>) -> Result<IterWindows, ParseError> {
 /// `position` is woven into grammar-bug messages to disambiguate the leading
 /// term from continuation terms.
 fn next_iter_term(
-    children: &mut pest::iterators::Pairs<'_, Rule>,
+    children: &mut Pairs<'_, Rule>,
     position: &str,
 ) -> Result<Vec<(u16, u16)>, ParseError> {
     let op = children
@@ -662,12 +665,7 @@ impl Lexeme for LoopBlock {
                     plan_target_start = Some(start);
                 }
                 Rule::plan_directive => {
-                    crate::logic::consume_plan_directive(
-                        item,
-                        file,
-                        &mut rules,
-                        &mut plan_target_start,
-                    )?;
+                    consume_plan_directive(item, file, &mut rules, &mut plan_target_start)?;
                 }
                 r => {
                     return Err(grammar_bug(format!(

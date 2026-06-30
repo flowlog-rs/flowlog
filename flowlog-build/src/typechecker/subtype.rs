@@ -21,6 +21,8 @@ use flowlog_parser::Arithmetic;
 use flowlog_parser::Atom;
 use flowlog_parser::AtomArg;
 use flowlog_parser::ComparisonExpr;
+use flowlog_parser::ConstType;
+use flowlog_parser::DataType;
 use flowlog_parser::Factor;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::HeadArg;
@@ -169,7 +171,7 @@ fn check_head(
                 {
                     return Err(TypeCheckError::HeadSubtypeMismatch {
                         span: head.span(),
-                        rel: rel_display.clone(),
+                        rel: rel_display,
                         col,
                         expected: reg.name_of(expected_id).to_string(),
                         found: reg.name_of(found_id).to_string(),
@@ -185,7 +187,7 @@ fn check_head(
                 {
                     return Err(TypeCheckError::HeadSubtypeMismatch {
                         span: head.span(),
-                        rel: rel_display.clone(),
+                        rel: rel_display,
                         col,
                         expected: reg.name_of(expected_field).to_string(),
                         found: reg.name_of(found_id).to_string(),
@@ -346,7 +348,7 @@ fn inner_factor_primitive_root(
     f: &Factor,
     reg: &TypeRegistry,
     bindings: &Bindings,
-) -> Option<flowlog_parser::DataType> {
+) -> Option<DataType> {
     match f {
         Factor::Var(v) => bindings.get(v).map(|&(id, _)| reg.root_primitive(id)),
         Factor::Const(_) => None,
@@ -394,10 +396,7 @@ fn lower_factor(f: &mut Factor) {
     // Peel nested casts: `as(as(x, A), B)` collapses to `x`.
     loop {
         if let Factor::Cast(c) = f {
-            let inner = mem::replace(
-                c.inner_mut(),
-                Factor::Const(flowlog_parser::ConstType::Int(0)),
-            );
+            let inner = mem::replace(c.inner_mut(), Factor::Const(ConstType::Int(0)));
             *f = inner;
             continue;
         }

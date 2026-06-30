@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt;
 use std::fmt::Write as _;
 
 use flowlog_parser::Atom;
@@ -194,8 +195,8 @@ impl RulePlanner {
     }
 }
 
-impl std::fmt::Display for RulePlanner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for RulePlanner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some(last) = self.transformations.last() else {
             return writeln!(f, "Plan Tree: (empty)");
         };
@@ -259,11 +260,11 @@ impl<'a> Walker<'a> {
 
     fn fmt_node(
         &mut self,
-        f: &mut std::fmt::Formatter<'_>,
+        f: &mut fmt::Formatter<'_>,
         node: u64,
         prefix: &str,
         is_last: bool,
-    ) -> std::fmt::Result {
+    ) -> fmt::Result {
         let (branch, spacer) = if is_last {
             ("└── ", "    ")
         } else {

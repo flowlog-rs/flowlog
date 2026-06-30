@@ -11,6 +11,7 @@ use flowlog_parser::ComparisonOperator;
 use flowlog_parser::ConstType;
 use flowlog_parser::DataType;
 use proc_macro2::Ident;
+use proc_macro2::Literal;
 use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::format_ident;
@@ -573,43 +574,43 @@ pub fn const_to_token(
             )));
         }
         ConstType::Int8(n) => {
-            let lit = proc_macro2::Literal::i8_unsuffixed(*n);
+            let lit = Literal::i8_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::Int16(n) => {
-            let lit = proc_macro2::Literal::i16_unsuffixed(*n);
+            let lit = Literal::i16_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::Int32(n) => {
-            let lit = proc_macro2::Literal::i32_unsuffixed(*n);
+            let lit = Literal::i32_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::Int64(n) => {
-            let lit = proc_macro2::Literal::i64_unsuffixed(*n);
+            let lit = Literal::i64_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::UInt8(n) => {
-            let lit = proc_macro2::Literal::u8_unsuffixed(*n);
+            let lit = Literal::u8_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::UInt16(n) => {
-            let lit = proc_macro2::Literal::u16_unsuffixed(*n);
+            let lit = Literal::u16_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::UInt32(n) => {
-            let lit = proc_macro2::Literal::u32_unsuffixed(*n);
+            let lit = Literal::u32_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::UInt64(n) => {
-            let lit = proc_macro2::Literal::u64_unsuffixed(*n);
+            let lit = Literal::u64_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::Float32(v) => {
-            let lit = proc_macro2::Literal::f32_unsuffixed(v.into_inner());
+            let lit = Literal::f32_unsuffixed(v.into_inner());
             quote! { OrderedFloat(#lit) }
         }
         ConstType::Float64(v) => {
-            let lit = proc_macro2::Literal::f64_unsuffixed(v.into_inner());
+            let lit = Literal::f64_unsuffixed(v.into_inner());
             quote! { OrderedFloat(#lit) }
         }
         ConstType::Text(s) => {

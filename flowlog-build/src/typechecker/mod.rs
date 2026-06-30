@@ -515,7 +515,7 @@ fn check_head(
                 {
                     return Err(TypeCheckError::HeadColumnType {
                         span: head_span,
-                        rel: rel_display.clone(),
+                        rel: rel_display,
                         col,
                         found: found.clone(),
                         expected,
@@ -695,13 +695,13 @@ fn infer_expr_type(
         if let Some(k) = infer_factor_type(factor, bindings, udfs)? {
             inferred = match inferred {
                 None => Some(k),
-                Some(existing) => Some(merge_lit(&existing, &k).ok_or(
+                Some(existing) => Some(merge_lit(&existing, &k).ok_or_else(|| {
                     TypeCheckError::ArithmeticTypeMismatch {
                         span,
                         left: existing.report_ty(),
                         right: k.report_ty(),
-                    },
-                )?),
+                    }
+                })?),
             };
         }
         if let Some(k) = &inferred {
@@ -1039,11 +1039,12 @@ mod tests {
     use std::io::Write;
 
     use flowlog_common::SourceMap;
+    use tempfile::NamedTempFile;
 
     use super::*;
 
     fn parse_and_check(src: &str) -> Program {
-        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut tmp = NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
         let mut program = Program::parse(&tmp.path().to_string_lossy(), true, &[], &mut sm)
@@ -1232,7 +1233,7 @@ mod tests {
     // =========================================================================
 
     fn parse_and_check_result(src: &str) -> Result<Program, TypeCheckError> {
-        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut tmp = NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
         let mut program = Program::parse(&tmp.path().to_string_lossy(), true, &[], &mut sm)
@@ -1459,7 +1460,7 @@ mod tests {
             .output Out\n\
             Out(p) :- In(p).\n";
         // The `.input` rejection is a ParseError, so it surfaces from parsing.
-        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut tmp = NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
         assert!(

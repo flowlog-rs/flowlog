@@ -1,6 +1,7 @@
 //! Arithmetic expression signatures for FlowLog Datalog programs.
 
 use std::fmt;
+use std::slice;
 
 use flowlog_parser::Arithmetic;
 use flowlog_parser::ArithmeticOperator;
@@ -228,7 +229,7 @@ impl ArithmeticPos {
                 }
                 Factor::TupleProj { tuple, index } => FactorPos::TupleProj {
                     tuple: Box::new(
-                        map_call_args(std::slice::from_ref(tuple.as_ref()), var_id)
+                        map_call_args(slice::from_ref(tuple.as_ref()), var_id)
                             .pop()
                             .expect("proj lowering yields exactly one arithmetic"),
                     ),

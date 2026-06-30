@@ -264,6 +264,8 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
 
 #[cfg(test)]
 mod tests {
+    use std::iter;
+
     use flowlog_common::Config;
     use flowlog_parser::ArithmeticOperator;
     use flowlog_parser::ConstType;
@@ -358,10 +360,10 @@ mod tests {
     #[test]
     fn tuple_tokens_arity_dispatch_keeps_singleton_comma() {
         // Arity 0 → unit type `()`.
-        assert_eq!(tuple_tokens(std::iter::empty()).to_string(), "()");
+        assert_eq!(tuple_tokens(iter::empty()).to_string(), "()");
 
         // Arity 1 → `(T,)` — the comma is the whole point.
-        let single = tuple_tokens(std::iter::once(quote! { i32 })).to_string();
+        let single = tuple_tokens(iter::once(quote! { i32 })).to_string();
         let single_norm: String = single.split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(
             single_norm, "(i32 ,)",

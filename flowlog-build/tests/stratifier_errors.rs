@@ -29,7 +29,7 @@ fn recursion_outside_loop() {
 fn forward_reference() {
     assert_err!(
         stratify("forward_reference.dl", true),
-        StratifyError::ForwardReference { ref rel, .. } if rel == "B",
+        StratifyError::ForwardReference { rel, .. } if rel == "B",
         ["not yet defined", "later segment"]
     );
 }
@@ -47,7 +47,7 @@ fn recursive_stratum_empty() {
 fn iterative_not_in_loop_head() {
     assert_err!(
         stratify("iterative_not_in_loop_head.dl", true),
-        StratifyError::IterativeNotInLoopHead { ref rel, .. } if rel == "ghost",
+        StratifyError::IterativeNotInLoopHead { rel, .. } if rel == "ghost",
         ["`iterative` relation `ghost`", "head"]
     );
 }
@@ -56,7 +56,7 @@ fn iterative_not_in_loop_head() {
 fn iterative_not_recursive() {
     assert_err!(
         stratify("iterative_not_recursive.dl", true),
-        StratifyError::IterativeNotRecursive { ref rel, .. } if rel == "sink",
+        StratifyError::IterativeNotRecursive { rel, .. } if rel == "sink",
         ["not recursive in this loop", "iterative"]
     );
 }
@@ -65,7 +65,7 @@ fn iterative_not_recursive() {
 fn loop_condition_not_recursive() {
     assert_err!(
         stratify("loop_condition_invalid.dl", true),
-        StratifyError::LoopConditionNotRecursive { ref rel, .. } if rel == "done",
+        StratifyError::LoopConditionNotRecursive { rel, .. } if rel == "done",
         [
             "loop until condition",
             "done",

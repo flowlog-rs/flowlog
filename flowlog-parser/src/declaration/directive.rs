@@ -75,7 +75,7 @@ fn parse_io_directive(
 
 /// Parse `io_params` children from a directive's inner pairs into a key→value map.
 fn parse_io_params<'i>(
-    inner: impl Iterator<Item = pest::iterators::Pair<'i, Rule>>,
+    inner: impl Iterator<Item = Pair<'i, Rule>>,
 ) -> Result<HashMap<String, String>, ParseError> {
     let mut parameters = HashMap::new();
     for node in inner {

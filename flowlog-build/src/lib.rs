@@ -70,6 +70,8 @@ pub mod stratifier;
 #[doc(hidden)]
 pub mod typechecker;
 
+use std::env;
+use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -211,7 +213,7 @@ impl Builder {
         let source = build::assemble(&output, out_dir).map_err(BuildError::from)?;
         self.emit_semiring_modules(&output, out_dir)
             .map_err(BuildError::from)?;
-        std::fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;
+        fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;
         self.emit_rerun_if_changed(program_path);
         Ok(())
     }
@@ -227,7 +229,7 @@ impl Builder {
             return Ok(());
         }
         let semiring_dir = out_dir.join("semiring");
-        std::fs::create_dir_all(&semiring_dir)?;
+        fs::create_dir_all(&semiring_dir)?;
 
         const LIB_ALIASES: &str = "\
 use ::flowlog_runtime::serde;
@@ -241,9 +243,9 @@ use ::flowlog_runtime::differential_dataflow;
                 .expect("semiring module path has no file name");
             let dst = semiring_dir.join(fname);
             if fname == "mod.rs" {
-                std::fs::write(dst, content)?;
+                fs::write(dst, content)?;
             } else {
-                std::fs::write(dst, format!("{LIB_ALIASES}{content}"))?;
+                fs::write(dst, format!("{LIB_ALIASES}{content}"))?;
             }
         }
         Ok(())
@@ -263,12 +265,10 @@ use ::flowlog_runtime::differential_dataflow;
 }
 
 fn cargo_out_dir() -> io::Result<PathBuf> {
-    std::env::var_os("OUT_DIR")
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "OUT_DIR not set — run from a build.rs",
-            )
-        })
+    env::var_os("OUT_DIR").map(PathBuf::from).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "OUT_DIR not set — run from a build.rs",
+        )
+    })
 }

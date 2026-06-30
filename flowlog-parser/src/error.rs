@@ -10,6 +10,8 @@
 //! `relation_name`). Those aren't user errors, but they still need to surface
 //! as a structured diagnostic rather than a SIGABRT.
 
+use std::fmt;
+use std::io;
 use std::path::PathBuf;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
@@ -23,6 +25,8 @@ use flowlog_common::primary_label;
 use flowlog_common::secondary_label;
 use thiserror::Error;
 
+use crate::Rule;
+
 /// Which `.decl`-style directive is being reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectiveKind {
@@ -31,8 +35,8 @@ pub enum DirectiveKind {
     PrintSize,
 }
 
-impl std::fmt::Display for DirectiveKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for DirectiveKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             DirectiveKind::Input => ".input",
             DirectiveKind::Output => ".output",
@@ -164,7 +168,7 @@ pub enum ParseError {
         span: Span,
         path: PathBuf,
         #[source]
-        source: std::io::Error,
+        source: io::Error,
     },
 
     /// An `.include` chain cycles back to a file already being loaded.
@@ -333,7 +337,7 @@ pub enum ParseError {
 impl ParseError {
     /// Construct a [`ParseError::Syntax`] from a Pest error, anchoring the
     /// span to `file`.
-    pub fn syntax_from_pest(err: &pest::error::Error<crate::Rule>, file: FileId) -> Self {
+    pub fn syntax_from_pest(err: &pest::error::Error<Rule>, file: FileId) -> Self {
         use pest::error::InputLocation;
         let (start, end) = match err.location {
             InputLocation::Pos(p) => (p as u32, p as u32),

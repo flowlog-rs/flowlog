@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
+use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -85,7 +86,7 @@ fn build_type_registry(parsed_rule: Pair<Rule>, file: FileId) -> Result<TypeRegi
 #[inline]
 fn flush_rules(pending: &mut Vec<FlowLogRule>, out: &mut Vec<Segment>) {
     if !pending.is_empty() {
-        out.push(Segment::Plain(std::mem::take(pending)));
+        out.push(Segment::Plain(mem::take(pending)));
     }
 }
 

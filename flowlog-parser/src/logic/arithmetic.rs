@@ -430,9 +430,7 @@ mod tests {
         use crate::Rule;
 
         let mut pairs = FlowLogParser::parse(Rule::arithmetic_expr, "a * (b + c)").unwrap();
-        let arith =
-            Arithmetic::from_parsed_rule(pairs.next().unwrap(), flowlog_common::FileId::new(0))
-                .unwrap();
+        let arith = Arithmetic::from_parsed_rule(pairs.next().unwrap(), FileId::new(0)).unwrap();
 
         // init = `a`; rest = [(*, Group(b + c))].
         assert!(matches!(arith.init(), Factor::Var(v) if v == "a"));
@@ -464,7 +462,7 @@ mod tests {
 
         let parse = |src: &str| -> Factor {
             let mut pairs = FlowLogParser::parse(Rule::arithmetic_expr, src).unwrap();
-            Arithmetic::from_parsed_rule(pairs.next().unwrap(), flowlog_common::FileId::new(0))
+            Arithmetic::from_parsed_rule(pairs.next().unwrap(), FileId::new(0))
                 .unwrap()
                 .init()
                 .clone()

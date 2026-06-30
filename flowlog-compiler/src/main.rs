@@ -4,6 +4,7 @@
 
 use clap::Parser;
 use flowlog_build::planner::ProgramPlanner;
+use flowlog_build::typechecker::check_program;
 use flowlog_common::SourceMap;
 use flowlog_common::emit_and_exit;
 use flowlog_compiler::Cli;
@@ -35,8 +36,7 @@ fn main() {
     .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Type-check the program.
-    flowlog_build::typechecker::check_program(&mut program, &config)
-        .unwrap_or_else(|err| emit_and_exit(err, &sm));
+    check_program(&mut program, &config).unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Plan into the relational intermediate representation.
     let mut profiler = config

@@ -12,6 +12,8 @@
 //! replaced with real ones once they are known. This allows building
 //! a transformation plan before all details are finalized.
 
+use std::fmt;
+
 use flowlog_common::compute_fp;
 use flowlog_parser::ConstType;
 
@@ -761,7 +763,7 @@ impl TransformationInfo {
     }
 }
 
-impl std::fmt::Display for TransformationInfo {
+impl fmt::Display for TransformationInfo {
     /// Multi-line block form:
     /// ```text
     /// [Join -> KV]
@@ -778,7 +780,7 @@ impl std::fmt::Display for TransformationInfo {
     /// the `TransformationFlow` is only materialized when a `Transformation`
     /// is built from this info. The `F` line is omitted when no predicates
     /// apply.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let coll = |fp: u64, name: &str, kv: &KeyValueLayout| {
             Collection::new(fp, name.to_string(), kv.key(), kv.value())
         };

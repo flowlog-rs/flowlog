@@ -87,6 +87,8 @@ pub(crate) fn find_local_ident(local_fp_to_ident: &HashMap<u64, Ident>, fp: u64)
 #[cfg(test)]
 mod binding_ident_tests {
     use quote::quote;
+    use syn::Block;
+    use syn::parse2;
 
     use super::binding_ident;
 
@@ -100,7 +102,7 @@ mod binding_ident_tests {
         {
             let id = binding_ident(i, kw);
             let ts = quote! { { let #id = 1; let _ = #id; } };
-            syn::parse2::<syn::Block>(ts).unwrap_or_else(|e| {
+            parse2::<Block>(ts).unwrap_or_else(|e| {
                 panic!("keyword {kw:?} -> `{id}` is not a usable binding: {e}")
             });
         }

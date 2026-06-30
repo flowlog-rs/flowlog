@@ -1,6 +1,9 @@
+use std::fs;
 use std::io::Write;
 
 use flowlog_common::SourceMap;
+use tempfile::NamedTempFile;
+use tempfile::tempdir;
 
 use super::*;
 use crate::ComparisonOperator;
@@ -23,7 +26,7 @@ fn parse_program(src: &str) -> Program {
 }
 
 fn parse_program_result(src: &str) -> Result<Program, ParseError> {
-    let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
+    let mut tmp = NamedTempFile::new().expect("failed to create temp file");
     tmp.write_all(src.as_bytes())
         .expect("failed to write temp file");
     let mut sm = SourceMap::new();
@@ -394,9 +397,9 @@ fn multi_head_multi_body_expands() {
 /// and-skip branch at the `completed.contains` check.
 #[test]
 fn diamond_include_dedups_leaf() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = tempdir().expect("tempdir");
     let write = |name: &str, body: &str| {
-        std::fs::write(dir.path().join(name), body).expect("write");
+        fs::write(dir.path().join(name), body).expect("write");
     };
     write(
         "leaf.dl",
@@ -482,7 +485,7 @@ fn output_and_printsize_on_same_relation_rejected() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, ParseError::OutputAndPrintsizeConflict { ref name, .. } if name == "R"),
+        matches!(&err, ParseError::OutputAndPrintsizeConflict { name, .. } if name == "R"),
         "expected OutputAndPrintsizeConflict, got {err:?}"
     );
 }

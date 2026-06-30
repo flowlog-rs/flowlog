@@ -89,7 +89,10 @@ pub(super) fn resolve_includes(
                 source,
             })?;
         let included_source = sm.text(included_file).to_string();
-        let included_base = full_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let included_base = full_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
 
         in_progress.insert(canonical.clone());
         let inlined = resolve_includes(

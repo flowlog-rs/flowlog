@@ -26,6 +26,7 @@ use crate::build::relation::gen_input_module;
 use crate::build::relation::validate_api_surface;
 use crate::codegen::Features;
 use crate::planner::ProgramPlanner;
+use crate::typechecker::check_program;
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
 pub(crate) struct Pipeline {
@@ -52,7 +53,7 @@ impl Pipeline {
 
         let config = build_config(builder, program_str);
         let mut program = parse(&config, &builder.include_dirs, sm)?;
-        crate::typechecker::check_program(&mut program, &config)?;
+        check_program(&mut program, &config)?;
         // The generated library API mirrors relation names verbatim; reject
         // the rare names it cannot represent before codegen runs.
         validate_api_surface(&program)?;

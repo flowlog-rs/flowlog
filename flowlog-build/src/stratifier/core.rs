@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
+use std::iter;
 
 use flowlog_common::Span;
 use flowlog_parser::AggregationOperator;
@@ -252,8 +253,8 @@ impl Stratifier {
                     let n = seg_strata.len();
                     strata.extend(seg_strata);
                     bitmap.extend(seg_bitmap);
-                    loop_conditions.extend(std::iter::repeat_n(None, n));
-                    iterative_rels.extend(std::iter::repeat_with(Vec::new).take(n));
+                    loop_conditions.extend(iter::repeat_n(None, n));
+                    iterative_rels.extend(iter::repeat_with(Vec::new).take(n));
                     id_offset += total;
                 }
                 Segment::Loop(block) | Segment::Fixpoint(block) => {
@@ -782,7 +783,7 @@ impl Stratifier {
                     return Err(StratifyError::ForwardReference {
                         rule: rid,
                         span,
-                        rel: rel_name.to_string(),
+                        rel: rel_name,
                     });
                 }
             }
@@ -1039,7 +1040,8 @@ mod tests {
 
     fn parse_program(source: &str) -> Program {
         use flowlog_common::SourceMap;
-        let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
+        use tempfile::NamedTempFile;
+        let mut tmp = NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())
             .expect("failed to write temp file");
         let mut sm = SourceMap::new();

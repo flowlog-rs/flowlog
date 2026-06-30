@@ -1,6 +1,7 @@
 //! Arithmetic expression representation for query planning in FlowLog Datalog programs.
 
 use std::fmt;
+use std::slice;
 
 use flowlog_parser::ArithmeticOperator;
 use flowlog_parser::BuiltinOperator;
@@ -162,7 +163,7 @@ impl ArithmeticArgument {
                 },
                 FactorPos::TupleProj { tuple, index } => FactorArgument::TupleProj {
                     tuple: Box::new(
-                        map_call_args(std::slice::from_ref(tuple), var_id)
+                        map_call_args(slice::from_ref(tuple), var_id)
                             .pop()
                             .expect("proj lowering yields exactly one arithmetic"),
                     ),

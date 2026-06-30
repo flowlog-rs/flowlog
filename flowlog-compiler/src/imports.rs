@@ -5,6 +5,8 @@
 
 use flowlog_build::Features;
 use flowlog_common::Config;
+use proc_macro2::Ident;
+use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -272,8 +274,8 @@ fn agg_semiring_uses_only(f: &Features) -> TokenStream {
     let uses: Vec<_> = entries
         .iter()
         .map(|(mod_name, ty_name)| {
-            let mod_ident = proc_macro2::Ident::new(mod_name, proc_macro2::Span::call_site());
-            let ty = proc_macro2::Ident::new(ty_name, proc_macro2::Span::call_site());
+            let mod_ident = Ident::new(mod_name, Span::call_site());
+            let ty = Ident::new(ty_name, Span::call_site());
             quote! { use semiring::#mod_ident::#ty; }
         })
         .collect();

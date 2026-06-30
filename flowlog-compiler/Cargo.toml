@@ -24,3 +24,6 @@ flowlog-build.workspace = true
 flowlog-common = { workspace = true, features = ["clap"] }
 flowlog-parser.workspace = true
 flowlog-profiler.workspace = true
+
+[lints]
+workspace = true

@@ -2,6 +2,7 @@
 
 use std::sync::LazyLock;
 use std::sync::OnceLock;
+use std::thread;
 
 use lasso::Key;
 use lasso::Spur;
@@ -31,7 +32,7 @@ pub fn intern(s: &str) -> Spur {
     for _ in 0..MAX_RETRIES {
         match INTERNER.try_get_or_intern(s) {
             Ok(key) => return key,
-            Err(_) => std::thread::yield_now(),
+            Err(_) => thread::yield_now(),
         }
     }
     panic!("string interner failed after {MAX_RETRIES} attempts for {s:?}");

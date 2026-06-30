@@ -1,6 +1,7 @@
 //! Rule profiling data and plan tree rendering helpers.
 
 use std::collections::HashSet;
+use std::iter;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -35,7 +36,7 @@ impl RuleProfile {
         plan_tree_info
             .iter()
             .map(|((fp1, fp2), output_fp)| {
-                let parents = std::iter::once(*fp1)
+                let parents = iter::once(*fp1)
                     .chain(fp2.iter().copied())
                     .filter(|fp| outputs.contains(fp))
                     .map(Self::format_fingerprint)

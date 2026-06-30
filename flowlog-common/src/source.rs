@@ -1,8 +1,12 @@
 //! Source location primitives — spans, file identifiers, and the source map.
 
+use std::fs;
 use std::io;
+use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
+
+use codespan_reporting::files;
 
 /// Identifier for a source file registered with a [`SourceMap`].
 ///
@@ -71,7 +75,7 @@ impl Span {
         }
     }
 
-    pub fn range(&self) -> std::ops::Range<usize> {
+    pub fn range(&self) -> Range<usize> {
         self.start as usize..self.end as usize
     }
 }
@@ -84,9 +88,7 @@ pub(crate) struct SourceFile {
 
 impl SourceFile {
     fn new(path: PathBuf, text: String) -> Self {
-        let line_starts = codespan_reporting::files::line_starts(&text)
-            .map(|n| n as u32)
-            .collect();
+        let line_starts = files::line_starts(&text).map(|n| n as u32).collect();
         Self {
             path,
             text,
@@ -100,7 +102,7 @@ impl SourceFile {
 /// Populated via [`load`](SourceMap::load) or [`add`](SourceMap::add);
 /// each call returns a new [`FileId`]. Resolves byte offsets to
 /// `(line, column)` and exposes source text through
-/// [`codespan_reporting::files::Files`].
+/// [`files::Files`].
 #[derive(Default)]
 pub struct SourceMap {
     files: Vec<SourceFile>,
@@ -114,7 +116,7 @@ impl SourceMap {
     /// Read `path` from disk and register it. Returns its [`FileId`].
     pub fn load(&mut self, path: impl Into<PathBuf>) -> io::Result<FileId> {
         let path = path.into();
-        let text = std::fs::read_to_string(&path)?;
+        let text = fs::read_to_string(&path)?;
         Ok(self.add(path, text))
     }
 
@@ -166,36 +168,28 @@ fn line_index_0(line_starts: &[u32], byte: u32) -> usize {
     }
 }
 
-impl<'a> codespan_reporting::files::Files<'a> for SourceMap {
+impl<'a> files::Files<'a> for SourceMap {
     type FileId = FileId;
     type Name = String;
     type Source = &'a str;
 
-    fn name(&'a self, id: FileId) -> Result<Self::Name, codespan_reporting::files::Error> {
+    fn name(&'a self, id: FileId) -> Result<Self::Name, files::Error> {
         Ok(self.path(id).display().to_string())
     }
 
-    fn source(&'a self, id: FileId) -> Result<Self::Source, codespan_reporting::files::Error> {
+    fn source(&'a self, id: FileId) -> Result<Self::Source, files::Error> {
         Ok(self.text(id))
     }
 
-    fn line_index(
-        &'a self,
-        id: FileId,
-        byte_index: usize,
-    ) -> Result<usize, codespan_reporting::files::Error> {
+    fn line_index(&'a self, id: FileId, byte_index: usize) -> Result<usize, files::Error> {
         Ok(line_index_0(&self.file(id).line_starts, byte_index as u32))
     }
 
-    fn line_range(
-        &'a self,
-        id: FileId,
-        line_index: usize,
-    ) -> Result<std::ops::Range<usize>, codespan_reporting::files::Error> {
+    fn line_range(&'a self, id: FileId, line_index: usize) -> Result<Range<usize>, files::Error> {
         let sf = self.file(id);
         let n = sf.line_starts.len();
         if line_index >= n {
-            return Err(codespan_reporting::files::Error::LineTooLarge {
+            return Err(files::Error::LineTooLarge {
                 given: line_index,
                 max: n - 1,
             });
@@ -261,7 +255,7 @@ mod tests {
     fn load_reads_file_and_indexes_lines() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.dl");
-        std::fs::write(&path, "line one\nline two\n").unwrap();
+        fs::write(&path, "line one\nline two\n").unwrap();
 
         let mut sm = SourceMap::new();
         let f = sm.load(&path).unwrap();

@@ -180,7 +180,7 @@ impl RulePlanner {
             semijoin_name.clone(),
             KeyValueLayout::new(lhs_new_keys.clone(), vec![]),
             KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
-            KeyValueLayout::new(lhs_new_keys.clone(), rhs_vals.clone()),
+            KeyValueLayout::new(lhs_new_keys, rhs_vals.clone()),
             JoinPredicates::default(),
         );
         let semijoin_fp = semijoin_tx.output_info_fp();

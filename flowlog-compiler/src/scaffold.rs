@@ -17,6 +17,7 @@
 //! `write_project` lays out these files from already-rendered strings;
 //! `render_cargo_toml` / `render_cargo_config` produce the metadata.
 
+use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -28,6 +29,7 @@ use toml_edit::Array;
 use toml_edit::DocumentMut;
 use toml_edit::InlineTable;
 use toml_edit::Item;
+use toml_edit::Table;
 use toml_edit::Value;
 use toml_edit::value;
 
@@ -104,7 +106,7 @@ impl Compiler {
 pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Features) -> String {
     let mut doc = DocumentMut::new();
 
-    doc["package"] = Item::Table(toml_edit::Table::new());
+    doc["package"] = Item::Table(Table::new());
     {
         let pkg = doc["package"].as_table_mut().unwrap();
         pkg["name"] = crate_name.into();
@@ -114,9 +116,9 @@ pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Fe
 
     // The generated crate is standalone; the empty `[workspace]` detaches
     // it from any enclosing cargo workspace when it's built inside one.
-    doc["workspace"] = Item::Table(toml_edit::Table::new());
+    doc["workspace"] = Item::Table(Table::new());
 
-    doc["dependencies"] = Item::Table(toml_edit::Table::new());
+    doc["dependencies"] = Item::Table(Table::new());
     {
         let deps = doc["dependencies"].as_table_mut().unwrap();
         deps["timely"] = "0.30".into();
@@ -160,11 +162,11 @@ pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Fe
     // checkout via `[patch.crates-io]`. The test harness sets it so generated
     // crates build against the workspace runtime instead of crates.io —
     // required whenever the workspace runtime has unpublished additions.
-    if let Ok(path) = std::env::var("FLOWLOG_RUNTIME_PATH") {
-        let mut patch = toml_edit::InlineTable::new();
+    if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
+        let mut patch = InlineTable::new();
         patch.insert("path", path.into());
-        doc["patch"] = Item::Table(toml_edit::Table::new());
-        doc["patch"]["crates-io"] = Item::Table(toml_edit::Table::new());
+        doc["patch"] = Item::Table(Table::new());
+        doc["patch"]["crates-io"] = Item::Table(Table::new());
         doc["patch"]["crates-io"]["flowlog-runtime"] = value(patch);
     }
 

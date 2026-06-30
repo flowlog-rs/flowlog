@@ -4,6 +4,8 @@
 //! model. Building it here keeps the generator free of mode-specific
 //! assumptions.
 
+use std::path::Path;
+
 use flowlog_build::CodeParts;
 use proc_macro2::Ident;
 use proc_macro2::Span;
@@ -62,7 +64,7 @@ impl Compiler {
                     .options
                     .fact_dir()
                     .map(|dir| {
-                        std::path::Path::new(dir)
+                        Path::new(dir)
                             .join(&file_name)
                             .to_string_lossy()
                             .into_owned()
