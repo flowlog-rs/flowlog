@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "flowlog-runtime",
+    "flowlog-common",
+    "flowlog-parser",
     "flowlog-build",
     "flowlog-compiler",
     "flowlog-profiler",
@@ -20,6 +22,7 @@ anyhow = "1.0"
 clap = "4.5"
 codespan-reporting = "0.13"
 differential-dataflow = "0.24"
+educe = "0.6"
 itertools = "0.15"
 lasso = "0.7"
 ordered-float = "5.1"
@@ -44,4 +47,35 @@ tracing-test = "0.2"
 
 # Internal crates.
 flowlog-build = { path = "flowlog-build", version = "0.3.4" }
+flowlog-common = { path = "flowlog-common", version = "0.1.0" }
+flowlog-parser = { path = "flowlog-parser", version = "0.1.0" }
 flowlog-profiler = { path = "flowlog-profiler", version = "0.1.0" }
+
+[workspace.lints.clippy]
+absolute_paths = "deny"
+as_ptr_cast_mut = "deny"
+borrow_as_ptr = "deny"
+clone_on_ref_ptr = "deny"
+collection_is_never_read = "deny"
+dbg_macro = "deny"
+debug_assert_with_mut_call = "deny"
+derive_partial_eq_without_eq = "deny"
+equatable_if_let = "deny"
+fallible_impl_from = "deny"
+host_endian_bytes = "deny"
+if_then_some_else_none = "deny"
+inconsistent_struct_constructor = "deny"
+manual_assert = "deny"
+manual_is_variant_and = "deny"
+many_single_char_names = "deny"
+mem_forget = "deny"
+or_fun_call = "deny"
+redundant_clone = "deny"
+redundant_static_lifetimes = "deny"
+ref_binding_to_reference = "deny"
+ref_option = "deny"
+ref_option_ref = "deny"
+ref_patterns = "deny"
+repeat_vec_with_capacity = "deny"
+reserve_after_initialization = "deny"
+same_name_method = "deny"

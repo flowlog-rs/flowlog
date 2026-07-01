@@ -17,14 +17,21 @@
 //! `write_project` lays out these files from already-rendered strings;
 //! `render_cargo_toml` / `render_cargo_config` produce the metadata.
 
+use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
 
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Value, value};
-
-use flowlog_build::common::Config;
-use flowlog_build::{CodeParts, Features};
+use flowlog_build::CodeParts;
+use flowlog_build::Features;
+use flowlog_common::Config;
+use toml_edit::Array;
+use toml_edit::DocumentMut;
+use toml_edit::InlineTable;
+use toml_edit::Item;
+use toml_edit::Table;
+use toml_edit::Value;
+use toml_edit::value;
 
 use crate::Compiler;
 
@@ -33,7 +40,7 @@ use crate::Compiler;
 // =========================================================================
 
 impl Compiler {
-    /// Materialize the scaffolded crate under [`Config::build_dir`].
+    /// Materialize the scaffolded crate under [`CompileOptions::build_dir`].
     ///
     /// Arguments are pre-rendered file contents; this function only decides
     /// _where_ they go and creates intermediate directories. Optional files
@@ -48,7 +55,7 @@ impl Compiler {
         cargo_config: &str,
     ) -> io::Result<()> {
         let config = &self.config;
-        let root = config.build_dir();
+        let root = self.options.build_dir();
         let src_dir = root.join("src");
         ensure_dir(&src_dir)?;
 
@@ -96,22 +103,22 @@ impl Compiler {
 /// Dependencies are feature-gated: we emit only what the generated code
 /// actually references so the downstream `cargo build` pulls the minimum
 /// set of crates.
-pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String {
+pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Features) -> String {
     let mut doc = DocumentMut::new();
 
-    doc["package"] = Item::Table(toml_edit::Table::new());
+    doc["package"] = Item::Table(Table::new());
     {
         let pkg = doc["package"].as_table_mut().unwrap();
-        pkg["name"] = config.crate_name().into();
+        pkg["name"] = crate_name.into();
         pkg["version"] = "0.1.0".into();
         pkg["edition"] = "2024".into();
     }
 
     // The generated crate is standalone; the empty `[workspace]` detaches
     // it from any enclosing cargo workspace when it's built inside one.
-    doc["workspace"] = Item::Table(toml_edit::Table::new());
+    doc["workspace"] = Item::Table(Table::new());
 
-    doc["dependencies"] = Item::Table(toml_edit::Table::new());
+    doc["dependencies"] = Item::Table(Table::new());
     {
         let deps = doc["dependencies"].as_table_mut().unwrap();
         deps["timely"] = "0.30".into();
@@ -155,11 +162,11 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
     // checkout via `[patch.crates-io]`. The test harness sets it so generated
     // crates build against the workspace runtime instead of crates.io —
     // required whenever the workspace runtime has unpublished additions.
-    if let Ok(path) = std::env::var("FLOWLOG_RUNTIME_PATH") {
-        let mut patch = toml_edit::InlineTable::new();
+    if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
+        let mut patch = InlineTable::new();
         patch.insert("path", path.into());
-        doc["patch"] = Item::Table(toml_edit::Table::new());
-        doc["patch"]["crates-io"] = Item::Table(toml_edit::Table::new());
+        doc["patch"] = Item::Table(Table::new());
+        doc["patch"]["crates-io"] = Item::Table(Table::new());
         doc["patch"]["crates-io"]["flowlog-runtime"] = value(patch);
     }
 

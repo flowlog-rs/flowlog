@@ -4,26 +4,33 @@
 //!
 //! 1. **`emit_sources`** — run the generator over the program and write a
 //!    complete Cargo project (`main.rs`, `relation.rs`, `Cargo.toml`, etc.)
-//!    under [`Config::build_dir`]. No external tools are invoked.
+//!    under [`CompileOptions::build_dir`]. No external tools are invoked.
 //! 2. **`build`** — shell out to `cargo build --release` in that directory,
-//!    copy the resulting binary to [`Config::executable_path`], and remove
-//!    the intermediate crate unless [`Config::save_temps`] is set.
+//!    copy the resulting binary to [`CompileOptions::executable_path`], and remove
+//!    the intermediate crate unless [`CompileOptions::save_temps`] is set.
 //!
 //! Both are `pub(crate)`; external callers use [`Compiler::compile`] which
 //! runs them in sequence.
 
-use std::path::{Path, PathBuf};
-use std::{env, fs, io, process};
+use std::env;
+use std::fs;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process;
 
 use flowlog_build::planner::ProgramPlanner;
 use flowlog_profiler::Profiler;
 use quote::quote;
 use tracing::info;
 
-use crate::{Compiler, imports, relation, scaffold};
+use crate::Compiler;
+use crate::imports;
+use crate::relation;
+use crate::scaffold;
 
 impl Compiler {
-    /// Produce the scaffolded Rust crate in [`Config::build_dir`].
+    /// Produce the scaffolded Rust crate in [`CompileOptions::build_dir`].
     ///
     /// Runs all code-generation passes (dataflow graph, relation handlers,
     /// output drain, imports) and writes the resulting source files to disk.
@@ -32,7 +39,7 @@ impl Compiler {
         &mut self,
         program_planner: &ProgramPlanner,
         profiler: &mut Option<Profiler>,
-    ) -> Result<(), flowlog_build::common::BoxError> {
+    ) -> Result<(), flowlog_common::BoxError> {
         let parts = self.codegen.generate(program_planner, profiler)?;
         let features = self.codegen.features();
 
@@ -40,7 +47,7 @@ impl Compiler {
         let relation_body =
             relation::gen_relation(&self.program, features, self.config.is_batch())?;
         let relation_extras = imports::gen_binary_relation_extras(&self.program, features);
-        let relation_rs = flowlog_build::common::pretty_print(quote! {
+        let relation_rs = flowlog_common::pretty_print(quote! {
             #![allow(non_camel_case_types)]
             #relation_body
             #relation_extras
@@ -52,7 +59,8 @@ impl Compiler {
         let main_rs = self.assemble_main(&parts, &bin_imports, &worker_helpers)?;
 
         // Cargo project metadata.
-        let cargo_toml = scaffold::render_cargo_toml(&self.config, features);
+        let cargo_toml =
+            scaffold::render_cargo_toml(&self.options.crate_name(), &self.config, features);
         let cargo_config = scaffold::render_cargo_config();
 
         self.write_project(&parts, &main_rs, &relation_rs, &cargo_toml, &cargo_config)
@@ -61,14 +69,14 @@ impl Compiler {
     }
 
     /// Compile the emitted crate with `cargo build --release`, install the
-    /// binary at [`Config::executable_path`], and (unless `--save-temps`)
+    /// binary at [`CompileOptions::executable_path`], and (unless `--save-temps`)
     /// remove the intermediate crate directory.
     pub(crate) fn build(&self) -> io::Result<()> {
-        let build_dir = self.config.build_dir();
-        let crate_name = self.config.crate_name();
-        let executable_path = self.config.executable_path();
+        let build_dir = self.options.build_dir();
+        let crate_name = self.options.crate_name();
+        let executable_path = self.options.executable_path();
 
-        run_cargo_build(&build_dir)?;
+        run_cargo(&build_dir, &["build", "--release"])?;
 
         // Cargo produces the binary under the sanitized crate name; copy it
         // to the user's requested path (appending `.exe` on Windows if the
@@ -77,12 +85,27 @@ impl Compiler {
             .join("target")
             .join("release")
             .join(format!("{crate_name}{}", env::consts::EXE_SUFFIX));
-        let dest = exe_with_platform_suffix(&executable_path);
+        let dest = exe_with_platform_suffix(executable_path);
         install_binary(&built, &dest)?;
         info!("Executable written to '{}'", dest.display());
 
-        if !self.config.save_temps() {
-            fs::remove_dir_all(&build_dir).map_err(|e| {
+        self.cleanup_build_dir(&build_dir)?;
+
+        Ok(())
+    }
+
+    /// Type-check the emitted crate with `cargo check`.
+    pub(crate) fn check(&self) -> io::Result<()> {
+        let build_dir = self.options.build_dir();
+        run_cargo(&build_dir, &["check"])?;
+        self.cleanup_build_dir(&build_dir)?;
+        Ok(())
+    }
+
+    /// Remove the intermediate crate directory unless `--save-temps` is set.
+    fn cleanup_build_dir(&self, build_dir: &Path) -> io::Result<()> {
+        if !self.options.save_temps() {
+            fs::remove_dir_all(build_dir).map_err(|e| {
                 io::Error::new(
                     e.kind(),
                     format!(
@@ -92,19 +115,18 @@ impl Compiler {
                 )
             })?;
         }
-
         Ok(())
     }
 }
 
-/// Invoke `cargo build --release` in `build_dir` and propagate any failure.
+/// Invoke `cargo <args>` in `build_dir` and propagate any failure.
 ///
 /// Surfaces a friendly "install Rust via rustup" hint if `cargo` isn't on
 /// `PATH`, and otherwise forwards cargo's stderr so users can see the
 /// underlying compiler error.
-fn run_cargo_build(build_dir: &Path) -> io::Result<()> {
+fn run_cargo(build_dir: &Path, args: &[&str]) -> io::Result<()> {
     let output = process::Command::new("cargo")
-        .args(["build", "--release"])
+        .args(args)
         .current_dir(build_dir)
         .output()
         .map_err(|e| match e.kind() {
@@ -112,13 +134,14 @@ fn run_cargo_build(build_dir: &Path) -> io::Result<()> {
                 io::ErrorKind::NotFound,
                 "cargo not found — install Rust via https://rustup.rs",
             ),
-            kind => io::Error::new(kind, format!("failed to run cargo build: {e}")),
+            kind => io::Error::new(kind, format!("failed to run cargo: {e}")),
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(io::Error::other(format!(
-            "cargo build --release failed:\n{stderr}"
+            "cargo {} failed:\n{stderr}",
+            args.join(" ")
         )));
     }
     Ok(())

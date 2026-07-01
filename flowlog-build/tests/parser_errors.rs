@@ -1,13 +1,15 @@
 mod errors;
 
-use flowlog_build::common::SourceMap;
-use flowlog_build::parser::{DirectiveKind, ParseError, Program};
-
-use errors::{fixture, render};
+use errors::fixture;
+use errors::render;
+use flowlog_common::SourceMap;
+use flowlog_parser::DirectiveKind;
+use flowlog_parser::ParseError;
+use flowlog_parser::Program;
 
 fn parse(name: &str, extended: bool) -> (Result<Program, ParseError>, SourceMap) {
     let mut sm = SourceMap::new();
-    let res = Program::parse(&fixture("parser", name), extended, &mut sm);
+    let res = Program::parse(&fixture("parser", name), extended, &[], &mut sm);
     (res, sm)
 }
 
@@ -21,6 +23,20 @@ fn duplicate_decl() {
             "redeclared here",
             "first declared here",
             "edge",
+        ]
+    );
+}
+
+#[test]
+fn duplicate_extern_fn() {
+    assert_err!(
+        parse("duplicate_extern_fn.dl", true),
+        ParseError::DuplicateExternFn { .. },
+        [
+            "duplicate declaration of extern function",
+            "redeclared here",
+            "first declared here",
+            "hash",
         ]
     );
 }
@@ -109,15 +125,6 @@ fn non_nullary_loop_condition() {
         parse("non_nullary_loop_condition.dl", true),
         ParseError::NonNullaryLoopCondition { .. },
         ["must be nullary", "done_flag"]
-    );
-}
-
-#[test]
-fn placeholder_in_udf() {
-    assert_err!(
-        parse("placeholder_in_udf.dl", true),
-        ParseError::PlaceholderInUdf { .. },
-        ["`_` placeholder", "my_udf"]
     );
 }
 

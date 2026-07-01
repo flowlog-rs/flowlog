@@ -1,8 +1,16 @@
 //! Arithmetic expression signatures for FlowLog Datalog programs.
 
-use crate::catalog::AtomArgumentSignature;
-use crate::parser::{Arithmetic, ArithmeticOperator, BuiltinOperator, ConstType, Factor, TupleElem};
 use std::fmt;
+use std::slice;
+
+use flowlog_parser::Arithmetic;
+use flowlog_parser::ArithmeticOperator;
+use flowlog_parser::BuiltinOperator;
+use flowlog_parser::ConstType;
+use flowlog_parser::Factor;
+use flowlog_parser::TupleElem;
+
+use crate::catalog::AtomArgumentSignature;
 
 /// A factor in an arithmetic expression with variables resolved to their
 /// concrete positions within atoms.
@@ -58,9 +66,7 @@ impl FactorPos {
                 args.iter().flat_map(|a| a.signatures()).collect()
             }
             FactorPos::Group(a) => a.signatures(),
-            FactorPos::Tuple { fields } => {
-                fields.iter().flat_map(|a| a.signatures()).collect()
-            }
+            FactorPos::Tuple { fields } => fields.iter().flat_map(|a| a.signatures()).collect(),
             FactorPos::TupleProj { tuple, .. } => tuple.signatures(),
         }
     }
@@ -223,7 +229,7 @@ impl ArithmeticPos {
                 }
                 Factor::TupleProj { tuple, index } => FactorPos::TupleProj {
                     tuple: Box::new(
-                        map_call_args(std::slice::from_ref(tuple.as_ref()), var_id)
+                        map_call_args(slice::from_ref(tuple.as_ref()), var_id)
                             .pop()
                             .expect("proj lowering yields exactly one arithmetic"),
                     ),

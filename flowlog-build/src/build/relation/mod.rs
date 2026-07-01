@@ -15,12 +15,16 @@ pub(crate) mod user;
 use std::collections::HashMap;
 use std::io;
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_parser::Program;
+use flowlog_parser::Relation;
+use proc_macro2::Ident;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 
 use crate::build::BuildError;
-use crate::codegen::{CodegenError, Features};
-use crate::parser::{Program, Relation};
+use crate::codegen::CodegenError;
+use crate::codegen::Features;
 
 /// Emit the body of the library-mode `relops` module — EDB input handlers
 /// + the `Inputs` container — plus the `use` lines they depend on.
@@ -337,7 +341,9 @@ fn gen_inputs_container(edbs: &[&Relation]) -> TokenStream {
 mod api_surface_tests {
     use std::collections::HashMap;
 
-    use super::{ensure_plain_ident, ensure_unique, pascal_case};
+    use super::ensure_plain_ident;
+    use super::ensure_unique;
+    use super::pascal_case;
 
     /// Representative keywords across the strict / reserved / non-raw-able
     /// classes must be rejected as verbatim API field names. `syn`'s ident

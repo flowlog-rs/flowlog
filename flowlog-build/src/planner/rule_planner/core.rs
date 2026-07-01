@@ -8,11 +8,14 @@
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates,
-};
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::Catalog;
+use crate::catalog::JoinPredicates;
+use crate::planner::KeyValueLayout;
 use crate::planner::PlanError;
-use crate::planner::{KeyValueLayout, TransformationInfo};
+use crate::planner::TransformationInfo;
 
 // =========================================================================
 // Core Planning
@@ -159,7 +162,7 @@ impl RulePlanner {
             rhs_name,
             new_name.clone(),
             KeyValueLayout::new(lhs_keys.clone(), lhs_vals.clone()),
-            KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
+            KeyValueLayout::new(rhs_keys, rhs_vals.clone()),
             KeyValueLayout::new(
                 lhs_keys,
                 lhs_vals.iter().chain(rhs_vals.iter()).cloned().collect(),
@@ -235,9 +238,7 @@ mod tests {
             .find(|t| matches!(t, TransformationInfo::JoinToKV { .. }))
             .expect("JoinToKV transformation missing");
 
-        let sig_of = |pos: &crate::catalog::ArithmeticPos| {
-            *pos.init().as_var_signature().expect("var signature")
-        };
+        let sig_of = |pos: &ArithmeticPos| *pos.init().as_var_signature().expect("var signature");
 
         let out = join.output_kv_layout();
         assert_eq!(out.key().len(), 1, "exactly one join key");

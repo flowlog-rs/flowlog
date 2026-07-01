@@ -1,7 +1,11 @@
-use anyhow::Context;
-use clap::Parser;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
+
+use anyhow::Context;
+use clap::Parser;
+use flowlog_profiler::Profiler;
+use tracing_subscriber::EnvFilter;
 
 mod log;
 mod ops;
@@ -33,10 +37,9 @@ fn main() -> Result<()> {
     // Warnings to stderr (default `warn`; override via `RUST_LOG`).
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
         )
-        .with_writer(std::io::stderr)
+        .with_writer(io::stderr)
         .without_time()
         .init();
 
@@ -44,7 +47,7 @@ fn main() -> Result<()> {
 
     // 1) Parse + validate ops.json.
     let ops_text = fs::read_to_string(&ops).with_context(|| format!("read ops file {}", ops))?;
-    let profiler: flowlog_profiler::Profiler =
+    let profiler: Profiler =
         serde_json::from_str(&ops_text).with_context(|| format!("parse ops file {}", ops))?;
     let validated = ops::validate_and_build(&profiler)?;
 

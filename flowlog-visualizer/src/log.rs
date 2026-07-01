@@ -19,16 +19,23 @@
 //! columns are new in the unified log; they are parsed past but not yet surfaced
 //! in the report.
 
-use crate::Result;
-use crate::stats::Stats;
-use flowlog_profiler::Addr;
-
-use anyhow::{Context, anyhow, bail};
-use regex::Regex;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::error::Error;
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::LazyLock;
+
+use anyhow::Context;
+use anyhow::anyhow;
+use anyhow::bail;
+use flowlog_profiler::Addr;
+use regex::Captures;
+use regex::Regex;
+
+use crate::Result;
+use crate::stats::Stats;
 
 // ---------------------------------------------------------------------------
 // Aggregated row types (mean + variance across workers)
@@ -423,7 +430,7 @@ fn parse_raw_metrics_file(path: &str) -> Result<RawIndex> {
 /// Parse the seven arrangement columns. They are reported together: either all
 /// numeric (an arranged operator) or all `n/a` (not arranged) — so the first
 /// column (`arr_in`) decides whether the operator carries memory data.
-fn parse_arrange(caps: &regex::Captures, path: &str, lno: usize) -> Result<Option<RawArrange>> {
+fn parse_arrange(caps: &Captures, path: &str, lno: usize) -> Result<Option<RawArrange>> {
     let Some(batched_in) = parse_cell::<u64>(caps.get(6).unwrap().as_str(), path, lno, "arr_in")?
     else {
         return Ok(None);
@@ -448,8 +455,8 @@ fn parse_arrange(caps: &regex::Captures, path: &str, lno: usize) -> Result<Optio
 /// (e.g. `u64` counts, `i64` flow that can go negative, `f64` times).
 fn parse_cell<T>(s: &str, path: &str, lno: usize, field: &str) -> Result<Option<T>>
 where
-    T: std::str::FromStr,
-    T::Err: std::error::Error + Send + Sync + 'static,
+    T: FromStr,
+    T::Err: Error + Send + Sync + 'static,
 {
     if s == "n/a" {
         return Ok(None);

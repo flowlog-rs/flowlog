@@ -16,13 +16,25 @@
 use std::collections::HashMap;
 use std::mem;
 
-use super::{DisplayNames, TypeCheckError, display_name};
-use crate::common::Span;
-use crate::parser::{
-    Arithmetic, Atom, AtomArg, ComparisonExpr, Factor, FlowLogRule, HeadArg, Predicate, Program,
-    TupleElem,
-};
-use crate::parser::{TypeId, TypeRegistry};
+use flowlog_common::Span;
+use flowlog_parser::Arithmetic;
+use flowlog_parser::Atom;
+use flowlog_parser::AtomArg;
+use flowlog_parser::ComparisonExpr;
+use flowlog_parser::ConstType;
+use flowlog_parser::DataType;
+use flowlog_parser::Factor;
+use flowlog_parser::FlowLogRule;
+use flowlog_parser::HeadArg;
+use flowlog_parser::Predicate;
+use flowlog_parser::Program;
+use flowlog_parser::TupleElem;
+use flowlog_parser::TypeId;
+use flowlog_parser::TypeRegistry;
+
+use super::DisplayNames;
+use super::TypeCheckError;
+use super::display_name;
 
 type DeclIds = HashMap<String, Vec<TypeId>>;
 
@@ -83,11 +95,6 @@ fn check_rule(
                 check_arith_casts(cmp.left(), reg, &bindings)?;
                 check_arith_casts(cmp.right(), reg, &bindings)?;
                 check_compare(cmp, reg, &bindings)?;
-            }
-            Predicate::FnCall(fc) => {
-                for arg in fc.args() {
-                    check_arith_casts(arg, reg, &bindings)?;
-                }
             }
         }
     }
@@ -164,7 +171,7 @@ fn check_head(
                 {
                     return Err(TypeCheckError::HeadSubtypeMismatch {
                         span: head.span(),
-                        rel: rel_display.clone(),
+                        rel: rel_display,
                         col,
                         expected: reg.name_of(expected_id).to_string(),
                         found: reg.name_of(found_id).to_string(),
@@ -180,7 +187,7 @@ fn check_head(
                 {
                     return Err(TypeCheckError::HeadSubtypeMismatch {
                         span: head.span(),
-                        rel: rel_display.clone(),
+                        rel: rel_display,
                         col,
                         expected: reg.name_of(expected_field).to_string(),
                         found: reg.name_of(found_id).to_string(),
@@ -341,7 +348,7 @@ fn inner_factor_primitive_root(
     f: &Factor,
     reg: &TypeRegistry,
     bindings: &Bindings,
-) -> Option<crate::parser::DataType> {
+) -> Option<DataType> {
     match f {
         Factor::Var(v) => bindings.get(v).map(|&(id, _)| reg.root_primitive(id)),
         Factor::Const(_) => None,
@@ -367,11 +374,6 @@ fn lower_rule(rule: &mut FlowLogRule) {
                 lower_arith(cmp.left_mut());
                 lower_arith(cmp.right_mut());
             }
-            Predicate::FnCall(fc) => {
-                for a in fc.args_mut() {
-                    lower_arith(a);
-                }
-            }
         }
     }
     for arg in rule.head_mut().head_arguments_mut() {
@@ -394,10 +396,7 @@ fn lower_factor(f: &mut Factor) {
     // Peel nested casts: `as(as(x, A), B)` collapses to `x`.
     loop {
         if let Factor::Cast(c) = f {
-            let inner = mem::replace(
-                c.inner_mut(),
-                Factor::Const(crate::parser::ConstType::Int(0)),
-            );
+            let inner = mem::replace(c.inner_mut(), Factor::Const(ConstType::Int(0)));
             *f = inner;
             continue;
         }

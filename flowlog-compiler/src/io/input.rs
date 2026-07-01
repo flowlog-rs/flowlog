@@ -4,10 +4,13 @@
 //! model. Building it here keeps the generator free of mode-specific
 //! assumptions.
 
-use proc_macro2::{Ident, Span, TokenStream};
-use quote::quote;
+use std::path::Path;
 
 use flowlog_build::CodeParts;
+use proc_macro2::Ident;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
+use quote::quote;
 
 use crate::Compiler;
 
@@ -58,10 +61,10 @@ impl Compiler {
                 let rel_name = rel.name();
                 let file_name = rel.input_file_name();
                 let path = self
-                    .config
+                    .options
                     .fact_dir()
                     .map(|dir| {
-                        std::path::Path::new(dir)
+                        Path::new(dir)
                             .join(&file_name)
                             .to_string_lossy()
                             .into_owned()

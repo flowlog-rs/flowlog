@@ -4,8 +4,9 @@
 //! as `(relative_path, content)` pairs, ready for the downstream compiler
 //! to write into the generated project.
 
+use flowlog_parser::AggregationOperator;
+
 use crate::codegen::CodeGen;
-use crate::parser::AggregationOperator;
 
 /// Embed a `templates/semiring/<name>.tpl` file at this crate's compile time.
 macro_rules! tpl {

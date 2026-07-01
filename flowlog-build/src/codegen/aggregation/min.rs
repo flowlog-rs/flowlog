@@ -4,13 +4,16 @@
 //! replacing expensive reduce arrangements with lightweight `threshold_semigroup` or
 //! `consolidate` pipelines.
 
-use crate::parser::{AggregationOperator, DataType};
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
 
-use super::common::{
-    ThresholdCmp, agg_semiring_new, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
-    result_from_key, row_pattern,
-};
+use super::common::ThresholdCmp;
+use super::common::agg_semiring_new;
+use super::common::aggregation_optimize_pipeline;
+use super::common::aggregation_pre_leave_pipeline;
+use super::common::result_from_key;
+use super::common::row_pattern;
 /// Generates the Min-semiring optimized aggregation pipeline.
 pub(crate) fn aggregation_min_optimize(
     arity: usize,

@@ -1,15 +1,16 @@
 mod errors;
 
-use flowlog_build::common::SourceMap;
-use flowlog_build::parser::Program;
-use flowlog_build::stratifier::{Stratifier, StratifyError};
-
-use errors::{fixture, render};
+use errors::fixture;
+use errors::render;
+use flowlog_build::stratifier::Stratifier;
+use flowlog_build::stratifier::StratifyError;
+use flowlog_common::SourceMap;
+use flowlog_parser::Program;
 
 /// Parse + stratify a fixture. `extended` selects Datalog mode.
 fn stratify(name: &str, extended: bool) -> (Result<Stratifier, StratifyError>, SourceMap) {
     let mut sm = SourceMap::new();
-    let program = Program::parse(&fixture("stratifier", name), extended, &mut sm)
+    let program = Program::parse(&fixture("stratifier", name), extended, &[], &mut sm)
         .expect("fixture should parse cleanly");
     let res = Stratifier::from_program(&program, extended);
     (res, sm)
@@ -28,7 +29,7 @@ fn recursion_outside_loop() {
 fn forward_reference() {
     assert_err!(
         stratify("forward_reference.dl", true),
-        StratifyError::ForwardReference { ref rel, .. } if rel == "B",
+        StratifyError::ForwardReference { rel, .. } if rel == "B",
         ["not yet defined", "later segment"]
     );
 }
@@ -46,7 +47,7 @@ fn recursive_stratum_empty() {
 fn iterative_not_in_loop_head() {
     assert_err!(
         stratify("iterative_not_in_loop_head.dl", true),
-        StratifyError::IterativeNotInLoopHead { ref rel, .. } if rel == "ghost",
+        StratifyError::IterativeNotInLoopHead { rel, .. } if rel == "ghost",
         ["`iterative` relation `ghost`", "head"]
     );
 }
@@ -55,7 +56,7 @@ fn iterative_not_in_loop_head() {
 fn iterative_not_recursive() {
     assert_err!(
         stratify("iterative_not_recursive.dl", true),
-        StratifyError::IterativeNotRecursive { ref rel, .. } if rel == "sink",
+        StratifyError::IterativeNotRecursive { rel, .. } if rel == "sink",
         ["not recursive in this loop", "iterative"]
     );
 }
@@ -64,7 +65,7 @@ fn iterative_not_recursive() {
 fn loop_condition_not_recursive() {
     assert_err!(
         stratify("loop_condition_invalid.dl", true),
-        StratifyError::LoopConditionNotRecursive { ref rel, .. } if rel == "done",
+        StratifyError::LoopConditionNotRecursive { rel, .. } if rel == "done",
         [
             "loop until condition",
             "done",

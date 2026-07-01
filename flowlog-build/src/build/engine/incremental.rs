@@ -26,18 +26,24 @@
 //! - `Drop` publishes `TxnAction::Quit`, barriers twice to release the
 //!   workers, then joins the timely thread.
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_parser::Program;
+use flowlog_parser::Relation;
+use proc_macro2::Ident;
+use proc_macro2::Literal;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 
-use crate::parser::{Program, Relation};
-
-use super::{per_position_tuple, user_to_tuple_convert};
+use super::per_position_tuple;
+use super::user_to_tuple_convert;
+use crate::CodeParts;
+use crate::build::relation::input_struct_ident;
+use crate::build::relation::inputs_field_ident;
+use crate::build::relation::printsize_field_ident;
+use crate::build::relation::results_field_ident;
 use crate::build::relation::user::tuple_to_user_expr;
-use crate::build::relation::{
-    input_struct_ident, inputs_field_ident, printsize_field_ident, results_field_ident,
-    user_struct_ident,
-};
-use crate::{CodeParts, data_type_tokens};
+use crate::build::relation::user_struct_ident;
+use crate::data_type_tokens;
 
 pub(crate) fn gen_lib_incremental_engine(
     program: &Program,
@@ -802,7 +808,7 @@ fn tuple_to_user_from_row(rel: &Relation, string_intern: bool) -> TokenStream {
         string_intern,
         quote! { row.0 },
         |i| {
-            let idx = proc_macro2::Literal::usize_unsuffixed(i);
+            let idx = Literal::usize_unsuffixed(i);
             quote! { row.0.#idx }
         },
         |dt, src| tuple_to_user_expr(dt, string_intern, src),

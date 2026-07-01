@@ -1,0 +1,26 @@
+[package]
+name = "flowlog-common"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[features]
+# Derive clap's `ValueEnum` on `ExecutionMode` for CLI front-ends.
+# Off by default: library consumers stay clap-free.
+clap = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+codespan-reporting.workspace = true
+prettyplease = { workspace = true }
+proc-macro2 = { workspace = true }
+syn = { workspace = true, features = ["full"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

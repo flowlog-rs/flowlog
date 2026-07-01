@@ -12,14 +12,18 @@
 //! replaced with real ones once they are known. This allows building
 //! a transformation plan before all details are finalized.
 
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, ComparisonExprPos, FnCallPredicatePos, JoinPredicates,
-    KvPredicates,
-};
-use crate::common::compute_fp;
-use crate::parser::ConstType;
+use std::fmt;
 
-use crate::planner::{Collection, PlanError};
+use flowlog_common::compute_fp;
+use flowlog_parser::ConstType;
+
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::ComparisonExprPos;
+use crate::catalog::JoinPredicates;
+use crate::catalog::KvPredicates;
+use crate::planner::Collection;
+use crate::planner::PlanError;
 
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
@@ -642,28 +646,6 @@ impl TransformationInfo {
         }
     }
 
-    /// Update boolean UDF predicate filters for transformations that support them.
-    ///
-    /// UDF predicates should be added incrementally.
-    pub(crate) fn update_fn_call_preds(
-        &mut self,
-        new_fn_call_preds: Vec<FnCallPredicatePos>,
-    ) -> Result<(), PlanError> {
-        match self {
-            Self::KVToKV { predicates, .. } => {
-                predicates.fn_call_preds.extend(new_fn_call_preds);
-                Ok(())
-            }
-            Self::JoinToKV { predicates, .. } => {
-                predicates.fn_call_preds.extend(new_fn_call_preds);
-                Ok(())
-            }
-            Self::AntiJoinToKV { .. } => Err(PlanError::internal(
-                "update_fn_call_preds: AntiJoinToKV has no fn_call_preds to update",
-            )),
-        }
-    }
-
     /// Update constant equality constraints, avoiding duplicates.
     pub(crate) fn update_const_eq_and_var_eq_constraints(
         &mut self,
@@ -781,7 +763,7 @@ impl TransformationInfo {
     }
 }
 
-impl std::fmt::Display for TransformationInfo {
+impl fmt::Display for TransformationInfo {
     /// Multi-line block form:
     /// ```text
     /// [Join -> KV]
@@ -798,7 +780,7 @@ impl std::fmt::Display for TransformationInfo {
     /// the `TransformationFlow` is only materialized when a `Transformation`
     /// is built from this info. The `F` line is omitted when no predicates
     /// apply.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let coll = |fp: u64, name: &str, kv: &KeyValueLayout| {
             Collection::new(fp, name.to_string(), kv.key(), kv.value())
         };

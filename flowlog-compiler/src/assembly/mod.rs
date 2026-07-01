@@ -10,12 +10,12 @@
 pub(crate) mod batch;
 pub(crate) mod inc;
 
+use flowlog_build::CodeParts;
+use flowlog_common::ExecutionMode;
 use quote::quote;
 
-use flowlog_build::CodeParts;
-use flowlog_build::common::ExecutionMode;
-
-use crate::{Compiler, CompilerError};
+use crate::Compiler;
+use crate::CompilerError;
 
 impl Compiler {
     pub(crate) fn assemble_main(
@@ -49,6 +49,6 @@ impl Compiler {
             #main_fn
         };
 
-        Ok(flowlog_build::common::pretty_print(file_ts))
+        Ok(flowlog_common::pretty_print(file_ts))
     }
 }

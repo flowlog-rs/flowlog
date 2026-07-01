@@ -3,17 +3,27 @@
 //! See the crate-level documentation for an overview of strata, recursion, and
 //! the Extended Datalog mode.
 
-use crate::common::Span;
-use crate::parser::{
-    AggregationOperator, FlowLogRule, HeadArg, IterativeDirective, LoopCondition, Predicate,
-    Program, Segment,
-};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::fmt;
+use std::iter;
+
+use flowlog_common::Span;
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::FlowLogRule;
+use flowlog_parser::HeadArg;
+use flowlog_parser::IterativeDirective;
+use flowlog_parser::LoopCondition;
+use flowlog_parser::Predicate;
+use flowlog_parser::Program;
+use flowlog_parser::Segment;
+use itertools::Itertools;
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
+
 use crate::stratifier::dependency_graph::DependencyGraph;
 use crate::stratifier::error::StratifyError;
-use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use tracing::{debug, info, warn};
 
 // =============================================================================
 // Stratifier
@@ -243,8 +253,8 @@ impl Stratifier {
                     let n = seg_strata.len();
                     strata.extend(seg_strata);
                     bitmap.extend(seg_bitmap);
-                    loop_conditions.extend(std::iter::repeat_n(None, n));
-                    iterative_rels.extend(std::iter::repeat_with(Vec::new).take(n));
+                    loop_conditions.extend(iter::repeat_n(None, n));
+                    iterative_rels.extend(iter::repeat_with(Vec::new).take(n));
                     id_offset += total;
                 }
                 Segment::Loop(block) | Segment::Fixpoint(block) => {
@@ -290,9 +300,9 @@ impl Stratifier {
             .segments()
             .iter()
             .flat_map(|seg| match seg {
-                Segment::Plain(rules) => rules.iter().map(|r| r.span().start).collect::<Vec<_>>(),
+                Segment::Plain(rules) => rules.iter().map(|r| r.span().start()).collect::<Vec<_>>(),
                 Segment::Loop(block) | Segment::Fixpoint(block) => {
-                    block.rules().iter().map(|r| r.span().start).collect()
+                    block.rules().iter().map(|r| r.span().start()).collect()
                 }
             })
             .collect();
@@ -773,7 +783,7 @@ impl Stratifier {
                     return Err(StratifyError::ForwardReference {
                         rule: rid,
                         span,
-                        rel: rel_name.to_string(),
+                        rel: rel_name,
                     });
                 }
             }
@@ -1022,17 +1032,20 @@ impl fmt::Display for Stratifier {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
+
     use tracing_test::traced_test;
 
+    use super::*;
+
     fn parse_program(source: &str) -> Program {
-        use crate::common::SourceMap;
-        let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
+        use flowlog_common::SourceMap;
+        use tempfile::NamedTempFile;
+        let mut tmp = NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())
             .expect("failed to write temp file");
         let mut sm = SourceMap::new();
-        Program::parse(&tmp.path().to_string_lossy(), true, &mut sm).expect("parse failed")
+        Program::parse(&tmp.path().to_string_lossy(), true, &[], &mut sm).expect("parse failed")
     }
 
     /// Each `.init` splices its component instance into its own `Plain`

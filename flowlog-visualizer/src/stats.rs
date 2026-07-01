@@ -1,7 +1,8 @@
 //! Shared statistics type used by both log parsing and view aggregation.
 
-use serde::Serialize;
 use std::ops::Add;
+
+use serde::Serialize;
 
 /// Per-field statistics across workers: mean, variance, min, max.
 #[derive(Debug, Clone, Serialize, Default)]

@@ -17,7 +17,7 @@
 //! fingerprint back to the declaration and uses the user's original
 //! spelling ([`Relation::raw_name`]).
 //!
-//! [`Relation::raw_name`]: crate::parser::Relation::raw_name
+//! [`Relation::raw_name`]: flowlog_parser::Relation::raw_name
 
 use std::collections::HashMap;
 
@@ -65,7 +65,7 @@ impl CodeGen {
 
     /// Human-facing name for a fingerprint (profiler labels, diagnostics):
     /// the declared relation's original spelling
-    /// ([`Relation::raw_name`](crate::parser::Relation::raw_name)), or the
+    /// ([`Relation::raw_name`](flowlog_parser::Relation::raw_name)), or the
     /// binding ident's text for synthesized intermediates.
     pub(super) fn display_name(&self, fp: u64) -> String {
         self.program
@@ -86,8 +86,11 @@ pub(crate) fn find_local_ident(local_fp_to_ident: &HashMap<u64, Ident>, fp: u64)
 
 #[cfg(test)]
 mod binding_ident_tests {
-    use super::binding_ident;
     use quote::quote;
+    use syn::Block;
+    use syn::parse2;
+
+    use super::binding_ident;
 
     /// Keyword-named relations get ordinary, valid bindings — the `rel_<N>`
     /// prefix means no name can produce a keyword ident.
@@ -99,7 +102,7 @@ mod binding_ident_tests {
         {
             let id = binding_ident(i, kw);
             let ts = quote! { { let #id = 1; let _ = #id; } };
-            syn::parse2::<syn::Block>(ts).unwrap_or_else(|e| {
+            parse2::<Block>(ts).unwrap_or_else(|e| {
                 panic!("keyword {kw:?} -> `{id}` is not a usable binding: {e}")
             });
         }

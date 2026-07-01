@@ -21,3 +21,6 @@ regex.workspace = true
 rustc-hash.workspace = true
 serde = { workspace = true }
 timely.workspace = true
+
+[lints]
+workspace = true

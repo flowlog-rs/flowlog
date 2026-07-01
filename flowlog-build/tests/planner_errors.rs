@@ -1,23 +1,25 @@
 mod errors;
 
-use flowlog_build::common::{Config, SourceMap};
+use errors::fixture;
+use errors::render;
 use flowlog_build::optimizer::Optimizer;
-use flowlog_build::parser::Program;
-use flowlog_build::planner::{PlanError, StratumPlanner};
+use flowlog_build::planner::PlanError;
+use flowlog_build::planner::StratumPlanner;
 use flowlog_build::stratifier::Stratifier;
-
-use errors::{fixture, render};
+use flowlog_common::Config;
+use flowlog_common::SourceMap;
+use flowlog_parser::Program;
 
 fn plan_fixture(name: &str) -> (Result<(), PlanError>, SourceMap) {
     let mut sm = SourceMap::new();
     let path = fixture("planner", name);
-    let program = Program::parse(&path, false, &mut sm).expect("fixture should parse cleanly");
+    let program = Program::parse(&path, false, &[], &mut sm).expect("fixture should parse cleanly");
     let stratifier =
         Stratifier::from_program(&program, false).expect("fixture should stratify cleanly");
 
     let config = Config {
         program: path,
-        output_dir: Some("-".into()),
+        output_to_stdout: true,
         ..Default::default()
     };
     let mut optimizer = Optimizer::new();
@@ -43,7 +45,7 @@ fn plan_fixture(name: &str) -> (Result<(), PlanError>, SourceMap) {
 fn unknown_head_variable() {
     assert_err!(
         plan_fixture("unknown_head_variable.dl"),
-        PlanError::UnknownHeadVariable { ref var, .. } if var == "salutation",
+        PlanError::UnknownHeadVariable { var, .. } if var == "salutation",
         ["unknown head variable", "salutation", "never bound"]
     );
 }
@@ -52,7 +54,7 @@ fn unknown_head_variable() {
 fn multiple_aggregations_in_head() {
     assert_err!(
         plan_fixture("multiple_aggregations_in_head.dl"),
-        PlanError::MultipleAggregationsInHead { ref rel, count: 2, .. } if rel == "Totals",
+        PlanError::MultipleAggregationsInHead { rel, count: 2, .. } if rel == "Totals",
         ["contains 2 aggregations", "at most one is allowed"]
     );
 }

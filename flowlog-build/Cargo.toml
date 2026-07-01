@@ -12,10 +12,14 @@ keywords = ["datalog", "dataflow", "compiler", "build-script"]
 categories = ["compilers", "database", "development-tools::build-utils"]
 
 [dependencies]
+flowlog-common.workspace = true
+flowlog-parser.workspace = true
+flowlog-profiler.workspace = true
+
 clap = { workspace = true, features = ["derive"] }
 codespan-reporting.workspace = true
 itertools.workspace = true
-ordered-float.workspace = true
+ordered-float = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
@@ -25,12 +29,9 @@ syn = { workspace = true, features = ["full"] }
 thiserror.workspace = true
 tracing.workspace = true
 
-# Parser grammar.
-pest.workspace = true
-pest_derive.workspace = true
-
-flowlog-profiler.workspace = true
-
 [dev-dependencies]
 tempfile.workspace = true
 tracing-test.workspace = true
+
+[lints]
+workspace = true

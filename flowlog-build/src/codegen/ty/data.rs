@@ -6,15 +6,17 @@
 //! emits, and (c) emits the Rust tuple types for both the internal
 //! (DD-facing) and user-facing shapes.
 
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::parser::DataType;
-use crate::planner::{
-    ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
-};
-
-use crate::codegen::{CodeGen, CodegenError};
+use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
+use crate::planner::ArithmeticArgument;
+use crate::planner::FactorArgument;
+use crate::planner::StratumPlanner;
+use crate::planner::TransformationArgument;
+use crate::planner::TransformationFlow;
 
 /// `(key_types, value_types)` — a relation's shape in key++value form.
 pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
@@ -180,14 +182,12 @@ impl CodeGen {
             // Tuple projection → the indexed field's type.
             FactorArgument::TupleProj { tuple, index } => {
                 match self.infer_expr_type(tuple, left_type, right_type)? {
-                    DataType::FixedTuple(fields) => {
-                        fields.get(*index).cloned().ok_or_else(|| {
-                            CodegenError::internal(format!(
-                                "tuple projection index {index} out of bounds (arity {})",
-                                fields.len()
-                            ))
-                        })
-                    }
+                    DataType::FixedTuple(fields) => fields.get(*index).cloned().ok_or_else(|| {
+                        CodegenError::internal(format!(
+                            "tuple projection index {index} out of bounds (arity {})",
+                            fields.len()
+                        ))
+                    }),
                     other => Err(CodegenError::internal(format!(
                         "tuple projection of a non-tuple type {other:?}"
                     ))),
@@ -264,9 +264,14 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
 
 #[cfg(test)]
 mod tests {
+    use std::iter;
+
+    use flowlog_common::Config;
+    use flowlog_parser::ArithmeticOperator;
+    use flowlog_parser::ConstType;
+    use flowlog_parser::Program;
+
     use super::*;
-    use crate::common::Config;
-    use crate::parser::{ArithmeticOperator, ConstType, Program};
 
     fn make_codegen() -> CodeGen {
         CodeGen::new(Config::default(), Program::default())
@@ -312,8 +317,9 @@ mod tests {
     /// codegen (see `agg_count_string` e2e).
     #[test]
     fn record_transformation_output_type_preserves_declared_idb_shape() {
-        use crate::planner::Constraints;
         use std::sync::Arc;
+
+        use crate::planner::Constraints;
 
         let mut cg = make_codegen();
         // IDB's declared shape: e.g. `DeptHeadcount(d: int32, cnt: int32)`.
@@ -337,7 +343,6 @@ mod tests {
             }]),
             constraints: Constraints::new(vec![], vec![]),
             compares: vec![],
-            fn_call_preds: vec![],
         };
         let stratum = StratumPlanner::default();
 
@@ -355,10 +360,10 @@ mod tests {
     #[test]
     fn tuple_tokens_arity_dispatch_keeps_singleton_comma() {
         // Arity 0 → unit type `()`.
-        assert_eq!(tuple_tokens(std::iter::empty()).to_string(), "()");
+        assert_eq!(tuple_tokens(iter::empty()).to_string(), "()");
 
         // Arity 1 → `(T,)` — the comma is the whole point.
-        let single = tuple_tokens(std::iter::once(quote! { i32 })).to_string();
+        let single = tuple_tokens(iter::once(quote! { i32 })).to_string();
         let single_norm: String = single.split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(
             single_norm, "(i32 ,)",

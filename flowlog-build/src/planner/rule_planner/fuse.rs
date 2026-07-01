@@ -13,16 +13,23 @@
 //!
 //! Not following these rules might introduce subtle bugs.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
+
+use flowlog_parser::ConstType;
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, ComparisonExprPos, FactorPos,
-    FnCallPredicatePos, KvPredicates,
-};
-use crate::parser::ConstType;
-use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::ComparisonExprPos;
+use crate::catalog::FactorPos;
+use crate::catalog::KvPredicates;
+use crate::planner::KeyValueLayout;
+use crate::planner::PlanError;
+use crate::planner::TransformationInfo;
 
 /// Ordered consumer indices alongside their key/value index selections.
 /// (minimum consumer id, consumer ids, key indices, value indices)
@@ -100,12 +107,9 @@ impl RulePlanner {
             for &input_producer_index in &input_producer_indices {
                 // Short-lived borrow to check if producer is a neg join
                 let producer_tx = &self.transformation_infos[input_producer_index];
-                if producer_tx.is_neg_join()
-                    && (!predicates.compare_exprs.is_empty()
-                        || !predicates.fn_call_preds.is_empty())
-                {
-                    // We always apply possible comparisons/fn_call before neg joins, so it is impossible
-                    // to fuse a map with a neg join producer if there are any comparisons or fn_call predicates.
+                if producer_tx.is_neg_join() && !predicates.compare_exprs.is_empty() {
+                    // We always apply possible comparisons before neg joins, so it is impossible
+                    // to fuse a map with a neg join producer if there are any comparisons.
                     return Err(PlanError::internal(
                         "fuse_map: impossible fusion of map with neg join producer",
                     ));
@@ -264,8 +268,6 @@ impl RulePlanner {
             Self::remap_const_eq_constraints(&all_positions, &predicates.const_eq)?;
         let remapped_var_eq = Self::remap_var_eq_constraints(&all_positions, &predicates.var_eq)?;
         let remapped_cmps = Self::remap_comparisons(&all_positions, &predicates.compare_exprs)?;
-        let remapped_fn_calls =
-            Self::remap_fn_call_preds(&all_positions, &predicates.fn_call_preds)?;
 
         // Update producer output layout, predicates, name and fingerprint.
         // The producer now semantically emits what the fused map used to emit,
@@ -279,9 +281,6 @@ impl RulePlanner {
             }
             if !predicates.compare_exprs.is_empty() {
                 producer_tx.update_comparisons(remapped_cmps)?;
-            }
-            if !predicates.fn_call_preds.is_empty() {
-                producer_tx.update_fn_call_preds(remapped_fn_calls)?;
             }
             producer_tx.update_output_name(fused_map_output_name);
             producer_tx.update_output_fake_sig();
@@ -346,29 +345,6 @@ impl RulePlanner {
                     left,
                     c.operator().clone(),
                     right,
-                ))
-            })
-            .collect()
-    }
-
-    /// Remap fn_call predicate positions by converting each variable signature to the
-    /// corresponding ArithmeticPos from the provided positions and rebuilding.
-    fn remap_fn_call_preds(
-        positions: &[ArithmeticPos],
-        fn_calls: &[FnCallPredicatePos],
-    ) -> Result<Vec<FnCallPredicatePos>, PlanError> {
-        fn_calls
-            .iter()
-            .map(|fc| {
-                let new_args = fc
-                    .args()
-                    .iter()
-                    .map(|a| Self::remap_arithmetic(positions, a))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(FnCallPredicatePos::new(
-                    fc.name().to_string(),
-                    new_args,
-                    fc.is_negated(),
                 ))
             })
             .collect()
@@ -604,7 +580,7 @@ impl RulePlanner {
                 (consumers[0], consumers, key_ids, value_ids)
             })
             .collect();
-        consumer_collection.sort_by_key(|(first_consumer, _, _, _)| *first_consumer);
+        consumer_collection.sort_by_key(|(first_consumer, ..)| *first_consumer);
         Ok(consumer_collection)
     }
 
@@ -656,7 +632,7 @@ impl RulePlanner {
         // Randomly assign also works, for simplify code we just push to the first one.
         if !available.is_empty() {
             match assignments.first_mut() {
-                Some((producer_ids, _, _, _)) => {
+                Some((producer_ids, ..)) => {
                     producer_ids.extend(available);
                     producer_ids.sort_unstable();
                 }

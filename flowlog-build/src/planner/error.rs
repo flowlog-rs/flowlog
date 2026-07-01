@@ -9,13 +9,17 @@
 //! file a bug" ICE instead of a process abort.
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
+use flowlog_common::BUG_URL;
+use flowlog_common::Diagnostic;
+use flowlog_common::FileId;
+use flowlog_common::InternalError;
+use flowlog_common::Span;
+use flowlog_common::primary_label;
+use flowlog_common::secondary_label;
+use flowlog_parser::AggregationOperator;
 use thiserror::Error;
 
 use crate::catalog::CatalogError;
-use crate::common::{
-    BUG_URL, Diagnostic, FileId, InternalError, Span, primary_label, secondary_label,
-};
-use crate::parser::AggregationOperator;
 
 #[non_exhaustive]
 #[derive(Debug, Error)]

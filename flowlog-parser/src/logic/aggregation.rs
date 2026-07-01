@@ -1,0 +1,206 @@
+//! Aggregation expressions for FlowLog Datalog programs.
+//!
+//! - [`AggregationOperator`]: `min | max | count | sum | average`
+//! - [`Aggregation`]: `op(expr)` (e.g., `sum(price * qty)`)
+
+use std::fmt;
+
+use educe::Educe;
+use flowlog_common::FileId;
+use flowlog_common::Span;
+use pest::iterators::Pair;
+
+use super::Arithmetic;
+use crate::Lexeme;
+use crate::Rule;
+use crate::error::ParseError;
+use crate::error::grammar_bug;
+use crate::span_of;
+
+/// Supported aggregation operators.
+///
+/// Declared `pub` because `Features::agg_semirings()` exposes an
+/// `AggSemiringNeeds` whose entries `flowlog-compiler` iterates over,
+/// calling [`Self::semiring_mod`] / [`Self::semiring_prefix`] on each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AggregationOperator {
+    Min,
+    Max,
+    Count,
+    Sum,
+    Avg,
+}
+
+impl AggregationOperator {
+    /// Normalize Count → Sum (they share the same semiring).
+    #[must_use]
+    pub fn semiring_canonical(self) -> Self {
+        match self {
+            Self::Count => Self::Sum,
+            other => other,
+        }
+    }
+
+    /// Lowercase name for semiring module paths (e.g. `"min"`, `"sum"`).
+    ///
+    /// `Count` shares its semiring with `Sum`.
+    #[must_use]
+    pub fn semiring_mod(self) -> &'static str {
+        match self {
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Sum | Self::Count => "sum",
+            Self::Avg => "avg",
+        }
+    }
+
+    /// Title-case prefix for semiring type names (e.g. `"Min"`, `"Sum"`).
+    ///
+    /// `Count` shares its semiring with `Sum`.
+    #[must_use]
+    pub fn semiring_prefix(self) -> &'static str {
+        match self {
+            Self::Min => "Min",
+            Self::Max => "Max",
+            Self::Sum | Self::Count => "Sum",
+            Self::Avg => "Avg",
+        }
+    }
+}
+
+impl fmt::Display for AggregationOperator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Min => write!(f, "min"),
+            Self::Max => write!(f, "max"),
+            Self::Count => write!(f, "count"),
+            Self::Sum => write!(f, "sum"),
+            Self::Avg => write!(f, "average"),
+        }
+    }
+}
+
+impl Lexeme for AggregationOperator {
+    /// Parse an aggregation operator from the grammar.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, _file: FileId) -> Result<Self, ParseError> {
+        let op = parsed_rule
+            .into_inner()
+            .next()
+            .ok_or_else(|| grammar_bug("aggregation operator missing inner token"))?;
+
+        Ok(match op.as_rule() {
+            Rule::min => Self::Min,
+            Rule::max => Self::Max,
+            Rule::count => Self::Count,
+            Rule::sum => Self::Sum,
+            Rule::average => Self::Avg,
+            other => {
+                return Err(grammar_bug(format!(
+                    "unexpected aggregation operator rule: {other:?}"
+                )));
+            }
+        })
+    }
+}
+
+/// `op(expr)` aggregation (e.g., `sum(price * qty)`).
+#[derive(Debug, Clone, Educe)]
+#[educe(PartialEq, Eq, Hash)]
+pub struct Aggregation {
+    operator: AggregationOperator,
+    arithmetic: Arithmetic,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    span: Span,
+}
+
+impl Aggregation {
+    #[cfg(test)]
+    pub fn new(operator: AggregationOperator, arithmetic: Arithmetic) -> Self {
+        Self {
+            operator,
+            arithmetic,
+            span: Span::DUMMY,
+        }
+    }
+
+    /// Source location this aggregation was parsed from.
+    #[must_use]
+    #[inline]
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    /// Variables referenced by the arithmetic expression.
+    #[must_use]
+    pub fn vars(&self) -> Vec<&String> {
+        self.arithmetic.vars()
+    }
+
+    /// Underlying arithmetic expression.
+    #[must_use]
+    #[inline]
+    pub fn arithmetic(&self) -> &Arithmetic {
+        &self.arithmetic
+    }
+
+    #[inline]
+    pub fn arithmetic_mut(&mut self) -> &mut Arithmetic {
+        &mut self.arithmetic
+    }
+
+    /// Aggregation operator.
+    #[must_use]
+    #[inline]
+    pub fn operator(&self) -> &AggregationOperator {
+        &self.operator
+    }
+}
+
+impl fmt::Display for Aggregation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}({})", self.operator, self.arithmetic)
+    }
+}
+
+impl Lexeme for Aggregation {
+    /// Parse an aggregation from the grammar.
+    fn from_parsed_rule(parsed_rule: Pair<Rule>, file: FileId) -> Result<Self, ParseError> {
+        let span = span_of(&parsed_rule, file);
+        let mut inner = parsed_rule.into_inner();
+
+        let op_pair = inner
+            .next()
+            .ok_or_else(|| grammar_bug("aggregation missing operator"))?;
+        let operator = AggregationOperator::from_parsed_rule(op_pair, file)?;
+
+        let expr_pair = inner
+            .next()
+            .ok_or_else(|| grammar_bug("aggregation missing arithmetic expression"))?;
+        let arithmetic = Arithmetic::from_parsed_rule(expr_pair, file)?;
+
+        Ok(Self {
+            operator,
+            arithmetic,
+            span,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flowlog_common::FileId;
+    use pest::Parser;
+
+    use super::*;
+    use crate::FlowLogParser;
+    use crate::Lexeme;
+    use crate::Rule;
+
+    #[test]
+    fn parse_aggregate_expr() {
+        let mut pairs = FlowLogParser::parse(Rule::aggregate_expr, "sum(price * qty)").unwrap();
+        let agg = Aggregation::from_parsed_rule(pairs.next().unwrap(), FileId::new(0)).unwrap();
+        assert_eq!(*agg.operator(), AggregationOperator::Sum);
+        assert_eq!(agg.vars().len(), 2);
+    }
+}

@@ -13,14 +13,15 @@ mod batch;
 mod incremental;
 
 pub(crate) use batch::gen_lib_engine;
+use flowlog_parser::DataType;
+use flowlog_parser::Relation;
 pub(crate) use incremental::gen_lib_incremental_engine;
-
+use proc_macro2::Literal;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::build::relation::user::user_to_tuple_expr;
 use crate::codegen::tuple_tokens;
-use crate::parser::{DataType, Relation};
 
 pub(crate) fn needs_conversion(rel: &Relation, string_intern: bool) -> bool {
     // Leaf-aware: a tuple column needs conversion when any of its (possibly
@@ -63,7 +64,7 @@ pub(crate) fn user_to_tuple_convert(rel: &Relation, string_intern: bool) -> Toke
         string_intern,
         quote! { item },
         |i| {
-            let idx = proc_macro2::Literal::usize_unsuffixed(i);
+            let idx = Literal::usize_unsuffixed(i);
             quote! { item.#idx }
         },
         |dt, src| user_to_tuple_expr(dt, string_intern, src),

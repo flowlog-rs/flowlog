@@ -11,12 +11,17 @@
 //! Acyclic Query Evaluation with Theoretical Guarantees." Proceedings of the ACM on
 //! Management of Data 3.3 (2025): 1-28, as part of algorithm 1.
 
-use super::RulePlanner;
-use crate::catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
-use crate::parser::ConstType;
-use crate::planner::PlanError;
-use crate::planner::{KeyValueLayout, TransformationInfo};
+use flowlog_parser::ConstType;
 use tracing::trace;
+
+use super::RulePlanner;
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::Catalog;
+use crate::catalog::KvPredicates;
+use crate::planner::KeyValueLayout;
+use crate::planner::PlanError;
+use crate::planner::TransformationInfo;
 
 // =========================================================================
 // Prepare Planning

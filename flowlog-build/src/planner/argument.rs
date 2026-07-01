@@ -1,7 +1,9 @@
 //! Argument types for query planning transformations in FlowLog Datalog program.
 
-use crate::planner::{ArithmeticArgument, FactorArgument};
 use std::fmt;
+
+use crate::planner::ArithmeticArgument;
+use crate::planner::FactorArgument;
 
 /// Represents different types of transformation arguments used in query planning.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -21,12 +23,11 @@ impl TransformationArgument {
             .into_iter()
             .map(|arith_arg| {
                 // Assert that there are no additional arithmetic operations
-                if !arith_arg.rest.is_empty() {
-                    panic!(
-                        "Planner error: expected simple variable reference in ArithmeticArgument, but found operations: {:?}",
-                        arith_arg.rest
-                    );
-                }
+                assert!(
+                    arith_arg.rest.is_empty(),
+                    "Planner error: expected simple variable reference in ArithmeticArgument, but found operations: {:?}",
+                    arith_arg.rest
+                );
 
                 match arith_arg.init {
                     FactorArgument::Var(trans_arg) => trans_arg,

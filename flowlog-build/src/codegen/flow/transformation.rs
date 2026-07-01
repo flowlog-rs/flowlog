@@ -6,17 +6,25 @@
 
 use std::collections::HashMap;
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
+use proc_macro2::Ident;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 
-use crate::codegen::arg::{
-    build_kv_constraints_predicate, build_row_constraints_predicate, combine_predicates,
-    compute_join_param_tokens, compute_kv_param_tokens, row_pattern_and_fields,
-};
+use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
+use crate::codegen::arg::build_kv_constraints_predicate;
+use crate::codegen::arg::build_row_constraints_predicate;
+use crate::codegen::arg::combine_predicates;
+use crate::codegen::arg::compute_join_param_tokens;
+use crate::codegen::arg::compute_kv_param_tokens;
+use crate::codegen::arg::row_pattern_and_fields;
+use crate::codegen::data_type_tokens;
 use crate::codegen::ident::find_local_ident;
-use crate::codegen::{CodeGen, CodegenError, data_type_tokens};
-use crate::planner::{StratumPlanner, Transformation};
-use flowlog_profiler::{Profiler, with_profiler};
+use crate::planner::StratumPlanner;
+use crate::planner::Transformation;
 
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.
@@ -54,11 +62,6 @@ impl CodeGen {
         );
         let si = self.features.string_intern();
 
-        // Mark UDF import needed if any fn_call predicate is present
-        if !transformation.flow().fn_call_preds().is_empty() {
-            self.features.mark_udf();
-        }
-
         match transformation {
             // Row -> Row
             Transformation::RowToRow {
@@ -87,7 +90,6 @@ impl CodeGen {
                     flow.key(),
                     flow.value(),
                     flow.compares(),
-                    flow.fn_call_preds(),
                     flow.constraints(),
                 );
                 self.record_transformation_output_type(
@@ -111,9 +113,7 @@ impl CodeGen {
                 )?;
                 let cst_pred =
                     build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
-                let fc_pred =
-                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si)?;
-                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
                 let flat_map_body = flat_map_body_tokens(pred, out_val);
 
@@ -151,7 +151,6 @@ impl CodeGen {
                     flow.key(),
                     flow.value(),
                     flow.compares(),
-                    flow.fn_call_preds(),
                     flow.constraints(),
                 );
                 self.record_transformation_output_type(
@@ -182,9 +181,7 @@ impl CodeGen {
                 )?;
                 let cst_pred =
                     build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
-                let fc_pred =
-                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si)?;
-                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
                 // Transformation logic
                 let flat_map_body = flat_map_body_tokens(pred, out_expr);
@@ -242,13 +239,11 @@ impl CodeGen {
                 let out_val = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type)?;
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si)?;
-                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si)?;
-                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred]);
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
                     flow.value(),
                     flow.compares(),
-                    flow.fn_call_preds(),
                     Some(flow.constraints()),
                 );
 
@@ -302,13 +297,11 @@ impl CodeGen {
                 };
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type)?;
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si)?;
-                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si)?;
-                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred]);
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
                     flow.value(),
                     flow.compares(),
-                    flow.fn_call_preds(),
                     Some(flow.constraints()),
                 );
 
@@ -386,12 +379,8 @@ impl CodeGen {
                 )?;
 
                 // Output expression + predicates
-                let (jn_k, jn_lv, jn_rv) = compute_join_param_tokens(
-                    flow.key(),
-                    flow.value(),
-                    flow.compares(),
-                    flow.fn_call_preds(),
-                );
+                let (jn_k, jn_lv, jn_rv) =
+                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
                 let out_val = self.build_key_val_from_join_args(flow.value(), si)?;
 
                 let left_type = self.find_global_data_type(left.fingerprint())?.clone();
@@ -402,8 +391,7 @@ impl CodeGen {
                     &left_type,
                     &right_type,
                 )?;
-                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si)?;
-                let pred = combine_predicates(vec![cmp_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred]);
                 let join_body = join_body_tokens(pred, out_val);
 
                 Ok(quote! {
@@ -447,12 +435,8 @@ impl CodeGen {
                 )?;
 
                 // Output expression + predicates
-                let (jn_k, jn_lv, jn_rv) = compute_join_param_tokens(
-                    flow.key(),
-                    flow.value(),
-                    flow.compares(),
-                    flow.fn_call_preds(),
-                );
+                let (jn_k, jn_lv, jn_rv) =
+                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
                 let out_key = self.build_key_val_from_join_args(flow.key(), si)?;
                 let out_val = self.build_key_val_from_join_args(flow.value(), si)?;
                 let out_expr = if output.is_k_only() {
@@ -469,8 +453,7 @@ impl CodeGen {
                     &left_type,
                     &right_type,
                 )?;
-                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si)?;
-                let pred = combine_predicates(vec![cmp_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred]);
                 let join_body = join_body_tokens(pred, out_expr);
 
                 let transformation = quote! {
@@ -531,7 +514,7 @@ impl CodeGen {
 
                 // Output expression
                 let (anti_param_k, anti_param_v) =
-                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
+                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
                 let out_map_value = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let inter_dedup = self.dedup_antijoin();
                 let final_normalize = self.dedup_recursive();
@@ -598,7 +581,7 @@ impl CodeGen {
 
                 // Output expression
                 let (anti_param_k, anti_param_v) =
-                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
+                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
                 let out_map_key = self.build_key_val_from_kv_args(flow.key(), si)?;
                 let out_map_value = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let out_map_expr = if output.is_k_only() {

@@ -1,23 +1,31 @@
 //! Argument / predicate / expression codegen.
 //!
 //! Lowers the planner's `ArithmeticArgument` / `ComparisonExprArgument` /
-//! `FnCallPredicateArgument` / `Constraints` into the Rust token streams
-//! embedded in closures, predicates, and key-value builders across every
-//! flow operator (row / KV / join-core).
+//! `Constraints` into the Rust token streams embedded in closures,
+//! predicates, and key-value builders across every flow operator
+//! (row / KV / join-core).
 
-use proc_macro2::{Ident, Span, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_parser::ArithmeticOperator;
+use flowlog_parser::BuiltinOperator;
+use flowlog_parser::ComparisonOperator;
+use flowlog_parser::ConstType;
+use flowlog_parser::DataType;
+use proc_macro2::Ident;
+use proc_macro2::Literal;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 use syn::Index;
-
-use crate::parser::{ArithmeticOperator, BuiltinOperator, ComparisonOperator, ConstType, DataType};
-use crate::planner::{
-    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
-    FnCallPredicateArgument, TransformationArgument,
-};
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
 use crate::codegen::tuple_tokens;
+use crate::planner::ArithmeticArgument;
+use crate::planner::ComparisonExprArgument;
+use crate::planner::Constraints;
+use crate::planner::FactorArgument;
+use crate::planner::TransformationArgument;
 
 // ==================================================
 // Row pattern + field identifiers for RowToX transformations
@@ -31,21 +39,13 @@ pub(super) fn row_pattern_and_fields(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
-    fn_call_preds: &[FnCallPredicateArgument],
     constraints: &Constraints,
 ) -> (TokenStream, Vec<Ident>) {
     if arity == 0 {
         return (quote! { () }, Vec::new());
     }
 
-    let used = compute_row_params_tokens(
-        arity,
-        key_args,
-        value_args,
-        compares,
-        fn_call_preds,
-        constraints,
-    );
+    let used = compute_row_params_tokens(arity, key_args, value_args, compares, constraints);
 
     let fields: Vec<Ident> = (0..arity)
         .map(|idx| {
@@ -122,7 +122,6 @@ fn compute_row_params_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
-    fn_call_preds: &[FnCallPredicateArgument],
     constraints: &Constraints,
 ) -> Vec<bool> {
     let mut used = vec![false; arity];
@@ -148,11 +147,6 @@ fn compute_row_params_tokens(
         inspect(cmp.left());
         inspect(cmp.right());
     }
-    for fc in fn_call_preds {
-        for arg in fc.args() {
-            inspect(arg);
-        }
-    }
     for (arg, _) in constraints.constant_eq_constraints().as_ref().iter() {
         mark(arg);
     }
@@ -176,7 +170,6 @@ pub(super) fn compute_join_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
-    fn_call_preds: &[FnCallPredicateArgument],
 ) -> (TokenStream, TokenStream, TokenStream) {
     let (mut use_k, mut use_lv, mut use_rv) = (false, false, false);
 
@@ -205,11 +198,6 @@ pub(super) fn compute_join_param_tokens(
         inspect(cmp.left());
         inspect(cmp.right());
     }
-    for fc in fn_call_preds {
-        for arg in fc.args() {
-            inspect(arg);
-        }
-    }
 
     (
         param_ident(use_k, "k"),
@@ -223,7 +211,6 @@ pub(super) fn compute_kv_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
-    fn_call_preds: &[FnCallPredicateArgument],
     constraints: Option<&Constraints>,
 ) -> (TokenStream, TokenStream) {
     let (mut use_k, mut use_v) = (false, false);
@@ -253,11 +240,6 @@ pub(super) fn compute_kv_param_tokens(
         inspect(cmp.left());
         inspect(cmp.right());
     }
-    for fc in fn_call_preds {
-        for arg in fc.args() {
-            inspect(arg);
-        }
-    }
     if let Some(cons) = constraints {
         for (arg, _) in cons.constant_eq_constraints().as_ref().iter() {
             mark(arg);
@@ -283,10 +265,86 @@ fn comparison_op_tokens(op: &ComparisonOperator) -> TokenStream {
         ComparisonOperator::GreaterEqualThan => quote! { >= },
         ComparisonOperator::LessThan => quote! { < },
         ComparisonOperator::LessEqualThan => quote! { <= },
+        // String constraints are not infix operators; they are emitted by
+        // `emit_string_constraint` and never reach this token mapper.
+        ComparisonOperator::Match { .. } | ComparisonOperator::Contains { .. } => {
+            unreachable!("string constraints are emitted separately")
+        }
     }
 }
 
 impl CodeGen {
+    /// Emit a string-constraint test (`match`/`contains`, the `!` folded into
+    /// the operator) from already-built operand tokens.
+    fn emit_string_constraint(
+        &mut self,
+        op: &ComparisonOperator,
+        left: &ArithmeticArgument,
+        l: &TokenStream,
+        r: &TokenStream,
+        string_intern: bool,
+    ) -> TokenStream {
+        if string_intern {
+            self.features.mark_string_resolve();
+        }
+        let read_str = |t: &TokenStream| -> TokenStream {
+            if string_intern {
+                quote! { resolve(#t) }
+            } else {
+                quote! { (#t).as_str() }
+            }
+        };
+        // Negation is a prefix on the boolean expression (`!`), not an outer
+        // paren wrap — keeps the generated `if` condition free of redundant
+        // parens (`-D warnings` in the generated crate flags those).
+        match op {
+            ComparisonOperator::Contains { negated } => {
+                let neg = if *negated {
+                    quote! { ! }
+                } else {
+                    quote! {}
+                };
+                let needle = read_str(l);
+                let hay = read_str(r);
+                quote! { #neg (#hay).contains(#needle) }
+            }
+            ComparisonOperator::Match { negated } => {
+                // `match(pattern, s)` is a *full* match, so anchor with
+                // `^(?:…)$` (the `regex` crate searches by default). A bad
+                // pattern yields `false` rather than aborting.
+                let neg = if *negated {
+                    quote! { ! }
+                } else {
+                    quote! {}
+                };
+                let hay = read_str(r);
+                if let FactorArgument::Const(ConstType::Text(p)) = left.init()
+                    && left.rest().is_empty()
+                {
+                    // Literal pattern (the common case): anchor at codegen time
+                    // and compile once per call site via a `LazyLock` static.
+                    let anchored = format!("^(?:{p})$");
+                    quote! {{
+                        static RE: ::std::sync::LazyLock<
+                            Option<::flowlog_runtime::regex::Regex>,
+                        > = ::std::sync::LazyLock::new(|| {
+                            ::flowlog_runtime::regex::Regex::new(#anchored).ok()
+                        });
+                        #neg RE.as_ref().is_some_and(|re| re.is_match(#hay))
+                    }}
+                } else {
+                    // Computed pattern: compile per evaluation.
+                    let pat = read_str(l);
+                    quote! {
+                        #neg ::flowlog_runtime::regex::Regex::new(&format!("^(?:{})$", #pat))
+                            .map_or(false, |re| re.is_match(#hay))
+                    }
+                }
+            }
+            other => unreachable!("not a string constraint: {other:?}"),
+        }
+    }
+
     /// KV-closure comparison predicate, combined with `&&`.
     pub(super) fn build_kv_compare_predicate(
         &mut self,
@@ -302,6 +360,15 @@ impl CodeGen {
             .map(|c| {
                 let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern)?;
                 let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern)?;
+                if c.operator().is_string_constraint() {
+                    return Ok(self.emit_string_constraint(
+                        c.operator(),
+                        c.left(),
+                        &l,
+                        &r,
+                        string_intern,
+                    ));
+                }
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
@@ -338,6 +405,15 @@ impl CodeGen {
             .map(|c| {
                 let l = self.build_join_args_arithmetic_expr(c.left(), string_intern)?;
                 let r = self.build_join_args_arithmetic_expr(c.right(), string_intern)?;
+                if c.operator().is_string_constraint() {
+                    return Ok(self.emit_string_constraint(
+                        c.operator(),
+                        c.left(),
+                        &l,
+                        &r,
+                        string_intern,
+                    ));
+                }
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
@@ -377,7 +453,17 @@ impl CodeGen {
             .iter()
             .map(|c| {
                 let l = self.build_row_args_arithmetic_expr(c.left(), row_fields, string_intern)?;
-                let r = self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern)?;
+                let r =
+                    self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern)?;
+                if c.operator().is_string_constraint() {
+                    return Ok(self.emit_string_constraint(
+                        c.operator(),
+                        c.left(),
+                        &l,
+                        &r,
+                        string_intern,
+                    ));
+                }
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
@@ -391,137 +477,6 @@ impl CodeGen {
                         quote! { (#l) #op (#r) }
                     },
                 )
-            })
-            .collect::<Result<_, CodegenError>>()?;
-
-        Ok(Some(quote! { #( #parts )&&* }))
-    }
-}
-
-// ==================================================
-// FnCall predicate builders
-// ==================================================
-
-impl CodeGen {
-    /// KV-closure UDF-call predicate, combined with `&&`.
-    pub(super) fn build_kv_fn_call_predicate(
-        &mut self,
-        fn_calls: &[FnCallPredicateArgument],
-        string_intern: bool,
-    ) -> Result<Option<TokenStream>, CodegenError> {
-        if fn_calls.is_empty() {
-            return Ok(None);
-        }
-        let parts: Vec<TokenStream> = fn_calls
-            .iter()
-            .map(|fc| {
-                let fn_name = format_ident!("{}", fc.name());
-                let param_types = self.udf_param_types(fc.name());
-                if string_intern && param_types.contains(&DataType::String) {
-                    self.features.mark_string_resolve();
-                }
-                let args: Vec<TokenStream> = fc
-                    .args()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        let token = self.build_kv_args_arithmetic_expr(a, string_intern)?;
-                        Ok(wrap_udf_arg(
-                            token,
-                            param_type_at(&param_types, i),
-                            string_intern,
-                        ))
-                    })
-                    .collect::<Result<_, CodegenError>>()?;
-                Ok(if fc.is_negated() {
-                    quote! { !udf::#fn_name(#( #args ),*) }
-                } else {
-                    quote! { udf::#fn_name(#( #args ),*) }
-                })
-            })
-            .collect::<Result<_, CodegenError>>()?;
-
-        Ok(Some(quote! { #( #parts )&&* }))
-    }
-
-    /// `join_core`-closure UDF-call predicate, combined with `&&`.
-    pub(super) fn build_join_fn_call_predicate(
-        &mut self,
-        fn_calls: &[FnCallPredicateArgument],
-        string_intern: bool,
-    ) -> Result<Option<TokenStream>, CodegenError> {
-        if fn_calls.is_empty() {
-            return Ok(None);
-        }
-        let parts: Vec<TokenStream> = fn_calls
-            .iter()
-            .map(|fc| {
-                let fn_name = format_ident!("{}", fc.name());
-                let param_types = self.udf_param_types(fc.name());
-                if string_intern && param_types.contains(&DataType::String) {
-                    self.features.mark_string_resolve();
-                }
-                let args: Vec<TokenStream> = fc
-                    .args()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        let token = self.build_join_args_arithmetic_expr(a, string_intern)?;
-                        Ok(wrap_udf_arg(
-                            token,
-                            param_type_at(&param_types, i),
-                            string_intern,
-                        ))
-                    })
-                    .collect::<Result<_, CodegenError>>()?;
-                Ok(if fc.is_negated() {
-                    quote! { !udf::#fn_name(#( #args ),*) }
-                } else {
-                    quote! { udf::#fn_name(#( #args ),*) }
-                })
-            })
-            .collect::<Result<_, CodegenError>>()?;
-
-        Ok(Some(quote! { #( #parts )&&* }))
-    }
-
-    /// Row-closure UDF-call predicate, combined with `&&`.
-    pub(super) fn build_row_fn_call_predicate(
-        &mut self,
-        fn_calls: &[FnCallPredicateArgument],
-        row_fields: &[Ident],
-        string_intern: bool,
-    ) -> Result<Option<TokenStream>, CodegenError> {
-        if fn_calls.is_empty() {
-            return Ok(None);
-        }
-        let parts: Vec<TokenStream> = fn_calls
-            .iter()
-            .map(|fc| {
-                let fn_name = format_ident!("{}", fc.name());
-                let param_types = self.udf_param_types(fc.name());
-                if string_intern && param_types.contains(&DataType::String) {
-                    self.features.mark_string_resolve();
-                }
-                let args: Vec<TokenStream> = fc
-                    .args()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        let token =
-                            self.build_row_args_arithmetic_expr(a, row_fields, string_intern)?;
-                        Ok(wrap_udf_arg(
-                            token,
-                            param_type_at(&param_types, i),
-                            string_intern,
-                        ))
-                    })
-                    .collect::<Result<_, CodegenError>>()?;
-                Ok(if fc.is_negated() {
-                    quote! { !udf::#fn_name(#( #args ),*) }
-                } else {
-                    quote! { udf::#fn_name(#( #args ),*) }
-                })
             })
             .collect::<Result<_, CodegenError>>()?;
 
@@ -619,43 +574,43 @@ pub fn const_to_token(
             )));
         }
         ConstType::Int8(n) => {
-            let lit = proc_macro2::Literal::i8_unsuffixed(*n);
+            let lit = Literal::i8_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::Int16(n) => {
-            let lit = proc_macro2::Literal::i16_unsuffixed(*n);
+            let lit = Literal::i16_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::Int32(n) => {
-            let lit = proc_macro2::Literal::i32_unsuffixed(*n);
+            let lit = Literal::i32_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::Int64(n) => {
-            let lit = proc_macro2::Literal::i64_unsuffixed(*n);
+            let lit = Literal::i64_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::UInt8(n) => {
-            let lit = proc_macro2::Literal::u8_unsuffixed(*n);
+            let lit = Literal::u8_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::UInt16(n) => {
-            let lit = proc_macro2::Literal::u16_unsuffixed(*n);
+            let lit = Literal::u16_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::UInt32(n) => {
-            let lit = proc_macro2::Literal::u32_unsuffixed(*n);
+            let lit = Literal::u32_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::UInt64(n) => {
-            let lit = proc_macro2::Literal::u64_unsuffixed(*n);
+            let lit = Literal::u64_unsuffixed(*n);
             quote! { #lit }
         }
         ConstType::Float32(v) => {
-            let lit = proc_macro2::Literal::f32_unsuffixed(v.into_inner());
+            let lit = Literal::f32_unsuffixed(v.into_inner());
             quote! { OrderedFloat(#lit) }
         }
         ConstType::Float64(v) => {
-            let lit = proc_macro2::Literal::f64_unsuffixed(v.into_inner());
+            let lit = Literal::f64_unsuffixed(v.into_inner());
             quote! { OrderedFloat(#lit) }
         }
         ConstType::Text(s) => {
@@ -988,9 +943,14 @@ impl CodeGen {
             .collect::<Result<_, _>>()?;
 
         // Avoid marking `resolve` for ops that never read a string param
-        // (e.g. `to_string(n: int)`), otherwise an unused helper leaks
-        // into the generated binary.
-        if string_intern && op.param_types().contains(&DataType::String) {
+        // (e.g. `to_string(n)`), otherwise an unused helper leaks into the
+        // generated binary.
+        if string_intern
+            && op
+                .param_allowed_types()
+                .iter()
+                .any(|set| set.contains(&DataType::String))
+        {
             self.features.mark_string_resolve();
         }
 
@@ -1030,40 +990,6 @@ impl CodeGen {
                 debug_assert!(string_intern);
                 let s = &raw[0];
                 Ok(quote! { ((#s).into_inner().get() as i32) })
-            }
-            BuiltinOperator::Contains => {
-                let needle = read_str(&raw[0]);
-                let hay = read_str(&raw[1]);
-                Ok(quote! { ((#hay).contains(#needle)) })
-            }
-            BuiltinOperator::Match => {
-                // Soufflé `match(pattern, s)` is a *full* match, so anchor
-                // with `^(?:…)$` (the `regex` crate searches by default).
-                // A malformed pattern yields `false` rather than aborting.
-                // `regex` resolves via the `flowlog_runtime` re-export in
-                // both binary and library modes (runtime ≥ 0.2.3).
-                let hay = read_str(&raw[1]);
-                // Literal pattern (the common case): anchor at codegen time
-                // and compile once per call site via a `LazyLock` static.
-                if let FactorArgument::Const(ConstType::Text(p)) = &args[0].init
-                    && args[0].rest.is_empty()
-                {
-                    let anchored = format!("^(?:{p})$");
-                    return Ok(quote! {{
-                        static RE: ::std::sync::LazyLock<
-                            Option<::flowlog_runtime::regex::Regex>,
-                        > = ::std::sync::LazyLock::new(|| {
-                            ::flowlog_runtime::regex::Regex::new(#anchored).ok()
-                        });
-                        RE.as_ref().is_some_and(|re| re.is_match(#hay))
-                    }});
-                }
-                // Computed pattern: compile per evaluation.
-                let pat = read_str(&raw[0]);
-                Ok(quote! {
-                    ::flowlog_runtime::regex::Regex::new(&format!("^(?:{})$", #pat))
-                        .map_or(false, |re| re.is_match(#hay))
-                })
             }
             BuiltinOperator::ToString => {
                 let n = &raw[0];

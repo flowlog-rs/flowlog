@@ -7,11 +7,14 @@
 //! address arrays into the graph, and computes roots (nodes with no incoming
 //! edges).
 
-use crate::Result;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use anyhow::bail;
-use flowlog_profiler::{Addr, Profiler};
-use std::collections::{BTreeMap, BTreeSet};
+use flowlog_profiler::Addr;
+use flowlog_profiler::Profiler;
+
+use crate::Result;
 
 /// Flattened, validated node ready for aggregation.
 #[derive(Debug, Clone)]
@@ -55,9 +58,7 @@ pub fn validate_and_build(profiler: &Profiler) -> Result<ValidatedOps> {
     let mut nodes: BTreeMap<usize, NodeSpec> = BTreeMap::new();
     for raw in profiler.nodes() {
         if nodes.contains_key(&raw.id) {
-            bail!(
-                format!("duplicate node id in ops.json: {}", raw.id)
-            );
+            bail!(format!("duplicate node id in ops.json: {}", raw.id));
         }
 
         let block = if raw.block.trim().is_empty() {
@@ -91,9 +92,7 @@ pub fn validate_and_build(profiler: &Profiler) -> Result<ValidatedOps> {
     }
 
     if nodes.is_empty() {
-        bail!(
-            "ops.json contained no nodes"
-        );
+        bail!("ops.json contained no nodes");
     }
 
     // Phase 2a: enforce unique, non-empty fingerprints within the same block.
@@ -104,12 +103,10 @@ pub fn validate_and_build(profiler: &Profiler) -> Result<ValidatedOps> {
         if let Some(fp) = &node.fingerprint {
             let key = (node.block.clone(), fp.clone());
             if let Some(prev) = fingerprint_block_to_node.insert(key.clone(), *id) {
-                bail!(
-                    format!(
-                        "fingerprint '{}' is used by multiple nodes in block '{}' ({} and {})",
-                        fp, key.0, prev, id
-                    )
-                );
+                bail!(format!(
+                    "fingerprint '{}' is used by multiple nodes in block '{}' ({} and {})",
+                    fp, key.0, prev, id
+                ));
             }
             fingerprint_to_node.entry(fp.clone()).or_insert(*id);
         }
@@ -129,12 +126,10 @@ pub fn validate_and_build(profiler: &Profiler) -> Result<ValidatedOps> {
     for node in nodes.values() {
         for pid in &node.parents {
             if !nodes.contains_key(pid) {
-                bail!(
-                    format!(
-                        "node {} references missing parent id {}",
-                        node.id, pid
-                    )
-                );
+                bail!(format!(
+                    "node {} references missing parent id {}",
+                    node.id, pid
+                ));
             }
         }
     }
@@ -148,28 +143,22 @@ pub fn validate_and_build(profiler: &Profiler) -> Result<ValidatedOps> {
         for pn in &raw_rule.plan_tree {
             let fp = pn.fingerprint.trim();
             if fp.is_empty() {
-                bail!(
-                    format!(
-                        "rule '{}' has an empty fingerprint entry",
-                        raw_rule.text
-                    )
-                );
+                bail!(format!(
+                    "rule '{}' has an empty fingerprint entry",
+                    raw_rule.text
+                ));
             }
             if nodes_map.contains_key(fp) {
-                bail!(
-                    format!(
-                        "rule '{}' has duplicate fingerprint '{}' in plan tree",
-                        raw_rule.text, fp
-                    )
-                );
+                bail!(format!(
+                    "rule '{}' has duplicate fingerprint '{}' in plan tree",
+                    raw_rule.text, fp
+                ));
             }
             if !fingerprint_to_node.contains_key(fp) {
-                bail!(
-                    format!(
-                        "rule '{}' references fingerprint '{}' not found in any node",
-                        raw_rule.text, fp
-                    )
-                );
+                bail!(format!(
+                    "rule '{}' references fingerprint '{}' not found in any node",
+                    raw_rule.text, fp
+                ));
             }
 
             let parents = normalize_parents(pn.parents.clone());
@@ -180,12 +169,10 @@ pub fn validate_and_build(profiler: &Profiler) -> Result<ValidatedOps> {
         for (fp, parents) in &raw_parents {
             for parent in parents {
                 if !raw_parents.contains_key(parent) {
-                    bail!(
-                        format!(
-                            "rule '{}' references parent fingerprint '{}' not present in its plan tree",
-                            raw_rule.text, parent
-                        )
-                    );
+                    bail!(format!(
+                        "rule '{}' references parent fingerprint '{}' not present in its plan tree",
+                        raw_rule.text, parent
+                    ));
                 }
             }
             nodes_map.entry(fp.clone()).or_insert(RulePlanNodeSpec {
@@ -218,13 +205,11 @@ pub fn validate_and_build(profiler: &Profiler) -> Result<ValidatedOps> {
             .collect();
 
         if sinks.len() != 1 {
-            bail!(
-                format!(
-                    "rule '{}' plan tree must have exactly one sink fingerprint (found {})",
-                    raw_rule.text,
-                    sinks.len()
-                )
-            );
+            bail!(format!(
+                "rule '{}' plan tree must have exactly one sink fingerprint (found {})",
+                raw_rule.text,
+                sinks.len()
+            ));
         }
 
         let root_fp = sinks[0].clone();
@@ -245,12 +230,10 @@ pub fn validate_and_build(profiler: &Profiler) -> Result<ValidatedOps> {
         if let Some(fp) = &node.fingerprint
             && !rule_fps.contains(fp)
         {
-            bail!(
-                format!(
-                    "node {} has fingerprint '{}' but it is not recorded in rules",
-                    id, fp
-                )
-            );
+            bail!(format!(
+                "node {} has fingerprint '{}' but it is not recorded in rules",
+                id, fp
+            ));
         }
     }
 

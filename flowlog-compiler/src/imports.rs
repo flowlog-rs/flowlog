@@ -3,11 +3,15 @@
 //! All non-stdlib references must resolve against the dependencies declared
 //! in [`crate::scaffold::render_cargo_toml`] — keep the two in sync.
 
+use flowlog_build::Features;
+use flowlog_common::Config;
+use proc_macro2::Ident;
+use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use flowlog_build::Features;
-use flowlog_build::common::{Config, INTERN_MAX_RETRIES};
+/// Maximum number of retries for transient string-interner allocation failures.
+const INTERN_MAX_RETRIES: usize = 1024;
 
 pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     let inc = config.is_incremental();
@@ -119,25 +123,25 @@ pub(crate) fn gen_worker_helpers() -> TokenStream {
 /// unqualified. The actual implementations live in the `flowlog` runtime
 /// crate (same crate library mode pulls in).
 pub(crate) fn gen_binary_relation_extras(
-    program: &flowlog_build::parser::Program,
+    program: &flowlog_parser::Program,
     features: &Features,
 ) -> TokenStream {
-    let non_nullary_edbs: Vec<&flowlog_build::parser::Relation> = program
+    let non_nullary_edbs: Vec<&flowlog_parser::Relation> = program
         .edbs()
         .iter()
         .filter(|r| r.arity() > 0)
         .copied()
         .collect();
-    let first_cols: Vec<flowlog_build::parser::DataType> = non_nullary_edbs
+    let first_cols: Vec<flowlog_parser::DataType> = non_nullary_edbs
         .iter()
         .filter_map(|r| r.data_type().first().cloned())
         .collect();
     let needs_int = first_cols
         .iter()
-        .any(|dt| !matches!(dt, flowlog_build::parser::DataType::String));
+        .any(|dt| !matches!(dt, flowlog_parser::DataType::String));
     let has_string = first_cols
         .iter()
-        .any(|dt| matches!(dt, flowlog_build::parser::DataType::String));
+        .any(|dt| matches!(dt, flowlog_parser::DataType::String));
     let needs_str = has_string && !features.string_intern();
     let needs_spur = has_string && features.string_intern();
     let needs_byte_range = !non_nullary_edbs.is_empty();
@@ -270,8 +274,8 @@ fn agg_semiring_uses_only(f: &Features) -> TokenStream {
     let uses: Vec<_> = entries
         .iter()
         .map(|(mod_name, ty_name)| {
-            let mod_ident = proc_macro2::Ident::new(mod_name, proc_macro2::Span::call_site());
-            let ty = proc_macro2::Ident::new(ty_name, proc_macro2::Span::call_site());
+            let mod_ident = Ident::new(mod_name, Span::call_site());
+            let ty = Ident::new(ty_name, Span::call_site());
             quote! { use semiring::#mod_ident::#ty; }
         })
         .collect();

@@ -1,0 +1,615 @@
+// =============================================================================
+// FlowLog GRAMMAR DEFINITION
+// =============================================================================
+// This grammar defines the syntax for FlowLog, a Datalog language engine
+// for declarative data processing and rule-based queries.
+
+// Main grammar entry point
+main_grammar = {
+    SOI ~
+    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | comp_decl | init_decl | fixpoint_block | loop_block | fact | rule | plan_directive)* ~
+    EOI
+}
+
+// =============================================================================
+// BASIC ELEMENTS (IDENTIFIERS, LITERALS, TYPES)
+// =============================================================================
+
+// Identifier pattern - must start with letter or underscore,
+// can contain letters, numbers, underscores
+// Valid examples: x, _temp, myVar123, _private_var
+// Invalid examples: 1x, x-yz (hyphen not allowed)
+identifier = @{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// A keyword's trailing edge: the next char must NOT continue an identifier,
+// so a reserved word matches the whole token and not a prefix (`as` vs
+// `assert`, `match` vs `matches`). Silent: produces no node.
+word_boundary = _{ !(ASCII_ALPHANUMERIC | "_") }
+
+// Variable reference - variables used in rules and queries
+variable = { identifier }
+
+// Attribute name - names of relation attributes (columns)
+attribute_name = { identifier }
+
+// Relation name as it appears at a *defining* site (`.decl`). Always
+// a single identifier — dots are reserved for inliner-produced names.
+relation_name = @{ identifier }
+
+// Relation reference at a *use* site (atom, head, directive target,
+// loop condition, iterative list). Accepts the dotted form so user
+// code can refer to inliner-produced relations like `c.Holds`.
+relation_ref = @{ identifier ~ ("." ~ identifier)* }
+
+// An attribute's type, one of three forms (the `T` in `.decl R(x: T)`):
+//   tuple_type   `(a: symbol, b: number)`    a fixed tuple
+//   data_type    `symbol`                    a built-in primitive
+//   alias_name   `MyType`                    a user-defined `.type`
+// data_type before alias_name so primitives win over the catch-all identifier.
+// (`[ … ]` is reserved for a future array type.)
+type_ref = { tuple_type | data_type | alias_name }
+
+// A fixed tuple type, e.g. `(a: symbol, b: number)`: one or more fields, each a
+// `type_ref` (so tuples nest). Recursion is rejected by the type registry.
+tuple_type  = { "(" ~ tuple_field ~ ("," ~ tuple_field)* ~ ")" }
+tuple_field = { attribute_name ~ ":" ~ type_ref }
+
+// A user-declared type name at a *use* site. Resolved against the
+// [`TypeRegistry`] after parsing — includes top-level `.type` aliases
+// and per-instance prefixed types registered by the component inliner
+// (`a.cfg.context`, etc.). Dotted forms support comp-type-parameter
+// references like `.decl R(c: cfg.Context)`.
+alias_name = @{ identifier ~ ("." ~ identifier)* }
+
+// Data type specification
+data_type = { integer8_type | integer16_type | integer32_type | integer64_type
+            | uinteger8_type | uinteger16_type | uinteger32_type | uinteger64_type
+            | float32_type | float64_type
+            | string_type | bool_type }
+
+// 8-bit signed integer data type
+integer8_type = { "int8" }
+
+// 16-bit signed integer data type
+integer16_type = { "int16" }
+
+// 32-bit signed integer data type ("number" is an alias for "int32")
+integer32_type = { "int32" | "number" }
+
+// 64-bit signed integer data type
+integer64_type = { "int64" }
+
+// 8-bit unsigned integer data type
+uinteger8_type = { "uint8" }
+
+// 16-bit unsigned integer data type
+uinteger16_type = { "uint16" }
+
+// 32-bit unsigned integer data type ("unsigned" is an alias for "uint32")
+uinteger32_type = { "uint32" | "unsigned" }
+
+// 64-bit unsigned integer data type
+uinteger64_type = { "uint64" }
+
+// 32-bit floating point data type ("float" is an alias for "f32")
+float32_type = { "float" | "f32" }
+
+// 64-bit floating point data type
+float64_type = { "f64" }
+
+// Text data type for strings ("symbol" is an alias for "string")
+string_type = { "string" | "symbol" }
+
+// Boolean data type
+bool_type = { "bool" }
+
+// Constant values
+constant = { boolean | float | integer | string } 
+
+// Float with optional sign, must contain a decimal point
+// Examples: 1.5, -3.14, +0.0
+float = @{ ("+" | "-")? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+
+// Integer with optional sign
+// Examples: 42, -17, +100
+integer = @{ ("+" | "-")? ~ ASCII_DIGIT+ }
+
+// String enclosed in double quotes
+// Example: "hello world"
+// Atomic so escapes and inner whitespace are matched literally. A `\` starts
+// an escape (consuming the next char, so `\"` does not terminate the string);
+// any other non-quote, non-backslash char is taken verbatim. Decoding of the
+// escapes happens in the parser (`primitive::unquote`), not the grammar.
+string = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
+
+// Placeholder for unused variables (underscore)
+// Used when you don't need to reference a variable
+placeholder = { "_" } 
+
+// Boolean literal values
+boolean = { ("True" | "False") ~ word_boundary }
+
+// =============================================================================
+// RELATION DECLARATIONS
+// =============================================================================
+// Relations are the core data structures in FlowLog. They can be:
+// - EDB (Extensional Database): Input relations with external data
+// - IDB (Intentional Database): Computed relations defined by rules
+
+// Declaration only defines the relation schema. I/O directives are
+// separate and can appear anywhere in the program. Optional trailing
+// `overridable` is only meaningful inside a `.comp` body.
+declaration = {
+    ".decl" ~ relation_name ~ "(" ~ attributes_decl? ~ ")" ~ overridable_kw?
+}
+
+// Lets a subcomponent's `.override` replace this relation's rules.
+overridable_kw = @{ "overridable" ~ word_boundary }
+
+// Input directive for EDB relations - separate from declaration.
+// Parens are optional; an empty/missing param list means defaults
+// (`IO="file"`, `filename="<RelationName>.facts"`, `delimiter="\t"`).
+// Example: .input Relation(IO="file", filename="data.csv", delimiter=",")
+// Example: .input Edge                                  // all defaults
+input_directive = {
+    ".input" ~ relation_ref ~ ("(" ~ io_params? ~ ")")?
+}
+
+// Output directive for relations
+// Example: .output Relation
+// Example: .output Relation(delimiter="|")
+output_directive = {
+    ".output" ~ relation_ref ~ ("(" ~ io_params? ~ ")")?
+}
+
+// Shared key=value parameter list used by both input and output directives
+io_params = { io_param ~ ("," ~ io_param)* }
+
+// Individual parameter
+io_param = { parameter_name ~ "=" ~ parameter_value }
+
+// Parameter name (IO, filename, delimiter, etc.)
+parameter_name = { identifier }
+
+// Parameter value (quoted string)
+parameter_value = { string }
+
+// Print size directive for relations - separate from declaration
+// Example: .printsize Relation
+printsize_directive = {
+    ".printsize" ~ relation_ref
+}
+
+// Include directive — pull another .dl file into the current program.
+// Path is resolved relative to the including file's directory.
+// Example: .include "lib/base.dl"
+include_directive = { ".include" ~ string }
+
+// Comma-separated list of attribute declarations
+// Example: src: number, dst: number, weight: string
+attributes_decl = { attribute_decl ~ ("," ~ attribute_decl)* }
+
+// Single attribute with name and type. Type is either a built-in primitive
+// or a `.type`-declared alias name (resolved transitively at parse time).
+// Example: "src: number" or "src: NodeId" where `NodeId` is a `.type` alias.
+attribute_decl = { attribute_name ~ ":" ~ type_ref }
+
+// =============================================================================
+// USER-DEFINED EXTERNAL FUNCTION DECLARATIONS
+// =============================================================================
+//   .extern fn   name(param1: type1, ...) -> ret_type
+
+extern_fn = {
+    ".extern" ~ "fn" ~ identifier ~
+    "(" ~ extern_fn_params? ~ ")" ~
+    "->" ~ data_type
+}
+
+extern_fn_params = { extern_fn_param ~ ("," ~ extern_fn_param)* }
+
+extern_fn_param = { identifier ~ ":" ~ data_type }
+
+// =============================================================================
+// ARITHMETIC EXPRESSIONS
+// =============================================================================
+// Mathematical expressions with basic operators
+
+// Simple arithmetic without precedence
+// Note: "x + y * z" is parsed left-to-right as "(x + y) * z"
+arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
+
+// `as_cast` first so `as` wins over a UDF named `as` (reserved keyword).
+// `paren_expr` gives explicit grouping: since arithmetic has no operator
+// precedence (it folds strictly left-to-right), parentheses are the only
+// way to override evaluation order, e.g. `x * (a + b)`.
+// One operand of an expression. Ordered choice: `tuple_lit` precedes
+// `paren_expr` because both open with `(`; the comma in a tuple literal is the
+// tiebreaker.
+factor = { as_cast | call_expr | tuple_lit | paren_expr | constant | variable }
+
+// A fixed-tuple literal. Constructs a tuple, or destructures one when matched
+// against a bound variable; a `_` element ignores that component on destructure:
+//   x = (a, b)     construct a 2-tuple
+//   (a, b) = x     destructure into `a` and `b`
+//   (a, _) = x     destructure, ignoring the second component
+//   (a,)           1-tuple — the trailing comma is required
+//   (a)            not a tuple: plain grouping, handled by `paren_expr`
+// The mandatory comma keeps `tuple_lit` distinct from `paren_expr`.
+tuple_lit  = { "(" ~ tuple_elem ~ (("," ~ tuple_elem)+ | ",") ~ ")" }
+tuple_elem = { arithmetic_expr | placeholder }
+
+// Parenthesised sub-expression. Both wrappers are silent (`_`): a
+// single-factor `(x)` surfaces as the bare inner factor, while a
+// multi-term `(a + b)` surfaces as `group_expr` (the `+` requires an
+// operator). A group node thus exists only when the grouping affects
+// the left-to-right fold.
+paren_expr  = _{ "(" ~ paren_inner ~ ")" }
+paren_inner = _{ group_expr | factor }
+group_expr  =  { factor ~ (arithmetic_op ~ factor)+ }
+
+// `as(factor, TargetType)` — explicit cast, runtime no-op. Inner is a
+// single `factor` (not `arithmetic_expr`) so the typechecker can lower
+// `as(...)` away after validation; for `as(x + 1, T)`, bind first.
+as_cast = { as_kw ~ "(" ~ factor ~ "," ~ type_ref ~ ")" }
+as_kw = _{ "as" ~ word_boundary }
+
+// Arithmetic operators. String concatenation lives in the `cat(a, b)`
+// built-in — there is no infix `cat` operator.
+arithmetic_op = {
+    plus |    // +
+    minus |   // -
+    times |   // *
+    divide |  // /
+    modulo    // %
+}
+
+// Individual arithmetic operators
+plus = { "+" }
+minus = { "-" }
+times = { "*" }
+divide = { "/" }
+modulo = { "%" }
+
+// =============================================================================
+// COMPARISON EXPRESSIONS
+// =============================================================================
+// Binary comparisons between arithmetic expressions
+
+// Binary comparison between arithmetic expressions
+// Examples: x + y > z + w, count(x) = 5
+compare_expr = { arithmetic_expr ~ compare_op ~ arithmetic_expr }
+
+// Comparison operators
+compare_op = { 
+    equal |               // =
+    not_equal |           // !=
+    greater_equal_than |  // >=
+    greater_than |        // >
+    less_equal_than |     // <=
+    less_than             // <
+}
+
+// Individual comparison operators
+equal = { "=" }
+not_equal = { "!=" }
+greater_equal_than = { ">=" }
+greater_than = { ">" }
+less_equal_than = { "<=" }
+less_than = { "<" }
+
+// String constraints. They may only appear bare in a rule body,
+// never inside an arithmetic expression. Optional leading `!` negates.
+//   match("a.*", s)        s fully matches the regex
+//   contains(sub, s)       s contains the substring sub
+//   !match("a.*", s)       s does NOT match
+string_constraint = { not_op? ~ string_constraint_op ~ "(" ~ arithmetic_expr ~ "," ~ arithmetic_expr ~ ")" }
+string_constraint_op = { match_op | contains_op }
+not_op       = { "!" }
+match_op     = @{ "match"    ~ word_boundary }
+contains_op  = @{ "contains" ~ word_boundary }
+
+// =============================================================================
+// AGGREGATE EXPRESSIONS
+// =============================================================================
+// Aggregation functions for computing statistics over groups
+
+// Aggregation operation on a value
+// Examples: count(x), avg(x + y), sum(weight)
+aggregate_expr = { 
+    aggregate_op ~ 
+    "(" ~ 
+    arithmetic_expr ~
+    ")" 
+} 
+
+// Supported aggregate operators
+aggregate_op = { count | average | sum | min | max }
+count = { "count" | "COUNT" }       // Count of elements
+average = { "average" | "AVG" }     // Average value
+sum = { "sum" | "SUM" }             // Sum of values
+min = { "min" | "MIN" }             // Minimum value
+max = { "max" | "MAX" }             // Maximum value
+
+// =============================================================================
+// ATOMS (RELATION REFERENCES)
+// =============================================================================
+// Atoms represent relation instances with specific arguments
+
+// Relation with arguments
+// Example: edge(x, y), person("Alice", 25)
+atom = {
+    relation_ref ~
+    "(" ~
+    (atom_arg ~ ("," ~ atom_arg)*)? ~
+    ")"
+}
+
+// Negative atom for negative conditions. The atom may be wrapped in
+// redundant parentheses — `!(edge(x, y))` — which Soufflé accepts and
+// treats identically to `!edge(x, y)`. The parens are silent literals,
+// so the parser sees the same inner `atom` either way.
+// Example: !edge(x, y)  or  !(edge(x, y))
+negative_atom = { "!" ~ ("(" ~ atom ~ ")" | atom) }
+
+// Arguments in atoms can be constants, variables, or placeholders
+atom_arg = { constant | variable | placeholder } 
+
+// =============================================================================
+// RULES SECTION
+// =============================================================================
+// Rules define how output relations are computed from input relations
+// Format: head :- body.
+// Example: reachable(x, z) :- edge(x, y), reachable(y, z).
+
+// A fact is a ground tuple inserted directly into a relation.
+// Example: edge(1, 2).
+fact = { head ~ "." }
+
+// Rule with optional multi-head and multi-body (Souffle-style).
+// Commas separate alternative heads, semicolons separate alternative bodies:
+//   h1, h2 :- b1; b2.  →  h1:-b1. h1:-b2. h2:-b1. h2:-b2.
+rule = { rule_heads ~ ":-" ~ rule_bodies ~ "." }
+
+// Plan hint pinning the join order of the immediately preceding rule's
+// positive body atoms. Indices are 1-based positions of positive atoms in
+// the rule's body (negations / comparisons / fn-call predicates are not
+// counted). Must be a permutation of `1..=k` where `k` is the count of
+// positive atoms. Applied at parse time by permuting the rule's RHS, so
+// downstream the source order is the plan order.
+//
+// An optional `<plan_version> :` prefix is accepted for Soufflé
+// compatibility. Soufflé uses the version to disambiguate clauses in a
+// multi-headed/multi-bodied rule; FlowLog already expands those clauses
+// during parsing, so the prefix is parsed and discarded — the
+// permutation is then applied identically to the native form.
+//
+// Examples:
+//   A(x,z) :- B(x,y), C(y,z), D(z,w).
+//   .plan (3, 1, 2)         // native form
+//   .plan 1:(3, 1, 2)       // Soufflé form, same effect
+plan_directive = {
+    ".plan" ~ (plan_version ~ ":")? ~ "(" ~ plan_index ~ ("," ~ plan_index)* ~ ")"
+}
+plan_index = @{ ASCII_DIGIT+ }
+plan_version = @{ ASCII_DIGIT+ }
+
+// One or more commas-separated heads
+rule_heads = { head ~ ("," ~ head)* }
+
+// One or more semicolon-separated bodies (disjunction)
+rule_bodies = { predicates ~ (";" ~ predicates)* }
+
+// Left side of rule (before :-)
+// Example: reachable(x, z), stats(count(x))
+head = {
+    relation_ref ~
+    "(" ~
+    (head_arg ~ ("," ~ head_arg)*)? ~
+    ")"
+}
+
+// Can be aggregate functions or arithmetic expressions (UDF calls are parsed as factors within arithmetic)
+head_arg = { aggregate_expr | arithmetic_expr }
+
+// A value function call: `name(args...)`. The parser resolves the name
+// against the reserved built-in set ([`BuiltinOperator::from_keyword`]):
+// a hit becomes a built-in call, otherwise a UDF (`.extern fn`) call.
+// Appears inside expressions, never bare in a body.
+// Example: cat(a, b), strlen(x), my_udf(x, y + 1)
+call_expr = {
+    identifier ~
+    "(" ~
+    (arithmetic_expr ~ ("," ~ arithmetic_expr)*)? ~
+    ")"
+}
+
+// Comma-separated list of predicates in the rule body
+predicates = { predicate ~ ("," ~ predicate)* }
+
+// Types of predicates allowed in a rule body. Order matters (ordered choice):
+//   - compare_expr before atom: `cost(x) > 5` starts with a call that atom
+//     would otherwise consume as a relation.
+//   - string_constraint before atom/negative_atom: `match(...)` would parse
+//     as an atom named `match`, and `!match(...)` as a negative atom.
+predicate = {
+    compare_expr |       // Comparison: x > y, cost(x) > 5, f(x) = True
+    string_constraint |  // match("a.*", x), !contains(x, y)
+    atom |               // Positive atom: edge(x, y)
+    negative_atom |      // Negative atom: !edge(x, y)
+    disjunction_group    // Nested disjunction: (A ; B)
+}
+
+// Parenthesised disjunction inside a body: `(A ; B)`.
+disjunction_group = { "(" ~ rule_bodies ~ ")" }
+
+
+// =============================================================================
+// LOOP BLOCK / FIXPOINT BLOCK
+// =============================================================================
+// A fixpoint block evaluates rules until no new tuples are derived (delta
+// becomes empty).  A loop block evaluates rules with bounded/conditional
+// iteration.  Both act as hard evaluation barriers — the stratifier cannot
+// move rules across their boundaries.
+//
+// Syntax:
+//   fixpoint { rules... }
+//   loop <condition> { rules... }
+//
+// The condition is composed of at most one `while` clause and one `until`
+// clause, in either order:
+//
+//   while { iter_expr }  — keep looping while the iteration constraint holds.
+//       iter_expr is one or more "@it op N" sub-conditions (joined by and/or)
+//       that describe allowed iteration windows.
+//         @it <= 6                  → run iterations 0..=6
+//         @it >= 5 and @it <= 10   → run iterations 5..=10
+//         @it < 5 or @it > 10      → run iterations 0..=4 and 11..
+//
+//   until { rel_expr }   — halt when the listed bool relation(s) become true.
+//       rel_expr is one or more nullary relation names joined by and/or.
+//         until { Done }            → stop when Done holds
+//         until { Done1 or Done2 }  → stop when either holds
+//
+//   Combining while and until:
+//     while W until U          — stop as soon as EITHER condition triggers (min)
+//     while W or until U       — stop only when BOTH conditions trigger (max)
+//
+// Relations using replacement (iterative) semantics are declared inside the
+// block with `.iterative <relation_name>` directives.  This is scoped per-block:
+// the same relation can be iterative in one block and accumulative in another.
+//
+// Examples:
+//   fixpoint { ... }
+//   fixpoint { .iterative X  ... }
+//   loop while { @it <= 10 } { ... }
+//   loop until { Done } { .iterative X  ... }
+//   loop while { @it <= 100 } until { Done } { ... }
+//   loop while { @it <= 100 } or until { Done } { ... }
+//   loop until { Done } while { @it >= 5 and @it <= 10 } { ... }
+
+fixpoint_block = {
+    "fixpoint" ~ "{" ~ iterative_directive* ~ (rule | plan_directive)* ~ "}"
+}
+
+loop_block = {
+    "loop" ~ loop_condition ~ "{" ~ iterative_directive* ~ (rule | plan_directive)* ~ "}"
+}
+
+// .iterative <relation_name> — marks a relation as using replacement (new_from)
+// semantics within this block.  Unlisted relations default to accumulative (new).
+// Scoped per-block: the same relation can be iterative in one block and
+// accumulative in another.
+iterative_directive = { ".iterative" ~ relation_ref }
+
+// At most one while clause and one until clause, in either order.
+// If both are present without "or", stop when EITHER fires (min / and semantics).
+// If joined by "or", stop when BOTH fire (max / or semantics).
+loop_condition = {
+    loop_while ~ (loop_or? ~ loop_until)?
+  | loop_until ~ (loop_or? ~ loop_while)?
+}
+
+// while { iter_expr } — loop while iteration is in the specified window(s).
+loop_while = { "while" ~ "{" ~ loop_iter_expr ~ "}" }
+
+// until { rel_expr } — stop when the listed relation(s) become true.
+loop_until = { "until" ~ "{" ~ loop_stop_group ~ "}" }
+
+// One or more bool relations joined by and/or inside the until clause.
+loop_stop_group = { loop_bool_relation ~ (loop_connective ~ loop_bool_relation)* }
+
+// One or more "@it op N" sub-conditions joined by and/or.
+// Resolved at parse time into a list of allowed iteration windows Vec<(u16,u16)>.
+loop_iter_expr = {
+    "@it" ~ loop_iter_compare_op ~ integer
+    ~ (loop_connective ~ "@it" ~ loop_iter_compare_op ~ integer)*
+}
+
+// Comparison operators for iteration sub-conditions.
+// Longer tokens must come before shorter ones to avoid premature match.
+loop_iter_compare_op = { "<=" | ">=" | "==" | "<" | ">" }
+
+// A single nullary (boolean) relation name used in an until clause.
+loop_bool_relation = { relation_ref }
+
+// Boolean connective joining clauses or sub-conditions.
+loop_connective = { loop_and | loop_or }
+loop_and        = @{ "and" ~ word_boundary }
+loop_or         = @{ "or"  ~ word_boundary }
+
+// =============================================================================
+// TYPE DECLARATIONS (.type)
+// =============================================================================
+//   .type NodeId  = number    alias (transparent equivalence)
+//   .type UserId <: number    subtype (distinct compile-time identity)
+//
+// Both forms are global, position-independent, and resolved at parse
+// time to a primitive root. Subtypes are zero-cost: only the type-
+// checker distinguishes them.
+
+type_alias_decl = { ".type" ~ identifier ~ type_decl_op ~ type_ref }
+type_decl_op = { subtype_op | alias_op }
+subtype_op = { "<:" }
+alias_op = { "=" }
+
+// =============================================================================
+// COMPONENT DECLARATIONS (.comp / .init)
+// =============================================================================
+//
+//   .comp Container<T> {
+//     .decl Holds(x: T)
+//     Holds(x) :- Source(x).
+//   }
+//   .init c = Container<symbol>
+//
+// `.comp` declares a parameterized template; `.init` instantiates it
+// under a name (e.g. `c`). The component inliner pass eliminates both
+// before typechecking, leaving only prefixed primitive forms
+// (`.decl c.holds(x: symbol)` etc.).
+
+comp_decl = {
+    ".comp" ~ identifier ~ comp_type_params? ~ comp_supertype? ~ "{" ~ comp_body_item* ~ "}"
+}
+
+// `<T>` or `<T, U>` — names of types this component is parameterized by.
+comp_type_params = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
+
+// `: BaseComp<args>` — inherit and splice another component's body.
+comp_supertype = { ":" ~ identifier ~ comp_type_args? }
+
+// `<symbol, NodeId>` — concrete type arguments. `type_ref` so dotted
+// forms like `cfg.Context` work.
+comp_type_args = { "<" ~ type_ref ~ ("," ~ type_ref)* ~ ">" }
+
+// `.init c = Container<symbol>`
+init_decl = { ".init" ~ identifier ~ "=" ~ identifier ~ comp_type_args? }
+
+// Items allowed inside a component body. Mirrors the top-level grammar
+// minus fixpoint/loop blocks and include directives (which are
+// resolved at file-load time), plus `override_directive` which is
+// comp-body-only.
+// `.plan` is applied at parse time by permuting the preceding rule's
+// positive atoms; component inlining (relation-name rewriting) then
+// runs on the already-permuted body, so each instantiated rule
+// inherits the hint without extra plumbing in the inliner.
+comp_body_item = {
+    declaration | type_alias_decl | input_directive | output_directive
+    | printsize_directive | rule | fact | comp_decl | init_decl
+    | override_directive | plan_directive
+}
+
+// Drop inherited rules and facts for `Name`; the parent's `.decl Name`
+// (which must be `overridable`) is kept.
+override_directive = { ".override" ~ identifier }
+
+// =============================================================================
+// WHITESPACE AND COMMENTS
+// =============================================================================
+// Rules for handling whitespace and comments (ignored during parsing)
+
+// Whitespace and comments are ignored during parsing
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+
+// Comment starts with # or // and continues until end of line
+// Examples: # This is a comment, // Another comment
+COMMENT = _{ ("#" | "//") ~ (!NEWLINE ~ ANY)* }

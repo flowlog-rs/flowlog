@@ -6,14 +6,18 @@
 //! Buffers store `(data, time, diff)` triples. Batch mode hardcodes
 //! `diff = 1` (DD uses `Present`, not `i32`). Sort operates on data only.
 
-use proc_macro2::{Ident, Span, TokenStream};
+use flowlog_parser::DataType;
+use flowlog_parser::Relation;
+use flowlog_profiler::Profiler;
+use flowlog_profiler::with_profiler;
+use proc_macro2::Ident;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Index;
 
 use crate::codegen::CodeGen;
 use crate::codegen::ty::tuple_type;
-use crate::parser::{DataType, Relation};
-use flowlog_profiler::{Profiler, with_profiler};
 
 // =========================================================================
 // Output struct
@@ -90,7 +94,9 @@ impl CodeGen {
                 // parallel drain. Stderr uses neither. The scaffold gates the
                 // deps on these marks.
                 if !self.config.output_to_stdout() && !data_type.is_empty() {
-                    if data_type.iter().any(|dt| dt.any_leaf(&DataType::is_integer))
+                    if data_type
+                        .iter()
+                        .any(|dt| dt.any_leaf(&DataType::is_integer))
                         || self.config.is_incremental()
                     {
                         self.features.mark_itoa();

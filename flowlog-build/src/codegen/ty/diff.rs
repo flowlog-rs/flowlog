@@ -8,10 +8,9 @@
 //! - **Other modes**: uses `i32` — an integer ring that requires explicit
 //!   `threshold` operators to normalise multiplicities.
 
+use flowlog_common::ExecutionMode;
 use proc_macro2::TokenStream;
 use quote::quote;
-
-use crate::common::ExecutionMode;
 
 use crate::codegen::CodeGen;
 

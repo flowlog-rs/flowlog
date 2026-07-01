@@ -7,10 +7,9 @@
 //!    transactions (`begin` / `put` / `file` / `commit` / `quit`)
 //!    and non-zero workers follow via shared state + barriers.
 
+use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
 use quote::quote;
-
-use flowlog_build::CodeParts;
 
 use crate::io::input::Input;
 

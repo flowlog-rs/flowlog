@@ -1,9 +1,14 @@
 //! Arithmetic expression representation for query planning in FlowLog Datalog programs.
 
 use std::fmt;
+use std::slice;
 
-use crate::catalog::{ArithmeticPos, FactorPos};
-use crate::parser::{ArithmeticOperator, BuiltinOperator, ConstType};
+use flowlog_parser::ArithmeticOperator;
+use flowlog_parser::BuiltinOperator;
+use flowlog_parser::ConstType;
+
+use crate::catalog::ArithmeticPos;
+use crate::catalog::FactorPos;
 use crate::planner::TransformationArgument;
 
 /// Represents a basic factor in an arithmetic expression
@@ -158,7 +163,7 @@ impl ArithmeticArgument {
                 },
                 FactorPos::TupleProj { tuple, index } => FactorArgument::TupleProj {
                     tuple: Box::new(
-                        map_call_args(std::slice::from_ref(tuple), var_id)
+                        map_call_args(slice::from_ref(tuple), var_id)
                             .pop()
                             .expect("proj lowering yields exactly one arithmetic"),
                     ),

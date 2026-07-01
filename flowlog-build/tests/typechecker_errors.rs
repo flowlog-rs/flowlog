@@ -1,14 +1,17 @@
 mod errors;
 
-use flowlog_build::common::{Config, SourceMap};
-use flowlog_build::parser::{DataType, Program};
-use flowlog_build::typechecker::{TypeCheckError, check_program};
-
-use errors::{fixture, render};
+use errors::fixture;
+use errors::render;
+use flowlog_build::typechecker::TypeCheckError;
+use flowlog_build::typechecker::check_program;
+use flowlog_common::Config;
+use flowlog_common::SourceMap;
+use flowlog_parser::DataType;
+use flowlog_parser::Program;
 
 fn typecheck(name: &str) -> (Result<(), TypeCheckError>, SourceMap) {
     let mut sm = SourceMap::new();
-    let mut program = Program::parse(&fixture("typechecker", name), false, &mut sm)
+    let mut program = Program::parse(&fixture("typechecker", name), false, &[], &mut sm)
         .expect("fixture should parse cleanly");
     (check_program(&mut program, &Config::default()), sm)
 }

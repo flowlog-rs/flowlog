@@ -6,28 +6,34 @@
 //! - Projection and unused argument removal
 //! - Producer-consumer relationship management
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
+
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
-};
-use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::Catalog;
+use crate::catalog::JoinPredicates;
+use crate::catalog::KvPredicates;
+use crate::planner::KeyValueLayout;
+use crate::planner::PlanError;
+use crate::planner::TransformationInfo;
 
 // =========================================================================
 // Semijoin & Comparison Operations
 // =========================================================================
 impl RulePlanner {
-    /// Attempts to apply semijoin or comparison/fn_call pushdown optimizations.
+    /// Attempts to apply semijoin or comparison pushdown optimizations.
     ///
     /// This method tries the following optimizations in order:
     /// 1. Comparison pushdown: When a comparison predicate can be pushed to atoms
-    /// 2. FnCall pushdown: When a boolean UDF predicate can be pushed to atoms
-    /// 3. Positive semijoin: When a positive atom has positive supersets
-    /// 4. Anti-semijoin: When a negative atom has positive supersets  
+    /// 2. Positive semijoin: When a positive atom has positive supersets
+    /// 3. Anti-semijoin: When a negative atom has positive supersets
     ///
-    /// The reason why we try comparison/fn_call pushdown first is that it can avoid fuse a comparison
+    /// The reason why we try comparison pushdown first is that it can avoid fuse a comparison
     /// with a neg join producer, which is undefined in my understanding.
     ///
     /// WARNING: this method should be called as a total instead of calling individual
@@ -59,30 +65,7 @@ impl RulePlanner {
             return self.apply_comparison_pushdown(catalog, lhs_comp_idx, &rhs_pos_indices);
         }
 
-        // (2) FnCall predicate pushdown
-        // When a boolean UDF predicate can be evaluated against specific atoms
-        if let Some((lhs_fn_call_idx, rhs_pos_indices)) = catalog
-            .fn_call_supersets()
-            .iter()
-            .enumerate()
-            .find(|(_, v)| !v.is_empty())
-            .map(|(idx, indices)| (idx, indices.clone()))
-        {
-            trace!(
-                "FnCall pushdown:\n  FnCall: {}\n  RHS atoms: {:?}",
-                catalog.fn_call_predicate(lhs_fn_call_idx),
-                rhs_pos_indices
-                    .iter()
-                    .map(|&i| (
-                        &catalog.rule().rhs()[catalog.positive_atom_rhs_id(i)],
-                        catalog.positive_atom_rhs_id(i)
-                    ))
-                    .collect::<Vec<_>>()
-            );
-            return self.apply_fn_call_pushdown(catalog, lhs_fn_call_idx, &rhs_pos_indices);
-        }
-
-        // (3) Positive semijoin optimization
+        // (2) Positive semijoin optimization
         // When a positive atom has positive supersets, we can join them.
         // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
         if let Some((lhs_pos_idx, rhs_pos_indices)) = catalog
@@ -109,7 +92,7 @@ impl RulePlanner {
             return self.apply_positive_semijoin(catalog, lhs_pos_idx, &rhs_pos_indices);
         }
 
-        // (4) Anti-semijoin optimization
+        // (3) Anti-semijoin optimization
         // When a negative atom has positive supersets, we can anti-join them.
         // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
         if let Some((lhs_neg_idx, rhs_pos_indices)) = catalog
@@ -519,80 +502,6 @@ impl RulePlanner {
         catalog.comparison_modify(lhs_comp_idx, right_sigs, new_names, new_fps)?;
         Ok(true)
     }
-
-    /// Pushes down a boolean UDF predicate onto RHS atoms that fully cover its variables.
-    ///
-    /// FnCall pushdown moves evaluation of UDF predicates closer to data sources,
-    /// reducing the volume of data processed in subsequent operations.
-    fn apply_fn_call_pushdown(
-        &mut self,
-        catalog: &mut Catalog,
-        lhs_fn_call_idx: usize,
-        rhs_pos_indices: &[usize],
-    ) -> Result<bool, PlanError> {
-        // Initialize collections for new atoms created by the fn_call pushdown
-        let mut new_names = Vec::new();
-        let mut new_fps = Vec::new();
-        let mut right_sigs = Vec::new();
-
-        // Process each RHS atom for fn_call pushdown
-        for &rhs_idx in rhs_pos_indices {
-            let current_transformation_index = self.transformation_infos.len();
-
-            // Extract RHS atom information
-            let rhs_args = catalog.positive_atom_argument_signature(rhs_idx).clone();
-            let rhs_fp = catalog.positive_atom_fingerprint(rhs_idx);
-
-            // Register RHS atom as consumer of this transformation
-            self.insert_consumer(
-                catalog.original_atom_fingerprints(),
-                rhs_fp,
-                current_transformation_index,
-            )?;
-
-            // Store signature for catalog update
-            right_sigs.push(AtomSignature::new(true, rhs_idx));
-
-            let in_vals = rhs_args
-                .iter()
-                .map(|&sig| ArithmeticPos::from_var_signature(sig))
-                .collect::<Vec<_>>();
-
-            let input_name = catalog.positive_atom_name(rhs_idx)?.to_string();
-            let cond = catalog.fn_call_predicate(lhs_fn_call_idx).to_string();
-            let new_name = Self::filter_name(&input_name, &cond);
-            let tx = TransformationInfo::kv_to_kv(
-                rhs_fp,
-                input_name,
-                new_name.clone(),
-                catalog.original_atom_fingerprints().contains(&rhs_fp),
-                KeyValueLayout::new(vec![], in_vals.clone()),
-                KeyValueLayout::new(vec![], in_vals),
-                KvPredicates {
-                    fn_call_preds: vec![
-                        catalog.resolve_fn_call_predicates(rhs_idx, lhs_fn_call_idx)?,
-                    ],
-                    ..Default::default() // no const-eq, var-eq, or comparisons
-                },
-            );
-
-            let new_fp = tx.output_info_fp();
-
-            // Register this transformation as a producer
-            self.insert_producer(new_fp, current_transformation_index);
-
-            trace!("FnCall transformation:\n{}", tx);
-
-            new_names.push(new_name);
-            new_fps.push(new_fp);
-
-            // Store the transformation info
-            self.transformation_infos.push(tx);
-        }
-
-        catalog.fn_call_modify(lhs_fn_call_idx, right_sigs, new_names, new_fps)?;
-        Ok(true)
-    }
 }
 
 // =========================================================================
@@ -936,7 +845,7 @@ impl RulePlanner {
         self.producer_consumer
             .entry(producer_fp)
             .and_modify(|(producers, _)| producers.push(producer_idx))
-            .or_insert((vec![producer_idx], vec![]));
+            .or_insert_with(|| (vec![producer_idx], vec![]));
     }
 
     /// Registers a consumer transformation for data with a given fingerprint.
@@ -1010,15 +919,17 @@ impl RulePlanner {
 /// `tests/catalog_errors.rs`.
 #[cfg(test)]
 pub(super) fn test_setup(src: &str) -> (RulePlanner, Catalog) {
-    use crate::common::SourceMap;
-    use crate::parser::Program;
     use std::io::Write;
 
-    let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+    use flowlog_common::SourceMap;
+    use flowlog_parser::Program;
+    use tempfile::NamedTempFile;
+
+    let mut tmp = NamedTempFile::new().expect("tempfile");
     tmp.write_all(src.as_bytes()).expect("write");
     let mut sm = SourceMap::new();
     let program =
-        Program::parse(&tmp.path().to_string_lossy(), false, &mut sm).expect("parse failed");
+        Program::parse(&tmp.path().to_string_lossy(), false, &[], &mut sm).expect("parse failed");
     let rule = program.rules()[0].clone();
     let catalog = Catalog::from_rule(&rule).expect("catalog build failed");
     let planner = RulePlanner::new(rule);
