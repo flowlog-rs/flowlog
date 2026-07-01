@@ -663,14 +663,20 @@ fn resolve_qualified(
 }
 
 fn rewrite_rule(rule: &mut FlowLogRule, scope: &Scope<'_>) -> Result<(), ParseError> {
+    // Resolve on `raw_name()`, not `name()`: `resolve_qualified` reports its
+    // input verbatim in `UnresolvedQualifiedRef`, so feeding it the surface
+    // spelling makes that diagnostic echo what the user wrote. The result is
+    // canonicalized here — as the directive callers also do — so the
+    // `!= name()` check compares like with like.
     let head = rule.head_mut();
-    let rewritten = resolve_qualified(head.name(), head.span(), scope, true)?;
+    let rewritten = resolve_qualified(head.raw_name(), head.span(), scope, true)?.to_lowercase();
     if rewritten != head.name() {
         head.set_name(rewritten);
     }
     for pred in rule.rhs_mut() {
         if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
-            let rewritten = resolve_qualified(atom.name(), atom.span(), scope, true)?;
+            let rewritten =
+                resolve_qualified(atom.raw_name(), atom.span(), scope, true)?.to_lowercase();
             if rewritten != atom.name() {
                 atom.set_name(rewritten);
             }

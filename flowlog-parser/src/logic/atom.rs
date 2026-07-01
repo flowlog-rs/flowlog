@@ -62,6 +62,8 @@ impl Lexeme for AtomArg {
 #[educe(PartialEq, Eq, Hash)]
 pub struct Atom {
     name: String,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    raw_name: String,
     arguments: Vec<AtomArg>,
     fingerprint: u64,
     #[educe(PartialEq(ignore), Hash(ignore))]
@@ -70,12 +72,11 @@ pub struct Atom {
 
 impl Atom {
     /// Create a new atom.
-    ///
-    /// Converts the name to lowercase.
     #[must_use]
     pub fn new(name: &str, arguments: Vec<AtomArg>, fingerprint: u64) -> Self {
         Self {
             name: name.to_lowercase(),
+            raw_name: name.to_string(),
             arguments,
             fingerprint,
             span: Span::DUMMY,
@@ -89,10 +90,16 @@ impl Atom {
         self.span
     }
 
-    /// Relation name.
+    /// Canonical relation name.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Original surface spelling of the relation name as the user wrote it.
+    #[must_use]
+    pub fn raw_name(&self) -> &str {
+        &self.raw_name
     }
 
     /// Rename in-place. Lowercases and refreshes the cached fingerprint.
@@ -154,11 +161,12 @@ impl Lexeme for Atom {
         let span = span_of(&parsed_rule, file);
         let mut inner = parsed_rule.into_inner();
 
-        let name = inner
+        let raw_name = inner
             .next()
             .ok_or_else(|| grammar_bug("atom missing relation name"))?
             .as_str()
-            .to_lowercase();
+            .to_string();
+        let name = raw_name.to_lowercase();
         let fingerprint = compute_fp(&name);
 
         let arguments = inner
@@ -168,6 +176,7 @@ impl Lexeme for Atom {
 
         Ok(Self {
             name,
+            raw_name,
             arguments,
             fingerprint,
             span,

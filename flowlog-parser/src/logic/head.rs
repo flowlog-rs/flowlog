@@ -93,6 +93,8 @@ impl Lexeme for HeadArg {
 #[educe(PartialEq, Eq, Hash)]
 pub struct Head {
     name: String,
+    #[educe(PartialEq(ignore), Hash(ignore))]
+    raw_name: String,
     head_fingerprint: u64,
     head_arguments: Vec<HeadArg>,
     #[educe(PartialEq(ignore), Hash(ignore))]
@@ -102,10 +104,12 @@ pub struct Head {
 impl Head {
     #[cfg(test)]
     pub fn new(name: String, head_arguments: Vec<HeadArg>) -> Self {
+        let raw_name = name.clone();
         let name = name.to_lowercase();
         let head_fingerprint = compute_fp(&name);
         Self {
             name,
+            raw_name,
             head_fingerprint,
             head_arguments,
             span: Span::DUMMY,
@@ -113,6 +117,7 @@ impl Head {
     }
 
     /// Rename in-place. Lowercases and refreshes the cached fingerprint.
+    /// Leaves `raw_name` untouched.
     pub fn set_name(&mut self, name: String) {
         let lname = name.to_lowercase();
         self.head_fingerprint = compute_fp(&lname);
@@ -126,11 +131,18 @@ impl Head {
         self.span
     }
 
-    /// Relation name.
+    /// Canonical relation name.
     #[must_use]
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Original surface spelling of the relation name as the user wrote it.
+    #[must_use]
+    #[inline]
+    pub fn raw_name(&self) -> &str {
+        &self.raw_name
     }
 
     /// Head fingerprint.
@@ -182,7 +194,8 @@ impl Lexeme for Head {
         let name_pair = inner
             .next()
             .ok_or_else(|| grammar_bug("head missing relation name"))?;
-        let name = name_pair.as_str().to_lowercase();
+        let raw_name = name_pair.as_str().to_string();
+        let name = raw_name.to_lowercase();
         let head_fingerprint = compute_fp(&name);
 
         let head_arguments: Vec<HeadArg> = inner
@@ -192,6 +205,7 @@ impl Lexeme for Head {
 
         Ok(Self {
             name,
+            raw_name,
             head_fingerprint,
             head_arguments,
             span,

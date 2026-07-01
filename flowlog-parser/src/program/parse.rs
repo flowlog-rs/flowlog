@@ -467,6 +467,8 @@ impl Program {
         // Constant-only rules become inline facts.
         desugar::desugar_equality_assignments(&mut segments, &mut raw_facts)?;
 
+        Self::validate_relation_references(&relations, &segments, &raw_facts)?;
+
         let mut program = Self {
             relations,
             segments,
@@ -477,8 +479,6 @@ impl Program {
         for fact in raw_facts {
             program.extract_fact(fact)?;
         }
-
-        program.validate_relation_references()?;
 
         Ok(program)
     }
@@ -532,10 +532,14 @@ impl Program {
     /// do via [`ParseError::UndeclaredInDirective`]; covering the rule and
     /// fact paths here lets the typechecker assume every reference is
     /// declared.
-    fn validate_relation_references(&self) -> Result<(), ParseError> {
-        let declared: HashSet<&str> = self.relations.iter().map(|r| r.name()).collect();
+    fn validate_relation_references(
+        relations: &[Relation],
+        segments: &[Segment],
+        raw_facts: &[FlowLogRule],
+    ) -> Result<(), ParseError> {
+        let declared: HashSet<&str> = relations.iter().map(|r| r.name()).collect();
 
-        for segment in &self.segments {
+        for segment in segments {
             let rules: &[FlowLogRule] = match segment {
                 Segment::Plain(rules) => rules,
                 Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
@@ -545,7 +549,7 @@ impl Program {
                 if !declared.contains(head.name()) {
                     return Err(ParseError::UndeclaredInRule {
                         span: head.span(),
-                        name: head.name().to_string(),
+                        name: head.raw_name().to_string(),
                     });
                 }
                 for pred in rule.rhs() {
@@ -554,19 +558,22 @@ impl Program {
                     {
                         return Err(ParseError::UndeclaredInRule {
                             span: atom.span(),
-                            name: atom.name().to_string(),
+                            name: atom.raw_name().to_string(),
                         });
                     }
                 }
             }
         }
 
-        for (rel_name, tuples) in &self.facts {
-            if !declared.contains(rel_name.as_str()) {
-                let span = tuples.first().map(|(s, _)| *s).unwrap_or(Span::DUMMY);
+        // Validate the raw facts here, before `extract_fact` folds them into
+        // the `facts` map (which is keyed by canonical name only): the head
+        // still carries the user's original spelling for the diagnostic.
+        for fact in raw_facts {
+            let head = fact.head();
+            if !declared.contains(head.name()) {
                 return Err(ParseError::UndeclaredInFact {
-                    span,
-                    name: rel_name.clone(),
+                    span: head.span(),
+                    name: head.raw_name().to_string(),
                 });
             }
         }
