@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.4...flowlog-build-v0.4.0) - 2026-07-01
+
+### Other
+
+- factor out `flowlog-common` and `flowlog-parser` ([#196](https://github.com/flowlog-rs/flowlog/pull/196))
+- Extended profiler follow-ups ([#192](https://github.com/flowlog-rs/flowlog/pull/192))
+- support tuple syntax ([#194](https://github.com/flowlog-rs/flowlog/pull/194))
+
 ## [0.3.4](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.3...flowlog-build-v0.3.4) - 2026-06-18
 
 ### Fixed

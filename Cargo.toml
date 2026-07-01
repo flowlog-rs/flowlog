@@ -46,7 +46,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-test = "0.2"
 
 # Internal crates.
-flowlog-build = { path = "flowlog-build", version = "0.3.4" }
+flowlog-build = { path = "flowlog-build", version = "0.4.0" }
 flowlog-common = { path = "flowlog-common", version = "0.1.0" }
 flowlog-parser = { path = "flowlog-parser", version = "0.1.0" }
 flowlog-profiler = { path = "flowlog-profiler", version = "0.1.0" }
