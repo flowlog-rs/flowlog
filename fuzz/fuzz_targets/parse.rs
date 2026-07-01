@@ -1,7 +1,7 @@
 #![no_main]
 
-use flowlog_build::common::SourceMap;
-use flowlog_build::parser::Program;
+use flowlog_common::SourceMap;
+use flowlog_parser::Program;
 use libfuzzer_sys::fuzz_target;
 
 // Fuzz the Datalog parser end-to-end. Arbitrary input must never panic: a

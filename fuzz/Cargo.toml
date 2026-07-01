@@ -11,8 +11,11 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 tempfile = "3"
 
-[dependencies.flowlog-build]
-path = "../flowlog-build"
+[dependencies.flowlog-common]
+path = "../flowlog-common"
+
+[dependencies.flowlog-parser]
+path = "../flowlog-parser"
 
 [[bin]]
 name = "parse"
