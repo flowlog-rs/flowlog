@@ -99,7 +99,7 @@ pub enum TypeCheckError {
     },
 
     /// A built-in argument's type isn't in the parameter's allowed set.
-    /// Arity is enforced earlier by [`ParseError::BuiltinArity`](super::super::parser::ParseError),
+    /// Arity is enforced earlier by [`ParseError::BuiltinArity`](flowlog_parser::ParseError),
     /// so the typechecker only worries about per-arg type fit. `expected` is the
     /// set of accepted types (one element for a fixed param, several for a
     /// polymorphic one like `to_string`).

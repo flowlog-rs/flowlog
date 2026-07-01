@@ -113,10 +113,10 @@ mod tests {
 
     use flowlog_common::SourceMap;
     use flowlog_common::compute_fp;
+    use flowlog_typechecker::check_program;
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::typechecker::check_program;
 
     /// Round-trip a tiny program through parse → typecheck → program-plan,
     /// mirroring the temp-file pattern used by `stratifier::core::tests`.

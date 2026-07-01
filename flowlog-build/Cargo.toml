@@ -15,6 +15,7 @@ categories = ["compilers", "database", "development-tools::build-utils"]
 flowlog-common.workspace = true
 flowlog-parser.workspace = true
 flowlog-profiler.workspace = true
+flowlog-typechecker.workspace = true
 
 clap = { workspace = true, features = ["derive"] }
 codespan-reporting.workspace = true

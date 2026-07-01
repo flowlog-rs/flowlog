@@ -1,0 +1,22 @@
+[package]
+name = "flowlog-typechecker"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Type checker and literal-pinning pass for FlowLog Datalog programs."
+
+[dependencies]
+flowlog-common.workspace = true
+flowlog-parser.workspace = true
+
+codespan-reporting.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

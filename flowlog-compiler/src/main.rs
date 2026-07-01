@@ -4,13 +4,13 @@
 
 use clap::Parser;
 use flowlog_build::planner::ProgramPlanner;
-use flowlog_build::typechecker::check_program;
 use flowlog_common::SourceMap;
 use flowlog_common::emit_and_exit;
 use flowlog_compiler::Cli;
 use flowlog_compiler::Compiler;
 use flowlog_parser::Program;
 use flowlog_profiler::Profiler;
+use flowlog_typechecker::check_program;
 use tracing_subscriber::EnvFilter;
 
 fn main() {

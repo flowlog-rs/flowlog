@@ -2,12 +2,12 @@ mod errors;
 
 use errors::fixture;
 use errors::render;
-use flowlog_build::typechecker::TypeCheckError;
-use flowlog_build::typechecker::check_program;
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
 use flowlog_parser::DataType;
 use flowlog_parser::Program;
+use flowlog_typechecker::TypeCheckError;
+use flowlog_typechecker::check_program;
 
 fn typecheck(name: &str) -> (Result<(), TypeCheckError>, SourceMap) {
     let mut sm = SourceMap::new();

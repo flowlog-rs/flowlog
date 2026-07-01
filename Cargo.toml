@@ -6,6 +6,7 @@ members = [
     "flowlog-build",
     "flowlog-compiler",
     "flowlog-profiler",
+    "flowlog-typechecker",
     "flowlog-visualizer",
 ]
 resolver = "2"
@@ -50,6 +51,7 @@ flowlog-build = { path = "flowlog-build", version = "0.3.4" }
 flowlog-common = { path = "flowlog-common", version = "0.1.0" }
 flowlog-parser = { path = "flowlog-parser", version = "0.1.0" }
 flowlog-profiler = { path = "flowlog-profiler", version = "0.1.0" }
+flowlog-typechecker = { path = "flowlog-typechecker", version = "0.1.0" }
 
 [workspace.lints.clippy]
 absolute_paths = "deny"
