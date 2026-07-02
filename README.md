@@ -60,6 +60,21 @@ $ ./reach_bin -w 4
 
 Flag reference: [Compiler CLI](#compiler-cli). For incremental mode and the profiler, see <https://www.flowlog-rs.com/>.
 
+## System requirements
+
+FlowLog's performance and stability depend on a number of host and OS-level
+settings. For example, on Linux a large analysis can abort with `memory
+allocation of <N> bytes failed` even when memory is plentiful, because the
+allocator maps many memory regions and exhausts a low
+`vm.max_map_count`. Raising it resolves this:
+
+```console
+$ sudo sysctl -w vm.max_map_count=1048576
+```
+
+Before running, review the recommended host configuration in the setup guide:
+<https://www.flowlog-rs.com/tutorial/getting-started/system-config>.
+
 ## Architecture
 
 A `.dl` program compiles through five stages; three side modules assist the planner and codegen:
