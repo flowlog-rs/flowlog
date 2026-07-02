@@ -49,11 +49,23 @@ impl CodeGen {
     /// Dedup before the pos/neg weight encoding inside antijoin — a no-op
     /// under `DatalogBatch` since `Present` diffs are already idempotent.
     ///
-    /// Antijoin runs in the outer (total-order) scope, so incremental modes
-    /// use the total-order `threshold_total`, matching `dedup_nonrecursive`.
-    pub(crate) fn dedup_antijoin(&mut self) -> TokenStream {
+    /// The right operator is **scope-dependent** in incremental modes.
+    /// Antijoins in the outer (non-recursive) scope run under the total-order
+    /// `u32` timestamp, so they use the specialised `threshold_total`, matching
+    /// `dedup_nonrecursive`. But stratified negation is legal *inside* a
+    /// recursive stratum (negating a lower stratum), where the antijoin — and
+    /// this dedup — is emitted under the `Product<_, _>` iteration timestamp,
+    /// which is only a partial order. `threshold_total` requires `TotalOrder`
+    /// and would fail to compile there, so recursive-scope antijoins fall back
+    /// to the general `threshold` (same result on any lattice, matching
+    /// `dedup_recursive`). `recursive` is threaded from the call site, which is
+    /// the only place that knows whether the transformation is emitted inside
+    /// an `iterate` scope.
+    pub(crate) fn dedup_antijoin(&mut self, recursive: bool) -> TokenStream {
         if self.config.is_datalog_batch() {
             quote! {}
+        } else if recursive {
+            threshold_nonzero()
         } else {
             self.features.mark_threshold_total();
             threshold_total_nonzero()
@@ -122,20 +134,28 @@ mod tests {
             "dedup_recursive under batch must mark threshold_total"
         );
 
-        let anti = cg.dedup_antijoin().to_string();
+        let anti = cg.dedup_antijoin(false).to_string();
         assert!(
             anti.trim().is_empty(),
             "batch antijoin dedup is a no-op, got: `{anti}`"
+        );
+        let anti_rec = cg.dedup_antijoin(true).to_string();
+        assert!(
+            anti_rec.trim().is_empty(),
+            "batch antijoin dedup is a no-op in recursive scope too, got: `{anti_rec}`"
         );
     }
 
     /// In incremental mode (`i32` diffs) the diff type still needs clamping to
     /// 0/1, but the *scope's timestamp* decides which operator is cheapest:
-    /// non-recursive / antijoin flows run in the outer total order (`u32`) and
-    /// use the specialised `threshold_total`, while recursive flows run under a
-    /// `Product<_, _>` lattice (only a partial order) and must fall back to the
-    /// general `threshold`. This guards against a new `ExecutionMode` silently
-    /// changing that mapping.
+    /// non-recursive / outer-scope antijoin flows run in the outer total order
+    /// (`u32`) and use the specialised `threshold_total`, while recursive flows
+    /// — including antijoins for stratified negation *inside* recursion — run
+    /// under a `Product<_, _>` lattice (only a partial order) and must fall
+    /// back to the general `threshold`. This guards against a new
+    /// `ExecutionMode` silently changing that mapping, and against the antijoin
+    /// dedup regressing to an unconditional `threshold_total` (which fails to
+    /// compile under `Product` time).
     #[test]
     fn datalog_inc_uses_threshold_total_outside_recursion() {
         let mut cg = codegen_with_mode(ExecutionMode::DatalogInc);
@@ -146,10 +166,19 @@ mod tests {
             "inc non-recursive must emit threshold_total(...), got: {non_rec}"
         );
 
-        let anti = cg.dedup_antijoin().to_string();
+        let anti_outer = cg.dedup_antijoin(false).to_string();
         assert!(
-            anti.contains("threshold_total"),
-            "inc antijoin must emit threshold_total(...), got: {anti}"
+            anti_outer.contains("threshold_total"),
+            "inc outer-scope antijoin must emit threshold_total(...), got: {anti_outer}"
+        );
+
+        let anti_rec = cg.dedup_antijoin(true).to_string();
+        assert!(
+            anti_rec.contains("threshold")
+                && !anti_rec.contains("threshold_total")
+                && !anti_rec.contains("threshold_semigroup"),
+            "inc recursive-scope antijoin must fall back to the general threshold(...) \
+             (Product time is only a partial order), got: {anti_rec}"
         );
 
         let rec = cg.dedup_recursive().to_string();

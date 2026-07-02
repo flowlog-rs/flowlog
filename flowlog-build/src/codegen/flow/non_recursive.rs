@@ -53,6 +53,7 @@ impl CodeGen {
                 &mut outer_arranged,
                 stratum,
                 profiler,
+                false,
             )?);
         }
 

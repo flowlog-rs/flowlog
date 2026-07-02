@@ -35,6 +35,11 @@ impl CodeGen {
     /// For non-recursive transformations, we use the global fingerprint-to-ident map.
     /// For recursive transformations, we use the local fingerprint-to-ident map.
     /// This function accepts the map as `local_fp_to_ident` to keep the interface unified.
+    ///
+    /// `recursive` records whether the transformation is emitted inside an
+    /// `iterate` scope (`Product<_, _>` timestamp, only a partial order) versus
+    /// the outer total-order scope. Dedup operator selection for antijoins
+    /// depends on it — see [`CodeGen::dedup_antijoin`].
     pub(super) fn gen_transformation(
         &mut self,
         local_fp_to_ident: &HashMap<u64, Ident>,
@@ -42,6 +47,7 @@ impl CodeGen {
         arranged_map: &mut HashMap<u64, Ident>,
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
+        recursive: bool,
     ) -> Result<TokenStream, CodegenError> {
         // `atom_fps` decides *which* inputs are named atoms; the label
         // text comes from `display_name` (the user's spelling).
@@ -539,7 +545,7 @@ impl CodeGen {
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
                 let out_map_value = self.build_key_val_from_kv_args(flow.value(), si)?;
-                let inter_dedup = self.dedup_antijoin();
+                let inter_dedup = self.dedup_antijoin(recursive);
                 let final_normalize = self.dedup_recursive();
 
                 Ok(quote! {
@@ -612,7 +618,7 @@ impl CodeGen {
                 } else {
                     quote! { ( #out_map_key, #out_map_value ) }
                 };
-                let inter_dedup = self.dedup_antijoin();
+                let inter_dedup = self.dedup_antijoin(recursive);
                 let final_normalize = self.dedup_recursive();
 
                 let transformation = quote! {

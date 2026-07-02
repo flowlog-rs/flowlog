@@ -130,7 +130,14 @@ impl CodeGen {
             .recursive_transformations()
             .iter()
             .map(|tx| {
-                self.gen_transformation(&current, tx, &mut recursive_arranged, stratum, profiler)
+                self.gen_transformation(
+                    &current,
+                    tx,
+                    &mut recursive_arranged,
+                    stratum,
+                    profiler,
+                    true,
+                )
             })
             .collect::<Result<_, _>>()?;
 
