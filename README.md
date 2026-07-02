@@ -60,6 +60,16 @@ $ ./reach_bin -w 4
 
 Flag reference: [Compiler CLI](#compiler-cli). For incremental mode and the profiler, see <https://www.flowlog-rs.com/>.
 
+## System requirements
+
+FlowLog runs on a stock Linux, macOS, or Windows host, but large analyses — many
+worker threads over hundreds of millions of tuples — can run into OS-level
+limits. On Linux especially, the generated binary's allocator (mimalloc) maps a
+great many memory regions, so a low `vm.max_map_count` can make a big run abort
+with `memory allocation of <N> bytes failed` even when plenty of RAM is free.
+Before a large run, review the host settings (including `vm.max_map_count`) in
+the setup guide: <https://www.flowlog-rs.com/tutorial/getting-started/system-config>.
+
 ## Architecture
 
 A `.dl` program compiles through five stages; three side modules assist the planner and codegen:
