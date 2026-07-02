@@ -23,8 +23,11 @@ use crate::codegen::arg::compute_kv_param_tokens;
 use crate::codegen::arg::row_pattern_and_fields;
 use crate::codegen::data_type_tokens;
 use crate::codegen::ident::find_local_ident;
+use crate::planner::ArithmeticArgument;
+use crate::planner::FactorArgument;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
+use crate::planner::TransformationArgument;
 
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.
@@ -115,12 +118,21 @@ impl CodeGen {
                     build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
+                // A full, in-order identity projection (row → identical row, no predicate) emits
+                // `flat_map(|row| once(row))` — a no-op. Alias the input instead of scheduling it.
+                let is_identity = pred.is_none()
+                    && flow.key().is_empty()
+                    && is_identity_row_projection(flow.value(), input.arity().1);
                 let flat_map_body = flat_map_body_tokens(pred, out_val);
 
-                Ok(quote! {
-                    let #out = #inp.clone()
-                        .flat_map(|#row_pat: #row_ty| { #flat_map_body });
-                })
+                if is_identity {
+                    Ok(quote! { let #out = #inp.clone(); })
+                } else {
+                    Ok(quote! {
+                        let #out = #inp.clone()
+                            .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                    })
+                }
             }
 
             // Row -> KV
@@ -183,12 +195,23 @@ impl CodeGen {
                     build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
-                // Transformation logic
+                // Transformation logic. A full, in-order identity projection that feeds an
+                // arrangement emits `flat_map(|row| once(row))` — a no-op operator. Detect it and
+                // alias the input collection instead; the `arrange_by_self` registered below reads
+                // it directly, dropping one scheduled operator per occurrence.
+                let is_identity = pred.is_none()
+                    && output.is_k_only()
+                    && flow.value().is_empty()
+                    && is_identity_row_projection(flow.key(), input.arity().1);
                 let flat_map_body = flat_map_body_tokens(pred, out_expr);
 
-                let transformation = quote! {
-                    let #out = #inp.clone()
-                        .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                let transformation = if is_identity {
+                    quote! { let #out = #inp.clone(); }
+                } else {
+                    quote! {
+                        let #out = #inp.clone()
+                            .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                    }
                 };
 
                 // Arrangement registration
@@ -710,6 +733,35 @@ fn flat_map_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStr
     }
 }
 
+/// Detects a pure **identity projection** over a *row* input: the output reproduces every one of
+/// the input row's `row_arity` columns exactly once, in order, as a plain variable — no arithmetic,
+/// cast, constant, reordering, or dropped/added column.
+///
+/// When this holds (and the transformation carries no predicate), the emitted
+/// `flat_map(|row| std::iter::once(row))` is a no-op: the input collection already *is* the output,
+/// so downstream consumers (an `arrange_by_self`, or the next operator) can read the input directly.
+/// Eliding it removes one scheduled differential-dataflow operator per occurrence. Because every
+/// `worker.step()` schedules the whole dataflow regardless of how little data moved, dropping these
+/// no-ops cuts the fixed per-round cost that dominates small, frequent updates.
+fn is_identity_row_projection(args: &[ArithmeticArgument], row_arity: usize) -> bool {
+    args.len() == row_arity
+        && args
+            .iter()
+            .enumerate()
+            .all(|(idx, arg)| is_plain_row_column_ref(arg, idx))
+}
+
+/// `true` iff `arg` forwards row column `idx` unchanged: a bare variable reference with no
+/// arithmetic tail. The key/value flag of the underlying `KV` reference is irrelevant for a row
+/// input — row columns are addressed purely by position (see `build_row_args_arithmetic_expr`).
+fn is_plain_row_column_ref(arg: &ArithmeticArgument, idx: usize) -> bool {
+    arg.rest().is_empty()
+        && matches!(
+            arg.init(),
+            FactorArgument::Var(TransformationArgument::KV((_, i))) if *i == idx,
+        )
+}
+
 /// Build the body of a `join_core` closure that yields `out` either
 /// conditionally (when `pred` is `Some`) or unconditionally.
 ///
@@ -719,5 +771,97 @@ fn join_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream 
     match pred {
         Some(pred) => quote! { if #pred { Some( #out ) } else { None } },
         None => quote! { Some( #out ) },
+    }
+}
+
+#[cfg(test)]
+mod identity_projection_tests {
+    use flowlog_parser::ArithmeticOperator;
+
+    use super::is_identity_row_projection;
+    use super::is_plain_row_column_ref;
+    use crate::planner::ArithmeticArgument;
+    use crate::planner::FactorArgument;
+    use crate::planner::TransformationArgument;
+
+    /// A bare column reference `KV((is_key, idx))` with no arithmetic tail.
+    fn col(is_key: bool, idx: usize) -> ArithmeticArgument {
+        ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((is_key, idx))),
+            rest: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn full_in_order_projection_is_identity() {
+        // Every column reproduced once, in order → identity.
+        assert!(is_identity_row_projection(
+            &[col(false, 0), col(false, 1), col(false, 2)],
+            3
+        ));
+        // Single column.
+        assert!(is_identity_row_projection(&[col(false, 0)], 1));
+    }
+
+    #[test]
+    fn key_value_flag_is_ignored_for_row_inputs() {
+        // Row columns are addressed by position; the key/value flag must not matter.
+        assert!(is_identity_row_projection(&[col(true, 0), col(true, 1)], 2));
+        assert!(is_identity_row_projection(
+            &[col(true, 0), col(false, 1)],
+            2
+        ));
+    }
+
+    #[test]
+    fn reordered_projection_is_not_identity() {
+        assert!(!is_identity_row_projection(
+            &[col(false, 1), col(false, 0)],
+            2
+        ));
+    }
+
+    #[test]
+    fn dropped_or_duplicated_column_is_not_identity() {
+        // Drops column 1.
+        assert!(!is_identity_row_projection(&[col(false, 0)], 2));
+        // Duplicates column 0 instead of referencing column 1.
+        assert!(!is_identity_row_projection(
+            &[col(false, 0), col(false, 0)],
+            2
+        ));
+    }
+
+    #[test]
+    fn arity_mismatch_is_not_identity() {
+        // Fewer/more args than the row arity are never a full identity.
+        assert!(!is_identity_row_projection(
+            &[col(false, 0), col(false, 1)],
+            3
+        ));
+        assert!(!is_identity_row_projection(
+            &[col(false, 0), col(false, 1)],
+            1
+        ));
+    }
+
+    #[test]
+    fn empty_projection_matches_only_zero_arity() {
+        assert!(is_identity_row_projection(&[], 0));
+        assert!(!is_identity_row_projection(&[], 1));
+    }
+
+    #[test]
+    fn arithmetic_tail_is_not_a_plain_reference() {
+        // `col0 + col1` transforms the value, so it must not be treated as identity.
+        let arg = ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((false, 0))),
+            rest: vec![(
+                ArithmeticOperator::Plus,
+                FactorArgument::Var(TransformationArgument::KV((false, 1))),
+            )],
+        };
+        assert!(!is_plain_row_column_ref(&arg, 0));
+        assert!(!is_identity_row_projection(std::slice::from_ref(&arg), 1));
     }
 }
