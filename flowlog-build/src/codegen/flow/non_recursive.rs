@@ -73,7 +73,7 @@ impl CodeGen {
         profiler: &mut Option<Profiler>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::new();
-        let dedup_stats = self.dedup_nonrecursive();
+        let dedup_stats = self.dedup_setwise(false);
 
         for (idb_fp, head_fps) in stratum.idb_to_heads_map() {
             let output = self.find_global_ident(*idb_fp);

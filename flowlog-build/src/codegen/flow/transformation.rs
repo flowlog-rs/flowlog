@@ -344,7 +344,9 @@ impl CodeGen {
                 // Ideally, in system design, projection (to key) in SIP optimization may introduce duplicates,
                 // we have to apply deduplication to avoid incorrect Yannakakis computation bounds.
                 // Dedup only applies when there is no predicate (predicate paths already filter).
-                let dedup_call = self.dedup_nonrecursive();
+                // SIP runs on recursive rules too, so this projection can land inside the
+                // `iterate` scope — pass `recursive` so the dedup stays partial-order-safe.
+                let dedup_call = self.dedup_setwise(recursive);
                 let out_dedup_expr = if pred.is_none() && output.is_k_only() {
                     quote! { let #out = #out #dedup_call; }
                 } else {

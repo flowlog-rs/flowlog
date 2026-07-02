@@ -17,7 +17,7 @@ impl CodeGen {
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
     pub(crate) fn gen_edb_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
-        let normalize = self.dedup_nonrecursive();
+        let normalize = self.dedup_setwise(false);
 
         let edbs = self.program.edbs();
         if edbs.is_empty() {
