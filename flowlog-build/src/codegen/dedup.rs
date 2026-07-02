@@ -18,11 +18,18 @@ use crate::codegen::CodeGen;
 
 impl CodeGen {
     /// Dedup for EDBs and non-recursive flows — no persistent trace needed.
+    ///
+    /// In incremental modes the diff type is `i32`, so multiplicities must be
+    /// clamped to 0/1. The outer timestamp is a total order (`u32`), so we use
+    /// the total-order-specialised `threshold_total` rather than the general
+    /// `threshold` (which routes through the partial-order `reduce_abelian`
+    /// machinery). Same result, lighter operator.
     pub(crate) fn dedup_nonrecursive(&mut self) -> TokenStream {
         if self.config.is_datalog_batch() {
             quote! { .consolidate() }
         } else {
-            threshold_nonzero()
+            self.features.mark_threshold_total();
+            threshold_total_nonzero()
         }
     }
 
@@ -41,18 +48,31 @@ impl CodeGen {
 
     /// Dedup before the pos/neg weight encoding inside antijoin — a no-op
     /// under `DatalogBatch` since `Present` diffs are already idempotent.
+    ///
+    /// Antijoin runs in the outer (total-order) scope, so incremental modes
+    /// use the total-order `threshold_total`, matching `dedup_nonrecursive`.
     pub(crate) fn dedup_antijoin(&mut self) -> TokenStream {
         if self.config.is_datalog_batch() {
             quote! {}
         } else {
-            threshold_nonzero()
+            self.features.mark_threshold_total();
+            threshold_total_nonzero()
         }
     }
 }
 
-/// `threshold` clamped to 0/1 — the non-batch diff-mode dedup.
+/// `threshold` clamped to 0/1 — the non-batch diff-mode dedup for scopes whose
+/// timestamp is only a lattice (e.g. inside recursion, `Product<_, _>`).
 fn threshold_nonzero() -> TokenStream {
     quote! { .threshold(|_, w| if *w > 0 { SEMIRING_ONE } else { 0 }) }
+}
+
+/// `threshold_total` clamped to 0/1 — the total-order-specialised dedup for
+/// non-recursive / antijoin scopes in incremental modes (outer `u32` time).
+/// Semantically identical to [`threshold_nonzero`] on a total order, but avoids
+/// the general `reduce_abelian` path, so it is cheaper to build and maintain.
+fn threshold_total_nonzero() -> TokenStream {
+    quote! { .threshold_total(|_, w| if *w > 0 { SEMIRING_ONE } else { 0 }) }
 }
 
 #[cfg(test)]
@@ -109,25 +129,36 @@ mod tests {
         );
     }
 
-    /// In incremental mode (`i32` diffs), every dedup site uses the
-    /// clamping `threshold(...)`. This guards against a new
-    /// `ExecutionMode` silently falling into the batch branch — every
-    /// mode except `DatalogBatch` must go through `threshold_nonzero()`.
+    /// In incremental mode (`i32` diffs) the diff type still needs clamping to
+    /// 0/1, but the *scope's timestamp* decides which operator is cheapest:
+    /// non-recursive / antijoin flows run in the outer total order (`u32`) and
+    /// use the specialised `threshold_total`, while recursive flows run under a
+    /// `Product<_, _>` lattice (only a partial order) and must fall back to the
+    /// general `threshold`. This guards against a new `ExecutionMode` silently
+    /// changing that mapping.
     #[test]
-    fn datalog_inc_emits_threshold_uniformly() {
+    fn datalog_inc_uses_threshold_total_outside_recursion() {
         let mut cg = codegen_with_mode(ExecutionMode::DatalogInc);
 
-        for (name, tokens) in [
-            ("dedup_nonrecursive", cg.dedup_nonrecursive().to_string()),
-            ("dedup_recursive", cg.dedup_recursive().to_string()),
-            ("dedup_antijoin", cg.dedup_antijoin().to_string()),
-        ] {
-            assert!(
-                tokens.contains("threshold")
-                    && !tokens.contains("threshold_semigroup")
-                    && !tokens.contains("consolidate"),
-                "{name} under incremental mode must emit plain threshold(...), got: {tokens}"
-            );
-        }
+        let non_rec = cg.dedup_nonrecursive().to_string();
+        assert!(
+            non_rec.contains("threshold_total") && !non_rec.contains("consolidate"),
+            "inc non-recursive must emit threshold_total(...), got: {non_rec}"
+        );
+
+        let anti = cg.dedup_antijoin().to_string();
+        assert!(
+            anti.contains("threshold_total"),
+            "inc antijoin must emit threshold_total(...), got: {anti}"
+        );
+
+        let rec = cg.dedup_recursive().to_string();
+        assert!(
+            rec.contains("threshold")
+                && !rec.contains("threshold_total")
+                && !rec.contains("threshold_semigroup"),
+            "inc recursive must emit the general threshold(...) (Product time is only \
+             a partial order), got: {rec}"
+        );
     }
 }
