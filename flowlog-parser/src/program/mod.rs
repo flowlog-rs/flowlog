@@ -26,6 +26,7 @@
 //! as a hard boundary between strata groups.
 
 mod display;
+mod fact;
 mod include;
 mod parse;
 mod prune;
@@ -35,9 +36,8 @@ mod tests;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use flowlog_common::Span;
+pub use fact::InlineFact;
 
-use crate::ConstType;
 use crate::declaration::ExternFn;
 use crate::declaration::Relation;
 use crate::logic::FlowLogRule;
@@ -63,10 +63,8 @@ pub struct Program {
     segments: Vec<Segment>,
     /// External scalar UDF declarations (`.extern fn`).
     udfs: Vec<ExternFn>,
-    /// Inline ground facts, keyed by relation name. Each entry is a list
-    /// of `(span, tuple)` — the head span of the source `rel(c1, ...).`
-    /// fact plus its constant columns.
-    facts: HashMap<String, Vec<(Span, Vec<ConstType>)>>,
+    /// Inline ground facts, keyed by canonical relation name.
+    facts: HashMap<String, Vec<InlineFact>>,
     /// Built during parsing, consulted by the typechecker for subtype
     /// rules, ignored downstream (subtypes are compile-time-only).
     type_registry: TypeRegistry,
@@ -238,14 +236,14 @@ impl Program {
     /// Inline facts (ground tuples).
     #[must_use]
     #[inline]
-    pub fn facts(&self) -> &HashMap<String, Vec<(Span, Vec<ConstType>)>> {
+    pub fn facts(&self) -> &HashMap<String, Vec<InlineFact>> {
         &self.facts
     }
 
     /// Mutable access to inline ground facts — only used by the typechecker's
     /// lowering pass to rewrite polymorphic literals to their concrete
     /// declared types.
-    pub fn facts_mut(&mut self) -> &mut HashMap<String, Vec<(Span, Vec<ConstType>)>> {
+    pub fn facts_mut(&mut self) -> &mut HashMap<String, Vec<InlineFact>> {
         &mut self.facts
     }
 

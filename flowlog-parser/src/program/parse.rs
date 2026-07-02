@@ -13,6 +13,7 @@ use pest::iterators::Pair;
 use tracing::debug;
 use tracing::info;
 
+use super::InlineFact;
 use super::Program;
 use super::include::resolve_includes;
 use crate::FlowLogParser;
@@ -748,9 +749,14 @@ impl Program {
     /// span so the typechecker can cite the offending source position.
     fn extract_fact(&mut self, fact_rule: FlowLogRule) -> Result<(), ParseError> {
         let rel_name = fact_rule.head().name().to_string();
+        let raw_name = fact_rule.head().raw_name().to_string();
         let span = fact_rule.head().span();
-        let tuple = fact_rule.extract_constants_from_head()?;
-        self.facts.entry(rel_name).or_default().push((span, tuple));
+        let columns = fact_rule.extract_constants_from_head()?;
+        self.facts.entry(rel_name).or_default().push(InlineFact {
+            span,
+            raw_name,
+            columns,
+        });
         Ok(())
     }
 }

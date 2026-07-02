@@ -7,6 +7,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::ComparisonOperator;
+use crate::ConstType;
 use crate::DataType;
 use crate::HeadArg;
 use crate::error::ParseError;
@@ -463,7 +464,7 @@ fn fact_numbers(program: &Program, rel: &str) -> Vec<i64> {
         .get(rel)
         .unwrap_or_else(|| panic!("no facts for `{rel}`"))
         .iter()
-        .map(|(_, tuple)| match &tuple[0] {
+        .map(|fact| match &fact.columns[0] {
             ConstType::Int(n) => *n,
             other => panic!("expected number in `{rel}`, got {other:?}"),
         })

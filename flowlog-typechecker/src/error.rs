@@ -21,6 +21,7 @@ use flowlog_parser::DataType;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive] // published API: new checks may add variants without a semver break
 pub enum TypeCheckError {
     /// A variable is bound to one type and later reused with another.
     #[error("variable `{var}` bound as `{first_ty:?}` but used as `{later_ty:?}`")]
@@ -220,7 +221,7 @@ pub enum TypeCheckError {
 }
 
 impl TypeCheckError {
-    pub(super) fn internal(detail: impl Into<String>) -> Self {
+    pub(crate) fn internal(detail: impl Into<String>) -> Self {
         Self::Internal(InternalError::new("typechecker", detail, BUG_URL))
     }
 }

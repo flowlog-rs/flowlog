@@ -9,9 +9,8 @@ use flowlog_build::CodegenError;
 use flowlog_build::Features;
 use flowlog_build::const_to_token;
 use flowlog_build::data_type_tokens;
-use flowlog_common::Span;
-use flowlog_parser::ConstType;
 use flowlog_parser::DataType;
+use flowlog_parser::InlineFact;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
@@ -130,7 +129,7 @@ pub(crate) fn gen_relation(
 
 fn gen_one_rel_nullary(
     rel: &Relation,
-    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
+    facts: Option<&Vec<InlineFact>>,
     is_batch: bool,
 ) -> Result<TokenStream, CodegenError> {
     let raw_name = rel.raw_name();
@@ -242,7 +241,7 @@ fn gen_one_rel_nullary(
 
 fn gen_one_rel_nonnullary(
     rel: &Relation,
-    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
+    facts: Option<&Vec<InlineFact>>,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
     let raw_name = rel.raw_name();
@@ -434,7 +433,7 @@ fn gen_one_rel_nonnullary(
 // ------------------------------------------------------------
 
 fn gen_inline_facts(
-    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
+    facts: Option<&Vec<InlineFact>>,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
     let Some(rows) = facts else {
@@ -446,8 +445,9 @@ fn gen_inline_facts(
 
     let tuples: Vec<TokenStream> = rows
         .iter()
-        .map(|(_, vals)| {
-            let elems: Vec<TokenStream> = vals
+        .map(|fact| {
+            let elems: Vec<TokenStream> = fact
+                .columns
                 .iter()
                 .map(|c| const_to_token(c, string_intern))
                 .collect::<Result<_, _>>()?;
