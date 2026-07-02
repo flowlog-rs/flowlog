@@ -48,10 +48,9 @@ mod error;
 mod primitive;
 mod subtype;
 
+pub use error::TypeCheckError;
 use flowlog_common::Config;
 use flowlog_parser::Program;
-
-pub use error::TypeCheckError;
 
 use crate::env::PrimitiveEnv;
 

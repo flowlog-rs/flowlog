@@ -4,13 +4,14 @@
 //! allow dead code here rather than force artificial uses.
 #![allow(dead_code)]
 
+use std::io::Write;
+
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
 use flowlog_parser::ParseError;
 use flowlog_parser::Program;
 use flowlog_typechecker::TypeCheckError;
 use flowlog_typechecker::check_program;
-use std::io::Write;
 use tempfile::NamedTempFile;
 
 /// Write `src` to a temp file and parse it (extended syntax, no type-check),
