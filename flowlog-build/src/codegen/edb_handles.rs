@@ -60,18 +60,23 @@ impl CodeGen {
                 // Record the source-file input and dedup operators when profiling is on
                 with_plan_graph(plan_graph, |plan_graph| {
                     plan_graph.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
-                    plan_graph.input_dedup_operator(
-                        rel.raw_name().to_string(),
-                        coll.to_string(),
-                        coll.to_string(),
-                    );
+                    if !self.config.assume_set_inputs {
+                        plan_graph.input_dedup_operator(
+                            rel.raw_name().to_string(),
+                            coll.to_string(),
+                            coll.to_string(),
+                        );
+                    }
                 });
 
                 let ty = data_type_tokens(&rel.data_type(), str_intern);
+                let normalize = (!self.config.assume_set_inputs).then(|| {
+                    quote! { let #coll = ::flowlog_runtime::operators::flowlog_dedup(#coll); }
+                });
 
                 quote! {
                     let (#handle, #coll) = scope.new_collection::<#ty, Diff>();
-                    let #coll = ::flowlog_runtime::operators::flowlog_dedup(#coll);
+                    #normalize
                 }
             })
             .collect()
