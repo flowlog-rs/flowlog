@@ -17,7 +17,14 @@ impl CodeGen {
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
     pub(crate) fn gen_edb_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
-        let normalize = self.dedup_setwise(false);
+        // assume_set_inputs (#204): when the driver stages set-semantic
+        // inputs, skip the per-input dedup entirely. Otherwise fall back to
+        // the unified scope-aware dedup (#201).
+        let normalize = if self.config.assume_set_inputs {
+            quote! {}
+        } else {
+            self.dedup_setwise(false)
+        };
 
         let edbs = self.program.edbs();
         if edbs.is_empty() {
