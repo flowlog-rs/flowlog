@@ -64,6 +64,14 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub udf_file: Option<String>,
 
+    /// Path to a Cargo manifest fragment (a TOML file with a
+    /// `[dependencies]` table) whose entries are merged into the generated
+    /// crate's `[dependencies]`. Lets UDFs supplied via `--udf-file` pull in
+    /// external crates (e.g. `serde_json`, `chrono`, `url`). Entries here
+    /// override the compiler's built-in dependencies on a key collision.
+    #[arg(long, value_name = "PATH", requires = "udf_file")]
+    pub udf_manifest: Option<String>,
+
     /// Keep the intermediate generated Rust crate instead of cleaning it up
     /// after building the executable.
     #[arg(long)]
@@ -92,6 +100,7 @@ impl Cli {
             str_intern: self.str_intern,
             assume_set_inputs: self.assume_set_inputs,
             udf_file: self.udf_file.clone(),
+            udf_manifest: self.udf_manifest.clone(),
             include_dirs: self.include_dirs.clone(),
             output_to_stdout: self.output_dir.as_deref() == Some("-"),
         }

@@ -53,6 +53,11 @@ pub struct Config {
     pub assume_set_inputs: bool,
     /// Path to a Rust source file containing UDF implementations.
     pub udf_file: Option<String>,
+    /// Path to a Cargo manifest fragment (TOML with a `[dependencies]`
+    /// table) whose entries are merged into the generated crate's
+    /// dependencies, so UDFs in `udf_file` can pull in external crates
+    /// (e.g. `serde_json`, `chrono`). User entries win on key collision.
+    pub udf_manifest: Option<String>,
     /// Extra search directories for `.include` directives.
     pub include_dirs: Vec<String>,
     /// Whether `.output` relations drain to stdout (`-D -`) rather than files.
@@ -123,6 +128,11 @@ impl Config {
     /// Path to the user-supplied UDF implementation file, if any.
     pub fn udf_file(&self) -> Option<&str> {
         self.udf_file.as_deref()
+    }
+
+    /// Path to the user-supplied UDF Cargo dependency manifest, if any.
+    pub fn udf_manifest(&self) -> Option<&str> {
+        self.udf_manifest.as_deref()
     }
 
     /// Extra `.include` search directories.

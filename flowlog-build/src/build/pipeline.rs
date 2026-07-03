@@ -102,6 +102,10 @@ fn build_config(builder: &Builder, program: &str) -> Config {
             .udf_file
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
+        udf_manifest: builder
+            .udf_manifest
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
         include_dirs: builder
             .include_dirs
             .iter()

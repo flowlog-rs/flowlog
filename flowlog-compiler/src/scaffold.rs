@@ -34,6 +34,7 @@ use toml_edit::Value;
 use toml_edit::value;
 
 use crate::Compiler;
+use crate::CompilerError;
 
 // =========================================================================
 // Project layout
@@ -102,8 +103,14 @@ impl Compiler {
 ///
 /// Dependencies are feature-gated: we emit only what the generated code
 /// actually references so the downstream `cargo build` pulls the minimum
-/// set of crates.
-pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Features) -> String {
+/// set of crates. When `config.udf_manifest()` is set, the `[dependencies]`
+/// table of that manifest is merged in on top (user entries win on
+/// collision) so UDFs can use external crates.
+pub(crate) fn render_cargo_toml(
+    crate_name: &str,
+    config: &Config,
+    features: &Features,
+) -> Result<String, CompilerError> {
     let mut doc = DocumentMut::new();
 
     doc["package"] = Item::Table(Table::new());
@@ -156,6 +163,12 @@ pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Fe
         if config.is_incremental() {
             deps["rustyline"] = "18".into();
         }
+
+        // Merge any user-supplied UDF crate dependencies last so they can
+        // override a built-in on a key collision.
+        if let Some(manifest_path) = config.udf_manifest() {
+            merge_udf_dependencies(deps, manifest_path)?;
+        }
     }
 
     // `FLOWLOG_RUNTIME_PATH` redirects the runtime dependency to a local
@@ -174,7 +187,33 @@ pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Fe
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
-    rendered
+    Ok(rendered)
+}
+
+/// Merge the `[dependencies]` table of a user-supplied UDF manifest into the
+/// generated crate's dependencies. A missing `[dependencies]` table is not an
+/// error (the manifest simply contributes nothing); a missing or malformed
+/// file is a hard error the user must fix.
+fn merge_udf_dependencies(deps: &mut Table, manifest_path: &str) -> Result<(), CompilerError> {
+    let text = fs::read_to_string(manifest_path).map_err(|e| {
+        CompilerError::Io(io::Error::new(
+            e.kind(),
+            format!("failed to read UDF manifest '{manifest_path}': {e}"),
+        ))
+    })?;
+    let manifest: DocumentMut = text.parse().map_err(|e| {
+        CompilerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to parse UDF manifest '{manifest_path}': {e}"),
+        ))
+    })?;
+    let Some(user_deps) = manifest.get("dependencies").and_then(Item::as_table) else {
+        return Ok(());
+    };
+    for (name, item) in user_deps.iter() {
+        deps[name] = item.clone();
+    }
+    Ok(())
 }
 
 /// Render `.cargo/config.toml` with `-Dwarnings` so any unused imports or
@@ -226,3 +265,53 @@ const PROMPT_RS_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/templates/prompt_rs.tpl"
 ));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn tmp_manifest(name: &str, body: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("flowlog_udf_manifest_{}_{}.toml", name, std::process::id()));
+        let mut f = fs::File::create(&p).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        p
+    }
+
+    #[test]
+    fn udf_manifest_merges_and_user_overrides_builtin() {
+        let path = tmp_manifest(
+            "merge",
+            "[dependencies]\nserde_json = \"1.0\"\ntimely = \"9.9\"\n",
+        );
+        let mut doc = DocumentMut::new();
+        doc["dependencies"] = Item::Table(Table::new());
+        {
+            let deps = doc["dependencies"].as_table_mut().unwrap();
+            deps["timely"] = "0.30".into();
+            merge_udf_dependencies(deps, path.to_str().unwrap()).unwrap();
+        }
+        let deps = doc["dependencies"].as_table().unwrap();
+        assert_eq!(deps["serde_json"].as_str(), Some("1.0"));
+        // User entry wins on a key collision with a built-in.
+        assert_eq!(deps["timely"].as_str(), Some("9.9"));
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn udf_manifest_without_deps_table_is_noop() {
+        let path = tmp_manifest("empty", "# nothing here\n");
+        let mut tbl = Table::new();
+        tbl["timely"] = "0.30".into();
+        merge_udf_dependencies(&mut tbl, path.to_str().unwrap()).unwrap();
+        assert_eq!(tbl["timely"].as_str(), Some("0.30"));
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn udf_manifest_missing_file_is_error() {
+        let mut tbl = Table::new();
+        assert!(merge_udf_dependencies(&mut tbl, "/no/such/manifest.toml").is_err());
+    }
+}

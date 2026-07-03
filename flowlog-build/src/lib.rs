@@ -118,6 +118,7 @@ pub struct Builder {
     pub(crate) profile: bool,
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
+    pub(crate) udf_manifest: Option<PathBuf>,
 }
 
 impl Builder {
@@ -158,6 +159,15 @@ impl Builder {
     /// generated module. Generated code calls UDFs as `udf::<fn_name>(…)`.
     pub fn udf_file(mut self, path: impl AsRef<Path>) -> Self {
         self.udf_file = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Path to a Cargo manifest fragment (TOML with a `[dependencies]`
+    /// table) whose entries are merged into the generated crate's
+    /// dependencies, so UDFs supplied via [`Builder::udf_file`] can pull in
+    /// external crates. User entries win on a key collision.
+    pub fn udf_manifest(mut self, path: impl AsRef<Path>) -> Self {
+        self.udf_manifest = Some(path.as_ref().to_path_buf());
         self
     }
 
@@ -266,6 +276,9 @@ use ::flowlog_runtime::differential_dataflow;
         println!("cargo:rerun-if-changed={}", program_path.display());
         if let Some(udf) = &self.udf_file {
             println!("cargo:rerun-if-changed={}", udf.display());
+        }
+        if let Some(manifest) = &self.udf_manifest {
+            println!("cargo:rerun-if-changed={}", manifest.display());
         }
         for inc in &self.include_dirs {
             println!("cargo:rerun-if-changed={}", inc.display());
