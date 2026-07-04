@@ -268,9 +268,18 @@ impl CodeGen {
                 ))
             })?;
 
-            let union_expr = tail.iter().fold(quote! { #head.clone() }, |ts, ident| {
-                quote! { #ts.concat(#ident.clone()) }
-            });
+            // Union all source collections for this IDB. Emit a single n-ary
+            // `concatenate` (one Timely operator) rather than a chain of k-1
+            // binary `concat`s — union is associative so the recursive
+            // fixpoint is identical, but k-1 operators collapse to 1. This is
+            // the recursive-stratum analog of the head-union fusion in
+            // `non_recursive.rs`; the two together cover every IDB rule-head
+            // union.
+            let union_expr = if tail.is_empty() {
+                quote! { #head.clone() }
+            } else {
+                quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) }
+            };
 
             // Apply dedup to merged collection.
             // Inside a recursive scope we need a persistent trace to avoid
@@ -849,16 +858,18 @@ fn stop_stmt(
             let keyed_rec_arr = keyed_rec.arrange_by_key();
             keyed
                 #pos
-                .concat({
-                    keyed_arr
-                        .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
-                        #neg
-                })
-                .concat({
-                    keyed_rec_arr
-                        .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
-                        #pos
-                })
+                .concatenate([
+                    {
+                        keyed_arr
+                            .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
+                            #neg
+                    },
+                    {
+                        keyed_rec_arr
+                            .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
+                            #pos
+                    },
+                ])
                 .map(|((), t)| t)
                 #normalize
         }

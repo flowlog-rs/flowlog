@@ -82,19 +82,35 @@ impl CodeGen {
                 .map(|fp| format_ident!("t_{}", fp))
                 .collect();
 
-            // Union the per-head collections left-to-right.
+            // Union the per-head collections. Emit a single n-ary
+            // `concatenate` (one Timely `Concatenate` operator with k inputs)
+            // instead of a left-to-right chain of k-1 binary `concat`s. Union
+            // is associative, so this is byte-for-byte equivalent, but it
+            // collapses k-1 operators into 1 — cutting the operator count that
+            // drives Timely's per-`step()` progress-propagation cost (the
+            // dominant per-commit expense in the resident-engine,
+            // many-tiny-commits regime).
             let head = &outs[0];
-            let mut expr: TokenStream = quote! { #head.clone() };
-            for t in &outs[1..] {
-                expr = quote! { #expr.concat(#t.clone()) };
-            }
+            let tail = &outs[1..];
 
             // Fold into the existing binding rather than shadowing it.
             let already_bound = bound_fps.contains(idb_fp);
             let (concat_expr, concat_count) = if already_bound {
-                (quote! { #output.concat(#expr) }, outs.len() as u32)
+                // Base = existing binding; union in every per-head collection
+                // via one operator.
+                (
+                    quote! { #output.concatenate([ #( #outs.clone() ),* ]) },
+                    outs.len() as u32,
+                )
+            } else if tail.is_empty() {
+                // Single head: no union operator at all.
+                (quote! { #head.clone() }, 0)
             } else {
-                (expr, outs.len() as u32 - 1)
+                // Base = first head; union in the rest via one operator.
+                (
+                    quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) },
+                    outs.len() as u32 - 1,
+                )
             };
 
             with_profiler(profiler, |profiler| {
