@@ -291,7 +291,12 @@ impl CodeGen {
 
             with_profiler(profiler, |profiler| {
                 let source_names: Vec<String> = sources.iter().map(|id| id.to_string()).collect();
-                let concat_count = (sources.len() as u32).saturating_sub(1);
+                // `union_expr` emits a single n-ary `concatenate` (one Timely
+                // operator) when there is a tail to merge, or a plain clone (no
+                // operator) for a lone source — so the profiler must advance by
+                // 1 or 0, not `k-1`, to keep its predicted address range in
+                // lockstep with the emitted dataflow.
+                let concat_count = u32::from(!tail.is_empty());
                 profiler.concat_dedup_operator(
                     self.display_name(*idb_fp),
                     source_names,

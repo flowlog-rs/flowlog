@@ -95,12 +95,18 @@ impl CodeGen {
 
             // Fold into the existing binding rather than shadowing it.
             let already_bound = bound_fps.contains(idb_fp);
+            // `concat_count` is the number of Timely union operators emitted,
+            // which the profiler advances its predicted address range by. An
+            // n-ary `concatenate` is a *single* Timely operator regardless of
+            // arity, so every union below is exactly one operator (a lone head
+            // is zero) — not `k-1`, which is what a chain of binary `concat`s
+            // used to cost before the fusion.
             let (concat_expr, concat_count) = if already_bound {
                 // Base = existing binding; union in every per-head collection
                 // via one operator.
                 (
                     quote! { #output.concatenate([ #( #outs.clone() ),* ]) },
-                    outs.len() as u32,
+                    1,
                 )
             } else if tail.is_empty() {
                 // Single head: no union operator at all.
@@ -109,7 +115,7 @@ impl CodeGen {
                 // Base = first head; union in the rest via one operator.
                 (
                     quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) },
-                    outs.len() as u32 - 1,
+                    1,
                 )
             };
 
