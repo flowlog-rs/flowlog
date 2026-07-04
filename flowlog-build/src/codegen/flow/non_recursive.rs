@@ -81,19 +81,21 @@ impl CodeGen {
                 .map(|fp| format_ident!("t_{}", fp))
                 .collect();
 
-            // Union the per-head collections left-to-right.
+            // Union the per-head collections.
             let head = &outs[0];
-            let mut expr: TokenStream = quote! { #head.clone() };
-            for t in &outs[1..] {
-                expr = quote! { #expr.concat(#t.clone()) };
-            }
+            let tail = &outs[1..];
 
             // Fold into the existing binding rather than shadowing it.
             let already_bound = bound_fps.contains(idb_fp);
             let (concat_expr, concat_count) = if already_bound {
-                (quote! { #output.concat(#expr) }, outs.len() as u32)
+                (quote! { #output.concatenate([ #( #outs.clone() ),* ]) }, 1)
+            } else if tail.is_empty() {
+                (quote! { #head.clone() }, 0)
             } else {
-                (expr, outs.len() as u32 - 1)
+                (
+                    quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) },
+                    1,
+                )
             };
 
             with_profiler(profiler, |profiler| {
