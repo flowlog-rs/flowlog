@@ -1,0 +1,23 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : recursive_sip_delta
+// Feature : SIP projection-to-key of a *recursive* relation under incremental
+//           mode. SIP runs on every rule in a stratum, so when it projects the
+//           recursive relation to a join key the dedup is emitted *inside* the
+//           `iterate` scope, where the timestamp is `Product<_, _>` (a partial
+//           order, not a total order). Guards the incremental setwise-dedup
+//           path: a total-order-only operator (`threshold_total`) does not
+//           compile here — the fixture only builds with the scope-aware dedup.
+//           Compiled with `--sip` (see `compile_flags`).
+// Program : textbook same-generation. `sg` is recursive; the recursive rule
+//           joins two edges around a recursive `sg` fact, and SIP projects
+//           `sg` onto the join key `a`.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl edge(x: int32, y: int32)
+.input edge(IO="command", delimiter=",")
+
+.decl sg(x: int32, y: int32)
+sg(x, y) :- edge(x, y).
+sg(x, y) :- edge(a, x), sg(a, b), edge(b, y).
+
+.output sg

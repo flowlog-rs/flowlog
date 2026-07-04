@@ -40,6 +40,8 @@ impl CodeGen {
         stratum: &StratumPlanner,
         profiler: &mut Option<Profiler>,
     ) -> Result<TokenStream, CodegenError> {
+        let recursive = stratum.is_recursive_transformation(transformation);
+
         // `atom_fps` decides *which* inputs are named atoms; the label
         // text comes from `display_name` (the user's spelling).
         let atom_fps = stratum.atom_fps();
@@ -315,7 +317,7 @@ impl CodeGen {
                 // Ideally, in system design, projection (to key) in SIP optimization may introduce duplicates,
                 // we have to apply deduplication to avoid incorrect Yannakakis computation bounds.
                 // Dedup only applies when there is no predicate (predicate paths already filter).
-                let dedup_call = self.dedup_nonrecursive();
+                let dedup_call = self.dedup_projection(recursive);
                 let out_dedup_expr = if pred.is_none() && output.is_k_only() {
                     quote! { let #out = #out #dedup_call; }
                 } else {
@@ -498,6 +500,7 @@ impl CodeGen {
                         vec![l.to_string(), r.to_string()],
                         out.to_string(),
                         output.fingerprint(),
+                        recursive,
                     );
                 });
 
@@ -516,8 +519,7 @@ impl CodeGen {
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
                 let out_map_value = self.build_key_val_from_kv_args(flow.value(), si)?;
-                let inter_dedup = self.dedup_antijoin();
-                let final_normalize = self.dedup_recursive();
+                let (inter_dedup, final_normalize) = self.dedup_antijoin(recursive);
 
                 Ok(quote! {
                     let #out =
@@ -565,6 +567,7 @@ impl CodeGen {
                         format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
+                        recursive,
                     );
                 });
 
@@ -589,8 +592,7 @@ impl CodeGen {
                 } else {
                     quote! { ( #out_map_key, #out_map_value ) }
                 };
-                let inter_dedup = self.dedup_antijoin();
-                let final_normalize = self.dedup_recursive();
+                let (inter_dedup, final_normalize) = self.dedup_antijoin(recursive);
 
                 let transformation = quote! {
                     let #out =

@@ -261,6 +261,14 @@ impl StratumPlanner {
         &self.recursive_transformations
     }
 
+    /// Whether `tx` belongs to this stratum's recursive partition — i.e. its
+    /// tokens are emitted inside the `iterate` scope (`Product<_, _>` time).
+    /// Derived from the same partition the emitters iterate, so codegen cannot
+    /// desync the emission scope from the call site.
+    pub(crate) fn is_recursive_transformation(&self, tx: &Transformation) -> bool {
+        self.recursive_transformations.contains(tx)
+    }
+
     /// Get fingerprints of collections that enter recursion.
     #[inline]
     pub(crate) fn recursion_enter_collections(&self) -> &[u64] {
