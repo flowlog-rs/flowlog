@@ -1,161 +1,103 @@
 # FlowLog on sasy workloads — benchmark report
 
 This branch (`main-next-for-sasy` = `main-next` + 5 codegen perf commits) was
-benchmarked against **Soufflé** on **sasy's** Datalog security policies, to
-answer one question: *can incremental FlowLog replace the warm Soufflé
-evaluator sasy runs today, and where does it stand?*
-
-The engine integration and the benchmark harness live in the sibling repo
-(`sasy-labs/sasy`, branch `flowlog-inc-integration`,
-`sasy-services/flowlog/`). This file is the summary of what was measured and
-what it showed.
-
----
+benchmarked against Soufflé on sasy's Datalog security policies, to answer one
+question: can incremental FlowLog replace the warm Soufflé evaluator sasy runs
+today, and where does it stand? The harness lives in the sibling repo
+(`sasy-labs/sasy`, branch `flowlog-inc-integration`, `sasy-services/flowlog/`).
 
 ## TL;DR
 
-- **Correctness:** on every workload, FlowLog-inc and Soufflé-warm produce
-  **byte-identical decisions** (parity-gated on each query). On the real
-  airline workload: **1162/1162 queries agree** (910 allow / 252 deny).
-- **Speed on sasy's real workload:** Soufflé-warm ~**136× faster** (p50 21 µs
-  vs 2865 µs/query) — because real agent conversations are **short**
-  (median 19 messages), and FlowLog's incremental advantage only appears on
-  *long* conversations.
-- **Where FlowLog wins:** only when conversations grow long and full-context
-  (synthetic fan-in): FlowLog crosses over around turn ~45 and reaches
-  **~15×** at 200 turns. Real traces never get that long.
-- **Bottleneck:** FlowLog's ~3 ms/query is a *fixed* cost (independent of the
-  data), dominated by Timely's per-step progress coordination over the
-  policy's ~919 operators — i.e. it scales with **policy size**, and the usual
-  structural optimizations (arrangement sharing, fusion, pruning) are
-  **already applied**.
+- **Correctness:** byte-identical decisions on every workload; real airline
+  traces **1162/1162 agree** (910 allow / 252 deny).
+- **Speed:** Souffle-warm ~**130x faster** at sasy's operating point (p50 21 µs
+  vs 2.8 ms/query) — real conversations are short (median 19 messages), and
+  FlowLog's incremental advantage only shows on long ones.
+- **Crossover:** FlowLog pulls ahead only past turn ~35 (full-context fan-in),
+  reaching ~16x at 200 turns — a ceiling real traces never reach.
+- **Bottleneck:** FlowLog's ~2.8 ms/query is a fixed cost, dominated by Timely
+  per-step progress coordination over the policy's ~918 operators. It scales
+  with policy size; the usual structural optimizations are already applied.
 
----
+## The 5 codegen optimizations on this branch
 
-## The 5 optimizations on this branch
-
-All in `flowlog-build` codegen, incremental (`--mode datalog-inc`) mode:
+All in `flowlog-build`, incremental mode:
 
 | commit | what |
 | --- | --- |
-| `b72664b` | elide identity projections — drop no-op `flat_map(|r| once(r))` operators |
-| `f58da4e` | use `threshold_total` for non-recursive dedup (lighter than general `threshold`) |
-| `27337a9` | make incremental antijoin dedup scope-aware (correct under `Product` time) |
-| `bfea673` | make SIP projection dedup scope-aware; unify the dedup-operator choice through one choke point |
-| `9aec504` | `--assume-set-inputs` — skip the per-input dedup when the driver stages set-semantic inputs |
+| `b72664b` | elide identity projections (drop no-op `flat_map(\|r\| once(r))`) |
+| `f58da4e` | `threshold_total` for non-recursive dedup |
+| `27337a9` | scope-aware incremental antijoin dedup (correct under `Product` time) |
+| `bfea673` | scope-aware SIP projection dedup; one dedup-choice choke point |
+| `9aec504` | `--assume-set-inputs` — skip per-input dedup for set-semantic inputs (195->180 dedup ops) |
 
-`--assume-set-inputs` was verified effective by a codegen A/B on the airline
-policy: **195 → 180** dedup operators with the flag on.
+## Setup
 
-The engine is driven **incrementally in library mode**, one **net-delta
-commit** per query (retract the previous query's ephemerals + insert the new
-ones in a single `begin/commit`), not two commits per round.
+One binary links both engines in-process — Souffle via its production
+`evaluator_shim.cpp` (resident graph, purge derived + swap ephemerals + re-run),
+FlowLog via the generated `DatalogIncrementalEngine` — drives them with the
+identical input, and gates on decision parity before trusting any timing. No
+IPC, no file I/O, same clock. FlowLog runs incrementally: one net-delta commit
+per query (retract prev ephemerals + insert current in a single `begin/commit`),
+never two commits per round.
 
----
+## Results — real airline traces (400 conversations, 1162 queries)
 
-## What was benchmarked
+| | Souffle-warm | FlowLog-inc |
+| --- | --: | --: |
+| decisions | parity 1162/1162 (910 allow / 252 deny) | identical |
+| p50 / query | **21 µs** | **2.8 ms** (~130x) |
 
-A single harness links **both engines in-process** (Soufflé via its real
-`evaluator_shim.cpp` over an FFI shim; FlowLog via the generated
-`DatalogIncrementalEngine`), drives them with the **identical** input, and
-**gates on decision parity** before trusting any timing. No subprocess, no
-IPC, no file I/O — same clock, only the evaluation model differs. The Soufflé
-side is the exact production model (resident graph, purge derived relations +
-swap ephemerals + re-run) — verified against sasy's `sasy-policy` crate.
+Per-turn cost inside one growing conversation shows the crossover (engine-only):
 
-Workloads:
+| turn | nodes | Souffle | FlowLog | winner |
+| --: | --: | --: | --: | --- |
+| 5   | 18  | 105 µs  | 3.5 ms | Souffle 33x |
+| 33  | 102 | 2.7 ms  | 4.4 ms | ~tie |
+| 200 | 603 | 324 ms  | 20 ms  | FlowLog 16x |
 
-1. **MALADE** (sasy's request-response policy) — synthetic growing conversation.
-2. **Airline (tau2)** — synthetic growing conversation (fan-in and linear).
-3. **Airline, real traces** — replays sasy's **actual 400 tau2-airline agent
-   conversations** (1162 authorization queries, real reservation JSON), one
-   query per assistant tool-call. This is the faithful, representative test.
+Souffle re-derives the whole slice each query (O(slice) — cheap when small,
+explodes when large); FlowLog is a fixed floor + O(delta) (flat). sasy
+conversations end at turn ~3-9, in the Souffle-wins zone.
 
----
+## Bottleneck — why ~2.8 ms/query
 
-## Results
-
-### Real airline workload (the representative one)
-
-400 conversations, **median 19 / max 46 messages**, 1162 queries:
-
-| | Soufflé-warm | FlowLog-inc |
-| --- | --- | --- |
-| decisions | ✅ parity 1162/1162 (910 allow / 252 deny) | ✅ identical |
-| p50 / query | **21 µs** | 2865 µs (**~136× slower**) |
-
-FlowLog is **correct**, just not competitive at these conversation lengths.
-Its fixed per-commit cost dominates the tiny (5–19-node) real graphs.
-
-### Airline synthetic (stress ceiling)
-
-FlowLog speedup vs Soufflé (engine-only, 1 worker; >1 = FlowLog wins):
-
-| shape | T=19 | T=46 | T=96 | T=200 |
-| --- | --: | --: | --: | --: |
-| linear (realistic) | 0.06× | 0.16× | 0.38× | 0.96× |
-| fan-in (full context) | 0.21× | 1.12× | 5.3× | 15.1× |
-
-FlowLog only pulls ahead on **long, full-context** conversations — a ceiling
-real traces don't reach. MALADE shows the same shape (up to ~97× fan-in at
-T=200, but warm wins at the short/linear operating point).
-
----
-
-## Bottleneck — why FlowLog is ~3 ms/query
-
-Perf-profiled on 3486 commits. The cost is **data-independent** (flat vs graph
-size: 3.0 ms at 5 nodes, 3.3 ms at 40), so it is a fixed cost, not data work:
+Flat vs graph size (3.0 ms at 5 nodes, 3.3 ms at 40), so a fixed cost. `perf`
+self-time:
 
 | bucket | ~% self | what |
 | --- | --: | --- |
-| Timely progress / scheduling | **~26 %** | `propagate_pointstamps`, operator-scheduling `BinaryHeap`, frontier/progress bookkeeping |
-| sorting | ~6 % | DD batch/arrangement |
+| Timely progress / scheduling | **~26 %** | `propagate_pointstamps`, op-scheduling `BinaryHeap`, frontier/progress bookkeeping |
+| sorting | ~6 % | DD arrangement build |
 | allocation | ~5 % | malloc/free |
 
-The airline policy (147 rules) compiles to **~919 operators** (227
-arrangements, 167 `join_core`, 245 `flat_map`, 172 thresholds). Every commit
-schedules + progress-tracks *all* of them regardless of the tiny delta.
+The 147-rule policy compiles to ~918 operators (227 arrangements, 168 joins,
+245 flat_maps, 172 thresholds); every commit schedules and progress-tracks all
+of them regardless of the tiny delta — and this is **after** FlowLog's
+arrangement sharing (PR #148, merged), operator fusion, and dead/duplicate
+pruning. sasy also builds one engine per session, so per-session construction
+(~5 ms x 400 ≈ 2 s) is a second fixed cost on short conversations.
 
-Crucially, this is **after** FlowLog's structural optimizations:
+## Remaining levers
 
-- **arrangement sharing** — `register_arrangement` (fingerprint-keyed); 227 is
-  the post-sharing distinct count.
-- **operator fusion** — `join_core` (join + projection) and `flat_map`
-  (filter + map), plus identity-projection elision (this branch).
-- **pruning** — `prune_cross_stratum_duplicates` + EDB pruning.
+1. **Idle-operator progress elision** (the real one) — DD `master-next`
+   `FrontierInterest::IfCapability` (#687) drops idle regions from progress,
+   once FlowLog's flat dataflow is carved into regions (it has none today).
+2. **Amortize per-session construction** — a resident engine per
+   `(tenant, session)` that retracts a finished conversation instead of
+   rebuilding (prototyped in `sasy-labs/sasy`: total -22 %, time-to-first-
+   decision -38 %).
 
-So the ~919 operators are the *inherent size* of a large policy after
-optimization, not removable redundancy. Additionally, sasy creates one engine
-per session, so **per-session construction (~4.9 ms × 400 ≈ 2 s)** is a second
-fixed cost, comparable to the commits, on short conversations.
-
-## Where FlowLog could still improve (harder levers)
-
-1. **Tighter arrangement sharing** (PR #148 *fix_insufficient_sharing*, not in
-   this stack) — the fingerprint can be over-specific and miss shareable
-   arrangements; ~10 % fewer on similar flattened programs.
-2. **Amortize per-session construction** — driver keeps a resident engine per
-   `(tenant, session)` and *retracts* a finished conversation instead of
-   rebuilding. Removes ~all of the 2 s construction on this workload.
-3. **Lighter progress for the many-tiny-commits regime** — the dominant cost
-   is Timely's per-step coordination, which is O(operators) regardless of
-   delta size; fewer scopes/regions or a lighter progress path is the real
-   ceiling-lifter.
-
-(Policy-side, dropping `.output DenialReason` — long human-readable denial
-strings the allow/deny decision doesn't need — would let FlowLog prune that
-work, but that is a sasy policy choice, not a compiler fix.)
+Dropping `.output DenialReason` does **not** help — `Unauthorized :-
+DenialReason(...)` makes it load-bearing for the deny decision.
 
 ## Notes
 
-- The harness normalizes conversation content to ASCII on **both** engines:
-  sasy's Rust functor port assumes ASCII input (it byte-slices `&str`),
-  whereas Soufflé's C++ functors are byte-oriented. With that normalization,
-  FlowLog completes the entire workload with full parity.
-- The optimizations on this branch change **no decisions** — every workload
-  stays parity-identical to Soufflé.
+- The harness normalizes conversation content to ASCII on both engines (sasy's
+  Rust functor port byte-slices `&str`; Souffle's C++ functors are
+  byte-oriented). With that, FlowLog completes the workload with full parity.
+- These optimizations change no decisions — every workload stays
+  parity-identical to Souffle.
 
-Full methodology, per-turn CSVs, and the profiling breakdown are in
-`sasy-labs/sasy` → `sasy-services/flowlog/airline-lib-bench/`
-(`README.md`, `PROFILING.md`, `results/`).
+Full methodology, per-turn CSVs, and the profiling breakdown live in
+`sasy-labs/sasy` → `sasy-services/flowlog/airline-lib-bench/`.
