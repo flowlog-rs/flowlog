@@ -135,7 +135,7 @@ impl Builder {
     }
 
     /// Skip the per-input dedup normalize, assuming the driver stages
-    /// set-semantic (already-deduplicated) inputs. Library-mode optimization;
+    /// set-semantic (already-deduplicated) inputs.
     /// unsound if inputs may contain duplicates. Defaults to `false`.
     pub fn assume_set_inputs(mut self, enabled: bool) -> Self {
         self.assume_set_inputs = enabled;
