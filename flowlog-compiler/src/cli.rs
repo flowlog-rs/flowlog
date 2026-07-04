@@ -55,10 +55,10 @@ pub struct Cli {
     #[arg(long)]
     pub str_intern: bool,
 
-    /// Assume input fact sources are already set-semantic (contain no
-    /// duplicate tuples), and skip the per-input dedup normalize. Speeds up
-    /// loading; unsound if any input may contain duplicate rows, so it is
-    /// opt-in and defaults to off.
+    /// Skip input deduplication. Requires duplicate-free batch inputs;
+    /// incremental updates must keep each tuple's accumulated weight at
+    /// zero or one after every commit across all workers. Otherwise,
+    /// results may be incorrect. Disabled by default.
     #[arg(long)]
     pub assume_set_inputs: bool,
 

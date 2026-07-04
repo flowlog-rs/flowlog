@@ -115,9 +115,13 @@ impl Builder {
         self
     }
 
-    /// Skip the per-input dedup normalize, assuming the driver stages
-    /// set-semantic (already-deduplicated) inputs. Library-mode optimization;
-    /// unsound if inputs may contain duplicates. Defaults to `false`.
+    /// Skip input deduplication when the caller guarantees set inputs.
+    /// Defaults to `false`.
+    ///
+    /// Batch inputs must contain no duplicate tuples. Incremental inputs
+    /// must keep each tuple's accumulated weight at zero or one across
+    /// committed epochs, including updates from all workers. Violating
+    /// these requirements can produce incorrect results.
     pub fn assume_set_inputs(mut self, enabled: bool) -> Self {
         self.assume_set_inputs = enabled;
         self
