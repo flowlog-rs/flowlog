@@ -107,6 +107,28 @@ impl Profiler {
         );
     }
 
+    /// A copy rule `B :- A` whose identity `flat_map` was elided entirely: no
+    /// timely operator is emitted, but the output relation still needs a
+    /// profiler node so downstream references to its fingerprint resolve. Pure
+    /// alias — **zero** operator steps (nothing to attribute at runtime), so it
+    /// does not advance the operator-address counter.
+    pub fn identity_alias_operator(
+        &mut self,
+        name: String,
+        input_variable_names: Vec<String>,
+        output_variable_name: String,
+        fingerprint: u64,
+    ) {
+        self.push_node(
+            name,
+            input_variable_names,
+            Some(output_variable_name),
+            TAG_STAGE,
+            0,
+            Some(fingerprint),
+        );
+    }
+
     pub fn anti_join_operator(
         &mut self,
         name: String,

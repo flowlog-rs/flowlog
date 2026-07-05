@@ -117,7 +117,18 @@ impl CodeGen {
                     && is_identity_row_projection(flow.value(), input.arity().1);
 
                 with_profiler(profiler, |profiler| {
-                    if !is_identity {
+                    if is_identity {
+                        // Copy rule `B :- A`: the identity `flat_map` is elided,
+                        // so no operator is emitted — but still register a 0-op
+                        // alias node so downstream references to this relation's
+                        // fingerprint resolve in the profiler model.
+                        profiler.identity_alias_operator(
+                            transformation_name,
+                            vec![inp.to_string()],
+                            out.to_string(),
+                            output.fingerprint(),
+                        );
+                    } else {
                         profiler.map_join_operator(
                             transformation_name,
                             vec![inp.to_string()],
