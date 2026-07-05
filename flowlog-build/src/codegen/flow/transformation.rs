@@ -29,6 +29,28 @@ use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
 use crate::planner::TransformationArgument;
 
+/// IfCapability codegen mode, read once from the `FLOWLOG_IFCAP` build-time env
+/// var. **Experimental, default-off, and blocked on upstream differential-dataflow.**
+///
+/// `0`/unset = off (all arranges use the stock `Always` scheduling — this is what
+/// ships today). `1`/`nonrec`/`on` = non-recursive arranges emit the
+/// `IfCapability` variant so an idle arrangement is skipped on a frontier advance
+/// instead of sealing an empty batch; `all` = every arrange does.
+///
+/// Enabling this requires a differential-dataflow that exposes the
+/// `arrange_by_*_if_capability` methods (or, per DD PR #723, makes the
+/// `IfCapability`/intra default automatic). Until that lands, the flag is inert
+/// in a stock build. See `docs/optimizations/idle-operator-elision.md`.
+fn ifcap_mode() -> u8 {
+    use std::sync::OnceLock;
+    static MODE: OnceLock<u8> = OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("FLOWLOG_IFCAP").ok().as_deref() {
+        Some("all") => 2,
+        Some("1") | Some("nonrec") | Some("on") => 1,
+        _ => 0,
+    })
+}
+
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.
     ///
@@ -226,6 +248,7 @@ impl CodeGen {
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
+                    recursive,
                 );
 
                 Ok(quote! {
@@ -368,6 +391,7 @@ impl CodeGen {
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
+                    recursive,
                 );
 
                 Ok(quote! {
@@ -497,6 +521,7 @@ impl CodeGen {
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
+                    recursive,
                 );
 
                 Ok(quote! {
@@ -648,6 +673,7 @@ impl CodeGen {
                     output.fingerprint(),
                     &out,
                     output.is_k_only(),
+                    recursive,
                 );
 
                 Ok(quote! {
@@ -704,15 +730,29 @@ impl CodeGen {
         fingerprint: u64,
         collection_ident: &Ident,
         only_key: bool,
+        recursive: bool,
     ) -> TokenStream {
         let arrangement_ident = format_ident!("{}_arr", collection_ident);
         arranged_map.insert(fingerprint, arrangement_ident.clone());
 
-        if only_key {
-            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_self(); }
-        } else {
-            quote! { let #arrangement_ident = #collection_ident.clone().arrange_by_key(); }
-        }
+        // Non-recursive arranges may opt into IfCapability (idle arrangements skip
+        // empty-batch sealing). Recursive-scope arranges stay `Always` — the
+        // conservative default until IfCapability is validated inside feedback loops.
+        let ifcap = match ifcap_mode() {
+            2 => true,
+            1 => !recursive,
+            _ => false,
+        };
+        let method = format_ident!(
+            "{}",
+            match (only_key, ifcap) {
+                (true, true) => "arrange_by_self_if_capability",
+                (true, false) => "arrange_by_self",
+                (false, true) => "arrange_by_key_if_capability",
+                (false, false) => "arrange_by_key",
+            }
+        );
+        quote! { let #arrangement_ident = #collection_ident.clone().#method(); }
     }
 }
 
