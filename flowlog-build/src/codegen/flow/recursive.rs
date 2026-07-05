@@ -261,9 +261,11 @@ impl CodeGen {
                 ))
             })?;
 
-            let union_expr = tail.iter().fold(quote! { #head.clone() }, |ts, ident| {
-                quote! { #ts.concat(#ident.clone()) }
-            });
+            let union_expr = if tail.is_empty() {
+                quote! { #head.clone() }
+            } else {
+                quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) }
+            };
 
             // Apply dedup to merged collection.
             // Inside a recursive scope we need a persistent trace to avoid
@@ -275,7 +277,7 @@ impl CodeGen {
 
             with_profiler(profiler, |profiler| {
                 let source_names: Vec<String> = sources.iter().map(|id| id.to_string()).collect();
-                let concat_count = (sources.len() as u32).saturating_sub(1);
+                let concat_count = if tail.is_empty() { 0 } else { 1 };
                 profiler.concat_dedup_operator(
                     self.display_name(*idb_fp),
                     source_names,
@@ -842,16 +844,18 @@ fn stop_stmt(
             let keyed_rec_arr = keyed_rec.arrange_by_key();
             keyed
                 #pos
-                .concat({
-                    keyed_arr
-                        .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
-                        #neg
-                })
-                .concat({
-                    keyed_rec_arr
-                        .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
-                        #pos
-                })
+                .concatenate([
+                    {
+                        keyed_arr
+                            .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
+                            #neg
+                    },
+                    {
+                        keyed_rec_arr
+                            .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
+                            #pos
+                    },
+                ])
                 .map(|((), t)| t)
                 #normalize
         }
