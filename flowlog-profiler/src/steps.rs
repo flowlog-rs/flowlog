@@ -16,25 +16,21 @@
 //! - `.consolidate()`                      = 3 ops (FlatMap + Consolidate + AsCollection)
 //! - `.threshold(...)`                     = 4 ops (FlatMap + Arrange:Threshold + Threshold + AsCollection)
 //! - `.threshold_semigroup(...)`           = 3 ops (FlatMap + Arrange:ThresholdTotal + ThresholdTotal)
+//! - `.threshold_total(...)`               = 3 ops (FlatMap + Arrange:ThresholdTotal + ThresholdTotal)
 
 use flowlog_common::ExecutionMode;
 
 use crate::Profiler;
 
 impl Profiler {
-    /// Operators created by `dedup_collection()`.
-    ///
-    /// - DatalogBatch `.consolidate()` → 3 (FlatMap + Consolidate + AsCollection)
-    /// - Others `.threshold(...)` → 4 (FlatMap + Arrange + Threshold + AsCollection)
-    pub(crate) fn dedup_collection_steps(&self) -> u32 {
-        if self.mode == ExecutionMode::DatalogBatch {
-            3
-        } else {
-            4
-        }
+    /// Operators created by `dedup_nonrecursive()` — the trace-free outer-scope
+    /// dedup for EDBs and rule outputs. Mode-independent: `.consolidate()`
+    /// (batch) and `.threshold_total()` (i32) each build 3 timely operators.
+    pub(crate) fn dedup_nonrecursive_steps(&self) -> u32 {
+        3
     }
 
-    /// Operators created by `dedup_recursive()`.
+    /// Operators created by `dedup_recursive()` — the in-loop dedup.
     ///
     /// - DatalogBatch `.threshold_semigroup(...)` → 3 (FlatMap + Arrange + ThresholdTotal)
     /// - Others `.threshold(...)` → 4 (FlatMap + Arrange + Threshold + AsCollection)
@@ -49,14 +45,18 @@ impl Profiler {
     /// Operators in the anti-join pipeline (excluding arrangement).
     ///
     /// - DatalogBatch (9): flat_map_ref(1) + pos_weight(1) + join(1)
-    ///     + neg_weight(1) + concat(1) + flat_map(1) + dedup_recursive(3)
-    /// - Others (17): flat_map_ref(1) + inter_dedup(4) + join(1)
-    ///     + inter_dedup(4) + neg_weight(1) + concat(1) + flat_map(1) + dedup_recursive(4)
-    pub(crate) fn anti_join_steps(&self) -> u32 {
+    ///     + neg_weight(1) + concat(1) + flat_map(1) + final_normalize(3)
+    /// - Others, recursive scope (17): flat_map_ref(1) + inter_dedup(4) + join(1)
+    ///     + inter_dedup(4) + neg_weight(1) + concat(1) + flat_map(1) + final_normalize(4)
+    /// - Others, outer scope (14): same shape, but all three dedups are
+    ///   `threshold_total` (3 each): 1 + 3 + 1 + 3 + 1 + 1 + 1 + 3
+    pub(crate) fn anti_join_steps(&self, recursive: bool) -> u32 {
         if self.mode == ExecutionMode::DatalogBatch {
             9
-        } else {
+        } else if recursive {
             17
+        } else {
+            14
         }
     }
 

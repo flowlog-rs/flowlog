@@ -32,7 +32,7 @@ impl Profiler {
         input_variable_name: String,
         output_variable_name: String,
     ) {
-        let steps = self.dedup_collection_steps();
+        let steps = self.dedup_nonrecursive_steps();
         self.push_node(
             format!("{}: dedup", edb_name),
             vec![input_variable_name],
@@ -91,8 +91,9 @@ impl Profiler {
         input_variable_names: Vec<String>,
         output_variable_name: String,
         fingerprint: u64,
+        recursive: bool,
     ) {
-        let steps = self.anti_join_steps();
+        let steps = self.anti_join_steps(recursive);
         self.push_node(
             name,
             input_variable_names,
@@ -110,8 +111,9 @@ impl Profiler {
         output_variable_name: String,
         fingerprint: u64,
         is_key_only: bool,
+        recursive: bool,
     ) {
-        let steps = self.anti_join_steps() + if is_key_only { 2 } else { 1 };
+        let steps = self.anti_join_steps(recursive) + if is_key_only { 2 } else { 1 };
         self.push_node(
             name,
             input_variable_names,
@@ -177,7 +179,7 @@ impl Profiler {
         let dedup = if recursive {
             self.dedup_recursive_steps()
         } else {
-            self.dedup_collection_steps()
+            self.dedup_nonrecursive_steps()
         };
         self.push_node(
             format!("{}: concat & dedup", name),
