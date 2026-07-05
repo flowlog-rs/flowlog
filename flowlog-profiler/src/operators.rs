@@ -85,6 +85,50 @@ impl Profiler {
         );
     }
 
+    /// Arrangement of an identity-projected input: the `flat_map` was aliased
+    /// away, so only the `arrange_by_self` remains (one fewer op than
+    /// [`Self::map_join_arrange_operator`]).
+    pub fn arrange_operator(
+        &mut self,
+        name: String,
+        input_variable_names: Vec<String>,
+        output_variable_name: String,
+        fingerprint: u64,
+        is_key_only: bool,
+    ) {
+        let operator_steps = if is_key_only { 2 } else { 1 };
+        self.push_node(
+            name,
+            input_variable_names,
+            Some(output_variable_name),
+            TAG_STAGE,
+            operator_steps,
+            Some(fingerprint),
+        );
+    }
+
+    /// A copy rule `B :- A` whose identity `flat_map` was elided entirely: no
+    /// timely operator is emitted, but the output relation still needs a
+    /// profiler node so downstream references to its fingerprint resolve. Pure
+    /// alias — **zero** operator steps (nothing to attribute at runtime), so it
+    /// does not advance the operator-address counter.
+    pub fn identity_alias_operator(
+        &mut self,
+        name: String,
+        input_variable_names: Vec<String>,
+        output_variable_name: String,
+        fingerprint: u64,
+    ) {
+        self.push_node(
+            name,
+            input_variable_names,
+            Some(output_variable_name),
+            TAG_STAGE,
+            0,
+            Some(fingerprint),
+        );
+    }
+
     pub fn anti_join_operator(
         &mut self,
         name: String,
