@@ -1,7 +1,5 @@
-//! Pass 1 expression engine: infer a `LitKind` for an `Arithmetic`/`Factor`
-//! and pin every polymorphic literal to its concrete width. Inference and
-//! pinning stay together — pinning a call's args re-infers them, and both
-//! share the UDF/builtin/literal rules.
+//! Infer and pin an expression (`Arithmetic`/`Factor`); the two stay together
+//! because pinning a call's args re-infers them.
 
 use flowlog_common::Span;
 use flowlog_parser::Arithmetic;
@@ -15,21 +13,21 @@ use flowlog_parser::TupleElem;
 use crate::TypeCheckError;
 use crate::env::UdfSigs;
 use crate::primitive::Bindings;
-use crate::primitive::lattice::LitKind;
+use crate::primitive::ty::LitKind;
 
 /// Infer an expression's kind, merging factor kinds left to right.
 /// `None` iff every variable factor is unbound (reported later by the
 /// range-restriction pass).
-pub(crate) fn infer_expr_type(
+pub(super) fn infer_expr(
     expr: &Arithmetic,
     bindings: &Bindings,
     udfs: &UdfSigs,
 ) -> Result<Option<LitKind>, TypeCheckError> {
     let span = expr.span();
-    let mut inferred = infer_factor_type(expr.init(), bindings, udfs)?;
+    let mut inferred = infer_factor(expr.init(), bindings, udfs)?;
 
     for (op, factor) in expr.rest() {
-        if let Some(k) = infer_factor_type(factor, bindings, udfs)? {
+        if let Some(k) = infer_factor(factor, bindings, udfs)? {
             inferred = match inferred {
                 None => Some(k),
                 Some(existing) => Some(existing.merge(&k).ok_or_else(|| {
@@ -48,7 +46,7 @@ pub(crate) fn infer_expr_type(
     Ok(inferred)
 }
 
-fn infer_factor_type(
+fn infer_factor(
     factor: &Factor,
     bindings: &Bindings,
     udfs: &UdfSigs,
@@ -56,14 +54,12 @@ fn infer_factor_type(
     Ok(match factor {
         Factor::Var(v) => bindings.get(v).map(|(ty, _)| LitKind::Concrete(ty.clone())),
         Factor::Const(c) => Some(LitKind::of(c)?),
-        Factor::FnCall(fc) => Some(LitKind::Concrete(infer_fn_call_type(fc, bindings, udfs)?)),
-        Factor::Builtin(bc) => Some(LitKind::Concrete(infer_builtin_call_type(
-            bc, bindings, udfs,
-        )?)),
+        Factor::FnCall(fc) => Some(LitKind::Concrete(infer_fn_call(fc, bindings, udfs)?)),
+        Factor::Builtin(bc) => Some(LitKind::Concrete(infer_builtin_call(bc, bindings, udfs)?)),
         // Primitive layer sees through casts; the `subtype` pass
         // enforces the cast rules separately.
-        Factor::Cast(c) => infer_factor_type(c.inner(), bindings, udfs)?,
-        Factor::Group(a) => infer_expr_type(a, bindings, udfs)?,
+        Factor::Cast(c) => infer_factor(c.inner(), bindings, udfs)?,
+        Factor::Group(a) => infer_expr(a, bindings, udfs)?,
         // Tuple construct `(e0, …)`: the type is the fixed tuple of the
         // components' concrete types. (Destructures are desugared to `TupleProj`s,
         // so a surviving placeholder here is a `_` in a construct — invalid.)
@@ -71,7 +67,7 @@ fn infer_factor_type(
             let mut fields = Vec::with_capacity(r.fields().len());
             for elem in r.fields() {
                 match elem {
-                    TupleElem::Expr(a) => match infer_expr_type(a, bindings, udfs)? {
+                    TupleElem::Expr(a) => match infer_expr(a, bindings, udfs)? {
                         Some(k) => fields.push(k.report_ty()),
                         // A component is unbound — the range-restriction pass
                         // reports it; we can't determine the tuple type yet.
@@ -88,7 +84,7 @@ fn infer_factor_type(
         // the type is the indexed field's type. A non-tuple base or an
         // out-of-range index means the user destructured something that isn't a
         // tuple of that shape — a clean user error, not an internal bug.
-        Factor::TupleProj { tuple, index } => match infer_expr_type(tuple, bindings, udfs)? {
+        Factor::TupleProj { tuple, index } => match infer_expr(tuple, bindings, udfs)? {
             Some(LitKind::Concrete(DataType::FixedTuple(fields))) => match fields.get(*index) {
                 Some(ty) => Some(LitKind::Concrete(ty.clone())),
                 None => {
@@ -117,7 +113,7 @@ fn infer_factor_type(
 
 /// Type-check a built-in call against its [`BuiltinOperator`] signature.
 /// Arity is already enforced by the parser, so only per-arg types here.
-fn infer_builtin_call_type(
+fn infer_builtin_call(
     bc: &BuiltinCall,
     bindings: &Bindings,
     udfs: &UdfSigs,
@@ -138,7 +134,7 @@ fn infer_builtin_call_type(
         .zip(op.param_allowed_types().iter())
         .enumerate()
     {
-        let Some(kind) = infer_expr_type(arg, bindings, udfs)? else {
+        let Some(kind) = infer_expr(arg, bindings, udfs)? else {
             continue;
         };
         if !allowed.iter().any(|t| kind.fits(t)) {
@@ -155,7 +151,7 @@ fn infer_builtin_call_type(
     Ok(op.ret_type())
 }
 
-fn infer_fn_call_type(
+fn infer_fn_call(
     fc: &FnCall,
     bindings: &Bindings,
     udfs: &UdfSigs,
@@ -177,7 +173,7 @@ fn infer_fn_call_type(
     }
 
     for (arg, (param_name, expected)) in fc.args().iter().zip(param_types.iter()) {
-        let Some(kind) = infer_expr_type(arg, bindings, udfs)? else {
+        let Some(kind) = infer_expr(arg, bindings, udfs)? else {
             continue;
         };
         if !kind.fits(expected) {
@@ -217,7 +213,7 @@ fn check_arith_op(
 /// Pin every polymorphic literal in `a` to `target`. Recurses into UDF
 /// argument expressions using the UDF's declared parameter types — those
 /// types are independent of the enclosing expression's `target`.
-pub(crate) fn pin_arith_literals(
+pub(super) fn pin_expr(
     a: &mut Arithmetic,
     target: &DataType,
     bindings: &Bindings,
@@ -244,18 +240,18 @@ fn pin_factor(
             Ok(())
         }
         Factor::Var(_) => Ok(()),
-        Factor::FnCall(fc) => pin_fn_call_args(fc, bindings, udfs),
-        Factor::Builtin(bc) => pin_builtin_call_args(bc, bindings, udfs),
+        Factor::FnCall(fc) => pin_fn_call(fc, bindings, udfs),
+        Factor::Builtin(bc) => pin_builtin_call(bc, bindings, udfs),
         // Cast asserts its inner has the target's primitive — pin
         // polymorphic literals inside accordingly.
         Factor::Cast(c) => pin_factor(c.inner_mut(), target, bindings, udfs),
-        Factor::Group(a) => pin_arith_literals(a, target, bindings, udfs),
+        Factor::Group(a) => pin_expr(a, target, bindings, udfs),
         // Tuple construct: pin each component against its declared field type.
         Factor::Tuple(r) => {
             if let DataType::FixedTuple(field_types) = target {
                 for (elem, fty) in r.fields_mut().iter_mut().zip(field_types.iter()) {
                     if let TupleElem::Expr(a) = elem {
-                        pin_arith_literals(a, fty, bindings, udfs)?;
+                        pin_expr(a, fty, bindings, udfs)?;
                     }
                 }
             }
@@ -271,38 +267,31 @@ fn pin_factor(
 /// allowed set, so the operand's own type is the right (and only consistent)
 /// pin target — for fixed-type params it equals the declared type, and for
 /// polymorphic params (`to_string`) it's whatever the operand actually is.
-fn pin_builtin_call_args(
+fn pin_builtin_call(
     bc: &mut BuiltinCall,
     bindings: &Bindings,
     udfs: &UdfSigs,
 ) -> Result<(), TypeCheckError> {
     for arg in bc.args_mut() {
-        if let Some(kind) = infer_expr_type(arg, bindings, udfs)? {
-            pin_arith_literals(arg, &kind.report_ty(), bindings, udfs)?;
+        if let Some(kind) = infer_expr(arg, bindings, udfs)? {
+            pin_expr(arg, &kind.report_ty(), bindings, udfs)?;
         }
     }
     Ok(())
 }
 
-fn pin_fn_call_args(
-    fc: &mut FnCall,
-    bindings: &Bindings,
-    udfs: &UdfSigs,
-) -> Result<(), TypeCheckError> {
-    // Collected by value so the recursive `pin_arith_literals` below can
-    // reborrow `udfs` — holding `&param_types` from `udfs.get(...)` across
-    // the recursion would block the reborrow.
+fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<(), TypeCheckError> {
+    // Collected by value so the recursive `pin_expr` below can reborrow `udfs`
+    // — holding `&param_types` from `udfs.get(...)` across the recursion would
+    // block the reborrow.
     let param_types: Vec<DataType> = udfs
         .get(fc.name())
         .map(|(params, _)| params.iter().map(|(_, ty)| ty.clone()).collect())
         .ok_or_else(|| {
-            TypeCheckError::internal(format!(
-                "pin_fn_call_args: UDF `{}` not declared",
-                fc.name()
-            ))
+            TypeCheckError::internal(format!("pin_fn_call: UDF `{}` not declared", fc.name()))
         })?;
     for (arg, pty) in fc.args_mut().iter_mut().zip(param_types.iter()) {
-        pin_arith_literals(arg, pty, bindings, udfs)?;
+        pin_expr(arg, pty, bindings, udfs)?;
     }
     Ok(())
 }

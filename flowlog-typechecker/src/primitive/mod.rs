@@ -1,13 +1,18 @@
-//! Pass 1 — primitive `DataType` checking and literal pinning.
+//! Pass 1: primitive `DataType` checking and literal pinning. Subtype-blind —
+//! [`crate::subtype`] is Pass 2.
 //!
-//! Binds variable types from positive-atom columns, checks every body/head
-//! site, and pins every polymorphic literal to a concrete width. Blind to
-//! subtypes (`UserId <: number` looks like `Int32`); [`crate::subtype`] is the
-//! second pass that recovers the nominal distinctions.
+//! Per-construct bricks over `ty` (the `LitKind` lattice): `expr` infers and
+//! pins expressions; `atom`, `fact`, `compare`, and `rule` (the composer)
+//! check and pin each construct. Names read `<verb>_<node>` — `infer`, `check`,
+//! `pin`, or `check_and_pin` for both. `check_program` calls
+//! `rule::check_and_pin_rules` and `fact::check_and_pin_facts` directly.
 
-mod check;
+mod atom;
+mod compare;
 mod expr;
-mod lattice;
+pub(crate) mod fact;
+pub(crate) mod rule;
+mod ty;
 
 use std::collections::HashMap;
 
@@ -18,37 +23,15 @@ use flowlog_parser::BuiltinOperator;
 use flowlog_parser::DataType;
 use flowlog_parser::Factor;
 use flowlog_parser::HeadArg;
-use flowlog_parser::InlineFact;
 use flowlog_parser::Predicate;
 use flowlog_parser::Program;
 
 use crate::TypeCheckError;
-use crate::env::PrimitiveEnv;
-use crate::primitive::lattice::LitKind;
 
 /// Var -> (first-seen type, first-seen span). Later uses must agree.
-/// Per-rule and primitive-pass-local — the subtype pass keeps its own
-/// `TypeId`-keyed map, so this deliberately isn't visible outside `primitive`.
-pub(in crate::primitive) type Bindings = HashMap<String, (DataType, Span)>;
-
-/// Check + pin every rule (plain and loop-internal) against the primitive
-/// type environment.
-pub(crate) fn check_and_pin_rules(
-    program: &mut Program,
-    env: &PrimitiveEnv,
-) -> Result<(), TypeCheckError> {
-    for segment in program.segments_mut() {
-        for rule in segment.as_rules_mut() {
-            check::check_rule(rule, env)?;
-        }
-        if let Some(block) = segment.as_loop_mut() {
-            for rule in block.rules_mut() {
-                check::check_rule(rule, env)?;
-            }
-        }
-    }
-    Ok(())
-}
+/// Private, so it stays confined to the `primitive` subtree — the subtype
+/// pass keeps its own `TypeId`-keyed map.
+type Bindings = HashMap<String, (DataType, Span)>;
 
 /// Reject built-in calls whose semantics depend on a build flag that
 /// isn't enabled — today only `ord(_)`, which needs `--str-intern`.
@@ -98,44 +81,6 @@ pub(crate) fn check_builtin_config_requirements(
                     HeadArg::Var(_) => {}
                     HeadArg::Arith(a) => check_arith(a)?,
                     HeadArg::Aggregation(agg) => check_arith(agg.arithmetic())?,
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Validate each fact tuple's column families against its `.decl` and pin
-/// polymorphic literals. Diagnostics cite the fact's head span.
-pub(crate) fn check_and_pin_facts(
-    facts: &mut HashMap<String, Vec<InlineFact>>,
-    env: &PrimitiveEnv,
-) -> Result<(), TypeCheckError> {
-    for (rel_name, entries) in facts.iter_mut() {
-        let Some(col_types) = env.decls.get(rel_name) else {
-            return Err(TypeCheckError::internal(format!(
-                "fact references undeclared relation `{rel_name}`"
-            )));
-        };
-        for fact in entries.iter_mut() {
-            if fact.columns.len() != col_types.len() {
-                return Err(TypeCheckError::HeadArity {
-                    span: fact.span,
-                    rel: fact.raw_name.clone(),
-                    expected: col_types.len(),
-                    found: fact.columns.len(),
-                });
-            }
-            for (c, col_ty) in fact.columns.iter_mut().zip(col_types.iter()) {
-                if !LitKind::of(c)?.fits(col_ty) {
-                    return Err(TypeCheckError::LiteralColumnMismatch {
-                        span: fact.span,
-                        literal: c.to_string(),
-                        expected: col_ty.clone(),
-                    });
-                }
-                if c.is_polymorphic() {
-                    c.pin(col_ty.clone());
                 }
             }
         }

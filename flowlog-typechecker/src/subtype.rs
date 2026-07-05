@@ -51,11 +51,11 @@ pub(crate) fn check_and_lower(program: &mut Program) -> Result<(), TypeCheckErro
     let (registry, segments) = program.registry_and_segments_mut();
     for segment in segments.iter_mut() {
         for rule in segment.as_rules_mut() {
-            check_rule(rule, registry, &decls)?;
+            check_and_lower_rule(rule, registry, &decls)?;
         }
         if let Some(block) = segment.as_loop_mut() {
             for rule in block.rules_mut() {
-                check_rule(rule, registry, &decls)?;
+                check_and_lower_rule(rule, registry, &decls)?;
             }
         }
     }
@@ -64,7 +64,7 @@ pub(crate) fn check_and_lower(program: &mut Program) -> Result<(), TypeCheckErro
 
 /// Bind via positive atoms, re-check negated/compared positions and
 /// `as()` casts, validate the head, then lower casts in-place.
-fn check_rule(
+fn check_and_lower_rule(
     rule: &mut FlowLogRule,
     reg: &TypeRegistry,
     decls: &DeclIds,

@@ -1,5 +1,4 @@
-//! The literal-kind lattice: how polymorphic literals and concrete column
-//! widths relate. Pass 1's primitive type algebra.
+//! The literal-type lattice and its algebra for Pass 1.
 
 use flowlog_parser::ConstType;
 use flowlog_parser::DataType;
@@ -10,7 +9,7 @@ use crate::TypeCheckError;
 /// `FloatLit`) until a concrete context fixes the type. Concrete literals
 /// carry their resolved [`DataType`] directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LitKind {
+pub(super) enum LitKind {
     IntLit,
     FloatLit,
     Concrete(DataType),
@@ -19,7 +18,7 @@ pub(crate) enum LitKind {
 impl LitKind {
     /// The kind of a literal constant. Errors only on a polymorphic literal
     /// that escaped the `Int`/`Float` arms — an internal invariant breach.
-    pub(crate) fn of(c: &ConstType) -> Result<Self, TypeCheckError> {
+    pub(super) fn of(c: &ConstType) -> Result<Self, TypeCheckError> {
         Ok(match c {
             ConstType::Int(_) => LitKind::IntLit,
             ConstType::Float(_) => LitKind::FloatLit,
@@ -33,7 +32,7 @@ impl LitKind {
 
     /// Combine two operand kinds across an arithmetic operator. `None` on
     /// a family mismatch.
-    pub(crate) fn merge(&self, other: &Self) -> Option<Self> {
+    pub(super) fn merge(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (x, y) if x == y => Some(x.clone()),
             (LitKind::Concrete(t), LitKind::IntLit) | (LitKind::IntLit, LitKind::Concrete(t))
@@ -51,7 +50,7 @@ impl LitKind {
         }
     }
 
-    pub(crate) fn fits(&self, expected: &DataType) -> bool {
+    pub(super) fn fits(&self, expected: &DataType) -> bool {
         match self {
             LitKind::IntLit => expected.is_integer(),
             LitKind::FloatLit => expected.is_float(),
@@ -59,7 +58,7 @@ impl LitKind {
         }
     }
 
-    pub(crate) fn is_numeric(&self) -> bool {
+    pub(super) fn is_numeric(&self) -> bool {
         match self {
             LitKind::IntLit | LitKind::FloatLit => true,
             LitKind::Concrete(t) => t.is_numeric(),
@@ -68,7 +67,7 @@ impl LitKind {
 
     /// Representative concrete type for diagnostic rendering **and** for
     /// pinning all-literal expressions that never met a concrete partner.
-    pub(crate) fn report_ty(&self) -> DataType {
+    pub(super) fn report_ty(&self) -> DataType {
         match self {
             LitKind::IntLit => DataType::Int32,
             LitKind::FloatLit => DataType::Float32,
