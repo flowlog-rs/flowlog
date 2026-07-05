@@ -23,8 +23,11 @@ use crate::codegen::arg::compute_kv_param_tokens;
 use crate::codegen::arg::row_pattern_and_fields;
 use crate::codegen::data_type_tokens;
 use crate::codegen::ident::find_local_ident;
+use crate::planner::ArithmeticArgument;
+use crate::planner::FactorArgument;
 use crate::planner::StratumPlanner;
 use crate::planner::Transformation;
+use crate::planner::TransformationArgument;
 
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.
@@ -75,16 +78,6 @@ impl CodeGen {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_operator(
-                        transformation_name,
-                        vec![inp.to_string()],
-                        out.to_string(),
-                        output.fingerprint(),
-                    );
-                });
-
                 // Type inference + row pattern
                 let input_arity = input.arity().1;
                 let (row_pat, row_fields) = row_pattern_and_fields(
@@ -117,12 +110,44 @@ impl CodeGen {
                     build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
+                // Identity row projection with no predicate: alias the input; the
+                // `flat_map(|row| once(row))` is a no-op, so no `Map` operator is emitted.
+                let is_identity = pred.is_none()
+                    && flow.key().is_empty()
+                    && is_identity_row_projection(flow.value(), input.arity().1);
+
+                with_profiler(profiler, |profiler| {
+                    if is_identity {
+                        // Copy rule `B :- A`: the identity `flat_map` is elided,
+                        // so no operator is emitted — but still register a 0-op
+                        // alias node so downstream references to this relation's
+                        // fingerprint resolve in the profiler model.
+                        profiler.identity_alias_operator(
+                            transformation_name,
+                            vec![inp.to_string()],
+                            out.to_string(),
+                            output.fingerprint(),
+                        );
+                    } else {
+                        profiler.map_join_operator(
+                            transformation_name,
+                            vec![inp.to_string()],
+                            out.to_string(),
+                            output.fingerprint(),
+                        );
+                    }
+                });
+
                 let flat_map_body = flat_map_body_tokens(pred, out_val);
 
-                Ok(quote! {
-                    let #out = #inp.clone()
-                        .flat_map(|#row_pat: #row_ty| { #flat_map_body });
-                })
+                if is_identity {
+                    Ok(quote! { let #out = #inp.clone(); })
+                } else {
+                    Ok(quote! {
+                        let #out = #inp.clone()
+                            .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                    })
+                }
             }
 
             // Row -> KV
@@ -134,17 +159,6 @@ impl CodeGen {
                 // Inputs / outputs
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
-
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_arrange_operator(
-                        transformation_name,
-                        vec![inp.to_string()],
-                        format!("{}_arr", out),
-                        output.fingerprint(),
-                        output.is_k_only(),
-                    );
-                });
 
                 // Type inference + row pattern
                 let input_arity = input.arity().1;
@@ -185,12 +199,41 @@ impl CodeGen {
                     build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
-                // Transformation logic
+                // Identity projection into a key-only arrangement: alias the input;
+                // the `arrange_by_self` below reads it directly, dropping the `flat_map`.
+                let is_identity = pred.is_none()
+                    && output.is_k_only()
+                    && flow.value().is_empty()
+                    && is_identity_row_projection(flow.key(), input.arity().1);
+
+                with_profiler(profiler, |profiler| {
+                    let name = transformation_name;
+                    let inputs = vec![inp.to_string()];
+                    let arr = format!("{}_arr", out);
+                    let fp = output.fingerprint();
+                    // Identity aliases away the `flat_map`; only the arrangement remains.
+                    if is_identity {
+                        profiler.arrange_operator(name, inputs, arr, fp, output.is_k_only());
+                    } else {
+                        profiler.map_join_arrange_operator(
+                            name,
+                            inputs,
+                            arr,
+                            fp,
+                            output.is_k_only(),
+                        );
+                    }
+                });
+
                 let flat_map_body = flat_map_body_tokens(pred, out_expr);
 
-                let transformation = quote! {
-                    let #out = #inp.clone()
-                        .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                let transformation = if is_identity {
+                    quote! { let #out = #inp.clone(); }
+                } else {
+                    quote! {
+                        let #out = #inp.clone()
+                            .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                    }
                 };
 
                 // Arrangement registration
@@ -712,6 +755,19 @@ fn flat_map_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStr
     }
 }
 
+/// `true` iff `args` reproduce every one of the input row's `row_arity` columns exactly once, in
+/// order, as a bare variable -- no arithmetic, cast, constant, reorder, or dropped/added column.
+fn is_identity_row_projection(args: &[ArithmeticArgument], row_arity: usize) -> bool {
+    args.len() == row_arity
+        && args.iter().enumerate().all(|(idx, arg)| {
+            arg.rest().is_empty()
+                && matches!(
+                    arg.init(),
+                    FactorArgument::Var(TransformationArgument::KV((_, i))) if *i == idx,
+                )
+        })
+}
+
 /// Build the body of a `join_core` closure that yields `out` either
 /// conditionally (when `pred` is `Some`) or unconditionally.
 ///
@@ -721,5 +777,79 @@ fn join_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream 
     match pred {
         Some(pred) => quote! { if #pred { Some( #out ) } else { None } },
         None => quote! { Some( #out ) },
+    }
+}
+
+#[cfg(test)]
+mod identity_projection_tests {
+    use flowlog_parser::ArithmeticOperator;
+
+    use super::is_identity_row_projection;
+    use crate::planner::ArithmeticArgument;
+    use crate::planner::FactorArgument;
+    use crate::planner::TransformationArgument;
+
+    /// A bare column reference `KV((is_key, idx))` with no arithmetic tail.
+    fn col(is_key: bool, idx: usize) -> ArithmeticArgument {
+        ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((is_key, idx))),
+            rest: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn full_in_order_projection_is_identity() {
+        // Every column reproduced once, in order: identity (incl. single- and zero-column).
+        assert!(is_identity_row_projection(
+            &[col(false, 0), col(false, 1), col(false, 2)],
+            3
+        ));
+        assert!(is_identity_row_projection(&[col(false, 0)], 1));
+        assert!(is_identity_row_projection(&[], 0));
+    }
+
+    #[test]
+    fn key_value_flag_is_ignored_for_row_inputs() {
+        // Row columns are addressed by position; the key/value flag must not matter.
+        assert!(is_identity_row_projection(
+            &[col(true, 0), col(false, 1)],
+            2
+        ));
+    }
+
+    #[test]
+    fn wrong_position_is_not_identity() {
+        // Reordered, and duplicated (col 0 where col 1 is expected): both break `i == idx`.
+        assert!(!is_identity_row_projection(
+            &[col(false, 1), col(false, 0)],
+            2
+        ));
+        assert!(!is_identity_row_projection(
+            &[col(false, 0), col(false, 0)],
+            2
+        ));
+    }
+
+    #[test]
+    fn arity_mismatch_is_not_identity() {
+        // Fewer or more args than the row arity are never a full identity.
+        assert!(!is_identity_row_projection(&[col(false, 0)], 2));
+        assert!(!is_identity_row_projection(
+            &[col(false, 0), col(false, 1)],
+            1
+        ));
+    }
+
+    #[test]
+    fn arithmetic_tail_is_not_identity() {
+        // `col0 + col1` transforms the value, so it must not be treated as identity.
+        let arg = ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((false, 0))),
+            rest: vec![(
+                ArithmeticOperator::Plus,
+                FactorArgument::Var(TransformationArgument::KV((false, 1))),
+            )],
+        };
+        assert!(!is_identity_row_projection(std::slice::from_ref(&arg), 1));
     }
 }
