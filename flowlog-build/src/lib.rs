@@ -67,8 +67,6 @@ pub mod optimizer;
 pub mod planner;
 #[doc(hidden)]
 pub mod stratifier;
-#[doc(hidden)]
-pub mod typechecker;
 
 use std::env;
 use std::fs;

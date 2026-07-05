@@ -52,6 +52,7 @@ pub use primitive::ConstType;
 pub use primitive::DataType;
 pub use primitive::TypeId;
 pub use primitive::TypeRegistry;
+pub use program::InlineFact;
 pub use program::Program;
 pub use segment::Segment;
 

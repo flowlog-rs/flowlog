@@ -361,6 +361,7 @@ dependencies = [
  "flowlog-common",
  "flowlog-parser",
  "flowlog-profiler",
+ "flowlog-typechecker",
  "itertools 0.15.0",
  "ordered-float",
  "prettyplease",
@@ -398,6 +399,7 @@ dependencies = [
  "flowlog-common",
  "flowlog-parser",
  "flowlog-profiler",
+ "flowlog-typechecker",
  "proc-macro2",
  "quote",
  "thiserror",
@@ -442,6 +444,17 @@ dependencies = [
  "rustc-hash",
  "serde",
  "timely",
+]
+
+[[package]]
+name = "flowlog-typechecker"
+version = "0.1.0"
+dependencies = [
+ "codespan-reporting",
+ "flowlog-common",
+ "flowlog-parser",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

@@ -7,8 +7,8 @@
 //!
 //! There is no `apply_file` — library mode is a pure typed API.
 
-use flowlog_common::Span;
 use flowlog_parser::ConstType;
+use flowlog_parser::InlineFact;
 use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -21,7 +21,7 @@ use crate::data_type_tokens;
 
 pub(super) fn gen_input_struct(
     rel: &Relation,
-    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
+    facts: Option<&Vec<InlineFact>>,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
     let struct_name = input_struct_ident(rel);
@@ -75,7 +75,7 @@ pub(super) fn gen_input_struct(
 /// number of rows to a single presence marker.
 fn gen_apply_inline(
     rel: &Relation,
-    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
+    facts: Option<&Vec<InlineFact>>,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
     let rows = match facts {
@@ -88,7 +88,7 @@ fn gen_apply_inline(
     } else {
         let tuples = rows
             .iter()
-            .map(|(_, row)| fact_tuple(row, string_intern))
+            .map(|fact| fact_tuple(&fact.columns, string_intern))
             .collect::<Result<Vec<_>, _>>()?;
         quote! {
             for row in [ #(#tuples),* ] {

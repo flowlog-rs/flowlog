@@ -32,9 +32,7 @@ use flowlog_parser::TupleElem;
 use flowlog_parser::TypeId;
 use flowlog_parser::TypeRegistry;
 
-use super::DisplayNames;
-use super::TypeCheckError;
-use super::display_name;
+use crate::TypeCheckError;
 
 type DeclIds = HashMap<String, Vec<TypeId>>;
 
@@ -43,10 +41,7 @@ type DeclIds = HashMap<String, Vec<TypeId>>;
 type Bindings = HashMap<String, (TypeId, Span)>;
 
 /// Check and lower casts in a single per-rule walk.
-pub(super) fn check_and_lower(
-    program: &mut Program,
-    display: &DisplayNames,
-) -> Result<(), TypeCheckError> {
+pub(crate) fn check_and_lower(program: &mut Program) -> Result<(), TypeCheckError> {
     let decls: DeclIds = program
         .relations()
         .iter()
@@ -56,11 +51,11 @@ pub(super) fn check_and_lower(
     let (registry, segments) = program.registry_and_segments_mut();
     for segment in segments.iter_mut() {
         for rule in segment.as_rules_mut() {
-            check_rule(rule, registry, &decls, display)?;
+            check_and_lower_rule(rule, registry, &decls)?;
         }
         if let Some(block) = segment.as_loop_mut() {
             for rule in block.rules_mut() {
-                check_rule(rule, registry, &decls, display)?;
+                check_and_lower_rule(rule, registry, &decls)?;
             }
         }
     }
@@ -69,11 +64,10 @@ pub(super) fn check_and_lower(
 
 /// Bind via positive atoms, re-check negated/compared positions and
 /// `as()` casts, validate the head, then lower casts in-place.
-fn check_rule(
+fn check_and_lower_rule(
     rule: &mut FlowLogRule,
     reg: &TypeRegistry,
     decls: &DeclIds,
-    display: &DisplayNames,
 ) -> Result<(), TypeCheckError> {
     let mut bindings: Bindings = HashMap::new();
 
@@ -94,12 +88,12 @@ fn check_rule(
             Predicate::Compare(cmp) => {
                 check_arith_casts(cmp.left(), reg, &bindings)?;
                 check_arith_casts(cmp.right(), reg, &bindings)?;
-                check_compare(cmp, reg, &bindings)?;
+                check_comparison(cmp, reg, &bindings)?;
             }
         }
     }
 
-    check_head(rule, decls, reg, &bindings, display)?;
+    check_head(rule, decls, reg, &bindings)?;
     lower_rule(rule);
     Ok(())
 }
@@ -153,11 +147,10 @@ fn check_head(
     decls: &DeclIds,
     reg: &TypeRegistry,
     bindings: &Bindings,
-    display: &DisplayNames,
 ) -> Result<(), TypeCheckError> {
     let head = rule.head();
     let rel_name = head.name();
-    let rel_display = display_name(display, rel_name);
+    let rel_display = head.raw_name().to_string();
     let col_ids = decls.get(rel_name).ok_or_else(|| {
         TypeCheckError::internal(format!(
             "subtype pass: head relation `{rel_name}` not declared"
@@ -263,7 +256,7 @@ fn check_head_widen(
 /// Comparison operands with determinate type identity must have a meet.
 /// Skipped when either side is a constant, arithmetic expression, or
 /// UDF/builtin call (no subtype identity flows through those).
-fn check_compare(
+fn check_comparison(
     cmp: &ComparisonExpr,
     reg: &TypeRegistry,
     bindings: &Bindings,

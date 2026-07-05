@@ -21,6 +21,7 @@ use flowlog_parser::DataType;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive] // published API: new checks may add variants without a semver break
 pub enum TypeCheckError {
     /// A variable is bound to one type and later reused with another.
     #[error("variable `{var}` bound as `{first_ty:?}` but used as `{later_ty:?}`")]
@@ -99,7 +100,7 @@ pub enum TypeCheckError {
     },
 
     /// A built-in argument's type isn't in the parameter's allowed set.
-    /// Arity is enforced earlier by [`ParseError::BuiltinArity`](super::super::parser::ParseError),
+    /// Arity is enforced earlier by [`ParseError::BuiltinArity`](flowlog_parser::ParseError),
     /// so the typechecker only worries about per-arg type fit. `expected` is the
     /// set of accepted types (one element for a fixed param, several for a
     /// polymorphic one like `to_string`).
@@ -220,7 +221,7 @@ pub enum TypeCheckError {
 }
 
 impl TypeCheckError {
-    pub(super) fn internal(detail: impl Into<String>) -> Self {
+    pub(crate) fn internal(detail: impl Into<String>) -> Self {
         Self::Internal(InternalError::new("typechecker", detail, BUG_URL))
     }
 }

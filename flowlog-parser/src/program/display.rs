@@ -59,8 +59,9 @@ impl fmt::Display for Program {
             writeln!(f, "Facts")?;
             writeln!(f, "{SUBSECTION_BAR}")?;
             for (rel_name, facts) in &self.facts {
-                for (_, vals) in facts {
-                    let values = vals
+                for fact in facts {
+                    let values = fact
+                        .columns
                         .iter()
                         .map(|c| c.to_string())
                         .collect::<Vec<_>>()
