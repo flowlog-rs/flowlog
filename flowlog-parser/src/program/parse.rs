@@ -13,7 +13,6 @@ use pest::iterators::Pair;
 use tracing::debug;
 use tracing::info;
 
-use super::InlineFact;
 use super::Program;
 use super::include::resolve_includes;
 use crate::FlowLogParser;
@@ -233,12 +232,11 @@ impl Program {
             .next()
             .ok_or_else(|| grammar_bug("no parsed rule found"))?;
 
-        let mut program = Self::collect_program(root, extended, combined_file)?;
-        program.prune_dead_components();
-        // Materialize orphan references only *after* pruning, so the empty-fact
-        // entries we add can't disable pruning's "no outputs/facts ⇒ keep all"
-        // shortcut, and so we never materialize a relation that pruning dropped.
-        program.materialize_orphan_relations();
+        // Parsing stays purely Datalog syntax → AST: it no longer runs
+        // dead-component pruning or orphan materialization. Those moved
+        // downstream, run once after type-checking and folding via
+        // `Program::normalize`.
+        let program = Self::collect_program(root, extended, combined_file)?;
 
         debug!("\n{}", program);
         info!("Successfully parsed program from '{}'.", path);
@@ -484,50 +482,6 @@ impl Program {
         Ok(program)
     }
 
-    /// Materialize *orphan* relations as empty inputs.
-    ///
-    /// A relation that is declared and referenced in some rule body, yet has no
-    /// producing rule, no `.input`, and no inline facts, denotes the empty
-    /// relation under Soufflé semantics (a positive reference yields nothing; a
-    /// negative reference is always satisfied). The stratifier already tolerates
-    /// such references; here we give them an empty inline-fact entry so codegen
-    /// emits an empty collection for them instead of referencing an undefined
-    /// binding.
-    fn materialize_orphan_relations(&mut self) {
-        let mut produced: HashSet<String> = HashSet::new();
-        let mut referenced: HashSet<String> = HashSet::new();
-        for segment in &self.segments {
-            let rules: &[FlowLogRule] = match segment {
-                Segment::Plain(rules) => rules,
-                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
-            };
-            for rule in rules {
-                produced.insert(rule.head().name().to_string());
-                for pred in rule.rhs() {
-                    if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
-                        referenced.insert(atom.name().to_string());
-                    }
-                }
-            }
-        }
-
-        let orphans: Vec<String> = self
-            .relations
-            .iter()
-            .filter(|rel| {
-                let name = rel.name();
-                referenced.contains(name)
-                    && !produced.contains(name)
-                    && !self.facts.contains_key(name)
-                    && !rel.has_input()
-            })
-            .map(|rel| rel.name().to_string())
-            .collect();
-        for name in orphans {
-            self.facts.entry(name).or_default();
-        }
-    }
-
     /// Reject any rule head, body atom, or ground fact whose relation
     /// name has no matching `.decl`. Mirrors the check directives already
     /// do via [`ParseError::UndeclaredInDirective`]; covering the rule and
@@ -748,15 +702,8 @@ impl Program {
     /// Insert a ground-tuple fact into `self.facts`, preserving the head
     /// span so the typechecker can cite the offending source position.
     fn extract_fact(&mut self, fact_rule: FlowLogRule) -> Result<(), ParseError> {
-        let rel_name = fact_rule.head().name().to_string();
-        let raw_name = fact_rule.head().raw_name().to_string();
-        let span = fact_rule.head().span();
-        let columns = fact_rule.extract_constants_from_head()?;
-        self.facts.entry(rel_name).or_default().push(InlineFact {
-            span,
-            raw_name,
-            columns,
-        });
+        let (rel_name, fact) = fact_rule.to_inline_fact()?;
+        self.facts.entry(rel_name).or_default().push(fact);
         Ok(())
     }
 }

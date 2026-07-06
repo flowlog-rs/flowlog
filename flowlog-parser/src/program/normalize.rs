@@ -10,7 +10,7 @@ use crate::logic::Predicate;
 use crate::segment::Segment;
 
 // =============================================================================
-// Dead-code elimination
+// Structural normalization: dead-component pruning + orphan materialization
 // =============================================================================
 
 /// Sentinel used in the dependency map to represent a predicate that has no
@@ -162,7 +162,7 @@ impl Program {
     }
 
     /// Remove dead rules and relations in place, logging what was dropped.
-    pub(super) fn prune_dead_components(&mut self) {
+    fn prune_dead_components(&mut self) {
         let ((needed_rules, needed_preds), underived) = self.identify_needed_components();
 
         // Collect dead relations (unreachable) and dead rules for a single
@@ -268,5 +268,56 @@ impl Program {
 
         self.facts
             .retain(|rel, _| needed_preds.contains(rel.as_str()));
+    }
+
+    /// Materialize *orphan* relations as empty inputs.
+    ///
+    /// A relation that is declared and referenced in some rule body, yet has no
+    /// producing rule, no `.input`, and no inline facts, denotes the empty
+    /// relation under Soufflé semantics (a positive reference yields nothing; a
+    /// negative reference is always satisfied). The stratifier already tolerates
+    /// such references; here we give them an empty inline-fact entry so codegen
+    /// emits an empty collection for them instead of referencing an undefined
+    /// binding.
+    fn materialize_orphan_relations(&mut self) {
+        let mut produced: HashSet<String> = HashSet::new();
+        let mut referenced: HashSet<String> = HashSet::new();
+        for segment in &self.segments {
+            let rules: &[FlowLogRule] = match segment {
+                Segment::Plain(rules) => rules,
+                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
+            };
+            for rule in rules {
+                produced.insert(rule.head().name().to_string());
+                for pred in rule.rhs() {
+                    if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
+                        referenced.insert(atom.name().to_string());
+                    }
+                }
+            }
+        }
+
+        let orphans: Vec<String> = self
+            .relations
+            .iter()
+            .filter(|rel| {
+                let name = rel.name();
+                referenced.contains(name)
+                    && !produced.contains(name)
+                    && !self.facts.contains_key(name)
+                    && !rel.has_input()
+            })
+            .map(|rel| rel.name().to_string())
+            .collect();
+        for name in orphans {
+            self.facts.entry(name).or_default();
+        }
+    }
+
+    /// Prune dead components, then materialize orphan relations. Order matters:
+    /// materialize must run after prune so it can't re-add a dropped relation.
+    pub fn normalize(&mut self) {
+        self.prune_dead_components();
+        self.materialize_orphan_relations();
     }
 }

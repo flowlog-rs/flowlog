@@ -453,6 +453,8 @@ dependencies = [
  "codespan-reporting",
  "flowlog-common",
  "flowlog-parser",
+ "ordered-float",
+ "rstest",
  "tempfile",
  "thiserror",
 ]

@@ -13,9 +13,11 @@ flowlog-common.workspace = true
 flowlog-parser.workspace = true
 
 codespan-reporting.workspace = true
+ordered-float.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+rstest.workspace = true
 tempfile.workspace = true
 
 [lints]

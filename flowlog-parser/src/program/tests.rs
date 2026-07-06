@@ -196,7 +196,8 @@ fn dead_code_elimination_keeps_loop_until_relations() {
 
         dead() :- edge(2, 3).
     ";
-    let program = parse_program(src);
+    let mut program = parse_program(src);
+    program.normalize();
 
     assert!(program.relations().iter().any(|rel| rel.name() == "keep"));
     assert!(!program.relations().iter().any(|rel| rel.name() == "dead"));
@@ -542,7 +543,7 @@ fn output_and_printsize_inside_comp_rejected() {
 /// `warn!` from the pruning pass surfaces it to the user.
 #[test]
 fn empty_output_pruned_from_dataflow() {
-    let program = parse_program(
+    let mut program = parse_program(
         "
         .decl Nothing(x: symbol)
         .decl Src(x: symbol)
@@ -553,6 +554,7 @@ fn empty_output_pruned_from_dataflow() {
         .output Out
         ",
     );
+    program.normalize();
     // `Nothing` is pruned from output_idbs (no rules, no facts, unreferenced).
     assert!(
         program.output_idbs().iter().all(|r| r.name() != "nothing"),
@@ -842,7 +844,7 @@ fn equality_between_bound_columns_is_kept_as_filter() {
 /// from the fact file.
 #[test]
 fn orphan_relation_referenced_by_live_rule_is_materialized_empty() {
-    let program = parse_program(
+    let mut program = parse_program(
         "
         .decl O(x:symbol)
         .decl I(x:symbol)
@@ -852,6 +854,7 @@ fn orphan_relation_referenced_by_live_rule_is_materialized_empty() {
         .output R
         ",
     );
+    program.normalize();
     assert!(
         program.facts().contains_key("o"),
         "orphan relation should be materialized"

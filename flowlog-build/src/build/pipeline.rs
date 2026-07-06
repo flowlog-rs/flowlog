@@ -17,6 +17,7 @@ use flowlog_common::SourceMap;
 use flowlog_parser::Program;
 use flowlog_profiler::Profiler;
 use flowlog_typechecker::check_program;
+use flowlog_typechecker::fold_constants;
 use proc_macro2::TokenStream;
 
 use crate::BuildError;
@@ -54,6 +55,10 @@ impl Pipeline {
         let config = build_config(builder, program_str);
         let mut program = parse(&config, &builder.include_dirs, sm)?;
         check_program(&mut program, &config)?;
+        // Constant-fold after type checking (literals pinned, casts stripped)
+        // and before planning, so the catalog and dataflow never see constant
+        // sub-expressions.
+        fold_constants(&mut program);
         // The generated library API mirrors relation names verbatim; reject
         // the rare names it cannot represent before codegen runs.
         validate_api_surface(&program)?;
