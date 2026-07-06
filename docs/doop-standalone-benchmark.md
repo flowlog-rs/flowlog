@@ -112,28 +112,36 @@ and inside it a single `Join` is pinned to one worker:
 Worker 5 processes **all** 1.46 M tuples; the other 31 receive **none** — and 599 s
 ≈ the whole `-w32` runtime.
 
-**Root cause: a degenerate exchange key.** Differential Dataflow routes each join key
-to `hash(key) % workers`. Here 100 % of the join's tuples carry a key that hashes to
-one worker, which only happens when the exchange key is (near-)constant / very
-low-cardinality for the hot tuples. Mapping the operator back to the plan lands on a
-single-column-key join whose real selectivity is a **post-join filter**
-(`Join … F:(if (LV1).0 == RV0)`) — i.e. a deliberately coarse exchange key with the
-discriminating predicate applied *after* the join. Over a hybrid type-object context
-that key collapses to a single partition. Soufflé's `-j` iterates the outer relation
-with a shared concurrent index (work-stealing) instead of hash-partitioning one join,
-so a low-cardinality key is shared across threads rather than pinned to one.
+**Root cause: an empty-key cross-join from a projection equi-join.** The hot join is
+the DOOP context constructor `configuration.ContextResponse :- configuration.ContextRequest(…, hctx, …, value, …), Value_DeclaringType(obj, …)`,
+where `obj` is the object *inside* the heap context `hctx`. For type-object
+sensitivity `hctx` is a **record**, so after FlowLog desugars the record pattern the
+shared variable appears as a **projection `(hctx).0`** in `ContextRequest` but as a
+**bare argument** in `Value_DeclaringType`. FlowLog's join-key selection matches keys
+by whole-argument **name**, so a projection never matches a bare variable → it finds
+**no shared key**, lowers the join to an **empty-key (unit) arrangement on both sides —
+a cross-join — and demotes `(hctx).0 == value` to a post-join filter**
+(`Join … F:(if (LV1).0 == RV0)`; the profile shows both `Arrange` operators with
+`V:(all columns)` and no `K:`). In Differential Dataflow an empty key routes every
+tuple to `hash(()) % workers` — one fixed worker — so worker 5 runs the entire join,
+which is also O(|L|·|R|) instead of O(|L|+|R|). Soufflé indexes the join on the object
+and work-steals across threads, so it is neither serial nor a cross-product.
 
-**Optimization directions (all keep results byte-exact):**
-
-1. **Skew/degeneracy-aware join-key choice in the planner** (cheapest first
-   experiment): detect a low-cardinality exchange key and prefer a higher-cardinality
-   or composite shared column so the tuples spread across workers. Plan-only.
-2. **Skew-aware exchange in the join lowering** (durable engine fix): when a key is
-   unavoidably low-cardinality, replicate the small side and sub-partition the heavy
-   key across workers instead of hashing it to one.
-3. **Push the dedup/filter before the exchange:** the heavy stream is dedup'd by the
-   neighbouring `ThresholdTotal`; doing it before the degenerate exchange shrinks the
-   overloaded worker's load.
+**The clean fix: key the equi-join on the projection (hash join, not cross-join).**
+`(hctx).0 == value` *is* an equi-join with a projection on one side. Have the planner
+materialize the projection as a fresh column (`g = (hctx).0`) via a `Map`, key the left
+arrangement on `g` and the right on `value`, and drop the redundant filter. That turns
+the unit-key cross-join into a normal hash join keyed on the **object** — high
+cardinality, so the hash spreads tuples across all 32 workers, and cost drops to
+O(|L|+|R|). It is **byte-exact** (the key enforces exactly the equality the filter did)
+and needs no new runtime operator — FlowLog already builds arrangement keys with a
+`flat_map` before `arrange_by_key`, so a computed/`TupleProj` key is a planner-only
+change: generalize join-key selection from "shared **bare** variable" to "equi-join
+where each side is computable from one relation", triggered when the shared-variable
+key would otherwise be empty. Expected to move these three families from ~1.4× toward
+near-linear scaling (Soufflé gets 8.4×). Two runtime fallbacks — a skew-aware exchange
+for genuine empty-key joins, and pushing the `ThresholdTotal` dedup ahead of the
+exchange — cover the rare case with no projection to key on.
 
 These are FlowLog-engine changes, orthogonal to the `ord` fix (which only touches fact
 loading and does not affect these families' evaluation beyond the shared load cost).
