@@ -1,8 +1,7 @@
 //! Shared helpers for the `flowlog-typechecker` integration tests.
 //!
-//! Compiled into each test binary; not every binary uses every helper, so
-//! allow dead code here rather than force artificial uses.
-#![allow(dead_code)]
+//! Both helpers are reachable from every test binary (`parse_and_check_result`
+//! wraps `parse_program`), so neither goes dead — no blanket allow needed.
 
 use std::io::Write;
 
@@ -25,14 +24,11 @@ pub fn parse_program(src: &str) -> Result<Program, ParseError> {
 }
 
 /// Parse (panicking on parse errors) then return the type-check `Result`.
+/// Success-case tests wrap this in a local `.expect(...)` for the pinned
+/// `Program`; error-case tests inspect the `Err`.
 pub fn parse_and_check_result(src: &str) -> Result<Program, TypeCheckError> {
     let mut program =
         parse_program(src).expect("parse should succeed; this test exercises typecheck only");
     check_program(&mut program, &Config::default())?;
     Ok(program)
-}
-
-/// Parse + type-check `src`, panicking on any error. Returns the pinned program.
-pub fn parse_and_check(src: &str) -> Program {
-    parse_and_check_result(src).expect("check failed")
 }

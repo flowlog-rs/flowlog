@@ -11,6 +11,7 @@ use flowlog_compiler::Compiler;
 use flowlog_parser::Program;
 use flowlog_profiler::Profiler;
 use flowlog_typechecker::check_program;
+use flowlog_typechecker::fold_constants;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -37,6 +38,9 @@ fn main() {
 
     // Type-check the program.
     check_program(&mut program, &config).unwrap_or_else(|err| emit_and_exit(err, &sm));
+
+    // Constant-fold after type checking, before planning.
+    fold_constants(&mut program);
 
     // Plan into the relational intermediate representation.
     let mut profiler = config

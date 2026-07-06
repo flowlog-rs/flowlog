@@ -20,6 +20,7 @@ use crate::Rule;
 use crate::error::ParseError;
 use crate::error::grammar_bug;
 use crate::primitive::ConstType;
+use crate::program::InlineFact;
 use crate::span_of;
 
 /// A complete FlowLog rule.
@@ -208,6 +209,23 @@ impl FlowLogRule {
             out.push(c.clone());
         }
         Ok(out)
+    }
+
+    /// The `(canonical name, InlineFact)` this fact-shaped rule denotes — the
+    /// shared assembly used both when collecting parsed facts and when constant
+    /// folding converts an always-true rule into a fact. `Err` if the head is
+    /// not all-constant (see [`Self::extract_constants_from_head`]).
+    pub fn to_inline_fact(&self) -> Result<(String, InlineFact), ParseError> {
+        let columns = self.extract_constants_from_head()?;
+        let head = self.head();
+        Ok((
+            head.name().to_string(),
+            InlineFact {
+                span: head.span(),
+                raw_name: head.raw_name().to_string(),
+                columns,
+            },
+        ))
     }
 
     /// Expand a multi-head / multi-body rule into one rule per

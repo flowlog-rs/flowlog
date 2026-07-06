@@ -1,11 +1,17 @@
 mod common;
 
-use common::parse_and_check;
+use common::parse_and_check_result;
 use flowlog_parser::AtomArg;
 use flowlog_parser::ConstType;
 use flowlog_parser::Factor;
 use flowlog_parser::HeadArg;
 use flowlog_parser::Predicate;
+use flowlog_parser::Program;
+
+/// Parse + type-check `src`, panicking on any error. Returns the pinned program.
+fn parse_and_check(src: &str) -> Program {
+    parse_and_check_result(src).expect("type-check should succeed")
+}
 
 /// Body-positive atom literal: `Flag(5)` with `.decl Flag(x: int8)` must
 /// pin `5` to `Int8(5)` via `pin_atom_consts`. If that pass becomes a

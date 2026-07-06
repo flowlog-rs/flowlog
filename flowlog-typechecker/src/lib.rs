@@ -60,12 +60,14 @@
 
 mod env;
 mod error;
+mod fold;
 mod primitive;
 mod subtype;
 
 pub use error::TypeCheckError;
 use flowlog_common::Config;
 use flowlog_parser::Program;
+pub use fold::fold_constants;
 
 use crate::env::PrimitiveEnv;
 

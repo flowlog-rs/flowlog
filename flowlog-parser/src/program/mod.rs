@@ -28,8 +28,8 @@
 mod display;
 mod fact;
 mod include;
+mod normalize;
 mod parse;
-mod prune;
 #[cfg(test)]
 mod tests;
 
