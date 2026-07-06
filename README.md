@@ -142,6 +142,8 @@ On DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo
 
 Benchmark suite: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
 
+Per-analysis correctness & scaling across the standalone context-sensitivity variants: [`docs/doop-standalone-benchmark.md`](docs/doop-standalone-benchmark.md).
+
 ## Publication
 
 > **FlowLog: Efficient and Extensible Datalog via Incrementality**  
