@@ -8,7 +8,7 @@ use crate::catalog::{
     FnCallPredicatePos,
 };
 use crate::common::{SECTION_BAR, SUBSECTION_BAR};
-use crate::parser::{ComparisonExpr, FlowLogRule, FnCall, HeadArg, Predicate};
+use crate::parser::{Arithmetic, ComparisonExpr, ComparisonOperator, FlowLogRule, FnCall, HeadArg, Predicate};
 use tracing::debug;
 
 // Implementation modules
@@ -411,6 +411,62 @@ impl Catalog {
             &left_var_signatures,
             &right_var_signatures,
         ))
+    }
+
+    /// Equi-join fusion: for each equality comparison `L = R` whose left side is
+    /// fully grounded in positive atom `lhs_idx` and right side in `rhs_idx` (or
+    /// vice-versa), return the `(lhs_key, rhs_key)` computed-key pair so the
+    /// caller can key the join on `L == R` (a hash join) instead of a cross-join
+    /// plus a post-join filter.
+    ///
+    /// Only `=` comparisons qualify, and only *spanning* ones (empty superset —
+    /// not evaluable against any single atom yet). Fresh-variable equalities
+    /// (`z = g(x)`) are desugared to bindings upstream, so `comparison_predicates`
+    /// only ever holds equalities between two already-grounded expressions, which
+    /// is exactly what is safe to fuse into a join key.
+    pub(crate) fn equijoin_keys_for_pair(
+        &self,
+        lhs_idx: usize,
+        rhs_idx: usize,
+    ) -> Vec<(ArithmeticPos, ArithmeticPos)> {
+        // Resolve every variable of `arith` to its signature in positive atom
+        // `atom_idx`; returns None if any variable is absent from that atom (so
+        // the side does not live wholly inside `atom_idx`).
+        let resolve = |arith: &Arithmetic, atom_idx: usize| -> Option<ArithmeticPos> {
+            let mut sigs = Vec::new();
+            for v in arith.vars() {
+                let sig = self
+                    .argument_presence_in_positive_atom_map
+                    .get(v)
+                    .and_then(|row| row.get(atom_idx).copied().flatten())?;
+                sigs.push(sig);
+            }
+            Some(ArithmeticPos::from_arithmetic(arith, &sigs))
+        };
+
+        let mut out = Vec::new();
+        for (comp_id, comp) in self.comparison_predicates.iter().enumerate() {
+            if *comp.operator() != ComparisonOperator::Equal {
+                continue;
+            }
+            // Skip comparisons already coverable by a single atom (within-atom
+            // filters / already-joined) — only genuine cross-atom equalities.
+            if !self.comparison_supersets[comp_id].is_empty() {
+                continue;
+            }
+            if let (Some(l), Some(r)) =
+                (resolve(comp.left(), lhs_idx), resolve(comp.right(), rhs_idx))
+            {
+                out.push((l, r));
+            } else if let (Some(l), Some(r)) =
+                (resolve(comp.left(), rhs_idx), resolve(comp.right(), lhs_idx))
+            {
+                // left lives in the rhs atom, right in the lhs atom: swap so that
+                // the first element always keys `lhs_idx`.
+                out.push((r, l));
+            }
+        }
+        out
     }
 
     // === FnCall Predicates ===

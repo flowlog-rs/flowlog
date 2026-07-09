@@ -256,6 +256,16 @@ impl ArithmeticPos {
         &self.rest
     }
 
+    /// Whether this position is a bare variable reference (no arithmetic tail and
+    /// no derivation on the initial factor). Such a position is a plain column of
+    /// its atom and can be selected by index; anything else (a tuple projection,
+    /// builtin, UDF call, constant, …) is a *computed* value that must be
+    /// materialized rather than selected.
+    #[inline]
+    pub(crate) fn is_plain_var(&self) -> bool {
+        self.rest.is_empty() && self.init.as_var_signature().is_some()
+    }
+
     /// Returns a vector of all variable signatures referenced in this expression, in order.
     pub(crate) fn signatures(&self) -> Vec<&AtomArgumentSignature> {
         let mut sigs = self.init.signatures();

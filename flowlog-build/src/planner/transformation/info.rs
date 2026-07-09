@@ -570,10 +570,20 @@ impl TransformationInfo {
     ///
     /// Necessary when the actual key/value split is known, e.g., after downstream
     /// join operators determine the key-value layout.
+    ///
+    /// `real_key_positions` carries the downstream consumer's full key layout,
+    /// slot-aligned with `real_key_indices`. When a key slot is a *computed*
+    /// expression (a tuple projection like `hctx.0`, or a builtin/UDF call) the
+    /// column-selection by index would collapse it to its base variable and drop
+    /// the derivation — the exact cause of an empty-key cross-join. For those
+    /// slots the computed position is installed directly, so the reshape (a
+    /// `RowToKv`) materializes the derived key. Plain-variable slots keep the
+    /// index-selection path, preserving any producer-side column rewriting.
     pub(crate) fn refactor_output_key_value_layout(
         &mut self,
         real_key_indices: &[usize],
         real_value_indices: &[usize],
+        real_key_positions: &[ArithmeticPos],
     ) {
         match self {
             Self::KVToKV {
@@ -598,24 +608,31 @@ impl TransformationInfo {
                     .cloned()
                     .collect();
 
-                let remap = |indices: &[usize]| -> Vec<ArithmeticPos> {
-                    indices
-                        .iter()
-                        .map(|idx| {
-                            all_positions.get(*idx).cloned().unwrap_or_else(|| {
-                                panic!(
-                                    "Planner error: 0x{:016x} output layout index {} out of bounds (len {})",
-                                    output_info_fp,
-                                    idx,
-                                    all_positions.len()
-                                )
-                            })
-                        })
-                        .collect()
+                let pick = |idx: usize| -> ArithmeticPos {
+                    all_positions.get(idx).cloned().unwrap_or_else(|| {
+                        panic!(
+                            "Planner error: 0x{:016x} output layout index {} out of bounds (len {})",
+                            output_info_fp,
+                            idx,
+                            all_positions.len()
+                        )
+                    })
                 };
 
-                *output_kv_layout =
-                    KeyValueLayout::new(remap(real_key_indices), remap(real_value_indices));
+                // Keys: install computed positions verbatim; select plain vars by index.
+                let new_key: Vec<ArithmeticPos> = real_key_indices
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, idx)| match real_key_positions.get(slot) {
+                        Some(pos) if !pos.is_plain_var() => pos.clone(),
+                        _ => pick(*idx),
+                    })
+                    .collect();
+
+                let new_value: Vec<ArithmeticPos> =
+                    real_value_indices.iter().map(|idx| pick(*idx)).collect();
+
+                *output_kv_layout = KeyValueLayout::new(new_key, new_value);
             }
         }
     }

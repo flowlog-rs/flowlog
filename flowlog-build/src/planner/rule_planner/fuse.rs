@@ -25,11 +25,17 @@ use crate::parser::ConstType;
 use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
 
 /// Ordered consumer indices alongside their key/value index selections.
-/// (minimum consumer id, consumer ids, key indices, value indices)
-type ConsumerLayout = (usize, Vec<usize>, Vec<usize>, Vec<usize>);
+/// (minimum consumer id, consumer ids, key indices, value indices, key positions)
+///
+/// `key positions` carries the consumer's full key layout (the join input
+/// `ArithmeticPos` list). For a plain-variable key it is redundant with
+/// `key indices`; for a *computed* key (e.g. a tuple projection `hctx.0` or a
+/// builtin `ord(x)`), it preserves the expression so the producer reshape can
+/// materialize the derived value instead of collapsing to the base column.
+type ConsumerLayout = (usize, Vec<usize>, Vec<usize>, Vec<usize>, Vec<ArithmeticPos>);
 /// Assigned producer indices with their consumers and key/value index selections.
-/// (assigned producer ids, consumer ids, key indices, value indices)
-type LayoutAssignment = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
+/// (assigned producer ids, consumer ids, key indices, value indices, key positions)
+type LayoutAssignment = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>, Vec<ArithmeticPos>);
 
 // =========================================================================
 // Fusion
@@ -206,7 +212,8 @@ impl RulePlanner {
             let producer_consumer_assignments =
                 Self::assign_layout_to_producer(tx_fp, &producer_indices, &consumer_layouts)?;
 
-            for (producers, consumers, key_indices, value_indices) in producer_consumer_assignments
+            for (producers, consumers, key_indices, value_indices, key_positions) in
+                producer_consumer_assignments
             {
                 trace!(
                     "[fuse_kv_layout] fuse at producer fp {:#018x} -> consumers {:?}; key ids: {:?}, value ids: {:?}",
@@ -217,7 +224,11 @@ impl RulePlanner {
                 for producer_idx in producers {
                     new_output_fp = {
                         let producer_tx = &mut self.transformation_infos[producer_idx];
-                        producer_tx.refactor_output_key_value_layout(&key_indices, &value_indices);
+                        producer_tx.refactor_output_key_value_layout(
+                            &key_indices,
+                            &value_indices,
+                            &key_positions,
+                        );
                         producer_tx.update_output_fake_sig();
                         producer_tx.output_info_fp()
                     };
@@ -510,9 +521,31 @@ impl RulePlanner {
         consumer_indices: &[usize],
         input_fp: u64,
     ) -> Result<Vec<ConsumerLayout>, PlanError> {
-        // Map from (key indices, value indices) to consumer ids
-        let mut layouts: BTreeMap<(Vec<usize>, Vec<usize>), Vec<usize>> = BTreeMap::new();
+        // Group key: (key indices, value indices, per-key-slot computed signature).
+        // The computed signature distinguishes consumers that share the same base
+        // argument ids but derive different keys from them (e.g. `hctx.0` vs
+        // `hctx.1`, both rooted at `hctx`), which must NOT share one arrangement.
+        type GroupKey = (Vec<usize>, Vec<usize>, Vec<String>);
+        // Map from group key to consumer ids.
+        let mut layouts: BTreeMap<GroupKey, Vec<usize>> = BTreeMap::new();
+        // Map from group key to the representative key positions (for reshape).
+        let mut group_key_positions: BTreeMap<GroupKey, Vec<ArithmeticPos>> = BTreeMap::new();
         let mut real_key_value_layout = None;
+
+        // Per-key-slot signature: empty for a plain column (index-selectable),
+        // the rendered expression for a computed key (must be materialized).
+        let key_signature = |positions: &[ArithmeticPos]| -> Vec<String> {
+            positions
+                .iter()
+                .map(|p| {
+                    if p.is_plain_var() {
+                        String::new()
+                    } else {
+                        p.to_string()
+                    }
+                })
+                .collect()
+        };
 
         // First pass: only join and antijoin contribute real key/value layout requirements.
         for &consumer_idx in consumer_indices {
@@ -555,10 +588,16 @@ impl RulePlanner {
                 }
                 let (key_indices, value_indices) =
                     matched_layout.extract_argument_ids_from_layout();
-                layouts
-                    .entry((key_indices, value_indices))
-                    .or_default()
-                    .push(consumer_idx);
+                let key_positions = matched_layout.key().to_vec();
+                let group: GroupKey = (
+                    key_indices,
+                    value_indices,
+                    key_signature(&key_positions),
+                );
+                group_key_positions
+                    .entry(group.clone())
+                    .or_insert(key_positions);
+                layouts.entry(group).or_default().push(consumer_idx);
             }
         }
 
@@ -585,26 +624,27 @@ impl RulePlanner {
             let atom_id = consumer_tx.input_kv_layout().0.extract_atom_id()?;
             consumer_tx.update_input_layout(Self::remap_atom_kv_layout(&layout, atom_id));
 
-            // Group this consumer under the same (key, value) indices as the joins.
-            let (key_indices, value_indices) = layouts.keys().next().cloned().ok_or_else(|| {
+            // Group this consumer under the same key as the joins (first group).
+            let group = layouts.keys().next().cloned().ok_or_else(|| {
                 PlanError::internal(format!(
                     "collect_consumer_layout_indices: consumer idx {consumer_idx} missing join/antijoin layout keys for producer fp {input_fp:#018x}"
                 ))
             })?;
-            layouts
-                .entry((key_indices, value_indices))
-                .or_default()
-                .push(consumer_idx);
+            layouts.entry(group).or_default().push(consumer_idx);
         }
 
         let mut consumer_collection: Vec<ConsumerLayout> = layouts
             .into_iter()
-            .map(|((key_ids, value_ids), mut consumers)| {
+            .map(|((key_ids, value_ids, sig), mut consumers)| {
                 consumers.sort_unstable();
-                (consumers[0], consumers, key_ids, value_ids)
+                let key_positions = group_key_positions
+                    .get(&(key_ids.clone(), value_ids.clone(), sig))
+                    .cloned()
+                    .unwrap_or_default();
+                (consumers[0], consumers, key_ids, value_ids, key_positions)
             })
             .collect();
-        consumer_collection.sort_by_key(|(first_consumer, _, _, _)| *first_consumer);
+        consumer_collection.sort_by_key(|(first_consumer, ..)| *first_consumer);
         Ok(consumer_collection)
     }
 
@@ -630,7 +670,7 @@ impl RulePlanner {
 
         let mut assignments = Vec::with_capacity(consumer_layouts.len());
 
-        for (first_consumer, consumers, key_ids, value_ids) in consumer_layouts {
+        for (first_consumer, consumers, key_ids, value_ids, key_positions) in consumer_layouts {
             // Feasibility check above guarantees at least one producer candidate.
             let producer_idx = available.pop_front().ok_or_else(|| {
                 PlanError::internal(
@@ -649,6 +689,7 @@ impl RulePlanner {
                 consumers.clone(),
                 key_ids.clone(),
                 value_ids.clone(),
+                key_positions.clone(),
             ));
         }
 
@@ -656,7 +697,7 @@ impl RulePlanner {
         // Randomly assign also works, for simplify code we just push to the first one.
         if !available.is_empty() {
             match assignments.first_mut() {
-                Some((producer_ids, _, _, _)) => {
+                Some((producer_ids, ..)) => {
                     producer_ids.extend(available);
                     producer_ids.sort_unstable();
                 }
