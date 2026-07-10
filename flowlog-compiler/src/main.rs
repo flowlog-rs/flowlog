@@ -23,7 +23,7 @@ fn main() {
         .init();
 
     let cli = Cli::parse();
-    let config = cli.to_config();
+    let mut config = cli.to_config();
     let options = cli.to_compile_options();
 
     // Parse the source into an AST.
@@ -37,7 +37,7 @@ fn main() {
     .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Type-check the program.
-    check_program(&mut program, &config).unwrap_or_else(|err| emit_and_exit(err, &sm));
+    check_program(&mut program, &mut config).unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Constant-fold after type checking, before planning.
     fold_constants(&mut program);

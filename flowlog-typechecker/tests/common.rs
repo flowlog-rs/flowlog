@@ -29,6 +29,6 @@ pub fn parse_program(src: &str) -> Result<Program, ParseError> {
 pub fn parse_and_check_result(src: &str) -> Result<Program, TypeCheckError> {
     let mut program =
         parse_program(src).expect("parse should succeed; this test exercises typecheck only");
-    check_program(&mut program, &Config::default())?;
+    check_program(&mut program, &mut Config::default())?;
     Ok(program)
 }

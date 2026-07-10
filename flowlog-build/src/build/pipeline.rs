@@ -52,9 +52,9 @@ impl Pipeline {
             ))
         })?;
 
-        let config = build_config(builder, program_str);
+        let mut config = build_config(builder, program_str);
         let mut program = parse(&config, &builder.include_dirs, sm)?;
-        check_program(&mut program, &config)?;
+        check_program(&mut program, &mut config)?;
         // Constant-fold after type checking (literals pinned, casts stripped)
         // and before planning, so the catalog and dataflow never see constant
         // sub-expressions.
@@ -112,5 +112,6 @@ fn build_config(builder: &Builder, program: &str) -> Config {
             .map(|p| p.to_string_lossy().into_owned())
             .collect(),
         output_to_stdout: false,
+        serialize_load: false,
     }
 }

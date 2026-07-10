@@ -78,11 +78,11 @@ use crate::env::PrimitiveEnv;
 /// Runs two passes: Pass 1 ([`primitive`]) checks primitive `DataType`s and
 /// pins literals; Pass 2 ([`subtype`]) enforces subtype rules and lowers
 /// `as()` casts. `config` is consulted for config-gated builtins.
-pub fn check_program(program: &mut Program, config: &Config) -> Result<(), TypeCheckError> {
+pub fn check_program(program: &mut Program, config: &mut Config) -> Result<(), TypeCheckError> {
     let env = PrimitiveEnv::from_program(program);
 
     primitive::rule::check_and_pin_rules(program, &env)?;
-    primitive::check_builtin_config_requirements(program, config)?;
+    primitive::builtin::check_ord(program, config)?;
     primitive::fact::check_and_pin_facts(program.facts_mut(), &env)?;
 
     subtype::check_and_lower(program)

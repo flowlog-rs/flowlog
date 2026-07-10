@@ -126,7 +126,7 @@ mod tests {
         let mut sm = SourceMap::new();
         let mut program =
             Program::parse(&tmp.path().to_string_lossy(), false, &[], &mut sm).expect("parse");
-        check_program(&mut program, &Config::default()).expect("typecheck");
+        check_program(&mut program, &mut Config::default()).expect("typecheck");
         ProgramPlanner::from_program(&Config::default(), &program, &mut None).expect("plan")
     }
 

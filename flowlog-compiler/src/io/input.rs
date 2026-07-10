@@ -48,7 +48,12 @@ impl Compiler {
         let has_inline_facts = !self.program.facts().is_empty();
         let needs_preload = has_file_backed_edbs || has_inline_facts;
 
-        let maybe_peers = if has_file_backed_edbs {
+        // We want a deterministic load whenever the program uses `ord`,
+        // so its value depends on interning order, deterministic across
+        // different runs; evaluation still runs on every worker.
+        let deterministic_load = self.config.serialize_load();
+
+        let maybe_peers = if has_file_backed_edbs && !deterministic_load {
             quote! { let peers = worker.peers(); }
         } else {
             quote! {}
@@ -70,9 +75,21 @@ impl Compiler {
                             .into_owned()
                     })
                     .unwrap_or_else(|| file_name);
-                quote! {
-                    rels.get_mut(#rel_name).unwrap()
-                        .apply_file(std::path::Path::new(#path), SEMIRING_ONE, peers, index);
+                if deterministic_load {
+                    // Worker 0 alone reads the whole file (`peers = 1, index = 0`);
+                    // other workers skip loading. Interning order thus matches `-w 1`.
+                    quote! {
+                        if index == 0 {
+                            rels.get_mut(#rel_name).unwrap()
+                                .apply_file(std::path::Path::new(#path), SEMIRING_ONE, 1, 0);
+                        }
+                    }
+                } else {
+                    // Each worker ingests its own ~1/N byte-range slice in parallel.
+                    quote! {
+                        rels.get_mut(#rel_name).unwrap()
+                            .apply_file(std::path::Path::new(#path), SEMIRING_ONE, peers, index);
+                    }
                 }
             })
             .collect();

@@ -54,6 +54,10 @@ pub struct Config {
     /// Whether `.output` relations drain to stdout (`-D -`) rather than files.
     /// Derived by the CLI from `--output-dir`; always `false` in library mode.
     pub output_to_stdout: bool,
+    /// When set, fact strings are interned serially rather than in parallel, so
+    /// interning order — and therefore `ord(_)` values — is deterministic across
+    /// worker counts (`-w N` matches `-w 1`).
+    pub serialize_load: bool,
 }
 
 impl Config {
@@ -129,6 +133,11 @@ impl Config {
     /// Whether `.output` relations drain to stdout rather than files.
     pub fn output_to_stdout(&self) -> bool {
         self.output_to_stdout
+    }
+
+    /// Whether fact-string interning must be serial for deterministic `ord(_)`.
+    pub fn serialize_load(&self) -> bool {
+        self.serialize_load
     }
 }
 
