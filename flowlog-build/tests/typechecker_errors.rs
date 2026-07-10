@@ -13,7 +13,7 @@ fn typecheck(name: &str) -> (Result<(), TypeCheckError>, SourceMap) {
     let mut sm = SourceMap::new();
     let mut program = Program::parse(&fixture("typechecker", name), false, &[], &mut sm)
         .expect("fixture should parse cleanly");
-    (check_program(&mut program, &Config::default()), sm)
+    (check_program(&mut program, &mut Config::default()), sm)
 }
 
 #[test]

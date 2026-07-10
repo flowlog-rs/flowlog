@@ -86,6 +86,7 @@ impl Cli {
             udf_file: self.udf_file.clone(),
             include_dirs: self.include_dirs.clone(),
             output_to_stdout: self.output_dir.as_deref() == Some("-"),
+            serialize_load: false,
         }
     }
 
