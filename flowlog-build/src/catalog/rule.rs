@@ -6,12 +6,15 @@ use std::fmt;
 
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
+use flowlog_parser::Arithmetic;
 use flowlog_parser::ComparisonExpr;
+use flowlog_parser::ComparisonOperator;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::HeadArg;
 use flowlog_parser::Predicate;
 use tracing::debug;
 
+use crate::catalog::ArithmeticPos;
 use crate::catalog::AtomArgumentSignature;
 use crate::catalog::AtomSignature;
 use crate::catalog::CatalogError;
@@ -365,6 +368,14 @@ impl Catalog {
         &self.comparison_supersets
     }
 
+    /// First binding occurrence of variable `v` in positive atom `atom_idx`.
+    #[inline]
+    fn var_sig_in_atom(&self, v: &str, atom_idx: usize) -> Option<AtomArgumentSignature> {
+        self.argument_presence_in_positive_atom_map
+            .get(v)
+            .and_then(|row| row.get(atom_idx).copied().flatten())
+    }
+
     /// Resolve a comparison expression with argument positions for a given positive atom and comparison predicate.
     pub(crate) fn resolve_comparison_predicates(
         &self,
@@ -372,18 +383,14 @@ impl Catalog {
         comp_id: usize,
     ) -> Result<ComparisonExprPos, CatalogError> {
         let comp_exprs = &self.comparison_predicates[comp_id];
-        let resolve = |side: &'static str,
-                       v: &String|
-         -> Result<AtomArgumentSignature, CatalogError> {
-            self.argument_presence_in_positive_atom_map
-                .get(v)
-                .and_then(|row| row.get(pos_atom_id).copied().flatten())
-                .ok_or_else(|| {
-                    CatalogError::internal(format!(
-                        "variable `{v}` in comparison {side} not found in positive atom #{pos_atom_id}"
-                    ))
-                })
-        };
+        let resolve =
+            |side: &'static str, v: &String| -> Result<AtomArgumentSignature, CatalogError> {
+                self.var_sig_in_atom(v, pos_atom_id).ok_or_else(|| {
+                CatalogError::internal(format!(
+                    "variable `{v}` in comparison {side} not found in positive atom #{pos_atom_id}"
+                ))
+            })
+            };
         let left_var_signatures = comp_exprs
             .left()
             .vars()
@@ -401,6 +408,65 @@ impl Catalog {
             &left_var_signatures,
             &right_var_signatures,
         ))
+    }
+
+    /// Equalities usable as join keys between positive atoms `lhs_idx` and
+    /// `rhs_idx`, as `(comp_id, lhs_key, rhs_key)` per fusable equality.
+    pub(crate) fn equijoin_keys_for_pair(
+        &self,
+        lhs_idx: usize,
+        rhs_idx: usize,
+    ) -> Vec<(usize, ArithmeticPos, ArithmeticPos)> {
+        // An equality qualifies when each side resolves wholly in one of the
+        // two atoms — fresh-variable equalities are desugared to bindings
+        // before planning, so every comparison here is between two grounded
+        // expressions and is safe to key a join on.
+
+        // Resolve `arith`'s variables to signatures in atom `atom_idx`;
+        // `None` if any variable is absent (side not grounded there).
+        let resolve = |arith: &Arithmetic, atom_idx: usize| -> Option<ArithmeticPos> {
+            let sigs = arith
+                .vars()
+                .iter()
+                .map(|&v| self.var_sig_in_atom(v, atom_idx))
+                .collect::<Option<Vec<_>>>()?;
+            Some(ArithmeticPos::from_arithmetic(arith, &sigs))
+        };
+
+        let mut out = Vec::new();
+        for (comp_id, comp) in self.comparison_predicates.iter().enumerate() {
+            if *comp.operator() != ComparisonOperator::Equal {
+                continue;
+            }
+            // Non-empty superset: a single atom covers it — pushdown owns it.
+            if !self.comparison_supersets[comp_id].is_empty() {
+                continue;
+            }
+            // Try both orientations; keep `(l, r)` keying `(lhs, rhs)`.
+            let keys = resolve(comp.left(), lhs_idx)
+                .zip(resolve(comp.right(), rhs_idx))
+                .or_else(|| resolve(comp.right(), lhs_idx).zip(resolve(comp.left(), rhs_idx)));
+            if let Some((l, r)) = keys {
+                out.push((comp_id, l, r));
+            }
+        }
+        out
+    }
+
+    /// Fresh shadow-column name for fused equality `comp_id`.
+    pub(crate) fn fresh_equijoin_key_name(&self, comp_id: usize) -> String {
+        // The grammar caps identifiers at one leading underscore, so users
+        // cannot occupy the `__` namespace; the loop only disambiguates
+        // against other minted names — a colliding name would assert an
+        // equality the rule never wrote.
+        let mut name = format!("__eqk{comp_id}");
+        while self
+            .argument_presence_in_positive_atom_map
+            .contains_key(&name)
+        {
+            name.push('_');
+        }
+        name
     }
 
     // === Filters ===
