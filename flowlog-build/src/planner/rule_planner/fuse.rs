@@ -120,19 +120,16 @@ impl RulePlanner {
                     index, input_fp, output_fp, input_producer_index
                 );
 
-                // Extract output key/value argument ids from ArithmeticPos expressions
-                let (key_argument_ids, value_argument_ids) =
-                    out_kv_layout.extract_argument_ids_from_layout();
                 trace!(
-                    "[fuse_map]   -> key ids: {:?}, value ids: {:?}",
-                    key_argument_ids, value_argument_ids
+                    "[fuse_map]   -> keys: {:?}, values: {:?}",
+                    out_kv_layout.key(),
+                    out_kv_layout.value()
                 );
 
                 // Apply fused layout + comparisons + fn_call predicates to producer, and get new output fp
                 input_producer_output_fp = self.apply_fused_layout_filters_cmps(
                     input_producer_index,
-                    &key_argument_ids,
-                    &value_argument_ids,
+                    &out_kv_layout,
                     &predicates,
                     fused_map_name.clone(),
                 )?;
@@ -245,24 +242,21 @@ impl RulePlanner {
 // Small helpers (private)
 // -----------------------------
 impl RulePlanner {
-    /// Build a new output layout from argument ids, update the producer's layout and comparisons,
-    /// then return the new output fingerprint.
+    /// Rebuild the fused map's output layout over the producer's positions,
+    /// update the producer's layout and comparisons, then return the new
+    /// output fingerprint.
     #[inline]
     fn apply_fused_layout_filters_cmps(
         &mut self,
         producer_idx: usize,
-        key_argument_ids: &[usize],
-        value_argument_ids: &[usize],
+        fused_out_layout: &KeyValueLayout,
         predicates: &KvPredicates,
         fused_map_output_name: String,
     ) -> Result<u64, PlanError> {
-        // Build the new output layout by selecting positions from the current producer output
+        // Build the new output layout by transferring the fused map's
+        // positions onto the current producer output
         let all_positions = self.collect_output_positions(producer_idx);
-        let new_out_kv_layout = self.generate_layout_from_argument_ids(
-            &all_positions,
-            key_argument_ids,
-            value_argument_ids,
-        )?;
+        let new_out_kv_layout = Self::transfer_layout(&all_positions, fused_out_layout)?;
 
         let remapped_const_eq =
             Self::remap_const_eq_constraints(&all_positions, &predicates.const_eq)?;
@@ -304,31 +298,41 @@ impl RulePlanner {
             .collect()
     }
 
-    // Generate a KeyValueLayout from argument ids by selecting from the provided positions.
+    // Rebuild a fused map's output layout over its producer's output positions.
     #[inline]
-    fn generate_layout_from_argument_ids(
-        &self,
+    fn transfer_layout(
         positions: &[ArithmeticPos],
-        key_ids: &[usize],
-        value_ids: &[usize],
+        layout: &KeyValueLayout,
     ) -> Result<KeyValueLayout, PlanError> {
-        let pick = |id: &usize, kind: &str| -> Result<ArithmeticPos, PlanError> {
-            positions.get(*id).cloned().ok_or_else(|| {
-                PlanError::internal(format!(
-                    "generate_layout_from_argument_ids: missing {kind} argument id {id} in output layout ({} positions)",
-                    positions.len()
-                ))
-            })
+        // A plain column selects the producer position wholesale (it may
+        // itself be computed); a computed position instead substitutes the
+        // producer's factors for its variables.
+        let transfer = |pos: &ArithmeticPos| -> Result<ArithmeticPos, PlanError> {
+            match pos.plain_var() {
+                Some(sig) => {
+                    let id = sig.argument_id();
+                    positions.get(id).cloned().ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "transfer_layout: missing argument id {id} in producer output ({} positions)",
+                            positions.len()
+                        ))
+                    })
+                }
+                None => Self::remap_arithmetic(positions, pos),
+            }
         };
-        let new_key = key_ids
-            .iter()
-            .map(|id| pick(id, "key"))
-            .collect::<Result<Vec<_>, _>>()?;
-        let new_value = value_ids
-            .iter()
-            .map(|id| pick(id, "value"))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(KeyValueLayout::new(new_key, new_value))
+        Ok(KeyValueLayout::new(
+            layout
+                .key()
+                .iter()
+                .map(transfer)
+                .collect::<Result<Vec<_>, _>>()?,
+            layout
+                .value()
+                .iter()
+                .map(transfer)
+                .collect::<Result<Vec<_>, _>>()?,
+        ))
     }
 
     /// Remap comparison expressions by converting each variable signature to the
@@ -651,6 +655,7 @@ impl RulePlanner {
 #[cfg(test)]
 mod tests {
     use super::super::common::test_setup;
+    use crate::planner::TransformationInfo;
 
     /// A filter whose input is an EDB atom must survive fuse — the EDB
     /// guard at fuse.rs:84 blocks fusion into something that has no
@@ -680,6 +685,44 @@ mod tests {
         assert_eq!(
             before, after,
             "EDB-input filter must not be fused into its (absent) producer"
+        );
+    }
+
+    /// After equi-join fusion, fuse must key each side's arrangement on the
+    /// *materialized* computed expression (`x + 1` / `y + 2`) — collapsing it
+    /// to the base column would join on the wrong value.
+    #[test]
+    fn fuse_keys_arrangement_on_materialized_equijoin_column() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(x: int32)\n\
+            .decl B(y: int32)\n\
+            .decl Out(x: int32, y: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, y) :- A(x), B(y), x + 1 = y + 2.\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+        planner.core(&mut catalog, (0, 1)).expect("core");
+        planner
+            .fuse(catalog.original_atom_fingerprints())
+            .expect("fuse");
+
+        let computed_keys = planner
+            .transformation_infos()
+            .iter()
+            .filter(|t| matches!(t, TransformationInfo::KVToKV { .. }))
+            .filter(|t| {
+                t.output_kv_layout()
+                    .key()
+                    .iter()
+                    .any(|p| p.plain_var().is_none())
+            })
+            .count();
+        assert_eq!(
+            computed_keys, 2,
+            "each side keys on its computed expression"
         );
     }
 

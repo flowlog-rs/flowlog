@@ -262,6 +262,18 @@ impl ArithmeticPos {
         &self.rest
     }
 
+    /// The signature of a bare variable reference — a plain column selectable
+    /// by index — or `None` for a *computed* value (projection, builtin,
+    /// arithmetic, …) that must be materialized.
+    #[inline]
+    pub(crate) fn plain_var(&self) -> Option<AtomArgumentSignature> {
+        if self.rest.is_empty() {
+            self.init.as_var_signature().copied()
+        } else {
+            None
+        }
+    }
+
     /// Returns a vector of all variable signatures referenced in this expression, in order.
     pub(crate) fn signatures(&self) -> Vec<&AtomArgumentSignature> {
         let mut sigs = self.init.signatures();

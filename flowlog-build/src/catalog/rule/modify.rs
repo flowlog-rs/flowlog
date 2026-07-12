@@ -17,6 +17,10 @@
 //!    of right atoms with new joined atoms.
 //! 5. **Comparison** ([`Catalog::comparison_modify`]): Fold a comparison
 //!    predicate into the atoms it filters, producing renamed copies.
+//! 6. **Append** ([`Catalog::append_arguments_modify`]): Append named
+//!    arguments to a positive atom (equi-join fusion's shadow columns).
+//! 7. **Consume** ([`Catalog::consume_comparisons`]): Drop comparisons
+//!    enforced elsewhere (e.g. fused into a join key).
 
 use flowlog_parser::Atom;
 use flowlog_parser::AtomArg;
@@ -63,6 +67,34 @@ impl Catalog {
         };
 
         // Replace the original atom with the mapped atom and update the rule
+        self.update_rule_in_place(rhs_index, new_atom)
+    }
+
+    /// Append named arguments to a positive atom, keeping the original
+    /// arguments in order. The caller owns name freshness.
+    pub(crate) fn append_arguments_modify(
+        &mut self,
+        atom_signature: AtomSignature,
+        extra_arg_names: Vec<String>,
+        new_atom_name: String,
+        new_atom_fingerprint: u64,
+    ) -> Result<(), CatalogError> {
+        let rhs_index = self.rhs_index_from_signature(atom_signature);
+
+        let new_atom = match &self.rule.rhs()[rhs_index] {
+            Predicate::PositiveAtom(atom) => {
+                let mut args = atom.arguments().to_vec();
+                args.extend(extra_arg_names.into_iter().map(AtomArg::Var));
+                Predicate::PositiveAtom(Atom::new(&new_atom_name, args, new_atom_fingerprint))
+            }
+            other => {
+                return Err(CatalogError::internal(format!(
+                    "append_arguments_modify: target predicate at rhs index {rhs_index} \
+                     is not a positive atom: {other}"
+                )));
+            }
+        };
+
         self.update_rule_in_place(rhs_index, new_atom)
     }
 
@@ -231,22 +263,8 @@ impl Catalog {
         }
 
         // Get the comparison predicate and find its position in the rule RHS
-        let comparison_predicate = &self.comparison_predicates[comparison_index];
-        let comparison_rhs_index = self
-            .rule
-            .rhs()
-            .iter()
-            .enumerate()
-            .find_map(|(idx, p)| match p {
-                Predicate::Compare(expr) if expr == comparison_predicate => Some(idx),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                CatalogError::internal(format!(
-                    "comparison_modify: comparison predicate at index {comparison_index} \
-                     not found in rule RHS"
-                ))
-            })?;
+        let comparison_rhs_index =
+            self.comparison_rhs_index(comparison_index, "comparison_modify")?;
 
         // Find and validate all target atoms for the comparison
         let right_indices =
@@ -264,9 +282,56 @@ impl Catalog {
         self.remove_and_update_rule(comparison_rhs_index, right_indices, new_filtered_atoms)
     }
 
+    /// Remove comparisons a planning step has consumed whole (e.g. equalities
+    /// fused into a join key), so they are never re-applied as filters.
+    pub(crate) fn consume_comparisons(
+        &mut self,
+        comparison_indices: &[usize],
+    ) -> Result<(), CatalogError> {
+        // Resolve all RHS positions against the current rule, then remove in
+        // descending order so removals don't shift the remaining positions;
+        // one rule update recomputes the metadata once.
+        let mut rhs_indices = comparison_indices
+            .iter()
+            .map(|&idx| self.comparison_rhs_index(idx, "consume_comparisons"))
+            .collect::<Result<Vec<_>, _>>()?;
+        rhs_indices.sort_unstable();
+
+        let mut new_rhs = self.rule.rhs().to_vec();
+        for idx in rhs_indices.into_iter().rev() {
+            new_rhs.remove(idx);
+        }
+        let new_rule = FlowLogRule::new(self.rule.head().clone(), new_rhs);
+        self.update_rule(&new_rule)
+    }
+
     // ========================================================================================
     // === PRIVATE HELPER METHODS ===
     // ========================================================================================
+
+    /// Find the global RHS index of the comparison predicate at
+    /// `comparison_index` in the catalog's comparison list.
+    fn comparison_rhs_index(
+        &self,
+        comparison_index: usize,
+        context: &str,
+    ) -> Result<usize, CatalogError> {
+        let comparison_predicate = &self.comparison_predicates[comparison_index];
+        self.rule
+            .rhs()
+            .iter()
+            .enumerate()
+            .find_map(|(idx, p)| match p {
+                Predicate::Compare(expr) if expr == comparison_predicate => Some(idx),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                CatalogError::internal(format!(
+                    "{context}: comparison predicate at index {comparison_index} \
+                     not found in rule RHS"
+                ))
+            })
+    }
 
     /// Resolve each `AtomSignature` to its global RHS index and verify that
     /// the predicate at that index is a positive or negative atom.

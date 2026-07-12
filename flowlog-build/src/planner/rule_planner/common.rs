@@ -693,6 +693,17 @@ impl RulePlanner {
         format!("σ[{}]({})", cond, input_name)
     }
 
+    /// Label for a shadow-column premap: all input columns plus one computed
+    /// `expr->name` column per fused equality side.
+    #[inline]
+    pub(super) fn shadow_name(input_name: &str, shadows: &[(String, ArithmeticPos)]) -> String {
+        let bindings: Vec<String> = shadows
+            .iter()
+            .map(|(name, expr)| format!("{expr}->{name}"))
+            .collect();
+        format!("π⁺[{}]({})", bindings.join(","), input_name)
+    }
+
     /// Extract named-attribute names from `ArithmeticPos` entries.
     /// Non-binding signatures (placeholders, const-eq, var-eq) and
     /// non-variable arithmetic expressions are skipped — they carry no
