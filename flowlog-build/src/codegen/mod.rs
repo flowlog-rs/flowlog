@@ -34,6 +34,7 @@ pub use idb_buffers::field_accessor;
 pub use idb_buffers::gen_drain_block;
 use proc_macro2::Ident;
 pub use ty::data::data_type_tokens;
+pub(crate) use ty::data::row_is_copy;
 // Intra-crate shortcuts used by build/ (library mode).
 pub(crate) use ty::data::{tuple_tokens, user_tuple_tokens};
 
