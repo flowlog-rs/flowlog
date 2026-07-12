@@ -23,6 +23,7 @@ use crate::codegen::arg::compute_kv_param_tokens;
 use crate::codegen::arg::row_pattern_and_fields;
 use crate::codegen::data_type_tokens;
 use crate::codegen::ident::find_local_ident;
+use crate::codegen::row_is_copy;
 use crate::planner::ArithmeticArgument;
 use crate::planner::FactorArgument;
 use crate::planner::StratumPlanner;
@@ -110,18 +111,29 @@ impl CodeGen {
                     build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
-                // Identity row projection with no predicate: alias the input; the
-                // `flat_map(|row| once(row))` is a no-op, so no `Map` operator is emitted.
-                let is_identity = pred.is_none()
-                    && flow.key().is_empty()
-                    && is_identity_row_projection(flow.value(), input.arity().1);
+                // Cheapest operator that fits, in-place forms first:
+                //   identity, no predicate → alias        (no operator)
+                //   identity + predicate   → filter       (drop rows in the input buffer)
+                //   same-typed rewrite     → map_in_place (overwrite them there)
+                //   anything else          → flat_map     (rebuild each row)
+                // In-place forms need a `Copy` row (fields are copied out via
+                // `*row`); `map_in_place` also needs the projection to keep
+                // every column's type, so `*row = <projection>` typechecks.
+                let key_free = flow.key().is_empty();
+                let identity_projection =
+                    key_free && is_identity_row_projection(flow.value(), input.arity().1);
+                let row_copy = row_is_copy(&itype, si);
+                let type_preserving = !identity_projection
+                    && key_free
+                    && row_copy
+                    && self.row_projection_preserves_type(flow.value(), &input_type)?;
+                let is_identity = pred.is_none() && identity_projection;
 
                 with_profiler(profiler, |profiler| {
                     if is_identity {
-                        // Copy rule `B :- A`: the identity `flat_map` is elided,
-                        // so no operator is emitted — but still register a 0-op
-                        // alias node so downstream references to this relation's
-                        // fingerprint resolve in the profiler model.
+                        // Copy rule `B :- A`: no operator is emitted — but still
+                        // register a 0-op alias node so downstream references to
+                        // this relation's fingerprint resolve in the profiler model.
                         profiler.identity_alias_operator(
                             transformation_name,
                             vec![inp.to_string()],
@@ -138,15 +150,30 @@ impl CodeGen {
                     }
                 });
 
-                let flat_map_body = flat_map_body_tokens(pred, out_val);
-
-                if is_identity {
-                    Ok(quote! { let #out = #inp.clone(); })
-                } else {
-                    Ok(quote! {
+                match pred {
+                    // Identity, no predicate: alias the input.
+                    None if identity_projection => Ok(quote! { let #out = #inp.clone(); }),
+                    // Identity + predicate: retain surviving rows in place.
+                    Some(p) if identity_projection && row_copy => Ok(quote! {
                         let #out = #inp.clone()
-                            .flat_map(|#row_pat: #row_ty| { #flat_map_body });
-                    })
+                            .filter(|&#row_pat: &#row_ty| #p);
+                    }),
+                    // Same-typed rewrite, no predicate: overwrite rows in place.
+                    None if type_preserving => Ok(quote! {
+                        let #out = #inp.clone()
+                            .map_in_place(|row: &mut #row_ty| {
+                                let #row_pat = *row;
+                                *row = #out_val;
+                            });
+                    }),
+                    // General projection: rebuild each row.
+                    pred => {
+                        let body = flat_map_body_tokens(pred, out_val);
+                        Ok(quote! {
+                            let #out = #inp.clone()
+                                .flat_map(|#row_pat: #row_ty| { #body });
+                        })
+                    }
                 }
             }
 
@@ -694,18 +721,27 @@ impl CodeGen {
             // i32 diff — no conversion needed
             quote! {}
         };
-        let neg = if self.config.is_batch() {
-            // Batch: fixed -1 weight (no retractions possible)
+        let neg = if self.config.is_datalog_batch() {
+            // Fixed -1 weight (no retractions possible); the Present → i32
+            // diff-type change forces rebuilding the triple.
             quote! {
                 .inner
                 .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
                 .as_collection()
             }
-        } else {
-            // Incremental: negate the actual diff
+        } else if self.config.is_batch() {
+            // ExtendBatch: i32 diff, always 1 — overwrite to -1 in the
+            // input buffer instead of rebuilding each triple.
             quote! {
                 .inner
-                .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
+                .map_in_place(|(_, _, d)| *d = -1i32)
+                .as_collection()
+            }
+        } else {
+            // Incremental: negate the actual diff in place.
+            quote! {
+                .inner
+                .map_in_place(|(_, _, d)| *d = -*d)
                 .as_collection()
             }
         };

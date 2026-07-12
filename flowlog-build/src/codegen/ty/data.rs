@@ -195,6 +195,26 @@ impl CodeGen {
             }
         }
     }
+
+    /// `true` iff every projected column re-derives its positional input
+    /// column type — the output row then has the same Rust tuple type as
+    /// the input row, the type precondition for an in-place rewrite.
+    pub(crate) fn row_projection_preserves_type(
+        &self,
+        args: &[ArithmeticArgument],
+        input_type: &KvTypes,
+    ) -> Result<bool, CodegenError> {
+        let row = &input_type.1;
+        if args.len() != row.len() {
+            return Ok(false);
+        }
+        for (arg, expected) in args.iter().zip(row) {
+            if self.infer_expr_type(arg, input_type, None)? != *expected {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }
 
 fn slot(tp: &KvTypes, is_key: bool) -> &[DataType] {
@@ -238,6 +258,16 @@ pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
         // A tuple column is a nested tuple of its fields' user types.
         DataType::FixedTuple(fields) => user_tuple_tokens(fields),
     }
+}
+
+/// `true` iff every column lowers to a `Copy` Rust type (see
+/// [`internal_column_tokens`]): a raw `String` leaf is the only non-`Copy`
+/// lowering, and interning replaces those with `Spur` keys.
+pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
+    string_intern
+        || !types
+            .iter()
+            .any(|dt| dt.any_leaf(&|l| matches!(l, DataType::String)))
 }
 
 fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
