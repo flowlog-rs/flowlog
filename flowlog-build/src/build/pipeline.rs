@@ -102,6 +102,7 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         profile: builder.profile,
         sip: builder.sip,
         str_intern: builder.string_intern,
+        assume_set_inputs: builder.assume_set_inputs,
         udf_file: builder
             .udf_file
             .as_ref()

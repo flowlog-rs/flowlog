@@ -47,6 +47,10 @@ pub struct Config {
     pub sip: bool,
     /// Intern string columns as compact integer keys at load time.
     pub str_intern: bool,
+    /// Assume driver-staged inputs are already set-semantic (deduplicated),
+    /// so skip the per-input dedup normalize.
+    /// unsound if the driver may stage duplicate input tuples. Defaults to `false`.
+    pub assume_set_inputs: bool,
     /// Path to a Rust source file containing UDF implementations.
     pub udf_file: Option<String>,
     /// Extra search directories for `.include` directives.

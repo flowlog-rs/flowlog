@@ -51,6 +51,13 @@ pub struct Cli {
     #[arg(long)]
     pub str_intern: bool,
 
+    /// Assume input fact sources are already set-semantic (contain no
+    /// duplicate tuples), and skip the per-input dedup normalize. Speeds up
+    /// loading; unsound if any input may contain duplicate rows, so it is
+    /// opt-in and defaults to off.
+    #[arg(long)]
+    pub assume_set_inputs: bool,
+
     /// Path to a Rust source file containing UDF implementations.
     /// Functions declared with `.extern fn` in the Datalog
     /// program must be defined in this file.
@@ -83,6 +90,7 @@ impl Cli {
             profile: self.profile,
             sip: self.sip,
             str_intern: self.str_intern,
+            assume_set_inputs: self.assume_set_inputs,
             udf_file: self.udf_file.clone(),
             include_dirs: self.include_dirs.clone(),
             output_to_stdout: self.output_dir.as_deref() == Some("-"),

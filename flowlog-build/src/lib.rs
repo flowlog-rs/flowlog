@@ -111,6 +111,7 @@ pub fn compile<P: AsRef<Path>>(program_path: P) -> io::Result<()> {
 pub struct Builder {
     pub(crate) sip: bool,
     pub(crate) string_intern: bool,
+    pub(crate) assume_set_inputs: bool,
     pub(crate) mode: ExecutionMode,
     pub(crate) profile: bool,
     pub(crate) include_dirs: Vec<PathBuf>,
@@ -128,6 +129,14 @@ impl Builder {
     /// interning is applied at `insert_<rel>` / drain.
     pub fn string_intern(mut self, enabled: bool) -> Self {
         self.string_intern = enabled;
+        self
+    }
+
+    /// Skip the per-input dedup normalize, assuming the driver stages
+    /// set-semantic (already-deduplicated) inputs.
+    /// unsound if inputs may contain duplicates. Defaults to `false`.
+    pub fn assume_set_inputs(mut self, enabled: bool) -> Self {
+        self.assume_set_inputs = enabled;
         self
     }
 
