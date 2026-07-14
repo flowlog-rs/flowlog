@@ -29,7 +29,8 @@ Every change must pass CI before it can merge:
   `Signed-off-by:` line).
 - **rustfmt**: `cargo +nightly fmt --all --check` (formatting runs on nightly).
 - **clippy**: `cargo clippy --workspace --all-targets -- -D warnings`.
-- **tests**: `cargo test` plus the end-to-end fixture suite (see
-  `tests/README.md`).
+- **tests**: `cargo nextest run --workspace` (unit and integration) and
+  `cargo test --doc --workspace` (doctests, which nextest does not run), plus
+  the end-to-end fixture suite (see `tests/README.md`).
 - Also gated: `cargo-deny` (licenses and advisories), `typos` (spelling), and
   `taplo` (TOML format and lint).
