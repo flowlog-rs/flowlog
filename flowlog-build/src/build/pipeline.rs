@@ -16,8 +16,6 @@ use flowlog_common::Config;
 use flowlog_common::SourceMap;
 use flowlog_parser::Program;
 use flowlog_profiler::Profiler;
-use flowlog_typechecker::check_program;
-use flowlog_typechecker::fold_constants;
 use proc_macro2::TokenStream;
 
 use crate::BuildError;
@@ -53,12 +51,10 @@ impl Pipeline {
         })?;
 
         let mut config = build_config(builder, program_str);
-        let mut program = parse(&config, &builder.include_dirs, sm)?;
-        check_program(&mut program, &mut config)?;
-        // Constant-fold after type checking (literals pinned, casts stripped)
-        // and before planning, so the catalog and dataflow never see constant
-        // sub-expressions.
-        fold_constants(&mut program);
+        // `parse` runs type-check + constant-fold (literals pinned, casts
+        // stripped), so the catalog and dataflow never see polymorphic literals
+        // or constant sub-expressions.
+        let program = parse(&mut config, &builder.include_dirs, sm)?;
         // The generated library API mirrors relation names verbatim; reject
         // the rare names it cannot represent before codegen runs.
         validate_api_surface(&program)?;
@@ -83,12 +79,13 @@ impl Pipeline {
 }
 
 fn parse(
-    config: &Config,
+    config: &mut Config,
     include_dirs: &[PathBuf],
     sm: &mut SourceMap,
 ) -> Result<Program, BoxError> {
     let include_refs: Vec<&Path> = include_dirs.iter().map(PathBuf::as_path).collect();
-    Program::parse(config.program(), config.is_extended(), &include_refs, sm).map_err(Into::into)
+    let program_path = config.program().to_owned();
+    flowlog_parser::parse(&program_path, &include_refs, sm, config).map_err(Into::into)
 }
 
 /// Project a [`Builder`] onto the shared pipeline [`Config`].

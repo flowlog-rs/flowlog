@@ -11,7 +11,7 @@
 //! Acyclic Query Evaluation with Theoretical Guarantees." Proceedings of the ACM on
 //! Management of Data 3.3 (2025): 1-28, as part of algorithm 1.
 
-use flowlog_parser::ConstType;
+use flowlog_parser::Constant;
 use tracing::trace;
 
 use super::RulePlanner;
@@ -145,7 +145,7 @@ impl RulePlanner {
         &mut self,
         catalog: &mut Catalog,
         var_sig: AtomArgumentSignature,
-        const_val: ConstType,
+        const_val: Constant,
     ) -> Result<bool, PlanError> {
         self.apply_drop_one_arg(
             catalog,
@@ -238,6 +238,8 @@ impl RulePlanner {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_parser::DataType;
+
     use super::super::common::test_setup;
     use super::*;
 
@@ -300,7 +302,10 @@ mod tests {
             .iter()
             .find(|t| !t.kv_predicates().const_eq.is_empty())
             .expect("const_eq transformation missing");
-        assert_eq!(tx.kv_predicates().const_eq[0].1, ConstType::Int(5));
+        assert_eq!(
+            tx.kv_predicates().const_eq[0].1,
+            Constant::new(DataType::Int32, "5")
+        );
         assert_eq!(tx.output_kv_layout().value().len(), 1);
 
         assert!(

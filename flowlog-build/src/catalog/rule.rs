@@ -703,14 +703,15 @@ mod tests {
     //! within-atom equality filters, placeholder/const recording, SIP
     //! eligibility truth table, and the "head var never unused" rule.
     //!
-    //! Tests skip the typechecker pass so literals stay polymorphic
-    //! (`ConstType::Int(_)`), matching how `tests/catalog_errors.rs`
-    //! drives the catalog.
+    //! Tests run the full `parse`, so the typechecker pins every literal to a
+    //! concrete type, matching how `tests/catalog_errors.rs` drives the
+    //! catalog.
     use std::io::Write;
 
+    use flowlog_common::Config;
     use flowlog_common::SourceMap;
-    use flowlog_parser::ConstType;
-    use flowlog_parser::Program;
+    use flowlog_parser::Constant;
+    use flowlog_parser::DataType;
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -719,8 +720,13 @@ mod tests {
         let mut tmp = NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
-        let program = Program::parse(&tmp.path().to_string_lossy(), false, &[], &mut sm)
-            .expect("parse failed");
+        let program = flowlog_parser::parse(
+            &tmp.path().to_string_lossy(),
+            &[],
+            &mut sm,
+            &mut Config::default(),
+        )
+        .expect("parse failed");
         Catalog::from_rule(program.rules()[0]).expect("catalog build failed")
     }
 
@@ -767,7 +773,7 @@ mod tests {
         );
         assert_eq!(
             filters.const_map().get(&sigs[1]),
-            Some(&ConstType::Int(5)),
+            Some(&Constant::new(DataType::Int32, "5")),
             "constant 5 missing from const_map"
         );
     }

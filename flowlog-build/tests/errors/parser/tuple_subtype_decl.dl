@@ -1,3 +1,0 @@
-.type Pair <: (a: symbol, b: symbol)
-.decl R(p: Pair)
-.output R

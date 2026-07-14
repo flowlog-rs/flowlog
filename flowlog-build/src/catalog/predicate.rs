@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use flowlog_parser::ConstType;
+use flowlog_parser::Constant;
 
 use crate::catalog::AtomArgumentSignature;
 use crate::catalog::ComparisonExprPos;
@@ -45,7 +45,7 @@ impl fmt::Display for JoinPredicates {
 /// Predicate filters for a Key-Value to Key-Value transformation.
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct KvPredicates {
-    pub(crate) const_eq: Vec<(AtomArgumentSignature, ConstType)>,
+    pub(crate) const_eq: Vec<(AtomArgumentSignature, Constant)>,
     pub(crate) var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
     pub(crate) compare_exprs: Vec<ComparisonExprPos>,
 }

@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 
-use flowlog_parser::ConstType;
+use flowlog_parser::Constant;
 use tracing::trace;
 
 use super::RulePlanner;
@@ -377,8 +377,8 @@ impl RulePlanner {
 
     fn remap_const_eq_constraints(
         positions: &[ArithmeticPos],
-        constraints: &[(AtomArgumentSignature, ConstType)],
-    ) -> Result<Vec<(AtomArgumentSignature, ConstType)>, PlanError> {
+        constraints: &[(AtomArgumentSignature, Constant)],
+    ) -> Result<Vec<(AtomArgumentSignature, Constant)>, PlanError> {
         constraints
             .iter()
             .map(|(sig, constant)| {

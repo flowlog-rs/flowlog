@@ -1,2 +1,0 @@
-.decl foo(a: number)
-foo(x) :- ghost_rel(x).

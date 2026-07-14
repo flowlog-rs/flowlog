@@ -1039,13 +1039,20 @@ mod tests {
     use super::*;
 
     fn parse_program(source: &str) -> Program {
+        use flowlog_common::Config;
+        use flowlog_common::ExecutionMode;
         use flowlog_common::SourceMap;
         use tempfile::NamedTempFile;
         let mut tmp = NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())
             .expect("failed to write temp file");
         let mut sm = SourceMap::new();
-        Program::parse(&tmp.path().to_string_lossy(), true, &[], &mut sm).expect("parse failed")
+        let mut config = Config {
+            mode: ExecutionMode::ExtendBatch,
+            ..Default::default()
+        };
+        flowlog_parser::parse(&tmp.path().to_string_lossy(), &[], &mut sm, &mut config)
+            .expect("parse failed")
     }
 
     /// Each `.init` splices its component instance into its own `Plain`

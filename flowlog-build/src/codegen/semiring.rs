@@ -8,6 +8,47 @@ use flowlog_parser::AggregationOperator;
 
 use crate::codegen::CodeGen;
 
+/// The four generated semirings; `Count` aggregations share `Sum`'s.
+///
+/// Semiring naming is a codegen concern: the parser's
+/// [`AggregationOperator`] carries no knowledge of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Semiring {
+    Min,
+    Max,
+    Sum,
+    Avg,
+}
+
+impl Semiring {
+    /// The semiring implementing an aggregation operator.
+    pub(crate) fn of(op: AggregationOperator) -> Self {
+        match op {
+            AggregationOperator::Min => Self::Min,
+            AggregationOperator::Max => Self::Max,
+            AggregationOperator::Sum | AggregationOperator::Count => Self::Sum,
+            AggregationOperator::Avg => Self::Avg,
+        }
+    }
+
+    /// Type-name prefix of the generated semiring types (`Sum` in `SumI64`).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Min => "Min",
+            Self::Max => "Max",
+            Self::Sum => "Sum",
+            Self::Avg => "Avg",
+        }
+    }
+
+    /// Stem of the generated module files (`sum` in `sum_int.rs`).
+    #[must_use]
+    pub fn module_stem(self) -> String {
+        self.name().to_lowercase()
+    }
+}
+
 /// Embed a `templates/semiring/<name>.tpl` file at this crate's compile time.
 macro_rules! tpl {
     ($name:literal) => {
@@ -72,18 +113,18 @@ impl CodeGen {
         let mut files: Vec<(String, String)> = Vec::new();
         let mut modules: Vec<String> = Vec::new();
 
-        use AggregationOperator::*;
-        for (int_tmpl, float_tmpl, op, mac, bound_kw) in [
+        use Semiring::*;
+        for (int_tmpl, float_tmpl, semiring, mac, bound_kw) in [
             (MIN_INT_TMPL, MIN_FLOAT_TMPL, Min, "define_min", Some("MAX")),
             (MAX_INT_TMPL, MAX_FLOAT_TMPL, Max, "define_max", Some("MIN")),
             (SUM_INT_TMPL, SUM_FLOAT_TMPL, Sum, "define_sum", None),
             (AVG_INT_TMPL, AVG_FLOAT_TMPL, Avg, "define_avg", None),
         ] {
-            let kind_str = op.semiring_mod();
-            let pfx = op.semiring_prefix();
+            let pfx = semiring.name();
+            let kind_str = semiring.module_stem();
 
-            let int_needs = semirings.int_needs(op);
-            let float_needs = semirings.float_needs(op);
+            let int_needs = semirings.int_needs(semiring);
+            let float_needs = semirings.float_needs(semiring);
 
             // Int/uint file
             if int_needs.iter().any(|&n| n) {
@@ -134,5 +175,31 @@ impl CodeGen {
         files.push(("semiring/mod.rs".to_string(), mod_rs));
 
         files
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// One row per operator: the semiring that implements it (`Count`
+    /// shares `Sum`'s) and the generated names.
+    #[rstest]
+    #[case(AggregationOperator::Min, Semiring::Min, "Min", "min")]
+    #[case(AggregationOperator::Max, Semiring::Max, "Max", "max")]
+    #[case(AggregationOperator::Count, Semiring::Sum, "Sum", "sum")]
+    #[case(AggregationOperator::Sum, Semiring::Sum, "Sum", "sum")]
+    #[case(AggregationOperator::Avg, Semiring::Avg, "Avg", "avg")]
+    fn semiring_of_each_operator(
+        #[case] op: AggregationOperator,
+        #[case] semiring: Semiring,
+        #[case] name: &str,
+        #[case] stem: &str,
+    ) {
+        assert_eq!(Semiring::of(op), semiring);
+        assert_eq!(semiring.name(), name);
+        assert_eq!(semiring.module_stem(), stem);
     }
 }
