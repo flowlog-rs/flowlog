@@ -6,7 +6,7 @@ use std::slice;
 use flowlog_parser::Arithmetic;
 use flowlog_parser::ArithmeticOperator;
 use flowlog_parser::BuiltinOperator;
-use flowlog_parser::ConstType;
+use flowlog_parser::Constant;
 use flowlog_parser::Factor;
 use flowlog_parser::TupleElem;
 
@@ -19,7 +19,7 @@ pub(crate) enum FactorPos {
     /// A variable reference identified by its atom and argument position
     Var(AtomArgumentSignature),
     /// A constant value (integer, string, etc.)
-    Const(ConstType),
+    Const(Constant),
     /// A user-defined function call.
     FnCall {
         name: String,

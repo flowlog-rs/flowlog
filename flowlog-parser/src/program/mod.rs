@@ -1,7 +1,7 @@
-//! FlowLog program representation and manipulation.
+//! FlowLog program representation.
 //!
-//! A [`Program`] is the central data structure produced by the parser.  It holds
-//! everything needed to evaluate a FlowLog Datalog program:
+//! A [`Program`] is the parser's output: everything needed to evaluate a
+//! FlowLog Datalog program. Build one with [`parse`](crate::parse).
 //!
 //! | Component | Description |
 //! |-----------|-------------|
@@ -9,40 +9,20 @@
 //! | [`Segment`]s | Rules and loop blocks in source order |
 //! | UDF declarations | External scalar functions (`.extern fn`) |
 //! | Inline facts | Ground tuples written directly in source (`rel(1, 2).`) |
-//!
-//! # File loading and include resolution
-//!
-//! [`Program::parse`] is the entry point for file-based loading.  It first
-//! resolves all `.include "path"` directives at the text level (see
-//! [`resolve_includes`]), producing a single combined source string, then parses
-//! that string in one pass.  This keeps the parser itself simple — it never has
-//! to merge two partially-parsed programs.
-//!
-//! # Segment model
-//!
-//! Rules are grouped into [`Segment::Plain`] segments separated by
-//! [`Segment::Loop`] / [`Segment::Fixpoint`] barriers.  The stratifier
-//! processes segments in source order and treats each loop or fixpoint block
-//! as a hard boundary between strata groups.
 
 mod display;
 mod fact;
-mod include;
-mod normalize;
-mod parse;
-#[cfg(test)]
-mod tests;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 pub use fact::InlineFact;
 
+use crate::ast::FlowLogRule;
 use crate::declaration::ExternFn;
 use crate::declaration::Relation;
-use crate::logic::FlowLogRule;
-use crate::primitive::TypeRegistry;
 use crate::segment::Segment;
+use crate::types::TypeRegistry;
 
 // =============================================================================
 // Program
@@ -50,24 +30,23 @@ use crate::segment::Segment;
 
 /// A fully-parsed FlowLog program.
 ///
-/// Construct one with [`Program::parse`] (file path) or, in tests, via the
-/// [`Lexeme`] impl on an already-parsed pest node.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Construct one with [`parse`](crate::parse); there is deliberately no
+/// `Default`, so parsing is the only way to build a `Program`, and the
+/// library otherwise exposes it read-only.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     /// All relation declarations (`.decl`), in source order.
-    relations: Vec<Relation>,
-    /// Ordered sequence of [`Segment`]s (plain rule groups and loop blocks).
-    ///
-    /// This is the primary representation consumed by the stratifier.
-    /// Source order is preserved exactly, including across included files.
-    segments: Vec<Segment>,
+    pub(crate) relations: Vec<Relation>,
+    /// Ordered sequence of [`Segment`]s (plain rule groups and loop blocks),
+    /// in source order, preserved exactly across included files.
+    pub(crate) segments: Vec<Segment>,
     /// External scalar UDF declarations (`.extern fn`).
-    udfs: Vec<ExternFn>,
+    pub(crate) udfs: Vec<ExternFn>,
     /// Inline ground facts, keyed by canonical relation name.
-    facts: HashMap<String, Vec<InlineFact>>,
-    /// Built during parsing, consulted by the typechecker for subtype
-    /// rules, ignored downstream (subtypes are compile-time-only).
-    type_registry: TypeRegistry,
+    pub(crate) facts: HashMap<String, Vec<InlineFact>>,
+    /// Type declarations (aliases, subtypes, tuples). Compile-time only;
+    /// not needed to evaluate the program.
+    pub(crate) type_registry: TypeRegistry,
 }
 
 // =============================================================================
@@ -84,13 +63,10 @@ impl Program {
         &self.relations
     }
 
-    /// Look up a declared relation by fingerprint.
+    /// Look up a declared relation by fingerprint, or `None` if none matches.
     ///
-    /// This is the bridge from codegen's fingerprint world back to the
-    /// declaration — primarily so human-facing output (profiler labels,
-    /// diagnostics) can show the user's original spelling
-    /// ([`Relation::raw_name`]) instead of the canonical internal name.
-    /// Linear scan: callers are codegen-time, never on the data path.
+    /// Recovers a relation's original spelling ([`Relation::raw_name`]) from
+    /// its canonical fingerprint. Linear scan; not for the data path.
     #[must_use]
     pub fn relation_by_fingerprint(&self, fp: u64) -> Option<&Relation> {
         self.relations.iter().find(|rel| rel.fingerprint() == fp)
@@ -183,10 +159,7 @@ impl Program {
 
     // --- Segments & rules ---
 
-    /// Ordered program items (rule segments and loop blocks in source order).
-    ///
-    /// This is the primary representation for the stratifier.  It processes
-    /// items in order and treats each `Segment::Loop` as a hard barrier.
+    /// Ordered program items (rule segments and loop blocks) in source order.
     #[must_use]
     #[inline]
     pub fn segments(&self) -> &[Segment] {
@@ -194,15 +167,13 @@ impl Program {
     }
 
     /// Mutable version of [`segments`](Self::segments).
-    pub fn segments_mut(&mut self) -> &mut [Segment] {
+    pub(crate) fn segments_mut(&mut self) -> &mut [Segment] {
         &mut self.segments
     }
 
-    /// All top-level rules, flattened across all `Segment::Plain` segments.
-    /// Does NOT include rules inside loop blocks.
-    ///
-    /// This is provided for backward-compatible access by callers that do not
-    /// yet understand loop blocks.  Prefer [`segments`] for loop-aware processing.
+    /// All top-level rules, flattened across `Segment::Plain` segments;
+    /// excludes rules inside loop blocks. Prefer [`segments`](Self::segments)
+    /// for loop-aware processing.
     #[must_use]
     pub fn rules(&self) -> Vec<&FlowLogRule> {
         self.segments
@@ -240,10 +211,9 @@ impl Program {
         &self.facts
     }
 
-    /// Mutable access to inline ground facts — only used by the typechecker's
-    /// lowering pass to rewrite polymorphic literals to their concrete
-    /// declared types.
-    pub fn facts_mut(&mut self) -> &mut HashMap<String, Vec<InlineFact>> {
+    /// Mutable access to inline ground facts, for rewriting polymorphic
+    /// literals to their concrete declared types.
+    pub(crate) fn facts_mut(&mut self) -> &mut HashMap<String, Vec<InlineFact>> {
         &mut self.facts
     }
 
@@ -265,16 +235,85 @@ impl Program {
 
     // --- Internal ---
 
-    /// Split-borrow used by the subtype pass: registry is read while
-    /// segments are mutated in place. Going through a method lets the
-    /// borrow checker see the two fields are disjoint.
+    /// Split-borrow of the registry (shared) and segments (mutable): going
+    /// through a method lets the borrow checker see the two fields are
+    /// disjoint.
     #[inline]
-    pub fn registry_and_segments_mut(&mut self) -> (&TypeRegistry, &mut [Segment]) {
+    pub(crate) fn registry_and_segments_mut(&mut self) -> (&TypeRegistry, &mut [Segment]) {
         (&self.type_registry, &mut self.segments)
     }
 
     #[inline]
     fn is_edb_relation(&self, rel: &Relation) -> bool {
         rel.has_input() || self.has_inline_facts(rel.name())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Relation;
+    use crate::test_util::assembled;
+
+    /// `rules()` flattens the rules of every `Segment::Plain` in source order
+    /// and excludes rules nested inside loop blocks.
+    #[test]
+    fn rules_flattens_plain_segments_and_excludes_loop_bodies() {
+        let program = assembled(
+            "
+            .decl a(x: number)
+            .decl b(x: number)
+            .output a
+            a(X) :- b(X).
+            fixpoint { }
+            a(1) :- b(1).
+            ",
+        )
+        .expect("assembles");
+        assert_eq!(program.rules().len(), 2);
+    }
+
+    /// `edbs()` is the union of file-backed (`.input`) relations and relations
+    /// with inline facts; `file_backed_relations()` and `inline_fact_relations()`
+    /// are the individual subsets, and a relation may belong to both.
+    #[test]
+    fn edb_subsets_track_file_backed_inline_and_overlap_relations() {
+        let program = assembled(
+            "
+            .decl file_only(x: number)
+            .decl fact_only(x: number)
+            .decl both(x: number)
+            .decl out(x: number)
+            .input file_only(IO=\"file\", filename=\"file_only.csv\", delimiter=\",\")
+            .input both(IO=\"file\", filename=\"both.csv\", delimiter=\",\")
+            .output out
+
+            fact_only(1).
+            both(2).
+
+            out(X) :- file_only(X).
+            out(X) :- fact_only(X).
+            out(X) :- both(X).
+            ",
+        )
+        .expect("assembles");
+
+        let names = |rels: Vec<&Relation>| {
+            let mut v: Vec<String> = rels.iter().map(|r| r.name().to_string()).collect();
+            v.sort_unstable();
+            v
+        };
+
+        assert_eq!(
+            names(program.edbs()),
+            vec!["both", "fact_only", "file_only"]
+        );
+        assert_eq!(
+            names(program.file_backed_relations()),
+            vec!["both", "file_only"]
+        );
+        assert_eq!(
+            names(program.inline_fact_relations()),
+            vec!["both", "fact_only"]
+        );
     }
 }

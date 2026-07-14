@@ -8,20 +8,19 @@ use flowlog_build::planner::StratumPlanner;
 use flowlog_build::stratifier::Stratifier;
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
-use flowlog_parser::Program;
 
 fn plan_fixture(name: &str) -> (Result<(), PlanError>, SourceMap) {
     let mut sm = SourceMap::new();
     let path = fixture("planner", name);
-    let program = Program::parse(&path, false, &[], &mut sm).expect("fixture should parse cleanly");
-    let stratifier =
-        Stratifier::from_program(&program, false).expect("fixture should stratify cleanly");
-
-    let config = Config {
-        program: path,
+    let mut config = Config {
+        program: path.clone(),
         output_to_stdout: true,
         ..Default::default()
     };
+    let program = flowlog_parser::parse(&path, &[], &mut sm, &mut config)
+        .expect("fixture should parse cleanly");
+    let stratifier =
+        Stratifier::from_program(&program, false).expect("fixture should stratify cleanly");
     let mut optimizer = Optimizer::new();
     let mut profiler = None;
 

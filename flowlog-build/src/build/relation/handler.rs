@@ -7,7 +7,7 @@
 //!
 //! There is no `apply_file` — library mode is a pure typed API.
 
-use flowlog_parser::ConstType;
+use flowlog_parser::Constant;
 use flowlog_parser::InlineFact;
 use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
@@ -105,7 +105,7 @@ fn gen_apply_inline(
     })
 }
 
-fn fact_tuple(row: &[ConstType], string_intern: bool) -> Result<TokenStream, CodegenError> {
+fn fact_tuple(row: &[Constant], string_intern: bool) -> Result<TokenStream, CodegenError> {
     let parts = row
         .iter()
         .map(|c| const_to_token(c, string_intern))

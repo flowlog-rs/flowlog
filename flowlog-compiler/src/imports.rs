@@ -261,11 +261,15 @@ fn agg_semiring_uses_only(f: &Features) -> TokenStream {
     let mut entries: Vec<_> = f
         .agg_semirings()
         .iter()
-        .map(|(op, dt)| {
+        .map(|(semiring, dt)| {
             let mod_suffix = if dt.is_float() { "float" } else { "int" };
+            // TODO: surface as CodegenError::internal instead of panicking.
+            let suffix = dt
+                .semiring_suffix()
+                .expect("typechecker guarantees a numeric aggregation input");
             (
-                format!("{}_{mod_suffix}", op.semiring_mod()),
-                format!("{}{}", op.semiring_prefix(), dt.semiring_suffix()),
+                format!("{}_{mod_suffix}", semiring.module_stem()),
+                format!("{}{}", semiring.name(), suffix),
             )
         })
         .collect();

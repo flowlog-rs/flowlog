@@ -113,7 +113,6 @@ mod tests {
 
     use flowlog_common::SourceMap;
     use flowlog_common::compute_fp;
-    use flowlog_typechecker::check_program;
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -124,9 +123,10 @@ mod tests {
         let mut tmp = NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
-        let mut program =
-            Program::parse(&tmp.path().to_string_lossy(), false, &[], &mut sm).expect("parse");
-        check_program(&mut program, &mut Config::default()).expect("typecheck");
+        let mut config = Config::default();
+        let program =
+            flowlog_parser::parse(&tmp.path().to_string_lossy(), &[], &mut sm, &mut config)
+                .expect("parse");
         ProgramPlanner::from_program(&Config::default(), &program, &mut None).expect("plan")
     }
 

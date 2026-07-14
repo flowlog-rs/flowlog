@@ -5,7 +5,7 @@ use std::slice;
 
 use flowlog_parser::ArithmeticOperator;
 use flowlog_parser::BuiltinOperator;
-use flowlog_parser::ConstType;
+use flowlog_parser::Constant;
 
 use crate::catalog::ArithmeticPos;
 use crate::catalog::FactorPos;
@@ -18,7 +18,7 @@ pub(crate) enum FactorArgument {
     Var(TransformationArgument),
 
     /// Constant/literal value
-    Const(ConstType),
+    Const(Constant),
 
     /// User-defined function call.
     FnCall {

@@ -7,7 +7,7 @@
 // Main grammar entry point
 main_grammar = {
     SOI ~
-    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | comp_decl | init_decl | fixpoint_block | loop_block | fact | rule | plan_directive)* ~
+    (declaration | type_alias_decl | extern_fn | include_directive | input_directive | output_directive | printsize_directive | comp_decl | init_decl | fixpoint_block | loop_block | fact | rule)* ~
     EOI
 }
 
@@ -114,13 +114,13 @@ float = @{ ("+" | "-")? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 // Examples: 42, -17, +100
 integer = @{ ("+" | "-")? ~ ASCII_DIGIT+ }
 
-// String enclosed in double quotes
-// Example: "hello world"
-// Atomic so escapes and inner whitespace are matched literally. A `\` starts
-// an escape (consuming the next char, so `\"` does not terminate the string);
-// any other non-quote, non-backslash char is taken verbatim. Decoding of the
-// escapes happens in the parser (`primitive::unquote`), not the grammar.
-string = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
+// String literal in Rust syntax: quoted (Rust's escape alphabet) or raw
+// (r"..." / r#"..."#, no escapes). Decoded and validated by
+// `grammar::decode_string`; unknown escapes are an error, so regex
+// patterns belong in raw strings.
+string = @{ quoted_string | raw_string }
+quoted_string = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
+raw_string = @{ "r" ~ PUSH("#"*) ~ "\"" ~ (!("\"" ~ PEEK) ~ ANY)* ~ "\"" ~ POP }
 
 // Placeholder for unused variables (underscore)
 // Used when you don't need to reference a variable
@@ -365,10 +365,15 @@ atom_arg = { constant | variable | placeholder }
 // Example: edge(1, 2).
 fact = { head ~ "." }
 
-// Rule with optional multi-head and multi-body (Souffle-style).
-// Commas separate alternative heads, semicolons separate alternative bodies:
-//   h1, h2 :- b1; b2.  →  h1:-b1. h1:-b2. h2:-b1. h2:-b2.
-rule = { rule_heads ~ ":-" ~ rule_bodies ~ "." }
+// Rule with optional multi-head and multi-body. Commas separate
+// alternative heads, semicolons separate alternative bodies:
+//   h1, h2 :- b1; b2.  ->  h1:-b1. h1:-b2. h2:-b1. h2:-b2.
+//
+// A trailing `.plan` hint binds to the rule it immediately follows.
+// Parsed as a child here so adjacency is a grammar guarantee, not a
+// post-parse check; a `.plan` that follows no rule has no production and
+// is a syntax error.
+rule = { rule_heads ~ ":-" ~ rule_bodies ~ "." ~ plan_directive? }
 
 // Plan hint pinning the join order of the immediately preceding rule's
 // positive body atoms. Indices are 1-based positions of positive atoms in
@@ -488,11 +493,11 @@ disjunction_group = { "(" ~ rule_bodies ~ ")" }
 //   loop until { Done } while { @it >= 5 and @it <= 10 } { ... }
 
 fixpoint_block = {
-    "fixpoint" ~ "{" ~ iterative_directive* ~ (rule | plan_directive)* ~ "}"
+    "fixpoint" ~ "{" ~ iterative_directive* ~ rule* ~ "}"
 }
 
 loop_block = {
-    "loop" ~ loop_condition ~ "{" ~ iterative_directive* ~ (rule | plan_directive)* ~ "}"
+    "loop" ~ loop_condition ~ "{" ~ iterative_directive* ~ rule* ~ "}"
 }
 
 // .iterative <relation_name> — marks a relation as using replacement (new_from)
@@ -595,7 +600,7 @@ init_decl = { ".init" ~ identifier ~ "=" ~ identifier ~ comp_type_args? }
 comp_body_item = {
     declaration | type_alias_decl | input_directive | output_directive
     | printsize_directive | rule | fact | comp_decl | init_decl
-    | override_directive | plan_directive
+    | override_directive
 }
 
 // Drop inherited rules and facts for `Name`; the parent's `.decl Name`

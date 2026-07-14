@@ -1,3 +1,0 @@
-.decl edge(x: number, y: number)
-.output edge
-fixpoint { edge(X, Y) :- edge(X, Y). }

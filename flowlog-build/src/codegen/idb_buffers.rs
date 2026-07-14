@@ -75,14 +75,17 @@ impl CodeGen {
 
             // Leaf-aware checks: a tuple column's float / string / integer
             // sub-fields need the same feature flags as a scalar column would.
-            if data_type.iter().any(|dt| dt.any_leaf(&DataType::is_float)) {
+            if data_type
+                .iter()
+                .any(|dt| dt.any_scalar(&DataType::is_float))
+            {
                 self.features.mark_ordered_float();
             }
 
             if idb.output() {
                 if data_type
                     .iter()
-                    .any(|dt| dt.any_leaf(&|l| matches!(l, DataType::String)))
+                    .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
                 {
                     self.features.mark_string_resolve_out();
                 }
@@ -96,7 +99,7 @@ impl CodeGen {
                 if !self.config.output_to_stdout() && !data_type.is_empty() {
                     if data_type
                         .iter()
-                        .any(|dt| dt.any_leaf(&DataType::is_integer))
+                        .any(|dt| dt.any_scalar(&DataType::is_integer))
                         || self.config.is_incremental()
                     {
                         self.features.mark_itoa();
@@ -394,7 +397,7 @@ pub fn field_accessor(
     // Resolve interned-string leaves so comparisons/formatting see the actual
     // strings. For a tuple column this descends every leaf: ORDER BY on a tuple
     // must compare resolved strings, not their (run-dependent) intern IDs.
-    if string_intern && data_type.any_leaf(&|l| matches!(l, DataType::String)) {
+    if string_intern && data_type.any_scalar(&|l| matches!(l, DataType::String)) {
         resolve_string_leaves(&inner, data_type)
     } else {
         inner

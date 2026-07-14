@@ -1,3 +1,6 @@
+//! `Display` for a parsed program: a readable dump of its relations, extern
+//! functions, segments, and facts.
+
 use std::fmt;
 
 use flowlog_common::SECTION_BAR;
@@ -5,10 +8,6 @@ use flowlog_common::SUBSECTION_BAR;
 
 use super::Program;
 use crate::segment::Segment;
-
-// =============================================================================
-// Display
-// =============================================================================
 
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
