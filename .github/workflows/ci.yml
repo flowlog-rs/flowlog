@@ -15,13 +15,14 @@ env:
   RUST_BACKTRACE: full
 
 jobs:
-  test:
+  clippy:
+    name: 📎 Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: ⚙️ Install protobuf-compiler + bsdmainutils
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler bsdmainutils
+      - name: ⚙️ Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -34,8 +35,59 @@ jobs:
       - name: 📎 Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: 🧪 Unit tests
-        run: cargo test
+  test:
+    name: 🧪 Unit + integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: ⚙️ Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: 📦 Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: 🧪 Unit + integration tests
+        run: cargo nextest run --workspace --profile ci
+
+  doctest:
+    name: 📖 Doctests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: ⚙️ Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: 📖 Doctests
+        run: cargo test --doc --workspace
+
+  fixtures:
+    name: 🏁 End-to-end fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: ⚙️ Install protobuf-compiler + bsdmainutils
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler bsdmainutils
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
 
       - name: 🏁 End-to-end fixture tests
         run: |

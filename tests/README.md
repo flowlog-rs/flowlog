@@ -7,7 +7,7 @@ runnable.
 
 | Path                        | What it does                                                  | Time       |
 |-----------------------------|---------------------------------------------------------------|------------|
-| `cargo test --workspace`    | Per-crate `#[test]`s — the unit-test layer                    | <15 s warm |
+| `cargo nextest run --workspace` | Per-crate `#[test]`s (nextest); doctests via `cargo test --doc` | <15 s warm |
 | `tests/fixtures/`           | ~95 hand-curated `.dl` programs, byte-diff vs `expected/`     | ~2 min     |
 | `tests/oracle/`             | Real benchmarks, byte-diff vs **Soufflé** reference outputs   | ~30 min    |
 | `tests/lib/`                | Shared bash helpers (sourced by every runner)                 | —          |
@@ -22,8 +22,12 @@ pass.
 
 ## How to run
 
+Unit and integration tests run under [cargo-nextest](https://nexte.st)
+(`cargo install cargo-nextest --locked`); doctests run separately via
+`cargo test --doc`, since nextest does not execute them.
+
 ```bash
-# Unit tests
+# Unit + integration tests (nextest) + doctests
 make test
 
 # Fixtures (no flags, runs all ~95 programs)

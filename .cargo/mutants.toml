@@ -16,3 +16,7 @@ exclude_globs = [
     "flowlog-runtime/**",
     "flowlog-compiler/**",
 ]
+
+# Run each mutant's tests under nextest (parallel, process-per-test), matching
+# CI's unit-test runner. Requires cargo-nextest on PATH.
+test_tool = "nextest"

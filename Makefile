@@ -12,7 +12,7 @@ help:
 	@echo
 	@echo "  Dev workflow:"
 	@echo "    make build           cargo build --release --workspace"
-	@echo "    make test            cargo test  --release --workspace"
+	@echo "    make test            cargo nextest run + cargo test --doc"
 	@echo
 	@echo "  End-to-end fixtures:"
 	@echo "    make fixtures [MODE=compiler|lib|both] [J=<n>] [ARGS=<names>]"
@@ -33,7 +33,8 @@ build:
 	cargo build --release --workspace
 
 test:
-	cargo test --release --workspace
+	cargo nextest run --release --workspace
+	cargo test --release --doc --workspace
 
 # End-to-end fixture suite (generated-crate byte-diff tests). MODE selects
 # the lowering path like `oracle`. J sets cross-fixture parallelism (default:
