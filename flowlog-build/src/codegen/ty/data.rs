@@ -257,6 +257,9 @@ pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
         DataType::Bool => quote! { bool },
         // A tuple column is a nested tuple of its fields' user types.
         DataType::FixedTuple(fields) => user_tuple_tokens(fields),
+        DataType::IntLit | DataType::FloatLit => {
+            unreachable!("unpinned literal type reached codegen; the typechecker pins all literals")
+        }
     }
 }
 
@@ -267,7 +270,7 @@ pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
     string_intern
         || !types
             .iter()
-            .any(|dt| dt.any_leaf(&|l| matches!(l, DataType::String)))
+            .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
 }
 
 fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
@@ -298,13 +301,27 @@ mod tests {
 
     use flowlog_common::Config;
     use flowlog_parser::ArithmeticOperator;
-    use flowlog_parser::ConstType;
+    use flowlog_parser::Constant;
     use flowlog_parser::Program;
 
     use super::*;
 
+    /// An empty program — the only supported way to build one is to parse.
+    fn empty_program() -> Program {
+        use flowlog_common::SourceMap;
+        use tempfile::NamedTempFile;
+        let tmp = NamedTempFile::new().expect("temp file");
+        flowlog_parser::parse(
+            &tmp.path().to_string_lossy(),
+            &[],
+            &mut SourceMap::new(),
+            &mut Config::default(),
+        )
+        .expect("empty program parses")
+    }
+
     fn make_codegen() -> CodeGen {
-        CodeGen::new(Config::default(), Program::default())
+        CodeGen::new(Config::default(), empty_program())
     }
 
     #[test]
@@ -312,13 +329,21 @@ mod tests {
         let cg = make_codegen();
         let empty: KvTypes = (vec![], vec![]);
         assert_eq!(
-            cg.infer_factor_type(&FactorArgument::Const(ConstType::Int32(42)), &empty, None)
-                .unwrap(),
+            cg.infer_factor_type(
+                &FactorArgument::Const(Constant::new(DataType::Int32, "42")),
+                &empty,
+                None
+            )
+            .unwrap(),
             DataType::Int32
         );
         assert_eq!(
-            cg.infer_factor_type(&FactorArgument::Const(ConstType::Bool(true)), &empty, None)
-                .unwrap(),
+            cg.infer_factor_type(
+                &FactorArgument::Const(Constant::new(DataType::Bool, "True")),
+                &empty,
+                None
+            )
+            .unwrap(),
             DataType::Bool
         );
     }
@@ -327,7 +352,7 @@ mod tests {
     fn infer_expr_type_picks_first_concrete_factor() {
         let cg = make_codegen();
         let expr = ArithmeticArgument {
-            init: FactorArgument::Const(ConstType::Int64(0)),
+            init: FactorArgument::Const(Constant::new(DataType::Int64, "0")),
             rest: vec![(
                 ArithmeticOperator::Plus,
                 FactorArgument::Var(TransformationArgument::KV((false, 0))),

@@ -12,6 +12,7 @@ use quote::format_ident;
 use quote::quote;
 
 use crate::codegen::CodegenError;
+use crate::codegen::Semiring;
 use crate::codegen::tuple_tokens;
 
 // ==================================================
@@ -20,7 +21,11 @@ use crate::codegen::tuple_tokens;
 
 /// Semiring type ident, e.g. `MinI32`, `SumF64`.
 fn agg_semiring_type_ident(op: AggregationOperator, dt: &DataType) -> proc_macro2::Ident {
-    format_ident!("{}{}", op.semiring_prefix(), dt.semiring_suffix())
+    // TODO: surface as CodegenError::internal instead of panicking.
+    let suffix = dt
+        .semiring_suffix()
+        .expect("typechecker guarantees a numeric aggregation input");
+    format_ident!("{}{}", Semiring::of(op).name(), suffix)
 }
 
 /// `Kind{Suffix}::new(x<agg_pos>)` expression for a given aggregation operator.

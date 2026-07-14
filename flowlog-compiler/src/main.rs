@@ -8,10 +8,7 @@ use flowlog_common::SourceMap;
 use flowlog_common::emit_and_exit;
 use flowlog_compiler::Cli;
 use flowlog_compiler::Compiler;
-use flowlog_parser::Program;
 use flowlog_profiler::Profiler;
-use flowlog_typechecker::check_program;
-use flowlog_typechecker::fold_constants;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -26,21 +23,20 @@ fn main() {
     let mut config = cli.to_config();
     let options = cli.to_compile_options();
 
-    // Parse the source into an AST.
+    // Parse, type-check, and constant-fold the source into a validated AST.
     let mut sm = SourceMap::new();
-    let mut program = Program::parse(
-        config.program(),
-        config.is_extended(),
-        &config.include_dirs(),
-        &mut sm,
-    )
-    .unwrap_or_else(|err| emit_and_exit(err, &sm));
-
-    // Type-check the program.
-    check_program(&mut program, &mut config).unwrap_or_else(|err| emit_and_exit(err, &sm));
-
-    // Constant-fold after type checking, before planning.
-    fold_constants(&mut program);
+    // `parse` runs type-check + constant-fold internally. Snapshot the
+    // config-derived path and include dirs first, so `config` is free to pass
+    // as `&mut` (type-check records `ord`'s serial-load requirement on it).
+    let program_path = config.program().to_owned();
+    let include_dirs: Vec<std::path::PathBuf> = config
+        .include_dirs()
+        .iter()
+        .map(|p| p.to_path_buf())
+        .collect();
+    let include_refs: Vec<&std::path::Path> = include_dirs.iter().map(|p| p.as_path()).collect();
+    let program = flowlog_parser::parse(&program_path, &include_refs, &mut sm, &mut config)
+        .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Plan into the relational intermediate representation.
     let mut profiler = config

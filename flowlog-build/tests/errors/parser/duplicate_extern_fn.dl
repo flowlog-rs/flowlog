@@ -1,2 +1,0 @@
-.extern fn hash(x: int64) -> int64
-.extern fn hash(y: int64) -> int64

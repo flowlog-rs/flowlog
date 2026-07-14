@@ -15,7 +15,7 @@
 use std::fmt;
 
 use flowlog_common::compute_fp;
-use flowlog_parser::ConstType;
+use flowlog_parser::Constant;
 
 use crate::catalog::ArithmeticPos;
 use crate::catalog::AtomArgumentSignature;
@@ -649,7 +649,7 @@ impl TransformationInfo {
     /// Update constant equality constraints, avoiding duplicates.
     pub(crate) fn update_const_eq_and_var_eq_constraints(
         &mut self,
-        const_eq: Vec<(AtomArgumentSignature, ConstType)>,
+        const_eq: Vec<(AtomArgumentSignature, Constant)>,
         var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
     ) -> Result<(), PlanError> {
         match self {

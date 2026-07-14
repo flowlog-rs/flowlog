@@ -10,7 +10,7 @@ use std::fmt;
 use std::slice;
 use std::sync::Arc;
 
-use flowlog_parser::ConstType;
+use flowlog_parser::Constant;
 use tracing::trace;
 
 use super::KeyValueLayout;
@@ -400,8 +400,8 @@ impl TransformationFlow {
     /// Helper to construct constant equality constraints: (var = const)
     fn build_const_eq_constraints(
         input_expr_map: &HashMap<ArithmeticPos, TransformationArgument>,
-        const_eq_constraints: &[(AtomArgumentSignature, ConstType)],
-    ) -> Vec<(TransformationArgument, ConstType)> {
+        const_eq_constraints: &[(AtomArgumentSignature, Constant)],
+    ) -> Vec<(TransformationArgument, Constant)> {
         let trans_args = Self::signatures_to_trans_args(
             input_expr_map,
             const_eq_constraints.iter().map(|(sig, _)| sig),

@@ -289,6 +289,9 @@ fn gen_one_rel_nonnullary(
         DataType::FixedTuple(_) => {
             unreachable!("tuple-typed columns cannot appear in EDB input relations")
         }
+        DataType::IntLit | DataType::FloatLit => {
+            unreachable!("unpinned literal type reached codegen; the typechecker pins all literals")
+        }
     };
     let tuple_parse_stmts = gen_parse_from_str(raw_name, &dts, string_intern);
     let file_parse_stmts = gen_parse_from_bytes(raw_name, &dts, string_intern);
@@ -512,6 +515,11 @@ fn gen_parse_from_str(rel_label: &str, dts: &[DataType], string_intern: bool) ->
                 DataType::FixedTuple(_) => {
                     unreachable!("tuple-typed columns cannot be parsed from EDB facts")
                 }
+                DataType::IntLit | DataType::FloatLit => {
+                    unreachable!(
+                        "unpinned literal type reached codegen; the typechecker pins all literals"
+                    )
+                }
             }
         })
         .collect();
@@ -639,6 +647,11 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                 // Records never appear in EDB facts (constructed by rules only).
                 DataType::FixedTuple(_) => {
                     unreachable!("tuple-typed columns cannot be parsed from EDB facts")
+                }
+                DataType::IntLit | DataType::FloatLit => {
+                    unreachable!(
+                        "unpinned literal type reached codegen; the typechecker pins all literals"
+                    )
                 }
             }
         })

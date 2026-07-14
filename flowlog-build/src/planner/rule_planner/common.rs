@@ -925,22 +925,26 @@ impl RulePlanner {
 /// Shared setup helper for planner phase tests.
 ///
 /// Parses a program source and builds a fresh `(RulePlanner, Catalog)` for
-/// its first rule. Bypasses the typechecker, so literal constants stay
-/// polymorphic (`ConstType::Int(_)`) — matching the behavior of
-/// `tests/catalog_errors.rs`.
+/// its first rule. Runs the full `parse`, so the typechecker pins every
+/// literal to a concrete type, matching `tests/catalog_errors.rs`.
 #[cfg(test)]
 pub(super) fn test_setup(src: &str) -> (RulePlanner, Catalog) {
     use std::io::Write;
 
+    use flowlog_common::Config;
     use flowlog_common::SourceMap;
-    use flowlog_parser::Program;
     use tempfile::NamedTempFile;
 
     let mut tmp = NamedTempFile::new().expect("tempfile");
     tmp.write_all(src.as_bytes()).expect("write");
     let mut sm = SourceMap::new();
-    let program =
-        Program::parse(&tmp.path().to_string_lossy(), false, &[], &mut sm).expect("parse failed");
+    let program = flowlog_parser::parse(
+        &tmp.path().to_string_lossy(),
+        &[],
+        &mut sm,
+        &mut Config::default(),
+    )
+    .expect("parse failed");
     let rule = program.rules()[0].clone();
     let catalog = Catalog::from_rule(&rule).expect("catalog build failed");
     let planner = RulePlanner::new(rule);

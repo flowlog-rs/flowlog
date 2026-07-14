@@ -29,7 +29,7 @@ pub(crate) fn needs_conversion(rel: &Relation, string_intern: bool) -> bool {
     // `rel::*` tuple alias holds `f32`/`String` while the internal tuple holds
     // `OrderedFloat`/`Spur`.
     rel.data_type().iter().any(|dt| {
-        dt.any_leaf(&|l| {
+        dt.any_scalar(&|l| {
             matches!(l, DataType::Float32 | DataType::Float64)
                 || (string_intern && matches!(l, DataType::String))
         })

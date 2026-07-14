@@ -92,12 +92,26 @@ mod tests {
 
     use super::*;
 
+    /// An empty program — the only supported way to build one is to parse.
+    fn empty_program() -> Program {
+        use flowlog_common::SourceMap;
+        use tempfile::NamedTempFile;
+        let tmp = NamedTempFile::new().expect("temp file");
+        flowlog_parser::parse(
+            &tmp.path().to_string_lossy(),
+            &[],
+            &mut SourceMap::new(),
+            &mut Config::default(),
+        )
+        .expect("empty program parses")
+    }
+
     fn codegen_with_mode(mode: ExecutionMode) -> CodeGen {
         let config = Config {
             mode,
             ..Config::default()
         };
-        CodeGen::new(config, Program::default())
+        CodeGen::new(config, empty_program())
     }
 
     #[derive(Debug)]

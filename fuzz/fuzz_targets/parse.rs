@@ -1,13 +1,15 @@
 #![no_main]
 
+use flowlog_common::Config;
+use flowlog_common::ExecutionMode;
 use flowlog_common::SourceMap;
-use flowlog_parser::Program;
+use flowlog_parser::parse;
 use libfuzzer_sys::fuzz_target;
 
 // Fuzz the Datalog parser end-to-end. Arbitrary input must never panic: a
 // malformed program is expected to return a `ParseError`, not crash. The
 // input is written to an isolated temp file so `.include` directives resolve
-// against an empty directory — their failures are correct behavior, not bugs.
+// against an empty directory: their failures are correct behavior, not bugs.
 fuzz_target!(|data: &[u8]| {
     let Ok(src) = std::str::from_utf8(data) else {
         return;
@@ -23,5 +25,9 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let mut sm = SourceMap::new();
-    let _ = Program::parse(path_str, true, &[], &mut sm);
+    let mut config = Config {
+        mode: ExecutionMode::ExtendBatch,
+        ..Config::default()
+    };
+    let _ = parse(path_str, &[], &mut sm, &mut config);
 });

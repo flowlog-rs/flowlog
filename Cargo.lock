@@ -323,7 +323,6 @@ dependencies = [
  "flowlog-common",
  "flowlog-parser",
  "flowlog-profiler",
- "flowlog-typechecker",
  "itertools 0.15.0",
  "ordered-float",
  "prettyplease",
@@ -361,7 +360,6 @@ dependencies = [
  "flowlog-common",
  "flowlog-parser",
  "flowlog-profiler",
- "flowlog-typechecker",
  "proc-macro2",
  "quote",
  "thiserror",
@@ -377,9 +375,11 @@ dependencies = [
  "codespan-reporting",
  "educe",
  "flowlog-common",
+ "litrs",
  "ordered-float",
  "pest",
  "pest_derive",
+ "rstest",
  "tempfile",
  "thiserror",
  "tracing",
@@ -406,19 +406,6 @@ dependencies = [
  "rustc-hash",
  "serde",
  "timely",
-]
-
-[[package]]
-name = "flowlog-typechecker"
-version = "0.1.0"
-dependencies = [
- "codespan-reporting",
- "flowlog-common",
- "flowlog-parser",
- "ordered-float",
- "rstest",
- "tempfile",
- "thiserror",
 ]
 
 [[package]]
@@ -601,6 +588,12 @@ name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+
+[[package]]
+name = "litrs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "lock_api"

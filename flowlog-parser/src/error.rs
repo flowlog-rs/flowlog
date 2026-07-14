@@ -1,9 +1,11 @@
 //! Parse errors and grammar-contract internal errors.
 //!
-//! `ParseError` covers failures reachable from a user-authored `.dl` program:
-//! syntax errors, duplicate declarations, references to undeclared relations,
-//! broken include directives, and so on. Each variant carries a [`Span`] so
-//! the renderer can point at the offending source.
+//! `ParseError` covers failures reachable from a user-authored `.dl` program
+//! across every pipeline stage: syntax errors, duplicate declarations,
+//! references to undeclared relations, broken include directives, and the
+//! semantic half — type, subtype, and cast errors raised by the checker.
+//! Each variant carries a [`Span`] so the renderer can point at the
+//! offending source.
 //!
 //! [`grammar_bug`] produces an [`InternalError`] for Pest grammar contracts
 //! that should hold by construction (e.g. an `atom` rule always has an inner
@@ -21,10 +23,16 @@ use flowlog_common::Diagnostic;
 use flowlog_common::FileId;
 use flowlog_common::InternalError;
 use flowlog_common::Span;
+use flowlog_common::labels;
 use flowlog_common::primary_label;
 use flowlog_common::secondary_label;
 use thiserror::Error;
 
+use crate::AggregationOperator;
+use crate::ArithmeticOperator;
+use crate::BuiltinOperator;
+use crate::ComparisonOperator;
+use crate::DataType;
 use crate::Rule;
 
 /// Which `.decl`-style directive is being reported.
@@ -152,8 +160,7 @@ pub enum ParseError {
     },
 
     /// A built-in call passes the wrong number of arguments. Carries the
-    /// keyword string instead of the enum to keep this error layer
-    /// independent of `crate::logic::BuiltinOperator`.
+    /// keyword as the user spelled it.
     #[error("built-in `{op}` expects {expected} argument(s) but got {found}")]
     BuiltinArity {
         span: Span,
@@ -286,11 +293,6 @@ pub enum ParseError {
         name: String,
     },
 
-    /// `.plan (...)` appears without an immediately-preceding rule clause
-    /// to attach to.
-    #[error("`.plan` has no preceding rule to attach to")]
-    PlanOrphan { span: Span },
-
     /// `.plan` index count does not match the rule's positive-atom count.
     #[error("`.plan` expects {expected} index(es) (one per positive body atom) but got {found}")]
     PlanArityMismatch {
@@ -321,12 +323,220 @@ pub enum ParseError {
     )]
     AssignmentVarInNegation { span: Span, var: String },
 
-    /// Assignment desugaring emptied a rule's body, but the head could not be
+    /// Assignment substitution emptied a rule's body, but the head could not be
     /// reduced to constants (an unbound head variable, or a non-integer
-    /// expression). The planner requires at least one positive atom, so the
-    /// rule is rejected here rather than panicking downstream.
+    /// expression). The planner requires at least one positive atom, so the rule
+    /// is rejected during constant folding rather than panicking downstream.
     #[error("rule body reduces to nothing but its head is not a constant fact")]
     GroundRuleNotConst { span: Span },
+
+    /// A string token is not a valid Rust string literal. FlowLog strings
+    /// follow Rust syntax (quoted with Rust's escape alphabet, or raw);
+    /// unknown escapes are errors, unlike Souffle's pass-through.
+    #[error("invalid string literal: {reason}")]
+    InvalidStringLiteral { span: Span, reason: String },
+
+    // ─── Semantic (type-check) errors ────────────────────────────────
+    /// A variable is bound to one type and later reused with another.
+    #[error("variable `{var}` bound as `{first_ty:?}` but used as `{later_ty:?}`")]
+    TypeMismatch {
+        var: String,
+        first_ty: DataType,
+        first_span: Span,
+        later_ty: DataType,
+        later_span: Span,
+    },
+
+    /// Two factors of a single arithmetic expression have different types.
+    #[error("mixed types in arithmetic expression: `{left:?}` and `{right:?}`")]
+    ArithmeticTypeMismatch {
+        span: Span,
+        left: DataType,
+        right: DataType,
+    },
+
+    /// An arithmetic operator applied to an incompatible type.
+    #[error("arithmetic operator `{op}` is not allowed on `{ty:?}`")]
+    ArithmeticOpNotAllowed {
+        span: Span,
+        op: ArithmeticOperator,
+        ty: DataType,
+    },
+
+    /// The two sides of a comparison have different types.
+    #[error("comparison sides disagree: `{left:?}` {op} `{right:?}`")]
+    ComparisonTypeMismatch {
+        span: Span,
+        op: ComparisonOperator,
+        left: DataType,
+        right: DataType,
+    },
+
+    /// An ordering comparison (`<`, `<=`, `>`, `>=`) applied to a type
+    /// with no natural order (`Bool`).
+    #[error("comparison operator `{op}` is not allowed on `{ty:?}`")]
+    ComparisonOpNotAllowed {
+        span: Span,
+        op: ComparisonOperator,
+        ty: DataType,
+    },
+
+    /// A constant in an atom or head position doesn't fit the declared
+    /// column family (`5.0` into `Int32`, `"x"` into `Bool`, ...).
+    #[error("literal `{literal}` does not fit column type `{expected:?}`")]
+    LiteralColumnMismatch {
+        span: Span,
+        literal: String,
+        expected: DataType,
+    },
+
+    /// A numeric literal's value does not fit the width its context pins
+    /// it to (`300` into an `int8` column).
+    #[error("literal `{literal}` is out of range for `{target}`")]
+    LiteralOutOfRange {
+        span: Span,
+        literal: String,
+        target: DataType,
+    },
+
+    /// A UDF call has no matching `.extern fn` declaration.
+    #[error("call to undeclared UDF `{name}`")]
+    UndeclaredUdf { span: Span, name: String },
+
+    /// A UDF call passes the wrong number of arguments.
+    #[error("UDF `{name}` expects {expected} argument(s) but got {found}")]
+    UdfArity {
+        span: Span,
+        name: String,
+        expected: usize,
+        found: usize,
+    },
+
+    /// A UDF argument's type doesn't match the declared parameter.
+    #[error("UDF `{name}` parameter `{param}` expects `{expected:?}` but got `{found:?}`")]
+    UdfArgType {
+        span: Span,
+        name: String,
+        param: String,
+        expected: DataType,
+        found: DataType,
+    },
+
+    /// A built-in argument's type isn't in the parameter's allowed set.
+    /// Arity is enforced earlier by [`ParseError::BuiltinArity`](crate::ParseError),
+    /// so the typechecker only worries about per-arg type fit. `expected` is the
+    /// set of accepted types (one element for a fixed param, several for a
+    /// polymorphic one like `to_string`).
+    #[error("built-in `{op}` argument {arg_index} expects `{expected:?}` but got `{found:?}`")]
+    BuiltinArgType {
+        span: Span,
+        op: BuiltinOperator,
+        arg_index: usize,
+        expected: Vec<DataType>,
+        found: DataType,
+    },
+
+    /// `ord(s)` was used without `--str-intern`. `ord` returns the
+    /// symbol's intern key, which only exists when strings are
+    /// interned; there's no collision-free fallback to use otherwise.
+    #[error("built-in `ord` requires `--str-intern` to be enabled")]
+    OrdRequiresStrIntern { span: Span },
+
+    /// A `_` placeholder appears in a tuple *construct* (`x = (a, _)`).
+    /// Placeholders are only meaningful when destructuring.
+    #[error("`_` placeholder is not allowed when constructing a tuple")]
+    TuplePlaceholderInConstruct { span: Span },
+
+    /// A tuple destructure (`(a, b) = x`) doesn't match `x`'s type — `x` is
+    /// not a tuple, or the pattern has more fields than the tuple.
+    #[error("invalid tuple destructure: {detail}")]
+    TupleDestructure { span: Span, detail: String },
+
+    /// A tuple construct (`(e0, …)`) doesn't match the declared tuple type —
+    /// wrong field count or a field whose value type doesn't fit.
+    #[error("invalid tuple construct: {detail}")]
+    TupleConstruct { span: Span, detail: String },
+
+    /// `sum` / `avg` / `min` / `max` applied to a non-numeric input.
+    #[error("aggregation `{op:?}` requires a numeric input but got `{ty:?}`")]
+    AggregationInputNotNumeric {
+        span: Span,
+        op: AggregationOperator,
+        ty: DataType,
+    },
+
+    /// The declared output type of an aggregation contradicts the
+    /// operator's contract.
+    #[error("aggregation `{op:?}` cannot produce result of type `{declared:?}`")]
+    AggregationOutputType {
+        span: Span,
+        op: AggregationOperator,
+        declared: DataType,
+    },
+
+    /// A head column's type disagrees with the relation's `.decl`.
+    #[error("head column {col} of `{rel}` expects `{expected:?}` but produces `{found:?}`")]
+    HeadColumnType {
+        span: Span,
+        rel: String,
+        col: usize,
+        expected: DataType,
+        found: DataType,
+    },
+
+    /// A head's arity disagrees with the relation's `.decl`.
+    #[error("head `{rel}` expects arity {expected} but got {found}")]
+    HeadArity {
+        span: Span,
+        rel: String,
+        expected: usize,
+        found: usize,
+    },
+
+    /// Sibling subtypes joined at the same variable (no meet).
+    #[error(
+        "variable `{var}` declared as `{first_ty}` but later used as `{later_ty}` (no common subtype)"
+    )]
+    SubtypeMismatch {
+        var: String,
+        first_ty: String,
+        first_span: Span,
+        later_ty: String,
+        later_span: Span,
+    },
+
+    /// Comparison operands with no common subtype — e.g. `x = y` where
+    /// `x: UserId` and `y: ProductId` are siblings of `number`.
+    #[error("comparison operands have incompatible subtypes: `{left_ty}` and `{right_ty}`")]
+    ComparisonSubtypeMismatch {
+        span: Span,
+        left_ty: String,
+        right_ty: String,
+    },
+
+    /// Narrowing in a head column without an explicit `as()`.
+    #[error(
+        "head column {col} of `{rel}` expects `{expected}` but receives `{found}` (use `as(expr, {expected})` to narrow)"
+    )]
+    HeadSubtypeMismatch {
+        span: Span,
+        rel: String,
+        col: usize,
+        expected: String,
+        found: String,
+    },
+
+    /// `as(expr, T)` where source and target have different primitive roots.
+    #[error("illegal cast: cannot cast `{from}` to `{to}` (different primitive roots)")]
+    IllegalCast {
+        span: Span,
+        from: String,
+        to: String,
+    },
+
+    /// `as(expr, T)` where `T` is undeclared.
+    #[error("unknown cast target type `{name}`")]
+    UnknownCastType { span: Span, name: String },
 
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
@@ -337,7 +547,7 @@ pub enum ParseError {
 impl ParseError {
     /// Construct a [`ParseError::Syntax`] from a Pest error, anchoring the
     /// span to `file`.
-    pub fn syntax_from_pest(err: &pest::error::Error<Rule>, file: FileId) -> Self {
+    pub(crate) fn syntax_from_pest(err: &pest::error::Error<Rule>, file: FileId) -> Self {
         use pest::error::InputLocation;
         let (start, end) = match err.location {
             InputLocation::Pos(p) => (p as u32, p as u32),
@@ -352,11 +562,12 @@ impl ParseError {
 
 impl Diagnostic for ParseError {
     fn to_diagnostic(&self) -> CsDiagnostic<FileId> {
-        if let ParseError::Internal(e) = self {
-            return e.to_diagnostic();
-        }
         let base = CsDiagnostic::error().with_message(self.to_string());
         match self {
+            // An internal error renders as its own bug-report diagnostic; every
+            // other variant is a user diagnostic built on `base`.
+            ParseError::Internal(e) => e.to_diagnostic(),
+
             ParseError::DuplicateDecl { span, prior, .. }
             | ParseError::DuplicateExternFn { span, prior, .. } => {
                 base.with_labels(dup_labels(*span, *prior, "redeclared here", "first declared here"))
@@ -488,12 +699,6 @@ impl Diagnostic for ParseError {
                 "`.override {name}` may only target an inherited relation; drop the local `.decl {name}` from this comp"
             )]),
 
-            ParseError::PlanOrphan { span } => base
-                .with_labels(primary_only(*span))
-                .with_notes(vec![
-                    "place `.plan (...)` immediately after the rule it pins".into(),
-                ]),
-
             ParseError::PlanArityMismatch { span, expected, .. } => base
                 .with_labels(primary_only(*span))
                 .with_notes(vec![format!(
@@ -551,8 +756,250 @@ impl Diagnostic for ParseError {
             | ParseError::AssignmentVarInNegation { span, .. }
             | ParseError::GroundRuleNotConst { span }
             | ParseError::IncludeIo { span, .. } => base.with_labels(primary_only(*span)),
+            ParseError::TypeMismatch {
+                var,
+                first_ty,
+                first_span,
+                later_ty,
+                later_span,
+            } => {
+                let mut label_vec = Vec::new();
+                if let Some(l) = primary_label(*later_span) {
+                    label_vec.push(l.with_message(format!("`{var}` used as `{later_ty:?}` here")));
+                }
+                if let Some(l) = secondary_label(*first_span) {
+                    label_vec
+                        .push(l.with_message(format!("`{var}` first bound as `{first_ty:?}`")));
+                }
+                base.with_labels(label_vec).with_notes(vec![
+                    "a variable's type is fixed by its first positive-atom occurrence; \
+                     all later uses must agree"
+                        .into(),
+                ])
+            }
 
-            ParseError::Internal(_) => unreachable!("handled above"),
+            ParseError::ArithmeticTypeMismatch { span, left, right } => {
+                base.with_labels(labels(
+                    *span,
+                    format!("`{left:?}` and `{right:?}` cannot be combined"),
+                ))
+            }
+
+            ParseError::ArithmeticOpNotAllowed { span, op, ty } => base
+                .with_labels(labels(*span, format!("`{op}` cannot apply to `{ty:?}`")))
+                .with_notes(vec![
+                    "numeric operators (`+`, `-`, `*`, `/`, `%`) require numeric factors; \
+                     `cat` requires strings; `Bool` has no arithmetic"
+                        .into(),
+                ]),
+
+            ParseError::ComparisonTypeMismatch {
+                span, left, right, ..
+            } => base.with_labels(labels(
+                *span,
+                format!("`{left:?}` cannot be compared with `{right:?}`"),
+            )),
+
+            ParseError::ComparisonOpNotAllowed { span, op, ty } => base
+                .with_labels(labels(*span, format!("`{op}` cannot apply to `{ty:?}`")))
+                .with_notes(vec![
+                    "ordering comparisons (`<`, `<=`, `>`, `>=`) require numeric or \
+                     string operands; `=` and `!=` work on any matching types"
+                        .into(),
+                ]),
+
+            ParseError::UndeclaredUdf { span, name } => base
+                .with_labels(labels(*span, format!("`{name}` is never declared")))
+                .with_notes(vec![format!(
+                    "add a matching `.extern fn {name}(...): ...` declaration, \
+                     or remove the call"
+                )]),
+
+            ParseError::UdfArity {
+                span,
+                name,
+                expected,
+                found,
+            } => base.with_labels(labels(
+                *span,
+                format!("`{name}` expects {expected} argument(s), got {found}"),
+            )),
+
+            ParseError::UdfArgType {
+                span,
+                name,
+                param,
+                expected,
+                found,
+            } => base.with_labels(labels(
+                *span,
+                format!("`{name}` param `{param}`: expected `{expected:?}`, got `{found:?}`"),
+            )),
+
+            ParseError::BuiltinArgType {
+                span,
+                op,
+                arg_index,
+                expected,
+                found,
+            } => {
+                let expected = expected
+                    .iter()
+                    .map(|t| format!("{t:?}"))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                base.with_labels(labels(
+                    *span,
+                    format!(
+                        "built-in `{op}` arg {arg_index}: expected `{expected}`, got `{found:?}`"
+                    ),
+                ))
+            }
+
+            ParseError::OrdRequiresStrIntern { span } => base
+                .with_labels(labels(*span, "`ord` used here"))
+                .with_notes(vec![
+                    "ord returns the symbol's intern key — a unique per-string \
+                     integer that only exists when strings are interned. Compile \
+                     with `--str-intern` (binary mode) or `.string_intern(true)` \
+                     (library mode) to use it."
+                        .into(),
+                ]),
+
+            ParseError::TuplePlaceholderInConstruct { span } => base
+                .with_labels(labels(*span, "`_` placeholder here"))
+                .with_notes(vec![
+                    "a `_` can only ignore a component when destructuring a bound \
+                     tuple (`(a, _) = x`); a construct must supply every field."
+                        .into(),
+                ]),
+
+            ParseError::TupleDestructure { span, detail }
+            | ParseError::TupleConstruct { span, detail } => {
+                base.with_labels(labels(*span, detail.clone()))
+            }
+
+            ParseError::AggregationInputNotNumeric { span, op, ty } => {
+                base.with_labels(labels(
+                    *span,
+                    format!("`{op:?}` requires a numeric column but found `{ty:?}`"),
+                ))
+            }
+
+            ParseError::AggregationOutputType { span, op, declared } => {
+                base.with_labels(labels(
+                    *span,
+                    format!("declared as `{declared:?}`, incompatible with `{op:?}`"),
+                ))
+            }
+
+            ParseError::HeadColumnType {
+                span,
+                rel,
+                col,
+                expected,
+                found,
+            } => base.with_labels(labels(
+                *span,
+                format!("`{rel}` column {col} expects `{expected:?}`, got `{found:?}`"),
+            )),
+
+            ParseError::HeadArity {
+                span,
+                rel,
+                expected,
+                found,
+            } => base.with_labels(labels(
+                *span,
+                format!("`{rel}` expects {expected} column(s), got {found}"),
+            )),
+
+            ParseError::LiteralColumnMismatch {
+                span,
+                literal,
+                expected,
+            } => base.with_labels(labels(
+                *span,
+                format!("`{literal}` does not fit `{expected:?}`"),
+            )),
+
+            ParseError::InvalidStringLiteral { span, reason } => {
+                base.with_labels(labels(*span, reason.clone()))
+            }
+
+            ParseError::LiteralOutOfRange {
+                span,
+                literal,
+                target,
+            } => base.with_labels(labels(
+                *span,
+                format!("`{literal}` is out of range for `{target}`"),
+            )),
+
+            ParseError::SubtypeMismatch {
+                var,
+                first_ty,
+                first_span,
+                later_ty,
+                later_span,
+            } => {
+                let mut label_vec = Vec::new();
+                if let Some(l) = primary_label(*later_span) {
+                    label_vec.push(l.with_message(format!("`{var}` used as `{later_ty}` here")));
+                }
+                if let Some(l) = secondary_label(*first_span) {
+                    label_vec.push(l.with_message(format!("`{var}` first bound as `{first_ty}`")));
+                }
+                base.with_labels(label_vec).with_notes(vec![
+                    "sibling subtypes of the same primitive are intentionally incompatible — \
+                     wrap one side with `as(expr, OtherType)` if you really mean to join them"
+                        .into(),
+                ])
+            }
+
+            ParseError::ComparisonSubtypeMismatch {
+                span,
+                left_ty,
+                right_ty,
+            } => base
+                .with_labels(labels(
+                    *span,
+                    format!("`{left_ty}` and `{right_ty}` have no common subtype"),
+                ))
+                .with_notes(vec![
+                    "wrap one side with `as(expr, OtherType)` to assert they should compare".into(),
+                ]),
+
+            ParseError::HeadSubtypeMismatch {
+                span,
+                rel,
+                col,
+                expected,
+                found,
+            } => base
+                .with_labels(labels(
+                    *span,
+                    format!("`{rel}` column {col} expects `{expected}`, found `{found}`"),
+                ))
+                .with_notes(vec![
+                    "head columns allow implicit widening (subtype → parent), \
+                     but narrowing (parent → subtype) requires `as(expr, TargetType)`"
+                        .into(),
+                ]),
+
+            ParseError::IllegalCast { span, from, to } => base
+                .with_labels(labels(*span, format!("`{from}` cannot be cast to `{to}`")))
+                .with_notes(vec![
+                    "`as()` only casts within the same primitive root \
+                     (e.g. between two `<: number` subtypes)"
+                        .into(),
+                ]),
+
+            ParseError::UnknownCastType { span, name } => base
+                .with_labels(labels(*span, format!("`{name}` is not a declared type")))
+                .with_notes(vec![format!(
+                    "use a built-in primitive or add `.type {name} = ...` (or `<:`)"
+                )]),
         }
     }
 
@@ -561,12 +1008,14 @@ impl Diagnostic for ParseError {
     }
 }
 
-/// Produce a `ParseError::Internal` for a Pest grammar-contract violation.
+/// Produce a `ParseError::Internal` for a violated internal invariant — an
+/// "impossible" state an earlier stage should have guaranteed.
 ///
-/// Use this at sites where an `.expect` would otherwise fire on an inner
-/// token that the grammar guarantees — e.g. `"atom_rule always contains
-/// relation_name"`. If such a site ever trips, it's a FlowLog bug, not a
-/// user error.
+/// Use this instead of an `.expect`/`panic!` at sites the grammar or an
+/// earlier pass makes unreachable: a Pest token the grammar guarantees
+/// (`"atom_rule always contains relation_name"`), or a type-check invariant
+/// (`"subtype pass: atom already declared"`). If such a site ever trips, it's
+/// a FlowLog bug, not a user error.
 pub fn grammar_bug(detail: impl Into<String>) -> ParseError {
     ParseError::Internal(InternalError::new("parser", detail, BUG_URL))
 }
@@ -651,5 +1100,18 @@ mod tests {
         assert!(out.contains("bug"), "got: {out}");
         assert!(out.contains("ghosts in the AST"), "got: {out}");
         assert!(out.contains(BUG_URL), "got: {out}");
+    }
+
+    /// A grammar failure is mapped to `ParseError::Syntax` by `syntax_from_pest`.
+    #[test]
+    fn syntax_from_pest_maps_grammar_failure_to_syntax() {
+        use pest::Parser as _;
+
+        let err = crate::FlowLogParser::parse(Rule::main_grammar, ".decl edge(x: number")
+            .expect_err("a malformed `.decl` should fail the grammar");
+        assert!(matches!(
+            ParseError::syntax_from_pest(&err, FileId::new(0)),
+            ParseError::Syntax { .. }
+        ));
     }
 }

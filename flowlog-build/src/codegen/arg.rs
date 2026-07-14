@@ -8,7 +8,7 @@
 use flowlog_parser::ArithmeticOperator;
 use flowlog_parser::BuiltinOperator;
 use flowlog_parser::ComparisonOperator;
-use flowlog_parser::ConstType;
+use flowlog_parser::Constant;
 use flowlog_parser::DataType;
 use proc_macro2::Ident;
 use proc_macro2::Literal;
@@ -318,12 +318,13 @@ impl CodeGen {
                     quote! {}
                 };
                 let hay = read_str(r);
-                if let FactorArgument::Const(ConstType::Text(p)) = left.init()
+                if let FactorArgument::Const(c) = left.init()
+                    && c.ty() == &DataType::String
                     && left.rest().is_empty()
                 {
                     // Literal pattern (the common case): anchor at codegen time
                     // and compile once per call site via a `LazyLock` static.
-                    let anchored = format!("^(?:{p})$");
+                    let anchored = format!("^(?:{})$", c.text());
                     quote! {{
                         static RE: ::std::sync::LazyLock<
                             Option<::flowlog_runtime::regex::Regex>,
@@ -372,7 +373,7 @@ impl CodeGen {
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
-                        && c.operator().is_inequality()
+                        && c.operator().is_ordering()
                         && self.infer_expr_type(c.left(), input_type, None)? == DataType::String
                         && self.infer_expr_type(c.right(), input_type, None)? == DataType::String
                     {
@@ -417,7 +418,7 @@ impl CodeGen {
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
-                        && c.operator().is_inequality()
+                        && c.operator().is_ordering()
                         && self.infer_expr_type(c.left(), left_type, Some(right_type))?
                             == DataType::String
                         && self.infer_expr_type(c.right(), left_type, Some(right_type))?
@@ -467,7 +468,7 @@ impl CodeGen {
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
-                        && c.operator().is_inequality()
+                        && c.operator().is_ordering()
                         && self.infer_expr_type(c.left(), input_type, None)? == DataType::String
                         && self.infer_expr_type(c.right(), input_type, None)? == DataType::String
                     {
@@ -555,72 +556,76 @@ pub(super) fn build_row_constraints_predicate(
 // Constraint helpers
 // ==================================================
 
-/// Lower a parsed constant to the internal tuple-slot expression —
-/// wraps floats in `OrderedFloat`, interns strings when enabled.
+/// Emit the Rust literal for one constant, parsed from its spelling in
+/// its pinned width.
 ///
-/// Every numeric variant emits an unsuffixed literal so Rust's own
+/// Every numeric constant emits an unsuffixed literal so Rust's own
 /// inference picks the matching width from the enclosing tuple type.
-/// Returns `CodegenError::internal` for polymorphic `Int` / `Float` — the
-/// typechecker should have pinned those to a concrete width first.
+/// Returns `CodegenError::internal` for an unpinned literal family or a
+/// spelling that does not parse — the typechecker pins every literal to
+/// a width its spelling fits.
 pub fn const_to_token(
-    constant: &ConstType,
+    constant: &Constant,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
-    Ok(match constant {
-        ConstType::Int(_) | ConstType::Float(_) => {
+    let text = constant.text();
+    macro_rules! int_lit {
+        ($t:ty, $ctor:path) => {{
+            let v: $t = text.parse().map_err(|_| {
+                CodegenError::internal(format!(
+                    "constant `{text}` does not parse as {}",
+                    stringify!($t)
+                ))
+            })?;
+            let lit = $ctor(v);
+            quote! { #lit }
+        }};
+    }
+    macro_rules! float_lit {
+        ($t:ty, $ctor:path) => {{
+            let v: $t = text.parse().map_err(|_| {
+                CodegenError::internal(format!(
+                    "constant `{text}` does not parse as {}",
+                    stringify!($t)
+                ))
+            })?;
+            let lit = $ctor(v);
+            quote! { OrderedFloat(#lit) }
+        }};
+    }
+    Ok(match constant.ty() {
+        DataType::IntLit | DataType::FloatLit => {
             return Err(CodegenError::internal(format!(
                 "polymorphic literal {constant:?} reached codegen; \
                  typechecker should have pinned it"
             )));
         }
-        ConstType::Int8(n) => {
-            let lit = Literal::i8_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::Int16(n) => {
-            let lit = Literal::i16_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::Int32(n) => {
-            let lit = Literal::i32_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::Int64(n) => {
-            let lit = Literal::i64_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::UInt8(n) => {
-            let lit = Literal::u8_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::UInt16(n) => {
-            let lit = Literal::u16_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::UInt32(n) => {
-            let lit = Literal::u32_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::UInt64(n) => {
-            let lit = Literal::u64_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::Float32(v) => {
-            let lit = Literal::f32_unsuffixed(v.into_inner());
-            quote! { OrderedFloat(#lit) }
-        }
-        ConstType::Float64(v) => {
-            let lit = Literal::f64_unsuffixed(v.into_inner());
-            quote! { OrderedFloat(#lit) }
-        }
-        ConstType::Text(s) => {
+        DataType::Int8 => int_lit!(i8, Literal::i8_unsuffixed),
+        DataType::Int16 => int_lit!(i16, Literal::i16_unsuffixed),
+        DataType::Int32 => int_lit!(i32, Literal::i32_unsuffixed),
+        DataType::Int64 => int_lit!(i64, Literal::i64_unsuffixed),
+        DataType::UInt8 => int_lit!(u8, Literal::u8_unsuffixed),
+        DataType::UInt16 => int_lit!(u16, Literal::u16_unsuffixed),
+        DataType::UInt32 => int_lit!(u32, Literal::u32_unsuffixed),
+        DataType::UInt64 => int_lit!(u64, Literal::u64_unsuffixed),
+        DataType::Float32 => float_lit!(f32, Literal::f32_unsuffixed),
+        DataType::Float64 => float_lit!(f64, Literal::f64_unsuffixed),
+        DataType::String => {
             if string_intern {
-                quote! { intern(#s) }
+                quote! { intern(#text) }
             } else {
-                quote! { #s.to_string() }
+                quote! { #text.to_string() }
             }
         }
-        ConstType::Bool(b) => quote! { #b },
+        DataType::Bool => {
+            let b = text == "True";
+            quote! { #b }
+        }
+        DataType::FixedTuple(_) => {
+            return Err(CodegenError::internal(format!(
+                "tuple-typed constant `{text}` cannot appear as a literal"
+            )));
+        }
     })
 }
 
@@ -849,12 +854,16 @@ impl CodeGen {
                     var_token
                 })
             }
-            FactorArgument::Const(c) => match c {
-                // String literals are already displayable – emit them
+            FactorArgument::Const(c) => {
+                // String literals are already displayable - emit them
                 // directly without interning first.
-                ConstType::Text(s) => Ok(quote! { #s }),
-                _ => const_to_token(c, string_intern),
-            },
+                if c.ty() == &DataType::String {
+                    let s = c.text();
+                    Ok(quote! { #s })
+                } else {
+                    const_to_token(c, string_intern)
+                }
+            }
             FactorArgument::FnCall { name, args } => {
                 // UDF returns Spur when string_intern is on — resolve for display.
                 let call = self.fncall_to_token(name, args, string_intern, resolve_var)?;
