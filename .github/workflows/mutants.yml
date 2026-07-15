@@ -42,7 +42,7 @@ jobs:
       - name: 🧬 Install cargo-mutants
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-mutants
+          tool: cargo-mutants,cargo-nextest
 
       - name: 🧬 Mutation test (shard ${{ matrix.shard }}/8)
         run: |
