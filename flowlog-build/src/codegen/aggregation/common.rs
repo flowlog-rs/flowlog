@@ -483,7 +483,7 @@ pub(crate) fn aggregation_reduce_stmt(
         (quote! { reduce_core }, aggregation_reduce(op, agg_type)?)
     };
     Ok(quote! {
-        .#combinator::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>,_>(
+        .#combinator::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>,_,_>(
             "aggregation",
             #reduce_logic,
             |vec, key, upds| {
