@@ -121,8 +121,8 @@ pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Fe
     doc["dependencies"] = Item::Table(Table::new());
     {
         let deps = doc["dependencies"].as_table_mut().unwrap();
-        deps["timely"] = "0.30".into();
-        deps["differential-dataflow"] = "0.24".into();
+        deps["timely"] = "0.31".into();
+        deps["differential-dataflow"] = "0.25".into();
         deps["mimalloc"] = "0.1".into();
         // 0.2.3 is the minimum carrying the `regex` re-export that generated
         // `match(...)` code resolves through (`::flowlog_runtime::regex`).
