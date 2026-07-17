@@ -103,7 +103,12 @@ impl Compiler {
 /// Dependencies are feature-gated: we emit only what the generated code
 /// actually references so the downstream `cargo build` pulls the minimum
 /// set of crates.
-pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Features) -> String {
+pub(crate) fn render_cargo_toml(
+    crate_name: &str,
+    config: &Config,
+    features: &Features,
+    keep_build_dir: bool,
+) -> String {
     let mut doc = DocumentMut::new();
 
     doc["package"] = Item::Table(Table::new());
@@ -121,6 +126,9 @@ pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Fe
     // Build the emitted crate at opt-level 2 without unwinding: both
     // measured runtime-neutral on the generated dataflow code while
     // cutting `cargo build --release` about 3x on large programs.
+    // Incremental compilation pays off only when the build directory
+    // survives to the next compile and costs cold-build time otherwise,
+    // so it is emitted only for kept (user-named) directories.
     {
         let mut profile = Table::new();
         profile.set_implicit(true);
@@ -129,6 +137,9 @@ pub(crate) fn render_cargo_toml(crate_name: &str, config: &Config, features: &Fe
         let release = doc["profile"]["release"].as_table_mut().unwrap();
         release["opt-level"] = value(2);
         release["panic"] = "abort".into();
+        if keep_build_dir {
+            release["incremental"] = value(true);
+        }
     }
 
     doc["dependencies"] = Item::Table(Table::new());
@@ -222,9 +233,15 @@ fn ensure_dir(dir: &Path) -> io::Result<()> {
 }
 
 /// Write a UTF-8 text file, creating parent directories as needed.
+/// Skips the write when the file already holds `contents`: preserving the
+/// mtime lets cargo fingerprint an unchanged generated source as fresh,
+/// so recompiling an unmodified program is a no-op.
 fn write_file(path: &Path, contents: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;
+    }
+    if fs::read_to_string(path).is_ok_and(|current| current == contents) {
+        return Ok(());
     }
     fs::write(path, contents)
 }
@@ -239,3 +256,59 @@ const PROMPT_RS_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/templates/prompt_rs.tpl"
 ));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `incremental = true` costs cold-build time and pays off only when
+    /// the build directory survives to a later compile, so it must ride
+    /// with kept directories and never with scratch ones.
+    #[test]
+    fn incremental_is_emitted_only_for_kept_build_dirs() {
+        let config = Config::default();
+        let features = Features::default();
+        let kept = render_cargo_toml("bin", &config, &features, true);
+        let scratch = render_cargo_toml("bin", &config, &features, false);
+        assert!(kept.contains("incremental = true"));
+        assert!(!scratch.contains("incremental"));
+    }
+
+    /// An unchanged file must keep its mtime so cargo fingerprints it as
+    /// fresh; a changed one must be rewritten. Exercised directly because
+    /// the mtime effect is unobservable through the public API without
+    /// running cargo.
+    #[test]
+    fn write_file_rewrites_only_on_content_change() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("main.rs");
+        write_file(&path, "fn main() {}").expect("initial write");
+
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        let file = fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open for mtime");
+        file.set_modified(old).expect("set mtime");
+        drop(file);
+
+        write_file(&path, "fn main() {}").expect("no-op rewrite");
+        let unchanged = fs::metadata(&path)
+            .expect("metadata")
+            .modified()
+            .expect("mtime");
+        assert_eq!(
+            unchanged, old,
+            "content-equal write must not touch the file"
+        );
+
+        write_file(&path, "fn main() { run() }").expect("changed rewrite");
+        let changed = fs::metadata(&path)
+            .expect("metadata")
+            .modified()
+            .expect("mtime");
+        assert_ne!(changed, old, "changed content must be written out");
+        let body = fs::read_to_string(&path).expect("read back");
+        assert_eq!(body, "fn main() { run() }");
+    }
+}

@@ -57,10 +57,13 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub udf_file: Option<String>,
 
-    /// Keep the intermediate generated Rust crate instead of cleaning it up
-    /// after building the executable.
-    #[arg(long)]
-    pub save_temps: bool,
+    /// Build the generated Rust crate in DIR and keep it afterwards.
+    /// Reusing the same DIR skips dependency rebuilds, reuses incremental
+    /// artifacts across recompiles, and leaves the generated sources
+    /// readable. Without it, the crate is built in a hidden scratch
+    /// directory that is removed after a successful build.
+    #[arg(short = 'B', long, value_name = "DIR")]
+    pub build_dir: Option<String>,
 
     /// Type-check the generated crate with `cargo check` instead of building
     /// an executable. Faster; conflicts with `-o`.
@@ -97,7 +100,7 @@ impl Cli {
             self.executable_path.clone(),
             self.output_dir.clone(),
             self.fact_dir.clone(),
-            self.save_temps,
+            self.build_dir.clone(),
             self.check,
         )
     }
