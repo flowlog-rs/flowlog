@@ -6,8 +6,9 @@
 //!    complete Cargo project (`main.rs`, `relation.rs`, `Cargo.toml`, etc.)
 //!    under [`CompileOptions::build_dir`]. No external tools are invoked.
 //! 2. **`build`** — shell out to `cargo build --release` in that directory,
-//!    copy the resulting binary to [`CompileOptions::executable_path`], and remove
-//!    the intermediate crate unless [`CompileOptions::save_temps`] is set.
+//!    copy the resulting binary to [`CompileOptions::executable_path`], and
+//!    remove the scratch crate unless the user named a build directory
+//!    (a named directory persists and doubles as a recompile cache).
 //!
 //! Both are `pub(crate)`; external callers use [`Compiler::compile`] which
 //! runs them in sequence.
@@ -59,8 +60,12 @@ impl Compiler {
         let main_rs = self.assemble_main(&parts, &bin_imports, &worker_helpers)?;
 
         // Cargo project metadata.
-        let cargo_toml =
-            scaffold::render_cargo_toml(&self.options.crate_name(), &self.config, features);
+        let cargo_toml = scaffold::render_cargo_toml(
+            &self.options.crate_name(),
+            &self.config,
+            features,
+            self.options.keeps_build_dir(),
+        );
         let cargo_config = scaffold::render_cargo_config();
 
         self.write_project(&parts, &main_rs, &relation_rs, &cargo_toml, &cargo_config)
@@ -69,8 +74,8 @@ impl Compiler {
     }
 
     /// Compile the emitted crate with `cargo build --release`, install the
-    /// binary at [`CompileOptions::executable_path`], and (unless `--save-temps`)
-    /// remove the intermediate crate directory.
+    /// binary at [`CompileOptions::executable_path`], and remove the crate
+    /// directory unless [`CompileOptions::keeps_build_dir`] holds.
     pub(crate) fn build(&self) -> io::Result<()> {
         let build_dir = self.options.build_dir();
         let crate_name = self.options.crate_name();
@@ -102,9 +107,11 @@ impl Compiler {
         Ok(())
     }
 
-    /// Remove the intermediate crate directory unless `--save-temps` is set.
+    /// Remove the crate directory unless [`CompileOptions::keeps_build_dir`]
+    /// holds; a kept directory persists as the recompile cache (see
+    /// [`CompileOptions::build_dir`]).
     fn cleanup_build_dir(&self, build_dir: &Path) -> io::Result<()> {
-        if !self.options.save_temps() {
+        if !self.options.keeps_build_dir() {
             fs::remove_dir_all(build_dir).map_err(|e| {
                 io::Error::new(
                     e.kind(),
@@ -140,8 +147,9 @@ fn run_cargo(build_dir: &Path, args: &[&str]) -> io::Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(io::Error::other(format!(
-            "cargo {} failed:\n{stderr}",
-            args.join(" ")
+            "cargo {} failed (generated crate kept at '{}'):\n{stderr}",
+            args.join(" "),
+            build_dir.display()
         )));
     }
     Ok(())

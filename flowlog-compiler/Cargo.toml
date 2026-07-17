@@ -25,5 +25,8 @@ flowlog-common = { workspace = true, features = ["clap"] }
 flowlog-parser.workspace = true
 flowlog-profiler.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

@@ -362,6 +362,7 @@ dependencies = [
  "flowlog-profiler",
  "proc-macro2",
  "quote",
+ "tempfile",
  "thiserror",
  "toml_edit",
  "tracing",

@@ -64,8 +64,9 @@ impl Compiler {
     }
 
     /// Emit the scaffolded Rust crate, run `cargo build --release`, copy the
-    /// binary to [`CompileOptions::executable_path`], and clean up build artifacts
-    /// unless [`CompileOptions::save_temps`] is set. When [`CompileOptions::check_only`]
+    /// binary to [`CompileOptions::executable_path`], and clean up the
+    /// scratch crate unless the user named a build directory, which then
+    /// persists as a recompile cache. When [`CompileOptions::check_only`]
     /// is set, the crate is type-checked with `cargo check` instead.
     ///
     /// Returns a [`BoxError`] on failure — user-facing codegen diagnostics

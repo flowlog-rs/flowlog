@@ -14,8 +14,12 @@ pub struct CompileOptions {
     output_dir: Option<String>,
     /// Directory containing input fact files, if any.
     fact_dir: Option<String>,
-    /// Keep the intermediate generated Rust crate instead of cleaning it up.
-    save_temps: bool,
+    /// User-named build directory for the generated crate. Naming one opts
+    /// into persistence: the directory survives the build and doubles as a
+    /// recompile cache (an unchanged program rebuilds as a cargo no-op, an
+    /// edited one incrementally). `None` builds in a hidden scratch
+    /// directory that is removed after a successful build.
+    build_dir: Option<PathBuf>,
     /// Type-check the emitted crate with `cargo check`.
     check_only: bool,
 }
@@ -28,7 +32,7 @@ impl CompileOptions {
         executable_path: Option<String>,
         output_dir: Option<String>,
         fact_dir: Option<String>,
-        save_temps: bool,
+        build_dir: Option<String>,
         check_only: bool,
     ) -> Self {
         let executable_path = executable_path
@@ -38,7 +42,7 @@ impl CompileOptions {
             executable_path,
             output_dir,
             fact_dir,
-            save_temps,
+            build_dir: build_dir.map(PathBuf::from),
             check_only,
         }
     }
@@ -54,12 +58,21 @@ impl CompileOptions {
             .unwrap_or("out")
     }
 
-    /// Intermediate build directory for the generated Rust crate.
-    /// Uses a hidden dotfile name so it won't collide
+    /// Build directory for the generated Rust crate: the user-named one
+    /// when given, otherwise a scratch sibling of the executable. The
+    /// scratch default uses a hidden dotfile name so it won't collide
     /// with the final executable or any user files.
     pub fn build_dir(&self) -> PathBuf {
-        self.executable_path
-            .with_file_name(format!(".{}.build", self.executable_name()))
+        self.build_dir.clone().unwrap_or_else(|| {
+            self.executable_path
+                .with_file_name(format!(".{}.build", self.executable_name()))
+        })
+    }
+
+    /// Returns `true` if the user named a build directory, which then
+    /// persists after the build.
+    pub fn keeps_build_dir(&self) -> bool {
+        self.build_dir.is_some()
     }
 
     /// Sanitized name suitable for use as a Cargo package/binary name.
@@ -95,11 +108,42 @@ impl CompileOptions {
         self.fact_dir.as_deref()
     }
 
-    pub fn save_temps(&self) -> bool {
-        self.save_temps
-    }
-
     pub fn check_only(&self) -> bool {
         self.check_only
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(executable: Option<&str>, build_dir: Option<&str>) -> CompileOptions {
+        CompileOptions::new(
+            "analysis.dl",
+            executable.map(String::from),
+            None,
+            None,
+            build_dir.map(String::from),
+            false,
+        )
+    }
+
+    /// Scratch builds must not collide with the executable or user files,
+    /// so the default is a hidden dot-directory beside the binary, and it
+    /// is not kept.
+    #[test]
+    fn build_dir_defaults_to_hidden_sibling_of_executable() {
+        let opts = options(Some("out/bin"), None);
+        assert_eq!(opts.build_dir(), PathBuf::from("out/.bin.build"));
+        assert!(!opts.keeps_build_dir());
+    }
+
+    /// Naming a directory replaces the scratch default and opts into
+    /// keeping it.
+    #[test]
+    fn named_build_dir_wins_and_is_kept() {
+        let opts = options(Some("out/bin"), Some("cache/dir"));
+        assert_eq!(opts.build_dir(), PathBuf::from("cache/dir"));
+        assert!(opts.keeps_build_dir());
     }
 }
