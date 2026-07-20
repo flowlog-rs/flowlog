@@ -8,8 +8,8 @@
 
 use flowlog_parser::DataType;
 use flowlog_parser::Relation;
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
 use proc_macro2::Span;
 use proc_macro2::TokenStream;
@@ -43,11 +43,11 @@ impl CodeGen {
     /// Walk IDB relations → fill [`InspectorCodegen`].
     pub(crate) fn collect_inspectors(
         &mut self,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> InspectorCodegen {
         let mut cg = InspectorCodegen::default();
 
-        with_profiler(profiler, |p| p.update_inspect_block());
+        with_plan_graph(plan_graph, |p| p.update_inspect_block());
 
         for idb in self.program.idbs() {
             let var = self.find_global_ident(idb.fingerprint());
@@ -69,7 +69,7 @@ impl CodeGen {
                     &var,
                     idb.raw_name(),
                     &cell_ident,
-                    profiler,
+                    plan_graph,
                 ));
             }
 
@@ -112,14 +112,14 @@ impl CodeGen {
                 // Wiring (first arg) is the collection binding feeding the
                 // sink; the label (second arg) is the human-facing name.
                 if self.config.output_to_stdout() {
-                    with_profiler(profiler, |p| {
+                    with_plan_graph(plan_graph, |p| {
                         p.inspect_content_terminal_operator(
                             var.to_string(),
                             idb.raw_name().to_string(),
                         );
                     });
                 } else {
-                    with_profiler(profiler, |p| {
+                    with_plan_graph(plan_graph, |p| {
                         p.inspect_content_file_operator(
                             var.to_string(),
                             idb.raw_name().to_string(),
@@ -156,7 +156,7 @@ impl CodeGen {
         var: &Ident,
         display: &str,
         cell_ident: &Ident,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> TokenStream {
         let maybe_probe = if self.config.is_incremental() {
             quote! { .probe_with(&mut probe) }
@@ -166,7 +166,7 @@ impl CodeGen {
 
         // Wiring (first arg) is the collection binding feeding the sink;
         // the label (second arg) is the human-facing name.
-        with_profiler(profiler, |p| {
+        with_plan_graph(plan_graph, |p| {
             p.inspect_size_operator(var.to_string(), display.to_string());
         });
 

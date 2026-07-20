@@ -1,8 +1,8 @@
 //! Per-EDB `(handle, collection)` declarations for the dataflow scope.
 
 use flowlog_parser::DataType;
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
@@ -16,7 +16,7 @@ impl CodeGen {
     /// ```ignore
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
-    pub(crate) fn gen_edb_decls(&mut self, profiler: &mut Option<Profiler>) -> Vec<TokenStream> {
+    pub(crate) fn gen_edb_decls(&mut self, plan_graph: &mut Option<PlanGraph>) -> Vec<TokenStream> {
         let normalize = self.dedup_nonrecursive();
 
         let edbs = self.program.edbs();
@@ -41,9 +41,9 @@ impl CodeGen {
             self.features.mark_ordered_float();
         }
 
-        // Record enter inputs block if profiler is enabled
-        with_profiler(profiler, |profiler| {
-            profiler.update_input_block();
+        // Record the enter-inputs block when profiling is on
+        with_plan_graph(plan_graph, |plan_graph| {
+            plan_graph.update_input_block();
         });
 
         let str_intern = self.config.str_intern_enabled();
@@ -55,10 +55,10 @@ impl CodeGen {
                 // ident every downstream flow resolves via fingerprint.
                 let coll = self.find_global_ident(rel.fingerprint());
 
-                // Record source file input operator and dedup operator in profiler if enabled
-                with_profiler(profiler, |profiler| {
-                    profiler.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
-                    profiler.input_dedup_operator(
+                // Record the source-file input and dedup operators when profiling is on
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
+                    plan_graph.input_dedup_operator(
                         rel.raw_name().to_string(),
                         coll.to_string(),
                         coll.to_string(),

@@ -29,7 +29,7 @@ pub use features::Features;
 use flowlog_common::Config;
 use flowlog_parser::DataType;
 use flowlog_parser::Program;
-use flowlog_profiler::Profiler;
+use flowlog_profiler::PlanGraph;
 pub use idb_buffers::field_accessor;
 pub use idb_buffers::gen_drain_block;
 use proc_macro2::Ident;
@@ -85,11 +85,11 @@ impl CodeGen {
     pub fn generate(
         &mut self,
         program_planner: &ProgramPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<CodeParts, CodegenError> {
         self.make_global_ident_map();
         self.features.reset();
         self.outer_arranged.clear();
-        self.collect_parts(program_planner.strata(), profiler)
+        self.collect_parts(program_planner.strata(), plan_graph)
     }
 }

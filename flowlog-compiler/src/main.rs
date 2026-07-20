@@ -8,7 +8,7 @@ use flowlog_common::SourceMap;
 use flowlog_common::emit_and_exit;
 use flowlog_compiler::Cli;
 use flowlog_compiler::Compiler;
-use flowlog_profiler::Profiler;
+use flowlog_profiler::PlanGraph;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -39,15 +39,15 @@ fn main() {
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Plan into the relational intermediate representation.
-    let mut profiler = config
+    let mut plan_graph = config
         .profiling_enabled()
-        .then(|| Profiler::new(config.mode()));
-    let program_planner = ProgramPlanner::from_program(&config, &program, &mut profiler)
+        .then(|| PlanGraph::new(config.mode()));
+    let program_planner = ProgramPlanner::from_program(&config, &program, &mut plan_graph)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Compile into a Rust executable.
     let mut compiler = Compiler::new(config, options, program);
     compiler
-        .compile(&program_planner, &mut profiler)
+        .compile(&program_planner, &mut plan_graph)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 }

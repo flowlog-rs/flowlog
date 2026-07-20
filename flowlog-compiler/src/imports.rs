@@ -1,7 +1,7 @@
 //! `use` statements emitted into the generated binary's `main.rs`.
 //!
 //! All non-stdlib references must resolve against the dependencies declared
-//! in [`crate::scaffold::render_cargo_toml`] — keep the two in sync.
+//! in [`crate::scaffold::render_cargo_toml`]; keep the two in sync.
 
 use flowlog_build::Features;
 use flowlog_common::Config;
@@ -22,10 +22,10 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
 
     out.push(quote! {
         // Mechanically generated dataflow routinely leaves intermediate
-        // collection bindings unused — e.g. a relation declared (with `.input`
+        // collection bindings unused, e.g. a relation declared (with `.input`
         // or inline facts) yet never referenced by any rule body, or a derived
         // collection whose only consumer is an output drain through a separate
-        // handle. These are valid Datalog (Soufflé accepts them); relax just the
+        // handle. These are valid Datalog (Souffle accepts them); relax just the
         // unused-variable lint on the generated binary while `-Dwarnings` keeps
         // every other lint class fatal.
         #![allow(unused_variables)]
@@ -63,7 +63,6 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     if prof {
         out.push(quote! {
             use timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
-            use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
         });
     }
 

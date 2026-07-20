@@ -15,7 +15,7 @@ use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
 use flowlog_parser::Program;
-use flowlog_profiler::Profiler;
+use flowlog_profiler::PlanGraph;
 use proc_macro2::TokenStream;
 
 use crate::BuildError;
@@ -58,13 +58,13 @@ impl Pipeline {
         // The generated library API mirrors relation names verbatim; reject
         // the rare names it cannot represent before codegen runs.
         validate_api_surface(&program)?;
-        let mut profiler = config
+        let mut plan_graph = config
             .profiling_enabled()
-            .then(|| Profiler::new(config.mode()));
-        let program_planner = ProgramPlanner::from_program(&config, &program, &mut profiler)?;
+            .then(|| PlanGraph::new(config.mode()));
+        let program_planner = ProgramPlanner::from_program(&config, &program, &mut plan_graph)?;
 
         let mut cg = CodeGen::new(config.clone(), program.clone());
-        let parts = cg.generate(&program_planner, &mut profiler)?;
+        let parts = cg.generate(&program_planner, &mut plan_graph)?;
         let features = cg.features().clone();
         let relations = gen_input_module(&program, &features)?;
 

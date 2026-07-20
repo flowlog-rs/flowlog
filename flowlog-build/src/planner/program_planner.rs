@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_parser::Program;
-use flowlog_profiler::Profiler;
+use flowlog_profiler::PlanGraph;
 
 use crate::optimizer::Optimizer;
 use crate::planner::StratumPlanner;
@@ -25,7 +25,7 @@ impl ProgramPlanner {
     pub fn from_program(
         config: &Config,
         program: &Program,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Self, BoxError> {
         let stratifier = Stratifier::from_program(program, config.is_extended())?;
         let mut optimizer = Optimizer::new();
@@ -39,7 +39,7 @@ impl ProgramPlanner {
                     config,
                     &rules,
                     &mut optimizer,
-                    profiler,
+                    plan_graph,
                     &stratifier,
                     idx,
                 )

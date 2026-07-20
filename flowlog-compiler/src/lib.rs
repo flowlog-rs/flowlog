@@ -10,7 +10,7 @@
 //!
 //! ```ignore
 //! let mut compiler = Compiler::new(config, program);
-//! compiler.compile(&program_planner, &mut profiler)?;
+//! compiler.compile(&program_planner, &mut plan_graph)?;
 //! ```
 //!
 //! Internal layout:
@@ -39,7 +39,7 @@ use flowlog_build::planner::ProgramPlanner;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_parser::Program;
-use flowlog_profiler::Profiler;
+use flowlog_profiler::PlanGraph;
 pub use options::CompileOptions;
 
 /// Drives code generation + build for a single FlowLog program.
@@ -74,9 +74,9 @@ impl Compiler {
     pub fn compile(
         &mut self,
         program_planner: &ProgramPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(), BoxError> {
-        self.emit_sources(program_planner, profiler)?;
+        self.emit_sources(program_planner, plan_graph)?;
         if self.options.check_only() {
             self.check().map_err(CompilerError::from)?;
         } else {

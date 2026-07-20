@@ -1,0 +1,132 @@
+//! The timely-operator count each codegen pattern expands to, per execution
+//! mode. Address prediction multiplies these counts into the operator
+//! ranges [`crate::plan::node::Node::operators`] records.
+//!
+//! The counts are facts about the pinned dependencies, verified against
+//! differential-dataflow 0.25 / timely 0.31. A dependency bump that changes
+//! an expansion shifts every later address and silently misattributes
+//! metrics, so re-verify this table whenever those crates move; an
+//! end-to-end profiled run of `example/graph_analysis/reach.dl` shows drift
+//! immediately. Only `DatalogBatch` and `DatalogInc` are verified; extended
+//! modes may add operators this table does not know (loop conditions, UDF
+//! pipelines), which is why profiling rejects them.
+//!
+//! Every count below composes these primitives, one per DD combinator, each
+//! listing the operators it adds. The functions further down sum them:
+//!
+//! - `stream.as_collection()` (0 ops)
+//!   - nothing (just wraps)
+//! - `arrangement.as_collection(|k,v| ...)` (1 op)
+//!   - AsCollection
+//! - `.inner.map(...).as_collection()` (1 op)
+//!   - Map
+//! - `.consolidate()` (3 ops)
+//!   - FlatMap + Consolidate + AsCollection
+//! - `.threshold(...)` (4 ops)
+//!   - FlatMap + Arrange:Threshold + Threshold + AsCollection
+//! - `.threshold_semigroup(...)`, `.threshold_total(...)` (3 ops)
+//!   - FlatMap + Arrange:ThresholdTotal + ThresholdTotal
+
+use flowlog_common::ExecutionMode;
+
+/// Operators from arranging a collection, by arrangement kind (the
+/// `only_key` split in `register_arrangement`):
+///
+/// - key-only `arrange_by_self()` (2): ArrangeBySelf + AsCollection
+/// - key-value `arrange_by_key()` (1): ArrangeByKey
+pub(crate) fn arrange(is_key_only: bool) -> u32 {
+    if is_key_only { 2 } else { 1 }
+}
+
+/// Operators from `general_aggregate`, the group-by reduce pipeline
+/// (`reduce_core` batch / `reduce_abelian` incremental), 4 either way:
+///
+/// - Map (row chop) + ArrangeByKey + Reduce + AsCollection (merge)
+pub(crate) const GENERAL_AGGREGATE: u32 = 4;
+
+/// Operators from `opt_aggregate`, the DatalogBatch monoid fast path via
+/// `threshold_semigroup` (skips the second arrange `reduce` would add). The
+/// two Maps are the pre/post `.inner.map().as_collection()`:
+///
+/// - (5): Map + `.threshold_semigroup()` (3) + Map
+pub(crate) const OPT_AGGREGATE: u32 = 5;
+
+/// Operators from the post-leave opt-aggregate step, merging semiring diffs
+/// collapsed across iterations (`.consolidate()` then convert back):
+///
+/// - (4): `.consolidate()` (3) + Map
+pub(crate) const POST_LEAVE_OPT_AGGREGATE: u32 = 4;
+
+/// Operators from `dedup_nonrecursive()`, the trace-free outer-scope dedup
+/// for EDBs and rule outputs. Three in both modes, differing in which:
+///
+/// - batch `.consolidate()` (3)
+/// - i32 `.threshold_total()` (3)
+pub(crate) const DEDUP_NONRECURSIVE: u32 = 3;
+
+/// Operators from `dedup_recursive()`, the in-loop dedup:
+///
+/// - DatalogBatch `.threshold_semigroup(...)` (3)
+/// - others `.threshold(...)` (4)
+///
+/// The SIP projection dedup (`dedup_projection`) emits `.consolidate()`
+/// in batch mode instead, also 3 operators, so these counts cover it in
+/// every mode.
+pub(crate) fn dedup_recursive(mode: ExecutionMode) -> u32 {
+    match mode {
+        ExecutionMode::DatalogBatch => 3,
+        ExecutionMode::DatalogInc | ExecutionMode::ExtendBatch | ExecutionMode::ExtendInc => 4,
+    }
+}
+
+/// Operators in the anti-join pipeline (excluding arrangement), by DD
+/// operator. The deref, weight-adjust, and projection steps are all
+/// `.flat_map`s (hence FlatMap); `join_core` is Join, `.concat` is
+/// Concatenate. `dedup` is the dedup expansion, 3 via `threshold_total` or
+/// 4 via `threshold` (see [`DEDUP_NONRECURSIVE`] / [`dedup_recursive`]).
+///
+/// - DatalogBatch (9): FlatMap (deref) + FlatMap (pos weight) + Join
+///   + FlatMap (neg weight) + Concatenate + FlatMap (project) + dedup (3)
+/// - Others, recursive scope (17): FlatMap + dedup (4) + Join + dedup (4)
+///   + FlatMap + Concatenate + FlatMap + dedup (4)
+/// - Others, outer scope (14): FlatMap + dedup (3) + Join + dedup (3)
+///   + FlatMap + Concatenate + FlatMap + dedup (3)
+pub(crate) fn anti_join(mode: ExecutionMode, recursive: bool) -> u32 {
+    match mode {
+        ExecutionMode::DatalogBatch => 9,
+        ExecutionMode::DatalogInc | ExecutionMode::ExtendBatch | ExecutionMode::ExtendInc => {
+            if recursive {
+                17
+            } else {
+                14
+            }
+        }
+    }
+}
+
+/// Operators in `gen_size_inspector`. Batch is verified against the reach
+/// fixture; Inc swaps the first `.consolidate()` for a `.threshold()` and
+/// probes.
+///
+/// - Batch (9): `.consolidate()` (3) + FlatMap + FlatMap
+///   + `.consolidate()` (3) + InspectBatch
+/// - Inc (11): `.threshold()` (4) + FlatMap + FlatMap + `.consolidate()` (3)
+///   + InspectBatch + Probe
+pub(crate) fn inspect_size(mode: ExecutionMode) -> u32 {
+    match mode {
+        ExecutionMode::DatalogBatch => 9,
+        ExecutionMode::DatalogInc | ExecutionMode::ExtendBatch | ExecutionMode::ExtendInc => 11,
+    }
+}
+
+/// Operators in content inspectors (terminal/file). Not exercised by the
+/// reach fixture, so the names are from codegen, not a run.
+///
+/// - Batch (1): InspectBatch
+/// - Inc (5): `.consolidate()` (3) + InspectBatch + Probe
+pub(crate) fn inspect_content(mode: ExecutionMode) -> u32 {
+    match mode {
+        ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => 5,
+        ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => 1,
+    }
+}

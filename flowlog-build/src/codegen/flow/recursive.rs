@@ -8,8 +8,9 @@ use std::collections::HashMap;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::LoopCondition;
 use flowlog_parser::LoopConnective;
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::try_with_plan_graph;
+use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
 use proc_macro2::Literal;
 use proc_macro2::TokenStream;
@@ -46,13 +47,9 @@ impl CodeGen {
         &mut self,
         non_recursive_arranged_map: &HashMap<u64, Ident>,
         stratum: &StratumPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
         self.features.mark_recursive();
-
-        with_profiler(profiler, |profiler| {
-            profiler.enter_scope();
-        });
 
         // Early exit if nothing leaves recursion.
         let leave_fps = stratum.recursion_leave_collections();
@@ -60,10 +57,16 @@ impl CodeGen {
             return Ok(quote! {});
         }
 
+        // Enter only once the iterative scope is actually generated, or
+        // every later address is recorded one scope too deep.
+        with_plan_graph(plan_graph, |plan_graph| {
+            plan_graph.enter_scope();
+        });
+
         // --- Enter bindings -------------------------------------------------
         let enter_fps = stratum.recursion_enter_collections();
         let (enter_stmts, enter_bindings, mut recursive_arranged) =
-            self.build_enter_bindings(non_recursive_arranged_map, enter_fps, profiler);
+            self.build_enter_bindings(non_recursive_arranged_map, enter_fps, plan_graph);
 
         // --- Recursive variable bindings -------------------------
         let acc_fps = stratum.recursion_accumulate_recursive_collections();
@@ -81,8 +84,8 @@ impl CodeGen {
 
         // Accumulative: always Variable::new — starts empty and grows monotonically.
         for (fp, name) in acc_fps.iter().zip(&acc_names) {
-            with_profiler(profiler, |profiler| {
-                profiler.recursive_feedback_operator(
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.recursive_feedback_operator(
                     self.display_name(*fp),
                     name.to_string(),
                     name.to_string(),
@@ -98,8 +101,8 @@ impl CodeGen {
         // When an EDB base enters the scope, seed from it; otherwise seed from
         // an empty collection so that old values are still retracted each iteration.
         for (fp, name) in itr_fps.iter().zip(&itr_names) {
-            with_profiler(profiler, |profiler| {
-                profiler.recursive_feedback_operator(
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.recursive_feedback_operator(
                     self.display_name(*fp),
                     name.to_string(),
                     name.to_string(),
@@ -130,7 +133,7 @@ impl CodeGen {
             .recursive_transformations()
             .iter()
             .map(|tx| {
-                self.gen_transformation(&current, tx, &mut recursive_arranged, stratum, profiler)
+                self.gen_transformation(&current, tx, &mut recursive_arranged, stratum, plan_graph)
             })
             .collect::<Result<_, _>>()?;
 
@@ -140,7 +143,7 @@ impl CodeGen {
             &enter_bindings,
             itr_fps,
             stratum.idb_to_aggregation_map(),
-            profiler,
+            plan_graph,
         )?;
 
         // --- Feedback assignments (Variable::set), optionally gated --------
@@ -149,7 +152,7 @@ impl CodeGen {
             &next_bindings,
             &recursive_bindings,
             itr_fps,
-            profiler,
+            plan_graph,
         )?;
 
         // --- Leave outputs --------------------------------------------------
@@ -159,7 +162,7 @@ impl CodeGen {
             &recursive_bindings,
             itr_fps,
             stratum.idb_to_aggregation_map(),
-            profiler,
+            plan_graph,
         )?;
 
         Ok(quote! {
@@ -188,7 +191,7 @@ impl CodeGen {
         &self,
         non_recursive_arranged_map: &HashMap<u64, Ident>,
         enter_fps: &[u64],
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> (Vec<TokenStream>, HashMap<u64, Ident>, HashMap<u64, Ident>) {
         let mut bindings: HashMap<u64, Ident> = HashMap::new();
         let mut stmts: Vec<TokenStream> = Vec::new();
@@ -208,8 +211,8 @@ impl CodeGen {
             // TraceAgent is Rc-backed so the clone is cheap.
             stmts.push(quote! { let #entered = #source.clone().enter(inner); });
 
-            with_profiler(profiler, |profiler| {
-                profiler.recursive_enter_operator(source.to_string(), entered.to_string());
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.recursive_enter_operator(source.to_string(), entered.to_string());
             });
 
             // Preserve arranged bindings for recursive paths.
@@ -230,7 +233,7 @@ impl CodeGen {
         enter_bindings: &HashMap<u64, Ident>,
         iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(HashMap<u64, Ident>, Vec<TokenStream>), CodegenError> {
         let mut next_bindings: HashMap<u64, Ident> = HashMap::new();
         let mut union_stmts = Vec::new();
@@ -275,10 +278,10 @@ impl CodeGen {
                 let #next_ident = #union_expr #dedup_call;
             };
 
-            with_profiler(profiler, |profiler| {
+            with_plan_graph(plan_graph, |plan_graph| {
                 let source_names: Vec<String> = sources.iter().map(|id| id.to_string()).collect();
                 let concat_count = if tail.is_empty() { 0 } else { 1 };
-                profiler.concat_dedup_operator(
+                plan_graph.concat_dedup_operator(
                     self.display_name(*idb_fp),
                     source_names,
                     next_ident.to_string(),
@@ -324,8 +327,8 @@ impl CodeGen {
                             #pipeline;
                     };
 
-                    with_profiler(profiler, |profiler| {
-                        profiler.opt_aggregate_operator(
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.opt_aggregate_operator(
                             output_name,
                             next_ident.to_string(),
                             next_ident.to_string(),
@@ -347,8 +350,8 @@ impl CodeGen {
                             .as_collection(#merge_kv);
                     };
 
-                    with_profiler(profiler, |profiler| {
-                        profiler.general_aggregate_operator(
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.general_aggregate_operator(
                             output_name,
                             next_ident.to_string(),
                             next_ident.to_string(),
@@ -372,7 +375,7 @@ impl CodeGen {
         recursive: &HashMap<u64, Ident>,
         iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(TokenStream, TokenStream, TokenStream), CodegenError> {
         // Resolve target identifiers and construct pattern.
         let targets: Vec<Ident> = leave_fps
@@ -420,8 +423,8 @@ impl CodeGen {
                         }
                     };
 
-                    with_profiler(profiler, |profiler| {
-                        profiler.recursive_pre_leave_opt_aggregate_operator(
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.recursive_pre_leave_opt_aggregate_operator(
                             self.display_name(*fp),
                             next_ident.to_string(),
                             next_ident.to_string(),
@@ -458,9 +461,10 @@ impl CodeGen {
             })
             .collect::<Result<_, _>>()?;
 
-        with_profiler(profiler, |profiler| {
-            profiler.leave_scope();
-        });
+        // An unbalanced leave is a codegen bug; surface it instead of
+        // corrupting the addresses that follow.
+        try_with_plan_graph(plan_graph, |plan_graph| plan_graph.leave_scope())
+            .map_err(|e| CodegenError::internal(format!("recording recursive scope exit: {e}")))?;
 
         for (fp, target) in leave_fps.iter().zip(targets.iter()) {
             let next_ident = next.get(fp).ok_or_else(|| {
@@ -470,8 +474,8 @@ impl CodeGen {
                 ))
             })?;
 
-            with_profiler(profiler, |profiler| {
-                profiler.recursive_leave_operator(
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.recursive_leave_operator(
                     self.display_name(*fp),
                     next_ident.to_string(),
                     target.to_string(),
@@ -496,8 +500,8 @@ impl CodeGen {
                     _ => aggregation_opt_post_leave(*agg_arity, *agg_pos),
                 };
 
-                with_profiler(profiler, |profiler| {
-                    profiler.recursive_post_leave_opt_aggregate_operator(
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.recursive_post_leave_opt_aggregate_operator(
                         self.display_name(*fp),
                         target.to_string(),
                         target.to_string(),
@@ -584,7 +588,7 @@ impl CodeGen {
         next_bindings: &HashMap<u64, Ident>,
         recursive_bindings: &HashMap<u64, Ident>,
         iterative_fps: &[u64],
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let (mut stmts, plan) = self.prepare_loop_condition(condition, next_bindings)?;
         let has_iterative = !iterative_fps.is_empty();
@@ -596,8 +600,8 @@ impl CodeGen {
                      from next bindings"
                 ))
             })?;
-            with_profiler(profiler, |profiler| {
-                profiler.recursive_resultsin_operator(
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.recursive_resultsin_operator(
                     self.display_name(*fp),
                     next_ident.to_string(),
                     next_ident.to_string(),

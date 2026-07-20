@@ -30,13 +30,29 @@ crate in the workspace.
 
 5. **Visibility follows role, not the current caller list.** A crate
    whose product is data (a parsed AST, a plan) exists to be read, so
-   read accessors on its public result types are `pub` by design, even
-   with no external caller yet. Keep the power to *build or change* that
-   state internal: constructors, setters, `*_mut` accessors, and
-   build-time helpers (name lookups, resolution) default to `pub(crate)`
-   or private, so only the owning crate shapes the result. The question
-   is not "does someone call it yet" but "does this read the result
-   (`pub`) or shape it (internal)".
+   read accessors on the result it hands another crate are `pub` by
+   design, even with no external caller yet. Keep the power to *build or
+   change* that state internal: constructors, setters, `*_mut` accessors,
+   and build-time helpers (name lookups, resolution) default to
+   `pub(crate)` or narrower, so only the owning code shapes the result.
+   The question is not "does someone call it yet" but "does this read the
+   result (`pub`) or shape it (internal)". Three refinements the simple
+   version misses:
+
+   - **The result is what crosses a crate boundary, not every readable
+     type.** An intermediate that only a sibling module reads (a plan's
+     `nodes`, feeding a report builder in the same crate) stays
+     `pub(crate)` along with its read accessors; `pub` is for the type a
+     *downstream crate* consumes.
+   - **Producer and owner can differ.** When another crate is the
+     legitimate producer (the compiler populating a plan the profiler
+     crate defines), that record/build API is `pub` for it. "Internal"
+     means "not offered to consumers", not "never crosses a crate
+     boundary".
+   - **An invariant shaped from a sibling module uses `pub(in path)` /
+     `pub(super)`, not `pub(crate)`.** When the recording methods live in
+     a neighbor module, scope the fields to the parent module that owns
+     the invariant, so the rest of the crate still cannot break it.
 
 6. **Group a file by type, not by kind.** A type's definition, inherent
    impl, and trait impls sit together in one section (separated by the
@@ -44,7 +60,7 @@ crate in the workspace.
    caller. Definitions interleaved with other types' implementations
    force the reader to jump.
 
-7. **The crate root defines nothing.** `lib.rs` declares modules and
-   re-exports the public surface; every item, impl, and test lives in a
-   module. An item with no obvious module is a missing module, not a
-   crate-root resident.
+7. **Roots route; leaves define.** `lib.rs` and every `mod.rs` only
+   declare submodules and re-export the surface; every item, impl, and
+   test lives in a leaf module. An item with no obvious leaf module is a
+   missing module, not a root resident.

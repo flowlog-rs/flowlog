@@ -1,16 +1,15 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::io;
+use std::path::Path;
 
 use anyhow::Context;
+use anyhow::bail;
 use clap::Parser;
-use flowlog_profiler::Profiler;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::metrics;
 use tracing_subscriber::EnvFilter;
 
-mod log;
-mod ops;
 mod render;
-mod stats;
 mod view;
 
 pub type Result<T> = anyhow::Result<T>;
@@ -23,8 +22,8 @@ struct Cli {
     #[arg(short = 'p', long)]
     ops: String,
 
-    /// Path to the folder of unified per-worker metrics logs
-    /// (`<stem>_log/metrics/`, files `metrics_worker_t{t}_{index}.log`).
+    /// Path to the folder of per-worker metrics logs (`<stem>_log/metrics/`,
+    /// an `operators_worker_*`/`channels_worker_*` table pair per worker).
     #[arg(short = 'm', long)]
     metrics: String,
 
@@ -43,61 +42,32 @@ fn main() -> Result<()> {
         .without_time()
         .init();
 
-    let Cli { ops, metrics, out } = Cli::parse();
-
-    // 1) Parse + validate ops.json.
-    let ops_text = fs::read_to_string(&ops).with_context(|| format!("read ops file {}", ops))?;
-    let profiler: Profiler =
-        serde_json::from_str(&ops_text).with_context(|| format!("parse ops file {}", ops))?;
-    let validated = ops::validate_and_build(&profiler)?;
-
-    let ops::ValidatedOps {
-        nodes,
-        roots: root_ids,
-        rules,
-        fingerprint_to_node,
-    } = validated;
-
-    let mut nodes_by_name = BTreeMap::new();
-    for (id, node) in nodes {
-        nodes_by_name.insert(id.to_string(), node);
-    }
-
-    let roots: Vec<String> = root_ids.iter().map(|id| id.to_string()).collect();
-
-    let fingerprint_to_node: BTreeMap<String, String> = fingerprint_to_node
-        .into_iter()
-        .map(|(fp, id)| (fp, id.to_string()))
-        .collect();
-
-    // 2) Parse the unified metrics folder (auto-detects batch vs per-transaction
-    //    snapshots from the `_t{N}_` in each filename).
-    let metric_snapshots = log::parse_metrics_folder(&metrics)?;
-
-    // 3) Build one ReportData per snapshot.
-    let mut snapshot_labels: Vec<String> = Vec::new();
-    let mut snapshots: Vec<view::ReportData> = Vec::new();
-
-    for snap in &metric_snapshots {
-        snapshot_labels.push(snap.label.clone());
-        snapshots.push(view::build_report_data(
-            &nodes_by_name,
-            &roots,
-            &rules,
-            &fingerprint_to_node,
-            &snap.time,
-            &snap.memory,
-        )?);
-    }
-
-    // 4) Render HTML.
-    let html = render::render_html_report(&snapshot_labels, &snapshots)?;
-    fs::write(&out, html).with_context(|| format!("write output file {}", out))?;
-    println!(
-        "Wrote {} ({} snapshot(s): {})",
+    let Cli {
+        ops,
+        metrics: metrics_dir,
         out,
-        snapshot_labels.len(),
-        snapshot_labels.join(", ")
+    } = Cli::parse();
+
+    // Load the plan graph, read the run's metrics against it, then shape
+    // each snapshot's facts into a rendered report.
+    let ops_text = fs::read_to_string(&ops).with_context(|| format!("read ops file {ops}"))?;
+    let plan: PlanGraph =
+        serde_json::from_str(&ops_text).with_context(|| format!("parse ops file {ops}"))?;
+
+    let runs = metrics::read(&plan, Path::new(&metrics_dir))
+        .with_context(|| format!("read metrics for {ops} from {metrics_dir}"))?;
+    if runs.is_empty() {
+        bail!("no .log files found in metrics folder {metrics_dir}");
+    }
+
+    let labels: Vec<&str> = runs.iter().map(|r| r.label.as_str()).collect();
+    let reports: Vec<view::Report> = runs.iter().map(|r| view::build(&plan, r)).collect();
+    let html = render::render_html_report(&reports)?;
+    fs::write(&out, html).with_context(|| format!("write output file {out}"))?;
+    println!(
+        "Wrote {out} ({} snapshot(s): {})",
+        labels.len(),
+        labels.join(", ")
     );
 
     Ok(())
