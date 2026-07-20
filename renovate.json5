@@ -54,6 +54,13 @@
       groupName: "timely + differential-dataflow",
     },
     {
+      // prettyplease pins syn at a major floor (0.3 → syn 3), so bumping
+      // one alone leaves two syn versions in the graph (prettyplease's syn
+      // 3 plus our direct syn 2) and fails to compile. Bump them together.
+      matchPackageNames: ["prettyplease", "syn"],
+      groupName: "prettyplease + syn",
+    },
+    {
       // Cargo patch bumps are lockfile-only for our caret ranges and fully
       // CI-gated — merge automatically. Minor stays manual on purpose: for
       // 0.x crates (timely 0.30→0.31) "minor" is cargo's breaking boundary.
