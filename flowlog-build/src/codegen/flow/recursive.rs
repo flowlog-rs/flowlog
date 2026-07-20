@@ -51,14 +51,14 @@ impl CodeGen {
     ) -> Result<TokenStream, CodegenError> {
         self.features.mark_recursive();
 
-        // Early exit if nothing leaves recursion.
+        // Nothing leaves this recursion: legal but unobservable, so no
+        // iterative scope is emitted -- and none recorded below, keeping
+        // predicted addresses aligned with the dataflow.
         let leave_fps = stratum.recursion_leave_collections();
         if leave_fps.is_empty() {
             return Ok(quote! {});
         }
 
-        // Enter only once the iterative scope is actually generated, or
-        // every later address is recorded one scope too deep.
         with_plan_graph(plan_graph, |plan_graph| {
             plan_graph.enter_scope();
         });
