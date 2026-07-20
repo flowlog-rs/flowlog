@@ -96,7 +96,13 @@ parser-specific.
     state the invariant or why the case matters; use `//` inside only for
     setup that is not obvious.
 
-11. **Plain words over jargon.** When a name is a term of art (`meet`,
+11. **Comments wrap at 80 columns.** Code lines follow rustfmt's width;
+    comment and doc lines hold to 80 columns. Enforcement belongs to
+    rustfmt (`wrap_comments` + `comment_width`) once the one-time
+    workspace reflow lands as its own change; until then the rule applies
+    to all new and touched comments.
+
+12. **Plain words over jargon.** When a name is a term of art (`meet`,
     `stratify`), the doc says what it does in plain language; a reader
     should not need the theory to use the function.
 

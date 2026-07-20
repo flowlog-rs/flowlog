@@ -13,8 +13,8 @@ use flowlog_parser::AggregationOperator;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::HeadArg;
 use flowlog_parser::LoopCondition;
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
 use tracing::debug;
 use tracing::trace;
 
@@ -95,7 +95,7 @@ impl StratumPlanner {
         config: &Config,
         stratum: &[FlowLogRule],
         optimizer: &mut Optimizer,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
         stratifier: &Stratifier,
         stratum_idx: usize,
     ) -> Result<Self, PlanError> {
@@ -174,10 +174,10 @@ impl StratumPlanner {
             debug!("{}", rp);
         });
 
-        // Profiler: record rule logic profiles if enabled
-        with_profiler(profiler, |profiler| {
+        // Profiling: record rule logic profiles if enabled
+        with_plan_graph(plan_graph, |plan_graph| {
             for rule_planner in rule_planners.iter() {
-                profiler.insert_rule(
+                plan_graph.insert_rule(
                     rule_planner.rule().to_string(),
                     rule_planner
                         .transformations()

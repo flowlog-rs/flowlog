@@ -1,7 +1,7 @@
 //! `use` statements emitted into the library-mode generated file.
 //!
 //! Every external crate reference is funneled through `::flowlog_runtime::`
-//! so the consumer only needs `flowlog-runtime` in `[dependencies]` — DD,
+//! so the consumer only needs `flowlog-runtime` in `[dependencies]`: DD,
 //! timely, `lasso`, `ordered_float`, `serde` are all re-exported from
 //! there.
 
@@ -12,7 +12,7 @@ use quote::quote;
 use crate::codegen::Features;
 
 /// Emit every import the generated library-mode module needs, including the
-/// private `mod relops { … }` wrapper that encapsulates the input-handler
+/// private `mod relops { ... }` wrapper that encapsulates the input-handler
 /// types.
 pub(crate) fn gen_lib_imports(
     relops_body: &TokenStream,
@@ -55,9 +55,9 @@ pub(crate) fn gen_lib_imports(
     quote! { #(#out)* }
 }
 
-/// Items the generated `OpMetrics` struct and its loggers reference
-/// unqualified — kept conditional so non-profile builds don't drag in
-/// `HashMap` / `File` / timely+DD logging for nothing.
+/// Items the generated `OpMetrics` struct and its logger reference
+/// unqualified; kept conditional so non-profile builds don't drag in
+/// `HashMap` / `File` / timely logging for nothing.
 fn profile_imports(profile: bool) -> TokenStream {
     if !profile {
         return quote! {};
@@ -68,9 +68,6 @@ fn profile_imports(profile: bool) -> TokenStream {
         use std::io::{BufWriter, Write};
         use std::time::Duration;
         use ::flowlog_runtime::timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
-        use ::flowlog_runtime::differential_dataflow::logging::{
-            DifferentialEvent, DifferentialEventBuilder,
-        };
     }
 }
 
@@ -102,7 +99,7 @@ fn dd_imports(f: &Features) -> TokenStream {
     }
 
     if f.agg_semiring() {
-        // Semiring `use` statements — same as binary mode since the
+        // Semiring `use` statements: same as binary mode since the
         // `mod semiring` is injected by assembly.rs via `#[path]`.
         let semirings = f.agg_semirings();
         let mut entries: Vec<_> = semirings

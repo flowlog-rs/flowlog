@@ -234,6 +234,12 @@
       background: linear-gradient(90deg, #fff 0%, #dc1e1e 100%);
     }
 
+    /* Tuples-mode red tones */
+    .tuples-mode .g-edge { stroke: #c78f8f; }
+    .tuples-mode .g-edge.highlight { stroke: #d32f2f; }
+    .tuples-mode .g-block rect { stroke: #ffc9c9; fill: rgba(255,248,248,0.6); }
+    .tuples-mode .g-node rect { stroke: #d45555; }
+
     /* ── Tree nodes ── */
     .tree-node {
       cursor: pointer;
@@ -486,12 +492,6 @@
       stroke-width: 2;
       opacity: 1;
     }
-
-    /* Memory-mode red tones */
-    .memory-mode .g-edge { stroke: #c78f8f; }
-    .memory-mode .g-edge.highlight { stroke: #d32f2f; }
-    .memory-mode .g-block rect { stroke: #ffc9c9; fill: rgba(255,248,248,0.6); }
-    .memory-mode .g-node rect { stroke: #d45555; }
 
     .g-block rect {
       fill: rgba(248,250,255,0.6);
@@ -784,10 +784,11 @@
           <button class="tab active" id="tabTree">Nodes</button>
           <button class="tab" id="tabGraph">Graph</button>
         </div>
-        <div id="modeToggle" style="display:none;gap:4px;align-items:center;">
-          <span style="font-size:11px;color:var(--c-text-muted);">Show:</span>
+        <div id="modeToggle" style="display:flex;gap:4px;align-items:center;">
+          <span style="font-size:11px;color:var(--c-text-muted);">Color by:</span>
           <button class="tab active" id="modeTime">Time</button>
-          <button class="tab" id="modeMemory">Memory</button>
+          <button class="tab" id="modeTuples">Tuples</button>
+          <button class="tab" id="modeBlowup">Blowup</button>
         </div>
       </div>
 
@@ -838,7 +839,7 @@
       view: "tree",
       graph: { tx: 0, ty: 0, scale: 1 }, // pan/zoom
       defaultExpanded: true,
-      displayMode: "time", // "time" or "memory"
+      displayMode: "time", // "time" | "tuples" | "blowup"
       snapshotIdx: 0,
       selectedRuleContext: null,
     };
@@ -892,6 +893,43 @@
     /** Get the mean from a Stats object or a raw number */
     function getMean(s) {
       return ensureStats(s).mean;
+    }
+
+    /** Flow is an integer total summed across workers; render it plainly. */
+    function fmtFlow(v) {
+      return Math.round(getMean(v)).toLocaleString();
+    }
+
+    // Boundary traffic: tuples in + tuples out. This is the linear cost a
+    // textbook model charges an operator (read every input, write every
+    // output), so heavy filters, amplifiers, and pass-throughs all rank by
+    // the work they cause.
+    function nodeVolume(node) {
+      return getMean(node.self_tup_in) + getMean(node.self_tup_out);
+    }
+
+    // Blowup factor (out/in); null when either side is unknown.
+    function nodeBlowup(node) {
+      const tin = getMean(node.self_tup_in);
+      if (!node.self_tup_in || !node.self_tup_out || tin === 0) return null;
+      return getMean(node.self_tup_out) / tin;
+    }
+
+    // Blowup significance gate: only nodes carrying real volume count; a
+    // 100x amplification of a handful of tuples is noise, not an explosion.
+    function volumeFloor(nodes) {
+      return Math.max(1000, arrayMax(Object.values(nodes).map(nodeVolume), 1) / 1000);
+    }
+    function significantBlowup(node, floor) {
+      const r = nodeBlowup(node);
+      return r !== null && nodeVolume(node) >= floor ? r : null;
+    }
+
+    // Linear interpolation between two RGB endpoints, shared by every
+    // color scale.
+    function mixColor(c1, c2, t) {
+      const mix = c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
+      return `rgb(${mix[0]},${mix[1]},${mix[2]})`;
     }
 
     /** Safe max over an array (avoids stack overflow from spread on large arrays) */
@@ -969,6 +1007,15 @@
       </div>`;
     }
 
+    /** A flow total is one integer (summed across workers); no distribution. */
+    function renderFlowCard(label, total, color) {
+      if (total === null || total === undefined) return "";
+      return `<div class="stat-card">
+        <div class="stat-card-label">${label}</div>
+        <div class="stat-card-value" style="color:${color || '#111'}">${Math.round(total).toLocaleString()}</div>
+      </div>`;
+    }
+
     function escapeHtml(s) {
       return String(s)
         .replaceAll("&", "&amp;")
@@ -1041,11 +1088,10 @@
       const workerPill = DATA.num_workers > 1 ? `<span class="pill">workers: <b>${DATA.num_workers}</b></span>` : "";
       el.innerHTML = `
     <span class="pill">names: <b>${t.names}</b></span>
-    <span class="pill">operators in time log: <b>${t.operators_in_time}</b></span>
+    <span class="pill">operators in metrics log: <b>${t.operators_in_time}</b></span>
     <span class="pill">operators mapped: <b>${t.operators_mapped}</b></span>
     <span class="pill">mapped ms: <b>${fmtStats(t.total_mapped_ms, "ms")}</b></span>
     <span class="pill">mapped activations: <b>${fmtStats(t.total_mapped_activations)}</b></span>
-    <span class="pill">total batched_in: <b>${fmtStats(t.total_batched_in)}</b></span>
     ${workerPill}
   `;
     }
@@ -1235,10 +1281,13 @@
       );
 
       const nodeMetaStr = (node) => {
-        if (state.displayMode === "memory") {
-          return node.has_memory_data
-            ? `batched_in: ${fmtStats(node.self_batched_in)}, merges: ${fmtStats(node.self_merges)}, merge_in: ${fmtStats(node.self_merge_in)}, merge_out: ${fmtStats(node.self_merge_out)}, dropped: ${fmtStats(node.self_dropped)}`
-            : "no memory data";
+        if (state.displayMode !== "time") {
+          const parts = [];
+          if (node.self_tup_in != null) parts.push(`in: ${fmtFlow(node.self_tup_in)}`);
+          if (node.self_tup_out != null) parts.push(`out: ${fmtFlow(node.self_tup_out)}`);
+          const r = nodeBlowup(node);
+          if (state.displayMode === "blowup" && r !== null) parts.push(`${r.toFixed(2)}x`);
+          return parts.length ? parts.join(", ") : "no flow data";
         }
         return `${fmtStats(node.self_total_active_ms, "ms")} ms, ${fmtStats(node.self_activations)} act`;
       };
@@ -1778,30 +1827,40 @@
         blockBoxes.set(blk, bb);
       }
 
-      // Node color scale based on self time or memory (batched_in).
+      // Node color scale based on self time or tuple volume. Red scales
+      // are log-scaled: volumes span orders of magnitude, so linear would
+      // bleach everything except the single largest node.
       const maxMs = arrayMax(
         Object.values(nodes).map((n) => getMean(n.self_total_active_ms)),
         0.0001
       );
-      const maxBatchedIn = arrayMax(
-        Object.values(nodes).map((n) => getMean(n.self_batched_in)),
+      const maxVolume = arrayMax(
+        Object.values(nodes).map((n) => nodeVolume(n)),
         1
       );
+      const floor = volumeFloor(nodes);
+      const maxBlowup = arrayMax(
+        Object.values(nodes).map((n) => significantBlowup(n, floor) ?? 1),
+        2
+      );
+      const WHITE = [255, 255, 255];
+      const RED = [220, 30, 30];
 
       function nodeColor(node) {
-        if (state.displayMode === "memory") {
-          if (!node.has_memory_data) return "rgb(255,255,255)";
-          const t = Math.min(1, getMean(node.self_batched_in) / maxBatchedIn);
-          const c1 = [255, 255, 255];
-          const c2 = [220, 30, 30];
-          const mix = c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
-          return `rgb(${mix[0]},${mix[1]},${mix[2]})`;
+        if (state.displayMode === "blowup") {
+          // Neutral at or below 1x: filters and carriers stay white; only
+          // amplification reddens toward the largest observed.
+          const r = significantBlowup(node, floor);
+          if (r === null || r <= 1) return "rgb(255,255,255)";
+          return mixColor(WHITE, RED, Math.min(1, Math.log(r) / Math.log(maxBlowup)));
+        }
+        if (state.displayMode === "tuples") {
+          const vol = nodeVolume(node);
+          if (vol <= 0) return "rgb(255,255,255)";
+          return mixColor(WHITE, RED, Math.min(1, Math.log1p(vol) / Math.log1p(maxVolume)));
         }
         const t = Math.min(1, getMean(node.self_total_active_ms) / maxMs);
-        const c1 = [233, 242, 255];
-        const c2 = [91, 141, 239];
-        const mix = c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
-        return `rgb(${mix[0]},${mix[1]},${mix[2]})`;
+        return mixColor([233, 242, 255], [91, 141, 239], t);
       }
 
       const childOrder = new Map();
@@ -1874,11 +1933,13 @@
           blockRank(a) - blockRank(b) || String(a).localeCompare(String(b))
       );
 
-      // Legend: show color scale appropriate to display mode.
+      // Legend: color scale for the active display mode.
       const legendEl = document.getElementById("legend");
       if (legendEl) {
-        if (state.displayMode === "memory") {
-          legendEl.innerHTML = `<span class="legend-item"><span class="legend-swatch-red"></span><span>memory (batched_in): none (white) → high (red, max ${maxBatchedIn.toLocaleString()})</span></span>`;
+        if (state.displayMode === "blowup") {
+          legendEl.innerHTML = `<span class="legend-item"><span class="legend-swatch-red"></span><span>blowup (out/in, log scale, volume ≥ ${Math.round(floor).toLocaleString()}): ≤1x (white) → ${maxBlowup.toFixed(1)}x (red)</span></span>`;
+        } else if (state.displayMode === "tuples") {
+          legendEl.innerHTML = `<span class="legend-item"><span class="legend-swatch-red"></span><span>tuple traffic (in + out, log scale): none (white) → high (red, max ${Math.round(maxVolume).toLocaleString()})</span></span>`;
         } else {
           legendEl.innerHTML = `<span class="legend-item"><span class="legend-swatch"></span><span>time (ms): low → high (max ${fmtMs(
             maxMs
@@ -1913,12 +1974,12 @@
         const labelEsc = escapeHtml(node.label || name);
 
         let nodeTip;
-        if (state.displayMode === "memory") {
-          if (node.has_memory_data) {
-            nodeTip = `${labelEsc}\nbatched_in: ${fmtStats(node.self_batched_in)}\nmerges: ${fmtStats(node.self_merges)}\nmerge_in: ${fmtStats(node.self_merge_in)}\nmerge_out: ${fmtStats(node.self_merge_out)}\ndropped: ${fmtStats(node.self_dropped)}`;
-          } else {
-            nodeTip = `${labelEsc}\n(no memory data)`;
-          }
+        if (state.displayMode === "tuples") {
+          const tin = node.self_tup_in != null ? fmtFlow(node.self_tup_in) : "n/a";
+          const tout = node.self_tup_out != null ? fmtFlow(node.self_tup_out) : "n/a";
+          const blowup = nodeBlowup(node);
+          const ratio = blowup === null ? "" : `\nblowup (out/in): ${blowup.toFixed(2)}x`;
+          nodeTip = `${labelEsc}\ntup_in: ${tin}\ntup_out: ${tout}${ratio}`;
         } else {
           nodeTip = `${labelEsc}\ntime: ${fmtStats(node.self_total_active_ms, "ms")}\nactivations: ${fmtStats(node.self_activations)}`;
         }
@@ -2189,28 +2250,38 @@
       const container = document.getElementById("topNodes");
       const titleEl = document.querySelector(".toplist-title");
 
-      // Memory mode
-      if (state.displayMode === "memory") {
-        if (titleEl) titleEl.textContent = "Top 10 by Memory";
-        const memNodes = Object.entries(DATA.nodes || {})
-          .map(([name, node]) => ({ name, node }))
-          .filter((x) => x.node.has_memory_data)
-          .sort((a, b) => getMean(b.node.self_batched_in) - getMean(a.node.self_batched_in))
+      if (state.displayMode === "tuples" || state.displayMode === "blowup") {
+        const blowupMode = state.displayMode === "blowup";
+        // Blowup ranks amplification among nodes with real volume (a huge
+        // ratio over a handful of tuples is noise); tuples ranks raw traffic.
+        const floor = volumeFloor(DATA.nodes || {});
+        const metric = blowupMode
+          ? (node) => {
+              const r = significantBlowup(node, floor);
+              return r !== null && r > 1 ? r : null;
+            }
+          : (node) => (nodeVolume(node) > 0 ? nodeVolume(node) : null);
+        if (titleEl) titleEl.textContent = blowupMode ? "Top 10 by Blowup" : "Top 10 by Tuples";
+        const ranked = Object.entries(DATA.nodes || {})
+          .map(([name, node]) => ({ name, node, m: metric(node) }))
+          .filter((x) => x.m !== null)
+          .sort((a, b) => b.m - a.m)
           .slice(0, 10);
 
-        if (!memNodes.length) {
-          container.innerHTML = "<div class=\"muted\">No memory data.</div>";
+        if (!ranked.length) {
+          container.innerHTML = "<div class=\"muted\">No flow data.</div>";
           return;
         }
 
-        container.innerHTML = memNodes
-          .map(({ name, node }) => {
+        container.innerHTML = ranked
+          .map(({ name, node, m }) => {
             const active = state.selected === name ? " active" : "";
             const label = node.label || name;
+            const val = blowupMode ? `${m.toFixed(2)}x` : Math.round(m).toLocaleString();
             return `
         <div class="toplist-item${active}" data-name="${escapeHtml(name)}">
           <div class="toplist-name" title="${escapeHtml(label)}">${colorizeHtml(label)}</div>
-          <div class="toplist-ms">${fmtMean(node.self_batched_in)}</div>
+          <div class="toplist-ms">${val}</div>
         </div>`;
           })
           .join("");
@@ -2221,7 +2292,6 @@
         return;
       }
 
-      // Time mode (default)
       if (titleEl) titleEl.textContent = "Top 10 by Time";
       const nodes = Object.entries(DATA.nodes || {})
         .map(([name, node]) => ({ name, node }))
@@ -2305,14 +2375,11 @@
       let cardsHtml = "";
       cardsHtml += renderStatCard("Active Time", node.self_total_active_ms, "ms", "#2563eb");
       cardsHtml += renderStatCard("Activations", node.self_activations, "", "#6366f1");
-      if (node.has_flow_data) {
-        cardsHtml += renderStatCard("Tuples In", node.self_tup_in, "", "#0891b2");
-        cardsHtml += renderStatCard("Tuples Out", node.self_tup_out, "", "#0d9488");
+      if (node.self_tup_in != null) {
+        cardsHtml += renderFlowCard("Tuples In", node.self_tup_in, "#0891b2");
       }
-      if (node.has_memory_data) {
-        // Headline memory metric only; the per-operator table below carries the
-        // full arrangement detail (merges / merge_in / merge_out / dropped).
-        cardsHtml += renderStatCard("Batched In", node.self_batched_in, "", "#dc2626");
+      if (node.self_tup_out != null) {
+        cardsHtml += renderFlowCard("Tuples Out", node.self_tup_out, "#0d9488");
       }
       statsEl.innerHTML = `<div class="detail-stats">${cardsHtml}</div>`;
 
@@ -2323,7 +2390,6 @@
       body.innerHTML = "";
 
       const head = document.getElementById("opsTableHead");
-      const showMemCol = node.has_memory_data;
       head.innerHTML = `<tr>
         <th>addr</th>
         <th>operator</th>
@@ -2331,7 +2397,6 @@
         <th>activations</th>
         <th>tup_in</th>
         <th>tup_out</th>
-        ${showMemCol ? '<th>batched_in</th><th>merges</th><th>merge_in</th><th>merge_out</th><th>dropped</th><th>bat_bytes</th><th>bat_cap</th>' : ""}
       </tr>`;
 
       if (!node.operators || node.operators.length === 0) {
@@ -2344,32 +2409,21 @@
           total_active_ms: arrayMax(ops.map(o => getMean(o.total_active_ms)), 0.001),
           tup_in: arrayMax(ops.map(o => getMean(o.tup_in)), 0.001),
           tup_out: arrayMax(ops.map(o => getMean(o.tup_out)), 0.001),
-          batched_in: arrayMax(ops.map(o => getMean(o.batched_in)), 0.001),
-          merges: arrayMax(ops.map(o => getMean(o.merges)), 0.001),
-          merge_in: arrayMax(ops.map(o => getMean(o.merge_in)), 0.001),
-          merge_out: arrayMax(ops.map(o => getMean(o.merge_out)), 0.001),
-          dropped: arrayMax(ops.map(o => getMean(o.dropped)), 0.001),
-          bat_bytes: arrayMax(ops.map(o => getMean(o.bat_bytes)), 0.001),
-          bat_cap: arrayMax(ops.map(o => getMean(o.bat_cap)), 0.001),
         };
 
         tbl.style.display = "table";
         for (const op of ops) {
           const tr = document.createElement("tr");
-          const memBar = (v, key, color) => (v !== null && v !== undefined
+          const flowBar = (v, key, color) => (v !== null && v !== undefined
             ? renderStatsBar(v, colMax[key], color)
             : "—");
-          const flowCells = `<td>${memBar(op.tup_in, "tup_in", "#0891b2")}</td><td>${memBar(op.tup_out, "tup_out", "#0d9488")}</td>`;
-          const memCells = showMemCol
-            ? `<td>${memBar(op.batched_in, "batched_in", "#dc2626")}</td><td>${memBar(op.merges, "merges", "#ea580c")}</td><td>${memBar(op.merge_in, "merge_in", "#d97706")}</td><td>${memBar(op.merge_out, "merge_out", "#059669")}</td><td>${memBar(op.dropped, "dropped", "#7c3aed")}</td><td>${memBar(op.bat_bytes, "bat_bytes", "#9333ea")}</td><td>${memBar(op.bat_cap, "bat_cap", "#c026d3")}</td>`
-            : "";
+          const flowCells = `<td>${flowBar(op.tup_in, "tup_in", "#0891b2")}</td><td>${flowBar(op.tup_out, "tup_out", "#0d9488")}</td>`;
           tr.innerHTML = `
         <td><code>[${op.addr.join(", ")}]</code></td>
         <td>${escapeHtml(op.op_name)}</td>
         <td>${renderStatsBar(op.total_active_ms, colMax.total_active_ms, "#2563eb")}</td>
         <td>${renderStatsBar(op.activations, colMax.activations, "#6366f1")}</td>
         ${flowCells}
-        ${memCells}
       `;
           body.appendChild(tr);
         }
@@ -2429,15 +2483,17 @@
     function setDisplayMode(mode) {
       state.displayMode = mode;
       document.getElementById("modeTime").classList.toggle("active", mode === "time");
-      document.getElementById("modeMemory").classList.toggle("active", mode === "memory");
-      document.getElementById("graphView").classList.toggle("memory-mode", mode === "memory");
+      document.getElementById("modeTuples").classList.toggle("active", mode === "tuples");
+      document.getElementById("modeBlowup").classList.toggle("active", mode === "blowup");
+      document.getElementById("graphView").classList.toggle("tuples-mode", mode !== "time");
       renderTree();
       renderTopNodes();
       if (state.view === "graph") renderGraph();
     }
 
     document.getElementById("modeTime").onclick = () => setDisplayMode("time");
-    document.getElementById("modeMemory").onclick = () => setDisplayMode("memory");
+    document.getElementById("modeTuples").onclick = () => setDisplayMode("tuples");
+    document.getElementById("modeBlowup").onclick = () => setDisplayMode("blowup");
 
     // --- Snapshot slider ---
     function setSnapshot(idx) {
@@ -2474,9 +2530,6 @@
     renderSummary();
     renderTree();
     renderTopNodes();
-
-    // Show mode toggle only when memory data is available.
-    document.getElementById("modeToggle").style.display = "flex";
 
     if (DATA.roots.length) selectNode(DATA.roots[0]);
 

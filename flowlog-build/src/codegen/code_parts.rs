@@ -2,8 +2,8 @@
 
 use std::collections::HashSet;
 
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
 use proc_macro2::TokenStream;
 
 use crate::codegen::CodeGen;
@@ -50,9 +50,9 @@ pub struct CodeParts {
     pub profile_ops: TokenStream,
     /// Logger registration code (emitted inside worker closure).
     pub profile_init: TokenStream,
-    /// Unified metrics write-out code for batch mode.
+    /// Metrics write-out code for batch mode.
     pub metrics_write_batch: TokenStream,
-    /// Unified metrics write-out code for incremental mode.
+    /// Metrics write-out code for incremental mode.
     pub metrics_write_incremental: TokenStream,
 
     /// Type aliases and constants for the `(Data, Diff, Time)` triple.
@@ -68,15 +68,15 @@ impl CodeGen {
     pub(crate) fn collect_parts(
         &mut self,
         strata: &[StratumPlanner],
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<CodeParts, CodegenError> {
-        // Record entering main dataflow scope in profiler if enabled
-        with_profiler(profiler, |profiler| {
-            profiler.enter_scope();
+        // Record entering the main dataflow scope when profiling is on
+        with_plan_graph(plan_graph, |plan_graph| {
+            plan_graph.enter_scope();
         });
 
         // Static sections.
-        let edb_decls = self.gen_edb_decls(profiler);
+        let edb_decls = self.gen_edb_decls(plan_graph);
         let (handle_binding, dataflow_return) = self.gen_handle_binding();
         let profile_structs = self.gen_metrics_struct();
         let profile_init = self.gen_metrics_init();
@@ -88,18 +88,18 @@ impl CodeGen {
         let mut bound_fps: HashSet<u64> = self.program.edb_fingerprints();
 
         for (idx, stratum) in strata.iter().enumerate() {
-            with_profiler(profiler, |profiler| {
-                profiler.update_stratum_block(idx);
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.update_stratum_block(idx);
             });
 
-            let core_flows = self.gen_non_recursive_core_flows(stratum, profiler)?;
+            let core_flows = self.gen_non_recursive_core_flows(stratum, plan_graph)?;
             flows.extend(core_flows);
 
             if stratum.is_recursive() {
                 let outer_snapshot = self.outer_arranged.clone();
-                flows.push(self.gen_recursive_block(&outer_snapshot, stratum, profiler)?);
+                flows.push(self.gen_recursive_block(&outer_snapshot, stratum, plan_graph)?);
             } else {
-                flows.extend(self.gen_non_recursive_post_flows(&bound_fps, stratum, profiler)?);
+                flows.extend(self.gen_non_recursive_post_flows(&bound_fps, stratum, plan_graph)?);
             }
 
             bound_fps.extend(stratum.output_relations());
@@ -114,15 +114,15 @@ impl CodeGen {
             flush_stmts: flush,
             size_cell_decls,
             size_cell_clones,
-        } = self.collect_inspectors(profiler);
+        } = self.collect_inspectors(plan_graph);
 
-        // -- Unified metrics write code (mode-specific) --
+        // -- Metrics write code (mode-specific) --
         let metrics_write_batch = self.gen_metrics_write_batch();
         let metrics_write_incremental = self.gen_metrics_write_incremental();
 
-        // Rendered after the codegen loop so the profiler is fully
+        // Rendered after the codegen loop so the plan graph is fully
         // populated. Empty when profile is off.
-        let profile_ops = render_profile_ops_const(profiler.as_ref());
+        let profile_ops = render_profile_ops_const(plan_graph.as_ref())?;
 
         let type_declarations = self.gen_type_declarations();
         let semiring_modules = self.render_semiring_modules();

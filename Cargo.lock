@@ -391,9 +391,10 @@ name = "flowlog-profiler"
 version = "0.1.0"
 dependencies = [
  "flowlog-common",
+ "rstest",
  "serde",
  "serde_json",
- "tracing",
+ "tempfile",
 ]
 
 [[package]]
@@ -417,10 +418,8 @@ dependencies = [
  "clap",
  "flowlog-profiler",
  "pretty_assertions",
- "regex",
  "serde",
  "serde_json",
- "tracing",
  "tracing-subscriber",
 ]
 

@@ -11,8 +11,8 @@ use std::collections::HashSet;
 use std::mem;
 
 use flowlog_parser::AggregationOperator;
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::format_ident;
@@ -40,7 +40,7 @@ impl CodeGen {
     pub(crate) fn gen_non_recursive_core_flows(
         &mut self,
         stratum: &StratumPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::new();
         let global_fp_to_ident = self.global_fp_to_ident.clone();
@@ -52,7 +52,7 @@ impl CodeGen {
                 transformation,
                 &mut outer_arranged,
                 stratum,
-                profiler,
+                plan_graph,
             )?);
         }
 
@@ -69,7 +69,7 @@ impl CodeGen {
         &mut self,
         bound_fps: &HashSet<u64>,
         stratum: &StratumPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::new();
         let dedup_stats = self.dedup_nonrecursive();
@@ -98,8 +98,8 @@ impl CodeGen {
                 )
             };
 
-            with_profiler(profiler, |profiler| {
-                profiler.concat_dedup_operator(
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.concat_dedup_operator(
                     self.display_name(*idb_fp),
                     outs.iter().map(|id| id.to_string()).collect(),
                     output.to_string(),
@@ -148,8 +148,8 @@ impl CodeGen {
                             #pipeline;
                     };
 
-                    with_profiler(profiler, |profiler| {
-                        profiler.opt_aggregate_operator(
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.opt_aggregate_operator(
                             self.display_name(*idb_fp),
                             output.to_string(),
                             output.to_string(),
@@ -170,8 +170,8 @@ impl CodeGen {
                             .as_collection(#merge_kv);
                     };
 
-                    with_profiler(profiler, |profiler| {
-                        profiler.general_aggregate_operator(
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.general_aggregate_operator(
                             self.display_name(*idb_fp),
                             output.to_string(),
                             output.to_string(),

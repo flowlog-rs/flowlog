@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::process;
 
 use flowlog_build::planner::ProgramPlanner;
-use flowlog_profiler::Profiler;
+use flowlog_profiler::PlanGraph;
 use quote::quote;
 use tracing::info;
 
@@ -39,9 +39,9 @@ impl Compiler {
     pub(crate) fn emit_sources(
         &mut self,
         program_planner: &ProgramPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(), flowlog_common::BoxError> {
-        let parts = self.codegen.generate(program_planner, profiler)?;
+        let parts = self.codegen.generate(program_planner, plan_graph)?;
         let features = self.codegen.features();
 
         // `src/relation.rs` — Relation trait + per-EDB `Rel{name}` input handlers.

@@ -1,37 +1,32 @@
-//! Profiling codegen: emits an optional per-operator metrics table, folding
-//! three sources keyed by timely operator id / address:
+//! Profiling codegen: the observation side of the metrics pipeline.
 //!
-//! - **Time** (timely `Schedule`): active time + activations.
-//! - **Flow** (timely `Channels`+`Messages`): tuples in/out — makes a join's
-//!   intermediate-result size visible, which the differential stream can't
-//!   (a join owns no arrangement).
-//! - **Arrangement** (differential `Batch`/`Merge`/`Drop`/`Batcher`): trace
-//!   residency, compaction churn, batcher bytes.
+//! A profiled binary dumps raw observations under `<stem>_log/`:
+//! `ops.json` (static plan graph, worker 0, startup) and `metrics/`, an
+//! `operators_worker_*`/`channels_worker_*` table pair per worker per
+//! transaction. The generated code derives nothing;
+//! `flowlog_profiler::metrics` owns the schema and derives tuple flow on
+//! read, so change writer and reader together.
 //!
-//! Both loggers fold into one `HashMap<operator_id, OpMetrics>`. A `Messages`
-//! event carries only a channel id, so flow is buffered and resolved to
-//! operator addresses at write time. Cells that don't apply print `n/a`, not `0`.
-//!
-//! Output (per worker, cwd-relative, namespaced by program stem):
-//! - `<stem>_log/ops.json` — static plan graph, baked in as a `const &str` and
-//!   written by worker 0 at startup.
-//! - `<stem>_log/metrics/metrics_worker_t{t}_{index}.log` — `t`=0 batch, txn
-//!   time incremental.
+//! Fragment assembly: [`CodeGen::gen_metrics_struct`] at module scope,
+//! [`CodeGen::gen_metrics_init`] in the worker closure, one write
+//! fragment per mode at its flush points. All empty without profiling.
 
-use flowlog_profiler::Profiler;
+use flowlog_profiler::PlanGraph;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::codegen::CodeGen;
+use crate::codegen::error::CodegenError;
 
 impl CodeGen {
-    /// Profiler output directory, `<stem>_log` (stem disambiguates programs
+    /// Profiling output directory, `<stem>_log` (stem disambiguates programs
     /// sharing a process).
     fn profile_log_dir(&self) -> String {
         format!("{}_log", self.config.program_name())
     }
 
-    /// Emits the per-operator metrics structs (profiling builds only).
+    /// Emits the metric structs and address formatter at module scope;
+    /// the other fragments reference them unqualified.
     pub(crate) fn gen_metrics_struct(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
@@ -49,55 +44,28 @@ impl CodeGen {
                 current_start: Option<Duration>,
             }
 
-            /// Arrangement stats (from `DifferentialEvent`).
-            #[derive(Clone, Debug, Default)]
-            struct ArrangeStats {
-                /// Total records entering the arrangement (summed over batches).
-                batch_total_len: usize,
-                /// Number of completed merge (compaction) events.
-                merge_completes: u64,
-                /// Sum of input lengths across merge completions.
-                merge_input_total: usize,
-                /// Sum of output lengths across merge completions.
-                merge_output_total: usize,
-                /// Total records freed across drops.
-                drop_total_len: usize,
-                /// Running batcher bytes used / allocated (net of deltas), kept
-                /// only to derive the peaks.
-                batcher_size: isize,
-                batcher_capacity: isize,
-                /// Peak batcher bytes used / allocated — the byte-level signal
-                /// (the running values return to ~0 once batchers flush).
-                batcher_size_peak: isize,
-                batcher_capacity_peak: isize,
-            }
-
-            /// Tuple flow, resolved from channels at write time. Each direction
-            /// is `None` when the operator has no edge there (a source has no
-            /// `tup_in`, a sink no `tup_out`).
-            #[derive(Clone, Debug, Default)]
-            struct FlowStats {
-                tup_in: Option<i64>,
-                tup_out: Option<i64>,
-            }
-
-            /// Per-operator metrics. `time`/`arrange` are `None` until the first
-            /// event (a dimension that doesn't apply writes `n/a`); `flow` is
-            /// per-direction.
+            /// Per-operator metrics. `time` is `None` until the first event
+            /// (a dimension that doesn't apply writes `n/a`).
             #[derive(Clone, Debug, Default)]
             struct OpMetrics {
                 /// Operator name and address path (from `TimelyEvent::Operates`).
                 name: String,
                 addr: Vec<usize>,
                 time: Option<TimeStats>,
-                arrange: Option<ArrangeStats>,
-                flow: FlowStats,
+            }
+
+            /// The wire form of an operator or scope address, as the reader's
+            /// `Addr` parser expects it.
+            fn fmt_addr(addr: &[usize]) -> String {
+                let cells: Vec<String> = addr.iter().map(|x| x.to_string()).collect();
+                format!("[{}]", cells.join(", "))
             }
         }
     }
 
-    /// Emits the two logger registrations (timely + differential) that fold
-    /// into the shared metrics map, plus worker 0's `ops.json` write.
+    /// Emits collection setup for the top of the worker closure (`worker`
+    /// in scope): the observation maps the write fragments read, the
+    /// timely logger feeding them, and worker 0's `ops.json` write.
     pub(crate) fn gen_metrics_init(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
@@ -110,11 +78,14 @@ impl CodeGen {
             // Per-operator metrics, keyed by operator id (worker-local).
             let metrics: Rc<RefCell<HashMap<usize, OpMetrics>>> =
                 Rc::new(RefCell::new(HashMap::new()));
-            // Channel topology: id -> (scope_addr, source idx, target idx).
-            let chan_info: Rc<RefCell<HashMap<usize, (Vec<usize>, usize, usize)>>> =
+            // Channel topology: id -> (scope_addr, source idx, source port,
+            // target idx, target port, ships-batches). The flag marks
+            // channels whose payload is arrangement batches; their message
+            // counts are batch handles, not tuples.
+            let chan_info: Rc<RefCell<HashMap<usize, (Vec<usize>, usize, usize, usize, usize, bool)>>> =
                 Rc::new(RefCell::new(HashMap::new()));
-            // Per-channel volume by direction: sends → tup_out, receives →
-            // tup_in. Each lands on the operator's own worker (correct for >1).
+            // Per-channel record volume by direction. Each lands on the
+            // operator's own worker (correct for >1).
             let chan_send: Rc<RefCell<HashMap<usize, i64>>> =
                 Rc::new(RefCell::new(HashMap::new()));
             let chan_recv: Rc<RefCell<HashMap<usize, i64>>> =
@@ -126,148 +97,130 @@ impl CodeGen {
             let chan_recv_log = Rc::clone(&chan_recv);
 
             // Worker 0 plants the static plan graph beside the runtime logs.
-            // Best-effort — a write failure here shouldn't take down the dataflow.
+            // Best-effort: a write failure here shouldn't take down the dataflow.
             if worker.index() == 0 {
                 let _ = std::fs::create_dir_all(#log_dir);
+                // Clear a previous run's metrics: the reader globs the
+                // whole directory, so leftovers would merge into this run.
+                let _ = std::fs::remove_dir_all(concat!(#log_dir, "/metrics"));
                 let _ = std::fs::write(#ops_path, __FLOWLOG_OPS_JSON);
             }
 
-            // Timely stream: identity, time, and flow.
-            worker
-                .log_register()
-                .expect("failed to get log_register")
-                .insert::<TimelyEventBuilder, _>("timely", move |_batch_time, data| {
-                    let Some(data) = data else { return; };
-                    for (ts, event) in data.iter() {
-                        match event {
-                            TimelyEvent::Operates(op) => {
-                                let mut map = metrics_timely.borrow_mut();
-                                let e = map.entry(op.id).or_default();
-                                e.name = op.name.to_string();
-                                e.addr = op.addr.clone();
-                            }
-                            TimelyEvent::Schedule(sched) => {
-                                let mut map = metrics_timely.borrow_mut();
-                                let t = map
-                                    .entry(sched.id)
-                                    .or_default()
-                                    .time
-                                    .get_or_insert_with(Default::default);
-                                match sched.start_stop {
-                                    StartStop::Start => {
-                                        t.current_start = Some(*ts);
-                                    }
-                                    StartStop::Stop => {
-                                        if let Some(st) = t.current_start.take() {
-                                            let delta = ts
-                                                .checked_sub(st)
-                                                .unwrap_or(Duration::ZERO);
-                                            t.total_active += delta;
-                                            t.activations += 1;
+            // Timely stream: identity, time, and channel volume. Profiling
+            // is an observation side channel: without a registry it degrades
+            // to no metrics, never to a dead dataflow.
+            match worker.log_register() {
+                Some(mut log_registry) => {
+                    log_registry.insert::<TimelyEventBuilder, _>("timely", move |_batch_time, data| {
+                        let Some(data) = data else { return; };
+                        for (ts, event) in data.iter() {
+                            match event {
+                                TimelyEvent::Operates(op) => {
+                                    let mut map = metrics_timely.borrow_mut();
+                                    let e = map.entry(op.id).or_default();
+                                    e.name = op.name.to_string();
+                                    e.addr = op.addr.clone();
+                                }
+                                TimelyEvent::Schedule(sched) => {
+                                    let mut map = metrics_timely.borrow_mut();
+                                    let t = map
+                                        .entry(sched.id)
+                                        .or_default()
+                                        .time
+                                        .get_or_insert_with(Default::default);
+                                    match sched.start_stop {
+                                        StartStop::Start => {
+                                            t.current_start = Some(*ts);
+                                        }
+                                        StartStop::Stop => {
+                                            if let Some(st) = t.current_start.take() {
+                                                let delta = ts
+                                                    .checked_sub(st)
+                                                    .unwrap_or(Duration::ZERO);
+                                                t.total_active += delta;
+                                                t.activations += 1;
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            // source/target are scope-local indices; the full
-                            // operator addr is `scope_addr ++ [index]`.
-                            TimelyEvent::Channels(c) => {
-                                chan_info_log.borrow_mut().insert(
-                                    c.id,
-                                    (c.scope_addr.clone(), c.source.0, c.target.0),
-                                );
-                            }
-                            // Accumulate send/receive volume per channel.
-                            TimelyEvent::Messages(m) => {
-                                let map = if m.is_send {
-                                    &chan_send_log
-                                } else {
-                                    &chan_recv_log
-                                };
-                                *map.borrow_mut().entry(m.channel).or_default() +=
-                                    m.record_count;
-                            }
-                            _ => {}
-                        }
-                    }
-                });
-
-            // Differential stream: arrangement residency + compaction.
-            let metrics_diff = Rc::clone(&metrics);
-            worker
-                .log_register()
-                .expect("failed to get log_register")
-                .insert::<DifferentialEventBuilder, _>(
-                    "differential/arrange",
-                    move |_batch_time, data| {
-                        let Some(data) = data else { return; };
-                        for (_ts, event) in data.iter() {
-                            match event {
-                                DifferentialEvent::Batch(b) => {
-                                    let mut map = metrics_diff.borrow_mut();
-                                    let a = map.entry(b.operator).or_default()
-                                        .arrange.get_or_insert_with(Default::default);
-                                    a.batch_total_len += b.length;
+                                // source/target are scope-local indices; the full
+                                // operator addr is `scope_addr ++ [index]`.
+                                TimelyEvent::Channels(c) => {
+                                    // FlowLog row types never mention "Batch", so
+                                    // the data-type name identifies batch-shipping
+                                    // (arranged) channels exactly.
+                                    let ships_batches = c.typ.contains("Batch");
+                                    chan_info_log.borrow_mut().insert(
+                                        c.id,
+                                        (
+                                            c.scope_addr.clone(),
+                                            c.source.0,
+                                            c.source.1,
+                                            c.target.0,
+                                            c.target.1,
+                                            ships_batches,
+                                        ),
+                                    );
                                 }
-                                DifferentialEvent::Merge(m) => {
-                                    if let Some(complete_len) = m.complete {
-                                        let mut map = metrics_diff.borrow_mut();
-                                        let a = map.entry(m.operator).or_default()
-                                            .arrange.get_or_insert_with(Default::default);
-                                        a.merge_completes += 1;
-                                        a.merge_input_total += m.length1 + m.length2;
-                                        a.merge_output_total += complete_len;
-                                    }
-                                    // ignore merge-start (no size info)
+                                TimelyEvent::Messages(m) => {
+                                    let map = if m.is_send {
+                                        &chan_send_log
+                                    } else {
+                                        &chan_recv_log
+                                    };
+                                    *map.borrow_mut().entry(m.channel).or_default() +=
+                                        m.record_count;
                                 }
-                                DifferentialEvent::Drop(d) => {
-                                    let mut map = metrics_diff.borrow_mut();
-                                    let a = map.entry(d.operator).or_default()
-                                        .arrange.get_or_insert_with(Default::default);
-                                    a.drop_total_len += d.length;
-                                }
-                                DifferentialEvent::Batcher(b) => {
-                                    let mut map = metrics_diff.borrow_mut();
-                                    let a = map.entry(b.operator).or_default()
-                                        .arrange.get_or_insert_with(Default::default);
-                                    a.batcher_size += b.size_diff;
-                                    a.batcher_capacity += b.capacity_diff;
-                                    a.batcher_size_peak = a.batcher_size_peak.max(a.batcher_size);
-                                    a.batcher_capacity_peak =
-                                        a.batcher_capacity_peak.max(a.batcher_capacity);
-                                }
-                                _ => {} // MergeShortfall, TraceShare: not tracked
+                                TimelyEvent::PushProgress(_)
+                                | TimelyEvent::Shutdown(_)
+                                | TimelyEvent::CommChannels(_)
+                                | TimelyEvent::Park(_)
+                                | TimelyEvent::Text(_) => {}
                             }
                         }
-                    },
-                );
+                    });
+                }
+                None => {
+                    eprintln!("flowlog profiling: log registry unavailable, metrics disabled");
+                }
+            }
         }
     }
 
-    /// Emits the unified metrics write-out for **batch** mode.
-    ///
-    /// Writes one file per worker: `<stem>_log/metrics/metrics_worker_t0_{index}.log`.
+    /// Emits the batch write-out for after the dataflow drains (`index`
+    /// in scope): one `t0` table pair per worker.
     pub(crate) fn gen_metrics_write_batch(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
         let dir = format!("{}/metrics", self.profile_log_dir());
-        let path_fmt = format!("{dir}/metrics_worker_t0_{{}}.log");
-        gen_metrics_write_core(&dir, quote! { format!(#path_fmt, index) })
+        let ops_fmt = format!("{dir}/operators_worker_t0_{{}}.log");
+        let chans_fmt = format!("{dir}/channels_worker_t0_{{}}.log");
+        gen_metrics_write_core(
+            &dir,
+            quote! { format!(#ops_fmt, index) },
+            quote! { format!(#chans_fmt, index) },
+        )
     }
 
-    /// Emits the **incremental** write-out: one file per worker per committed
-    /// transaction, then resets per-transaction counters (keeping identity and
-    /// topology).
+    /// Emits the incremental write-out for the commit path (`time_stamp`
+    /// and `index` in scope): one table pair for the just-committed
+    /// transaction, then a counter reset; snapshots are deltas, not
+    /// running totals.
     pub(crate) fn gen_metrics_write_incremental(&self) -> TokenStream {
         if !self.config.profiling_enabled() {
             return quote! {};
         }
 
         let dir = format!("{}/metrics", self.profile_log_dir());
-        let path_fmt = format!("{dir}/metrics_worker_t{{}}_{{}}.log");
-        let write =
-            gen_metrics_write_core(&dir, quote! { format!(#path_fmt, time_stamp - 1, index) });
+        let ops_fmt = format!("{dir}/operators_worker_t{{}}_{{}}.log");
+        let chans_fmt = format!("{dir}/channels_worker_t{{}}_{{}}.log");
+        let write = gen_metrics_write_core(
+            &dir,
+            quote! { format!(#ops_fmt, time_stamp - 1, index) },
+            quote! { format!(#chans_fmt, time_stamp - 1, index) },
+        );
 
         quote! {
             #write
@@ -278,9 +231,6 @@ impl CodeGen {
                 if let Some(t) = m.time.as_mut() {
                     *t = TimeStats::default();
                 }
-                if let Some(a) = m.arrange.as_mut() {
-                    *a = ArrangeStats::default();
-                }
             }
             chan_send.borrow_mut().clear();
             chan_recv.borrow_mut().clear();
@@ -288,162 +238,135 @@ impl CodeGen {
     }
 }
 
-// =================================================================
-// Private helper functions (not tied to CodeGen state)
-// =================================================================
+// =============================================================================
+// Plan-graph const and shared write-out
+// =============================================================================
 
-/// Render the static plan-graph profiler as a `const &str` baked into the
-/// generated module. Worker 0 writes it to `<stem>_log/ops.json` on startup
-/// (see [`CodeGen::gen_metrics_init`]).
+/// Renders the recorded plan graph as a `const &str` baked into the
+/// generated module. Errors only if the plan graph fails to serialize,
+/// which a well-formed graph never does: an internal error, not a user
+/// mistake.
 ///
-/// `None` profiler → empty token stream so non-profile builds carry no dead const.
-pub(crate) fn render_profile_ops_const(profiler: Option<&Profiler>) -> TokenStream {
-    let Some(profiler) = profiler else {
-        return quote! {};
+/// A `None` plan graph renders an empty token stream so non-profile builds
+/// carry no dead const.
+pub(crate) fn render_profile_ops_const(
+    plan_graph: Option<&PlanGraph>,
+) -> Result<TokenStream, CodegenError> {
+    let Some(plan_graph) = plan_graph else {
+        return Ok(quote! {});
     };
-    let json = profiler.to_json_string();
-    quote! {
+    let json = plan_graph
+        .to_json_string()
+        .map_err(|e| CodegenError::internal(format!("plan graph failed to serialize: {e}")))?;
+    Ok(quote! {
         const __FLOWLOG_OPS_JSON: &str = #json;
-    }
+    })
 }
 
-/// Resolve flow, then write one row per operator. A block so borrows drop.
-fn gen_metrics_write_core(dir: &str, file_path_expr: TokenStream) -> TokenStream {
-    let create_msg = format!("failed to create {dir} directory");
-    let header =
-        "{:<20} {:<6} {:<11} {:<10} {:<10} {:<10} {:<7} {:<11} {:<11} {:<10} {:<12} {:<12} {}";
+/// Emits the operator and channel table write-out shared by batch and
+/// incremental modes. The dump is best-effort end-to-end: profiling never
+/// aborts the profiled run, so a failed create degrades to a warning and
+/// the reader's missing-file handling.
+fn gen_metrics_write_core(
+    dir: &str,
+    ops_path_expr: TokenStream,
+    chans_path_expr: TokenStream,
+) -> TokenStream {
+    let ops_header = "{:<20} {:<6} {:<11} {}";
+    let chans_header = "{:<20} {:<5} {:<9} {:<5} {:<9} {:<6} {:<12} {}";
     quote! {
         {
-            // Resolve buffered channel volume into per-operator flow (a
-            // `Messages` event only knows its channel, so it's joined against
-            // the topology here, not accumulated live like time/arrange).
-            {
+            let dump = || -> std::io::Result<()> {
+                std::fs::create_dir_all(#dir)?;
+
+                // Operator table, sorted by numeric address for stable output.
+                let map = metrics.borrow();
+                let mut rows: Vec<&OpMetrics> = map.values().collect();
+                rows.sort_by(|a, b| a.addr.cmp(&b.addr));
+
+                let mut w = BufWriter::new(File::create(#ops_path_expr)?);
+                writeln!(w, #ops_header, "addr", "acts", "active_ms", "name")?;
+                for m in &rows {
+                    // Non-applicable dimensions print `n/a`.
+                    let (acts, active_ms) = m.time.as_ref().map_or_else(
+                        || ("n/a".to_string(), "n/a".to_string()),
+                        |t| (
+                            t.activations.to_string(),
+                            format!("{:.3}", t.total_active.as_secs_f64() * 1000.0),
+                        ),
+                    );
+                    writeln!(w, #ops_header, fmt_addr(&m.addr), acts, active_ms, m.name)?;
+                }
+                if rows.is_empty() {
+                    writeln!(w, "(no operators recorded)")?;
+                }
+                w.flush()?;
+
+                // Channel table, sorted by topology for stable output.
                 let info = chan_info.borrow();
                 let sends = chan_send.borrow();
                 let recvs = chan_recv.borrow();
-
-                // Operator address of a channel endpoint, `scope_addr ++ [idx]`;
-                // `None` for index 0 — the scope boundary, not a leaf operator
-                // (its I/O is on the parent-scope edges).
-                let endpoint_addr = |scope_addr: &Vec<usize>, idx: usize| -> Option<Vec<usize>> {
-                    (idx != 0).then(|| {
-                        let mut a = scope_addr.clone();
-                        a.push(idx);
-                        a
-                    })
-                };
-                let mut out_by_addr: HashMap<Vec<usize>, i64> = HashMap::new();
-                let mut in_by_addr: HashMap<Vec<usize>, i64> = HashMap::new();
-
-                // Tuple length of each arrangement, keyed by operator addr.
-                // An arrangement's output ships batches (one message = one batch),
-                // so its `record_count` is a batch count, not tuples; substitute
-                // the real `batch_total_len` on those edges.
-                let arrange_len: HashMap<Vec<usize>, i64> = metrics
-                    .borrow()
-                    .values()
-                    .filter_map(|m| {
-                        m.arrange
-                            .as_ref()
-                            .map(|a| (m.addr.clone(), a.batch_total_len as i64))
+                let mut chans: Vec<_> = info
+                    .iter()
+                    .map(|(id, (scope, src, src_port, tgt, tgt_port, batch))| {
+                        (
+                            scope,
+                            src,
+                            src_port,
+                            tgt,
+                            tgt_port,
+                            u8::from(*batch),
+                            sends.get(id).copied().unwrap_or(0),
+                            recvs.get(id).copied().unwrap_or(0),
+                        )
                     })
                     .collect();
+                chans.sort();
 
-                // `or_insert(0)` seeds connected endpoints (zero flow → `0`,
-                // missing edge → `n/a`), then add this channel's volume, always
-                // in tuples.
-                for (chan, (scope_addr, src, tgt)) in info.iter() {
-                    let src_addr = endpoint_addr(scope_addr, *src);
-                    let tgt_addr = endpoint_addr(scope_addr, *tgt);
-                    // Tuples crossing this edge: the source arrangement's batch
-                    // length if the source arranges, else the message tuple count.
-                    let src_arr_len = src_addr.as_ref().and_then(|a| arrange_len.get(a).copied());
-
-                    if let Some(a) = &src_addr {
-                        // Collection sources accumulate per-edge sends; arrangement
-                        // sources have their cardinality set once below, so fanning
-                        // a shared arrangement to several consumers doesn't multiply
-                        // its reported output.
-                        if src_arr_len.is_none() {
-                            *out_by_addr.entry(a.clone()).or_insert(0) +=
-                                sends.get(chan).copied().unwrap_or(0);
-                        }
-                    }
-                    if let Some(a) = &tgt_addr {
-                        let vol =
-                            src_arr_len.unwrap_or_else(|| recvs.get(chan).copied().unwrap_or(0));
-                        *in_by_addr.entry(a.clone()).or_insert(0) += vol;
-                    }
-                }
-                // Set each arrangement's output once (assign, not accumulate): a
-                // shared trace produces its tuples once but is read by every
-                // consumer, so per-edge accumulation would multiply tup_out by the
-                // fanout. The loop above skipped these via `src_arr_len.is_none()`.
-                // Consumes `arrange_len` (last use).
-                for (addr, len) in arrange_len {
-                    out_by_addr.insert(addr, len);
-                }
-                for m in metrics.borrow_mut().values_mut() {
-                    m.flow.tup_out = out_by_addr.get(&m.addr).copied();
-                    m.flow.tup_in = in_by_addr.get(&m.addr).copied();
-                }
-            }
-
-            // Sort by numeric address for stable output.
-            let map = metrics.borrow();
-            let mut rows: Vec<&OpMetrics> = map.values().collect();
-            rows.sort_by(|a, b| a.addr.cmp(&b.addr));
-
-            std::fs::create_dir_all(#dir).expect(#create_msg);
-            let f = File::create(#file_path_expr)
-                .expect("failed to create metrics log file");
-            let mut w = BufWriter::new(f);
-
-            writeln!(
-                w,
-                #header,
-                "addr", "acts", "active_ms", "tup_in", "tup_out",
-                "arr_in", "merges", "merge_in", "merge_out", "dropped",
-                "bat_bytes", "bat_cap", "name"
-            ).ok();
-
-            // Non-applicable dimensions print `n/a`.
-            let na = || "n/a".to_string();
-            for m in &rows {
-                let (acts, active_ms) = m.time.as_ref().map_or_else(
-                    || (na(), na()),
-                    |t| (
-                        t.activations.to_string(),
-                        format!("{:.3}", t.total_active.as_secs_f64() * 1000.0),
-                    ),
-                );
-                let tup_in = m.flow.tup_in.map_or_else(na, |v| v.to_string());
-                let tup_out = m.flow.tup_out.map_or_else(na, |v| v.to_string());
-                let (arr_in, merges, merge_in, merge_out, dropped, bat_bytes, bat_cap) =
-                    m.arrange.as_ref().map_or_else(
-                        || (na(), na(), na(), na(), na(), na(), na()),
-                        |a| (
-                            a.batch_total_len.to_string(),
-                            a.merge_completes.to_string(),
-                            a.merge_input_total.to_string(),
-                            a.merge_output_total.to_string(),
-                            a.drop_total_len.to_string(),
-                            a.batcher_size_peak.to_string(),
-                            a.batcher_capacity_peak.to_string(),
-                        ),
-                    );
+                let mut w = BufWriter::new(File::create(#chans_path_expr)?);
                 writeln!(
                     w,
-                    #header,
-                    format!("{:?}", m.addr), acts, active_ms, tup_in, tup_out,
-                    arr_in, merges, merge_in, merge_out, dropped, bat_bytes, bat_cap, m.name
-                ).ok();
+                    #chans_header,
+                    "scope", "src", "src_port", "tgt", "tgt_port", "batch", "sent", "recvd"
+                )?;
+                for (scope, src, src_port, tgt, tgt_port, batch, sent, recvd) in chans {
+                    writeln!(
+                        w,
+                        #chans_header,
+                        fmt_addr(scope), src, src_port, tgt, tgt_port, batch, sent, recvd
+                    )?;
+                }
+                w.flush()
+            };
+            if let Err(e) = dump() {
+                eprintln!("flowlog profiling: metrics dump into {} failed: {e}", #dir);
             }
-
-            if rows.is_empty() {
-                writeln!(w, "(no operators recorded)").ok();
-            }
-            w.flush().ok();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flowlog_common::ExecutionMode;
+
+    use super::*;
+
+    /// A `None` plan graph must render nothing, so non-profile builds
+    /// carry no dead const.
+    #[test]
+    fn none_plan_graph_renders_no_tokens() {
+        let ts = render_profile_ops_const(None).expect("None cannot fail");
+        assert!(ts.is_empty());
+    }
+
+    /// A recorded plan graph bakes the ops const with its JSON payload.
+    #[test]
+    fn recorded_plan_graph_renders_the_ops_const() {
+        let mut graph = PlanGraph::new(ExecutionMode::DatalogBatch);
+        graph.map_join_operator("n".into(), vec![], "a".into(), 1);
+        let ts = render_profile_ops_const(Some(&graph)).expect("serializes");
+        let rendered = ts.to_string();
+        assert!(rendered.contains("__FLOWLOG_OPS_JSON"));
+        assert!(rendered.contains("nodes"));
     }
 }

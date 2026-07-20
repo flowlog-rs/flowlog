@@ -48,9 +48,6 @@ fn identify_needed_components(
         .map(|d| d.name().to_string())
         .collect();
 
-    // Fact relations are always needed.
-    needed_preds.extend(program.facts.keys().cloned());
-
     // Loop-until relations stay live even if not outputs: the loop reads them
     // to decide termination.
     needed_preds.extend(
@@ -67,7 +64,7 @@ fn identify_needed_components(
             }),
     );
 
-    // If no outputs and no facts, keep everything.
+    // If no outputs and no loop conditions, keep everything.
     if needed_preds.is_empty() {
         let all_indices = (0..all_rules.len()).collect();
         let all_preds = program
@@ -220,6 +217,10 @@ fn prune_dead_components(program: &mut Program) {
         .relations
         .retain(|d| needed_preds.contains(d.name()));
 
+    // A fact is a derivation, not a demand: facts of pruned relations go
+    // with them.
+    program.facts.retain(|name, _| needed_preds.contains(name));
+
     // Filter dead rules from all segments; drop any segment that becomes empty.
     let mut global_idx = 0usize;
     let new_items: Vec<Segment> = program
@@ -316,6 +317,30 @@ fn materialize_orphan_relations(program: &mut Program) {
 #[cfg(test)]
 mod tests {
     use crate::test_util::pruned;
+
+    /// A fact is a derivation, not a demand: an inline fact on a relation
+    /// nothing reads or outputs does not keep the relation, its facts, or
+    /// its recursion alive.
+    #[test]
+    fn unread_fact_seeded_recursion_is_pruned() {
+        let program = pruned(
+            "
+            .decl Src(x: number)
+            .decl P(x: number)
+            .decl Out(x: number)
+            Src(1).
+            P(1).
+            P(x) :- P(x).
+            Out(x) :- Src(x).
+            .output Out
+            ",
+        )
+        .expect("valid program");
+        assert!(!program.relations().iter().any(|rel| rel.name() == "p"));
+        assert!(!program.facts().contains_key("p"));
+        // The consumed fact relation stays, facts intact.
+        assert!(program.facts().contains_key("src"));
+    }
 
     /// A loop-`until` relation is kept live even though nothing else reads it,
     /// while an unreferenced derived relation (`dead`) is pruned.

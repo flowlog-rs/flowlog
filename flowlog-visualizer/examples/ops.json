@@ -1,30 +1,30 @@
 {
   "rules": [
     {
-      "text": "reach(y) :- source(y).",
+      "text": "reach(y) :- Source(y).",
       "plan_tree": [
         {
-          "fingerprint": "0x154a7773126d9e60",
+          "fingerprint": "0x105a9c5ce84cc9b7",
           "parents": []
         }
       ]
     },
     {
-      "text": "reach(y) :- reach(x), arc(x, y).",
+      "text": "reach(y) :- Reach(x), Arc(x, y).",
       "plan_tree": [
         {
-          "fingerprint": "0x9a0ab85008fdb3a6",
+          "fingerprint": "0xdc59d3b1fd503297",
           "parents": []
         },
         {
-          "fingerprint": "0x6f963aa6d23460f0",
+          "fingerprint": "0x1af1396f1e59dd1f",
           "parents": []
         },
         {
-          "fingerprint": "0xaf1d5e148bbf482f",
+          "fingerprint": "0x7d0afed5be947983",
           "parents": [
-            "0x9a0ab85008fdb3a6",
-            "0x6f963aa6d23460f0"
+            "0xdc59d3b1fd503297",
+            "0x1af1396f1e59dd1f"
           ]
         }
       ]
@@ -35,26 +35,23 @@
       "id": 0,
       "name": "Source: input",
       "block": "input",
+      "parents": [],
       "fingerprint": null,
-      "tags": [
-        "Input"
-      ],
       "operators": [
         [
           0,
           1
         ]
-      ],
-      "parents": []
+      ]
     },
     {
       "id": 1,
       "name": "Source: dedup",
       "block": "input",
-      "fingerprint": null,
-      "tags": [
-        "Input"
+      "parents": [
+        0
       ],
+      "fingerprint": null,
       "operators": [
         [
           0,
@@ -68,35 +65,29 @@
           0,
           4
         ]
-      ],
-      "parents": [
-        0
       ]
     },
     {
       "id": 2,
       "name": "Arc: input",
       "block": "input",
+      "parents": [],
       "fingerprint": null,
-      "tags": [
-        "Input"
-      ],
       "operators": [
         [
           0,
           5
         ]
-      ],
-      "parents": []
+      ]
     },
     {
       "id": 3,
       "name": "Arc: dedup",
       "block": "input",
-      "fingerprint": null,
-      "tags": [
-        "Input"
+      "parents": [
+        2
       ],
+      "fingerprint": null,
       "operators": [
         [
           0,
@@ -110,38 +101,31 @@
           0,
           8
         ]
-      ],
-      "parents": [
-        2
       ]
     },
     {
       "id": 4,
       "name": "Map: V:(V0) ← Source",
       "block": "stratum 0",
-      "fingerprint": "0x154a7773126d9e60",
-      "tags": [
-        "Stage"
-      ],
-      "operators": [
-        [
-          0,
-          9
-        ]
-      ],
       "parents": [
         1
-      ]
+      ],
+      "fingerprint": "0x105a9c5ce84cc9b7",
+      "operators": []
     },
     {
       "id": 5,
       "name": "Reach: concat & dedup",
       "block": "stratum 0",
-      "fingerprint": null,
-      "tags": [
-        "Runtime"
+      "parents": [
+        4
       ],
+      "fingerprint": null,
       "operators": [
+        [
+          0,
+          9
+        ],
         [
           0,
           10
@@ -149,223 +133,188 @@
         [
           0,
           11
-        ],
-        [
-          0,
-          12
         ]
-      ],
-      "parents": [
-        4
       ]
     },
     {
       "id": 6,
       "name": "Arrange: K:(V0), V:(V1) ← Arc",
       "block": "stratum 1",
-      "fingerprint": "0x6f963aa6d23460f0",
-      "tags": [
-        "Stage"
+      "parents": [
+        3
       ],
+      "fingerprint": "0x1af1396f1e59dd1f",
       "operators": [
         [
           0,
-          13
+          12
         ],
         [
           0,
-          14
+          13
         ]
-      ],
-      "parents": [
-        3
       ]
     },
     {
       "id": 7,
       "name": "enter",
       "block": "stratum 1",
-      "fingerprint": null,
-      "tags": [
-        "Runtime"
+      "parents": [
+        6
       ],
+      "fingerprint": null,
       "operators": [
         [
           0,
-          15,
+          14,
           1
         ]
-      ],
-      "parents": [
-        5
       ]
     },
     {
       "id": 8,
       "name": "enter",
       "block": "stratum 1",
-      "fingerprint": null,
-      "tags": [
-        "Runtime"
+      "parents": [
+        5
       ],
+      "fingerprint": null,
       "operators": [
         [
           0,
-          15,
+          14,
           2
         ]
-      ],
-      "parents": [
-        6
       ]
     },
     {
       "id": 9,
       "name": "Reach: feedback",
       "block": "stratum 1",
+      "parents": [],
       "fingerprint": null,
-      "tags": [
-        "Runtime"
-      ],
       "operators": [
         [
           0,
-          15,
+          14,
           3
         ]
-      ],
-      "parents": []
+      ]
     },
     {
       "id": 10,
       "name": "Arrange: K:(V0) ← Reach",
       "block": "stratum 1",
-      "fingerprint": "0x9a0ab85008fdb3a6",
-      "tags": [
-        "Stage"
+      "parents": [
+        9
       ],
+      "fingerprint": "0xdc59d3b1fd503297",
       "operators": [
         [
           0,
-          15,
+          14,
           4
         ],
         [
           0,
-          15,
+          14,
           5
-        ],
-        [
-          0,
-          15,
-          6
         ]
-      ],
-      "parents": [
-        9
       ]
     },
     {
       "id": 11,
       "name": "SemiJoin: V:(RV0)",
       "block": "stratum 1",
-      "fingerprint": "0xaf1d5e148bbf482f",
-      "tags": [
-        "Stage"
+      "parents": [
+        10,
+        7
       ],
+      "fingerprint": "0x7d0afed5be947983",
       "operators": [
         [
           0,
-          15,
-          7
+          14,
+          6
         ]
-      ],
-      "parents": [
-        10,
-        8
       ]
     },
     {
       "id": 12,
       "name": "Reach: concat & dedup",
       "block": "stratum 1",
-      "fingerprint": null,
-      "tags": [
-        "Runtime"
+      "parents": [
+        11,
+        8
       ],
+      "fingerprint": null,
       "operators": [
         [
           0,
-          15,
+          14,
+          7
+        ],
+        [
+          0,
+          14,
           8
         ],
         [
           0,
-          15,
+          14,
           9
         ],
         [
           0,
-          15,
+          14,
           10
-        ],
-        [
-          0,
-          15,
-          11
         ]
-      ],
-      "parents": [
-        11,
-        7
       ]
     },
     {
       "id": 13,
       "name": "Reach: resultsin",
       "block": "stratum 1",
-      "fingerprint": null,
-      "tags": [
-        "Runtime"
+      "parents": [
+        12
       ],
+      "fingerprint": null,
       "operators": [
         [
           0,
-          15,
-          12
+          14,
+          11
         ]
-      ],
-      "parents": [
-        12
       ]
     },
     {
       "id": 14,
       "name": "Reach: leave",
       "block": "stratum 1",
-      "fingerprint": null,
-      "tags": [
-        "Runtime"
+      "parents": [
+        13
       ],
+      "fingerprint": null,
       "operators": [
         [
           0,
-          16
+          15
         ]
-      ],
-      "parents": [
-        13
       ]
     },
     {
       "id": 15,
       "name": "Reach: inspect size",
       "block": "inspect",
-      "fingerprint": null,
-      "tags": [
-        "Inspect"
+      "parents": [
+        14
       ],
+      "fingerprint": null,
       "operators": [
+        [
+          0,
+          16
+        ],
         [
           0,
           17
@@ -397,14 +346,7 @@
         [
           0,
           24
-        ],
-        [
-          0,
-          25
         ]
-      ],
-      "parents": [
-        14
       ]
     }
   ]

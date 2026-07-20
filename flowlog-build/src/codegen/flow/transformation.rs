@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
-use flowlog_profiler::Profiler;
-use flowlog_profiler::with_profiler;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::format_ident;
@@ -42,7 +42,7 @@ impl CodeGen {
         transformation: &Transformation,
         arranged_map: &mut HashMap<u64, Ident>,
         stratum: &StratumPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
         let recursive = stratum.is_recursive_transformation(transformation);
 
@@ -129,19 +129,19 @@ impl CodeGen {
                     && self.row_projection_preserves_type(flow.value(), &input_type)?;
                 let is_identity = pred.is_none() && identity_projection;
 
-                with_profiler(profiler, |profiler| {
+                with_plan_graph(plan_graph, |plan_graph| {
                     if is_identity {
                         // Copy rule `B :- A`: no operator is emitted — but still
                         // register a 0-op alias node so downstream references to
                         // this relation's fingerprint resolve in the profiler model.
-                        profiler.identity_alias_operator(
+                        plan_graph.identity_alias_operator(
                             transformation_name,
                             vec![inp.to_string()],
                             out.to_string(),
                             output.fingerprint(),
                         );
                     } else {
-                        profiler.map_join_operator(
+                        plan_graph.map_join_operator(
                             transformation_name,
                             vec![inp.to_string()],
                             out.to_string(),
@@ -233,16 +233,16 @@ impl CodeGen {
                     && flow.value().is_empty()
                     && is_identity_row_projection(flow.key(), input.arity().1);
 
-                with_profiler(profiler, |profiler| {
+                with_plan_graph(plan_graph, |plan_graph| {
                     let name = transformation_name;
                     let inputs = vec![inp.to_string()];
                     let arr = format!("{}_arr", out);
                     let fp = output.fingerprint();
                     // Identity aliases away the `flat_map`; only the arrangement remains.
                     if is_identity {
-                        profiler.arrange_operator(name, inputs, arr, fp, output.is_k_only());
+                        plan_graph.arrange_operator(name, inputs, arr, fp, output.is_k_only());
                     } else {
-                        profiler.map_join_arrange_operator(
+                        plan_graph.map_join_arrange_operator(
                             name,
                             inputs,
                             arr,
@@ -287,9 +287,9 @@ impl CodeGen {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.map_join_operator(
                         transformation_name,
                         vec![inp.to_string()],
                         out.to_string(),
@@ -338,17 +338,6 @@ impl CodeGen {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_arrange_operator(
-                        transformation_name,
-                        vec![inp.to_string()],
-                        format!("{}_arr", out),
-                        output.fingerprint(),
-                        output.is_k_only(),
-                    );
-                });
-
                 // Type inference
                 self.record_transformation_output_type(
                     input.fingerprint(),
@@ -370,6 +359,33 @@ impl CodeGen {
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type)?;
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred]);
+
+                // One flag drives the emitted dedup and its recording,
+                // so the predicted operator count cannot drift.
+                let dedups = pred.is_none() && output.is_k_only();
+
+                // Profiling hook (optional), after the predicates so the
+                // dedup is known.
+                with_plan_graph(plan_graph, |plan_graph| {
+                    if dedups {
+                        plan_graph.map_dedup_arrange_operator(
+                            transformation_name,
+                            vec![inp.to_string()],
+                            format!("{}_arr", out),
+                            output.fingerprint(),
+                            output.is_k_only(),
+                            recursive,
+                        );
+                    } else {
+                        plan_graph.map_join_arrange_operator(
+                            transformation_name,
+                            vec![inp.to_string()],
+                            format!("{}_arr", out),
+                            output.fingerprint(),
+                            output.is_k_only(),
+                        );
+                    }
+                });
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
                     flow.value(),
@@ -388,7 +404,7 @@ impl CodeGen {
                 // we have to apply deduplication to avoid incorrect Yannakakis computation bounds.
                 // Dedup only applies when there is no predicate (predicate paths already filter).
                 let dedup_call = self.dedup_projection(recursive);
-                let out_dedup_expr = if pred.is_none() && output.is_k_only() {
+                let out_dedup_expr = if dedups {
                     quote! { let #out = #out #dedup_call; }
                 } else {
                     quote! {}
@@ -431,9 +447,9 @@ impl CodeGen {
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.map_join_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
                         out.to_string(),
@@ -486,9 +502,9 @@ impl CodeGen {
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_arrange_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.map_join_arrange_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
                         format!("{}_arr", out),
@@ -563,9 +579,9 @@ impl CodeGen {
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.anti_join_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.anti_join_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
                         out.to_string(),
@@ -629,9 +645,9 @@ impl CodeGen {
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.anti_join_arrange_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.anti_join_arrange_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
                         format!("{}_arr", out),
