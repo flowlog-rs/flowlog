@@ -15,7 +15,7 @@
 
 > **status** · under active development; interfaces may change.
 
-FlowLog compiles Datalog into efficient and scalable [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow) rust executables.</h3> As such, FlowLog has first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to it runs **~2× faster than Soufflé** across 20 DaCapo programs (32 threads).
+FlowLog compiles Datalog into efficient and scalable [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow) rust executables.</h3> As such, FlowLog has first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to it runs **~3.6× faster than Soufflé** across 20 DaCapo programs (32 threads).
 
 ## Quick Start
 
@@ -132,13 +132,19 @@ A green oracle run is the definition of correct — see [`tests/README.md`](test
 
 ### vs Soufflé — DOOP
 
-On DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo](https://www.dacapobench.org/) programs at **32 threads** (FlowLog `-w 32`, Soufflé `-j 32`). The Soufflé program is the same `default.dl` of identical rules and join order.
+On DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo](https://www.dacapobench.org/) programs at **32 threads** (FlowLog `-w 32`, Soufflé `-j 32`). The Soufflé program is the same `default.dl` of identical rules and join order; all 20 produce **identical `VarPointsTo`**.
 
 <p align="center">
   <img src="docs/doop-time.png" alt="DOOP run time — FlowLog vs Soufflé" width="820"/>
 </p>
 
-**Run time** (run only; one-off compile excluded) — FlowLog is faster on **20/20**, geomean **1.95×** (range 1.41–3.27×).
+**Run time** (run only; one-off compile excluded) — FlowLog is faster on **20/20**, geomean **3.62×** (range 1.41–6.07×).
+
+<p align="center">
+  <img src="docs/doop-memory.png" alt="DOOP peak memory — FlowLog vs Soufflé" width="820"/>
+</p>
+
+**Peak memory** — Soufflé is leaner: Soufflé/FlowLog geomean **0.43×** (FlowLog trades memory for speed).
 
 Benchmark suite: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
 
