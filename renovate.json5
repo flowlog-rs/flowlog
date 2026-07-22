@@ -17,12 +17,12 @@
 
   // Weekly Cargo.lock refresh: CI builds against the same fresh in-range
   // resolution that users of generated crates always get (they have no lockfile).
-  lockFileMaintenance: { enabled: true, automerge: true },
+  lockFileMaintenance: { enabled: true, automerge: true, addLabels: ["automerge"] },
 
-  // GitHub's native auto-merge proved unreliable here (armed PRs with green
-  // required checks sat unmerged for hours); have Renovate merge green
-  // automerge PRs itself during its visits instead.
-  platformAutomerge: false,
+  // Platform auto-merge feeds the merge queue: Renovate arms GitHub
+  // auto-merge, the auto-approve workflow supplies the required Committer
+  // review, and the queue merges. 
+  platformAutomerge: true,
 
   customManagers: [
     {
@@ -68,6 +68,7 @@
       matchManagers: ["cargo"],
       matchUpdateTypes: ["patch"],
       automerge: true,
+      addLabels: ["automerge"],
     },
     {
       // Stable (>=1.x) crates: minors are semver-compatible and in-range
@@ -77,6 +78,7 @@
       matchUpdateTypes: ["minor"],
       matchCurrentVersion: ">=1.0.0",
       automerge: true,
+      addLabels: ["automerge"],
     },
   ],
 }
