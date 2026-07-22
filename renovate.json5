@@ -21,8 +21,13 @@
 
   // Platform auto-merge feeds the merge queue: Renovate arms GitHub
   // auto-merge, the auto-approve workflow supplies the required Committer
-  // review, and the queue merges. 
+  // review, and the queue merges.
   platformAutomerge: true,
+
+  // The merge queue rebuilds each entry against the current base, so don't
+  // force-push (and re-run CI on) PRs merely because main-next advanced;
+  // rebase only on a genuine conflict.
+  rebaseWhen: "conflicted",
 
   customManagers: [
     {
