@@ -39,7 +39,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [-j N] [test_name ...]
+  $(basename "$0") [-j N] [--shard I/N] [test_name ...]
 
 Run FlowLog library-mode end-to-end tests against the datalog-batch,
 datalog-inc, and extend-batch fixtures. Batch fixtures (CSV in, files
@@ -59,12 +59,14 @@ Options:
                   owns its own runner crate at target/e2e-lib/runner-{slot},
                   so the shared crate state in lib mode is sharded rather
                   than locked.
+  --shard I/N     Run only shard I of N (the fixtures split into N groups).
 
 Examples:
   $(basename "$0")                     # run every fixture sequentially
   $(basename "$0") -j 4                # 4 workers in parallel
   $(basename "$0") agg_sum             # one batch test
   $(basename "$0") recursive_tc_delta  # one incremental test
+  $(basename "$0") --shard 1/8         # first of 8 shards
 EOF
 }
 
@@ -296,6 +298,7 @@ run_tasks_parallel() {
 
 main() {
     parse_jobs_flag usage "$@"
+    apply_shard
     local jobs="$PARSED_JOBS"
     set -- "${PARSED_POSITIONAL[@]}"
 

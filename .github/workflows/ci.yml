@@ -77,8 +77,13 @@ jobs:
       - name: 📖 Doctests
         run: cargo test --doc --workspace
 
-  fixtures:
-    name: 🏁 End-to-end fixtures
+  # End-to-end fixtures, split across runners. Tune the count via the matrix length.
+  fixtures-shard:
+    name: 🏁 e2e shard ${{ matrix.shard }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -92,10 +97,21 @@ jobs:
       - name: 💾 Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: 🏁 End-to-end fixture tests
+      - name: 🏁 End-to-end fixtures
         run: |
-          bash tests/fixtures/run_compiler.sh -j 4
-          bash tests/fixtures/run_lib.sh -j 4
+          bash tests/fixtures/run_compiler.sh -j 4 --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+          bash tests/fixtures/run_lib.sh -j 4 --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  # Required check "🏁 End-to-end fixtures": keeps a stable name; green only if
+  # every shard passed.
+  fixtures:
+    name: 🏁 End-to-end fixtures
+    needs: [fixtures-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          [ "${{ needs.fixtures-shard.result }}" = success ] || { echo "a fixture shard failed"; exit 1; }
 
   fmt:
     name: 🎨 rustfmt
