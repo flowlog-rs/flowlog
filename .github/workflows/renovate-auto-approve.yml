@@ -1,23 +1,17 @@
 name: Auto-approve Renovate
 
-# Auto-approve non-major Renovate PRs so they satisfy the "Main Branch"
-# ruleset's required Committer review and flow through auto-merge + the merge
-# queue unattended. Major updates are intentionally excluded (no `automerge`
-# label) so a human reviews them.
-
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, labeled]
+    # Only on open/label, not synchronize: the approval survives rebases
+    # (dismiss_stale_reviews_on_push=false), so re-approving on every push
+    # would just spam identical reviews as the queue rebases conflicts.
+    types: [opened, labeled]
     branches: [main-next]
 
-# The default token needs nothing: approval is submitted with a Committer PAT.
 permissions: {}
 
 jobs:
   approve:
-    # Gate on Renovate authorship AND the `automerge` label. Both are set by
-    # GitHub / the Renovate config, not by PR contents, so this can't be
-    # spoofed from a fork. Majors are labelled for review, not `automerge`.
     if: >-
       github.event.pull_request.user.login == 'renovate[bot]' &&
       contains(github.event.pull_request.labels.*.name, 'automerge')
@@ -25,14 +19,7 @@ jobs:
     steps:
       - name: Approve
         env:
-          # Fine-grained PAT of a Committers-team member (Pull requests:
-          # write). A Committer approval is what the ruleset requires; the
-          # default GITHUB_TOKEN can't approve and wouldn't count toward the
-          # team review. Renovate PRs aren't authored by the PAT owner, so
-          # approving them is allowed.
+          # Committer PAT: the ruleset requires a Committers-team approval,
+          # which GITHUB_TOKEN cannot provide.
           GH_TOKEN: ${{ secrets.RENOVATE_APPROVE_TOKEN }}
-        run: |
-          gh pr review "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" \
-            --approve \
-            --body "Auto-approved: non-major Renovate update."
+        run: gh pr review "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --approve
