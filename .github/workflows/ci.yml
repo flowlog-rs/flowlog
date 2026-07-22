@@ -5,6 +5,9 @@ on:
     branches: ["main", "main-next"]
   pull_request:
     branches: ["main", "main-next"]
+  # Run the required checks against the merge queue's temporary branch too;
+  # without this the queue never receives their status and stalls.
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
