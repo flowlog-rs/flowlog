@@ -407,6 +407,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "serde",
+ "tempfile",
  "timely",
 ]
 
