@@ -184,10 +184,9 @@ fn std_imports(inc: bool, prof: bool, f: &Features) -> TokenStream {
             }
         };
         let output_buf = output_buffer_imports(inc, f.output_buffers());
+
         return quote! {
             #rc_refcell
-            use std::fs::File;
-            use std::io::{BufWriter, Write};
             #output_buf
             use std::time::{Duration, Instant};
         };

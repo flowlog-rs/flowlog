@@ -115,6 +115,7 @@ pub struct Builder {
     pub(crate) profile: bool,
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
+    pub(crate) metrics_flush_interval_ms: u64,
 }
 
 impl Builder {
@@ -160,6 +161,16 @@ impl Builder {
     /// panics if the combination is requested.
     pub fn profile(mut self, enabled: bool) -> Self {
         self.profile = enabled;
+        self
+    }
+
+    /// Milliseconds between periodic metric flushes during a profiled batch
+    /// run, so a long or interrupted run still leaves the latest snapshot on
+    /// disk. Defaults to `0` (flush only at the end); set a non-zero value to
+    /// snapshot periodically. Batch modes only, and ignored unless
+    /// [`Self::profile`] is set.
+    pub fn metrics_flush_interval_ms(mut self, ms: u64) -> Self {
+        self.metrics_flush_interval_ms = ms;
         self
     }
 

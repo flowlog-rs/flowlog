@@ -213,6 +213,12 @@ impl CodeGen {
             return quote! {};
         }
 
+        // TODO: no periodic in-commit flush here yet (batch has one via
+        // `gen_batch_step_loop`), so a fat single commit leaves no partial
+        // snapshot until it completes. Adding it needs a write-without-reset
+        // variant: the counter reset below must run only on the final
+        // per-commit write, or a periodic partial would split one
+        // transaction's delta across writes.
         let dir = format!("{}/metrics", self.profile_log_dir());
         let ops_fmt = format!("{dir}/operators_worker_t{{}}_{{}}.log");
         let chans_fmt = format!("{dir}/channels_worker_t{{}}_{{}}.log");
@@ -234,6 +240,34 @@ impl CodeGen {
             }
             chan_send.borrow_mut().clear();
             chan_recv.borrow_mut().clear();
+        }
+    }
+
+    /// Emits the batch run loop (`worker` and `index` in scope). Without
+    /// profiling or with a zero flush interval this is a plain
+    /// step-to-fixpoint loop. With a non-zero interval the dataflow is
+    /// stepped in a loop that re-dumps the batch metrics every `interval`
+    /// milliseconds (overwriting the `t0` tables), so a long or interrupted
+    /// run still leaves the latest cumulative snapshot on disk. The final
+    /// authoritative dump still runs after the loop drains.
+    pub(crate) fn gen_batch_step_loop(&self) -> TokenStream {
+        let interval = self.config.metrics_flush_interval_ms();
+        if !self.config.profiling_enabled() || interval == 0 {
+            return quote! { while worker.step() {} };
+        }
+
+        let write = self.gen_metrics_write_batch();
+        quote! {
+            {
+                let mut __flowlog_last_flush = std::time::Instant::now();
+                let __flowlog_flush_interval = std::time::Duration::from_millis(#interval);
+                while worker.step() {
+                    if __flowlog_last_flush.elapsed() >= __flowlog_flush_interval {
+                        #write
+                        __flowlog_last_flush = std::time::Instant::now();
+                    }
+                }
+            }
         }
     }
 }
@@ -284,23 +318,26 @@ fn gen_metrics_write_core(
                 let mut rows: Vec<&OpMetrics> = map.values().collect();
                 rows.sort_by(|a, b| a.addr.cmp(&b.addr));
 
-                let mut w = BufWriter::new(File::create(#ops_path_expr)?);
-                writeln!(w, #ops_header, "addr", "acts", "active_ms", "name")?;
-                for m in &rows {
-                    // Non-applicable dimensions print `n/a`.
-                    let (acts, active_ms) = m.time.as_ref().map_or_else(
-                        || ("n/a".to_string(), "n/a".to_string()),
-                        |t| (
-                            t.activations.to_string(),
-                            format!("{:.3}", t.total_active.as_secs_f64() * 1000.0),
-                        ),
-                    );
-                    writeln!(w, #ops_header, fmt_addr(&m.addr), acts, active_ms, m.name)?;
-                }
-                if rows.is_empty() {
-                    writeln!(w, "(no operators recorded)")?;
-                }
-                w.flush()?;
+                // Periodic flushes can be interrupted mid-write, so route the
+                // table through an atomic write.
+                ::flowlog_runtime::io::write_atomic(#ops_path_expr, |w| {
+                    writeln!(w, #ops_header, "addr", "acts", "active_ms", "name")?;
+                    for m in &rows {
+                        // Non-applicable dimensions print `n/a`.
+                        let (acts, active_ms) = m.time.as_ref().map_or_else(
+                            || ("n/a".to_string(), "n/a".to_string()),
+                            |t| (
+                                t.activations.to_string(),
+                                format!("{:.3}", t.total_active.as_secs_f64() * 1000.0),
+                            ),
+                        );
+                        writeln!(w, #ops_header, fmt_addr(&m.addr), acts, active_ms, m.name)?;
+                    }
+                    if rows.is_empty() {
+                        writeln!(w, "(no operators recorded)")?;
+                    }
+                    Ok(())
+                })?;
 
                 // Channel table, sorted by topology for stable output.
                 let info = chan_info.borrow();
@@ -323,20 +360,21 @@ fn gen_metrics_write_core(
                     .collect();
                 chans.sort();
 
-                let mut w = BufWriter::new(File::create(#chans_path_expr)?);
-                writeln!(
-                    w,
-                    #chans_header,
-                    "scope", "src", "src_port", "tgt", "tgt_port", "batch", "sent", "recvd"
-                )?;
-                for (scope, src, src_port, tgt, tgt_port, batch, sent, recvd) in chans {
+                ::flowlog_runtime::io::write_atomic(#chans_path_expr, |w| {
                     writeln!(
                         w,
                         #chans_header,
-                        fmt_addr(scope), src, src_port, tgt, tgt_port, batch, sent, recvd
+                        "scope", "src", "src_port", "tgt", "tgt_port", "batch", "sent", "recvd"
                     )?;
-                }
-                w.flush()
+                    for (scope, src, src_port, tgt, tgt_port, batch, sent, recvd) in chans {
+                        writeln!(
+                            w,
+                            #chans_header,
+                            fmt_addr(scope), src, src_port, tgt, tgt_port, batch, sent, recvd
+                        )?;
+                    }
+                    Ok(())
+                })
             };
             if let Err(e) = dump() {
                 eprintln!("flowlog profiling: metrics dump into {} failed: {e}", #dir);

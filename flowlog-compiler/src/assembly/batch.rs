@@ -34,6 +34,7 @@ pub(crate) fn gen_batch_main(
         size_cell_clones,
         profile_init,
         metrics_write_batch: metrics_write,
+        batch_step_loop: step_loop,
         ..
     } = parts;
     let Input {
@@ -89,7 +90,7 @@ pub(crate) fn gen_batch_main(
                         r.close();
                     }
 
-                    while worker.step() {}
+                    #step_loop
 
                     // Flush per-worker output buffers into the shared ones,
                     // then worker 0 merges and writes results.

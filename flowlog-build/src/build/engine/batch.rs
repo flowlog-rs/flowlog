@@ -197,6 +197,7 @@ fn gen_run_body(
     let size_cell_clones = &parts.size_cell_clones;
     let profile_init = &parts.profile_init;
     let metrics_write = &parts.metrics_write_batch;
+    let step_loop = &parts.batch_step_loop;
 
     let (host_partitions, worker_partition_clones) = gen_host_partitions(edbs);
     let inputs_new_args = gen_inputs_new_args(edbs);
@@ -236,7 +237,7 @@ fn gen_run_body(
                 inputs.apply_inline_all(index);
                 inputs.close_all();
 
-                while worker.step() {}
+                #step_loop
 
                 #(#flush)*
                 barrier.wait();

@@ -110,5 +110,6 @@ fn build_config(builder: &Builder, program: &str) -> Config {
             .collect(),
         output_to_stdout: false,
         serialize_load: false,
+        metrics_flush_interval_ms: builder.metrics_flush_interval_ms,
     }
 }
