@@ -387,7 +387,8 @@ fn gen_worker_closure(
     let inspectors = &parts.inspectors;
     let flush = &parts.flush;
     let profile_init = &parts.profile_init;
-    let metrics_write = &parts.metrics_write_incremental;
+    let metrics_write = &parts.metrics_write;
+    let step_loop = &parts.step_loop;
 
     let inputs_new_args = gen_inputs_new_args(program);
 
@@ -473,9 +474,7 @@ fn gen_worker_closure(
                         time_stamp += 1;
                         inputs.advance_to_all(time_stamp);
                         inputs.flush_all();
-                        while probe.less_than(&time_stamp) {
-                            worker.step();
-                        }
+                        #step_loop
 
                         #metrics_write
 

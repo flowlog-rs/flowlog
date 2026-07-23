@@ -164,11 +164,11 @@ impl Builder {
         self
     }
 
-    /// Milliseconds between periodic metric flushes during a profiled batch
-    /// run, so a long or interrupted run still leaves the latest snapshot on
-    /// disk. Defaults to `0` (flush only at the end); set a non-zero value to
-    /// snapshot periodically. Batch modes only, and ignored unless
-    /// [`Self::profile`] is set.
+    /// Milliseconds between periodic metric flushes during a profiled run, so
+    /// a long or interrupted run still leaves the latest snapshot on disk.
+    /// Defaults to `0` (flush only at each natural write point: after a batch
+    /// run drains, or after each incremental commit); a non-zero value also
+    /// snapshots mid-run. Ignored unless [`Self::profile`] is set.
     pub fn metrics_flush_interval_ms(mut self, ms: u64) -> Self {
         self.metrics_flush_interval_ms = ms;
         self

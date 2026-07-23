@@ -213,21 +213,7 @@ impl CodeGen {
             return quote! {};
         }
 
-        // TODO: no periodic in-commit flush here yet (batch has one via
-        // `gen_batch_step_loop`), so a fat single commit leaves no partial
-        // snapshot until it completes. Adding it needs a write-without-reset
-        // variant: the counter reset below must run only on the final
-        // per-commit write, or a periodic partial would split one
-        // transaction's delta across writes.
-        let dir = format!("{}/metrics", self.profile_log_dir());
-        let ops_fmt = format!("{dir}/operators_worker_t{{}}_{{}}.log");
-        let chans_fmt = format!("{dir}/channels_worker_t{{}}_{{}}.log");
-        let write = gen_metrics_write_core(
-            &dir,
-            quote! { format!(#ops_fmt, time_stamp - 1, index) },
-            quote! { format!(#chans_fmt, time_stamp - 1, index) },
-        );
-
+        let write = self.gen_metrics_write_incremental_tables();
         quote! {
             #write
 
@@ -243,25 +229,45 @@ impl CodeGen {
         }
     }
 
-    /// Emits the batch run loop (`worker` and `index` in scope). Without
-    /// profiling or with a zero flush interval this is a plain
-    /// step-to-fixpoint loop. With a non-zero interval the dataflow is
-    /// stepped in a loop that re-dumps the batch metrics every `interval`
-    /// milliseconds (overwriting the `t0` tables), so a long or interrupted
-    /// run still leaves the latest cumulative snapshot on disk. The final
-    /// authoritative dump still runs after the loop drains.
-    pub(crate) fn gen_batch_step_loop(&self) -> TokenStream {
+    /// Emits the incremental table write for the in-flight transaction: dumps
+    /// the counters as they stand into the `t{time_stamp-1}` table pair
+    /// (`time_stamp` and `index` in scope), leaving them intact for the caller
+    /// to reset or keep accumulating. Not resetting lets the same table pair
+    /// be overwritten repeatedly within one transaction without splitting its
+    /// delta across writes.
+    fn gen_metrics_write_incremental_tables(&self) -> TokenStream {
+        let dir = format!("{}/metrics", self.profile_log_dir());
+        let ops_fmt = format!("{dir}/operators_worker_t{{}}_{{}}.log");
+        let chans_fmt = format!("{dir}/channels_worker_t{{}}_{{}}.log");
+        gen_metrics_write_core(
+            &dir,
+            quote! { format!(#ops_fmt, time_stamp - 1, index) },
+            quote! { format!(#chans_fmt, time_stamp - 1, index) },
+        )
+    }
+
+    /// Emits a step loop that periodically flushes metrics. Without profiling
+    /// or with a zero flush interval this is the plain `while #cond { #step }`
+    /// loop; otherwise the same loop re-dumps metrics via `write` every
+    /// `metrics_flush_interval_ms` milliseconds, so a long or interrupted run
+    /// still leaves the latest snapshot on disk.
+    fn gen_flush_loop(
+        &self,
+        cond: TokenStream,
+        step: TokenStream,
+        write: TokenStream,
+    ) -> TokenStream {
         let interval = self.config.metrics_flush_interval_ms();
         if !self.config.profiling_enabled() || interval == 0 {
-            return quote! { while worker.step() {} };
+            return quote! { while #cond { #step } };
         }
 
-        let write = self.gen_metrics_write_batch();
         quote! {
             {
                 let mut __flowlog_last_flush = std::time::Instant::now();
                 let __flowlog_flush_interval = std::time::Duration::from_millis(#interval);
-                while worker.step() {
+                while #cond {
+                    #step
                     if __flowlog_last_flush.elapsed() >= __flowlog_flush_interval {
                         #write
                         __flowlog_last_flush = std::time::Instant::now();
@@ -269,6 +275,28 @@ impl CodeGen {
                 }
             }
         }
+    }
+
+    /// Emits the batch run loop (`worker` and `index` in scope): steps the
+    /// dataflow to fixpoint, periodically flushing metrics when profiled.
+    pub(crate) fn gen_batch_step_loop(&self) -> TokenStream {
+        self.gen_flush_loop(
+            quote! { worker.step() },
+            quote! {},
+            self.gen_metrics_write_batch(),
+        )
+    }
+
+    /// Emits the incremental commit step loop (`worker`, `probe`,
+    /// `time_stamp`, and `index` in scope): steps the dataflow until the probe
+    /// reaches the just-advanced `time_stamp`, periodically flushing metrics
+    /// when profiled.
+    pub(crate) fn gen_incremental_step_loop(&self) -> TokenStream {
+        self.gen_flush_loop(
+            quote! { probe.less_than(&time_stamp) },
+            quote! { worker.step(); },
+            self.gen_metrics_write_incremental_tables(),
+        )
     }
 }
 
