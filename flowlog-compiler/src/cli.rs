@@ -40,6 +40,13 @@ pub struct Cli {
     #[arg(long, short = 'P')]
     pub profile: bool,
 
+    /// Milliseconds between periodic metric flushes while a profiled batch
+    /// run executes, so a long or interrupted run still leaves the latest
+    /// partial metrics on disk. `0` flushes only at the end. Batch modes
+    /// only; needs `--profile`.
+    #[arg(long, value_name = "MS", default_value_t = 5000)]
+    pub metrics_flush_interval_ms: u64,
+
     /// Enable Sideways Information Passing to propagate binding constraints
     /// from rule heads into body atoms, reducing intermediate results.
     #[arg(long)]
@@ -90,6 +97,7 @@ impl Cli {
             include_dirs: self.include_dirs.clone(),
             output_to_stdout: self.output_dir.as_deref() == Some("-"),
             serialize_load: false,
+            metrics_flush_interval_ms: self.metrics_flush_interval_ms,
         }
     }
 

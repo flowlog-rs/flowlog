@@ -20,6 +20,7 @@ ordered-float = { workspace = true, features = ["serde"] }
 regex.workspace = true
 rustc-hash.workspace = true
 serde = { workspace = true }
+tempfile.workspace = true
 timely.workspace = true
 
 [lints]

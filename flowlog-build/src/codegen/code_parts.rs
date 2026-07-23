@@ -54,6 +54,10 @@ pub struct CodeParts {
     pub metrics_write_batch: TokenStream,
     /// Metrics write-out code for incremental mode.
     pub metrics_write_incremental: TokenStream,
+    /// Batch run loop: a plain `while worker.step()` fixpoint, or (when
+    /// profiling with a non-zero flush interval) a stepping loop that
+    /// periodically re-dumps metrics.
+    pub batch_step_loop: TokenStream,
 
     /// Type aliases and constants for the `(Data, Diff, Time)` triple.
     pub type_declarations: TokenStream,
@@ -119,6 +123,7 @@ impl CodeGen {
         // -- Metrics write code (mode-specific) --
         let metrics_write_batch = self.gen_metrics_write_batch();
         let metrics_write_incremental = self.gen_metrics_write_incremental();
+        let batch_step_loop = self.gen_batch_step_loop();
 
         // Rendered after the codegen loop so the plan graph is fully
         // populated. Empty when profile is off.
@@ -144,6 +149,7 @@ impl CodeGen {
             profile_init,
             metrics_write_batch,
             metrics_write_incremental,
+            batch_step_loop,
             type_declarations,
             semiring_modules,
         })

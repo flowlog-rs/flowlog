@@ -58,6 +58,11 @@ pub struct Config {
     /// interning order — and therefore `ord(_)` values — is deterministic across
     /// worker counts (`-w N` matches `-w 1`).
     pub serialize_load: bool,
+    /// Milliseconds between periodic metric flushes while a profiled batch
+    /// run is executing, so a long or interrupted run still leaves the latest
+    /// cumulative snapshot on disk. `0` flushes only at the end. Batch modes
+    /// only: incremental modes snapshot per transaction and ignore this.
+    pub metrics_flush_interval_ms: u64,
 }
 
 impl Config {
@@ -138,6 +143,11 @@ impl Config {
     /// Whether fact-string interning must be serial for deterministic `ord(_)`.
     pub fn serialize_load(&self) -> bool {
         self.serialize_load
+    }
+
+    /// Milliseconds between periodic metric flushes; `0` means end-only.
+    pub fn metrics_flush_interval_ms(&self) -> u64 {
+        self.metrics_flush_interval_ms
     }
 }
 

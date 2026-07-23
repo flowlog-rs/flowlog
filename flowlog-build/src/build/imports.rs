@@ -57,15 +57,14 @@ pub(crate) fn gen_lib_imports(
 
 /// Items the generated `OpMetrics` struct and its logger reference
 /// unqualified; kept conditional so non-profile builds don't drag in
-/// `HashMap` / `File` / timely logging for nothing.
+/// `HashMap` / timely logging for nothing. The metric tables write through
+/// `flowlog_runtime::io::write_atomic`, so no `File`/`Write` import is needed.
 fn profile_imports(profile: bool) -> TokenStream {
     if !profile {
         return quote! {};
     }
     quote! {
         use std::collections::HashMap;
-        use std::fs::File;
-        use std::io::{BufWriter, Write};
         use std::time::Duration;
         use ::flowlog_runtime::timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
     }
