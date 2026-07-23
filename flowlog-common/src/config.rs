@@ -58,10 +58,11 @@ pub struct Config {
     /// interning order — and therefore `ord(_)` values — is deterministic across
     /// worker counts (`-w N` matches `-w 1`).
     pub serialize_load: bool,
-    /// Milliseconds between periodic metric flushes while a profiled batch
-    /// run is executing, so a long or interrupted run still leaves the latest
-    /// cumulative snapshot on disk. `0` flushes only at the end. Batch modes
-    /// only: incremental modes snapshot per transaction and ignore this.
+    /// Milliseconds between periodic metric flushes while a profiled run is
+    /// executing, so a long or interrupted run still leaves the latest
+    /// snapshot on disk. `0` flushes only at each natural write point (batch:
+    /// after the run drains; incremental: after each transaction commits). A
+    /// non-zero interval additionally re-dumps the in-flight tables mid-run.
     pub metrics_flush_interval_ms: u64,
 }
 
@@ -145,7 +146,7 @@ impl Config {
         self.serialize_load
     }
 
-    /// Milliseconds between periodic metric flushes; `0` means end-only.
+    /// Milliseconds between periodic metric flushes; `0` disables them.
     pub fn metrics_flush_interval_ms(&self) -> u64 {
         self.metrics_flush_interval_ms
     }

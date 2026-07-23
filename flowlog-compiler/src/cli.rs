@@ -40,10 +40,10 @@ pub struct Cli {
     #[arg(long, short = 'P')]
     pub profile: bool,
 
-    /// Milliseconds between periodic metric flushes while a profiled batch
-    /// run executes, so a long or interrupted run still leaves the latest
-    /// partial metrics on disk. `0` flushes only at the end. Batch modes
-    /// only; needs `--profile`.
+    /// Milliseconds between periodic metric flushes while a profiled run
+    /// executes, so a long or interrupted run still leaves the latest partial
+    /// metrics on disk. `0` flushes only at each natural write point (end of a
+    /// batch run, or after each incremental commit). Needs `--profile`.
     #[arg(long, value_name = "MS", default_value_t = 5000)]
     pub metrics_flush_interval_ms: u64,
 

@@ -196,8 +196,8 @@ fn gen_run_body(
     let size_cell_decls = &parts.size_cell_decls;
     let size_cell_clones = &parts.size_cell_clones;
     let profile_init = &parts.profile_init;
-    let metrics_write = &parts.metrics_write_batch;
-    let step_loop = &parts.batch_step_loop;
+    let metrics_write = &parts.metrics_write;
+    let step_loop = &parts.step_loop;
 
     let (host_partitions, worker_partition_clones) = gen_host_partitions(edbs);
     let inputs_new_args = gen_inputs_new_args(edbs);

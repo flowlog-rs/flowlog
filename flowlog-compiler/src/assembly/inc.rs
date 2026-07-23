@@ -32,7 +32,8 @@ pub(crate) fn gen_incremental_main(
         size_cell_decls,
         size_cell_clones,
         profile_init,
-        metrics_write_incremental: metrics_write,
+        metrics_write,
+        step_loop,
         ..
     } = p;
     let Input {
@@ -147,9 +148,7 @@ pub(crate) fn gen_incremental_main(
                                         r.advance_to(time_stamp);
                                         r.flush();
                                     }
-                                    while probe.less_than(&time_stamp) {
-                                        worker.step();
-                                    }
+                                    #step_loop
 
                                     #metrics_write
 
@@ -251,9 +250,7 @@ pub(crate) fn gen_incremental_main(
                                     r.advance_to(time_stamp);
                                     r.flush();
                                 }
-                                while probe.less_than(&time_stamp) {
-                                    worker.step();
-                                }
+                                #step_loop
 
                                 #metrics_write
 

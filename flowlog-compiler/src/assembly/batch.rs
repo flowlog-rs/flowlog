@@ -33,8 +33,8 @@ pub(crate) fn gen_batch_main(
         size_cell_decls,
         size_cell_clones,
         profile_init,
-        metrics_write_batch: metrics_write,
-        batch_step_loop: step_loop,
+        metrics_write,
+        step_loop,
         ..
     } = parts;
     let Input {
