@@ -150,7 +150,7 @@ pub(crate) fn render_cargo_toml(
         deps["mimalloc"] = "0.1".into();
         // 0.2.3 is the minimum carrying the `regex` re-export that generated
         // `match(...)` code resolves through (`::flowlog_runtime::regex`).
-        deps["flowlog-runtime"] = "0.2.3".into();
+        deps["flowlog-runtime"] = "0.3".into();
 
         if features.string_intern() {
             deps["lasso"] = value(inline_versioned_dep(

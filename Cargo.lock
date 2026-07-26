@@ -399,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-runtime"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "differential-dataflow",
  "lasso",
