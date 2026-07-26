@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
+description = "Shared primitives for the FlowLog pipeline crates."
 
 [features]
 # Derive clap's `ValueEnum` on `ExecutionMode` for CLI front-ends.

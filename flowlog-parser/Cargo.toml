@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
+description = "FlowLog parser: source text to a checked, optimized program."
 
 [dependencies]
 flowlog-common.workspace = true
