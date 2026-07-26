@@ -1,10 +1,6 @@
 # flowlog-parser
 
-The frontend for [FlowLog](https://github.com/flowlog-rs/flowlog)'s Datalog
-language. `parse` takes a `.dl` program (resolving `.include`s) through
-type checking, constant folding, and pruning, and returns a fully-typed,
-immutable `Program` — ready for a code generator, analyzer, linter, or any
-other tool that consumes FlowLog programs.
+The frontend for [FlowLog](https://github.com/flowlog-rs/flowlog)'s Datalog language. `parse` takes a `.dl` program (resolving `.include`s) through type checking, constant folding, and pruning unused components, and returns a fully-typed, immutable `Program`, ready for a code generator, analyzer, linter, or any other tool that consumes FlowLog programs.
 
 ## Usage
 
@@ -17,9 +13,7 @@ let mut config = Config::default();
 let program = parse("program.dl", &[], &mut sm, &mut config)?;
 ```
 
-`parse` runs the whole pipeline; `check_program`, `fold_constants`, and
-`prune` expose the individual stages, and the AST layer is public for
-tools that work on the syntax directly.
+`parse` runs the whole pipeline; `check_program`, `fold_constants`, and `prune` expose the individual stages, and the AST layer is public for tools that work on the syntax directly.
 
 ## Layout
 
