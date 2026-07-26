@@ -2,7 +2,10 @@ name: Auto-approve Renovate
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, labeled]
+    # Only on open/label, not synchronize: the approval survives rebases
+    # (dismiss_stale_reviews_on_push=false), so re-approving on every push
+    # would just spam identical reviews as the queue rebases conflicts.
+    types: [opened, labeled]
     branches: [main-next]
 
 permissions: {}
@@ -19,8 +22,4 @@ jobs:
           # Committer PAT: the ruleset requires a Committers-team approval,
           # which GITHUB_TOKEN cannot provide.
           GH_TOKEN: ${{ secrets.RENOVATE_APPROVE_TOKEN }}
-        run: |
-          gh pr review "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" \
-            --approve \
-            --body "Auto-approved: non-major Renovate update."
+        run: gh pr review "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --approve

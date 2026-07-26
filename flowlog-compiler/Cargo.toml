@@ -1,6 +1,6 @@
 [package]
 name = "flowlog-compiler"
-version = "0.4.4"
+version = "0.5.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -20,4 +20,13 @@ toml_edit = { workspace = true }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
-flowlog-build = { path = "../flowlog-build" }
+flowlog-build.workspace = true
+flowlog-common = { workspace = true, features = ["clap"] }
+flowlog-parser.workspace = true
+flowlog-profiler.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

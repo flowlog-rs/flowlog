@@ -7,10 +7,9 @@
 //!    transactions (`begin` / `put` / `file` / `commit` / `quit`)
 //!    and non-zero workers follow via shared state + barriers.
 
+use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
 use quote::quote;
-
-use flowlog_build::CodeParts;
 
 use crate::io::input::Input;
 
@@ -33,8 +32,8 @@ pub(crate) fn gen_incremental_main(
         size_cell_decls,
         size_cell_clones,
         profile_init,
-        time_profile_write_incremental: time_profile_write,
-        memory_profile_write_incremental: memory_profile_write,
+        metrics_write,
+        step_loop,
         ..
     } = p;
     let Input {
@@ -149,12 +148,9 @@ pub(crate) fn gen_incremental_main(
                                         r.advance_to(time_stamp);
                                         r.flush();
                                     }
-                                    while probe.less_than(&time_stamp) {
-                                        worker.step();
-                                    }
+                                    #step_loop
 
-                                    #time_profile_write
-                                    #memory_profile_write
+                                    #metrics_write
 
                                     // Flush thread-local buffers into shared buffers.
                                     #(#flush)*
@@ -254,12 +250,9 @@ pub(crate) fn gen_incremental_main(
                                     r.advance_to(time_stamp);
                                     r.flush();
                                 }
-                                while probe.less_than(&time_stamp) {
-                                    worker.step();
-                                }
+                                #step_loop
 
-                                #time_profile_write
-                                #memory_profile_write
+                                #metrics_write
 
                                 // Flush thread-local buffers into shared buffers.
                                 #(#flush)*

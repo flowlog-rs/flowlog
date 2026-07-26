@@ -8,10 +8,9 @@
 //! 4. Flush worker-local output buffers into the shared buffers.
 //! 5. Worker 0 drains the shared buffers (sort / limit / write).
 
+use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
 use quote::quote;
-
-use flowlog_build::CodeParts;
 
 use crate::io::input::Input;
 
@@ -34,8 +33,8 @@ pub(crate) fn gen_batch_main(
         size_cell_decls,
         size_cell_clones,
         profile_init,
-        time_profile_write_batch: time_profile_write,
-        memory_profile_write_batch: memory_profile_write,
+        metrics_write,
+        step_loop,
         ..
     } = parts;
     let Input {
@@ -91,15 +90,14 @@ pub(crate) fn gen_batch_main(
                         r.close();
                     }
 
-                    while worker.step() {}
+                    #step_loop
 
                     // Flush per-worker output buffers into the shared ones,
                     // then worker 0 merges and writes results.
                     #(#flush)*
                     barrier.wait();
 
-                    #time_profile_write
-                    #memory_profile_write
+                    #metrics_write
 
                     if index == 0 {
                         println!("{:?}:\tDataflow executed", timer.elapsed());

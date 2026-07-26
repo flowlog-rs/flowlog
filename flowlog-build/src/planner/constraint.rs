@@ -1,15 +1,17 @@
 //! Constraints representation for query planning in FlowLog Datalog programs.
 
-use crate::parser::ConstType;
-use crate::planner::TransformationArgument;
 use std::fmt;
 use std::sync::Arc;
+
+use flowlog_parser::Constant;
+
+use crate::planner::TransformationArgument;
 
 /// Represents constraints in a query plan.
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub(crate) struct Constraints {
     /// Constraints that equate a variable (transformation arg) to a constant value (e.g., `x = 5`)
-    constant_eq_constraints: Arc<Vec<(TransformationArgument, ConstType)>>,
+    constant_eq_constraints: Arc<Vec<(TransformationArgument, Constant)>>,
 
     /// Constraints that equate two variables (transformation args), e.g., `x = y`
     variable_eq_constraints: Arc<Vec<(TransformationArgument, TransformationArgument)>>,
@@ -18,7 +20,7 @@ pub(crate) struct Constraints {
 impl Constraints {
     /// Creates a new Constraints instance.
     pub(crate) fn new(
-        constant_eq_constraints: Vec<(TransformationArgument, ConstType)>,
+        constant_eq_constraints: Vec<(TransformationArgument, Constant)>,
         variable_eq_constraints: Vec<(TransformationArgument, TransformationArgument)>,
     ) -> Self {
         Self {
@@ -28,7 +30,7 @@ impl Constraints {
     }
 
     /// Returns the constant equality constraints.
-    pub(crate) fn constant_eq_constraints(&self) -> &Arc<Vec<(TransformationArgument, ConstType)>> {
+    pub(crate) fn constant_eq_constraints(&self) -> &Arc<Vec<(TransformationArgument, Constant)>> {
         &self.constant_eq_constraints
     }
 

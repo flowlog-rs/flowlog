@@ -4,4 +4,4 @@
 .decl Reach(x: int32)
 .input Edge(IO="file", filename="Edge.csv", delimiter=",")
 .output Reach
-Reach(x) :- Edge(x, y), is_positive(z).
+Reach(x) :- Edge(x, y), is_positive(z) = True.

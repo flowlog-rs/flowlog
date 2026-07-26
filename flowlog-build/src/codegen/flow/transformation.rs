@@ -4,21 +4,31 @@
 //! such as Row-to-Row, Row-to-KV, KV-to-KV, KV-to-Row, Joins, and Antijoins
 //! in the differential dataflow pipelines.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
+use proc_macro2::Ident;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 
-use crate::codegen::arg::{
-    build_kv_constraints_predicate, build_row_constraints_predicate, combine_predicates,
-    compute_join_param_tokens, compute_kv_param_tokens, kv_use_counts, row_pattern_and_fields,
-    row_use_counts,
-};
+use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
+use crate::codegen::arg::build_kv_constraints_predicate;
+use crate::codegen::arg::build_row_constraints_predicate;
+use crate::codegen::arg::combine_predicates;
+use crate::codegen::arg::compute_join_param_tokens;
+use crate::codegen::arg::compute_kv_param_tokens;
+use crate::codegen::arg::row_pattern_and_fields;
+use crate::codegen::data_type_tokens;
 use crate::codegen::ident::find_local_ident;
-use crate::codegen::{CodeGen, CodegenError, data_type_tokens};
-use crate::planner::{StratumPlanner, Transformation};
-use crate::profiler::{Profiler, with_profiler};
+use crate::codegen::row_is_copy;
+use crate::planner::ArithmeticArgument;
+use crate::planner::FactorArgument;
+use crate::planner::StratumPlanner;
+use crate::planner::Transformation;
+use crate::planner::TransformationArgument;
 
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.
@@ -32,8 +42,10 @@ impl CodeGen {
         transformation: &Transformation,
         arranged_map: &mut HashMap<u64, Ident>,
         stratum: &StratumPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<TokenStream, CodegenError> {
+        let recursive = stratum.is_recursive_transformation(transformation);
+
         // `atom_fps` decides *which* inputs are named atoms; the label
         // text comes from `display_name` (the user's spelling).
         let atom_fps = stratum.atom_fps();
@@ -56,11 +68,6 @@ impl CodeGen {
         );
         let si = self.features.string_intern();
 
-        // Mark UDF import needed if any fn_call predicate is present
-        if !transformation.flow().fn_call_preds().is_empty() {
-            self.features.mark_udf();
-        }
-
         match transformation {
             // Row -> Row
             Transformation::RowToRow {
@@ -72,16 +79,6 @@ impl CodeGen {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_operator(
-                        transformation_name,
-                        vec![inp.to_string()],
-                        out.to_string(),
-                        output.fingerprint(),
-                    );
-                });
-
                 // Type inference + row pattern
                 let input_arity = input.arity().1;
                 let (row_pat, row_fields) = row_pattern_and_fields(
@@ -89,7 +86,6 @@ impl CodeGen {
                     flow.key(),
                     flow.value(),
                     flow.compares(),
-                    flow.fn_call_preds(),
                     flow.constraints(),
                 );
                 self.record_transformation_output_type(
@@ -104,13 +100,7 @@ impl CodeGen {
 
                 // Output expression + predicates
                 let row_ty = data_type_tokens(&itype, si);
-                let remaining = RefCell::new(row_use_counts(&[flow.value()]));
-                let out_val = self.build_key_val_from_row_args(
-                    flow.value(),
-                    &row_fields,
-                    si,
-                    Some(&remaining),
-                )?;
+                let out_val = self.build_key_val_from_row_args(flow.value(), &row_fields, si)?;
                 let cmp_pred = self.build_row_compare_predicate(
                     flow.compares(),
                     &row_fields,
@@ -119,16 +109,72 @@ impl CodeGen {
                 )?;
                 let cst_pred =
                     build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
-                let fc_pred =
-                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si)?;
-                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
-                let flat_map_body = flat_map_body_tokens(pred, out_val);
+                // Cheapest operator that fits, in-place forms first:
+                //   identity, no predicate → alias        (no operator)
+                //   identity + predicate   → filter       (drop rows in the input buffer)
+                //   same-typed rewrite     → map_in_place (overwrite them there)
+                //   anything else          → flat_map     (rebuild each row)
+                // In-place forms need a `Copy` row (fields are copied out via
+                // `*row`); `map_in_place` also needs the projection to keep
+                // every column's type, so `*row = <projection>` typechecks.
+                let key_free = flow.key().is_empty();
+                let identity_projection =
+                    key_free && is_identity_row_projection(flow.value(), input.arity().1);
+                let row_copy = row_is_copy(&itype, si);
+                let type_preserving = !identity_projection
+                    && key_free
+                    && row_copy
+                    && self.row_projection_preserves_type(flow.value(), &input_type)?;
+                let is_identity = pred.is_none() && identity_projection;
 
-                Ok(quote! {
-                    let #out = #inp.clone()
-                        .flat_map(|#row_pat: #row_ty| { #flat_map_body });
-                })
+                with_plan_graph(plan_graph, |plan_graph| {
+                    if is_identity {
+                        // Copy rule `B :- A`: no operator is emitted — but still
+                        // register a 0-op alias node so downstream references to
+                        // this relation's fingerprint resolve in the profiler model.
+                        plan_graph.identity_alias_operator(
+                            transformation_name,
+                            vec![inp.to_string()],
+                            out.to_string(),
+                            output.fingerprint(),
+                        );
+                    } else {
+                        plan_graph.map_join_operator(
+                            transformation_name,
+                            vec![inp.to_string()],
+                            out.to_string(),
+                            output.fingerprint(),
+                        );
+                    }
+                });
+
+                match pred {
+                    // Identity, no predicate: alias the input.
+                    None if identity_projection => Ok(quote! { let #out = #inp.clone(); }),
+                    // Identity + predicate: retain surviving rows in place.
+                    Some(p) if identity_projection && row_copy => Ok(quote! {
+                        let #out = #inp.clone()
+                            .filter(|&#row_pat: &#row_ty| #p);
+                    }),
+                    // Same-typed rewrite, no predicate: overwrite rows in place.
+                    None if type_preserving => Ok(quote! {
+                        let #out = #inp.clone()
+                            .map_in_place(|row: &mut #row_ty| {
+                                let #row_pat = *row;
+                                *row = #out_val;
+                            });
+                    }),
+                    // General projection: rebuild each row.
+                    pred => {
+                        let body = flat_map_body_tokens(pred, out_val);
+                        Ok(quote! {
+                            let #out = #inp.clone()
+                                .flat_map(|#row_pat: #row_ty| { #body });
+                        })
+                    }
+                }
             }
 
             // Row -> KV
@@ -141,17 +187,6 @@ impl CodeGen {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_arrange_operator(
-                        transformation_name,
-                        vec![inp.to_string()],
-                        format!("{}_arr", out),
-                        output.fingerprint(),
-                        output.is_k_only(),
-                    );
-                });
-
                 // Type inference + row pattern
                 let input_arity = input.arity().1;
                 let (row_pat, row_fields) = row_pattern_and_fields(
@@ -159,7 +194,6 @@ impl CodeGen {
                     flow.key(),
                     flow.value(),
                     flow.compares(),
-                    flow.fn_call_preds(),
                     flow.constraints(),
                 );
                 self.record_transformation_output_type(
@@ -174,19 +208,8 @@ impl CodeGen {
 
                 // Output expression + predicates
                 let row_ty = data_type_tokens(&itype, si);
-                let remaining = RefCell::new(row_use_counts(&[flow.key(), flow.value()]));
-                let out_key = self.build_key_val_from_row_args(
-                    flow.key(),
-                    &row_fields,
-                    si,
-                    Some(&remaining),
-                )?;
-                let out_val = self.build_key_val_from_row_args(
-                    flow.value(),
-                    &row_fields,
-                    si,
-                    Some(&remaining),
-                )?;
+                let out_key = self.build_key_val_from_row_args(flow.key(), &row_fields, si)?;
+                let out_val = self.build_key_val_from_row_args(flow.value(), &row_fields, si)?;
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
@@ -201,16 +224,43 @@ impl CodeGen {
                 )?;
                 let cst_pred =
                     build_row_constraints_predicate(flow.constraints(), &row_fields, si)?;
-                let fc_pred =
-                    self.build_row_fn_call_predicate(flow.fn_call_preds(), &row_fields, si)?;
-                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
-                // Transformation logic
+                // Identity projection into a key-only arrangement: alias the input;
+                // the `arrange_by_self` below reads it directly, dropping the `flat_map`.
+                let is_identity = pred.is_none()
+                    && output.is_k_only()
+                    && flow.value().is_empty()
+                    && is_identity_row_projection(flow.key(), input.arity().1);
+
+                with_plan_graph(plan_graph, |plan_graph| {
+                    let name = transformation_name;
+                    let inputs = vec![inp.to_string()];
+                    let arr = format!("{}_arr", out);
+                    let fp = output.fingerprint();
+                    // Identity aliases away the `flat_map`; only the arrangement remains.
+                    if is_identity {
+                        plan_graph.arrange_operator(name, inputs, arr, fp, output.is_k_only());
+                    } else {
+                        plan_graph.map_join_arrange_operator(
+                            name,
+                            inputs,
+                            arr,
+                            fp,
+                            output.is_k_only(),
+                        );
+                    }
+                });
+
                 let flat_map_body = flat_map_body_tokens(pred, out_expr);
 
-                let transformation = quote! {
-                    let #out = #inp.clone()
-                        .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                let transformation = if is_identity {
+                    quote! { let #out = #inp.clone(); }
+                } else {
+                    quote! {
+                        let #out = #inp.clone()
+                            .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                    }
                 };
 
                 // Arrangement registration
@@ -237,9 +287,9 @@ impl CodeGen {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.map_join_operator(
                         transformation_name,
                         vec![inp.to_string()],
                         out.to_string(),
@@ -258,18 +308,14 @@ impl CodeGen {
 
                 // Output value + predicates
                 let input_type = self.find_global_data_type(input.fingerprint())?.clone();
-                let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
-                let out_val =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
+                let out_val = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type)?;
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si)?;
-                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si)?;
-                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred]);
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
                     flow.value(),
                     flow.compares(),
-                    flow.fn_call_preds(),
                     Some(flow.constraints()),
                 );
 
@@ -292,17 +338,6 @@ impl CodeGen {
                 let inp = find_local_ident(local_fp_to_ident, input.fingerprint());
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_arrange_operator(
-                        transformation_name,
-                        vec![inp.to_string()],
-                        format!("{}_arr", out),
-                        output.fingerprint(),
-                        output.is_k_only(),
-                    );
-                });
-
                 // Type inference
                 self.record_transformation_output_type(
                     input.fingerprint(),
@@ -314,10 +349,8 @@ impl CodeGen {
 
                 // Output expression + predicates
                 let input_type = self.find_global_data_type(input.fingerprint())?.clone();
-                let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
-                let out_key = self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining))?;
-                let out_val =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
+                let out_key = self.build_key_val_from_kv_args(flow.key(), si)?;
+                let out_val = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let out_expr = if output.is_k_only() {
                     quote! { #out_key }
                 } else {
@@ -325,13 +358,38 @@ impl CodeGen {
                 };
                 let cmp_pred = self.build_kv_compare_predicate(flow.compares(), si, &input_type)?;
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si)?;
-                let fc_pred = self.build_kv_fn_call_predicate(flow.fn_call_preds(), si)?;
-                let pred = combine_predicates(vec![cmp_pred, cst_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred, cst_pred]);
+
+                // One flag drives the emitted dedup and its recording,
+                // so the predicted operator count cannot drift.
+                let dedups = pred.is_none() && output.is_k_only();
+
+                // Profiling hook (optional), after the predicates so the
+                // dedup is known.
+                with_plan_graph(plan_graph, |plan_graph| {
+                    if dedups {
+                        plan_graph.map_dedup_arrange_operator(
+                            transformation_name,
+                            vec![inp.to_string()],
+                            format!("{}_arr", out),
+                            output.fingerprint(),
+                            output.is_k_only(),
+                            recursive,
+                        );
+                    } else {
+                        plan_graph.map_join_arrange_operator(
+                            transformation_name,
+                            vec![inp.to_string()],
+                            format!("{}_arr", out),
+                            output.fingerprint(),
+                            output.is_k_only(),
+                        );
+                    }
+                });
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
                     flow.value(),
                     flow.compares(),
-                    flow.fn_call_preds(),
                     Some(flow.constraints()),
                 );
 
@@ -345,8 +403,8 @@ impl CodeGen {
                 // Ideally, in system design, projection (to key) in SIP optimization may introduce duplicates,
                 // we have to apply deduplication to avoid incorrect Yannakakis computation bounds.
                 // Dedup only applies when there is no predicate (predicate paths already filter).
-                let dedup_call = self.dedup_nonrecursive();
-                let out_dedup_expr = if pred.is_none() && output.is_k_only() {
+                let dedup_call = self.dedup_projection(recursive);
+                let out_dedup_expr = if dedups {
                     quote! { let #out = #out #dedup_call; }
                 } else {
                     quote! {}
@@ -389,9 +447,9 @@ impl CodeGen {
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.map_join_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
                         out.to_string(),
@@ -409,12 +467,8 @@ impl CodeGen {
                 )?;
 
                 // Output expression + predicates
-                let (jn_k, jn_lv, jn_rv) = compute_join_param_tokens(
-                    flow.key(),
-                    flow.value(),
-                    flow.compares(),
-                    flow.fn_call_preds(),
-                );
+                let (jn_k, jn_lv, jn_rv) =
+                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
                 let out_val = self.build_key_val_from_join_args(flow.value(), si)?;
 
                 let left_type = self.find_global_data_type(left.fingerprint())?.clone();
@@ -425,8 +479,7 @@ impl CodeGen {
                     &left_type,
                     &right_type,
                 )?;
-                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si)?;
-                let pred = combine_predicates(vec![cmp_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred]);
                 let join_body = join_body_tokens(pred, out_val);
 
                 Ok(quote! {
@@ -449,9 +502,9 @@ impl CodeGen {
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.map_join_arrange_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.map_join_arrange_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
                         format!("{}_arr", out),
@@ -470,12 +523,8 @@ impl CodeGen {
                 )?;
 
                 // Output expression + predicates
-                let (jn_k, jn_lv, jn_rv) = compute_join_param_tokens(
-                    flow.key(),
-                    flow.value(),
-                    flow.compares(),
-                    flow.fn_call_preds(),
-                );
+                let (jn_k, jn_lv, jn_rv) =
+                    compute_join_param_tokens(flow.key(), flow.value(), flow.compares());
                 let out_key = self.build_key_val_from_join_args(flow.key(), si)?;
                 let out_val = self.build_key_val_from_join_args(flow.value(), si)?;
                 let out_expr = if output.is_k_only() {
@@ -492,8 +541,7 @@ impl CodeGen {
                     &left_type,
                     &right_type,
                 )?;
-                let fc_pred = self.build_join_fn_call_predicate(flow.fn_call_preds(), si)?;
-                let pred = combine_predicates(vec![cmp_pred, fc_pred]);
+                let pred = combine_predicates(vec![cmp_pred]);
                 let join_body = join_body_tokens(pred, out_expr);
 
                 let transformation = quote! {
@@ -531,13 +579,14 @@ impl CodeGen {
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.anti_join_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.anti_join_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
                         out.to_string(),
                         output.fingerprint(),
+                        recursive,
                     );
                 });
 
@@ -554,12 +603,9 @@ impl CodeGen {
 
                 // Output expression
                 let (anti_param_k, anti_param_v) =
-                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
-                let remaining = RefCell::new(kv_use_counts(&[flow.value()]));
-                let out_map_value =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
-                let inter_dedup = self.dedup_antijoin();
-                let final_normalize = self.dedup_recursive();
+                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
+                let out_map_value = self.build_key_val_from_kv_args(flow.value(), si)?;
+                let (inter_dedup, final_normalize) = self.dedup_antijoin(recursive);
 
                 Ok(quote! {
                     let #out =
@@ -599,14 +645,15 @@ impl CodeGen {
                 let r = expect_arranged(arranged_map, right.fingerprint(), &r_base)?;
                 let out = find_local_ident(local_fp_to_ident, output.fingerprint());
 
-                // Profiler hook (optional)
-                with_profiler(profiler, |profiler| {
-                    profiler.anti_join_arrange_operator(
+                // Profiling hook (optional)
+                with_plan_graph(plan_graph, |plan_graph| {
+                    plan_graph.anti_join_arrange_operator(
                         transformation_name,
                         vec![l.to_string(), r.to_string()],
                         format!("{}_arr", out),
                         output.fingerprint(),
                         output.is_k_only(),
+                        recursive,
                     );
                 });
 
@@ -623,19 +670,15 @@ impl CodeGen {
 
                 // Output expression
                 let (anti_param_k, anti_param_v) =
-                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), &[], None);
-                let remaining = RefCell::new(kv_use_counts(&[flow.key(), flow.value()]));
-                let out_map_key =
-                    self.build_key_val_from_kv_args(flow.key(), si, Some(&remaining))?;
-                let out_map_value =
-                    self.build_key_val_from_kv_args(flow.value(), si, Some(&remaining))?;
+                    compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
+                let out_map_key = self.build_key_val_from_kv_args(flow.key(), si)?;
+                let out_map_value = self.build_key_val_from_kv_args(flow.value(), si)?;
                 let out_map_expr = if output.is_k_only() {
                     quote! { #out_map_key }
                 } else {
                     quote! { ( #out_map_key, #out_map_value ) }
                 };
-                let inter_dedup = self.dedup_antijoin();
-                let final_normalize = self.dedup_recursive();
+                let (inter_dedup, final_normalize) = self.dedup_antijoin(recursive);
 
                 let transformation = quote! {
                     let #out =
@@ -694,18 +737,27 @@ impl CodeGen {
             // i32 diff — no conversion needed
             quote! {}
         };
-        let neg = if self.config.is_batch() {
-            // Batch: fixed -1 weight (no retractions possible)
+        let neg = if self.config.is_datalog_batch() {
+            // Fixed -1 weight (no retractions possible); the Present → i32
+            // diff-type change forces rebuilding the triple.
             quote! {
                 .inner
                 .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
                 .as_collection()
             }
-        } else {
-            // Incremental: negate the actual diff
+        } else if self.config.is_batch() {
+            // ExtendBatch: i32 diff, always 1 — overwrite to -1 in the
+            // input buffer instead of rebuilding each triple.
             quote! {
                 .inner
-                .flat_map(move |(x, t, d)| std::iter::once((x, t.clone(), -d)))
+                .map_in_place(|(_, _, d)| *d = -1i32)
+                .as_collection()
+            }
+        } else {
+            // Incremental: negate the actual diff in place.
+            quote! {
+                .inner
+                .map_in_place(|(_, _, d)| *d = -*d)
                 .as_collection()
             }
         };
@@ -755,6 +807,19 @@ fn flat_map_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStr
     }
 }
 
+/// `true` iff `args` reproduce every one of the input row's `row_arity` columns exactly once, in
+/// order, as a bare variable -- no arithmetic, cast, constant, reorder, or dropped/added column.
+fn is_identity_row_projection(args: &[ArithmeticArgument], row_arity: usize) -> bool {
+    args.len() == row_arity
+        && args.iter().enumerate().all(|(idx, arg)| {
+            arg.rest().is_empty()
+                && matches!(
+                    arg.init(),
+                    FactorArgument::Var(TransformationArgument::KV((_, i))) if *i == idx,
+                )
+        })
+}
+
 /// Build the body of a `join_core` closure that yields `out` either
 /// conditionally (when `pred` is `Some`) or unconditionally.
 ///
@@ -764,5 +829,79 @@ fn join_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream 
     match pred {
         Some(pred) => quote! { if #pred { Some( #out ) } else { None } },
         None => quote! { Some( #out ) },
+    }
+}
+
+#[cfg(test)]
+mod identity_projection_tests {
+    use flowlog_parser::ArithmeticOperator;
+
+    use super::is_identity_row_projection;
+    use crate::planner::ArithmeticArgument;
+    use crate::planner::FactorArgument;
+    use crate::planner::TransformationArgument;
+
+    /// A bare column reference `KV((is_key, idx))` with no arithmetic tail.
+    fn col(is_key: bool, idx: usize) -> ArithmeticArgument {
+        ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((is_key, idx))),
+            rest: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn full_in_order_projection_is_identity() {
+        // Every column reproduced once, in order: identity (incl. single- and zero-column).
+        assert!(is_identity_row_projection(
+            &[col(false, 0), col(false, 1), col(false, 2)],
+            3
+        ));
+        assert!(is_identity_row_projection(&[col(false, 0)], 1));
+        assert!(is_identity_row_projection(&[], 0));
+    }
+
+    #[test]
+    fn key_value_flag_is_ignored_for_row_inputs() {
+        // Row columns are addressed by position; the key/value flag must not matter.
+        assert!(is_identity_row_projection(
+            &[col(true, 0), col(false, 1)],
+            2
+        ));
+    }
+
+    #[test]
+    fn wrong_position_is_not_identity() {
+        // Reordered, and duplicated (col 0 where col 1 is expected): both break `i == idx`.
+        assert!(!is_identity_row_projection(
+            &[col(false, 1), col(false, 0)],
+            2
+        ));
+        assert!(!is_identity_row_projection(
+            &[col(false, 0), col(false, 0)],
+            2
+        ));
+    }
+
+    #[test]
+    fn arity_mismatch_is_not_identity() {
+        // Fewer or more args than the row arity are never a full identity.
+        assert!(!is_identity_row_projection(&[col(false, 0)], 2));
+        assert!(!is_identity_row_projection(
+            &[col(false, 0), col(false, 1)],
+            1
+        ));
+    }
+
+    #[test]
+    fn arithmetic_tail_is_not_identity() {
+        // `col0 + col1` transforms the value, so it must not be treated as identity.
+        let arg = ArithmeticArgument {
+            init: FactorArgument::Var(TransformationArgument::KV((false, 0))),
+            rest: vec![(
+                ArithmeticOperator::Plus,
+                FactorArgument::Var(TransformationArgument::KV((false, 1))),
+            )],
+        };
+        assert!(!is_identity_row_projection(std::slice::from_ref(&arg), 1));
     }
 }

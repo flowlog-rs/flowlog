@@ -10,21 +10,26 @@
 use std::collections::HashSet;
 use std::mem;
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_parser::AggregationOperator;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
+use proc_macro2::Ident;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 use tracing::trace;
-
-use crate::parser::AggregationOperator;
-use crate::planner::StratumPlanner;
-use crate::profiler::{Profiler, with_profiler};
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
-use crate::codegen::aggregation::{
-    aggregation_avg_optimize, aggregation_count_optimize, aggregation_max_optimize,
-    aggregation_merge_kv, aggregation_min_optimize, aggregation_reduce_stmt, aggregation_row_chop,
-    aggregation_sum_optimize,
-};
+use crate::codegen::aggregation::aggregation_avg_optimize;
+use crate::codegen::aggregation::aggregation_count_optimize;
+use crate::codegen::aggregation::aggregation_max_optimize;
+use crate::codegen::aggregation::aggregation_merge_kv;
+use crate::codegen::aggregation::aggregation_min_optimize;
+use crate::codegen::aggregation::aggregation_reduce_stmt;
+use crate::codegen::aggregation::aggregation_row_chop;
+use crate::codegen::aggregation::aggregation_sum_optimize;
+use crate::planner::StratumPlanner;
 
 // =========================================================================
 // Non-Recursive Flow Generation
@@ -35,7 +40,7 @@ impl CodeGen {
     pub(crate) fn gen_non_recursive_core_flows(
         &mut self,
         stratum: &StratumPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::new();
         let global_fp_to_ident = self.global_fp_to_ident.clone();
@@ -47,7 +52,7 @@ impl CodeGen {
                 transformation,
                 &mut outer_arranged,
                 stratum,
-                profiler,
+                plan_graph,
             )?);
         }
 
@@ -64,7 +69,7 @@ impl CodeGen {
         &mut self,
         bound_fps: &HashSet<u64>,
         stratum: &StratumPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::new();
         let dedup_stats = self.dedup_nonrecursive();
@@ -76,23 +81,25 @@ impl CodeGen {
                 .map(|fp| format_ident!("t_{}", fp))
                 .collect();
 
-            // Union the per-head collections left-to-right.
+            // Union the per-head collections.
             let head = &outs[0];
-            let mut expr: TokenStream = quote! { #head.clone() };
-            for t in &outs[1..] {
-                expr = quote! { #expr.concat(#t.clone()) };
-            }
+            let tail = &outs[1..];
 
             // Fold into the existing binding rather than shadowing it.
             let already_bound = bound_fps.contains(idb_fp);
             let (concat_expr, concat_count) = if already_bound {
-                (quote! { #output.concat(#expr) }, outs.len() as u32)
+                (quote! { #output.concatenate([ #( #outs.clone() ),* ]) }, 1)
+            } else if tail.is_empty() {
+                (quote! { #head.clone() }, 0)
             } else {
-                (expr, outs.len() as u32 - 1)
+                (
+                    quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) },
+                    1,
+                )
             };
 
-            with_profiler(profiler, |profiler| {
-                profiler.concat_dedup_operator(
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.concat_dedup_operator(
                     self.display_name(*idb_fp),
                     outs.iter().map(|id| id.to_string()).collect(),
                     output.to_string(),
@@ -115,7 +122,7 @@ impl CodeGen {
                 // arrangement that `reduce_core` would introduce.
                 if self.config.is_datalog_batch() {
                     self.features.mark_as_collection();
-                    self.features.mark_agg_semiring(*agg_op, agg_type);
+                    self.features.mark_agg_semiring(*agg_op, agg_type.clone());
                     self.features.mark_threshold_total();
                     self.features.mark_timely_map();
                     let pipeline = match agg_op {
@@ -141,8 +148,8 @@ impl CodeGen {
                             #pipeline;
                     };
 
-                    with_profiler(profiler, |profiler| {
-                        profiler.opt_aggregate_operator(
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.opt_aggregate_operator(
                             self.display_name(*idb_fp),
                             output.to_string(),
                             output.to_string(),
@@ -163,8 +170,8 @@ impl CodeGen {
                             .as_collection(#merge_kv);
                     };
 
-                    with_profiler(profiler, |profiler| {
-                        profiler.general_aggregate_operator(
+                    with_plan_graph(plan_graph, |plan_graph| {
+                        plan_graph.general_aggregate_operator(
                             self.display_name(*idb_fp),
                             output.to_string(),
                             output.to_string(),

@@ -2,14 +2,15 @@
 
 use std::collections::HashSet;
 
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
 use proc_macro2::TokenStream;
-use quote::quote;
 
+use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
 use crate::codegen::idb_buffers::InspectorCodegen;
 use crate::codegen::profile::render_profile_ops_const;
-use crate::codegen::{CodeGen, CodegenError};
 use crate::planner::StratumPlanner;
-use crate::profiler::{Profiler, with_profiler};
 
 /// Token-stream fragments and rendered source files produced by
 /// [`CodeGen::generate`]. All fields are `pub` so consumers can
@@ -49,14 +50,11 @@ pub struct CodeParts {
     pub profile_ops: TokenStream,
     /// Logger registration code (emitted inside worker closure).
     pub profile_init: TokenStream,
-    /// Time profiling write-out code for batch mode.
-    pub time_profile_write_batch: TokenStream,
-    /// Time profiling write-out code for incremental mode.
-    pub time_profile_write_incremental: TokenStream,
-    /// Memory profiling write-out code for batch mode.
-    pub memory_profile_write_batch: TokenStream,
-    /// Memory profiling write-out code for incremental mode.
-    pub memory_profile_write_incremental: TokenStream,
+    /// Metrics write-out for the current mode; empty without profiling.
+    pub metrics_write: TokenStream,
+    /// Step loop for the current mode; flushes metrics periodically when
+    /// profiled.
+    pub step_loop: TokenStream,
 
     /// Type aliases and constants for the `(Data, Diff, Time)` triple.
     pub type_declarations: TokenStream,
@@ -71,20 +69,18 @@ impl CodeGen {
     pub(crate) fn collect_parts(
         &mut self,
         strata: &[StratumPlanner],
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<CodeParts, CodegenError> {
-        // Record entering main dataflow scope in profiler if enabled
-        with_profiler(profiler, |profiler| {
-            profiler.enter_scope();
+        // Record entering the main dataflow scope when profiling is on
+        with_plan_graph(plan_graph, |plan_graph| {
+            plan_graph.enter_scope();
         });
 
         // Static sections.
-        let edb_decls = self.gen_edb_decls(profiler);
+        let edb_decls = self.gen_edb_decls(plan_graph);
         let (handle_binding, dataflow_return) = self.gen_handle_binding();
-        let time_profile_struct = self.gen_time_profile_struct();
-        let memory_profile_struct = self.gen_memory_profile_struct();
-        let time_profile_init = self.gen_time_profile_init();
-        let memory_profile_init = self.gen_memory_profile_init();
+        let profile_structs = self.gen_metrics_struct();
+        let profile_init = self.gen_metrics_init();
 
         // Relations whose outer ident is already bound — by `gen_edb_decls`
         // (seeded here) or by a prior stratum. Without EDB seeding, a rule
@@ -93,18 +89,18 @@ impl CodeGen {
         let mut bound_fps: HashSet<u64> = self.program.edb_fingerprints();
 
         for (idx, stratum) in strata.iter().enumerate() {
-            with_profiler(profiler, |profiler| {
-                profiler.update_stratum_block(idx);
+            with_plan_graph(plan_graph, |plan_graph| {
+                plan_graph.update_stratum_block(idx);
             });
 
-            let core_flows = self.gen_non_recursive_core_flows(stratum, profiler)?;
+            let core_flows = self.gen_non_recursive_core_flows(stratum, plan_graph)?;
             flows.extend(core_flows);
 
             if stratum.is_recursive() {
                 let outer_snapshot = self.outer_arranged.clone();
-                flows.push(self.gen_recursive_block(&outer_snapshot, stratum, profiler)?);
+                flows.push(self.gen_recursive_block(&outer_snapshot, stratum, plan_graph)?);
             } else {
-                flows.extend(self.gen_non_recursive_post_flows(&bound_fps, stratum, profiler)?);
+                flows.extend(self.gen_non_recursive_post_flows(&bound_fps, stratum, plan_graph)?);
             }
 
             bound_fps.extend(stratum.output_relations());
@@ -119,27 +115,22 @@ impl CodeGen {
             flush_stmts: flush,
             size_cell_decls,
             size_cell_clones,
-        } = self.collect_inspectors(profiler);
+        } = self.collect_inspectors(plan_graph);
 
-        let profile_structs = quote! {
-            #time_profile_struct
-            #memory_profile_struct
+        // A run is either batch or incremental, never both, so build only the
+        // matching pair.
+        let (metrics_write, step_loop) = if self.config.is_incremental() {
+            (
+                self.gen_metrics_write_incremental(),
+                self.gen_incremental_step_loop(),
+            )
+        } else {
+            (self.gen_metrics_write_batch(), self.gen_batch_step_loop())
         };
 
-        let profile_init = quote! {
-            #time_profile_init
-            #memory_profile_init
-        };
-
-        // -- Profile write code (mode-specific) --
-        let time_profile_write_batch = self.gen_time_profile_write_batch();
-        let time_profile_write_incremental = self.gen_time_profile_write_incremental();
-        let memory_profile_write_batch = self.gen_memory_profile_write_batch();
-        let memory_profile_write_incremental = self.gen_memory_profile_write_incremental();
-
-        // Rendered after the codegen loop so the profiler is fully
+        // Rendered after the codegen loop so the plan graph is fully
         // populated. Empty when profile is off.
-        let profile_ops = render_profile_ops_const(profiler.as_ref());
+        let profile_ops = render_profile_ops_const(plan_graph.as_ref())?;
 
         let type_declarations = self.gen_type_declarations();
         let semiring_modules = self.render_semiring_modules();
@@ -159,10 +150,8 @@ impl CodeGen {
             profile_structs,
             profile_ops,
             profile_init,
-            time_profile_write_batch,
-            time_profile_write_incremental,
-            memory_profile_write_batch,
-            memory_profile_write_incremental,
+            metrics_write,
+            step_loop,
             type_declarations,
             semiring_modules,
         })

@@ -28,7 +28,7 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: ⚙️ Install protobuf-compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -42,7 +42,7 @@ jobs:
       - name: 🧬 Install cargo-mutants
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-mutants
+          tool: cargo-mutants,cargo-nextest
 
       - name: 🧬 Mutation test (shard ${{ matrix.shard }}/8)
         run: |

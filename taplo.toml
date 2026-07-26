@@ -1,0 +1,26 @@
+# TOML formatting + linting config (taplo). Run `taplo fmt` / `taplo lint`.
+include = ["**/Cargo.toml", "*.toml"]
+exclude = ["target/**"]
+
+[formatting]
+# Match the repo's existing 4-space TOML style (taplo defaults to 2).
+indent_string = "    "
+# Collapse runs of blank lines to at most one.
+allowed_blank_lines = 1
+# Keep keys in author order by default (e.g. [package] stays as written)…
+reorder_keys = false
+# …and don't shuffle arrays (preserve `members`, feature lists as written).
+reorder_arrays = false
+
+# …but DO alphabetize the dependency tables, so additions land deterministically.
+[[rule]]
+include = ["**/Cargo.toml"]
+keys = [
+    "dependencies",
+    "dev-dependencies",
+    "build-dependencies",
+    "workspace.dependencies",
+]
+
+[rule.formatting]
+reorder_keys = true

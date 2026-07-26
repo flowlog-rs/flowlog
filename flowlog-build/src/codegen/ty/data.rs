@@ -6,15 +6,17 @@
 //! emits, and (c) emits the Rust tuple types for both the internal
 //! (DD-facing) and user-facing shapes.
 
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::parser::DataType;
-use crate::planner::{
-    ArithmeticArgument, FactorArgument, StratumPlanner, TransformationArgument, TransformationFlow,
-};
-
-use crate::codegen::{CodeGen, CodegenError};
+use crate::codegen::CodeGen;
+use crate::codegen::CodegenError;
+use crate::planner::ArithmeticArgument;
+use crate::planner::FactorArgument;
+use crate::planner::StratumPlanner;
+use crate::planner::TransformationArgument;
+use crate::planner::TransformationFlow;
 
 /// `(key_types, value_types)` — a relation's shape in key++value form.
 pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
@@ -53,7 +55,7 @@ impl CodeGen {
         keys.iter()
             .chain(vals)
             .nth(agg_pos)
-            .copied()
+            .cloned()
             .ok_or_else(|| {
                 CodegenError::internal(format!(
                     "aggregation position {agg_pos} out of bounds for \
@@ -129,7 +131,7 @@ impl CodeGen {
     ) -> Result<DataType, CodegenError> {
         match factor {
             FactorArgument::Var(TransformationArgument::KV((is_key, idx))) => {
-                slot(left_type, *is_key).get(*idx).copied().ok_or_else(|| {
+                slot(left_type, *is_key).get(*idx).cloned().ok_or_else(|| {
                     CodegenError::internal(format!(
                         "KV slot out of bounds: is_key={is_key}, idx={idx}, \
                      left shape=({}, {})",
@@ -149,7 +151,7 @@ impl CodeGen {
                         )
                     })?
                 };
-                slot(base, *is_key).get(*idx).copied().ok_or_else(|| {
+                slot(base, *is_key).get(*idx).cloned().ok_or_else(|| {
                     CodegenError::internal(format!(
                         "join slot out of bounds: is_left={is_left}, is_key={is_key}, idx={idx}"
                     ))
@@ -169,7 +171,49 @@ impl CodeGen {
                 .ok_or_else(|| CodegenError::internal(format!("UDF `{name}` not declared"))),
             FactorArgument::Builtin { op, .. } => Ok(op.ret_type()),
             FactorArgument::Group(a) => self.infer_expr_type(a, left_type, right_type),
+            // Tuple construct → fixed tuple of the components' types.
+            FactorArgument::Tuple { fields } => {
+                let dts = fields
+                    .iter()
+                    .map(|f| self.infer_expr_type(f, left_type, right_type))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(DataType::FixedTuple(dts))
+            }
+            // Tuple projection → the indexed field's type.
+            FactorArgument::TupleProj { tuple, index } => {
+                match self.infer_expr_type(tuple, left_type, right_type)? {
+                    DataType::FixedTuple(fields) => fields.get(*index).cloned().ok_or_else(|| {
+                        CodegenError::internal(format!(
+                            "tuple projection index {index} out of bounds (arity {})",
+                            fields.len()
+                        ))
+                    }),
+                    other => Err(CodegenError::internal(format!(
+                        "tuple projection of a non-tuple type {other:?}"
+                    ))),
+                }
+            }
         }
+    }
+
+    /// `true` iff every projected column re-derives its positional input
+    /// column type — the output row then has the same Rust tuple type as
+    /// the input row, the type precondition for an in-place rewrite.
+    pub(crate) fn row_projection_preserves_type(
+        &self,
+        args: &[ArithmeticArgument],
+        input_type: &KvTypes,
+    ) -> Result<bool, CodegenError> {
+        let row = &input_type.1;
+        if args.len() != row.len() {
+            return Ok(false);
+        }
+        for (arg, expected) in args.iter().zip(row) {
+            if self.infer_expr_type(arg, input_type, None)? != *expected {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -198,7 +242,7 @@ pub(crate) fn user_tuple_tokens(input_types: &[DataType]) -> TokenStream {
 }
 
 pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
-    match *dt {
+    match dt {
         DataType::Int8 => quote! { i8 },
         DataType::Int16 => quote! { i16 },
         DataType::Int32 => quote! { i32 },
@@ -211,14 +255,32 @@ pub(crate) fn user_column_tokens(dt: &DataType) -> TokenStream {
         DataType::Float64 => quote! { f64 },
         DataType::String => quote! { String },
         DataType::Bool => quote! { bool },
+        // A tuple column is a nested tuple of its fields' user types.
+        DataType::FixedTuple(fields) => user_tuple_tokens(fields),
+        DataType::IntLit | DataType::FloatLit => {
+            unreachable!("unpinned literal type reached codegen; the typechecker pins all literals")
+        }
     }
 }
 
+/// `true` iff every column lowers to a `Copy` Rust type (see
+/// [`internal_column_tokens`]): a raw `String` leaf is the only non-`Copy`
+/// lowering, and interning replaces those with `Spur` keys.
+pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
+    string_intern
+        || !types
+            .iter()
+            .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
+}
+
 fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
-    match *dt {
+    match dt {
         DataType::Float32 => quote! { OrderedFloat<f32> },
         DataType::Float64 => quote! { OrderedFloat<f64> },
         DataType::String if string_intern => quote! { Spur },
+        // A tuple column is a nested tuple of its fields' internal types
+        // (strings intern to `Spur`, floats wrap, nested records recurse).
+        DataType::FixedTuple(fields) => data_type_tokens(fields, string_intern),
         _ => user_column_tokens(dt),
     }
 }
@@ -235,12 +297,31 @@ pub(crate) fn tuple_tokens<I: IntoIterator<Item = TokenStream>>(cols: I) -> Toke
 
 #[cfg(test)]
 mod tests {
+    use std::iter;
+
+    use flowlog_common::Config;
+    use flowlog_parser::ArithmeticOperator;
+    use flowlog_parser::Constant;
+    use flowlog_parser::Program;
+
     use super::*;
-    use crate::common::Config;
-    use crate::parser::{ArithmeticOperator, ConstType, Program};
+
+    /// An empty program — the only supported way to build one is to parse.
+    fn empty_program() -> Program {
+        use flowlog_common::SourceMap;
+        use tempfile::NamedTempFile;
+        let tmp = NamedTempFile::new().expect("temp file");
+        flowlog_parser::parse(
+            &tmp.path().to_string_lossy(),
+            &[],
+            &mut SourceMap::new(),
+            &mut Config::default(),
+        )
+        .expect("empty program parses")
+    }
 
     fn make_codegen() -> CodeGen {
-        CodeGen::new(Config::default(), Program::default())
+        CodeGen::new(Config::default(), empty_program())
     }
 
     #[test]
@@ -248,13 +329,21 @@ mod tests {
         let cg = make_codegen();
         let empty: KvTypes = (vec![], vec![]);
         assert_eq!(
-            cg.infer_factor_type(&FactorArgument::Const(ConstType::Int32(42)), &empty, None)
-                .unwrap(),
+            cg.infer_factor_type(
+                &FactorArgument::Const(Constant::new(DataType::Int32, "42")),
+                &empty,
+                None
+            )
+            .unwrap(),
             DataType::Int32
         );
         assert_eq!(
-            cg.infer_factor_type(&FactorArgument::Const(ConstType::Bool(true)), &empty, None)
-                .unwrap(),
+            cg.infer_factor_type(
+                &FactorArgument::Const(Constant::new(DataType::Bool, "True")),
+                &empty,
+                None
+            )
+            .unwrap(),
             DataType::Bool
         );
     }
@@ -263,7 +352,7 @@ mod tests {
     fn infer_expr_type_picks_first_concrete_factor() {
         let cg = make_codegen();
         let expr = ArithmeticArgument {
-            init: FactorArgument::Const(ConstType::Int64(0)),
+            init: FactorArgument::Const(Constant::new(DataType::Int64, "0")),
             rest: vec![(
                 ArithmeticOperator::Plus,
                 FactorArgument::Var(TransformationArgument::KV((false, 0))),
@@ -283,8 +372,9 @@ mod tests {
     /// codegen (see `agg_count_string` e2e).
     #[test]
     fn record_transformation_output_type_preserves_declared_idb_shape() {
-        use crate::planner::Constraints;
         use std::sync::Arc;
+
+        use crate::planner::Constraints;
 
         let mut cg = make_codegen();
         // IDB's declared shape: e.g. `DeptHeadcount(d: int32, cnt: int32)`.
@@ -308,7 +398,6 @@ mod tests {
             }]),
             constraints: Constraints::new(vec![], vec![]),
             compares: vec![],
-            fn_call_preds: vec![],
         };
         let stratum = StratumPlanner::default();
 
@@ -326,10 +415,10 @@ mod tests {
     #[test]
     fn tuple_tokens_arity_dispatch_keeps_singleton_comma() {
         // Arity 0 → unit type `()`.
-        assert_eq!(tuple_tokens(std::iter::empty()).to_string(), "()");
+        assert_eq!(tuple_tokens(iter::empty()).to_string(), "()");
 
         // Arity 1 → `(T,)` — the comma is the whole point.
-        let single = tuple_tokens(std::iter::once(quote! { i32 })).to_string();
+        let single = tuple_tokens(iter::once(quote! { i32 })).to_string();
         let single_norm: String = single.split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(
             single_norm, "(i32 ,)",

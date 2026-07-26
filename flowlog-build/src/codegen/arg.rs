@@ -1,26 +1,31 @@
 //! Argument / predicate / expression codegen.
 //!
 //! Lowers the planner's `ArithmeticArgument` / `ComparisonExprArgument` /
-//! `FnCallPredicateArgument` / `Constraints` into the Rust token streams
-//! embedded in closures, predicates, and key-value builders across every
-//! flow operator (row / KV / join-core).
+//! `Constraints` into the Rust token streams embedded in closures,
+//! predicates, and key-value builders across every flow operator
+//! (row / KV / join-core).
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-
-use proc_macro2::{Ident, Span, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_parser::ArithmeticOperator;
+use flowlog_parser::BuiltinOperator;
+use flowlog_parser::ComparisonOperator;
+use flowlog_parser::Constant;
+use flowlog_parser::DataType;
+use proc_macro2::Ident;
+use proc_macro2::Literal;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 use syn::Index;
-
-use crate::parser::{ArithmeticOperator, BuiltinOperator, ComparisonOperator, ConstType, DataType};
-use crate::planner::{
-    ArithmeticArgument, ComparisonExprArgument, Constraints, FactorArgument,
-    FnCallPredicateArgument, TransformationArgument,
-};
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
 use crate::codegen::tuple_tokens;
+use crate::planner::ArithmeticArgument;
+use crate::planner::ComparisonExprArgument;
+use crate::planner::Constraints;
+use crate::planner::FactorArgument;
+use crate::planner::TransformationArgument;
 
 // ==================================================
 // Row pattern + field identifiers for RowToX transformations
@@ -34,21 +39,13 @@ pub(super) fn row_pattern_and_fields(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
-    fn_call_preds: &[FnCallPredicateArgument],
     constraints: &Constraints,
 ) -> (TokenStream, Vec<Ident>) {
     if arity == 0 {
         return (quote! { () }, Vec::new());
     }
 
-    let used = compute_row_params_tokens(
-        arity,
-        key_args,
-        value_args,
-        compares,
-        fn_call_preds,
-        constraints,
-    );
+    let used = compute_row_params_tokens(arity, key_args, value_args, compares, constraints);
 
     let fields: Vec<Ident> = (0..arity)
         .map(|idx| {
@@ -65,45 +62,6 @@ pub(super) fn row_pattern_and_fields(
 }
 
 // ==================================================
-// Multi-use variable detection
-// ==================================================
-
-/// Row field → total reference count across the argument lists. Callers
-/// decrement as they emit uses and skip the final `.clone()` when count
-/// hits 1 (no future uses).
-pub(super) fn row_use_counts(arg_lists: &[&[ArithmeticArgument]]) -> HashMap<usize, usize> {
-    arg_lists
-        .iter()
-        .flat_map(|args| args.iter())
-        .flat_map(|arg| arg.transformation_arguments())
-        .filter_map(|ta| match ta {
-            TransformationArgument::KV((_, idx)) => Some(*idx),
-            _ => None,
-        })
-        .fold(HashMap::new(), |mut acc, idx| {
-            *acc.entry(idx).or_insert(0) += 1;
-            acc
-        })
-}
-
-/// KV slot (`is_key`, idx) → total reference count, used identically to
-/// [`row_use_counts`] to elide the last-use clone.
-pub(super) fn kv_use_counts(arg_lists: &[&[ArithmeticArgument]]) -> HashMap<(bool, usize), usize> {
-    arg_lists
-        .iter()
-        .flat_map(|args| args.iter())
-        .flat_map(|arg| arg.transformation_arguments())
-        .map(|ta| match ta {
-            TransformationArgument::KV((is_key, idx))
-            | TransformationArgument::Jn((_, is_key, idx)) => (*is_key, *idx),
-        })
-        .fold(HashMap::new(), |mut acc, key| {
-            *acc.entry(key).or_insert(0) += 1;
-            acc
-        })
-}
-
-// ==================================================
 // Tuple builder utilities
 // ==================================================
 
@@ -115,11 +73,10 @@ impl CodeGen {
         args: &[ArithmeticArgument],
         fields: &[Ident],
         string_intern: bool,
-        remaining: Option<&RefCell<HashMap<usize, usize>>>,
     ) -> Result<TokenStream, CodegenError> {
         let parts: Vec<TokenStream> = args
             .iter()
-            .map(|arg| self.build_row_args_arithmetic_expr(arg, fields, string_intern, remaining))
+            .map(|arg| self.build_row_args_arithmetic_expr(arg, fields, string_intern))
             .collect::<Result<_, _>>()?;
         Ok(tuple_tokens(parts))
     }
@@ -130,11 +87,10 @@ impl CodeGen {
         &mut self,
         args: &[ArithmeticArgument],
         string_intern: bool,
-        remaining: Option<&RefCell<HashMap<(bool, usize), usize>>>,
     ) -> Result<TokenStream, CodegenError> {
         let parts: Vec<TokenStream> = args
             .iter()
-            .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern, remaining))
+            .map(|a| self.build_kv_args_arithmetic_expr(a, string_intern))
             .collect::<Result<_, _>>()?;
         Ok(tuple_tokens(parts))
     }
@@ -166,7 +122,6 @@ fn compute_row_params_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
-    fn_call_preds: &[FnCallPredicateArgument],
     constraints: &Constraints,
 ) -> Vec<bool> {
     let mut used = vec![false; arity];
@@ -192,11 +147,6 @@ fn compute_row_params_tokens(
         inspect(cmp.left());
         inspect(cmp.right());
     }
-    for fc in fn_call_preds {
-        for arg in fc.args() {
-            inspect(arg);
-        }
-    }
     for (arg, _) in constraints.constant_eq_constraints().as_ref().iter() {
         mark(arg);
     }
@@ -220,7 +170,6 @@ pub(super) fn compute_join_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
-    fn_call_preds: &[FnCallPredicateArgument],
 ) -> (TokenStream, TokenStream, TokenStream) {
     let (mut use_k, mut use_lv, mut use_rv) = (false, false, false);
 
@@ -249,11 +198,6 @@ pub(super) fn compute_join_param_tokens(
         inspect(cmp.left());
         inspect(cmp.right());
     }
-    for fc in fn_call_preds {
-        for arg in fc.args() {
-            inspect(arg);
-        }
-    }
 
     (
         param_ident(use_k, "k"),
@@ -267,7 +211,6 @@ pub(super) fn compute_kv_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
     compares: &[ComparisonExprArgument],
-    fn_call_preds: &[FnCallPredicateArgument],
     constraints: Option<&Constraints>,
 ) -> (TokenStream, TokenStream) {
     let (mut use_k, mut use_v) = (false, false);
@@ -297,11 +240,6 @@ pub(super) fn compute_kv_param_tokens(
         inspect(cmp.left());
         inspect(cmp.right());
     }
-    for fc in fn_call_preds {
-        for arg in fc.args() {
-            inspect(arg);
-        }
-    }
     if let Some(cons) = constraints {
         for (arg, _) in cons.constant_eq_constraints().as_ref().iter() {
             mark(arg);
@@ -327,10 +265,87 @@ fn comparison_op_tokens(op: &ComparisonOperator) -> TokenStream {
         ComparisonOperator::GreaterEqualThan => quote! { >= },
         ComparisonOperator::LessThan => quote! { < },
         ComparisonOperator::LessEqualThan => quote! { <= },
+        // String constraints are not infix operators; they are emitted by
+        // `emit_string_constraint` and never reach this token mapper.
+        ComparisonOperator::Match { .. } | ComparisonOperator::Contains { .. } => {
+            unreachable!("string constraints are emitted separately")
+        }
     }
 }
 
 impl CodeGen {
+    /// Emit a string-constraint test (`match`/`contains`, the `!` folded into
+    /// the operator) from already-built operand tokens.
+    fn emit_string_constraint(
+        &mut self,
+        op: &ComparisonOperator,
+        left: &ArithmeticArgument,
+        l: &TokenStream,
+        r: &TokenStream,
+        string_intern: bool,
+    ) -> TokenStream {
+        if string_intern {
+            self.features.mark_string_resolve();
+        }
+        let read_str = |t: &TokenStream| -> TokenStream {
+            if string_intern {
+                quote! { resolve(#t) }
+            } else {
+                quote! { (#t).as_str() }
+            }
+        };
+        // Negation is a prefix on the boolean expression (`!`), not an outer
+        // paren wrap — keeps the generated `if` condition free of redundant
+        // parens (`-D warnings` in the generated crate flags those).
+        match op {
+            ComparisonOperator::Contains { negated } => {
+                let neg = if *negated {
+                    quote! { ! }
+                } else {
+                    quote! {}
+                };
+                let needle = read_str(l);
+                let hay = read_str(r);
+                quote! { #neg (#hay).contains(#needle) }
+            }
+            ComparisonOperator::Match { negated } => {
+                // `match(pattern, s)` is a *full* match, so anchor with
+                // `^(?:…)$` (the `regex` crate searches by default). A bad
+                // pattern yields `false` rather than aborting.
+                let neg = if *negated {
+                    quote! { ! }
+                } else {
+                    quote! {}
+                };
+                let hay = read_str(r);
+                if let FactorArgument::Const(c) = left.init()
+                    && c.ty() == &DataType::String
+                    && left.rest().is_empty()
+                {
+                    // Literal pattern (the common case): anchor at codegen time
+                    // and compile once per call site via a `LazyLock` static.
+                    let anchored = format!("^(?:{})$", c.text());
+                    quote! {{
+                        static RE: ::std::sync::LazyLock<
+                            Option<::flowlog_runtime::regex::Regex>,
+                        > = ::std::sync::LazyLock::new(|| {
+                            ::flowlog_runtime::regex::Regex::new(#anchored).ok()
+                        });
+                        #neg RE.as_ref().is_some_and(|re| re.is_match(#hay))
+                    }}
+                } else {
+                    // Computed pattern: compile per evaluation.
+                    let pat = read_str(l);
+                    quote! {
+                        #neg ::flowlog_runtime::regex::Regex::new(&format!("^(?:{})$", #pat))
+                            .map_or(false, |re| re.is_match(#hay))
+                    }
+                }
+            }
+            other => unreachable!("not a string constraint: {other:?}"),
+        }
+    }
+
     /// KV-closure comparison predicate, combined with `&&`.
     pub(super) fn build_kv_compare_predicate(
         &mut self,
@@ -344,12 +359,21 @@ impl CodeGen {
         let parts: Vec<TokenStream> = comps
             .iter()
             .map(|c| {
-                let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern, None)?;
-                let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern, None)?;
+                let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern)?;
+                let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern)?;
+                if c.operator().is_string_constraint() {
+                    return Ok(self.emit_string_constraint(
+                        c.operator(),
+                        c.left(),
+                        &l,
+                        &r,
+                        string_intern,
+                    ));
+                }
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
-                        && c.operator().is_inequality()
+                        && c.operator().is_ordering()
                         && self.infer_expr_type(c.left(), input_type, None)? == DataType::String
                         && self.infer_expr_type(c.right(), input_type, None)? == DataType::String
                     {
@@ -365,7 +389,8 @@ impl CodeGen {
         Ok(Some(quote! { #( #parts )&&* }))
     }
 
-    /// `join_core`-closure comparison predicate, combined with `&&`.
+    /// `join_core`-closure comparison predicate, combined with `&&`. The join
+    /// operand builder always clones (`k`/`lv`/`rv` are references).
     pub(super) fn build_join_compare_predicate(
         &mut self,
         comps: &[ComparisonExprArgument],
@@ -381,10 +406,19 @@ impl CodeGen {
             .map(|c| {
                 let l = self.build_join_args_arithmetic_expr(c.left(), string_intern)?;
                 let r = self.build_join_args_arithmetic_expr(c.right(), string_intern)?;
+                if c.operator().is_string_constraint() {
+                    return Ok(self.emit_string_constraint(
+                        c.operator(),
+                        c.left(),
+                        &l,
+                        &r,
+                        string_intern,
+                    ));
+                }
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
-                        && c.operator().is_inequality()
+                        && c.operator().is_ordering()
                         && self.infer_expr_type(c.left(), left_type, Some(right_type))?
                             == DataType::String
                         && self.infer_expr_type(c.right(), left_type, Some(right_type))?
@@ -413,165 +447,37 @@ impl CodeGen {
         if comps.is_empty() {
             return Ok(None);
         }
+        // Operands are always cloned (see `build_kv_compare_predicate`): keeps
+        // tuple-literal operands move-safe and the three compare paths uniform;
+        // free for `Copy`/interned leaves.
         let parts: Vec<TokenStream> = comps
             .iter()
             .map(|c| {
-                let l =
-                    self.build_row_args_arithmetic_expr(c.left(), row_fields, string_intern, None)?;
-                let r = self.build_row_args_arithmetic_expr(
-                    c.right(),
-                    row_fields,
-                    string_intern,
-                    None,
-                )?;
+                let l = self.build_row_args_arithmetic_expr(c.left(), row_fields, string_intern)?;
+                let r =
+                    self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern)?;
+                if c.operator().is_string_constraint() {
+                    return Ok(self.emit_string_constraint(
+                        c.operator(),
+                        c.left(),
+                        &l,
+                        &r,
+                        string_intern,
+                    ));
+                }
                 let op = comparison_op_tokens(c.operator());
                 Ok(
                     if string_intern
-                        && c.operator().is_inequality()
+                        && c.operator().is_ordering()
                         && self.infer_expr_type(c.left(), input_type, None)? == DataType::String
                         && self.infer_expr_type(c.right(), input_type, None)? == DataType::String
                     {
                         self.features.mark_string_resolve();
                         quote! { resolve(#l) #op resolve(#r) }
                     } else {
-                        quote! { #l #op #r }
+                        quote! { (#l) #op (#r) }
                     },
                 )
-            })
-            .collect::<Result<_, CodegenError>>()?;
-
-        Ok(Some(quote! { #( #parts )&&* }))
-    }
-}
-
-// ==================================================
-// FnCall predicate builders
-// ==================================================
-
-impl CodeGen {
-    /// KV-closure UDF-call predicate, combined with `&&`.
-    pub(super) fn build_kv_fn_call_predicate(
-        &mut self,
-        fn_calls: &[FnCallPredicateArgument],
-        string_intern: bool,
-    ) -> Result<Option<TokenStream>, CodegenError> {
-        if fn_calls.is_empty() {
-            return Ok(None);
-        }
-        let parts: Vec<TokenStream> = fn_calls
-            .iter()
-            .map(|fc| {
-                let fn_name = format_ident!("{}", fc.name());
-                let param_types = self.udf_param_types(fc.name());
-                if string_intern && param_types.contains(&DataType::String) {
-                    self.features.mark_string_resolve();
-                }
-                let args: Vec<TokenStream> = fc
-                    .args()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        let token = self.build_kv_args_arithmetic_expr(a, string_intern, None)?;
-                        Ok(wrap_udf_arg(
-                            token,
-                            param_type_at(&param_types, i),
-                            string_intern,
-                        ))
-                    })
-                    .collect::<Result<_, CodegenError>>()?;
-                Ok(if fc.is_negated() {
-                    quote! { !udf::#fn_name(#( #args ),*) }
-                } else {
-                    quote! { udf::#fn_name(#( #args ),*) }
-                })
-            })
-            .collect::<Result<_, CodegenError>>()?;
-
-        Ok(Some(quote! { #( #parts )&&* }))
-    }
-
-    /// `join_core`-closure UDF-call predicate, combined with `&&`.
-    pub(super) fn build_join_fn_call_predicate(
-        &mut self,
-        fn_calls: &[FnCallPredicateArgument],
-        string_intern: bool,
-    ) -> Result<Option<TokenStream>, CodegenError> {
-        if fn_calls.is_empty() {
-            return Ok(None);
-        }
-        let parts: Vec<TokenStream> = fn_calls
-            .iter()
-            .map(|fc| {
-                let fn_name = format_ident!("{}", fc.name());
-                let param_types = self.udf_param_types(fc.name());
-                if string_intern && param_types.contains(&DataType::String) {
-                    self.features.mark_string_resolve();
-                }
-                let args: Vec<TokenStream> = fc
-                    .args()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        let token = self.build_join_args_arithmetic_expr(a, string_intern)?;
-                        Ok(wrap_udf_arg(
-                            token,
-                            param_type_at(&param_types, i),
-                            string_intern,
-                        ))
-                    })
-                    .collect::<Result<_, CodegenError>>()?;
-                Ok(if fc.is_negated() {
-                    quote! { !udf::#fn_name(#( #args ),*) }
-                } else {
-                    quote! { udf::#fn_name(#( #args ),*) }
-                })
-            })
-            .collect::<Result<_, CodegenError>>()?;
-
-        Ok(Some(quote! { #( #parts )&&* }))
-    }
-
-    /// Row-closure UDF-call predicate, combined with `&&`.
-    pub(super) fn build_row_fn_call_predicate(
-        &mut self,
-        fn_calls: &[FnCallPredicateArgument],
-        row_fields: &[Ident],
-        string_intern: bool,
-    ) -> Result<Option<TokenStream>, CodegenError> {
-        if fn_calls.is_empty() {
-            return Ok(None);
-        }
-        let parts: Vec<TokenStream> = fn_calls
-            .iter()
-            .map(|fc| {
-                let fn_name = format_ident!("{}", fc.name());
-                let param_types = self.udf_param_types(fc.name());
-                if string_intern && param_types.contains(&DataType::String) {
-                    self.features.mark_string_resolve();
-                }
-                let args: Vec<TokenStream> = fc
-                    .args()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        let token = self.build_row_args_arithmetic_expr(
-                            a,
-                            row_fields,
-                            string_intern,
-                            None,
-                        )?;
-                        Ok(wrap_udf_arg(
-                            token,
-                            param_type_at(&param_types, i),
-                            string_intern,
-                        ))
-                    })
-                    .collect::<Result<_, CodegenError>>()?;
-                Ok(if fc.is_negated() {
-                    quote! { !udf::#fn_name(#( #args ),*) }
-                } else {
-                    quote! { udf::#fn_name(#( #args ),*) }
-                })
             })
             .collect::<Result<_, CodegenError>>()?;
 
@@ -650,72 +556,76 @@ pub(super) fn build_row_constraints_predicate(
 // Constraint helpers
 // ==================================================
 
-/// Lower a parsed constant to the internal tuple-slot expression —
-/// wraps floats in `OrderedFloat`, interns strings when enabled.
+/// Emit the Rust literal for one constant, parsed from its spelling in
+/// its pinned width.
 ///
-/// Every numeric variant emits an unsuffixed literal so Rust's own
+/// Every numeric constant emits an unsuffixed literal so Rust's own
 /// inference picks the matching width from the enclosing tuple type.
-/// Returns `CodegenError::internal` for polymorphic `Int` / `Float` — the
-/// typechecker should have pinned those to a concrete width first.
+/// Returns `CodegenError::internal` for an unpinned literal family or a
+/// spelling that does not parse — the typechecker pins every literal to
+/// a width its spelling fits.
 pub fn const_to_token(
-    constant: &ConstType,
+    constant: &Constant,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
-    Ok(match constant {
-        ConstType::Int(_) | ConstType::Float(_) => {
+    let text = constant.text();
+    macro_rules! int_lit {
+        ($t:ty, $ctor:path) => {{
+            let v: $t = text.parse().map_err(|_| {
+                CodegenError::internal(format!(
+                    "constant `{text}` does not parse as {}",
+                    stringify!($t)
+                ))
+            })?;
+            let lit = $ctor(v);
+            quote! { #lit }
+        }};
+    }
+    macro_rules! float_lit {
+        ($t:ty, $ctor:path) => {{
+            let v: $t = text.parse().map_err(|_| {
+                CodegenError::internal(format!(
+                    "constant `{text}` does not parse as {}",
+                    stringify!($t)
+                ))
+            })?;
+            let lit = $ctor(v);
+            quote! { OrderedFloat(#lit) }
+        }};
+    }
+    Ok(match constant.ty() {
+        DataType::IntLit | DataType::FloatLit => {
             return Err(CodegenError::internal(format!(
                 "polymorphic literal {constant:?} reached codegen; \
                  typechecker should have pinned it"
             )));
         }
-        ConstType::Int8(n) => {
-            let lit = proc_macro2::Literal::i8_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::Int16(n) => {
-            let lit = proc_macro2::Literal::i16_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::Int32(n) => {
-            let lit = proc_macro2::Literal::i32_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::Int64(n) => {
-            let lit = proc_macro2::Literal::i64_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::UInt8(n) => {
-            let lit = proc_macro2::Literal::u8_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::UInt16(n) => {
-            let lit = proc_macro2::Literal::u16_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::UInt32(n) => {
-            let lit = proc_macro2::Literal::u32_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::UInt64(n) => {
-            let lit = proc_macro2::Literal::u64_unsuffixed(*n);
-            quote! { #lit }
-        }
-        ConstType::Float32(v) => {
-            let lit = proc_macro2::Literal::f32_unsuffixed(v.into_inner());
-            quote! { OrderedFloat(#lit) }
-        }
-        ConstType::Float64(v) => {
-            let lit = proc_macro2::Literal::f64_unsuffixed(v.into_inner());
-            quote! { OrderedFloat(#lit) }
-        }
-        ConstType::Text(s) => {
+        DataType::Int8 => int_lit!(i8, Literal::i8_unsuffixed),
+        DataType::Int16 => int_lit!(i16, Literal::i16_unsuffixed),
+        DataType::Int32 => int_lit!(i32, Literal::i32_unsuffixed),
+        DataType::Int64 => int_lit!(i64, Literal::i64_unsuffixed),
+        DataType::UInt8 => int_lit!(u8, Literal::u8_unsuffixed),
+        DataType::UInt16 => int_lit!(u16, Literal::u16_unsuffixed),
+        DataType::UInt32 => int_lit!(u32, Literal::u32_unsuffixed),
+        DataType::UInt64 => int_lit!(u64, Literal::u64_unsuffixed),
+        DataType::Float32 => float_lit!(f32, Literal::f32_unsuffixed),
+        DataType::Float64 => float_lit!(f64, Literal::f64_unsuffixed),
+        DataType::String => {
             if string_intern {
-                quote! { intern(#s) }
+                quote! { intern(#text) }
             } else {
-                quote! { #s.to_string() }
+                quote! { #text.to_string() }
             }
         }
-        ConstType::Bool(b) => quote! { #b },
+        DataType::Bool => {
+            let b = text == "True";
+            quote! { #b }
+        }
+        DataType::FixedTuple(_) => {
+            return Err(CodegenError::internal(format!(
+                "tuple-typed constant `{text}` cannot appear as a literal"
+            )));
+        }
     })
 }
 
@@ -907,6 +817,20 @@ impl CodeGen {
                 let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
                 Ok(quote! { ( #inner ) })
             }
+            // Tuple construct → Rust tuple literal `(a, b)` (singleton `(a,)`).
+            FactorArgument::Tuple { fields } => {
+                let field_toks = fields
+                    .iter()
+                    .map(|f| self.build_arithmetic_expr(f, string_intern, resolve_var))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(tuple_tokens(field_toks))
+            }
+            // Tuple projection → Rust tuple field access `(tuple).i`.
+            FactorArgument::TupleProj { tuple, index } => {
+                let rec = self.build_arithmetic_expr(tuple, string_intern, resolve_var)?;
+                let idx = Index::from(*index);
+                Ok(quote! { (#rec).#idx })
+            }
         }
     }
 
@@ -930,12 +854,16 @@ impl CodeGen {
                     var_token
                 })
             }
-            FactorArgument::Const(c) => match c {
-                // String literals are already displayable – emit them
+            FactorArgument::Const(c) => {
+                // String literals are already displayable - emit them
                 // directly without interning first.
-                ConstType::Text(s) => Ok(quote! { #s }),
-                _ => const_to_token(c, string_intern),
-            },
+                if c.ty() == &DataType::String {
+                    let s = c.text();
+                    Ok(quote! { #s })
+                } else {
+                    const_to_token(c, string_intern)
+                }
+            }
             FactorArgument::FnCall { name, args } => {
                 // UDF returns Spur when string_intern is on — resolve for display.
                 let call = self.fncall_to_token(name, args, string_intern, resolve_var)?;
@@ -962,6 +890,25 @@ impl CodeGen {
                 // (string concat is `cat`) — no display resolution needed.
                 let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
                 Ok(quote! { ( #inner ) })
+            }
+            // A projected field reaching a `cat`/display context is a string
+            // (typecheck-enforced); resolve the interned `Spur` to display text,
+            // exactly as the `Var` arm does for a bound string variable.
+            FactorArgument::TupleProj { tuple, index } => {
+                let rec = self.build_arithmetic_expr(tuple, string_intern, resolve_var)?;
+                let idx = Index::from(*index);
+                let proj = quote! { (#rec).#idx };
+                Ok(if string_intern {
+                    self.features.mark_string_resolve();
+                    quote! { resolve(#proj) }
+                } else {
+                    proj
+                })
+            }
+            // A whole tuple is not a string, so the typechecker rejects it in a
+            // `cat` context; reuse the value lowering to stay total (unreached).
+            FactorArgument::Tuple { .. } => {
+                self.factor_to_token(factor, string_intern, resolve_var)
             }
         }
     }
@@ -1005,9 +952,14 @@ impl CodeGen {
             .collect::<Result<_, _>>()?;
 
         // Avoid marking `resolve` for ops that never read a string param
-        // (e.g. `to_string(n: int)`), otherwise an unused helper leaks
-        // into the generated binary.
-        if string_intern && op.param_types().contains(&DataType::String) {
+        // (e.g. `to_string(n)`), otherwise an unused helper leaks into the
+        // generated binary.
+        if string_intern
+            && op
+                .param_allowed_types()
+                .iter()
+                .any(|set| set.contains(&DataType::String))
+        {
             self.features.mark_string_resolve();
         }
 
@@ -1048,40 +1000,6 @@ impl CodeGen {
                 let s = &raw[0];
                 Ok(quote! { ((#s).into_inner().get() as i32) })
             }
-            BuiltinOperator::Contains => {
-                let needle = read_str(&raw[0]);
-                let hay = read_str(&raw[1]);
-                Ok(quote! { ((#hay).contains(#needle)) })
-            }
-            BuiltinOperator::Match => {
-                // Soufflé `match(pattern, s)` is a *full* match, so anchor
-                // with `^(?:…)$` (the `regex` crate searches by default).
-                // A malformed pattern yields `false` rather than aborting.
-                // `regex` resolves via the `flowlog_runtime` re-export in
-                // both binary and library modes (runtime ≥ 0.2.3).
-                let hay = read_str(&raw[1]);
-                // Literal pattern (the common case): anchor at codegen time
-                // and compile once per call site via a `LazyLock` static.
-                if let FactorArgument::Const(ConstType::Text(p)) = &args[0].init
-                    && args[0].rest.is_empty()
-                {
-                    let anchored = format!("^(?:{p})$");
-                    return Ok(quote! {{
-                        static RE: ::std::sync::LazyLock<
-                            Option<::flowlog_runtime::regex::Regex>,
-                        > = ::std::sync::LazyLock::new(|| {
-                            ::flowlog_runtime::regex::Regex::new(#anchored).ok()
-                        });
-                        RE.as_ref().is_some_and(|re| re.is_match(#hay))
-                    }});
-                }
-                // Computed pattern: compile per evaluation.
-                let pat = read_str(&raw[0]);
-                Ok(quote! {
-                    ::flowlog_runtime::regex::Regex::new(&format!("^(?:{})$", #pat))
-                        .map_or(false, |re| re.is_match(#hay))
-                })
-            }
             BuiltinOperator::ToString => {
                 let n = &raw[0];
                 Ok(emit_string(quote! { (#n).to_string() }))
@@ -1103,7 +1021,6 @@ impl CodeGen {
         expr: &ArithmeticArgument,
         fields: &[Ident],
         string_intern: bool,
-        remaining: Option<&RefCell<HashMap<usize, usize>>>,
     ) -> Result<TokenStream, CodegenError> {
         self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
             TransformationArgument::KV((_, idx)) => {
@@ -1113,21 +1030,7 @@ impl CodeGen {
                         fields.len()
                     ))
                 })?;
-                // Clone only when future uses remain; the last use moves.
-                let needs_clone = remaining.is_some_and(|rem| {
-                    rem.borrow_mut()
-                        .get_mut(idx)
-                        .map(|count| {
-                            *count -= 1;
-                            *count > 0
-                        })
-                        .unwrap_or(false)
-                });
-                Ok(if needs_clone {
-                    quote! { #ident.clone() }
-                } else {
-                    quote! { #ident }
-                })
+                Ok(quote! { #ident.clone() })
             }
             _ => Err(CodegenError::internal(
                 "non-KV argument in row arithmetic builder",
@@ -1139,26 +1042,15 @@ impl CodeGen {
         &mut self,
         expr: &ArithmeticArgument,
         string_intern: bool,
-        remaining: Option<&RefCell<HashMap<(bool, usize), usize>>>,
     ) -> Result<TokenStream, CodegenError> {
         self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
             TransformationArgument::KV((is_key, idx))
             | TransformationArgument::Jn((_, is_key, idx)) => {
                 let i = Index::from(*idx);
-                let needs_clone = remaining.is_some_and(|rem| {
-                    let mut map = rem.borrow_mut();
-                    map.get_mut(&(*is_key, *idx))
-                        .map(|count| {
-                            *count -= 1;
-                            *count > 0
-                        })
-                        .unwrap_or(false)
-                });
-                Ok(match (is_key, needs_clone) {
-                    (true, true) => quote! { k.#i.clone() },
-                    (true, false) => quote! { k.#i },
-                    (false, true) => quote! { v.#i.clone() },
-                    (false, false) => quote! { v.#i },
+                Ok(if *is_key {
+                    quote! { k.#i.clone() }
+                } else {
+                    quote! { v.#i.clone() }
                 })
             }
         })
@@ -1203,7 +1095,7 @@ impl CodeGen {
             .udfs()
             .iter()
             .find(|f| f.name() == name)
-            .map(|f| f.params().iter().map(|p| *p.data_type()).collect())
+            .map(|f| f.params().iter().map(|p| p.data_type().clone()).collect())
             .unwrap_or_default()
     }
 
@@ -1221,7 +1113,7 @@ impl CodeGen {
 /// Param-type lookup with graceful out-of-bounds. Variadic-style mismatches
 /// shouldn't happen post-typecheck, but a panic here would be surprising.
 fn param_type_at(types: &[DataType], idx: usize) -> Option<DataType> {
-    types.get(idx).copied()
+    types.get(idx).cloned()
 }
 
 /// Wrap a UDF argument token so it matches the declared param type at the

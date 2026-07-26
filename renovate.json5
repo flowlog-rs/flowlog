@@ -1,7 +1,8 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   // Batch update PRs into one quiet weekly sweep (vortex-style cadence).
-  extends: ["config:recommended", "schedule:earlyMondays"],
+  // `:gitSignOff` adds a DCO `Signed-off-by` trailer so bot PRs pass the DCO check.
+  extends: ["config:recommended", "schedule:earlyMondays", ":gitSignOff"],
 
   // With a weekly schedule there is no reason to trickle PRs out.
   prHourlyLimit: 0,
@@ -16,12 +17,17 @@
 
   // Weekly Cargo.lock refresh: CI builds against the same fresh in-range
   // resolution that users of generated crates always get (they have no lockfile).
-  lockFileMaintenance: { enabled: true, automerge: true },
+  lockFileMaintenance: { enabled: true, automerge: true, addLabels: ["automerge"] },
 
-  // GitHub's native auto-merge proved unreliable here (armed PRs with green
-  // required checks sat unmerged for hours); have Renovate merge green
-  // automerge PRs itself during its visits instead.
-  platformAutomerge: false,
+  // Platform auto-merge feeds the merge queue: Renovate arms GitHub
+  // auto-merge, the auto-approve workflow supplies the required Committer
+  // review, and the queue merges.
+  platformAutomerge: true,
+
+  // The merge queue rebuilds each entry against the current base, so don't
+  // force-push (and re-run CI on) PRs merely because main-next advanced;
+  // rebase only on a genuine conflict.
+  rebaseWhen: "conflicted",
 
   customManagers: [
     {
@@ -53,6 +59,13 @@
       groupName: "timely + differential-dataflow",
     },
     {
+      // prettyplease pins syn at a major floor (0.3 → syn 3), so bumping
+      // one alone leaves two syn versions in the graph (prettyplease's syn
+      // 3 plus our direct syn 2) and fails to compile. Bump them together.
+      matchPackageNames: ["prettyplease", "syn"],
+      groupName: "prettyplease + syn",
+    },
+    {
       // Cargo patch bumps are lockfile-only for our caret ranges and fully
       // CI-gated — merge automatically. Minor stays manual on purpose: for
       // 0.x crates (timely 0.30→0.31) "minor" is cargo's breaking boundary.
@@ -60,6 +73,7 @@
       matchManagers: ["cargo"],
       matchUpdateTypes: ["patch"],
       automerge: true,
+      addLabels: ["automerge"],
     },
     {
       // Stable (>=1.x) crates: minors are semver-compatible and in-range
@@ -69,6 +83,7 @@
       matchUpdateTypes: ["minor"],
       matchCurrentVersion: ">=1.0.0",
       automerge: true,
+      addLabels: ["automerge"],
     },
   ],
 }

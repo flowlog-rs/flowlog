@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_inc
+// Feature : tuple column in INCREMENTAL mode — a (a, b) tuple constructed from a
+//           command-driven EDB, output with per-epoch diffs. Confirms tuple rows
+//           flow through the incremental (multiplicity-tracking) engine and
+//           serialize as `(a, b)` with the `+1/-1` diff column.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl In(x: int32, y: int32)
+.input In(IO="command", delimiter=",")
+
+.type P = ( a: int32, b: int32 )
+.decl Out(p: P)
+
+Out(p) :- In(x, y), p = (x, y).
+
+.output Out

@@ -1,8 +1,10 @@
 //! Plan tree (left-to-right chain) over core atoms for FlowLog Datalog programs.
-use crate::catalog::Catalog;
 use std::collections::HashMap;
 use std::fmt;
+
 use tracing::debug;
+
+use crate::catalog::Catalog;
 
 #[derive(Debug, Clone)]
 pub struct PlanTree {

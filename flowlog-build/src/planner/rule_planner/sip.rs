@@ -15,12 +15,18 @@
 //! > general SIP framework (e.g. sideways information-passing strategies for
 //! > full rules) is left for future work.
 
-use super::RulePlanner;
-use crate::catalog::{
-    ArithmeticPos, AtomArgumentSignature, AtomSignature, Catalog, JoinPredicates, KvPredicates,
-};
-use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
 use tracing::trace;
+
+use super::RulePlanner;
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::AtomSignature;
+use crate::catalog::Catalog;
+use crate::catalog::JoinPredicates;
+use crate::catalog::KvPredicates;
+use crate::planner::KeyValueLayout;
+use crate::planner::PlanError;
+use crate::planner::TransformationInfo;
 
 // =========================================================================
 // SIP Optimization
@@ -174,7 +180,7 @@ impl RulePlanner {
             semijoin_name.clone(),
             KeyValueLayout::new(lhs_new_keys.clone(), vec![]),
             KeyValueLayout::new(rhs_keys.clone(), rhs_vals.clone()),
-            KeyValueLayout::new(lhs_new_keys.clone(), rhs_vals.clone()),
+            KeyValueLayout::new(lhs_new_keys, rhs_vals.clone()),
             JoinPredicates::default(),
         );
         let semijoin_fp = semijoin_tx.output_info_fp();

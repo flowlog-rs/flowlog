@@ -7,10 +7,13 @@
 //! fire. Each variant carries at least one [`Span`] so the renderer can
 //! point at the offending source.
 
-use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
+use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
+use codespan_reporting::diagnostic::Label;
+use flowlog_common::Diagnostic;
+use flowlog_common::FileId;
+use flowlog_common::Span;
+use flowlog_common::primary_label;
 use thiserror::Error;
-
-use crate::common::{Diagnostic, FileId, Span, primary_label};
 
 /// Build one primary label per rule, annotated with `rule {id}`.
 fn rule_labels(rules: &[(usize, Span)]) -> Vec<Label<FileId>> {

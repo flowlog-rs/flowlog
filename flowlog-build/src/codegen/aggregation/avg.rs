@@ -5,14 +5,19 @@
 //! `(sum: value, count: 1)`.  Consolidation accumulates both components,
 //! and the final average is computed as `sum / count` in Phase 3.
 
-use crate::parser::{AggregationOperator, DataType};
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::format_ident;
+use quote::quote;
 
-use super::common::{
-    ThresholdCmp, agg_semiring_new, aggregation_optimize_pipeline, aggregation_pre_leave_pipeline,
-    key_pattern, row_pattern, tuple,
-};
+use super::common::ThresholdCmp;
+use super::common::agg_semiring_new;
+use super::common::aggregation_optimize_pipeline;
+use super::common::aggregation_pre_leave_pipeline;
+use super::common::key_pattern;
+use super::common::row_pattern;
+use super::common::tuple;
 
 /// Full row reconstruction from `(key, agg_val)` where the averaged value is
 /// computed as `agg_val.avg()` (= sum / count) at position `agg_pos`.

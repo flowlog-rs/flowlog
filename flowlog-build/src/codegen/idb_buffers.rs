@@ -6,14 +6,18 @@
 //! Buffers store `(data, time, diff)` triples. Batch mode hardcodes
 //! `diff = 1` (DD uses `Present`, not `i32`). Sort operates on data only.
 
-use proc_macro2::{Ident, Span, TokenStream};
+use flowlog_parser::DataType;
+use flowlog_parser::Relation;
+use flowlog_profiler::PlanGraph;
+use flowlog_profiler::with_plan_graph;
+use proc_macro2::Ident;
+use proc_macro2::Span;
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Index;
 
 use crate::codegen::CodeGen;
 use crate::codegen::ty::tuple_type;
-use crate::parser::{DataType, Relation};
-use crate::profiler::{Profiler, with_profiler};
 
 // =========================================================================
 // Output struct
@@ -39,11 +43,11 @@ impl CodeGen {
     /// Walk IDB relations → fill [`InspectorCodegen`].
     pub(crate) fn collect_inspectors(
         &mut self,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> InspectorCodegen {
         let mut cg = InspectorCodegen::default();
 
-        with_profiler(profiler, |p| p.update_inspect_block());
+        with_plan_graph(plan_graph, |p| p.update_inspect_block());
 
         for idb in self.program.idbs() {
             let var = self.find_global_ident(idb.fingerprint());
@@ -65,19 +69,24 @@ impl CodeGen {
                     &var,
                     idb.raw_name(),
                     &cell_ident,
-                    profiler,
+                    plan_graph,
                 ));
             }
 
+            // Leaf-aware checks: a tuple column's float / string / integer
+            // sub-fields need the same feature flags as a scalar column would.
             if data_type
                 .iter()
-                .any(|dt| matches!(dt, DataType::Float32 | DataType::Float64))
+                .any(|dt| dt.any_scalar(&DataType::is_float))
             {
                 self.features.mark_ordered_float();
             }
 
             if idb.output() {
-                if data_type.contains(&DataType::String) {
+                if data_type
+                    .iter()
+                    .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
+                {
                     self.features.mark_string_resolve_out();
                 }
 
@@ -88,7 +97,11 @@ impl CodeGen {
                 // parallel drain. Stderr uses neither. The scaffold gates the
                 // deps on these marks.
                 if !self.config.output_to_stdout() && !data_type.is_empty() {
-                    if data_type.iter().any(DataType::is_integer) || self.config.is_incremental() {
+                    if data_type
+                        .iter()
+                        .any(|dt| dt.any_scalar(&DataType::is_integer))
+                        || self.config.is_incremental()
+                    {
                         self.features.mark_itoa();
                     }
                     if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
@@ -99,14 +112,14 @@ impl CodeGen {
                 // Wiring (first arg) is the collection binding feeding the
                 // sink; the label (second arg) is the human-facing name.
                 if self.config.output_to_stdout() {
-                    with_profiler(profiler, |p| {
+                    with_plan_graph(plan_graph, |p| {
                         p.inspect_content_terminal_operator(
                             var.to_string(),
                             idb.raw_name().to_string(),
                         );
                     });
                 } else {
-                    with_profiler(profiler, |p| {
+                    with_plan_graph(plan_graph, |p| {
                         p.inspect_content_file_operator(
                             var.to_string(),
                             idb.raw_name().to_string(),
@@ -143,7 +156,7 @@ impl CodeGen {
         var: &Ident,
         display: &str,
         cell_ident: &Ident,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> TokenStream {
         let maybe_probe = if self.config.is_incremental() {
             quote! { .probe_with(&mut probe) }
@@ -153,7 +166,7 @@ impl CodeGen {
 
         // Wiring (first arg) is the collection binding feeding the sink;
         // the label (second arg) is the human-facing name.
-        with_profiler(profiler, |p| {
+        with_plan_graph(plan_graph, |p| {
             p.inspect_size_operator(var.to_string(), display.to_string());
         });
 
@@ -381,10 +394,29 @@ pub fn field_accessor(
 ) -> TokenStream {
     let idx = Index::from(col_idx);
     let inner = quote! { #base.0.#idx };
-    if matches!(data_type, DataType::String) && string_intern {
-        quote! { resolve_out(#inner) }
+    // Resolve interned-string leaves so comparisons/formatting see the actual
+    // strings. For a tuple column this descends every leaf: ORDER BY on a tuple
+    // must compare resolved strings, not their (run-dependent) intern IDs.
+    if string_intern && data_type.any_scalar(&|l| matches!(l, DataType::String)) {
+        resolve_string_leaves(&inner, data_type)
     } else {
         inner
+    }
+}
+
+/// Rebuild `access` with every interned-string leaf wrapped in `resolve_out`,
+/// recursing through tuple columns. Non-string leaves pass through unchanged.
+fn resolve_string_leaves(access: &TokenStream, data_type: &DataType) -> TokenStream {
+    match data_type {
+        DataType::String => quote! { resolve_out(#access) },
+        DataType::FixedTuple(fields) => {
+            let elems = fields.iter().enumerate().map(|(j, fdt)| {
+                let jdx = Index::from(j);
+                resolve_string_leaves(&quote! { (#access).#jdx }, fdt)
+            });
+            quote! { ( #(#elems,)* ) }
+        }
+        _ => access.clone(),
     }
 }
 

@@ -213,26 +213,62 @@ count_tests() {
 # CLI helpers
 ###############################################################################
 
-# Parse `[-j N] [-h] [--] [positional…]`. Populates `PARSED_JOBS` (positive int,
-# default 1) and `PARSED_POSITIONAL` (array). On `-h|--help` invokes the
-# script-supplied `usage_fn` and exits 0.
+# Parse `[-j N] [--shard I/N] [-h] [--] [positional…]`. Populates `PARSED_JOBS`
+# (positive int, default 1), `PARSED_POSITIONAL` (array), and `PARSED_SHARD`
+# ("I/N" or empty). On `-h|--help` invokes `usage_fn` and exits 0.
 PARSED_JOBS=1
 PARSED_POSITIONAL=()
+PARSED_SHARD=""
 parse_jobs_flag() {
     local usage_fn="$1"; shift
     PARSED_JOBS=1
     PARSED_POSITIONAL=()
+    PARSED_SHARD=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help) "$usage_fn"; exit 0 ;;
             -j) PARSED_JOBS="${2:?}"; shift 2 ;;
             -j*) PARSED_JOBS="${1#-j}"; shift ;;
+            --shard) PARSED_SHARD="${2:?}"; shift 2 ;;
+            --shard=*) PARSED_SHARD="${1#--shard=}"; shift ;;
             --) shift; PARSED_POSITIONAL+=("$@"); break ;;
             *) PARSED_POSITIONAL+=("$1"); shift ;;
         esac
     done
     [[ "$PARSED_JOBS" =~ ^[1-9][0-9]*$ ]] \
         || die "Invalid -j value: $PARSED_JOBS (expected positive integer)"
+    [[ -z "$PARSED_SHARD" || "$PARSED_SHARD" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] \
+        || die "Invalid --shard value: $PARSED_SHARD (expected I/N)"
+}
+
+# Every fixture name across the configured categories, sorted — the stable
+# order `--shard` slices over.
+all_test_names() {
+    local cat cat_dir test_dir
+    for cat in "${CATEGORIES[@]}"; do
+        cat_dir="${TESTS_DIR}/${cat}"
+        [[ -d "$cat_dir" ]] || continue
+        for test_dir in "$cat_dir"/*/; do
+            [[ -f "$test_dir/program.dl" ]] || continue
+            basename "$test_dir"
+        done
+    done | sort
+}
+
+# When `--shard I/N` was given, narrow `PARSED_POSITIONAL` to this shard: every
+# Nth name of the sorted list. Lets CI fan the suite across runners without
+# naming fixtures; a shard is just a subset of the usual named-test path.
+apply_shard() {
+    [[ -n "$PARSED_SHARD" ]] || return 0
+    (( ${#PARSED_POSITIONAL[@]} == 0 )) \
+        || die "--shard cannot be combined with explicit test names"
+    local index="${PARSED_SHARD%/*}" total="${PARSED_SHARD#*/}"
+    (( index >= 1 && index <= total )) || die "--shard out of range: $PARSED_SHARD"
+    local i=0 name
+    while IFS= read -r name; do
+        (( i % total == index - 1 )) && PARSED_POSITIONAL+=("$name")
+        (( i++ )) || true
+    done < <(all_test_names)
 }
 
 ###############################################################################

@@ -51,10 +51,6 @@ mod build;
 // the re-exports below, by `flowlog-compiler`'s binary mode.
 mod codegen;
 
-// Shared primitives — previously the `common` crate, folded in here.
-#[doc(hidden)]
-pub mod common;
-
 // Pipeline stages — previously independent crates, folded in here so
 // `flowlog-build` ships as a single publishable library.
 //
@@ -68,31 +64,28 @@ pub mod catalog;
 #[doc(hidden)]
 pub mod optimizer;
 #[doc(hidden)]
-pub mod parser;
-#[doc(hidden)]
 pub mod planner;
 #[doc(hidden)]
-pub mod profiler;
-#[doc(hidden)]
 pub mod stratifier;
-#[doc(hidden)]
-pub mod typechecker;
+
+use std::env;
+use std::fs;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
 
 pub use build::BuildError;
-
 // Internal codegen re-exports — only consumed by `flowlog-compiler`.
 // Hidden from docs.rs for the same reason as the pipeline modules above.
 #[doc(hidden)]
 pub use codegen::{
-    AggSemiringNeeds, CodeGen, CodeParts, CodegenError, Features, const_to_token, data_type_tokens,
-    field_accessor, gen_drain_block,
+    AggSemiringNeeds, CodeGen, CodeParts, CodegenError, Features, Semiring, const_to_token,
+    data_type_tokens, field_accessor, gen_drain_block,
 };
-
-use std::io;
-use std::path::{Path, PathBuf};
-
-pub use crate::common::ExecutionMode;
-use crate::common::{BoxError, SourceMap, emit};
+use flowlog_common::BoxError;
+pub use flowlog_common::ExecutionMode;
+use flowlog_common::SourceMap;
+use flowlog_common::emit;
 
 /// Compile a single `.dl` program with default options.
 ///
@@ -122,6 +115,7 @@ pub struct Builder {
     pub(crate) profile: bool,
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
+    pub(crate) metrics_flush_interval_ms: u64,
 }
 
 impl Builder {
@@ -167,6 +161,16 @@ impl Builder {
     /// panics if the combination is requested.
     pub fn profile(mut self, enabled: bool) -> Self {
         self.profile = enabled;
+        self
+    }
+
+    /// Milliseconds between periodic metric flushes during a profiled run, so
+    /// a long or interrupted run still leaves the latest snapshot on disk.
+    /// Defaults to `0` (flush only at each natural write point: after a batch
+    /// run drains, or after each incremental commit); a non-zero value also
+    /// snapshots mid-run. Ignored unless [`Self::profile`] is set.
+    pub fn metrics_flush_interval_ms(mut self, ms: u64) -> Self {
+        self.metrics_flush_interval_ms = ms;
         self
     }
 
@@ -218,7 +222,7 @@ impl Builder {
         let source = build::assemble(&output, out_dir).map_err(BuildError::from)?;
         self.emit_semiring_modules(&output, out_dir)
             .map_err(BuildError::from)?;
-        std::fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;
+        fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;
         self.emit_rerun_if_changed(program_path);
         Ok(())
     }
@@ -234,7 +238,7 @@ impl Builder {
             return Ok(());
         }
         let semiring_dir = out_dir.join("semiring");
-        std::fs::create_dir_all(&semiring_dir)?;
+        fs::create_dir_all(&semiring_dir)?;
 
         const LIB_ALIASES: &str = "\
 use ::flowlog_runtime::serde;
@@ -248,9 +252,9 @@ use ::flowlog_runtime::differential_dataflow;
                 .expect("semiring module path has no file name");
             let dst = semiring_dir.join(fname);
             if fname == "mod.rs" {
-                std::fs::write(dst, content)?;
+                fs::write(dst, content)?;
             } else {
-                std::fs::write(dst, format!("{LIB_ALIASES}{content}"))?;
+                fs::write(dst, format!("{LIB_ALIASES}{content}"))?;
             }
         }
         Ok(())
@@ -270,12 +274,10 @@ use ::flowlog_runtime::differential_dataflow;
 }
 
 fn cargo_out_dir() -> io::Result<PathBuf> {
-    std::env::var_os("OUT_DIR")
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "OUT_DIR not set — run from a build.rs",
-            )
-        })
+    env::var_os("OUT_DIR").map(PathBuf::from).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "OUT_DIR not set — run from a build.rs",
+        )
+    })
 }

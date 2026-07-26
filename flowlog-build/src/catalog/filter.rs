@@ -1,9 +1,12 @@
 //! Filter expression for FlowLog Datalog programs.
 
-use crate::catalog::AtomArgumentSignature;
-use crate::parser::ConstType;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
+
+use flowlog_parser::Constant;
+
+use crate::catalog::AtomArgumentSignature;
 
 /// Base constraint filters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,7 +15,7 @@ pub(crate) struct Filters {
     var_eq_map: HashMap<AtomArgumentSignature, AtomArgumentSignature>,
 
     /// Maps variables to constant values they must equal
-    const_map: HashMap<AtomArgumentSignature, ConstType>,
+    const_map: HashMap<AtomArgumentSignature, Constant>,
 
     /// Set of variables that are treated as placeholders
     placeholder_set: HashSet<AtomArgumentSignature>,
@@ -22,7 +25,7 @@ impl Filters {
     /// Creates a filters with the specified constraints.
     pub(crate) fn new(
         var_eq_map: HashMap<AtomArgumentSignature, AtomArgumentSignature>,
-        const_map: HashMap<AtomArgumentSignature, ConstType>,
+        const_map: HashMap<AtomArgumentSignature, Constant>,
         placeholder_set: HashSet<AtomArgumentSignature>,
     ) -> Self {
         Self {
@@ -40,7 +43,7 @@ impl Filters {
 
     /// Returns a reference to the constant equality constraints map.
     #[inline]
-    pub(crate) fn const_map(&self) -> &HashMap<AtomArgumentSignature, ConstType> {
+    pub(crate) fn const_map(&self) -> &HashMap<AtomArgumentSignature, Constant> {
         &self.const_map
     }
 

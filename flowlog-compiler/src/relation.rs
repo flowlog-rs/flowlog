@@ -5,12 +5,17 @@
 //! Shard helpers and the byte-range reader are supplied by the binary's
 //! `imports::gen_binary_relation_extras` (inlined into the same module).
 
+use flowlog_build::CodegenError;
+use flowlog_build::Features;
+use flowlog_build::const_to_token;
+use flowlog_build::data_type_tokens;
+use flowlog_parser::DataType;
+use flowlog_parser::InlineFact;
+use flowlog_parser::Program;
+use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
-
-use flowlog_build::common::Span;
-use flowlog_build::parser::{ConstType, DataType, Program, Relation};
-use flowlog_build::{CodegenError, Features, const_to_token, data_type_tokens};
+use quote::format_ident;
+use quote::quote;
 
 /// Emit the shared relation-handler module body for binary mode.
 pub(crate) fn gen_relation(
@@ -124,7 +129,7 @@ pub(crate) fn gen_relation(
 
 fn gen_one_rel_nullary(
     rel: &Relation,
-    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
+    facts: Option<&Vec<InlineFact>>,
     is_batch: bool,
 ) -> Result<TokenStream, CodegenError> {
     let raw_name = rel.raw_name();
@@ -236,7 +241,7 @@ fn gen_one_rel_nullary(
 
 fn gen_one_rel_nonnullary(
     rel: &Relation,
-    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
+    facts: Option<&Vec<InlineFact>>,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
     let raw_name = rel.raw_name();
@@ -256,7 +261,7 @@ fn gen_one_rel_nonnullary(
 
     let tuple_ty = data_type_tokens(&dts, string_intern);
 
-    let shard_tuple = match dts[0] {
+    let shard_tuple = match &dts[0] {
         DataType::Int8 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
         DataType::Int16 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
         DataType::Int32 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
@@ -279,6 +284,14 @@ fn gen_one_rel_nonnullary(
             }
         }
         DataType::Bool => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        // Records never appear in EDB input, so an input relation cannot have
+        // a record first column to shard on.
+        DataType::FixedTuple(_) => {
+            unreachable!("tuple-typed columns cannot appear in EDB input relations")
+        }
+        DataType::IntLit | DataType::FloatLit => {
+            unreachable!("unpinned literal type reached codegen; the typechecker pins all literals")
+        }
     };
     let tuple_parse_stmts = gen_parse_from_str(raw_name, &dts, string_intern);
     let file_parse_stmts = gen_parse_from_bytes(raw_name, &dts, string_intern);
@@ -423,7 +436,7 @@ fn gen_one_rel_nonnullary(
 // ------------------------------------------------------------
 
 fn gen_inline_facts(
-    facts: Option<&Vec<(Span, Vec<ConstType>)>>,
+    facts: Option<&Vec<InlineFact>>,
     string_intern: bool,
 ) -> Result<TokenStream, CodegenError> {
     let Some(rows) = facts else {
@@ -435,8 +448,9 @@ fn gen_inline_facts(
 
     let tuples: Vec<TokenStream> = rows
         .iter()
-        .map(|(_, vals)| {
-            let elems: Vec<TokenStream> = vals
+        .map(|fact| {
+            let elems: Vec<TokenStream> = fact
+                .columns
                 .iter()
                 .map(|c| const_to_token(c, string_intern))
                 .collect::<Result<_, _>>()?;
@@ -477,7 +491,7 @@ fn gen_parse_from_str(rel_label: &str, dts: &[DataType], string_intern: bool) ->
                     }
                 };
             };
-            match *dt {
+            match dt {
                 DataType::Int8 => parse_str_scalar(&v, quote! { i8 }, "i8", rel_label, idx, &get),
                 DataType::Int16 => parse_str_scalar(&v, quote! { i16 }, "i16", rel_label, idx, &get),
                 DataType::Int32 => parse_str_scalar(&v, quote! { i32 }, "i32", rel_label, idx, &get),
@@ -496,6 +510,15 @@ fn gen_parse_from_str(rel_label: &str, dts: &[DataType], string_intern: bool) ->
                         quote! { let #v: String = s.to_string(); }
                     };
                     quote! { #get #field }
+                }
+                // Records never appear in EDB facts (constructed by rules only).
+                DataType::FixedTuple(_) => {
+                    unreachable!("tuple-typed columns cannot be parsed from EDB facts")
+                }
+                DataType::IntLit | DataType::FloatLit => {
+                    unreachable!(
+                        "unpinned literal type reached codegen; the typechecker pins all literals"
+                    )
                 }
             }
         })
@@ -574,7 +597,7 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                     }
                 };
             };
-            match *dt {
+            match dt {
                 DataType::Int8 => {
                     parse_scalar_bytes(&v, quote! { i8 }, "i8", rel_label, idx, &get_raw)
                 }
@@ -620,6 +643,15 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                         #utf8
                         #field
                     }
+                }
+                // Records never appear in EDB facts (constructed by rules only).
+                DataType::FixedTuple(_) => {
+                    unreachable!("tuple-typed columns cannot be parsed from EDB facts")
+                }
+                DataType::IntLit | DataType::FloatLit => {
+                    unreachable!(
+                        "unpinned literal type reached codegen; the typechecker pins all literals"
+                    )
                 }
             }
         })

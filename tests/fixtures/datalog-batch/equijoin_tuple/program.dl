@@ -1,0 +1,22 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : equijoin_tuple
+// Feature : the DOOP context shape — a destructure `c = (v, w)` desugars to
+//           the spanning projection equality `c.0 = v` between two atoms with
+//           no shared variable. Fusion materializes the projection as a column
+//           named `v` and hash-joins on it (`Mk` is an IDB, so the premap also
+//           exercises the fuse-phase computed-position transfer).
+// ════════════════════════════════════════════════════════════════════════════
+
+.type P = (a: int32, b: int32)
+
+.decl Base(a: int32, b: int32)
+.decl Val(v: int32, t: int32)
+.input Base(IO="file", filename="Base.csv", delimiter=",")
+.input Val(IO="file", filename="Val.csv", delimiter=",")
+
+.decl Mk(c: P)
+Mk(c) :- Base(a, b), c = (a, b).
+
+.decl Out(v: int32, t: int32)
+Out(v, t) :- Mk(c), Val(v, t), c = (v, w).
+.output Out

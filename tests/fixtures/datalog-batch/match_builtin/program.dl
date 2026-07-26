@@ -3,8 +3,8 @@
 // Feature : Soufflé `match(pattern, s)` regex builtin under --str-intern
 // Covers  : full-match anchoring (`a.*` must NOT match "java.lang.String" but
 //           must match "applet"), the `::flowlog_runtime::regex` re-export the
-//           generated code resolves through, and the equated boolean form
-//           (`match(...) = True` / `= False`) DOOP's logic uses.
+//           generated code resolves through, and the bare constraint form
+//           (`match(...)` / `!match(...)`) DOOP's logic uses.
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Name(s: string)
@@ -12,10 +12,10 @@
 
 // Full match: the whole string must match the pattern (Soufflé semantics).
 .decl JavaName(s: string)
-JavaName(s) :- Name(s), match("java.*", s) = True.
+JavaName(s) :- Name(s), match("java.*", s).
 .output JavaName
 
 // Negated form: names that do NOT match.
 .decl NonJavaName(s: string)
-NonJavaName(s) :- Name(s), match("java.*", s) = False.
+NonJavaName(s) :- Name(s), !match("java.*", s).
 .output NonJavaName

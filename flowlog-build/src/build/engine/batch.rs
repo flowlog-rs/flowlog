@@ -9,18 +9,26 @@
 //! Library mode has no file I/O — users load their own data. See the
 //! top-level crate docs for the typical `build.rs` + `include!()` pattern.
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
+use flowlog_parser::Program;
+use flowlog_parser::Relation;
+use proc_macro2::Ident;
+use proc_macro2::Literal;
+use proc_macro2::TokenStream;
+use quote::format_ident;
+use quote::quote;
 
-use crate::parser::{Program, Relation};
-
-use super::{needs_conversion, per_position_tuple, user_to_tuple_convert};
+use super::needs_conversion;
+use super::per_position_tuple;
+use super::user_to_tuple_convert;
+use crate::CodeParts;
+use crate::build::relation::input_struct_ident;
+use crate::build::relation::inputs_field_ident;
+use crate::build::relation::printsize_field_ident;
+use crate::build::relation::results_field_ident;
 use crate::build::relation::user::tuple_to_user_expr;
-use crate::build::relation::{
-    input_struct_ident, inputs_field_ident, printsize_field_ident, results_field_ident,
-    user_struct_ident,
-};
-use crate::{CodeParts, data_type_tokens, gen_drain_block};
+use crate::build::relation::user_struct_ident;
+use crate::data_type_tokens;
+use crate::gen_drain_block;
 
 pub(crate) fn gen_lib_engine(
     program: &Program,
@@ -188,8 +196,8 @@ fn gen_run_body(
     let size_cell_decls = &parts.size_cell_decls;
     let size_cell_clones = &parts.size_cell_clones;
     let profile_init = &parts.profile_init;
-    let time_profile_write = &parts.time_profile_write_batch;
-    let memory_profile_write = &parts.memory_profile_write_batch;
+    let metrics_write = &parts.metrics_write;
+    let step_loop = &parts.step_loop;
 
     let (host_partitions, worker_partition_clones) = gen_host_partitions(edbs);
     let inputs_new_args = gen_inputs_new_args(edbs);
@@ -229,13 +237,12 @@ fn gen_run_body(
                 inputs.apply_inline_all(index);
                 inputs.close_all();
 
-                while worker.step() {}
+                #step_loop
 
                 #(#flush)*
                 barrier.wait();
 
-                #time_profile_write
-                #memory_profile_write
+                #metrics_write
             }
         })
         .expect("timely::execute failed");
@@ -394,7 +401,7 @@ fn tuple_to_user_convert(rel: &Relation, string_intern: bool) -> TokenStream {
         string_intern,
         quote! { row.0.clone() },
         |i| {
-            let idx = proc_macro2::Literal::usize_unsuffixed(i);
+            let idx = Literal::usize_unsuffixed(i);
             quote! { row.0.#idx.clone() }
         },
         |dt, src| tuple_to_user_expr(dt, string_intern, src),

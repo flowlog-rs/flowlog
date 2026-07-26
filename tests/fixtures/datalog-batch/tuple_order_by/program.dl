@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_order_by
+// Feature : ORDER BY + LIMIT on a tuple column. Sorts lexicographically by
+//           component (resolved strings, not intern ids), then truncates.
+// ════════════════════════════════════════════════════════════════════════════
+
+.type P = ( a: symbol, b: symbol )
+.decl In(x: symbol, y: symbol)
+.decl Out(p: P)
+
+In("b", "x").
+In("a", "z").
+In("a", "a").
+
+Out(p) :- In(x, y), p = (x, y).
+
+.output Out(order_by="p", limit="2")

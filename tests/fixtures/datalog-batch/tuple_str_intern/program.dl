@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_str_intern
+// Feature : tuple of symbols compiled with --str-intern — leaves are interned
+//           as Spur internally but must serialize back to the resolved strings,
+//           `(p, q)`, not intern ids.
+// ════════════════════════════════════════════════════════════════════════════
+
+.type P = ( a: symbol, b: symbol )
+.decl In(x: symbol, y: symbol)
+.decl Out(p: P)
+
+In("p", "q").
+In("a", "b").
+
+Out(p) :- In(x, y), p = (x, y).
+
+.output Out

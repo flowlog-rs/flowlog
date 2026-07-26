@@ -19,24 +19,27 @@ mod ty;
 
 // External API — used by flowlog-compiler via lib.rs re-exports.
 // `AggSemiringNeeds` leaks through `Features::agg_semirings()`.
+use std::collections::HashMap;
+
 pub use arg::const_to_token;
 pub use code_parts::CodeParts;
 pub use error::CodegenError;
-pub use features::{AggSemiringNeeds, Features};
-pub use idb_buffers::{field_accessor, gen_drain_block};
+pub use features::AggSemiringNeeds;
+pub use features::Features;
+use flowlog_common::Config;
+use flowlog_parser::DataType;
+use flowlog_parser::Program;
+use flowlog_profiler::PlanGraph;
+pub use idb_buffers::field_accessor;
+pub use idb_buffers::gen_drain_block;
+use proc_macro2::Ident;
+pub use semiring::Semiring;
 pub use ty::data::data_type_tokens;
-
+pub(crate) use ty::data::row_is_copy;
 // Intra-crate shortcuts used by build/ (library mode).
 pub(crate) use ty::data::{tuple_tokens, user_tuple_tokens};
 
-use std::collections::HashMap;
-
-use proc_macro2::Ident;
-
-use crate::common::Config;
-use crate::parser::{DataType, Program};
 use crate::planner::ProgramPlanner;
-use crate::profiler::Profiler;
 
 pub struct CodeGen {
     pub(crate) config: Config,
@@ -82,11 +85,11 @@ impl CodeGen {
     pub fn generate(
         &mut self,
         program_planner: &ProgramPlanner,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<CodeParts, CodegenError> {
         self.make_global_ident_map();
         self.features.reset();
         self.outer_arranged.clear();
-        self.collect_parts(program_planner.strata(), profiler)
+        self.collect_parts(program_planner.strata(), plan_graph)
     }
 }

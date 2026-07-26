@@ -1,13 +1,17 @@
 //! `use` statements emitted into the generated binary's `main.rs`.
 //!
 //! All non-stdlib references must resolve against the dependencies declared
-//! in [`crate::scaffold::render_cargo_toml`] — keep the two in sync.
+//! in [`crate::scaffold::render_cargo_toml`]; keep the two in sync.
 
+use flowlog_build::Features;
+use flowlog_common::Config;
+use proc_macro2::Ident;
+use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use flowlog_build::Features;
-use flowlog_build::common::{Config, INTERN_MAX_RETRIES};
+/// Maximum number of retries for transient string-interner allocation failures.
+const INTERN_MAX_RETRIES: usize = 1024;
 
 pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     let inc = config.is_incremental();
@@ -18,10 +22,10 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
 
     out.push(quote! {
         // Mechanically generated dataflow routinely leaves intermediate
-        // collection bindings unused — e.g. a relation declared (with `.input`
+        // collection bindings unused, e.g. a relation declared (with `.input`
         // or inline facts) yet never referenced by any rule body, or a derived
         // collection whose only consumer is an output drain through a separate
-        // handle. These are valid Datalog (Soufflé accepts them); relax just the
+        // handle. These are valid Datalog (Souffle accepts them); relax just the
         // unused-variable lint on the generated binary while `-Dwarnings` keeps
         // every other lint class fatal.
         #![allow(unused_variables)]
@@ -59,7 +63,6 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     if prof {
         out.push(quote! {
             use timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
-            use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
         });
     }
 
@@ -119,25 +122,25 @@ pub(crate) fn gen_worker_helpers() -> TokenStream {
 /// unqualified. The actual implementations live in the `flowlog` runtime
 /// crate (same crate library mode pulls in).
 pub(crate) fn gen_binary_relation_extras(
-    program: &flowlog_build::parser::Program,
+    program: &flowlog_parser::Program,
     features: &Features,
 ) -> TokenStream {
-    let non_nullary_edbs: Vec<&flowlog_build::parser::Relation> = program
+    let non_nullary_edbs: Vec<&flowlog_parser::Relation> = program
         .edbs()
         .iter()
         .filter(|r| r.arity() > 0)
         .copied()
         .collect();
-    let first_cols: Vec<flowlog_build::parser::DataType> = non_nullary_edbs
+    let first_cols: Vec<flowlog_parser::DataType> = non_nullary_edbs
         .iter()
-        .filter_map(|r| r.data_type().first().copied())
+        .filter_map(|r| r.data_type().first().cloned())
         .collect();
     let needs_int = first_cols
         .iter()
-        .any(|dt| !matches!(dt, flowlog_build::parser::DataType::String));
+        .any(|dt| !matches!(dt, flowlog_parser::DataType::String));
     let has_string = first_cols
         .iter()
-        .any(|dt| matches!(dt, flowlog_build::parser::DataType::String));
+        .any(|dt| matches!(dt, flowlog_parser::DataType::String));
     let needs_str = has_string && !features.string_intern();
     let needs_spur = has_string && features.string_intern();
     let needs_byte_range = !non_nullary_edbs.is_empty();
@@ -181,10 +184,9 @@ fn std_imports(inc: bool, prof: bool, f: &Features) -> TokenStream {
             }
         };
         let output_buf = output_buffer_imports(inc, f.output_buffers());
+
         return quote! {
             #rc_refcell
-            use std::fs::File;
-            use std::io::{BufWriter, Write};
             #output_buf
             use std::time::{Duration, Instant};
         };
@@ -257,11 +259,15 @@ fn agg_semiring_uses_only(f: &Features) -> TokenStream {
     let mut entries: Vec<_> = f
         .agg_semirings()
         .iter()
-        .map(|(op, dt)| {
+        .map(|(semiring, dt)| {
             let mod_suffix = if dt.is_float() { "float" } else { "int" };
+            // TODO: surface as CodegenError::internal instead of panicking.
+            let suffix = dt
+                .semiring_suffix()
+                .expect("typechecker guarantees a numeric aggregation input");
             (
-                format!("{}_{mod_suffix}", op.semiring_mod()),
-                format!("{}{}", op.semiring_prefix(), dt.semiring_suffix()),
+                format!("{}_{mod_suffix}", semiring.module_stem()),
+                format!("{}{}", semiring.name(), suffix),
             )
         })
         .collect();
@@ -270,8 +276,8 @@ fn agg_semiring_uses_only(f: &Features) -> TokenStream {
     let uses: Vec<_> = entries
         .iter()
         .map(|(mod_name, ty_name)| {
-            let mod_ident = proc_macro2::Ident::new(mod_name, proc_macro2::Span::call_site());
-            let ty = proc_macro2::Ident::new(ty_name, proc_macro2::Span::call_site());
+            let mod_ident = Ident::new(mod_name, Span::call_site());
+            let ty = Ident::new(ty_name, Span::call_site());
             quote! { use semiring::#mod_ident::#ty; }
         })
         .collect();

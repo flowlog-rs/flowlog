@@ -1,31 +1,27 @@
 //! I/O and partition helpers used by the generated engine code.
 //!
-//! - [`partition`] — split an owned `Vec` into per-worker slices for the
+//! - [`partition`]: split an owned `Vec` into per-worker slices for the
 //!   library-mode batch engine's ingest path.
-//! - [`byte_range_reader`] — split a CSV file across timely workers so each
+//! - [`byte_range_reader`]: split a CSV file across timely workers so each
 //!   reads its own byte slice (binary mode).
-//! - [`shard_int`] / [`shard_str`] / [`shard_spur`] — pick the owning
-//!   worker for a tuple based on its first column (binary mode).
-//!
-//! # Byte-range reader example
-//!
-//! ```ignore
-//! if let Some((reader, budget)) = byte_range_reader(path, index, peers) {
-//!     let mut buf = Vec::new();
-//!     let mut consumed = 0u64;
-//!     while consumed < budget {
-//!         buf.clear();
-//!         let n = reader.read_until(b'\n', &mut buf).unwrap_or(0);
-//!         if n == 0 { break; }
-//!         consumed += n as u64;
-//!         // parse &buf …
-//!     }
-//! }
-//! ```
+//! - [`shard_int`] / [`shard_str`] / [`shard_spur`]: pick the owning worker
+//!   for a tuple based on its first column (binary mode).
+//! - [`write_atomic`]: write a file via a temp sibling and rename so a
+//!   reader never sees a half-written file.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::BufWriter;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::path::Path;
+
+use lasso::Spur;
+use tempfile::NamedTempFile;
 
 // =========================================================================
 // Per-worker partitioning
@@ -33,9 +29,8 @@ use std::path::Path;
 
 /// Split `v` into `n` roughly-equal owned partitions, in order.
 ///
-/// Used by the generated library-mode engine to hand each timely worker its
-/// own slice by value — no `Arc` sharing, no per-tuple clone, each tuple
-/// moves directly into the worker's `InputSession`.
+/// Each element moves by value into its partition (no `Arc` sharing, no
+/// per-tuple clone), so a consumer takes ownership of its slice directly.
 ///
 /// `n.max(1)` partitions are produced; if `v.len() < n` some partitions
 /// are empty. The last partition absorbs any remainder when the division
@@ -104,7 +99,7 @@ pub fn byte_range_reader(
     }
 
     // Any worker whose range begins at byte 0 reads from the start with no
-    // alignment skip — there's no previous byte to peek at. Worker 0 always
+    // alignment skip; there's no previous byte to peek at. Worker 0 always
     // hits this; others hit it when `chunk == 0` (peers > file_size), which
     // puts the whole file on the last worker.
     if start == 0 {
@@ -141,7 +136,7 @@ pub fn byte_range_reader(
 
 /// Shard an integer-typed first column across `peers` workers.
 ///
-/// Returns `true` if worker `index` should own this tuple.
+/// Returns `true` if worker `index` owns this tuple.
 #[inline]
 pub fn shard_int(first: i64, peers: usize, index: usize) -> bool {
     first.rem_euclid(peers as i64) as usize == index
@@ -149,7 +144,8 @@ pub fn shard_int(first: i64, peers: usize, index: usize) -> bool {
 
 /// Shard a string-typed first column across `peers` workers.
 ///
-/// Uses a 32-bit FNV-1a hash to distribute strings uniformly.
+/// Returns `true` if worker `index` owns this tuple, hashing with 32-bit
+/// FNV-1a for a uniform distribution.
 #[inline]
 pub fn shard_str(first: &str, peers: usize, index: usize) -> bool {
     let mut hash: u32 = 0x811c9dc5;
@@ -161,7 +157,105 @@ pub fn shard_str(first: &str, peers: usize, index: usize) -> bool {
 }
 
 /// Shard an interned-string first column ([`lasso::Spur`]) across `peers`.
+///
+/// Returns `true` if worker `index` owns this tuple.
 #[inline]
-pub fn shard_spur(first: lasso::Spur, peers: usize, index: usize) -> bool {
+pub fn shard_spur(first: Spur, peers: usize, index: usize) -> bool {
     (first.into_inner().get() as usize) % peers == index
+}
+
+// =========================================================================
+// Atomic file write
+// =========================================================================
+
+/// Write `path` atomically: stream through `write` into a temp file in the
+/// same directory, then persist it over `path` in a single rename. A failed
+/// or interrupted write leaves `path` untouched, so a concurrent reader never
+/// observes a half-written file. Delegates the platform-specific atomic
+/// replace to `tempfile`, which handles the Unix and Windows differences.
+///
+/// The temp file is a sibling of `path` so the rename stays within one
+/// filesystem (a metadata move, not a copy). `path` must have a parent or be
+/// relative to the current directory.
+pub fn write_atomic(
+    path: impl AsRef<Path>,
+    write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
+) -> io::Result<()> {
+    let path = path.as_ref();
+    let mut tmp = match path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(dir) => NamedTempFile::new_in(dir)?,
+        None => NamedTempFile::new()?,
+    };
+    {
+        let mut buf = BufWriter::new(&mut tmp);
+        write(&mut buf)?;
+        buf.flush()?;
+    }
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A completed write leaves the destination with exactly the bytes
+    /// written and no leftover temp sibling in the directory.
+    #[test]
+    fn write_atomic_persists_content_and_leaves_no_temp() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("out.log");
+        write_atomic(&path, |w| write!(w, "hello")).expect("write");
+
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "hello");
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert_eq!(
+            names.len(),
+            1,
+            "only the persisted file should remain: {names:?}"
+        );
+    }
+
+    /// A second write replaces the destination rather than appending or
+    /// erroring on the existing file.
+    #[test]
+    fn write_atomic_overwrites_existing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("out.log");
+        write_atomic(&path, |w| write!(w, "first")).expect("first");
+        write_atomic(&path, |w| write!(w, "second")).expect("second");
+
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "second");
+    }
+
+    /// The atomicity guarantee: a closure error propagates, the existing
+    /// destination keeps its old contents (the write never clobbers the
+    /// target), and the temp sibling is cleaned up rather than left behind.
+    #[test]
+    fn write_atomic_failed_write_preserves_existing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("out.log");
+        write_atomic(&path, |w| write!(w, "original")).expect("seed");
+
+        let err = write_atomic(&path, |w| {
+            write!(w, "partial")?;
+            Err(io::Error::other("boom"))
+        })
+        .expect_err("closure error must propagate");
+        assert_eq!(err.to_string(), "boom");
+
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "original");
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert_eq!(
+            names.len(),
+            1,
+            "temp sibling should be cleaned up: {names:?}"
+        );
+    }
 }

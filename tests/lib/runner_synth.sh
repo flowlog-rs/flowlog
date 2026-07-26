@@ -185,6 +185,88 @@ _parse_decl() {
     fi
 }
 
+# If `typename` names a tuple `.type` (`.type T = ( a: U, b: V )`), echo its
+# field type sources space-separated (`U V`) and return 0. Otherwise return 1.
+# A bare `=` alias (`.type T = Other`) is followed transitively; a `<:` subtype
+# erases to a primitive, so it is not a tuple here.
+tuple_field_types() {
+    local dl_file="$1"
+    local typename="$2"
+    local f line inside
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        # Component-prefixed names (`a·Pair`) declare the bare type inside the
+        # `.comp` body, so match on the post-`·` tail too.
+        local search="${typename##*·}"
+        line=$(grep -iE "^[[:space:]]*\.type[[:space:]]+${search}[[:space:]]*=" "$f" 2>/dev/null | head -1 || true)
+        [[ -n "$line" ]] || continue
+        if [[ "$line" == *'('* ]]; then
+            inside=$(echo "$line" | sed -E 's/^[^(]*\(([^)]*)\).*$/\1/')
+            echo "$inside" \
+                | tr ',' '\n' \
+                | awk -F: '{ ty=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", ty); print ty }' \
+                | tr '\n' ' '
+            return 0
+        fi
+        # Bare alias RHS — follow it.
+        local rhs
+        rhs=$(echo "$line" | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]+$//')
+        [[ "$rhs" == *'<:'* || -z "$rhs" ]] && return 1
+        tuple_field_types "$dl_file" "$rhs"
+        return $?
+    done < <(all_dl_files "$dl_file")
+    return 1
+}
+
+# Rust expression that formats the value at `access` (a place expr like `r.0`)
+# for output. A primitive column is its bare `Display`; a tuple column resolves
+# to the FlowLog tuple form `(a, b)` (comma-space separated, recursing into
+# nested tuples) so lib-mode output matches the binary-mode serializer.
+fmt_col_expr() {
+    local dl_file="$1"
+    local access="$2"
+    local dltype="$3"
+    local field_types
+    if field_types=$(tuple_field_types "$dl_file" "$dltype") && [[ -n "$field_types" ]]; then
+        local inner_fmt="" inner_args="" j=0 first=1 ft sub
+        for ft in $field_types; do
+            sub=$(fmt_col_expr "$dl_file" "${access}.${j}" "$ft")
+            if (( first )); then
+                inner_fmt="{}"; inner_args="$sub"; first=0
+            else
+                inner_fmt+=", {}"; inner_args+=", $sub"
+            fi
+            j=$((j + 1))
+        done
+        # A 1-tuple needs the trailing comma — `(e0,)` — matching the source
+        # grammar and the binary serializer.
+        (( j == 1 )) && inner_fmt+=","
+        printf 'format!("(%s)", %s)' "$inner_fmt" "$inner_args"
+    else
+        printf '%s' "$access"
+    fi
+}
+
+# Rust type for a column's declared `dltype`, resolving `.type` tuple aliases to
+# the nested Rust tuple they lower to (e.g. `P = (a:int32, b:int32)` → `(i32,
+# i32)`), recursing for nesting and emitting the 1-tuple trailing comma.
+# Primitives fall back to `dl_to_rust_type`.
+dl_to_rust_type_deep() {
+    local dl_file="$1" dltype="$2"
+    local field_types
+    if field_types=$(tuple_field_types "$dl_file" "$dltype") && [[ -n "$field_types" ]]; then
+        local tys="" first=1 ft sub n=0
+        for ft in $field_types; do
+            sub=$(dl_to_rust_type_deep "$dl_file" "$ft")
+            if (( first )); then tys="$sub"; first=0; else tys+=", $sub"; fi
+            n=$((n + 1))
+        done
+        if (( n == 1 )); then printf '(%s,)' "$tys"; else printf '(%s)' "$tys"; fi
+    else
+        dl_to_rust_type "$dltype"
+    fi
+}
+
 ###############################################################################
 # Runner crate management
 ###############################################################################
@@ -416,26 +498,20 @@ EOF
     local delim
     delim=$(output_delimiter_for "$dl_file" "$lower_name")
 
-    local field_count
-    field_count=$(echo "$fields" | wc -w)
-    local fmt=""
-    local i
-    for ((i=0; i<field_count; i++)); do
-        (( i > 0 )) && fmt+="${delim}"
-        fmt+="{}"
-    done
-
-    # Tuple indexing: `r.0, r.1, r.2 …`. Attribute names don't exist as
-    # Rust fields anymore — the user-facing shape is a tuple alias.
-    local accessors=""
-    local i=0
-    local first=1
-    for _ in $fields; do
+    # Per-column formatting. The user-facing relation is a positional tuple
+    # (`r.0, r.1, …`); a column whose declared type is itself a `.type` tuple is
+    # rendered in the FlowLog tuple form `(a, b)` (via `fmt_col_expr`) so the
+    # output matches the binary-mode serializer. Other columns use `Display`.
+    local typed_fields
+    typed_fields=$(parse_decl_typed_fields "$dl_file" "$lower_name")
+    local fmt="" accessors="" i=0 first=1 pair dltype expr
+    for pair in $typed_fields; do
+        dltype="${pair#*:}"
+        expr=$(fmt_col_expr "$dl_file" "r.${i}" "$dltype")
         if (( first )); then
-            accessors+="r.${i}"
-            first=0
+            fmt="{}"; accessors="$expr"; first=0
         else
-            accessors+=", r.${i}"
+            fmt+="${delim}{}"; accessors+=", $expr"
         fi
         i=$((i + 1))
     done
@@ -548,7 +624,7 @@ _inc_tuple_ty() {
     for pair in $typed_fields; do
         local dltype="${pair#*:}"
         local ty
-        ty=$(dl_to_rust_type "$dltype")
+        ty=$(dl_to_rust_type_deep "$dl_file" "$dltype")
         if (( first )); then tys="$ty"; first=0; else tys+=", $ty"; fi
         arity=$((arity + 1))
     done
@@ -563,13 +639,20 @@ _inc_tuple_ty() {
 # the delta-emission block to produce `1\t2\t+1`-style output lines.
 # Echoes one line: `<fmt>|<accessors>`.
 _inc_fmt_and_accessors() {
-    local arity="$1"
-    local fmt="" accessors=""
-    local i
-    for ((i=0; i<arity; i++)); do
-        (( i > 0 )) && { fmt+="\t"; accessors+=", "; }
-        fmt+="{}"
-        accessors+="t.${i}"
+    local dl_file="$1" rel="$2"
+    local typed_fields fmt="" accessors="" i=0 first=1 pair dltype expr
+    typed_fields=$(parse_decl_typed_fields "$dl_file" "$rel")
+    for pair in $typed_fields; do
+        dltype="${pair#*:}"
+        # Tuple columns render via `fmt_col_expr` (→ `(a, b)`); scalars use
+        # `Display`. Base is the per-row tuple binding `t`.
+        expr=$(fmt_col_expr "$dl_file" "t.${i}" "$dltype")
+        if (( first )); then
+            fmt="{}"; accessors="$expr"; first=0
+        else
+            fmt+="\t{}"; accessors+=", $expr"
+        fi
+        i=$((i + 1))
     done
     printf '%s|%s' "$fmt" "$accessors"
 }
@@ -710,7 +793,7 @@ _inc_prev_decl() {
 # whenever the unit fact crosses 0, matching binary-mode behavior.
 _inc_delta_block() {
     local dl_file="$1" rel="$2"
-    local fields arity=0
+    local fields
     # Per-epoch delta filename base: `<RawName>` (case-preserved), so the
     # written path is `<RawName>_t<N>.csv` — `_t<N>` injected before the
     # extension, matching the compiler's incremental output convention.
@@ -735,10 +818,9 @@ _inc_delta_block() {
 EOF
         return 0
     fi
-    for _ in $fields; do arity=$((arity + 1)); done
     local tuple_ty fmt_acc fmt accessors
     tuple_ty=$(_inc_tuple_ty "$dl_file" "$rel")
-    fmt_acc=$(_inc_fmt_and_accessors "$arity")
+    fmt_acc=$(_inc_fmt_and_accessors "$dl_file" "$rel")
     fmt="${fmt_acc%|*}"
     accessors="${fmt_acc#*|}"
 
