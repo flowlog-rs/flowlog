@@ -6,7 +6,10 @@ authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "FlowLog parser: source text to a checked, optimized program."
+description = "Parser and typechecker for FlowLog — turns Datalog source into a checked, optimized program."
+readme = "README.md"
+keywords = ["datalog", "parser", "typechecker", "compiler"]
+categories = ["compilers", "parser-implementations", "database"]
 
 [dependencies]
 flowlog-common.workspace = true

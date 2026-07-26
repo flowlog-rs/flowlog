@@ -6,7 +6,10 @@ authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Shared primitives for the FlowLog pipeline crates."
+description = "Shared support crate for the FlowLog compiler stack — configuration, diagnostics, source spans, and formatting helpers."
+readme = "README.md"
+keywords = ["datalog", "dataflow", "compiler"]
+categories = ["compilers", "database"]
 
 [features]
 # Derive clap's `ValueEnum` on `ExecutionMode` for CLI front-ends.

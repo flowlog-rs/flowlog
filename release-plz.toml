@@ -18,3 +18,11 @@ publish = false
 # or open a GitHub Release for this crate.
 git_tag_enable = false
 git_release_enable = false
+
+[[package]]
+name = "flowlog-visualizer"
+# Mirrors `publish = false` in Cargo.toml — not a crates.io crate, and no
+# separate release workflow ships it either, so no tags or GitHub Releases.
+publish = false
+git_tag_enable = false
+git_release_enable = false
