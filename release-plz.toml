@@ -18,3 +18,10 @@ publish = false
 # or open a GitHub Release for this crate.
 git_tag_enable = false
 git_release_enable = false
+
+[[package]]
+name = "flowlog-visualizer"
+# Not a crates.io crate and nothing ships it: no publish, tags, or Releases.
+publish = false
+git_tag_enable = false
+git_release_enable = false

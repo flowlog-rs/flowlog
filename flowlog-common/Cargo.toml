@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
+description = "Shared support crate for FlowLog."
+readme = "README.md"
+keywords = ["datalog", "dataflow", "compiler"]
+categories = ["compilers", "database"]
 
 [features]
 # Derive clap's `ValueEnum` on `ExecutionMode` for CLI front-ends.
