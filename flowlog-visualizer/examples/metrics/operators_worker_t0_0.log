@@ -1,0 +1,37 @@
+addr                 acts   active_ms   name
+[0]                  46     2.905       Dataflow
+[0, 1]               2      0.000       Input
+[0, 2]               3      0.059       FlatMap
+[0, 3]               4      0.004       Consolidate
+[0, 4]               4      0.001       AsCollection
+[0, 5]               2      0.000       Input
+[0, 6]               3      0.084       FlatMap
+[0, 7]               4      0.683       Consolidate
+[0, 8]               4      0.042       AsCollection
+[0, 9]               4      0.002       FlatMap
+[0, 10]              5      0.002       Consolidate
+[0, 11]              3      0.001       AsCollection
+[0, 12]              4      0.049       FlatMap
+[0, 13]              5      0.574       ArrangeByKey
+[0, 14]              39     1.246       Iterative
+[0, 14, 1]           4      0.002       FlatMap
+[0, 14, 2]           4      0.001       Enter
+[0, 14, 3]           12     0.002       Feedback
+[0, 14, 4]           12     0.009       FlatMap
+[0, 14, 5]           14     0.017       ArrangeBySelf
+[0, 14, 6]           18     0.380       Join
+[0, 14, 7]           14     0.004       Concatenate
+[0, 14, 8]           14     0.036       FlatMap
+[0, 14, 9]           22     0.560       Arrange: ThresholdTotal
+[0, 14, 10]          16     0.144       ThresholdTotal
+[0, 14, 11]          12     0.002       ResultsIn
+[0, 15]              13     0.002       Leave
+[0, 16]              12     0.008       FlatMap
+[0, 17]              14     0.017       Consolidate
+[0, 18]              3      0.004       AsCollection
+[0, 19]              3      0.003       FlatMap
+[0, 20]              3      0.005       FlatMap
+[0, 21]              3      0.008       FlatMap
+[0, 22]              5      0.001       Consolidate
+[0, 23]              2      0.000       AsCollection
+[0, 24]              2      0.000       InspectBatch

@@ -3,8 +3,9 @@
 //! module, not a separate integration binary. Fixtures sit as sibling
 //! subdirs (`tests/errors/<stage>/*.dl`).
 
-use flowlog_build::common::SourceMap;
-use flowlog_build::common::{BoxError, emit};
+use flowlog_common::BoxError;
+use flowlog_common::SourceMap;
+use flowlog_common::emit;
 
 pub fn fixture(stage: &str, name: &str) -> String {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -31,7 +32,7 @@ macro_rules! assert_err {
     ($res_sm:expr, $pat:pat $(if $guard:expr)?, [$($expected:expr),* $(,)?]) => {{
         let (res, sm) = $res_sm;
         let err = res.expect_err("expected stage error");
-        assert!(matches!(err, $pat $(if $guard)?), "got {err:?}");
+        assert!(matches!(&err, $pat $(if $guard)?), "got {err:?}");
         let out = render(err, &sm);
         $(
             assert!(

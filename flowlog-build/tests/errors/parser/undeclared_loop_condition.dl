@@ -1,1 +1,0 @@
-loop until { ghost_flag } { }

@@ -1,3 +1,0 @@
-.type number = int64
-.decl R(x: number)
-R(1).

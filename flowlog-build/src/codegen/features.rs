@@ -6,7 +6,10 @@
 
 use std::collections::HashSet;
 
-use crate::parser::{AggregationOperator, DataType};
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::DataType;
+
+use crate::codegen::Semiring;
 
 // =========================================================================
 // AggSemiringNeeds
@@ -25,10 +28,11 @@ const INT_DATA_TYPES: [DataType; 8] = [
 ];
 const FLOAT_DATA_TYPES: [DataType; 2] = [DataType::Float32, DataType::Float64];
 
-/// Tracks which semiring modules (operator × numeric type) are needed.
-/// Count is normalized to Sum on insert.
+/// Tracks which semiring modules (semiring x numeric type) are needed.
+/// Operators fold to their [`Semiring`] on insert, so `Count` and `Sum`
+/// aggregations share entries.
 #[derive(Default, Clone)]
-pub struct AggSemiringNeeds(HashSet<(AggregationOperator, DataType)>);
+pub struct AggSemiringNeeds(HashSet<(Semiring, DataType)>);
 
 impl AggSemiringNeeds {
     #[inline]
@@ -37,26 +41,25 @@ impl AggSemiringNeeds {
     }
 
     pub(crate) fn insert(&mut self, op: AggregationOperator, dt: DataType) {
-        assert!(
+        // The typechecker rejects non-numeric aggregation inputs.
+        debug_assert!(
             dt.is_numeric(),
-            "CodeGen error: semiring only supports numeric types, got {dt}"
+            "semiring only supports numeric types, got {dt}"
         );
-        self.0.insert((op.semiring_canonical(), dt));
+        self.0.insert((Semiring::of(op), dt));
     }
 
     #[inline]
-    pub(crate) fn int_needs(&self, op: AggregationOperator) -> [bool; 8] {
-        let op = op.semiring_canonical();
-        INT_DATA_TYPES.map(|dt| self.0.contains(&(op, dt)))
+    pub(crate) fn int_needs(&self, semiring: Semiring) -> [bool; 8] {
+        INT_DATA_TYPES.map(|dt| self.0.contains(&(semiring, dt)))
     }
 
     #[inline]
-    pub(crate) fn float_needs(&self, op: AggregationOperator) -> [bool; 2] {
-        let op = op.semiring_canonical();
-        FLOAT_DATA_TYPES.map(|dt| self.0.contains(&(op, dt)))
+    pub(crate) fn float_needs(&self, semiring: Semiring) -> [bool; 2] {
+        FLOAT_DATA_TYPES.map(|dt| self.0.contains(&(semiring, dt)))
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &(AggregationOperator, DataType)> {
+    pub fn iter(&self) -> impl Iterator<Item = &(Semiring, DataType)> {
         self.0.iter()
     }
 }

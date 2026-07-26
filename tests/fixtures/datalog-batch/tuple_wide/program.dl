@@ -1,0 +1,14 @@
+// Suite   : tuple_wide
+// Feature : tuple arity above the old cap of 4 (here 6) compiles and runs —
+//           lowers to a 6-element Rust tuple (well within the 12-field ceiling).
+
+.type Six = ( a: symbol, b: symbol, c: symbol, d: symbol, e: symbol, f: symbol )
+
+.decl In(a: symbol, b: symbol, c: symbol, d: symbol, e: symbol, f: symbol)
+.decl Out(t: Six)
+
+In("p", "q", "r", "s", "t", "u").
+
+Out(t) :- In(a, b, c, d, e, f), t = (a, b, c, d, e, f).
+
+.output Out

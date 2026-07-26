@@ -5,6 +5,9 @@ on:
     branches: ["main", "main-next"]
   pull_request:
     branches: ["main", "main-next"]
+  # Run the required checks against the merge queue's temporary branch too;
+  # without this the queue never receives their status and stalls.
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,13 +18,14 @@ env:
   RUST_BACKTRACE: full
 
 jobs:
-  test:
+  clippy:
+    name: 📎 Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - name: ⚙️ Install protobuf-compiler + bsdmainutils
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler bsdmainutils
+      - name: ⚙️ Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -32,21 +36,100 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: 📎 Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: 🧪 Unit tests
-        run: cargo test
+  test:
+    name: 🧪 Unit + integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
 
-      - name: 🏁 End-to-end fixture tests
+      - name: ⚙️ Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: 📦 Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: 🧪 Unit + integration tests
+        run: cargo nextest run --workspace --profile ci
+
+  doctest:
+    name: 📖 Doctests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: ⚙️ Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: 📖 Doctests
+        run: cargo test --doc --workspace
+
+  # End-to-end fixtures, split across runners. Tune the count via the matrix length.
+  fixtures-shard:
+    name: 🏁 e2e shard ${{ matrix.shard }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: ⚙️ Install protobuf-compiler + bsdmainutils
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler bsdmainutils
+
+      - name: 🦀 Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 💾 Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: 🏁 End-to-end fixtures
         run: |
-          bash tests/fixtures/run_compiler.sh -j 4
-          bash tests/fixtures/run_lib.sh -j 4
+          bash tests/fixtures/run_compiler.sh -j 4 --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+          bash tests/fixtures/run_lib.sh -j 4 --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  # Required check "🏁 End-to-end fixtures": keeps a stable name; green only if
+  # every shard passed.
+  fixtures:
+    name: 🏁 End-to-end fixtures
+    needs: [fixtures-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          [ "${{ needs.fixtures-shard.result }}" = success ] || { echo "a fixture shard failed"; exit 1; }
+
+  fmt:
+    name: 🎨 rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Nightly: rustfmt.toml uses group_imports / imports_granularity,
+      # which are nightly-only options.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - run: cargo +nightly fmt --all --check
 
   deny:
     name: 🛡️ cargo-deny (licenses + advisories)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
@@ -55,5 +138,21 @@ jobs:
     name: 📝 typos (spell check)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: crate-ci/typos@v1.47.2
+      - uses: actions/checkout@v7
+      - uses: crate-ci/typos@v1.48.0
+
+  lint-toml:
+    name: 🧹 taplo (TOML format + lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: ⬇️ Install taplo
+        run: |
+          curl -fsSL https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz \
+            | gunzip | sudo tee /usr/local/bin/taplo > /dev/null
+          sudo chmod +x /usr/local/bin/taplo
+          taplo --version
+      - name: 🎨 taplo fmt --check
+        run: taplo fmt --check --diff
+      - name: 🔍 taplo lint
+        run: taplo lint

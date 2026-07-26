@@ -1,13 +1,16 @@
 //! Whole-program planner: owns the per-stratum plans after cross-stratum
 //! dedup of redundant non-recursive transformations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 
-use crate::common::{BoxError, Config};
+use flowlog_common::BoxError;
+use flowlog_common::Config;
+use flowlog_parser::Program;
+use flowlog_profiler::PlanGraph;
+
 use crate::optimizer::Optimizer;
-use crate::parser::Program;
 use crate::planner::StratumPlanner;
-use crate::profiler::Profiler;
 use crate::stratifier::Stratifier;
 
 /// Whole-program planning.
@@ -22,7 +25,7 @@ impl ProgramPlanner {
     pub fn from_program(
         config: &Config,
         program: &Program,
-        profiler: &mut Option<Profiler>,
+        plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Self, BoxError> {
         let stratifier = Stratifier::from_program(program, config.is_extended())?;
         let mut optimizer = Optimizer::new();
@@ -36,7 +39,7 @@ impl ProgramPlanner {
                     config,
                     &rules,
                     &mut optimizer,
-                    profiler,
+                    plan_graph,
                     &stratifier,
                     idx,
                 )
@@ -106,20 +109,24 @@ fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
 
-    use crate::common::SourceMap;
+    use flowlog_common::SourceMap;
+    use flowlog_common::compute_fp;
+    use tempfile::NamedTempFile;
+
+    use super::*;
 
     /// Round-trip a tiny program through parse → typecheck → program-plan,
     /// mirroring the temp-file pattern used by `stratifier::core::tests`.
     fn analyze(src: &str) -> ProgramPlanner {
-        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut tmp = NamedTempFile::new().expect("tempfile");
         tmp.write_all(src.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
-        let mut program =
-            Program::parse(&tmp.path().to_string_lossy(), false, &mut sm).expect("parse");
-        crate::typechecker::check_program(&mut program, &Config::default()).expect("typecheck");
+        let mut config = Config::default();
+        let program =
+            flowlog_parser::parse(&tmp.path().to_string_lossy(), &[], &mut sm, &mut config)
+                .expect("parse");
         ProgramPlanner::from_program(&Config::default(), &program, &mut None).expect("plan")
     }
 
@@ -194,7 +201,7 @@ mod tests {
     #[test]
     fn rhs_id_does_not_split_identical_arrangements() {
         let pp = analyze(RHS_ID_SHARING_SRC);
-        let b_fp = crate::common::compute_fp("b");
+        let b_fp = compute_fp("b");
 
         let b_arrangements: Vec<_> = pp
             .strata()

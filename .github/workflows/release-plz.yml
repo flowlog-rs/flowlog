@@ -33,7 +33,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -44,6 +44,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: 🤖 release-plz (release-pr)
+        id: release-plz
         uses: MarcoIeni/release-plz-action@v0.5
         with:
           command: release-pr
@@ -53,6 +54,29 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+      - name: ✍️ Sign off the release commit (DCO)
+        # release-plz has no sign-off option, and the DCO check requires a
+        # Signed-off-by matching the commit author. Amend one in on the
+        # author's behalf, using the commit's own author identity so the
+        # sign-off matches. Guarded so a rerun does not re-amend.
+        if: steps.release-plz.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          set -euo pipefail
+          branch='${{ fromJSON(steps.release-plz.outputs.pr).head_branch }}'
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch origin "$branch"
+          git checkout -B "$branch" "origin/$branch"
+          if git show -s --format='%(trailers:key=Signed-off-by,valueonly)' | grep -q .; then
+            echo "Release commit already signed off."; exit 0
+          fi
+          git config user.name  "$(git show -s --format='%an')"
+          git config user.email "$(git show -s --format='%ae')"
+          git commit --amend --signoff --no-edit
+          git push --force-with-lease origin "HEAD:$branch"
+          echo "Signed off the release commit on $branch."
+
   release-plz-release:
     name: Publish on release merge to main
     if: github.ref == 'refs/heads/main'
@@ -60,7 +84,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

@@ -1,3 +1,0 @@
-.type X = NoSuchType
-.decl R(x: X)
-R(1).

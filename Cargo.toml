@@ -1,8 +1,12 @@
 [workspace]
 members = [
     "flowlog-runtime",
+    "flowlog-common",
+    "flowlog-parser",
     "flowlog-build",
     "flowlog-compiler",
+    "flowlog-profiler",
+    "flowlog-visualizer",
 ]
 resolver = "2"
 
@@ -14,18 +18,66 @@ homepage = "https://www.flowlog-rs.com/"
 repository = "https://github.com/flowlog-rs/flowlog"
 
 [workspace.dependencies]
+anyhow = "1.0"
 clap = "4.5"
 codespan-reporting = "0.13"
-itertools = "0.14"
-prettyplease = "0.2"
+differential-dataflow = "0.25"
+educe = "0.7"
+itertools = "0.15"
+lasso = "0.7"
+litrs = "1.0"
+ordered-float = "5.1"
+pest = "2.8"
+pest_derive = "2.8"
+pretty_assertions = "1.4"
+prettyplease = "0.3"
 proc-macro2 = "1.0"
 quote = "1.0"
+regex = "1.11"
+rstest = "0.26"
+rustc-hash = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-syn = "2.0"
+syn = "3.0"
+tempfile = "3.0"
 thiserror = "2.0"
+timely = "0.31"
 toml_edit = "0.25"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-test = "0.2"
-tempfile = "3.0"
+
+# Internal crates.
+flowlog-build = { path = "flowlog-build", version = "0.4.0" }
+flowlog-common = { path = "flowlog-common", version = "0.1.0" }
+flowlog-parser = { path = "flowlog-parser", version = "0.1.0" }
+flowlog-profiler = { path = "flowlog-profiler", version = "0.1.0" }
+
+[workspace.lints.clippy]
+absolute_paths = "deny"
+as_ptr_cast_mut = "deny"
+borrow_as_ptr = "deny"
+clone_on_ref_ptr = "deny"
+collection_is_never_read = "deny"
+dbg_macro = "deny"
+debug_assert_with_mut_call = "deny"
+derive_partial_eq_without_eq = "deny"
+equatable_if_let = "deny"
+fallible_impl_from = "deny"
+host_endian_bytes = "deny"
+if_then_some_else_none = "deny"
+inconsistent_struct_constructor = "deny"
+manual_assert = "deny"
+manual_is_variant_and = "deny"
+many_single_char_names = "deny"
+mem_forget = "deny"
+or_fun_call = "deny"
+redundant_clone = "deny"
+redundant_static_lifetimes = "deny"
+ref_binding_to_reference = "deny"
+ref_option = "deny"
+ref_option_ref = "deny"
+ref_patterns = "deny"
+repeat_vec_with_capacity = "deny"
+reserve_after_initialization = "deny"
+same_name_method = "deny"

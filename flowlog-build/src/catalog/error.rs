@@ -3,19 +3,21 @@
 use std::fmt;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
+use flowlog_common::BUG_URL;
+use flowlog_common::Diagnostic;
+use flowlog_common::FileId;
+use flowlog_common::InternalError;
+use flowlog_common::Span;
+use flowlog_common::primary_label;
+use flowlog_common::secondary_label;
 use thiserror::Error;
 
-use crate::common::{
-    BUG_URL, Diagnostic, FileId, InternalError, Span, primary_label, secondary_label,
-};
-
 /// Which body predicate carried an unsafe variable. Only affects the
-/// rendered wording; all three kinds share the same range-restriction rule.
+/// rendered wording; both kinds share the same range-restriction rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnsafePredicateKind {
     Negation,
     Comparison,
-    FnCall,
 }
 
 impl fmt::Display for UnsafePredicateKind {
@@ -23,7 +25,6 @@ impl fmt::Display for UnsafePredicateKind {
         match self {
             Self::Negation => write!(f, "negated atom"),
             Self::Comparison => write!(f, "comparison"),
-            Self::FnCall => write!(f, "function call"),
         }
     }
 }

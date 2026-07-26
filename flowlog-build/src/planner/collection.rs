@@ -4,8 +4,9 @@
 //! positions (as `ArithmeticPos`). Collections can be row-based (no keys) or
 //! key/value-based and are identified by a fingerprint.
 
-use crate::catalog::ArithmeticPos;
 use std::fmt;
+
+use crate::catalog::ArithmeticPos;
 
 /// Represents a data collection with key-value structure.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

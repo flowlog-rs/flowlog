@@ -8,17 +8,24 @@
 //! against the parsed source on both success and failure.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
+use flowlog_common::BoxError;
+use flowlog_common::Config;
+use flowlog_common::SourceMap;
+use flowlog_parser::Program;
+use flowlog_profiler::PlanGraph;
 use proc_macro2::TokenStream;
 
-use crate::build::relation::{gen_input_module, validate_api_surface};
+use crate::BuildError;
+use crate::Builder;
+use crate::CodeGen;
+use crate::CodeParts;
+use crate::build::relation::gen_input_module;
+use crate::build::relation::validate_api_surface;
 use crate::codegen::Features;
-use crate::common::{BoxError, Config, SourceMap};
-use crate::parser::Program;
 use crate::planner::ProgramPlanner;
-use crate::profiler::Profiler;
-use crate::{BuildError, Builder, CodeGen, CodeParts};
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
 pub(crate) struct Pipeline {
@@ -43,19 +50,21 @@ impl Pipeline {
             ))
         })?;
 
-        let config = build_config(builder, program_str);
-        let mut program = parse(&config, &builder.include_dirs, sm)?;
-        crate::typechecker::check_program(&mut program, &config)?;
+        let mut config = build_config(builder, program_str);
+        // `parse` runs type-check + constant-fold (literals pinned, casts
+        // stripped), so the catalog and dataflow never see polymorphic literals
+        // or constant sub-expressions.
+        let program = parse(&mut config, &builder.include_dirs, sm)?;
         // The generated library API mirrors relation names verbatim; reject
         // the rare names it cannot represent before codegen runs.
         validate_api_surface(&program)?;
-        let mut profiler = config
+        let mut plan_graph = config
             .profiling_enabled()
-            .then(|| Profiler::new(config.mode()));
-        let program_planner = ProgramPlanner::from_program(&config, &program, &mut profiler)?;
+            .then(|| PlanGraph::new(config.mode()));
+        let program_planner = ProgramPlanner::from_program(&config, &program, &mut plan_graph)?;
 
         let mut cg = CodeGen::new(config.clone(), program.clone());
-        let parts = cg.generate(&program_planner, &mut profiler)?;
+        let parts = cg.generate(&program_planner, &mut plan_graph)?;
         let features = cg.features().clone();
         let relations = gen_input_module(&program, &features)?;
 
@@ -70,25 +79,22 @@ impl Pipeline {
 }
 
 fn parse(
-    config: &Config,
+    config: &mut Config,
     include_dirs: &[PathBuf],
     sm: &mut SourceMap,
 ) -> Result<Program, BoxError> {
     let include_refs: Vec<&Path> = include_dirs.iter().map(PathBuf::as_path).collect();
-    Program::parse_with_includes(config.program(), config.is_extended(), &include_refs, sm)
-        .map_err(Into::into)
+    let program_path = config.program().to_owned();
+    flowlog_parser::parse(&program_path, &include_refs, sm, config).map_err(Into::into)
 }
 
-/// Project a [`Builder`] onto the shared compiler [`Config`].
+/// Project a [`Builder`] onto the shared pipeline [`Config`].
 ///
-/// `output_dir` is `None` in library mode — outputs drain through
-/// `BatchResults` rather than stdout or a file.
+/// Library mode never drains to stdout (`output_to_stdout = false`) — outputs
+/// flow through `BatchResults` rather than stdout or a file.
 fn build_config(builder: &Builder, program: &str) -> Config {
     Config {
         program: program.to_string(),
-        fact_dir: None,
-        executable_path: None,
-        output_dir: None,
         mode: builder.mode,
         profile: builder.profile,
         sip: builder.sip,
@@ -97,11 +103,13 @@ fn build_config(builder: &Builder, program: &str) -> Config {
             .udf_file
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
-        save_temps: false,
         include_dirs: builder
             .include_dirs
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect(),
+        output_to_stdout: false,
+        serialize_load: false,
+        metrics_flush_interval_ms: builder.metrics_flush_interval_ms,
     }
 }

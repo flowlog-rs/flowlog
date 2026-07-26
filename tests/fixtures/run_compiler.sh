@@ -37,7 +37,7 @@ export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [-j N] [test_name ...]
+  $(basename "$0") [-j N] [--shard I/N] [test_name ...]
 
 Run FlowLog binary-mode end-to-end tests. Tests are organized by category:
   datalog-batch/  Standard batch Datalog evaluation (default mode)
@@ -56,11 +56,13 @@ Options:
   -j N            Run up to N fixtures in parallel (default 1).
                   Each fixture already gets its own work_dir, so parallelism
                   is safe in binary mode.
+  --shard I/N     Run only shard I of N (the fixtures split into N groups).
 
 Examples:
   $(basename "$0")                     # run all tests sequentially
   $(basename "$0") -j 8                # 8 fixtures at a time
   $(basename "$0") recursive_max       # run one test
+  $(basename "$0") --shard 1/8         # first of 8 shards
 EOF
 }
 
@@ -266,6 +268,7 @@ run_tasks_parallel() {
 
 main() {
     parse_jobs_flag usage "$@"
+    apply_shard
     local jobs="$PARSED_JOBS"
     set -- "${PARSED_POSITIONAL[@]}"
 

@@ -17,14 +17,21 @@
 //! `write_project` lays out these files from already-rendered strings;
 //! `render_cargo_toml` / `render_cargo_config` produce the metadata.
 
+use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
 
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Value, value};
-
-use flowlog_build::common::Config;
-use flowlog_build::{CodeParts, Features};
+use flowlog_build::CodeParts;
+use flowlog_build::Features;
+use flowlog_common::Config;
+use toml_edit::Array;
+use toml_edit::DocumentMut;
+use toml_edit::InlineTable;
+use toml_edit::Item;
+use toml_edit::Table;
+use toml_edit::Value;
+use toml_edit::value;
 
 use crate::Compiler;
 
@@ -33,7 +40,7 @@ use crate::Compiler;
 // =========================================================================
 
 impl Compiler {
-    /// Materialize the scaffolded crate under [`Config::build_dir`].
+    /// Materialize the scaffolded crate under [`CompileOptions::build_dir`].
     ///
     /// Arguments are pre-rendered file contents; this function only decides
     /// _where_ they go and creates intermediate directories. Optional files
@@ -48,7 +55,7 @@ impl Compiler {
         cargo_config: &str,
     ) -> io::Result<()> {
         let config = &self.config;
-        let root = config.build_dir();
+        let root = self.options.build_dir();
         let src_dir = root.join("src");
         ensure_dir(&src_dir)?;
 
@@ -96,30 +103,54 @@ impl Compiler {
 /// Dependencies are feature-gated: we emit only what the generated code
 /// actually references so the downstream `cargo build` pulls the minimum
 /// set of crates.
-pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String {
+pub(crate) fn render_cargo_toml(
+    crate_name: &str,
+    config: &Config,
+    features: &Features,
+    keep_build_dir: bool,
+) -> String {
     let mut doc = DocumentMut::new();
 
-    doc["package"] = Item::Table(toml_edit::Table::new());
+    doc["package"] = Item::Table(Table::new());
     {
         let pkg = doc["package"].as_table_mut().unwrap();
-        pkg["name"] = config.crate_name().into();
+        pkg["name"] = crate_name.into();
         pkg["version"] = "0.1.0".into();
         pkg["edition"] = "2024".into();
     }
 
     // The generated crate is standalone; the empty `[workspace]` detaches
     // it from any enclosing cargo workspace when it's built inside one.
-    doc["workspace"] = Item::Table(toml_edit::Table::new());
+    doc["workspace"] = Item::Table(Table::new());
 
-    doc["dependencies"] = Item::Table(toml_edit::Table::new());
+    // Build the emitted crate at opt-level 2 without unwinding: both
+    // measured runtime-neutral on the generated dataflow code while
+    // cutting `cargo build --release` about 3x on large programs.
+    // Incremental compilation pays off only when the build directory
+    // survives to the next compile and costs cold-build time otherwise,
+    // so it is emitted only for kept (user-named) directories.
+    {
+        let mut profile = Table::new();
+        profile.set_implicit(true);
+        doc["profile"] = Item::Table(profile);
+        doc["profile"]["release"] = Item::Table(Table::new());
+        let release = doc["profile"]["release"].as_table_mut().unwrap();
+        release["opt-level"] = value(2);
+        release["panic"] = "abort".into();
+        if keep_build_dir {
+            release["incremental"] = value(true);
+        }
+    }
+
+    doc["dependencies"] = Item::Table(Table::new());
     {
         let deps = doc["dependencies"].as_table_mut().unwrap();
-        deps["timely"] = "0.30".into();
-        deps["differential-dataflow"] = "0.24".into();
+        deps["timely"] = "0.31".into();
+        deps["differential-dataflow"] = "0.25".into();
         deps["mimalloc"] = "0.1".into();
         // 0.2.3 is the minimum carrying the `regex` re-export that generated
         // `match(...)` code resolves through (`::flowlog_runtime::regex`).
-        deps["flowlog-runtime"] = "0.2.3".into();
+        deps["flowlog-runtime"] = "0.3".into();
 
         if features.string_intern() {
             deps["lasso"] = value(inline_versioned_dep(
@@ -155,11 +186,11 @@ pub(crate) fn render_cargo_toml(config: &Config, features: &Features) -> String 
     // checkout via `[patch.crates-io]`. The test harness sets it so generated
     // crates build against the workspace runtime instead of crates.io —
     // required whenever the workspace runtime has unpublished additions.
-    if let Ok(path) = std::env::var("FLOWLOG_RUNTIME_PATH") {
-        let mut patch = toml_edit::InlineTable::new();
+    if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
+        let mut patch = InlineTable::new();
         patch.insert("path", path.into());
-        doc["patch"] = Item::Table(toml_edit::Table::new());
-        doc["patch"]["crates-io"] = Item::Table(toml_edit::Table::new());
+        doc["patch"] = Item::Table(Table::new());
+        doc["patch"]["crates-io"] = Item::Table(Table::new());
         doc["patch"]["crates-io"]["flowlog-runtime"] = value(patch);
     }
 
@@ -202,9 +233,15 @@ fn ensure_dir(dir: &Path) -> io::Result<()> {
 }
 
 /// Write a UTF-8 text file, creating parent directories as needed.
+/// Skips the write when the file already holds `contents`: preserving the
+/// mtime lets cargo fingerprint an unchanged generated source as fresh,
+/// so recompiling an unmodified program is a no-op.
 fn write_file(path: &Path, contents: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;
+    }
+    if fs::read_to_string(path).is_ok_and(|current| current == contents) {
+        return Ok(());
     }
     fs::write(path, contents)
 }
@@ -219,3 +256,59 @@ const PROMPT_RS_TMPL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/templates/prompt_rs.tpl"
 ));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `incremental = true` costs cold-build time and pays off only when
+    /// the build directory survives to a later compile, so it must ride
+    /// with kept directories and never with scratch ones.
+    #[test]
+    fn incremental_is_emitted_only_for_kept_build_dirs() {
+        let config = Config::default();
+        let features = Features::default();
+        let kept = render_cargo_toml("bin", &config, &features, true);
+        let scratch = render_cargo_toml("bin", &config, &features, false);
+        assert!(kept.contains("incremental = true"));
+        assert!(!scratch.contains("incremental"));
+    }
+
+    /// An unchanged file must keep its mtime so cargo fingerprints it as
+    /// fresh; a changed one must be rewritten. Exercised directly because
+    /// the mtime effect is unobservable through the public API without
+    /// running cargo.
+    #[test]
+    fn write_file_rewrites_only_on_content_change() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("main.rs");
+        write_file(&path, "fn main() {}").expect("initial write");
+
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        let file = fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open for mtime");
+        file.set_modified(old).expect("set mtime");
+        drop(file);
+
+        write_file(&path, "fn main() {}").expect("no-op rewrite");
+        let unchanged = fs::metadata(&path)
+            .expect("metadata")
+            .modified()
+            .expect("mtime");
+        assert_eq!(
+            unchanged, old,
+            "content-equal write must not touch the file"
+        );
+
+        write_file(&path, "fn main() { run() }").expect("changed rewrite");
+        let changed = fs::metadata(&path)
+            .expect("metadata")
+            .modified()
+            .expect("mtime");
+        assert_ne!(changed, old, "changed content must be written out");
+        let body = fs::read_to_string(&path).expect("read back");
+        assert_eq!(body, "fn main() { run() }");
+    }
+}

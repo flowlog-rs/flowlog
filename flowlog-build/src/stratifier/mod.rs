@@ -46,5 +46,6 @@ mod core;
 mod dependency_graph;
 mod error;
 
-pub use self::core::Stratifier;
 pub use error::StratifyError;
+
+pub use self::core::Stratifier;

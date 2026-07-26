@@ -1,0 +1,16 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_hetero
+// Feature : a tuple with HETEROGENEOUS leaf types (number, float, bool, symbol),
+//           exercising per-leaf output formatting (itoa / float / bool / raw).
+// ════════════════════════════════════════════════════════════════════════════
+
+.type Row = ( n: number, f: float, b: bool, s: symbol )
+
+.decl In(n: number, f: float, b: bool, s: symbol)
+.decl Out(t: Row)
+
+In(7, 1.5, True, "hi").
+
+Out(t) :- In(n, f, b, s), t = (n, f, b, s).
+
+.output Out

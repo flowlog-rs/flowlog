@@ -1,0 +1,14 @@
+# cargo-nextest configuration.
+#
+# Unit and integration tests run under nextest (parallel, one process per
+# test). Doctests are not run by nextest; CI runs them separately via
+# `cargo test --doc`.
+
+[profile.default]
+# A test still running after 60s is almost certainly hung: fail it (retrying
+# once, in case the stall was transient) rather than stall the whole run.
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+# CI reports every failure in one run instead of stopping at the first.
+[profile.ci]
+fail-fast = false

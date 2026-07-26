@@ -17,11 +17,19 @@
 //! The planner maintains a vector of transformation descriptors along with
 //! dependency analyses.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::fmt;
 use std::fmt::Write as _;
 
-use crate::parser::{Atom, FlowLogRule, Predicate};
-use crate::planner::{Transformation, TransformationInfo};
+use flowlog_parser::Atom;
+use flowlog_parser::FlowLogRule;
+use flowlog_parser::Predicate;
+
+use crate::planner::Transformation;
+use crate::planner::TransformationInfo;
 
 mod common; // small utilities shared by planner phases
 mod core; // core join, plus fixed-point of semijoin/pushdown and projection removal
@@ -187,8 +195,8 @@ impl RulePlanner {
     }
 }
 
-impl std::fmt::Display for RulePlanner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for RulePlanner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some(last) = self.transformations.last() else {
             return writeln!(f, "Plan Tree: (empty)");
         };
@@ -252,11 +260,11 @@ impl<'a> Walker<'a> {
 
     fn fmt_node(
         &mut self,
-        f: &mut std::fmt::Formatter<'_>,
+        f: &mut fmt::Formatter<'_>,
         node: u64,
         prefix: &str,
         is_last: bool,
-    ) -> std::fmt::Result {
+    ) -> fmt::Result {
         let (branch, spacer) = if is_last {
             ("└── ", "    ")
         } else {

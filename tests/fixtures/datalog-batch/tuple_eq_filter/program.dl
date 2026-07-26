@@ -1,0 +1,18 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : tuple_eq_filter
+// Feature : whole-tuple equality `=` used as a body filter between two tuple
+//           literals built from the same row vars. Regression for a codegen bug
+//           where the tuple-literal operands *moved* their leaf vars (`(x,y) ==
+//           (x,x)` moved `x` 3×) → "use of moved value". Comparison operands
+//           are now always cloned.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl In(x: symbol, y: symbol)
+.decl Out(x: symbol, y: symbol)
+
+In("a", "b").
+In("a", "a").
+
+Out(x, y) :- In(x, y), p = (x, y), q = (x, x), p = q.
+
+.output Out

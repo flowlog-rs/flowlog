@@ -5,12 +5,18 @@
 //! For aggregation in the head, we handled it at stratum planning phase.
 
 use std::collections::HashMap;
+
+use flowlog_parser::HeadArg;
 use tracing::trace;
 
 use super::RulePlanner;
-use crate::catalog::{ArithmeticPos, AtomArgumentSignature, Catalog, KvPredicates};
-use crate::parser::HeadArg;
-use crate::planner::{KeyValueLayout, PlanError, TransformationInfo};
+use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
+use crate::catalog::Catalog;
+use crate::catalog::KvPredicates;
+use crate::planner::KeyValueLayout;
+use crate::planner::PlanError;
+use crate::planner::TransformationInfo;
 
 // =========================================================================
 // Post Processing

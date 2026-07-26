@@ -18,12 +18,14 @@
 //!
 //! A relation carrying both directives gets both fields.
 
+use flowlog_parser::Program;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::format_ident;
+use quote::quote;
 
-use crate::parser::Program;
-
-use crate::build::relation::{printsize_field_ident, results_field_ident, user_struct_ident};
+use crate::build::relation::printsize_field_ident;
+use crate::build::relation::results_field_ident;
+use crate::build::relation::user_struct_ident;
 
 /// `BatchResults` — returned by `DatalogBatchEngine::run()`.
 pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {

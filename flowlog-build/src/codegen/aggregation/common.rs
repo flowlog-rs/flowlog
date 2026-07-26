@@ -5,20 +5,27 @@
 //! generic `reduce_core` / `reduce_abelian` pipeline (batch + incremental
 //! fallback).
 
+use flowlog_parser::AggregationOperator;
+use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::format_ident;
+use quote::quote;
 
-use crate::parser::{AggregationOperator, DataType};
-
-use crate::codegen::{CodegenError, tuple_tokens};
+use crate::codegen::CodegenError;
+use crate::codegen::Semiring;
+use crate::codegen::tuple_tokens;
 
 // ==================================================
 // Semiring constructor helpers
 // ==================================================
 
 /// Semiring type ident, e.g. `MinI32`, `SumF64`.
-fn agg_semiring_type_ident(op: AggregationOperator, dt: DataType) -> proc_macro2::Ident {
-    format_ident!("{}{}", op.semiring_prefix(), dt.semiring_suffix())
+fn agg_semiring_type_ident(op: AggregationOperator, dt: &DataType) -> proc_macro2::Ident {
+    // TODO: surface as CodegenError::internal instead of panicking.
+    let suffix = dt
+        .semiring_suffix()
+        .expect("typechecker guarantees a numeric aggregation input");
+    format_ident!("{}{}", Semiring::of(op).name(), suffix)
 }
 
 /// `Kind{Suffix}::new(x<agg_pos>)` expression for a given aggregation operator.
@@ -28,7 +35,7 @@ pub(super) fn agg_semiring_new(
     agg_type: DataType,
 ) -> TokenStream {
     let field = format_ident!("x{}", agg_pos);
-    let ty = agg_semiring_type_ident(op, agg_type);
+    let ty = agg_semiring_type_ident(op, &agg_type);
     quote! { #ty::new(#field) }
 }
 
@@ -36,7 +43,7 @@ pub(super) fn agg_semiring_new(
 ///
 /// Float types use `OrderedFloat(1.0)` as the argument.
 pub(super) fn agg_semiring_unit(op: AggregationOperator, agg_type: DataType) -> TokenStream {
-    let ty = agg_semiring_type_ident(op, agg_type);
+    let ty = agg_semiring_type_ident(op, &agg_type);
     if agg_type.is_float() {
         quote! { #ty::new(OrderedFloat(1.0)) }
     } else {
@@ -476,7 +483,7 @@ pub(crate) fn aggregation_reduce_stmt(
         (quote! { reduce_core }, aggregation_reduce(op, agg_type)?)
     };
     Ok(quote! {
-        .#combinator::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>,_>(
+        .#combinator::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>,_,_>(
             "aggregation",
             #reduce_logic,
             |vec, key, upds| {
