@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.4...flowlog-build-v0.4.0) - 2026-07-26
+
+### Breaking
+
+- generated code targets timely 0.31 / differential-dataflow 0.25 ([#227](https://github.com/flowlog-rs/flowlog/pull/227)); pair with flowlog-runtime 0.3
+
+### Added
+
+- *(profiler)* periodically flush metrics during incremental commits ([#267](https://github.com/flowlog-rs/flowlog/pull/267))
+- *(profiler)* periodically flush metrics during batch runs ([#246](https://github.com/flowlog-rs/flowlog/pull/246))
+- *(profiler)* record plan graph in codegen and read metrics back in… ([#242](https://github.com/flowlog-rs/flowlog/pull/242))
+- *(planner)* fuse spanning equality comparisons into join keys ([#219](https://github.com/flowlog-rs/flowlog/pull/219))
+
+### Fixed
+
+- *(codegen)* deterministic `ord` via single-thread fact interning ([#208](https://github.com/flowlog-rs/flowlog/pull/208))
+
+### Other
+
+- *(release)* prep first crates.io publish; flowlog-compiler 0.5.0 ([#268](https://github.com/flowlog-rs/flowlog/pull/268))
+- Migrate to differential-dataflow 0.25 / timely 0.31 ([#227](https://github.com/flowlog-rs/flowlog/pull/227))
+- fold flowlog-typechecker into flowlog-parser ([#224](https://github.com/flowlog-rs/flowlog/pull/224))
+- *(codegen)* emit in-place filter/map_in_place for type-preserving row transforms ([#220](https://github.com/flowlog-rs/flowlog/pull/220))
+- *(typechecker)* post-typecheck constant folding pass ([#209](https://github.com/flowlog-rs/flowlog/pull/209))
+- extract `flowlog-typechecker` crate; per-site spelling in type errors ([#202](https://github.com/flowlog-rs/flowlog/pull/202))
+- *(codegen)* elide identity projections (drop no-op flat_maps) ([#200](https://github.com/flowlog-rs/flowlog/pull/200))
+- *(codegen)* fuse chained unions into a single n-ary concatenate ([#205](https://github.com/flowlog-rs/flowlog/pull/205))
+- *(codegen)* use threshold_total for outer-scope dedup in incremental mode ([#201](https://github.com/flowlog-rs/flowlog/pull/201)) ([#201](https://github.com/flowlog-rs/flowlog/pull/201))
+- factor out `flowlog-common` and `flowlog-parser` ([#196](https://github.com/flowlog-rs/flowlog/pull/196))
+- Extended profiler follow-ups ([#192](https://github.com/flowlog-rs/flowlog/pull/192))
+- support tuple syntax ([#194](https://github.com/flowlog-rs/flowlog/pull/194))
+
 ## [0.3.4](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.3...flowlog-build-v0.3.4) - 2026-06-18
 
 ### Fixed
