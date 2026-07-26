@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.2.5...flowlog-runtime-v0.3.0) - 2026-07-26
+
+### Added
+
+- *(profiler)* periodically flush metrics during batch runs ([#246](https://github.com/flowlog-rs/flowlog/pull/246))
+
+### Other
+
+- *(release)* prep first crates.io publish; flowlog-compiler 0.5.0 ([#268](https://github.com/flowlog-rs/flowlog/pull/268))
+- factor out `flowlog-common` and `flowlog-parser` ([#196](https://github.com/flowlog-rs/flowlog/pull/196))
+- Extended profiler follow-ups ([#192](https://github.com/flowlog-rs/flowlog/pull/192))
+
 ## [0.2.5](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.2.4...flowlog-runtime-v0.2.5) - 2026-06-13
 
 ### Other
