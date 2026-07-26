@@ -1,9 +1,6 @@
 # flowlog-common
 
-Shared support crate for [FlowLog](https://github.com/flowlog-rs/flowlog), a
-Datalog-to-[differential-dataflow](https://crates.io/crates/differential-dataflow)
-compiler. Internal dependency of the other FlowLog crates; you typically
-don't depend on it directly.
+Shared support crate for [FlowLog](https://github.com/flowlog-rs/flowlog), a Datalog-to-[differential-dataflow](https://crates.io/crates/differential-dataflow) compiler. Internal dependency of the other FlowLog crates; you typically don't depend on it directly.
 
 ## Layout
 

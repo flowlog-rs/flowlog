@@ -18,10 +18,8 @@ let program = parse("program.dl", &[], &mut sm, &mut config)?;
 ## Layout
 
 - `types` — the type vocabulary (`DataType`, the registry).
-- `syntax` — what the user wrote: grammar, string decoding, and the AST
-  node layers.
-- `pipeline` — what happens to it: the stages from source text to a
-  checked, optimized `Program`, in execution order.
+- `syntax` — what the user wrote: grammar, string decoding, and the AST node layers.
+- `pipeline` — what happens to it: the stages from source text to a checked, optimized `Program`, in execution order.
 - `program` — what comes out: the `Program` container.
 
 ## License
