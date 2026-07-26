@@ -24,10 +24,10 @@ Add it alongside [`flowlog-build`](https://crates.io/crates/flowlog-build):
 
 ```toml
 [dependencies]
-flowlog-runtime = "0.2"
+flowlog-runtime = "0.3"
 
 [build-dependencies]
-flowlog-build = "0.2"
+flowlog-build = "0.4"
 ```
 
 ## License
