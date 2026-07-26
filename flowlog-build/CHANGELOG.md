@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.4...flowlog-build-v0.4.0) - 2026-07-26
 
+### Breaking
+
+- generated code targets timely 0.31 / differential-dataflow 0.25 ([#227](https://github.com/flowlog-rs/flowlog/pull/227)); pair with flowlog-runtime 0.3
+
 ### Added
 
 - *(profiler)* periodically flush metrics during incremental commits ([#267](https://github.com/flowlog-rs/flowlog/pull/267))
