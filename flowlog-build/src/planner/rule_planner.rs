@@ -88,16 +88,43 @@ impl RulePlanner {
         &self.transformations
     }
 
-    /// Materialize all infos into [`Transformation`]s with content-canonical
-    /// fingerprints (see [`Transformation::from_info`]). Must run after post,
-    /// in pipeline order so inputs resolve to their producers' fingerprints.
+    /// Materialize all infos into [`Transformation`]s. Must run after post.
+    ///
+    /// Pure representation conversion: fingerprints are content-current by
+    /// the time this runs (fuse ends with a refresh sweep, and post
+    /// refreshes eagerly).
     pub(crate) fn materialize(&mut self) {
-        let mut fp_map: HashMap<u64, u64> = HashMap::new();
         self.transformations = self
             .transformation_infos
             .iter()
-            .map(|info| Transformation::from_info(info, &mut fp_map))
+            .map(Transformation::from_info)
             .collect();
+    }
+
+    /// Recompute every info's output fingerprint bottom-up and re-point
+    /// consumer ports whose input fingerprints went stale.
+    ///
+    /// Walks in pipeline order (producers precede consumers), so a rename
+    /// is always recorded before any consumer reads it.
+    pub(super) fn refresh_fps(&mut self) {
+        let mut renames: HashMap<u64, u64> = HashMap::new();
+        for info in &mut self.transformation_infos {
+            let (left_fp, right_fp) = info.input_info_fp();
+            if let Some(&new_fp) = renames.get(&left_fp) {
+                info.set_input_fp(true, new_fp);
+            }
+            if let Some(right_fp) = right_fp
+                && let Some(&new_fp) = renames.get(&right_fp)
+            {
+                info.set_input_fp(false, new_fp);
+            }
+
+            let old_fp = info.output_info_fp();
+            info.refresh_output_fp();
+            if old_fp != info.output_info_fp() {
+                renames.insert(old_fp, info.output_info_fp());
+            }
+        }
     }
 
     /// Returns the original rule.

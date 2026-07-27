@@ -1,17 +1,11 @@
-//! Fuse logic for rule planner.
+//! Fuse pass over a rule's transformation infos: merge map steps into
+//! their producers and push key/value layout requirements upstream, so
+//! the pipeline reaches materialization without redundant hops.
 //!
-//! Warning: you should not modify this file unless you are very sure about what you are doing.
+//! Both passes assume the orderings earlier phases established:
 //!
-//! This module implements the logic to fuse map transformations into their producers
-//! to reduce the number of transformation steps and improve performance.
-//! It also ensures that key-value layout requirements are correctly propagated
-//! through the transformation pipeline.
-//!
-//! Recommended rules when reasoning about fusion order:
-//! 1. Always apply base filters before any further operations.
-//! 2. Always perform possible comparisons before any semijoins.
-//!
-//! Not following these rules might introduce subtle bugs.
+//! 1. Base filters apply before any further operations.
+//! 2. Comparisons apply before any semijoins.
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -31,19 +25,23 @@ use crate::planner::KeyValueLayout;
 use crate::planner::PlanError;
 use crate::planner::TransformationInfo;
 
-/// Ordered consumer indices alongside their key/value index selections.
-/// (minimum consumer id, consumer ids, key indices, value indices)
-type ConsumerLayout = (usize, Vec<usize>, Vec<usize>, Vec<usize>);
-/// Assigned producer indices with their consumers and key/value index selections.
-/// (assigned producer ids, consumer ids, key indices, value indices)
-type LayoutAssignment = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
+/// Consumer input ports grouped by the (key indices, value indices) layout
+/// they demand of a shared producer. A port is (consumer index, `is_left`);
+/// see [`TransformationInfo::set_input_fp`] for the `is_left` convention.
+type LayoutDemands = BTreeMap<(Vec<usize>, Vec<usize>), Vec<(usize, bool)>>;
+/// Ordered consumer input ports alongside their key/value index selections.
+/// (minimum consumer id, consumer ports, key indices, value indices)
+type ConsumerLayout = (usize, Vec<(usize, bool)>, Vec<usize>, Vec<usize>);
+/// Assigned producer indices with their consumer ports and key/value index selections.
+/// (assigned producer ids, consumer ports, key indices, value indices)
+type LayoutAssignment = (Vec<usize>, Vec<(usize, bool)>, Vec<usize>, Vec<usize>);
 
 // =========================================================================
 // Fusion
 // =========================================================================
 impl RulePlanner {
-    /// Run fusion passes (map fusion and KV-layout fusion) on
-    /// the planned transformation infos.
+    /// Runs both fusion passes, then settles the fingerprints their
+    /// rewiring deferred.
     pub(crate) fn fuse(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
         trace!(
             "Transformation infos before fusion:\n{}",
@@ -51,6 +49,12 @@ impl RulePlanner {
         );
         self.fuse_map(original_atom_fp)?;
         self.fuse_kv_layout(original_atom_fp)?;
+        // Input rewiring inside the passes above defers fingerprint
+        // refreshes (an eager refresh would invalidate the fp-keyed maps
+        // mid-pass); settle them now so fingerprints are content-current
+        // whenever control is outside fuse.
+        self.refresh_fps();
+        self.rebuild_producer_consumer(original_atom_fp)?;
         trace!(
             "Transformation infos after fusion:\n{}",
             self.transformation_infos_dump()
@@ -60,10 +64,13 @@ impl RulePlanner {
 }
 
 impl RulePlanner {
-    /// Fuse map transformation infos.
+    /// Merges every fusable map into its producer(s): the producer takes
+    /// over the map's output layout, predicates, and name, the map's
+    /// consumers re-point to the producer, and the map is removed.
     ///
-    /// Map transformations that directly consume the output of other transformations
-    /// (and are not neg joins) can be fused into their producers.
+    /// Maps reading an EDB (no producer to merge into) and SIP
+    /// projections (the project/semijoin pair must stay intact) are left
+    /// in place.
     fn fuse_map(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
         let mut fused_map_indices = Vec::new();
 
@@ -82,12 +89,13 @@ impl RulePlanner {
                 continue;
             };
 
-            // Do not fuse SIP projection transformations
+            // Fusing a SIP projection would collapse SIP's
+            // project/semijoin pair into the wrong producer.
             if *is_sip_projection {
                 continue;
             }
 
-            // Do not fuse if the input is from an EDB
+            // An EDB input has no producer transformation to merge into.
             if original_atom_fp.contains(input_info_fp) {
                 trace!(
                     "[fuse_map] skip at idx {}: input is original atom {:#018x}",
@@ -105,11 +113,11 @@ impl RulePlanner {
             let input_producer_indices = self.producer_indices(input_fp)?;
             let mut input_producer_output_fp = 0u64;
             for &input_producer_index in &input_producer_indices {
-                // Short-lived borrow to check if producer is a neg join
                 let producer_tx = &self.transformation_infos[input_producer_index];
                 if producer_tx.is_neg_join() && !predicates.compare_exprs.is_empty() {
-                    // We always apply possible comparisons before neg joins, so it is impossible
-                    // to fuse a map with a neg join producer if there are any comparisons.
+                    // Comparisons always apply before neg joins (module
+                    // ordering rule 2), so a map with comparisons can
+                    // never sit downstream of a neg join.
                     return Err(PlanError::internal(
                         "fuse_map: impossible fusion of map with neg join producer",
                     ));
@@ -126,7 +134,6 @@ impl RulePlanner {
                     out_kv_layout.value()
                 );
 
-                // Apply fused layout + comparisons + fn_call predicates to producer, and get new output fp
                 input_producer_output_fp = self.apply_fused_layout_filters_cmps(
                     input_producer_index,
                     &out_kv_layout,
@@ -137,12 +144,14 @@ impl RulePlanner {
 
             let output_consumer_indices = self.consumer_indices(output_fp)?;
 
-            // Update all consumers to point to the producer's new output
+            // Update all consumers to point to the producer's new output.
+            let mut patched: HashSet<usize> = HashSet::new();
             for &output_consumer_index in &output_consumer_indices {
-                let consumer_tx = &mut self.transformation_infos[output_consumer_index];
-                consumer_tx.update_input_fake_info_fp(input_producer_output_fp, &output_fp);
+                if patched.insert(output_consumer_index) {
+                    let consumer_tx = &mut self.transformation_infos[output_consumer_index];
+                    consumer_tx.update_input_fp(input_producer_output_fp, &output_fp);
+                }
 
-                // Update the producer-consumer mapping
                 self.insert_consumer(
                     original_atom_fp,
                     input_producer_output_fp,
@@ -152,11 +161,10 @@ impl RulePlanner {
                     "[fuse_map]   -> updated consumer idx {} to input {:#018x}",
                     output_consumer_index, input_producer_output_fp
                 );
-                // Note: No need to update the input key-value layout of consumers here.
-                // They will be updated when processed as join producers in later iterations.
+                // Consumer input layouts stay as they are: each is updated
+                // when its own iteration processes it as a join producer.
             }
 
-            // Update the producer_consumer map
             fused_map_indices.push(index);
         }
 
@@ -170,13 +178,15 @@ impl RulePlanner {
             self.transformation_infos_dump()
         );
 
-        // After removing fused maps, rebuild the producer-consumer
+        // Removals shifted indices and fusion changed fingerprints; the
+        // map must be re-derived before anyone consults it.
         self.rebuild_producer_consumer(original_atom_fp)?;
         Ok(())
     }
 
-    /// Fuse correct key-value layout requirements from downstream transformation infos
-    /// to upstream transformations.
+    /// Pushes each consumer's required key/value split upstream, so
+    /// producers emit arrangements keyed the way their consumers read
+    /// them.
     fn fuse_kv_layout(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
         // Collect output fingerprints in transformation order, keeping only
         // the first occurrence of each. Order matters for sharing
@@ -191,15 +201,15 @@ impl RulePlanner {
             .collect();
 
         for tx_fp in tx_fps {
-            // Copy out the producer index and current consumers (if any), then mutate
+            // Clone out of the map; the loop body mutates `self`.
             let Some((producer_indices, consumers)) = self.producer_consumer.get(&tx_fp).cloned()
             else {
-                // No producer found - likely an original atom; ignore
+                // No producer: an original atom, nothing to re-key.
                 continue;
             };
 
             if consumers.is_empty() {
-                // No consumers - likely a final output; ignore
+                // No consumers: a final output, no layout demand on it.
                 continue;
             }
 
@@ -213,34 +223,34 @@ impl RulePlanner {
                     "[fuse_kv_layout] fuse at producer fp {:#018x} -> consumers {:?}; key ids: {:?}, value ids: {:?}",
                     tx_fp, consumers, key_indices, value_indices
                 );
-                // Update producer layout and fingerprint
                 let mut new_output_fp = 0u64;
                 for producer_idx in producers {
                     new_output_fp = {
                         let producer_tx = &mut self.transformation_infos[producer_idx];
                         producer_tx.refactor_output_key_value_layout(&key_indices, &value_indices);
-                        producer_tx.update_output_fake_sig();
+                        producer_tx.refresh_output_fp();
                         producer_tx.output_info_fp()
                     };
                 }
 
-                // Update consumers to use new fingerprint
-                for consumer_idx in consumers {
-                    self.transformation_infos[consumer_idx]
-                        .update_input_fake_info_fp(new_output_fp, &tx_fp);
+                // Rewire each consumer port to the new fingerprint. Ports,
+                // not fingerprint matching: after the producer refresh both
+                // sides of a self-join may already hold equal fps, and only
+                // the recorded side belongs to this layout assignment.
+                for (consumer_idx, is_left) in consumers {
+                    self.transformation_infos[consumer_idx].set_input_fp(is_left, new_output_fp);
                 }
             }
         }
 
-        // After updating kv-layouts, rebuild the producer-consumer
+        // Producer fingerprints changed; the map must be re-derived
+        // before anyone consults it.
         self.rebuild_producer_consumer(original_atom_fp)?;
         Ok(())
     }
 }
 
-// -----------------------------
-// Small helpers (private)
-// -----------------------------
+// --- Small helpers ---
 impl RulePlanner {
     /// Rebuild the fused map's output layout over the producer's positions,
     /// update the producer's layout and comparisons, then return the new
@@ -253,8 +263,6 @@ impl RulePlanner {
         predicates: &KvPredicates,
         fused_map_output_name: String,
     ) -> Result<u64, PlanError> {
-        // Build the new output layout by transferring the fused map's
-        // positions onto the current producer output
         let all_positions = self.collect_output_positions(producer_idx);
         let new_out_kv_layout = Self::transfer_layout(&all_positions, fused_out_layout)?;
 
@@ -263,9 +271,8 @@ impl RulePlanner {
         let remapped_var_eq = Self::remap_var_eq_constraints(&all_positions, &predicates.var_eq)?;
         let remapped_cmps = Self::remap_comparisons(&all_positions, &predicates.compare_exprs)?;
 
-        // Update producer output layout, predicates, name and fingerprint.
-        // The producer now semantically emits what the fused map used to emit,
-        // so its output_name inherits the map's.
+        // The producer now semantically emits what the fused map used to
+        // emit, so its output_name inherits the map's.
         {
             let producer_tx = &mut self.transformation_infos[producer_idx];
             producer_tx.update_output_key_value_layout(new_out_kv_layout);
@@ -277,16 +284,15 @@ impl RulePlanner {
                 producer_tx.update_comparisons(remapped_cmps)?;
             }
             producer_tx.update_output_name(fused_map_output_name);
-            producer_tx.update_output_fake_sig();
+            producer_tx.refresh_output_fp();
         }
 
-        // Return the new output fingerprint
         let new_fp = self.transformation_infos[producer_idx].output_info_fp();
         self.insert_producer(new_fp, producer_idx);
         Ok(new_fp)
     }
 
-    // Collect all output positions (keys + values) from an upstream transformation.
+    /// Collects a producer's output positions, keys then values.
     #[inline]
     fn collect_output_positions(&self, producer_idx: usize) -> Vec<ArithmeticPos> {
         let layout = self.transformation_infos[producer_idx].output_kv_layout();
@@ -298,7 +304,8 @@ impl RulePlanner {
             .collect()
     }
 
-    // Rebuild a fused map's output layout over its producer's output positions.
+    /// Rebuilds a fused map's output layout over its producer's output
+    /// positions.
     #[inline]
     fn transfer_layout(
         positions: &[ArithmeticPos],
@@ -335,8 +342,8 @@ impl RulePlanner {
         ))
     }
 
-    /// Remap comparison expressions by converting each variable signature to the
-    /// corresponding ArithmeticPos from the provided positions and rebuilding.
+    /// Remaps a fused map's comparison expressions onto the producer's
+    /// output positions.
     fn remap_comparisons(
         positions: &[ArithmeticPos],
         cmps: &[ComparisonExprPos],
@@ -354,7 +361,8 @@ impl RulePlanner {
             .collect()
     }
 
-    /// Remap an ArithmeticPos by resolving each variable signature through `positions`.
+    /// Remaps an arithmetic expression by resolving each of its variable
+    /// signatures through `positions`.
     fn remap_arithmetic(
         positions: &[ArithmeticPos],
         expr: &ArithmeticPos,
@@ -375,6 +383,8 @@ impl RulePlanner {
         Ok(expr.map_vars(&|sig| positions[sig.argument_id()].init().clone()))
     }
 
+    /// Remaps a fused map's constant-equality constraints onto the
+    /// producer's output positions.
     fn remap_const_eq_constraints(
         positions: &[ArithmeticPos],
         constraints: &[(AtomArgumentSignature, Constant)],
@@ -388,6 +398,8 @@ impl RulePlanner {
             .collect()
     }
 
+    /// Remaps a fused map's variable-equality constraints onto the
+    /// producer's output positions.
     fn remap_var_eq_constraints(
         positions: &[ArithmeticPos],
         constraints: &[(AtomArgumentSignature, AtomArgumentSignature)],
@@ -416,6 +428,8 @@ impl RulePlanner {
         )
     }
 
+    /// Resolves an atom-argument signature to the first signature of its
+    /// position in the producer's output.
     fn remap_atom_signature(
         positions: &[ArithmeticPos],
         sig: &AtomArgumentSignature,
@@ -436,12 +450,13 @@ impl RulePlanner {
         })
     }
 
-    /// Rebuild the producer_consumer map and key-value layouts after fusion.
+    /// Re-derives `producer_consumer` from the current infos: producers
+    /// from output fingerprints, consumers from input fingerprints, one
+    /// consumer entry per input port.
     fn rebuild_producer_consumer(
         &mut self,
         original_atom_fp: &HashSet<u64>,
     ) -> Result<(), PlanError> {
-        // Clear caches
         self.producer_consumer.clear();
 
         let count = self.transformation_infos.len();
@@ -450,7 +465,7 @@ impl RulePlanner {
             count
         );
 
-        // First pass: register all producers
+        // Producers first: insert_consumer requires its producer entry.
         for index in 0..count {
             let output_fp = self.transformation_infos[index].output_info_fp();
             self.insert_producer(output_fp, index);
@@ -460,7 +475,6 @@ impl RulePlanner {
             );
         }
 
-        // Second pass: register all consumers for each input fingerprint
         for index in 0..count {
             let (left_fp, right_fp_opt) = self.transformation_infos[index].input_info_fp();
             for input_fp in [Some(left_fp), right_fp_opt].into_iter().flatten() {
@@ -468,7 +482,6 @@ impl RulePlanner {
             }
         }
 
-        // Detailed mapping summary
         for (fp, (prod_idx, consumers)) in &self.producer_consumer {
             trace!(
                 "[rebuild_producer_consumer] mapping: fp {:#018x} -> producer {:?}, consumers {:?}",
@@ -483,18 +496,20 @@ impl RulePlanner {
         Ok(())
     }
 
-    /// Collect distinct key-value layouts required by consumers of a given input fingerprint.
-    /// Sorted by minimum consumer index.
+    /// Collects the distinct key/value layouts the consumers of `input_fp`
+    /// demand, each with the ports demanding it, ordered by minimum
+    /// consumer index.
     fn collect_consumer_layout_indices(
         &mut self,
         consumer_indices: &[usize],
         input_fp: u64,
     ) -> Result<Vec<ConsumerLayout>, PlanError> {
-        // Map from (key indices, value indices) to consumer ids
-        let mut layouts: BTreeMap<(Vec<usize>, Vec<usize>), Vec<usize>> = BTreeMap::new();
+        let mut layouts: LayoutDemands = BTreeMap::new();
         let mut real_key_value_layout = None;
 
         // First pass: only join and antijoin contribute real key/value layout requirements.
+        // Check both sides independently: one collection can feed both sides
+        // of a self-join, and each side may demand a different layout.
         for &consumer_idx in consumer_indices {
             let join_inputs = match &self.transformation_infos[consumer_idx] {
                 TransformationInfo::JoinToKV {
@@ -520,30 +535,32 @@ impl RulePlanner {
             };
 
             if let Some((left_fp, right_fp, left_layout, right_layout)) = join_inputs {
-                let matched_layout = if *left_fp == input_fp {
-                    left_layout
-                } else if *right_fp == input_fp {
-                    right_layout
-                } else {
+                let matched_sides = [
+                    (*left_fp == input_fp).then_some((true, left_layout)),
+                    (*right_fp == input_fp).then_some((false, right_layout)),
+                ];
+                if matched_sides.iter().all(Option::is_none) {
                     return Err(PlanError::internal(format!(
                         "collect_consumer_layout_indices: consumer idx {consumer_idx} does not match input fp {input_fp:#018x} in join/antijoin layout"
                     )));
-                };
-
-                if real_key_value_layout.is_none() {
-                    real_key_value_layout = Some(matched_layout.clone());
                 }
-                let (key_indices, value_indices) =
-                    matched_layout.extract_argument_ids_from_layout();
-                layouts
-                    .entry((key_indices, value_indices))
-                    .or_default()
-                    .push(consumer_idx);
+
+                for (side, matched_layout) in matched_sides.into_iter().flatten() {
+                    if real_key_value_layout.is_none() {
+                        real_key_value_layout = Some(matched_layout.clone());
+                    }
+                    let (key_indices, value_indices) =
+                        matched_layout.extract_argument_ids_from_layout();
+                    layouts
+                        .entry((key_indices, value_indices))
+                        .or_default()
+                        .push((consumer_idx, side));
+                }
             }
         }
 
-        // Second pass: KV-to-KV consumers inherit the join/antijoin layout requirement.
-        // They don't define their own key/value split — they adopt the first join/antijoin's.
+        // Second pass: KV-to-KV consumers define no key/value split of
+        // their own; they adopt the first join/antijoin's.
         for &consumer_idx in consumer_indices {
             // Only process KV-to-KV maps whose input matches this producer.
             if !matches!(
@@ -574,29 +591,27 @@ impl RulePlanner {
             layouts
                 .entry((key_indices, value_indices))
                 .or_default()
-                .push(consumer_idx);
+                .push((consumer_idx, true));
         }
 
         let mut consumer_collection: Vec<ConsumerLayout> = layouts
             .into_iter()
             .map(|((key_ids, value_ids), mut consumers)| {
                 consumers.sort_unstable();
-                (consumers[0], consumers, key_ids, value_ids)
+                (consumers[0].0, consumers, key_ids, value_ids)
             })
             .collect();
         consumer_collection.sort_by_key(|(first_consumer, ..)| *first_consumer);
         Ok(consumer_collection)
     }
 
-    /// Assign producer indices to consumer layout kinds.
-    /// Ensures that each consumer layout kind is assigned at least one producer index
-    /// that appears before its first consumer index.
+    /// Assigns producer indices to consumer layout kinds, giving each kind
+    /// at least one producer that appears before its first consumer.
     fn assign_layout_to_producer(
         tx_fp: u64,
         producer_indices: &[usize],
         consumer_layouts: &[ConsumerLayout],
     ) -> Result<Vec<LayoutAssignment>, PlanError> {
-        // Check feasibility.
         if consumer_layouts.len() > producer_indices.len() {
             return Err(PlanError::internal(format!(
                 "assign_layout_to_producer: {tx_fp:#018x} has {} consumer layout kinds but only {} producers available",
@@ -632,8 +647,8 @@ impl RulePlanner {
             ));
         }
 
-        // If there are any remaining available producers, assign them to the first consumer layout kind.
-        // Randomly assign also works, for simplify code we just push to the first one.
+        // Leftover producers all land on the first layout kind; any
+        // assignment would do, this is the simplest.
         if !available.is_empty() {
             match assignments.first_mut() {
                 Some((producer_ids, ..)) => {
@@ -657,10 +672,9 @@ mod tests {
     use super::super::common::test_setup;
     use crate::planner::TransformationInfo;
 
-    /// A filter whose input is an EDB atom must survive fuse — the EDB
-    /// guard at fuse.rs:84 blocks fusion into something that has no
-    /// upstream producer. A broken guard would error out or silently
-    /// drop the filter.
+    /// A filter whose input is an EDB atom must survive fuse: there is no
+    /// upstream producer to merge it into. A broken guard would error out
+    /// or silently drop the filter.
     #[test]
     fn fuse_map_skips_edb_input() {
         let (mut planner, mut catalog) = test_setup(
@@ -689,7 +703,7 @@ mod tests {
     }
 
     /// After equi-join fusion, fuse must key each side's arrangement on the
-    /// *materialized* computed expression (`x + 1` / `y + 2`) — collapsing it
+    /// *materialized* computed expression (`x + 1` / `y + 2`); collapsing it
     /// to the base column would join on the wrong value.
     #[test]
     fn fuse_keys_arrangement_on_materialized_equijoin_column() {
@@ -726,9 +740,9 @@ mod tests {
         );
     }
 
-    /// fuse.rs:79 explicitly skips `is_sip_projection == true`. If that
-    /// guard were removed, SIP's project→semijoin pair would collapse
-    /// into the wrong producer and SIP semantics would silently break.
+    /// `fuse_map` explicitly skips SIP projections. If that guard were
+    /// removed, SIP's project/semijoin pair would collapse into the wrong
+    /// producer and SIP semantics would silently break.
     ///
     /// Rule shape avoids positive-subset relations among atoms so that
     /// `prepare`'s `apply_positive_semijoin` doesn't consume the SIP
