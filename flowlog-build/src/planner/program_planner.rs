@@ -182,8 +182,8 @@ mod tests {
     }
 
     /// Both rules key `B` on its first column, but at different rhs
-    /// positions (1 vs 0). Lineage fps embed that position; content-canonical
-    /// materialization must share one arrangement.
+    /// positions (1 vs 0). Fingerprints hash the positional flow, so the
+    /// rhs position must never split the shared arrangement.
     const RHS_ID_SHARING_SRC: &str = "\
         .decl A(x: int32, y: int32)\n\
         .decl B(x: int32, y: int32)\n\
@@ -230,6 +230,29 @@ mod tests {
         assert_eq!(
             consumers, 2,
             "both joins must consume the shared B arrangement"
+        );
+    }
+
+    /// Fingerprints are content-canonical during planning too, not only
+    /// after materialization: the B premaps of both rules must already
+    /// collide at the info level, where the fuse passes group by fp.
+    #[test]
+    fn planning_fingerprints_collide_across_rules() {
+        let pp = analyze(RHS_ID_SHARING_SRC);
+        let b_fp = compute_fp("b");
+
+        let b_premap_fps: Vec<u64> = pp
+            .strata()
+            .iter()
+            .flat_map(|s| s.rule_planners())
+            .flat_map(|rp| rp.transformation_infos())
+            .filter(|info| info.input_info_fp() == (b_fp, None))
+            .map(|info| info.output_info_fp())
+            .collect();
+        assert_eq!(b_premap_fps.len(), 2, "each rule premaps B once");
+        assert_eq!(
+            b_premap_fps[0], b_premap_fps[1],
+            "identical premaps of B must share one fingerprint before materialization"
         );
     }
 
