@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.4.0...flowlog-build-v0.4.1) - 2026-07-27
+
+### Other
+
+- *(planner)* hash transformation fingerprints in flow coordinates ([#271](https://github.com/flowlog-rs/flowlog/pull/271))
+
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.4...flowlog-build-v0.4.0) - 2026-07-26
 
 ### Breaking
