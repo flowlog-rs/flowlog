@@ -17,13 +17,13 @@ use crate::planner::Collection;
 mod flow;
 mod info;
 
-pub(crate) use flow::TransformationFlow;
-pub(crate) use info::KeyValueLayout;
-pub(crate) use info::TransformationInfo;
+pub use flow::TransformationFlow;
+pub use info::KeyValueLayout;
+pub use info::TransformationInfo;
 
 /// Represents a data transformation operation in a query execution plan.
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
-pub(crate) enum Transformation {
+pub enum Transformation {
     // === Unary Transformations ===
     /// Row-to-row transformation (filtering, projection, aggregation)
     RowToRow {
@@ -86,7 +86,7 @@ pub(crate) enum Transformation {
 // ========================
 impl Transformation {
     /// Returns `true` if this is a unary transformation.
-    pub(crate) fn is_unary(&self) -> bool {
+    pub fn is_unary(&self) -> bool {
         matches!(
             self,
             Self::RowToRow { .. }
@@ -106,7 +106,7 @@ impl Transformation {
     /// # Panics
     ///
     /// Panics if called on a binary transformation. Use `is_unary()` to check first.
-    pub(crate) fn unary_input(&self) -> &Arc<Collection> {
+    pub fn unary_input(&self) -> &Arc<Collection> {
         match self {
             Self::RowToRow { input, .. }
             | Self::RowToKv { input, .. }
@@ -121,7 +121,7 @@ impl Transformation {
     /// # Panics
     ///
     /// Panics if called on a unary transformation. Use `is_unary()` to check first.
-    pub(crate) fn binary_input(&self) -> &(Arc<Collection>, Arc<Collection>) {
+    pub fn binary_input(&self) -> &(Arc<Collection>, Arc<Collection>) {
         match self {
             Self::JnToRow { input, .. }
             | Self::JnToKv { input, .. }
@@ -132,7 +132,7 @@ impl Transformation {
     }
 
     /// Returns the input fingerprint(s) for any transformation.
-    pub(crate) fn input_fingerprints(&self) -> Vec<u64> {
+    pub fn input_fingerprints(&self) -> Vec<u64> {
         match self {
             Self::RowToRow { input, .. }
             | Self::RowToKv { input, .. }
@@ -146,7 +146,7 @@ impl Transformation {
     }
 
     /// Returns the output collection for any transformation.
-    pub(crate) fn output(&self) -> &Arc<Collection> {
+    pub fn output(&self) -> &Arc<Collection> {
         match self {
             Self::RowToRow { output, .. }
             | Self::RowToKv { output, .. }
@@ -160,7 +160,7 @@ impl Transformation {
     }
 
     /// Returns the transformation flow for any transformation.
-    pub(crate) fn flow(&self) -> &TransformationFlow {
+    pub fn flow(&self) -> &TransformationFlow {
         match self {
             Self::RowToRow { flow, .. }
             | Self::RowToKv { flow, .. }
@@ -174,7 +174,7 @@ impl Transformation {
     }
 
     /// Return the transformation operation name.
-    pub(crate) fn operation_name(&self) -> &'static str {
+    pub fn operation_name(&self) -> &'static str {
         match self {
             Self::RowToRow { .. } => "[Row -> Row]",
             Self::RowToKv { .. } => "[Row -> KV]",
@@ -188,7 +188,7 @@ impl Transformation {
     }
 
     /// Simplified operation label for profiler / visualizer output.
-    pub(crate) fn profile_operation_name(&self) -> &'static str {
+    pub fn profile_operation_name(&self) -> &'static str {
         match self {
             Self::RowToRow { .. } => "Map",
             Self::RowToKv { .. } => "Arrange",
@@ -232,7 +232,7 @@ impl Transformation {
     /// `fp_map` (per rule, threaded in pipeline order) maps info fp →
     /// content fp so inputs resolve to their producers; many info fps
     /// mapping to one content fp is the intended sharing.
-    pub(crate) fn from_info(info: &TransformationInfo, fp_map: &mut HashMap<u64, u64>) -> Self {
+    pub fn from_info(info: &TransformationInfo, fp_map: &mut HashMap<u64, u64>) -> Self {
         // Tag mirrors the variant picked below, so equal fingerprints
         // imply the same variant.
         let (left, right) = info.input_info_fp();

@@ -10,7 +10,7 @@ use crate::catalog::ArithmeticPos;
 
 /// Represents a data collection with key-value structure.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub(crate) struct Collection {
+pub struct Collection {
     /// A fingerprint identifying the collection type and lineage
     fingerprint: u64,
 
@@ -28,7 +28,7 @@ pub(crate) struct Collection {
 
 impl Collection {
     /// Creates a new collection with the given fingerprint, name, and argument signatures.
-    pub(crate) fn new(
+    pub fn new(
         fingerprint: u64,
         name: String,
         key_argument_signatures: &[ArithmeticPos],
@@ -44,7 +44,7 @@ impl Collection {
 
     /// Returns the arity as (key_count, value_count).
     #[inline]
-    pub(crate) fn arity(&self) -> (usize, usize) {
+    pub fn arity(&self) -> (usize, usize) {
         (
             self.key_argument_signatures.len(),
             self.value_argument_signatures.len(),
@@ -52,12 +52,12 @@ impl Collection {
     }
 
     /// Returns `true` if this collection has only keys (no values).
-    pub(crate) fn is_k_only(&self) -> bool {
+    pub fn is_k_only(&self) -> bool {
         self.value_argument_signatures.is_empty()
     }
 
     /// Returns the collection fingerprint.
-    pub(crate) fn fingerprint(&self) -> u64 {
+    pub fn fingerprint(&self) -> u64 {
         self.fingerprint
     }
 }

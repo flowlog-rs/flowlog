@@ -10,7 +10,7 @@ use crate::planner::arithmetic::ArithmeticArgument;
 
 /// Represents a comparison expression in a query plan.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub(crate) struct ComparisonExprArgument {
+pub struct ComparisonExprArgument {
     /// The left-hand side arithmetic expression
     left: ArithmeticArgument,
 
@@ -23,7 +23,7 @@ pub(crate) struct ComparisonExprArgument {
 
 impl ComparisonExprArgument {
     /// Creates a new ComparisonExprArgument from constituent parts.
-    pub(crate) fn from_comparison_expr(
+    pub fn from_comparison_expr(
         compare_expr: &ComparisonExprPos,
         left_arguments: &[TransformationArgument],
         right_arguments: &[TransformationArgument],
@@ -40,17 +40,17 @@ impl ComparisonExprArgument {
     }
 
     /// Returns the comparison operator used in this expression.
-    pub(crate) fn operator(&self) -> &ComparisonOperator {
+    pub fn operator(&self) -> &ComparisonOperator {
         &self.operator
     }
 
     /// Returns the left-hand side arithmetic expression.
-    pub(crate) fn left(&self) -> &ArithmeticArgument {
+    pub fn left(&self) -> &ArithmeticArgument {
         &self.left
     }
 
     /// Returns the right-hand side arithmetic expression.
-    pub(crate) fn right(&self) -> &ArithmeticArgument {
+    pub fn right(&self) -> &ArithmeticArgument {
         &self.right
     }
 }

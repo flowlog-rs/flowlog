@@ -53,7 +53,7 @@ impl fmt::Debug for AtomSignature {
 
 /// A signature referencing a specific argument within an atom.
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub(crate) struct AtomArgumentSignature {
+pub struct AtomArgumentSignature {
     atom_signature: AtomSignature,
     argument_id: usize,
 }

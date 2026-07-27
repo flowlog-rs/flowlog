@@ -7,16 +7,16 @@
 //! (DD-facing) and user-facing shapes.
 
 use flowlog_parser::DataType;
+use flowlog_planner::planner::ArithmeticArgument;
+use flowlog_planner::planner::FactorArgument;
+use flowlog_planner::planner::StratumPlanner;
+use flowlog_planner::planner::TransformationArgument;
+use flowlog_planner::planner::TransformationFlow;
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
-use crate::planner::ArithmeticArgument;
-use crate::planner::FactorArgument;
-use crate::planner::StratumPlanner;
-use crate::planner::TransformationArgument;
-use crate::planner::TransformationFlow;
 
 /// `(key_types, value_types)` — a relation's shape in key++value form.
 pub(crate) type KvTypes = (Vec<DataType>, Vec<DataType>);
@@ -374,7 +374,7 @@ mod tests {
     fn record_transformation_output_type_preserves_declared_idb_shape() {
         use std::sync::Arc;
 
-        use crate::planner::Constraints;
+        use flowlog_planner::planner::Constraints;
 
         let mut cg = make_codegen();
         // IDB's declared shape: e.g. `DeptHeadcount(d: int32, cnt: int32)`.

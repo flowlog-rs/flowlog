@@ -15,6 +15,7 @@ use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
 use flowlog_parser::Program;
+use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
 use proc_macro2::TokenStream;
 
@@ -25,7 +26,6 @@ use crate::CodeParts;
 use crate::build::relation::gen_input_module;
 use crate::build::relation::validate_api_surface;
 use crate::codegen::Features;
-use crate::planner::ProgramPlanner;
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
 pub(crate) struct Pipeline {

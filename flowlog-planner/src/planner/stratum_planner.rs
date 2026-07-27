@@ -240,14 +240,14 @@ impl StratumPlanner {
     /// Get non-recursive transformations that depend only on EDBs.
     /// These transformations can be computed once outside recursion.
     #[inline]
-    pub(crate) fn non_recursive_transformations(&self) -> &[Transformation] {
+    pub fn non_recursive_transformations(&self) -> &[Transformation] {
         &self.non_recursive_transformations
     }
 
     /// Retain only the non-recursive transformations matching `f`. Used by
     /// the cross-stratum prune pass to drop transformations whose output
     /// fingerprint was already produced by an earlier stratum's prelude.
-    pub(crate) fn retain_non_recursive_transformations<F>(&mut self, f: F)
+    pub fn retain_non_recursive_transformations<F>(&mut self, f: F)
     where
         F: FnMut(&Transformation) -> bool,
     {
@@ -257,7 +257,7 @@ impl StratumPlanner {
     /// Get dynamic transformations that depend on IDB collections.
     /// These transformations must be re-evaluated during recursion.
     #[inline]
-    pub(crate) fn recursive_transformations(&self) -> &[Transformation] {
+    pub fn recursive_transformations(&self) -> &[Transformation] {
         &self.recursive_transformations
     }
 
@@ -265,49 +265,49 @@ impl StratumPlanner {
     /// tokens are emitted inside the `iterate` scope (`Product<_, _>` time).
     /// Derived from the same partition the emitters iterate, so codegen cannot
     /// desync the emission scope from the call site.
-    pub(crate) fn is_recursive_transformation(&self, tx: &Transformation) -> bool {
+    pub fn is_recursive_transformation(&self, tx: &Transformation) -> bool {
         self.recursive_transformations.contains(tx)
     }
 
     /// Get fingerprints of collections that enter recursion.
     #[inline]
-    pub(crate) fn recursion_enter_collections(&self) -> &[u64] {
+    pub fn recursion_enter_collections(&self) -> &[u64] {
         &self.recursion_enter_collections
     }
 
     /// Get fingerprints of accumulative recursive collections within recursion.
     #[inline]
-    pub(crate) fn recursion_accumulate_recursive_collections(&self) -> &[u64] {
+    pub fn recursion_accumulate_recursive_collections(&self) -> &[u64] {
         &self.recursion_accumulate_recursive_collections
     }
 
     /// Get fingerprints of iterative recursive collections within recursion.
     #[inline]
-    pub(crate) fn recursion_iterative_recursive_collections(&self) -> &[u64] {
+    pub fn recursion_iterative_recursive_collections(&self) -> &[u64] {
         &self.recursion_iterative_recursive_collections
     }
 
     /// Get fingerprints of collections that leave recursion.
     #[inline]
-    pub(crate) fn recursion_leave_collections(&self) -> &[u64] {
+    pub fn recursion_leave_collections(&self) -> &[u64] {
         &self.recursion_leave_collections
     }
 
     /// Output relation fingerprints produced by this stratum.
     #[inline]
-    pub(crate) fn output_relations(&self) -> HashSet<u64> {
+    pub fn output_relations(&self) -> HashSet<u64> {
         self.idb_to_heads_map.keys().cloned().collect()
     }
 
     /// Get the mapping from each IDB fingerprint to per-rule head fingerprints.
     #[inline]
-    pub(crate) fn idb_to_heads_map(&self) -> &HashMap<u64, Vec<u64>> {
+    pub fn idb_to_heads_map(&self) -> &HashMap<u64, Vec<u64>> {
         &self.idb_to_heads_map
     }
 
     /// Get the reverse mapping from per-rule head fingerprint to IDB fingerprint.
     #[inline]
-    pub(crate) fn head_to_idb_map(&self) -> &HashMap<u64, u64> {
+    pub fn head_to_idb_map(&self) -> &HashMap<u64, u64> {
         &self.head_to_idb_map
     }
 
@@ -315,7 +315,7 @@ impl StratumPlanner {
     /// Returns tuples of `(AggregationOperator, position in output relation,
     /// output arity)`.
     #[inline]
-    pub(crate) fn idb_to_aggregation_map(
+    pub fn idb_to_aggregation_map(
         &self,
     ) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
         &self.idb_to_aggregation_map
@@ -323,7 +323,7 @@ impl StratumPlanner {
 
     /// Get the loop condition for this stratum, if it is a loop block.
     #[inline]
-    pub(crate) fn loop_condition(&self) -> Option<&LoopCondition> {
+    pub fn loop_condition(&self) -> Option<&LoopCondition> {
         self.loop_condition.as_ref()
     }
 
@@ -333,19 +333,19 @@ impl StratumPlanner {
     /// the profiler/visualizer can show `[Row -> KV] K:(V0) arc(x, y)` without
     /// any downstream knowledge of atoms.
     #[inline]
-    pub(crate) fn atom_fps(&self) -> &HashSet<u64> {
+    pub fn atom_fps(&self) -> &HashSet<u64> {
         &self.atom_fps
     }
 
     /// Check if this stratum is recursive.
     #[inline]
-    pub(crate) fn is_recursive(&self) -> bool {
+    pub fn is_recursive(&self) -> bool {
         self.is_recursive
     }
 
     /// Test-only: per-rule transformations before cross-rule dedup.
     #[cfg(test)]
-    pub(crate) fn rule_planners(&self) -> &[RulePlanner] {
+    pub fn rule_planners(&self) -> &[RulePlanner] {
         &self.rule_planners
     }
 }
@@ -507,7 +507,7 @@ impl StratumPlanner {
 // =========================================================================
 impl StratumPlanner {
     /// Build the fingerprint of collections that enter recursion.
-    pub(crate) fn build_recursion_enter_collections(&mut self, available_relations: &HashSet<u64>) {
+    pub fn build_recursion_enter_collections(&mut self, available_relations: &HashSet<u64>) {
         // Build sets of input/output fingerprints touched by recursion transformations.
         let mut recursion_input_fps: HashSet<u64> = HashSet::new();
         let mut recursion_output_fps: HashSet<u64> = HashSet::new();

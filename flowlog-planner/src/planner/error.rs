@@ -73,7 +73,7 @@ pub enum PlanError {
 }
 
 impl PlanError {
-    pub(crate) fn internal(detail: impl Into<String>) -> Self {
+    pub fn internal(detail: impl Into<String>) -> Self {
         Self::Internal(InternalError::new("planner", detail, BUG_URL))
     }
 }

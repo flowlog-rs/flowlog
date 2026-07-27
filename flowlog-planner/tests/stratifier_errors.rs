@@ -2,11 +2,11 @@ mod errors;
 
 use errors::fixture;
 use errors::render;
-use flowlog_build::stratifier::Stratifier;
-use flowlog_build::stratifier::StratifyError;
 use flowlog_common::Config;
 use flowlog_common::ExecutionMode;
 use flowlog_common::SourceMap;
+use flowlog_planner::stratifier::Stratifier;
+use flowlog_planner::stratifier::StratifyError;
 
 /// Parse + stratify a fixture. `extended` selects Datalog mode. Parsing runs
 /// the full pipeline (typecheck/fold/prune), matching what the compiler feeds

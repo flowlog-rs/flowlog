@@ -322,8 +322,8 @@ dependencies = [
  "codespan-reporting",
  "flowlog-common",
  "flowlog-parser",
+ "flowlog-planner",
  "flowlog-profiler",
- "itertools 0.15.0",
  "ordered-float",
  "prettyplease",
  "proc-macro2",
@@ -359,6 +359,7 @@ dependencies = [
  "flowlog-build",
  "flowlog-common",
  "flowlog-parser",
+ "flowlog-planner",
  "flowlog-profiler",
  "proc-macro2",
  "quote",
@@ -384,6 +385,21 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "flowlog-planner"
+version = "0.1.0"
+dependencies = [
+ "codespan-reporting",
+ "flowlog-common",
+ "flowlog-parser",
+ "flowlog-profiler",
+ "itertools 0.15.0",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "tracing-test",
 ]
 
 [[package]]

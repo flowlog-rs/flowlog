@@ -7,7 +7,7 @@ use crate::planner::FactorArgument;
 
 /// Represents different types of transformation arguments used in query planning.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub(crate) enum TransformationArgument {
+pub enum TransformationArgument {
     /// Key-Value transformation from input stream (key/value, index)
     KV((bool, usize)),
 
@@ -18,7 +18,7 @@ pub(crate) enum TransformationArgument {
 impl TransformationArgument {
     /// Converts ArithmeticArgument(s) to TransformationArgument(s).
     /// Each ArithmeticArgument is expected to contain only a single variable reference.
-    pub(crate) fn from_arithmetic_arguments(arith_args: Vec<ArithmeticArgument>) -> Vec<Self> {
+    pub fn from_arithmetic_arguments(arith_args: Vec<ArithmeticArgument>) -> Vec<Self> {
         arith_args
             .into_iter()
             .map(|arith_arg| {

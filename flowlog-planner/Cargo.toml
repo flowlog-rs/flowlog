@@ -1,0 +1,29 @@
+[package]
+name = "flowlog-planner"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Semantic analysis and query planning for FlowLog."
+readme = "README.md"
+keywords = ["datalog", "dataflow", "compiler"]
+categories = ["compilers", "database"]
+
+[dependencies]
+flowlog-common.workspace = true
+flowlog-parser.workspace = true
+flowlog-profiler.workspace = true
+
+codespan-reporting.workspace = true
+itertools.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tracing-test.workspace = true
+
+[lints]
+workspace = true

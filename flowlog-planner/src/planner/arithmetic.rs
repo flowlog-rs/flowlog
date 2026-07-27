@@ -13,7 +13,7 @@ use crate::planner::TransformationArgument;
 
 /// Represents a basic factor in an arithmetic expression
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum FactorArgument {
+pub enum FactorArgument {
     /// Variable reference to locate the value
     Var(TransformationArgument),
 
@@ -48,7 +48,7 @@ pub(crate) enum FactorArgument {
 impl FactorArgument {
     /// Returns all transformation arguments referenced in this factor
     /// (including nested in FnCall / Builtin args).
-    pub(crate) fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
+    pub fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
         match self {
             Self::Var(arg) => vec![arg],
             Self::Const(_) => vec![],
@@ -103,17 +103,17 @@ impl fmt::Display for FactorArgument {
 
 /// Represents a complete arithmetic expression
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub(crate) struct ArithmeticArgument {
+pub struct ArithmeticArgument {
     /// The initial factor in the expression
-    pub(crate) init: FactorArgument,
+    pub init: FactorArgument,
 
     /// Additional operations and factors (e.g., + 5, * x)
-    pub(crate) rest: Vec<(ArithmeticOperator, FactorArgument)>,
+    pub rest: Vec<(ArithmeticOperator, FactorArgument)>,
 }
 
 impl ArithmeticArgument {
     /// Creates an ArithmeticArgument from an ArithmeticPos and a list of transformation arguments.
-    pub(crate) fn from_arithmeticpos(
+    pub fn from_arithmeticpos(
         arithmetic: &ArithmeticPos,
         var_arguments: &[TransformationArgument],
     ) -> Self {
@@ -185,17 +185,17 @@ impl ArithmeticArgument {
     }
 
     /// Returns the initial factor of the arithmetic expression.
-    pub(crate) fn init(&self) -> &FactorArgument {
+    pub fn init(&self) -> &FactorArgument {
         &self.init
     }
 
     /// Returns all operations and factors after the initial factor.
-    pub(crate) fn rest(&self) -> &[(ArithmeticOperator, FactorArgument)] {
+    pub fn rest(&self) -> &[(ArithmeticOperator, FactorArgument)] {
         &self.rest
     }
 
     /// Returns all transformation arguments referenced in this arithmetic expression.
-    pub(crate) fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
+    pub fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
         let mut args = self.init.transformation_arguments();
         for (_, factor) in &self.rest {
             args.extend(factor.transformation_arguments());

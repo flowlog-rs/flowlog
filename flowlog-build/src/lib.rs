@@ -51,23 +51,6 @@ mod build;
 // the re-exports below, by `flowlog-compiler`'s binary mode.
 mod codegen;
 
-// Pipeline stages — previously independent crates, folded in here so
-// `flowlog-build` ships as a single publishable library.
-//
-// NOTE: These modules are `pub` because the `flowlog-compiler` binary
-// (separate crate, `publish = false`) and the integration tests under
-// `tests/` both reach into them. They are `#[doc(hidden)]` to signal
-// that they are NOT part of the stable public API — do not rely on
-// them from external crates.
-#[doc(hidden)]
-pub mod catalog;
-#[doc(hidden)]
-pub mod optimizer;
-#[doc(hidden)]
-pub mod planner;
-#[doc(hidden)]
-pub mod stratifier;
-
 use std::env;
 use std::fs;
 use std::io;

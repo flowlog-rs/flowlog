@@ -9,7 +9,7 @@ use crate::planner::TransformationArgument;
 
 /// Represents constraints in a query plan.
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
-pub(crate) struct Constraints {
+pub struct Constraints {
     /// Constraints that equate a variable (transformation arg) to a constant value (e.g., `x = 5`)
     constant_eq_constraints: Arc<Vec<(TransformationArgument, Constant)>>,
 
@@ -19,7 +19,7 @@ pub(crate) struct Constraints {
 
 impl Constraints {
     /// Creates a new Constraints instance.
-    pub(crate) fn new(
+    pub fn new(
         constant_eq_constraints: Vec<(TransformationArgument, Constant)>,
         variable_eq_constraints: Vec<(TransformationArgument, TransformationArgument)>,
     ) -> Self {
@@ -30,19 +30,19 @@ impl Constraints {
     }
 
     /// Returns the constant equality constraints.
-    pub(crate) fn constant_eq_constraints(&self) -> &Arc<Vec<(TransformationArgument, Constant)>> {
+    pub fn constant_eq_constraints(&self) -> &Arc<Vec<(TransformationArgument, Constant)>> {
         &self.constant_eq_constraints
     }
 
     /// Returns the variable equality constraints.
-    pub(crate) fn variable_eq_constraints(
+    pub fn variable_eq_constraints(
         &self,
     ) -> &Arc<Vec<(TransformationArgument, TransformationArgument)>> {
         &self.variable_eq_constraints
     }
 
     /// Checks if this constraint set is empty.
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.constant_eq_constraints.is_empty() && self.variable_eq_constraints.is_empty()
     }
 }

@@ -2,12 +2,12 @@ mod errors;
 
 use errors::fixture;
 use errors::render;
-use flowlog_build::optimizer::Optimizer;
-use flowlog_build::planner::PlanError;
-use flowlog_build::planner::StratumPlanner;
-use flowlog_build::stratifier::Stratifier;
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
+use flowlog_planner::optimizer::Optimizer;
+use flowlog_planner::planner::PlanError;
+use flowlog_planner::planner::StratumPlanner;
+use flowlog_planner::stratifier::Stratifier;
 
 fn plan_fixture(name: &str) -> (Result<(), PlanError>, SourceMap) {
     let mut sm = SourceMap::new();

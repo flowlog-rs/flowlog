@@ -33,7 +33,7 @@ use crate::planner::TransformationInfo;
 // =========================================================================
 impl RulePlanner {
     /// Entry point for applying SIP optimizations to the current rule plan.
-    pub(crate) fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
+    pub fn apply_sip(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let n = catalog.positive_atom_number();
 
         // SIP only pays off once there's a third atom that can benefit from

@@ -25,7 +25,7 @@ impl RulePlanner {
     /// This is the main entry point for the rule planning process. It performs a join
     /// between two positive atoms and then applies optimization transformations in a
     /// fixed-point loop until no more optimizations can be applied.
-    pub(crate) fn core(
+    pub fn core(
         &mut self,
         catalog: &mut Catalog,
         join_tuple_index: (usize, usize),

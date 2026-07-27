@@ -20,7 +20,7 @@ fn write_and_sep(f: &mut fmt::Formatter<'_>, first: &mut bool) -> fmt::Result {
 
 /// Predicate filters for a Join (or Anti-Join) to Key-Value transformation.
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct JoinPredicates {
+pub struct JoinPredicates {
     pub(crate) compare_exprs: Vec<ComparisonExprPos>,
 }
 
@@ -44,7 +44,7 @@ impl fmt::Display for JoinPredicates {
 
 /// Predicate filters for a Key-Value to Key-Value transformation.
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct KvPredicates {
+pub struct KvPredicates {
     pub(crate) const_eq: Vec<(AtomArgumentSignature, Constant)>,
     pub(crate) var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
     pub(crate) compare_exprs: Vec<ComparisonExprPos>,

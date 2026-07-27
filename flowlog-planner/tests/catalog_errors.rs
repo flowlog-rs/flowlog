@@ -2,10 +2,10 @@ mod errors;
 
 use errors::fixture;
 use errors::render;
-use flowlog_build::catalog::Catalog;
-use flowlog_build::catalog::CatalogError;
 use flowlog_common::Config;
 use flowlog_common::SourceMap;
+use flowlog_planner::catalog::Catalog;
+use flowlog_planner::catalog::CatalogError;
 
 /// Parse `name` and build a catalog for each rule. Returns the first
 /// catalog error encountered (or `Ok(())` if none).

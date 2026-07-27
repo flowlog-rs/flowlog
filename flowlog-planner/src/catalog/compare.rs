@@ -10,7 +10,7 @@ use crate::catalog::atom::AtomArgumentSignature;
 
 /// A comparison expression with variables resolved to their concrete positions.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub(crate) struct ComparisonExprPos {
+pub struct ComparisonExprPos {
     left: ArithmeticPos,
     operator: ComparisonOperator,
     right: ArithmeticPos,

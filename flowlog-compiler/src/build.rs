@@ -20,7 +20,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process;
 
-use flowlog_build::planner::ProgramPlanner;
+use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
 use quote::quote;
 use tracing::info;

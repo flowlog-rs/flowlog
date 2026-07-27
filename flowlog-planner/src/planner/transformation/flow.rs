@@ -32,7 +32,7 @@ use crate::planner::TransformationArgument;
 /// different stages of query execution, including filtering, projection,
 /// and joins.
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
-pub(crate) enum TransformationFlow {
+pub enum TransformationFlow {
     /// Single relation transformations: filtering, projection.
     /// Example: `((x), y) -> ((), x, y)` with filter `x > 0`.
     ///
@@ -87,7 +87,7 @@ impl TransformationFlow {
     ///
     /// A new `KVToKV` transformation flow that can transform input data according
     /// to the specified layout and constraints.
-    pub(crate) fn kv_to_kv(
+    pub fn kv_to_kv(
         input_kv_layout: &KeyValueLayout,
         output_kv_layout: &KeyValueLayout,
         predicates: &KvPredicates,
@@ -132,7 +132,7 @@ impl TransformationFlow {
     ///
     /// A new `JnToKV` transformation flow that can join the two input relations
     /// according to their shared keys and produce the specified output layout.
-    pub(crate) fn join_to_kv(
+    pub fn join_to_kv(
         input_left_kv_layout: &KeyValueLayout,
         input_right_kv_layout: &KeyValueLayout,
         output_kv_layout: &KeyValueLayout,
@@ -163,7 +163,7 @@ impl TransformationFlow {
 // ========================
 impl TransformationFlow {
     /// Returns the output key expressions.
-    pub(crate) fn key(&self) -> &Arc<Vec<ArithmeticArgument>> {
+    pub fn key(&self) -> &Arc<Vec<ArithmeticArgument>> {
         match self {
             Self::KVToKV { key, .. } => key,
             Self::JnToKV { key, .. } => key,
@@ -171,7 +171,7 @@ impl TransformationFlow {
     }
 
     /// Returns the output value expressions.
-    pub(crate) fn value(&self) -> &Arc<Vec<ArithmeticArgument>> {
+    pub fn value(&self) -> &Arc<Vec<ArithmeticArgument>> {
         match self {
             Self::KVToKV { value, .. } => value,
             Self::JnToKV { value, .. } => value,
@@ -183,7 +183,7 @@ impl TransformationFlow {
     /// # Panics
     ///
     /// Panics if called on a `JnToKV` flow, which doesn't support constraints.
-    pub(crate) fn constraints(&self) -> &Constraints {
+    pub fn constraints(&self) -> &Constraints {
         match self {
             Self::KVToKV { constraints, .. } => constraints,
             Self::JnToKV { .. } => {
@@ -193,7 +193,7 @@ impl TransformationFlow {
     }
 
     /// Returns the comparison filters for flows that support them.
-    pub(crate) fn compares(&self) -> &Vec<ComparisonExprArgument> {
+    pub fn compares(&self) -> &Vec<ComparisonExprArgument> {
         match self {
             Self::KVToKV { compares, .. } => compares,
             Self::JnToKV { compares, .. } => compares,

@@ -135,7 +135,7 @@ impl fmt::Display for FactorPos {
 /// Positional arithmetic expression with variables resolved to their
 /// concrete argument signatures.
 #[derive(Clone, Hash, PartialEq, Eq)]
-pub(crate) struct ArithmeticPos {
+pub struct ArithmeticPos {
     /// The initial factor (left-most term)
     init: FactorPos,
     /// Subsequent operations and factors (operator, right operand)

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::LoopCondition;
 use flowlog_parser::LoopConnective;
+use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::try_with_plan_graph;
 use flowlog_profiler::with_plan_graph;
@@ -34,7 +35,6 @@ use crate::codegen::aggregation::aggregation_reduce_stmt;
 use crate::codegen::aggregation::aggregation_row_chop;
 use crate::codegen::aggregation::aggregation_sum_optimize;
 use crate::codegen::aggregation::aggregation_sum_pre_leave;
-use crate::planner::StratumPlanner;
 
 // =========================================================================
 // Recursive Flow Generation

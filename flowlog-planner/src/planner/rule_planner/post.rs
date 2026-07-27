@@ -26,7 +26,7 @@ impl RulePlanner {
     ///
     /// - If there is no prior transformation, create a single post transformation.
     /// - Otherwise, modify the last transformation in-place to match the head.
-    pub(crate) fn post(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
+    pub fn post(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let head_args = catalog.head_arguments();
 
         // Note: here we always create row output layout for rule heads.

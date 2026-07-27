@@ -40,7 +40,7 @@ mod sip; // Side Information Passing (SIP) optimization for pushing down filters
 
 /// Planner state for a single rule.
 #[derive(Debug)]
-pub(crate) struct RulePlanner {
+pub struct RulePlanner {
     /// The original rule.
     rule: FlowLogRule,
 
@@ -67,7 +67,7 @@ pub(crate) struct RulePlanner {
 
 impl RulePlanner {
     /// Creates a new empty RulePlanner.
-    pub(crate) fn new(rule: FlowLogRule) -> Self {
+    pub fn new(rule: FlowLogRule) -> Self {
         Self {
             rule,
             transformation_infos: Vec::new(),
@@ -78,20 +78,20 @@ impl RulePlanner {
 
     /// Returns the planned transformations for this rule.
     #[inline]
-    pub(crate) fn transformation_infos(&self) -> &Vec<TransformationInfo> {
+    pub fn transformation_infos(&self) -> &Vec<TransformationInfo> {
         &self.transformation_infos
     }
 
     /// Returns the materialized transformations (empty before [`RulePlanner::materialize`]).
     #[inline]
-    pub(crate) fn transformations(&self) -> &[Transformation] {
+    pub fn transformations(&self) -> &[Transformation] {
         &self.transformations
     }
 
     /// Materialize all infos into [`Transformation`]s with content-canonical
     /// fingerprints (see [`Transformation::from_info`]). Must run after post,
     /// in pipeline order so inputs resolve to their producers' fingerprints.
-    pub(crate) fn materialize(&mut self) {
+    pub fn materialize(&mut self) {
         let mut fp_map: HashMap<u64, u64> = HashMap::new();
         self.transformations = self
             .transformation_infos
@@ -102,7 +102,7 @@ impl RulePlanner {
 
     /// Returns the original rule.
     #[inline]
-    pub(crate) fn rule(&self) -> &FlowLogRule {
+    pub fn rule(&self) -> &FlowLogRule {
         &self.rule
     }
 }
@@ -111,7 +111,7 @@ impl RulePlanner {
 /// Rule Plan Tree Debugging Information
 /// ========================================================================
 impl RulePlanner {
-    pub(crate) fn generate_rule_plan_tree_debug_map(&self) -> BTreeMap<u64, (String, Vec<u64>)> {
+    pub fn generate_rule_plan_tree_debug_map(&self) -> BTreeMap<u64, (String, Vec<u64>)> {
         let mut debug_info_map: BTreeMap<u64, (String, Vec<u64>)> = BTreeMap::new();
 
         if self.transformations.is_empty() {
@@ -140,14 +140,14 @@ impl RulePlanner {
     /// for every positive or negative atom on the rule's rhs, derived from
     /// `Atom`'s `Display` impl. Consumed by the plan-tree developer-debug
     /// walker so the leaf nodes show full binding context.
-    pub(crate) fn rhs_atom_labels(&self) -> HashMap<u64, String> {
+    pub fn rhs_atom_labels(&self) -> HashMap<u64, String> {
         self.rhs_atom_map(Atom::to_string)
     }
 
     /// Fingerprints of every positive/negative atom on the rule's rhs.
     /// Consumed by codegen to decide which transformation inputs are named
     /// atoms (label text comes from `display_name`).
-    pub(crate) fn rhs_atom_fps(&self) -> HashSet<u64> {
+    pub fn rhs_atom_fps(&self) -> HashSet<u64> {
         self.rhs_atom_map(|_| ()).into_keys().collect()
     }
 
@@ -183,7 +183,7 @@ impl RulePlanner {
     /// Render `self.transformation_infos` as an indexed list for trace output.
     /// `TransformationInfo::Display` terminates each block with `\n`; we add
     /// only the `[i]` prefix here.
-    pub(crate) fn transformation_infos_dump(&self) -> String {
+    pub fn transformation_infos_dump(&self) -> String {
         if self.transformation_infos.is_empty() {
             return "  (none)".to_string();
         }
