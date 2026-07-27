@@ -54,16 +54,11 @@ pub(crate) fn substitute_assignments(segments: &mut [Segment]) -> Result<(), Par
 /// the fold stage materializes it.
 fn substitute_rule(rule: &mut FlowLogRule) -> Result<(), ParseError> {
     // Variables grounded by a positive atom: never treated as assignments.
-    let mut bound: HashSet<String> = HashSet::new();
-    for pred in rule.rhs() {
-        if let Predicate::PositiveAtom(atom) = pred {
-            for arg in atom.arguments() {
-                if let AtomArg::Var(v) = arg {
-                    bound.insert(v.clone());
-                }
-            }
-        }
-    }
+    let mut bound: HashSet<String> = rule
+        .positive_body_vars()
+        .into_iter()
+        .map(String::from)
+        .collect();
 
     // Discover assignment comparisons to a fixpoint. `assignment_idx` records
     // which `rhs` slots are consumed (assignments and destructures, dropped

@@ -1,8 +1,6 @@
-//! Post processing to align the final output to the rule head for rule planning.
-//!
-//! This includes handling variables, arithmetic expressions.
-//!
-//! For aggregation in the head, we handled it at stratum planning phase.
+//! Post processing: aligns a rule pipeline's final output layout to the
+//! rule head, resolving head variables and arithmetic into output
+//! positions.
 
 use std::collections::HashMap;
 
@@ -26,11 +24,11 @@ impl RulePlanner {
     ///
     /// - If there is no prior transformation, create a single post transformation.
     /// - Otherwise, modify the last transformation in-place to match the head.
-    pub fn post(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
+    pub(crate) fn post(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let head_args = catalog.head_arguments();
 
         // Note: here we always create row output layout for rule heads.
-        if self.needs_post_transformation() {
+        if self.transformation_infos.is_empty() {
             self.create_post_transformation(catalog, head_args)?;
         } else {
             self.update_last_transformation_layout(catalog, head_args)?;
@@ -45,12 +43,6 @@ impl RulePlanner {
 }
 
 impl RulePlanner {
-    /// Whether we need to append a post transformation (true when the pipeline is empty).
-    #[inline]
-    fn needs_post_transformation(&self) -> bool {
-        self.transformation_infos.is_empty()
-    }
-
     /// Update the last transformation's output layout in-place for rule head.
     fn update_last_transformation_layout(
         &mut self,
@@ -61,7 +53,7 @@ impl RulePlanner {
             PlanError::internal("post: no transformations available before post phase")
         })?;
 
-        let name_to_sig = Self::build_name_to_output_signatures_from_last_tx(catalog, last_tx);
+        let name_to_sig = Self::build_name_to_output_signatures_from_last_tx(catalog, last_tx)?;
         let output_values = Self::resolve_head_arguments(catalog, &name_to_sig, head_args)?;
 
         let new_layout = KeyValueLayout::new(Vec::new(), output_values);
@@ -124,29 +116,36 @@ impl RulePlanner {
     fn build_name_to_output_signatures_from_last_tx(
         catalog: &Catalog,
         last_tx: &TransformationInfo,
-    ) -> HashMap<String, AtomArgumentSignature> {
+    ) -> Result<HashMap<String, AtomArgumentSignature>, PlanError> {
+        // Pre-head layouts hold only variable positions; anything else
+        // means an earlier planning phase produced a broken layout.
+        let as_var = |pos: &ArithmeticPos| -> Result<AtomArgumentSignature, PlanError> {
+            pos.init().as_var_signature().copied().ok_or_else(|| {
+                PlanError::internal(format!(
+                    "post: output layout of rule `{}` holds a non-variable \
+                     position before head alignment",
+                    catalog.rule()
+                ))
+            })
+        };
         let output_layout = last_tx.output_kv_layout();
         let all_positions = output_layout
             .key()
             .iter()
-            .map(|pos| *pos.init().as_var_signature().unwrap())
-            .chain(
-                output_layout
-                    .value()
-                    .iter()
-                    .map(|pos| *pos.init().as_var_signature().unwrap()),
-            );
+            .map(as_var)
+            .chain(output_layout.value().iter().map(as_var));
         let atom_sigs = catalog.positive_atom_argument_signature(0);
 
         atom_sigs
             .iter()
             .zip(all_positions)
-            .map(|(sig, pos)| (catalog.signature_to_argument_str(sig).clone(), pos))
+            .map(|(sig, pos)| Ok((catalog.signature_to_argument_str(sig).clone(), pos?)))
             .collect()
     }
 
-    /// Build a mapping from variable names to their argument signatures from the first positive atom.
-    /// Used when the pipeline is empty.
+    /// Build a mapping from variable names to their argument signatures
+    /// straight from the first positive atom, with no transformation
+    /// reordering applied.
     fn build_name_to_output_signatures_from_atom(
         catalog: &Catalog,
     ) -> HashMap<String, AtomArgumentSignature> {
@@ -157,27 +156,24 @@ impl RulePlanner {
             .collect()
     }
 
-    /// Resolve head arguments (variables, arithmetic expressions, aggregation, UDF) into ArithmeticPos.
-    ///
-    /// Notice we handled aggregation at stratum planning phase, so here we only need to
-    /// convert aggregation arguments to arithmetic expressions.
+    /// Resolve head arguments (variables, arithmetic expressions, aggregation,
+    /// UDF) into [`ArithmeticPos`]. Aggregation arguments lower to their inner
+    /// arithmetic; the aggregate itself is planned per stratum.
     fn resolve_head_arguments(
         catalog: &Catalog,
         name_to_sig: &HashMap<String, AtomArgumentSignature>,
         head_args: &[HeadArg],
     ) -> Result<Vec<ArithmeticPos>, PlanError> {
-        let rule = catalog.rule();
-        let head_span = rule.head().span();
-        let rule_span = rule.span();
+        // Unbound head variables are rejected by parser validation; hitting
+        // one here means an earlier stage broke that contract.
         let sig_of = |name: &str| -> Result<AtomArgumentSignature, PlanError> {
-            name_to_sig
-                .get(name)
-                .copied()
-                .ok_or_else(|| PlanError::UnknownHeadVariable {
-                    head_span,
-                    rule_span,
-                    var: name.to_string(),
-                })
+            name_to_sig.get(name).copied().ok_or_else(|| {
+                PlanError::internal(format!(
+                    "head variable `{name}` of rule `{}` has no binding in the \
+                     planned pipeline",
+                    catalog.rule()
+                ))
+            })
         };
 
         let mut out = Vec::with_capacity(head_args.len());
@@ -212,9 +208,9 @@ impl RulePlanner {
 mod tests {
     use super::super::common::test_setup;
 
-    /// `Out(y, x) :- A(x, y).` — post must reorder the final layout so
+    /// `Out(y, x) :- A(x, y).`: post must reorder the final layout so
     /// output values map to head order, not source order. A no-op post
-    /// would emit (x, y) — every output row swapped, no error.
+    /// would emit (x, y): every output row swapped, no error.
     #[test]
     fn post_aligns_head_var_order() {
         let (mut planner, mut catalog) = test_setup(
@@ -246,9 +242,9 @@ mod tests {
         );
     }
 
-    /// `Out(x + 1) :- A(x).` — the head carries an arithmetic expression.
+    /// `Out(x + 1) :- A(x).`: the head carries an arithmetic expression.
     /// Post must preserve the `+ 1` operator, not flatten to bare `x`.
-    /// If post dropped the Arith branch, codegen emits `x` — off-by-one
+    /// If post dropped the Arith branch, codegen emits `x`: off-by-one
     /// every row with no compiler error.
     #[test]
     fn post_emits_head_arithmetic_expression() {

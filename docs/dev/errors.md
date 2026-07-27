@@ -9,12 +9,12 @@ every crate in the workspace.
    maps to a dedicated error variant carrying a span, rendered as a
    source diagnostic. Never a panic, never a bare string.
 
-2. **Violated internal invariants are internal errors, not panics.** A
-   state an earlier stage should have made impossible is reported through
-   the crate's internal-error constructor, which wraps
-   `flowlog_common::InternalError` and its bug-report URL. FlowLog runs
-   inside users' builds: a panic gives them a backtrace, an internal
-   error tells them "this is a FlowLog bug, please report it."
+2. **Detected invariant failures are internal errors.** When an operation
+   can discover that an earlier stage produced an impossible state, report
+   it through the crate's internal-error constructor, which wraps
+   `flowlog_common::InternalError` and its bug-report URL. Do not add
+   fallible lookups solely to recheck values created and contained by a
+   private type; make its constructor establish the invariant instead.
 
 3. **Queries return facts; absence is `Option`.** When "no answer" is a
    legitimate fact about the input, return `Option` and leave the policy
@@ -37,11 +37,14 @@ every crate in the workspace.
    contract already guaranteed elsewhere: free in release, loud under
    test. It must never be the only guard on a real invariant.
 
-8. **Never panic in library code.** Where a trait signature offers no
-   error channel (e.g. `fmt::Display`, where returning a spurious `Err`
-   makes `format!` panic anyway), do not `expect` through the gap: make
-   the implementation infallible by construction, or degrade to a
-   visible placeholder rather than crash the caller's process. Tests are
+8. **Never panic on outside values.** A function that accepts a
+   caller-controlled index or user-derived value must return `Option` or
+   `Result` when that value may be invalid. Direct access is acceptable
+   for indices created and contained by a private structure when its
+   constructor guarantees their bounds. Where a trait signature offers
+   no error channel (e.g. `fmt::Display`, where returning a spurious
+   `Err` makes `format!` panic anyway), make the implementation infallible
+   by construction or degrade to a visible placeholder. Tests are
    exempt; `unwrap` in a test is the failure mechanism.
 
 9. **Messages state the violated expectation with the offending values.**

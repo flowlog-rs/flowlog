@@ -1,51 +1,26 @@
-//! Stratification for FlowLog Datalog programs.
+//! Partitions a parsed program into dependency-ordered evaluation strata.
 //!
-//! This crate analyses a parsed [`Program`] and determines the order in which
-//! rule groups (strata) must be evaluated so that every rule's dependencies
-//! are fully computed before it fires.
+//! # Evaluation model
 //!
-//! # Concepts
+//! A stratum is a group of rules evaluated as a unit. Its rules may depend
+//! on rules in the same stratum or an earlier one, but never on a later
+//! stratum. A dependency cycle makes a stratum recursive: it repeats to a
+//! fixpoint instead of running once.
 //!
-//! ## Strata
+//! Explicit `loop` and `fixpoint` blocks remain indivisible evaluation
+//! barriers. All rules in the block iterate together under its
+//! [`LoopCondition`](flowlog_parser::LoopCondition). The `extend-batch` and
+//! `extend-inc` modes require recursive rules to appear inside one of these
+//! blocks; the Datalog modes also allow recursion in plain rules.
 //!
-//! A *stratum* is a set of rules that can be evaluated as a unit.  Rules within
-//! the same stratum may depend on each other (forming a strongly-connected
-//! component, SCC); rules in stratum *i* may only depend on relations produced
-//! by strata *0 … i-1*.
-//!
-//! ## Recursive vs. Non-recursive strata
-//!
-//! A stratum is *recursive* when it contains a cycle — either a multi-rule SCC
-//! or a single rule that references its own head in its body.  Recursive strata
-//! are evaluated recursively until a fixpoint is reached; non-recursive strata
-//! are evaluated in a single pass.
-//!
-//! ## Loop blocks and Extended Datalog mode
-//!
-//! FlowLog supports an **Extended Datalog** mode (enabled with
-//! `--mode extend-batch` or `--mode extend-inc`) where recursion
-//! must be written explicitly using `fixpoint` or `loop` blocks:
-//!
-//! ```text
-//! fixpoint {
-//!     Reach(x, y) :- Edge(x, y).
-//!     Reach(x, z) :- Edge(x, y), Reach(y, z).
-//! }
-//! ```
-//!
-//! Each `fixpoint`/`loop` block maps to **exactly one recursive stratum**,
-//! regardless of its internal rule structure — all rules inside iterate
-//! together under the block's [`LoopCondition`].  In Extended Datalog mode,
-//! any recursive dependency found outside a block is a hard error.
-//!
-//! In datalog modes (`datalog-batch` / `datalog-inc`), recursion in
-//! plain rules is allowed and handled implicitly via SCC detection, matching
-//! classic stratified-Datalog semantics.
+//! `dependency_graph` builds rule edges, `scc` orders plain-rule components,
+//! `core` handles explicit loops and relation metadata, and `error` renders
+//! user diagnostics.
 
 mod core;
 mod dependency_graph;
 mod error;
+mod scc;
 
-pub use error::StratifyError;
-
-pub use self::core::Stratifier;
+pub(crate) use self::core::Stratifier;
+pub(crate) use self::core::Stratum;

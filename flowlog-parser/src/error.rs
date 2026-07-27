@@ -3,7 +3,7 @@
 //! `ParseError` covers failures reachable from a user-authored `.dl` program
 //! across every pipeline stage: syntax errors, duplicate declarations,
 //! references to undeclared relations, broken include directives, and the
-//! semantic half — type, subtype, and cast errors raised by the checker.
+//! semantic half: type, subtype, and cast errors raised by the checker.
 //! Each variant carries a [`Span`] so the renderer can point at the
 //! offending source.
 //!
@@ -124,10 +124,10 @@ pub enum ParseError {
 
     /// A relation carries both `.output` and `.printsize`. Both write
     /// to the same `<RawName>.csv` path, so the second would silently
-    /// clobber the first — rejected up-front. Use one or the other.
+    /// clobber the first; rejected up-front. Use one or the other.
     #[error(
         "relation `{name}` has both `.output` and `.printsize`; \
-         both write `{name}.csv` — pick one"
+         both write `{name}.csv`; pick one"
     )]
     OutputAndPrintsizeConflict { span: Span, name: String },
 
@@ -207,7 +207,7 @@ pub enum ParseError {
     #[error("attribute references unknown type `{name}`")]
     UnknownAttributeType { span: Span, name: String },
 
-    /// `.type T = ( f: U, … )` where field type `U` is undeclared.
+    /// `.type T = ( f: U, ... )` where field type `U` is undeclared.
     #[error("tuple type `{tuple}` field `{field}` references unknown type `{field_type}`")]
     TupleFieldUnknownType {
         span: Span,
@@ -216,22 +216,22 @@ pub enum ParseError {
         field_type: String,
     },
 
-    /// `.type T = ( …, f: T, … )` — a tuple that references its own type.
+    /// `.type T = ( ..., f: T, ... )`: a tuple that references its own type.
     /// Recursive tuples (cons-lists / trees) are not supported.
     #[error("tuple type `{name}` is recursive; recursive tuples are not supported")]
     RecursiveTuple { span: Span, name: String },
 
     /// `.type X <: Y` where `Y` is a tuple type. Tuples are not subtypeable.
-    #[error("`.type {name} <: {parent}` — tuples cannot be subtyped")]
+    #[error("`.type {name} <: {parent}`: tuples cannot be subtyped")]
     SubtypeOfTuple {
         span: Span,
         name: String,
         parent: String,
     },
 
-    /// `.type T <: ( … )` — an inline tuple RHS declared with `<:`. A tuple
+    /// `.type T <: ( ... )`: an inline tuple RHS declared with `<:`. A tuple
     /// definition is its own kind of `.type` and must use `=`.
-    #[error("`.type {name} <: ( … )` — a tuple type must be defined with `=`, not `<:`")]
+    #[error("`.type {name} <: ( ... )`: a tuple type must be defined with `=`, not `<:`")]
     TupleSubtypeDecl { span: Span, name: String },
 
     /// `.input R` where `R` has a tuple-typed column. Tuples are constructed
@@ -309,7 +309,7 @@ pub enum ParseError {
         max: usize,
     },
 
-    /// `.plan` lists the same index twice — must be a permutation.
+    /// `.plan` lists the same index twice; must be a permutation.
     #[error("`.plan` lists positive-atom index {index} more than once")]
     PlanDuplicateIndex { span: Span, index: usize },
 
@@ -336,7 +336,7 @@ pub enum ParseError {
     #[error("invalid string literal: {reason}")]
     InvalidStringLiteral { span: Span, reason: String },
 
-    // ─── Semantic (type-check) errors ────────────────────────────────
+    // --- Semantic (type-check) errors ---
     /// A variable is bound to one type and later reused with another.
     #[error("variable `{var}` bound as `{first_ty:?}` but used as `{later_ty:?}`")]
     TypeMismatch {
@@ -447,12 +447,12 @@ pub enum ParseError {
     #[error("`_` placeholder is not allowed when constructing a tuple")]
     TuplePlaceholderInConstruct { span: Span },
 
-    /// A tuple destructure (`(a, b) = x`) doesn't match `x`'s type — `x` is
+    /// A tuple destructure (`(a, b) = x`) doesn't match `x`'s type: `x` is
     /// not a tuple, or the pattern has more fields than the tuple.
     #[error("invalid tuple destructure: {detail}")]
     TupleDestructure { span: Span, detail: String },
 
-    /// A tuple construct (`(e0, …)`) doesn't match the declared tuple type —
+    /// A tuple construct (`(e0, ...)`) doesn't match the declared tuple type;
     /// wrong field count or a field whose value type doesn't fit.
     #[error("invalid tuple construct: {detail}")]
     TupleConstruct { span: Span, detail: String },
@@ -505,7 +505,7 @@ pub enum ParseError {
         later_span: Span,
     },
 
-    /// Comparison operands with no common subtype — e.g. `x = y` where
+    /// Comparison operands with no common subtype; e.g. `x = y` where
     /// `x: UserId` and `y: ProductId` are siblings of `number`.
     #[error("comparison operands have incompatible subtypes: `{left_ty}` and `{right_ty}`")]
     ComparisonSubtypeMismatch {
@@ -537,6 +537,25 @@ pub enum ParseError {
     /// `as(expr, T)` where `T` is undeclared.
     #[error("unknown cast target type `{name}`")]
     UnknownCastType { span: Span, name: String },
+
+    /// A rule head references a variable never bound by a positive body
+    /// atom. Valid syntax, but the variable has no value at evaluation time.
+    #[error("unknown head variable `{var}`")]
+    UnknownHeadVariable {
+        head_span: Span,
+        rule_span: Span,
+        var: String,
+    },
+
+    /// A single rule head contains more than one aggregation argument.
+    /// FlowLog's evaluator materializes at most one aggregation per head.
+    #[error("rule head for `{rel}` contains {count} aggregations; at most one is allowed")]
+    MultipleAggregationsInHead {
+        head_span: Span,
+        rule_span: Span,
+        rel: String,
+        count: usize,
+    },
 
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
@@ -623,7 +642,7 @@ impl Diagnostic for ParseError {
                 let mut diag = base.with_labels(primary_only(*span));
                 if !chain.is_empty() {
                     let shown: Vec<String> = chain.iter().map(|p| p.display().to_string()).collect();
-                    diag = diag.with_notes(vec![format!("include chain: {}", shown.join(" → "))]);
+                    diag = diag.with_notes(vec![format!("include chain: {}", shown.join(" -> "))]);
                 }
                 diag
             }
@@ -859,7 +878,7 @@ impl Diagnostic for ParseError {
             ParseError::OrdRequiresStrIntern { span } => base
                 .with_labels(labels(*span, "`ord` used here"))
                 .with_notes(vec![
-                    "ord returns the symbol's intern key — a unique per-string \
+                    "ord returns the symbol's intern key: a unique per-string \
                      integer that only exists when strings are interned. Compile \
                      with `--str-intern` (binary mode) or `.string_intern(true)` \
                      (library mode) to use it."
@@ -951,7 +970,7 @@ impl Diagnostic for ParseError {
                     label_vec.push(l.with_message(format!("`{var}` first bound as `{first_ty}`")));
                 }
                 base.with_labels(label_vec).with_notes(vec![
-                    "sibling subtypes of the same primitive are intentionally incompatible — \
+                    "sibling subtypes of the same primitive are intentionally incompatible; \
                      wrap one side with `as(expr, OtherType)` if you really mean to join them"
                         .into(),
                 ])
@@ -982,8 +1001,8 @@ impl Diagnostic for ParseError {
                     format!("`{rel}` column {col} expects `{expected}`, found `{found}`"),
                 ))
                 .with_notes(vec![
-                    "head columns allow implicit widening (subtype → parent), \
-                     but narrowing (parent → subtype) requires `as(expr, TargetType)`"
+                    "head columns allow implicit widening (subtype -> parent), \
+                     but narrowing (parent -> subtype) requires `as(expr, TargetType)`"
                         .into(),
                 ]),
 
@@ -1000,6 +1019,41 @@ impl Diagnostic for ParseError {
                 .with_notes(vec![format!(
                     "use a built-in primitive or add `.type {name} = ...` (or `<:`)"
                 )]),
+
+            ParseError::UnknownHeadVariable {
+                head_span,
+                rule_span,
+                var,
+            } => base
+                .with_labels(dup_labels(
+                    *head_span,
+                    *rule_span,
+                    &format!("`{var}` is referenced here but never bound by a positive body atom"),
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "every variable in the rule head must appear in a positive body \
+                     atom so its value is determined during evaluation"
+                        .into(),
+                ]),
+
+            ParseError::MultipleAggregationsInHead {
+                head_span,
+                rule_span,
+                ..
+            } => base
+                .with_labels(dup_labels(
+                    *head_span,
+                    *rule_span,
+                    "multiple aggregations declared here",
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "split the head into multiple rules, each producing a separate \
+                     relation, if you need several aggregated columns"
+                        .into(),
+                ]),
+
         }
     }
 
@@ -1008,7 +1062,7 @@ impl Diagnostic for ParseError {
     }
 }
 
-/// Produce a `ParseError::Internal` for a violated internal invariant — an
+/// Produce a `ParseError::Internal` for a violated internal invariant: an
 /// "impossible" state an earlier stage should have guaranteed.
 ///
 /// Use this instead of an `.expect`/`panic!` at sites the grammar or an
@@ -1113,5 +1167,41 @@ mod tests {
             ParseError::syntax_from_pest(&err, FileId::new(0)),
             ParseError::Syntax { .. }
         ));
+    }
+
+    #[test]
+    fn unknown_head_variable_labels_head_and_rule() {
+        let (sm, f) = make_sm_with("Out(x) :- Edge(y, z).\n");
+        let out = render(
+            ParseError::UnknownHeadVariable {
+                head_span: Span::new(f, 0, 6),
+                rule_span: Span::new(f, 0, 21),
+                var: "x".into(),
+            },
+            &sm,
+        );
+        assert!(out.contains("unknown head variable `x`"), "got: {out}");
+        assert!(out.contains("never bound"), "got: {out}");
+        assert!(out.contains("in this rule"), "got: {out}");
+    }
+
+    #[test]
+    fn multiple_aggregations_labels_head_and_rule() {
+        let (sm, f) = make_sm_with("Totals(sum(a), count(b)) :- Orders(a, b).\n");
+        let out = render(
+            ParseError::MultipleAggregationsInHead {
+                head_span: Span::new(f, 0, 24),
+                rule_span: Span::new(f, 0, 41),
+                rel: "Totals".into(),
+                count: 2,
+            },
+            &sm,
+        );
+        assert!(out.contains("contains 2 aggregations"), "got: {out}");
+        assert!(out.contains("at most one is allowed"), "got: {out}");
+        assert!(
+            out.contains("multiple aggregations declared here"),
+            "got: {out}"
+        );
     }
 }

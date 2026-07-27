@@ -1,12 +1,13 @@
 //! Compilation pipeline: every stage from source text to a checked,
 //! optimized [`Program`], driven by [`parse`] in execution order:
 //!
-//! 1. `include`  — splice `.include` files into one source string.
-//! 2. `assemble` — pest-parse, build the [`Program`] (inlining,
+//! 1. `include`: splice `.include` files into one source string.
+//! 2. `assemble`: pest-parse, build the [`Program`] (inlining,
 //!    directives, validation, assignment substitution).
-//! 3. `typecheck` — check types and subtypes; pin literals, lower casts.
-//! 4. `fold`     — constant folding and dead-rule elimination.
-//! 5. `prune`    — dead-component pruning + orphan materialization.
+//! 3. `typecheck`: check types and subtypes; pin literals, lower casts.
+//! 4. `fold`: constant folding and dead-rule elimination.
+//! 5. `prune`: dead-component pruning + orphan materialization.
+//! 6. `validate`: reject semantically broken rules.
 //!
 //! The individual stages ([`check_program`], [`fold_constants`], [`prune`])
 //! are also exported at the crate root.
@@ -28,10 +29,11 @@ pub(crate) mod fold;
 mod include;
 pub(crate) mod prune;
 pub(crate) mod typecheck;
+mod validate;
 
 /// Parses a program from a file, resolving `.include` directives
-/// recursively, then runs the semantic stages in order: type-check
-/// (pinning every polymorphic literal), constant-fold, and prune. On
+/// recursively, then runs the semantic stages in the order the module
+/// docs list. On
 /// `Ok` the returned [`Program`] is a fully-typed, immutable AST; this
 /// is the only supported way to build one.
 ///
@@ -60,6 +62,9 @@ pub fn parse(
     fold::fold_constants(&mut program)?;
     // Stage 5: prune dead components and materialize orphan relations.
     prune::prune(&mut program);
+    // Stage 6: reject semantically broken rules, after prune so dead rules
+    // are not reported.
+    validate::validate(&program)?;
 
     debug!("\n{}", program);
     info!("Successfully parsed program from '{}'.", path);

@@ -44,7 +44,7 @@ type LayoutAssignment = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
 impl RulePlanner {
     /// Run fusion passes (map fusion and KV-layout fusion) on
     /// the planned transformation infos.
-    pub fn fuse(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
+    pub(crate) fn fuse(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
         trace!(
             "Transformation infos before fusion:\n{}",
             self.transformation_infos_dump()

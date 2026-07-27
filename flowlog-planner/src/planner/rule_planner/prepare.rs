@@ -35,7 +35,7 @@ impl RulePlanner {
     /// 3) Projection that removes unused arguments
     ///
     /// The loop stops when a full iteration makes no changes.
-    pub fn prepare(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
+    pub(crate) fn prepare(&mut self, catalog: &mut Catalog) -> Result<(), PlanError> {
         let mut step = 0;
 
         loop {

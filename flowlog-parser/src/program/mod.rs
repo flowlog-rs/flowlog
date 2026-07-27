@@ -171,35 +171,36 @@ impl Program {
         &mut self.segments
     }
 
-    /// All top-level rules, flattened across `Segment::Plain` segments;
-    /// excludes rules inside loop blocks. Prefer [`segments`](Self::segments)
-    /// for loop-aware processing.
+    /// Returns every rule in source order, including rules inside loop blocks.
     #[must_use]
     pub fn rules(&self) -> Vec<&FlowLogRule> {
         self.segments
             .iter()
-            .flat_map(|item| item.as_rules())
+            .flat_map(|segment| {
+                let rules: &[FlowLogRule] = match segment {
+                    Segment::Plain(rules) => rules,
+                    Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
+                };
+                rules
+            })
             .collect()
     }
 
-    /// Look up a rule by its global source-order ID.
-    ///
-    /// # Panics
-    /// Panics if `rid` is out of bounds.
+    /// Returns the rule with global source-order ID `rule_id`.
     #[must_use]
-    pub fn rule(&self, rid: usize) -> &FlowLogRule {
-        let mut offset = 0;
-        for seg in &self.segments {
-            let rules: &[FlowLogRule] = match seg {
+    pub fn rule(&self, rule_id: usize) -> Option<&FlowLogRule> {
+        let mut remaining = rule_id;
+        for segment in &self.segments {
+            let rules: &[FlowLogRule] = match segment {
                 Segment::Plain(rules) => rules,
                 Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
             };
-            if rid < offset + rules.len() {
-                return &rules[rid - offset];
+            if let Some(rule) = rules.get(remaining) {
+                return Some(rule);
             }
-            offset += rules.len();
+            remaining = remaining.saturating_sub(rules.len());
         }
-        panic!("Parser error: rule ID {rid} out of bounds");
+        None
     }
 
     // --- Inline facts ---
@@ -254,22 +255,38 @@ mod tests {
     use crate::Relation;
     use crate::test_util::assembled;
 
-    /// `rules()` flattens the rules of every `Segment::Plain` in source order
-    /// and excludes rules nested inside loop blocks.
     #[test]
-    fn rules_flattens_plain_segments_and_excludes_loop_bodies() {
+    fn rules_include_loop_bodies_in_source_order() {
         let program = assembled(
             "
             .decl a(x: number)
             .decl b(x: number)
             .output a
             a(X) :- b(X).
-            fixpoint { }
+            fixpoint {
+                a(2) :- b(2).
+            }
             a(1) :- b(1).
             ",
         )
         .expect("assembles");
-        assert_eq!(program.rules().len(), 2);
+        let rules = program.rules();
+        assert_eq!(rules.len(), 3);
+        assert!(rules[1].to_string().contains("2"));
+    }
+
+    #[test]
+    fn rule_returns_none_for_out_of_bounds_id() {
+        let program = assembled(
+            "
+            .decl a(x: number)
+            .decl b(x: number)
+            .output a
+            a(X) :- b(X).
+            ",
+        )
+        .expect("assembles");
+        assert!(program.rule(1).is_none());
     }
 
     /// `edbs()` is the union of file-backed (`.input`) relations and relations

@@ -1,11 +1,7 @@
-//! Stratification errors.
+//! User diagnostics produced during stratification.
 //!
-//! `StratifyError` covers failures reachable from a user-authored `.dl`
-//! program: recursion outside a `loop`/`fixpoint` block in extended mode,
-//! malformed `.iterative` directives, forward references across a loop
-//! barrier, empty recursive strata, and loop conditions that can never
-//! fire. Each variant carries at least one [`Span`] so the renderer can
-//! point at the offending source.
+//! Each [`StratifyError`] describes an invalid program structure and retains
+//! the source spans needed to render it.
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use codespan_reporting::diagnostic::Label;
@@ -15,21 +11,10 @@ use flowlog_common::Span;
 use flowlog_common::primary_label;
 use thiserror::Error;
 
-/// Build one primary label per rule, annotated with `rule {id}`.
-fn rule_labels(rules: &[(usize, Span)]) -> Vec<Label<FileId>> {
-    rules
-        .iter()
-        .filter_map(|(rid, span)| {
-            primary_label(*span).map(|l| l.with_message(format!("rule {rid}")))
-        })
-        .collect()
-}
-
 /// Errors raised while stratifying a FlowLog program.
-#[non_exhaustive]
 #[derive(Debug, Error)]
-pub enum StratifyError {
-    /// Extended Datalog mode: a recursive SCC appeared in plain (non-loop) rules.
+pub(crate) enum StratifyError {
+    /// Extended Datalog mode found a recursive SCC in plain rules.
     #[error(
         "recursive rules must be inside an explicit `loop`/`fixpoint` block, \
          but recursion was found in plain rules"
@@ -37,25 +22,27 @@ pub enum StratifyError {
     RecursionOutsideLoop {
         /// Rule IDs and spans of the rules in the offending SCC.
         rules: Vec<(usize, Span)>,
+        /// Caller-supplied fix suggestion, rendered verbatim as the
+        /// diagnostic's note.
         hint: &'static str,
     },
 
-    /// A `.iterative` directive names a relation with no rule inside the loop body.
+    /// A `.iterative` relation has no deriving rule in the loop body.
     #[error("`iterative` relation `{rel}` has no rule inside the loop body that derives it")]
     IterativeNotInLoopHead {
         rel: String,
-        /// Span of the loop/fixpoint block whose `.iterative` directive is wrong.
+        /// Span of the block containing the invalid directive.
         decl_span: Span,
     },
 
-    /// A `.iterative` directive names a relation that never appears as a body atom.
+    /// A `.iterative` relation never appears as a body atom.
     #[error(
         "`iterative` relation `{rel}` is not recursive in this loop \
          (never appears as a body atom)"
     )]
     IterativeNotRecursive {
         rel: String,
-        /// Span of the loop/fixpoint block whose `.iterative` directive is wrong.
+        /// Span of the block containing the invalid directive.
         decl_span: Span,
     },
 
@@ -77,7 +64,9 @@ pub enum StratifyError {
          (no head relation appears as a body atom)"
     )]
     RecursiveStratumEmpty {
+        /// 1-based stratum number, as shown to the user.
         stratum: usize,
+        /// 0-based rule IDs and spans of the block's rules.
         rules: Vec<(usize, Span)>,
     },
 
@@ -162,5 +151,58 @@ impl Diagnostic for StratifyError {
                         .into(),
                 ]),
         }
+    }
+}
+
+/// Returns one primary label per rule, annotated with its ID.
+fn rule_labels(rules: &[(usize, Span)]) -> Vec<Label<FileId>> {
+    rules
+        .iter()
+        .filter_map(|(rid, span)| {
+            primary_label(*span).map(|l| l.with_message(format!("rule {rid}")))
+        })
+        .collect()
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use flowlog_common::SourceMap;
+
+    use super::*;
+
+    #[test]
+    fn recursion_outside_loop_renders_hint_as_note() {
+        let err = StratifyError::RecursionOutsideLoop {
+            rules: vec![(0, Span::DUMMY)],
+            hint: "wrap these rules in `fixpoint { ... }`",
+        };
+        let notes = err.to_diagnostic().notes;
+        assert_eq!(notes, vec!["wrap these rules in `fixpoint { ... }`"]);
+    }
+
+    #[test]
+    fn dummy_span_yields_no_label() {
+        let err = StratifyError::RecursionOutsideLoop {
+            rules: vec![(0, Span::DUMMY)],
+            hint: "wrap these rules in a loop form",
+        };
+        assert!(err.to_diagnostic().labels.is_empty());
+    }
+
+    #[test]
+    fn label_message_names_the_rule_id() {
+        let mut sm = SourceMap::new();
+        let file = sm.add("test.dl".into(), "A(x) :- B(x).".into());
+        let err = StratifyError::RecursionOutsideLoop {
+            rules: vec![(7, Span::new(file, 0, 4))],
+            hint: "wrap these rules in a loop form",
+        };
+        let labels = err.to_diagnostic().labels;
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].message, "rule 7");
     }
 }

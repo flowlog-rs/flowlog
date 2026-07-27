@@ -30,20 +30,11 @@ impl ProgramPlanner {
         let stratifier = Stratifier::from_program(program, config.is_extended())?;
         let mut optimizer = Optimizer::new();
         let mut strata: Vec<StratumPlanner> = stratifier
-            .stratum()
+            .strata()
             .iter()
-            .enumerate()
-            .map(|(idx, rule_refs)| {
-                let rules: Vec<_> = rule_refs.iter().copied().cloned().collect();
-                StratumPlanner::from_rules(
-                    config,
-                    &rules,
-                    &mut optimizer,
-                    plan_graph,
-                    &stratifier,
-                    idx,
-                )
-                .map_err(BoxError::from)
+            .map(|stratum| {
+                StratumPlanner::from_stratum(config, program, stratum, &mut optimizer, plan_graph)
+                    .map_err(BoxError::from)
             })
             .collect::<Result<_, _>>()?;
         prune_cross_stratum_duplicates(&mut strata);

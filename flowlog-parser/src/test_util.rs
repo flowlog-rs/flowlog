@@ -84,8 +84,7 @@ pub(crate) fn folded(src: &str) -> Result<Program, ParseError> {
     Ok(program)
 }
 
-/// Rung 4: [`folded`] then prune; the whole pipeline, equivalent to
-/// [`parse`](crate::parse).
+/// Rung 4: [`folded`] then prune. Stops before the `validate` stage.
 pub(crate) fn pruned(src: &str) -> Result<Program, ParseError> {
     let mut program = folded(src)?;
     crate::prune(&mut program);
@@ -102,6 +101,8 @@ pub(crate) fn pruned(src: &str) -> Result<Program, ParseError> {
 macro_rules! assert_err {
     ($result:expr, $pat:pat $(if $guard:expr)?) => {{
         let err = $result.expect_err("expected an Err");
-        assert!(matches!(err, $pat $(if $guard)?), "got {err:?}");
+        // Match on a reference so guards can compare non-Copy fields
+        // (bindings become references) without consuming `err`.
+        assert!(matches!(&err, $pat $(if $guard)?), "got {err:?}");
     }};
 }
