@@ -4,6 +4,28 @@
 //! [`compute_sccs`] groups mutually dependent rules into [`Component`]s.
 //! [`merge_strata`] then places dependencies before their consumers and
 //! combines independent non-recursive components.
+//!
+//! # Algorithm
+//!
+//! A strongly connected component (SCC) is a maximal group of rules that
+//! all reach each other through dependencies. Such rules feed each other,
+//! directly or through intermediaries, so no order within the group is
+//! complete: they can only be evaluated together, to a fixpoint.
+//!
+//! Kosaraju's algorithm finds every SCC with two depth-first passes:
+//!
+//! 1. **Finish order.** Walk the graph, recording each rule only after
+//!    all of its dependencies are fully explored. A component finishes
+//!    after everything it depends on, so reading the record backwards
+//!    lists consumers before their dependencies.
+//! 2. **Transposed walk.** Reverse every edge and walk again, starting
+//!    rules in that backwards order. Reversed edges lead from a
+//!    dependency back to its consumers, and every consumer component was
+//!    already collected by an earlier start; each start therefore
+//!    gathers exactly the start rule's own component and stops.
+//!
+//! Both passes visit each rule and edge once, so the cost is linear in
+//! the size of the graph.
 
 use std::collections::BTreeSet;
 use std::collections::HashSet;
@@ -31,7 +53,8 @@ impl Component {
     }
 }
 
-/// Groups mutually dependent rules with Kosaraju's two-pass algorithm.
+/// Groups mutually dependent rules with Kosaraju's two-pass algorithm
+/// (see the module docs).
 ///
 /// Every rule appears in exactly one component. A component is recursive
 /// when it contains multiple rules or one rule with a self-dependency.
@@ -40,8 +63,8 @@ pub(super) fn compute_sccs(graph: &DependencyGraph) -> Vec<Component> {
     let dependencies = graph.dependencies();
     let rule_count = dependencies.len();
 
-    // Reverse finish order makes the second pass encounter one component
-    // at a time in the transposed graph.
+    // Pass 1: record post-order finish times; reversed, the order lists
+    // consumers before their dependencies.
     let mut finish_order = Vec::with_capacity(rule_count);
     let mut visited = vec![false; rule_count];
     for rule_id in 0..rule_count {
@@ -49,7 +72,7 @@ pub(super) fn compute_sccs(graph: &DependencyGraph) -> Vec<Component> {
     }
     finish_order.reverse();
 
-    // Reversing every edge confines a second-pass traversal to one component.
+    // Pass 2: each walk in the transposed graph stays inside one component.
     let transposed = transpose(dependencies);
     let mut assigned = vec![false; rule_count];
     let mut component_rules = Vec::new();
@@ -93,8 +116,10 @@ pub(super) fn is_recursive_edge(components: &[Component], source: usize, target:
 
 /// Orders components after their dependencies.
 ///
-/// Independent non-recursive components in the same ready set are combined.
-/// Recursive components retain separate fixpoint boundaries.
+/// Each round peels off the components whose dependencies are all
+/// satisfied: the non-recursive ones combine into a single wider
+/// component (one evaluation pass instead of several), while recursive
+/// ones stay separate so each keeps its own fixpoint boundary.
 #[must_use]
 pub(super) fn merge_strata(components: Vec<Component>, graph: &DependencyGraph) -> Vec<Component> {
     let dependencies = graph.dependencies();
@@ -139,6 +164,8 @@ pub(super) fn merge_strata(components: Vec<Component>, graph: &DependencyGraph) 
     merged
 }
 
+/// Returns `true` if the component depends on a rule that is still
+/// pending outside itself.
 fn has_pending_dependency(
     component: &Component,
     dependencies: &[BTreeSet<usize>],
@@ -151,6 +178,7 @@ fn has_pending_dependency(
     })
 }
 
+/// Reverses every edge, so dependencies point back at their consumers.
 fn transpose(dependencies: &[BTreeSet<usize>]) -> Vec<BTreeSet<usize>> {
     let mut transposed = vec![BTreeSet::new(); dependencies.len()];
     for (source, targets) in dependencies.iter().enumerate() {
@@ -161,6 +189,8 @@ fn transpose(dependencies: &[BTreeSet<usize>]) -> Vec<BTreeSet<usize>> {
     transposed
 }
 
+/// Pass 1 walk: records `rule_id` after all of its dependencies, so
+/// `finish_order` ends up in post-order.
 fn visit_dependencies(
     dependencies: &[BTreeSet<usize>],
     visited: &mut [bool],
@@ -178,6 +208,8 @@ fn visit_dependencies(
     finish_order.push(rule_id);
 }
 
+/// Pass 2 walk: gathers every unassigned rule reachable from `rule_id`
+/// in the transposed graph, which is exactly `rule_id`'s component.
 fn collect_component(
     transposed: &[BTreeSet<usize>],
     assigned: &mut [bool],

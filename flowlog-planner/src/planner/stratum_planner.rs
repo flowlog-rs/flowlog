@@ -314,9 +314,7 @@ impl StratumPlanner {
     /// Returns tuples of `(AggregationOperator, position in output relation,
     /// output arity)`.
     #[inline]
-    pub fn idb_to_aggregation_map(
-        &self,
-    ) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
+    pub fn idb_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
         &self.idb_to_aggregation_map
     }
 
