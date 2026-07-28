@@ -6,6 +6,11 @@
 
 use std::collections::HashMap;
 
+use flowlog_planner::planner::ArithmeticArgument;
+use flowlog_planner::planner::FactorArgument;
+use flowlog_planner::planner::StratumPlanner;
+use flowlog_planner::planner::Transformation;
+use flowlog_planner::planner::TransformationArgument;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
@@ -24,11 +29,6 @@ use crate::codegen::arg::row_pattern_and_fields;
 use crate::codegen::data_type_tokens;
 use crate::codegen::ident::find_local_ident;
 use crate::codegen::row_is_copy;
-use crate::planner::ArithmeticArgument;
-use crate::planner::FactorArgument;
-use crate::planner::StratumPlanner;
-use crate::planner::Transformation;
-use crate::planner::TransformationArgument;
 
 impl CodeGen {
     /// Generate differential dataflow pipelines for a single transformation.
@@ -835,11 +835,11 @@ fn join_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream 
 #[cfg(test)]
 mod identity_projection_tests {
     use flowlog_parser::ArithmeticOperator;
+    use flowlog_planner::planner::ArithmeticArgument;
+    use flowlog_planner::planner::FactorArgument;
+    use flowlog_planner::planner::TransformationArgument;
 
     use super::is_identity_row_projection;
-    use crate::planner::ArithmeticArgument;
-    use crate::planner::FactorArgument;
-    use crate::planner::TransformationArgument;
 
     /// A bare column reference `KV((is_key, idx))` with no arithmetic tail.
     fn col(is_key: bool, idx: usize) -> ArithmeticArgument {

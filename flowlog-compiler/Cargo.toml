@@ -23,6 +23,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 flowlog-build.workspace = true
 flowlog-common = { workspace = true, features = ["clap"] }
 flowlog-parser.workspace = true
+flowlog-planner.workspace = true
 flowlog-profiler.workspace = true
 
 [dev-dependencies]

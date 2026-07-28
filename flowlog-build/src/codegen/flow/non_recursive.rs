@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::mem;
 
 use flowlog_parser::AggregationOperator;
+use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
@@ -29,7 +30,6 @@ use crate::codegen::aggregation::aggregation_min_optimize;
 use crate::codegen::aggregation::aggregation_reduce_stmt;
 use crate::codegen::aggregation::aggregation_row_chop;
 use crate::codegen::aggregation::aggregation_sum_optimize;
-use crate::planner::StratumPlanner;
 
 // =========================================================================
 // Non-Recursive Flow Generation

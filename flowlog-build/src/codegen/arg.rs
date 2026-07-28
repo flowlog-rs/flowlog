@@ -10,6 +10,11 @@ use flowlog_parser::BuiltinOperator;
 use flowlog_parser::ComparisonOperator;
 use flowlog_parser::Constant;
 use flowlog_parser::DataType;
+use flowlog_planner::planner::ArithmeticArgument;
+use flowlog_planner::planner::ComparisonExprArgument;
+use flowlog_planner::planner::Constraints;
+use flowlog_planner::planner::FactorArgument;
+use flowlog_planner::planner::TransformationArgument;
 use proc_macro2::Ident;
 use proc_macro2::Literal;
 use proc_macro2::Span;
@@ -21,11 +26,6 @@ use syn::Index;
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
 use crate::codegen::tuple_tokens;
-use crate::planner::ArithmeticArgument;
-use crate::planner::ComparisonExprArgument;
-use crate::planner::Constraints;
-use crate::planner::FactorArgument;
-use crate::planner::TransformationArgument;
 
 // ==================================================
 // Row pattern + field identifiers for RowToX transformations

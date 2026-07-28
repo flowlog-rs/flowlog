@@ -35,10 +35,10 @@ mod scaffold;
 pub use cli::Cli;
 pub use error::CompilerError;
 use flowlog_build::CodeGen;
-use flowlog_build::planner::ProgramPlanner;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_parser::Program;
+use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
 pub use options::CompileOptions;
 
