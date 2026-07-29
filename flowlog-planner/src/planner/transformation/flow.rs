@@ -87,7 +87,7 @@ impl TransformationFlow {
     ///
     /// A new `KVToKV` transformation flow that can transform input data according
     /// to the specified layout and constraints.
-    pub fn kv_to_kv(
+    pub(crate) fn kv_to_kv(
         input_kv_layout: &KeyValueLayout,
         output_kv_layout: &KeyValueLayout,
         predicates: &KvPredicates,
@@ -132,7 +132,7 @@ impl TransformationFlow {
     ///
     /// A new `JnToKV` transformation flow that can join the two input relations
     /// according to their shared keys and produce the specified output layout.
-    pub fn join_to_kv(
+    pub(crate) fn join_to_kv(
         input_left_kv_layout: &KeyValueLayout,
         input_right_kv_layout: &KeyValueLayout,
         output_kv_layout: &KeyValueLayout,

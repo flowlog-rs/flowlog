@@ -81,32 +81,30 @@ impl RulePlanner {
     fn apply_filter(&mut self, catalog: &mut Catalog) -> Result<bool, PlanError> {
         // (1) var == var
         if let Some((&left, &right)) = catalog.filters().var_eq_map().iter().next() {
+            let rhs_index = catalog.rhs_index_from_signature(*left.atom_signature())?;
             trace!(
                 "Variables equality filter:\n  Atom: {}\n  Arguments: {} == {}",
-                catalog.rhs_index_from_signature(*left.atom_signature()),
-                left,
-                right
+                rhs_index, left, right
             );
             return self.apply_var_equality_filter(catalog, left, right);
         }
 
         // (2) var == const
         if let Some((&var_sig, const_val)) = catalog.filters().const_map().iter().next() {
+            let rhs_index = catalog.rhs_index_from_signature(*var_sig.atom_signature())?;
             trace!(
                 "Constant equality filter:\n  Atom: {}\n  Arguments: {} == {}",
-                catalog.rhs_index_from_signature(*var_sig.atom_signature()),
-                var_sig,
-                const_val
+                rhs_index, var_sig, const_val
             );
             return self.apply_const_equality_filter(catalog, var_sig, const_val.clone());
         }
 
         // (3) placeholder
         if let Some(&var_sig) = catalog.filters().placeholder_set().iter().next() {
+            let rhs_index = catalog.rhs_index_from_signature(*var_sig.atom_signature())?;
             trace!(
                 "Placeholder filter:\n  Atom: {}\n  Arguments: {}",
-                catalog.rhs_index_from_signature(*var_sig.atom_signature()),
-                var_sig
+                rhs_index, var_sig
             );
             return self.apply_placeholder_filter(catalog, var_sig);
         }
@@ -199,7 +197,7 @@ impl RulePlanner {
         let out_vals = Self::out_values_excluding(args, drop_sig);
         trace!("Output values after dropping {}: {:?}", drop_sig, out_vals);
 
-        let kept_attrs = Self::attrs_from_positions(&out_vals, catalog);
+        let kept_attrs = Self::attrs_from_positions(&out_vals, catalog)?;
         let new_name = Self::proj_name(&input_name, &kept_attrs);
         let is_original = catalog.original_atom_fingerprints().contains(&atom_fp);
         let tx = TransformationInfo::kv_to_kv(

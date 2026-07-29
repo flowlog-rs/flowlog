@@ -14,6 +14,7 @@
 //! Not following these rules might introduce subtle bugs.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 
@@ -44,7 +45,7 @@ type LayoutAssignment = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
 impl RulePlanner {
     /// Run fusion passes (map fusion and KV-layout fusion) on
     /// the planned transformation infos.
-    pub(crate) fn fuse(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
+    pub(crate) fn fuse(&mut self, original_atom_fp: &BTreeSet<u64>) -> Result<(), PlanError> {
         trace!(
             "Transformation infos before fusion:\n{}",
             self.transformation_infos_dump()
@@ -64,7 +65,7 @@ impl RulePlanner {
     ///
     /// Map transformations that directly consume the output of other transformations
     /// (and are not neg joins) can be fused into their producers.
-    fn fuse_map(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
+    fn fuse_map(&mut self, original_atom_fp: &BTreeSet<u64>) -> Result<(), PlanError> {
         let mut fused_map_indices = Vec::new();
 
         // Iterate in reverse order so consumers are processed before their producers.
@@ -177,7 +178,7 @@ impl RulePlanner {
 
     /// Fuse correct key-value layout requirements from downstream transformation infos
     /// to upstream transformations.
-    fn fuse_kv_layout(&mut self, original_atom_fp: &HashSet<u64>) -> Result<(), PlanError> {
+    fn fuse_kv_layout(&mut self, original_atom_fp: &BTreeSet<u64>) -> Result<(), PlanError> {
         // Collect output fingerprints in transformation order, keeping only
         // the first occurrence of each. Order matters for sharing
         // optimization: a different processing order may yield different
@@ -439,7 +440,7 @@ impl RulePlanner {
     /// Rebuild the producer_consumer map and key-value layouts after fusion.
     fn rebuild_producer_consumer(
         &mut self,
-        original_atom_fp: &HashSet<u64>,
+        original_atom_fp: &BTreeSet<u64>,
     ) -> Result<(), PlanError> {
         // Clear caches
         self.producer_consumer.clear();

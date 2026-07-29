@@ -69,17 +69,17 @@ impl RulePlanner {
         catalog: &Catalog,
         head_args: &[HeadArg],
     ) -> Result<(), PlanError> {
-        let name_to_sig = Self::build_name_to_output_signatures_from_atom(catalog);
+        let name_to_sig = Self::build_name_to_output_signatures_from_atom(catalog)?;
         let output_values = Self::resolve_head_arguments(catalog, &name_to_sig, head_args)?;
 
         // We default here assume the input layout is all values from the first positive atom.
         // No additional mapping is needed.
         let (input_fake_sig, input_kv_layout) = (
-            catalog.positive_atom_fingerprint(0),
+            catalog.positive_atom_fingerprint(0)?,
             KeyValueLayout::new(
                 Vec::new(),
                 catalog
-                    .positive_atom_argument_signature(0)
+                    .positive_atom_argument_signature(0)?
                     .iter()
                     .map(|&sig| ArithmeticPos::from_var_signature(sig))
                     .collect(),
@@ -134,12 +134,12 @@ impl RulePlanner {
             .iter()
             .map(as_var)
             .chain(output_layout.value().iter().map(as_var));
-        let atom_sigs = catalog.positive_atom_argument_signature(0);
+        let atom_sigs = catalog.positive_atom_argument_signature(0)?;
 
         atom_sigs
             .iter()
             .zip(all_positions)
-            .map(|(sig, pos)| Ok((catalog.signature_to_argument_str(sig).clone(), pos?)))
+            .map(|(sig, pos)| Ok((catalog.signature_to_argument_str(sig)?.to_string(), pos?)))
             .collect()
     }
 
@@ -148,11 +148,11 @@ impl RulePlanner {
     /// reordering applied.
     fn build_name_to_output_signatures_from_atom(
         catalog: &Catalog,
-    ) -> HashMap<String, AtomArgumentSignature> {
-        let atom_sigs = catalog.positive_atom_argument_signature(0);
+    ) -> Result<HashMap<String, AtomArgumentSignature>, PlanError> {
+        let atom_sigs = catalog.positive_atom_argument_signature(0)?;
         atom_sigs
             .iter()
-            .map(|sig| (catalog.signature_to_argument_str(sig).clone(), *sig))
+            .map(|sig| Ok((catalog.signature_to_argument_str(sig)?.to_string(), *sig)))
             .collect()
     }
 
@@ -188,7 +188,7 @@ impl RulePlanner {
                         .iter()
                         .map(|v| sig_of(v.as_str()))
                         .collect::<Result<_, _>>()?;
-                    out.push(ArithmeticPos::from_arithmetic(arith, &var_sigs));
+                    out.push(ArithmeticPos::from_arithmetic(arith, &var_sigs)?);
                 }
                 HeadArg::Aggregation(agg) => {
                     let var_sigs: Vec<_> = agg
@@ -196,7 +196,7 @@ impl RulePlanner {
                         .iter()
                         .map(|v| sig_of(v.as_str()))
                         .collect::<Result<_, _>>()?;
-                    out.push(ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs));
+                    out.push(ArithmeticPos::from_arithmetic(agg.arithmetic(), &var_sigs)?);
                 }
             }
         }

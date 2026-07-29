@@ -5,6 +5,7 @@ use std::fmt;
 use tracing::debug;
 
 use crate::catalog::Catalog;
+use crate::planner::PlanError;
 
 #[derive(Debug, Clone)]
 pub struct PlanTree {
@@ -20,11 +21,18 @@ impl PlanTree {
     /// a left-deep join tree from left to right as the atoms appear in the rule,
     /// without any reordering or optimization.
     /// Future versions may implement cost-based or heuristic join reordering.
-    pub fn from_catalog(catalog: &Catalog) -> Self {
-        let core_atoms: Vec<usize> = (0..catalog.core_atom_number()).collect();
+    pub(crate) fn from_catalog(catalog: &Catalog) -> Result<Self, PlanError> {
+        let core_atom_count = catalog.core_atom_number()?;
+        if core_atom_count < 2 {
+            return Err(PlanError::internal(format!(
+                "optimizer needs at least two core atoms, found {core_atom_count} in {}",
+                catalog.rule()
+            )));
+        }
+        let core_atoms: Vec<usize> = (0..core_atom_count).collect();
 
         // The root of the plan tree is the last core atom (rightmost in join order).
-        let root = *core_atoms.last().unwrap();
+        let root = core_atom_count - 1;
         let mut tree: HashMap<usize, Vec<usize>> = HashMap::new();
 
         // Build a left-deep tree: each parent points to its left neighbor as child.
@@ -42,8 +50,7 @@ impl PlanTree {
         let plan_tree = Self { root, tree };
         debug!("\nRule:\n  {:?}\nPlan tree:\n{}", catalog.rule(), plan_tree);
 
-        // Return the constructed plan tree.
-        plan_tree
+        Ok(plan_tree)
     }
 
     pub fn get_first_join_tuple_index(&self) -> (usize, usize) {
@@ -64,10 +71,10 @@ impl fmt::Display for PlanTree {
                 f,
                 "{}{}{}",
                 prefix,
-                if last { "└── " } else { "├── " },
+                if last { "\\-- " } else { "|-- " },
                 current
             )?;
-            let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
+            let new_prefix = format!("{}{}", prefix, if last { "    " } else { "|   " });
             if let Some(children) = tree.get(&current) {
                 let len = children.len();
                 for (i, child) in children.iter().enumerate() {

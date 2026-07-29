@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use crate::catalog::Catalog;
 use crate::optimizer::plan_tree::PlanTree;
+use crate::planner::PlanError;
 
 #[derive(Debug, Default)]
 pub struct Optimizer {
@@ -31,17 +32,20 @@ impl Optimizer {
     /// This function returns a vector of optional tuple indices, one per rule in the stratum.
     /// If a rule is already planned (is_planned = true), its entry is `None`.
     /// Otherwise, it contains `Some((first_join_tuple_index))`.
-    pub fn plan_stratum(&self, catalogs: &[Catalog]) -> Vec<Option<(usize, usize)>> {
+    pub(crate) fn plan_stratum(
+        &self,
+        catalogs: &[Catalog],
+    ) -> Result<Vec<Option<(usize, usize)>>, PlanError> {
         catalogs
             .iter()
             .map(|catalog| {
                 if catalog.is_planned() {
-                    None
+                    Ok(None)
                 } else {
                     // TODO: future work to return join tuple based on built join tree
                     //       while also considering cardinalities.
-                    let plan_tree = PlanTree::from_catalog(catalog);
-                    Some(plan_tree.get_first_join_tuple_index())
+                    let plan_tree = PlanTree::from_catalog(catalog)?;
+                    Ok(Some(plan_tree.get_first_join_tuple_index()))
                 }
             })
             .collect()

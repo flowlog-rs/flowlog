@@ -19,7 +19,7 @@ use crate::catalog::CatalogError;
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
-pub enum PlanError {
+pub(crate) enum PlanError {
     /// Rules in one stratum derive the same relation with incompatible
     /// aggregation operators or positions.
     #[error(

@@ -18,8 +18,8 @@ mod flow;
 mod info;
 
 pub use flow::TransformationFlow;
-pub use info::KeyValueLayout;
-pub use info::TransformationInfo;
+pub(crate) use info::KeyValueLayout;
+pub(crate) use info::TransformationInfo;
 
 /// Represents a data transformation operation in a query execution plan.
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
@@ -232,7 +232,7 @@ impl Transformation {
     /// `fp_map` (per rule, threaded in pipeline order) maps info fp →
     /// content fp so inputs resolve to their producers; many info fps
     /// mapping to one content fp is the intended sharing.
-    pub fn from_info(info: &TransformationInfo, fp_map: &mut HashMap<u64, u64>) -> Self {
+    pub(crate) fn from_info(info: &TransformationInfo, fp_map: &mut HashMap<u64, u64>) -> Self {
         // Tag mirrors the variant picked below, so equal fingerprints
         // imply the same variant.
         let (left, right) = info.input_info_fp();

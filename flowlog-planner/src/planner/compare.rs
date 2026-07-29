@@ -23,7 +23,7 @@ pub struct ComparisonExprArgument {
 
 impl ComparisonExprArgument {
     /// Creates a new ComparisonExprArgument from constituent parts.
-    pub fn from_comparison_expr(
+    pub(crate) fn from_comparison_expr(
         compare_expr: &ComparisonExprPos,
         left_arguments: &[TransformationArgument],
         right_arguments: &[TransformationArgument],

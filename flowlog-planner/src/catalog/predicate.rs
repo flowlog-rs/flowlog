@@ -7,20 +7,9 @@ use flowlog_parser::Constant;
 use crate::catalog::AtomArgumentSignature;
 use crate::catalog::ComparisonExprPos;
 
-/// Write `" and "` before every term except the first. Toggles `first` to
-/// `false` after running, so callers can reuse it across heterogeneous
-/// term iterators without re-implementing the bookkeeping.
-fn write_and_sep(f: &mut fmt::Formatter<'_>, first: &mut bool) -> fmt::Result {
-    if !*first {
-        write!(f, " and ")?;
-    }
-    *first = false;
-    Ok(())
-}
-
 /// Predicate filters for a Join (or Anti-Join) to Key-Value transformation.
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct JoinPredicates {
+pub(crate) struct JoinPredicates {
     pub(crate) compare_exprs: Vec<ComparisonExprPos>,
 }
 
@@ -44,7 +33,7 @@ impl fmt::Display for JoinPredicates {
 
 /// Predicate filters for a Key-Value to Key-Value transformation.
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct KvPredicates {
+pub(crate) struct KvPredicates {
     pub(crate) const_eq: Vec<(AtomArgumentSignature, Constant)>,
     pub(crate) var_eq: Vec<(AtomArgumentSignature, AtomArgumentSignature)>,
     pub(crate) compare_exprs: Vec<ComparisonExprPos>,
@@ -62,7 +51,7 @@ impl fmt::Display for KvPredicates {
         let mut first = true;
         for (sig, c) in &self.const_eq {
             write_and_sep(f, &mut first)?;
-            write!(f, "{} = {:?}", sig, c)?;
+            write!(f, "{sig} = {c}")?;
         }
         for (l, r) in &self.var_eq {
             write_and_sep(f, &mut first)?;
@@ -74,4 +63,15 @@ impl fmt::Display for KvPredicates {
         }
         Ok(())
     }
+}
+
+/// Write `" and "` before every term except the first. Toggles `first` to
+/// `false` after running, so callers can reuse it across heterogeneous
+/// term iterators without re-implementing the bookkeeping.
+fn write_and_sep(f: &mut fmt::Formatter<'_>, first: &mut bool) -> fmt::Result {
+    if !*first {
+        write!(f, " and ")?;
+    }
+    *first = false;
+    Ok(())
 }

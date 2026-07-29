@@ -30,12 +30,13 @@ impl RulePlanner {
         catalog: &mut Catalog,
         join_tuple_index: (usize, usize),
     ) -> Result<(), PlanError> {
+        let lhs_body_index = catalog.positive_atom_rhs_id(join_tuple_index.0)?;
+        let rhs_body_index = catalog.positive_atom_rhs_id(join_tuple_index.1)?;
+        let lhs_name = catalog.positive_atom_name(join_tuple_index.0)?;
+        let rhs_name = catalog.positive_atom_name(join_tuple_index.1)?;
         trace!(
             "Join:\n  LHS atom: ({}, {})\n RHS atom: ({}, {})",
-            catalog.rule().rhs()[catalog.positive_atom_rhs_id(join_tuple_index.0)],
-            catalog.positive_atom_rhs_id(join_tuple_index.0),
-            catalog.rule().rhs()[catalog.positive_atom_rhs_id(join_tuple_index.1)],
-            catalog.positive_atom_rhs_id(join_tuple_index.1),
+            lhs_name, lhs_body_index, rhs_name, rhs_body_index,
         );
 
         // Turn spanning equalities into shared join columns when the two
@@ -91,11 +92,11 @@ impl RulePlanner {
 
         // Gate: only pairs with no shared variable (an otherwise-keyed join
         // is fine as-is; the equality stays a cheap post-join filter).
-        if catalog.check_sip_pair(lhs_idx, rhs_idx) {
+        if catalog.check_sip_pair(lhs_idx, rhs_idx)? {
             return Ok(());
         }
 
-        let fusable = catalog.equijoin_keys_for_pair(lhs_idx, rhs_idx);
+        let fusable = catalog.equijoin_keys_for_pair(lhs_idx, rhs_idx)?;
         if fusable.is_empty() {
             return Ok(());
         }
@@ -110,10 +111,10 @@ impl RulePlanner {
         for (comp_id, l, r) in fusable {
             match (l.plain_var(), r.plain_var()) {
                 (_, Some(sig)) => {
-                    lhs_shadows.push((catalog.signature_to_argument_str(&sig).clone(), l));
+                    lhs_shadows.push((catalog.signature_to_argument_str(&sig)?.to_string(), l));
                 }
                 (Some(sig), None) => {
-                    rhs_shadows.push((catalog.signature_to_argument_str(&sig).clone(), r));
+                    rhs_shadows.push((catalog.signature_to_argument_str(&sig)?.to_string(), r));
                 }
                 (None, None) => {
                     let name = catalog.fresh_equijoin_key_name(comp_id);
@@ -141,7 +142,7 @@ impl RulePlanner {
         shadows: Vec<(String, ArithmeticPos)>,
     ) -> Result<(), PlanError> {
         let current_transformation_index = self.transformation_infos.len();
-        let atom_fp = catalog.positive_atom_fingerprint(atom_idx);
+        let atom_fp = catalog.positive_atom_fingerprint(atom_idx)?;
 
         self.insert_consumer(
             catalog.original_atom_fingerprints(),
@@ -155,7 +156,7 @@ impl RulePlanner {
 
         // Output layout: the atom's columns in order, then the shadow columns.
         let in_vals: Vec<ArithmeticPos> = catalog
-            .positive_atom_argument_signature(atom_idx)
+            .positive_atom_argument_signature(atom_idx)?
             .iter()
             .map(|&sig| ArithmeticPos::from_var_signature(sig))
             .collect();
@@ -197,7 +198,7 @@ impl RulePlanner {
         for idx in [lhs_idx, rhs_idx] {
             if catalog
                 .original_atom_fingerprints()
-                .contains(&catalog.positive_atom_fingerprint(idx))
+                .contains(&catalog.positive_atom_fingerprint(idx)?)
             {
                 self.create_edb_premap_transformations(catalog, idx, true)?;
             }
@@ -215,9 +216,10 @@ impl RulePlanner {
         let (lhs_idx, rhs_idx) = join_tuple_index;
 
         // Extract LHS atom information and register as consumer
-        let lhs_pos_fp = catalog.positive_atom_fingerprint(lhs_idx);
+        let lhs_pos_fp = catalog.positive_atom_fingerprint(lhs_idx)?;
         let left_atom_signature = AtomSignature::new(true, lhs_idx);
-        let left_atom_argument_signatures = catalog.positive_atom_argument_signature(lhs_idx);
+        let left_atom_argument_signatures =
+            catalog.positive_atom_argument_signature(lhs_idx)?.to_vec();
 
         self.insert_consumer(
             catalog.original_atom_fingerprints(),
@@ -226,9 +228,10 @@ impl RulePlanner {
         )?;
 
         // Extract RHS atom information and register as consumer
-        let rhs_pos_fp = catalog.positive_atom_fingerprint(rhs_idx);
+        let rhs_pos_fp = catalog.positive_atom_fingerprint(rhs_idx)?;
         let right_atom_signatures = vec![AtomSignature::new(true, rhs_idx)];
-        let right_atom_argument_signatures = catalog.positive_atom_argument_signature(rhs_idx);
+        let right_atom_argument_signatures =
+            catalog.positive_atom_argument_signature(rhs_idx)?.to_vec();
 
         self.insert_consumer(
             catalog.original_atom_fingerprints(),
@@ -239,26 +242,12 @@ impl RulePlanner {
         // Partition arguments into join keys and payload values
         let (lhs_keys, lhs_vals, rhs_keys, rhs_vals) = Self::partition_shared_keys(
             catalog,
-            left_atom_argument_signatures,
-            right_atom_argument_signatures,
-        );
-        fn labelled<'a>(
-            positions: &'a [ArithmeticPos],
-            catalog: &'a Catalog,
-        ) -> Vec<(&'a ArithmeticPos, &'a String)> {
-            positions
-                .iter()
-                .map(|pos| {
-                    (
-                        pos,
-                        catalog.signature_to_argument_str(pos.init().as_var_signature().unwrap()),
-                    )
-                })
-                .collect()
-        }
-        trace!("Join keys: {:?}", labelled(&lhs_keys, catalog));
-        trace!("Join LHS values: {:?}", labelled(&lhs_vals, catalog));
-        trace!("Join RHS values: {:?}", labelled(&rhs_vals, catalog));
+            &left_atom_argument_signatures,
+            &right_atom_argument_signatures,
+        )?;
+        trace!("Join keys: {:?}", lhs_keys);
+        trace!("Join LHS values: {:?}", lhs_vals);
+        trace!("Join RHS values: {:?}", rhs_vals);
 
         // Construct output argument list: keys + LHS values + RHS values
         let new_arguments_list: Vec<AtomArgumentSignature> = lhs_keys
@@ -271,7 +260,7 @@ impl RulePlanner {
         // Create the join transformation with proper key-value layouts
         let lhs_name = catalog.positive_atom_name(lhs_idx)?.to_string();
         let rhs_name = catalog.positive_atom_name(rhs_idx)?.to_string();
-        let lhs_key_names = Self::attrs_from_positions(&lhs_keys, catalog);
+        let lhs_key_names = Self::attrs_from_positions(&lhs_keys, catalog)?;
         let new_name = Self::join_name(&lhs_name, &rhs_name, &lhs_key_names);
         let tx = TransformationInfo::join_to_kv(
             lhs_pos_fp,
@@ -350,8 +339,14 @@ mod tests {
         planner.prepare(&mut catalog).expect("prepare");
 
         // Pin each source var to its pre-core argument signature.
-        let a_sigs = catalog.positive_atom_argument_signature(0).clone();
-        let b_sigs = catalog.positive_atom_argument_signature(1).clone();
+        let a_sigs = catalog
+            .positive_atom_argument_signature(0)
+            .expect("first atom")
+            .to_vec();
+        let b_sigs = catalog
+            .positive_atom_argument_signature(1)
+            .expect("second atom")
+            .to_vec();
         let x_in_a = a_sigs[0];
         let y_in_a = a_sigs[1];
         let y_in_b = b_sigs[0];

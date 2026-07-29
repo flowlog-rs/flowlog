@@ -136,7 +136,7 @@ impl StratumPlanner {
 
         // Phase 3 uses optimizer guidance to limit intermediate join results.
         while !catalogs.iter().all(|c| c.is_planned()) {
-            let join_decisions = optimizer.plan_stratum(&catalogs);
+            let join_decisions = optimizer.plan_stratum(&catalogs)?;
 
             for ((planner, catalog), join_decision) in rule_planners
                 .iter_mut()

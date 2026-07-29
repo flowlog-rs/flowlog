@@ -1,32 +1,45 @@
-//! Filter expression for FlowLog Datalog programs.
+//! One rule's local filters: variable-equality, constant, and
+//! placeholder constraints on atom argument positions. Iteration follows
+//! argument-signature order.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 
 use flowlog_parser::Constant;
 
 use crate::catalog::AtomArgumentSignature;
 
-/// Base constraint filters.
+/// Constraints a single rule imposes on its atom argument positions.
+///
+/// Examples use `atom.argument` signatures: `0.1` is argument 1 of
+/// positive atom 0, while `!0.1` is argument 1 of negative atom 0.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Filters {
-    /// Maps variables to other variables they must equal
-    var_eq_map: HashMap<AtomArgumentSignature, AtomArgumentSignature>,
+    /// Maps a repeated variable occurrence to the variable's first
+    /// occurrence within the same atom.
+    ///
+    /// For `A(x, x)`, this contains `0.1 -> 0.0`: the second argument
+    /// must equal the first.
+    var_eq_map: BTreeMap<AtomArgumentSignature, AtomArgumentSignature>,
 
-    /// Maps variables to constant values they must equal
-    const_map: HashMap<AtomArgumentSignature, Constant>,
+    /// Maps an argument position to the constant it must equal.
+    ///
+    /// For `A(x, 5)`, this contains `0.1 -> 5`.
+    const_map: BTreeMap<AtomArgumentSignature, Constant>,
 
-    /// Set of variables that are treated as placeholders
-    placeholder_set: HashSet<AtomArgumentSignature>,
+    /// Argument positions holding a placeholder (`_`).
+    ///
+    /// For `A(x, _)`, this contains `0.1`; that position is projected
+    /// away without an equality predicate.
+    placeholder_set: BTreeSet<AtomArgumentSignature>,
 }
 
 impl Filters {
-    /// Creates a filters with the specified constraints.
     pub(crate) fn new(
-        var_eq_map: HashMap<AtomArgumentSignature, AtomArgumentSignature>,
-        const_map: HashMap<AtomArgumentSignature, Constant>,
-        placeholder_set: HashSet<AtomArgumentSignature>,
+        var_eq_map: BTreeMap<AtomArgumentSignature, AtomArgumentSignature>,
+        const_map: BTreeMap<AtomArgumentSignature, Constant>,
+        placeholder_set: BTreeSet<AtomArgumentSignature>,
     ) -> Self {
         Self {
             var_eq_map,
@@ -35,25 +48,22 @@ impl Filters {
         }
     }
 
-    /// Returns a reference to the variable equality constraints map.
     #[inline]
-    pub(crate) fn var_eq_map(&self) -> &HashMap<AtomArgumentSignature, AtomArgumentSignature> {
+    pub(crate) fn var_eq_map(&self) -> &BTreeMap<AtomArgumentSignature, AtomArgumentSignature> {
         &self.var_eq_map
     }
 
-    /// Returns a reference to the constant equality constraints map.
     #[inline]
-    pub(crate) fn const_map(&self) -> &HashMap<AtomArgumentSignature, Constant> {
+    pub(crate) fn const_map(&self) -> &BTreeMap<AtomArgumentSignature, Constant> {
         &self.const_map
     }
 
-    /// Returns a reference to the placeholder variables set.
     #[inline]
-    pub(crate) fn placeholder_set(&self) -> &HashSet<AtomArgumentSignature> {
+    pub(crate) fn placeholder_set(&self) -> &BTreeSet<AtomArgumentSignature> {
         &self.placeholder_set
     }
 
-    /// Returns if the given args has any constraints.
+    /// Returns `true` if `arg` is constrained by any filter kind.
     pub(crate) fn is_const_or_var_eq_or_placeholder(&self, arg: &AtomArgumentSignature) -> bool {
         self.var_eq_map.contains_key(arg)
             || self.const_map.contains_key(arg)
@@ -75,7 +85,6 @@ impl fmt::Display for Filters {
 
         writeln!(f, "Filters:")?;
 
-        // Variable equality constraints
         if !self.var_eq_map.is_empty() {
             writeln!(f, "  Variable Equality Constraints:")?;
             for (var, target) in &self.var_eq_map {
@@ -83,7 +92,6 @@ impl fmt::Display for Filters {
             }
         }
 
-        // Constant equality constraints
         if !self.const_map.is_empty() {
             writeln!(f, "  Constant Constraints:")?;
             for (var, constant) in &self.const_map {
@@ -91,7 +99,6 @@ impl fmt::Display for Filters {
             }
         }
 
-        // Placeholder variables
         if !self.placeholder_set.is_empty() {
             writeln!(f, "  Placeholder Variables:")?;
             for placeholder in &self.placeholder_set {
