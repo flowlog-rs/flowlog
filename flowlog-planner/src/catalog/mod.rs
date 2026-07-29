@@ -1,9 +1,17 @@
-//! FlowLog Catalog Library
+//! Per-rule metadata for planning.
 //!
-//! This crate provides per-rule metadata and utilities used by the planner.
-//! It builds compact signatures for atoms/arguments, detects core
-//! atoms, records local filters, and exposes helpers to reason about variable
-//! occurrence and comparisons.
+//! A [`Catalog`] digests one rule into compact signatures for atoms and
+//! arguments, local filters, and variable-occurrence facts that the
+//! planner and optimizer query while ordering joins.
+//!
+//! # Layout
+//!
+//! - `rule`: the [`Catalog`] itself, its population and rewrites.
+//! - `atom`, `arithmetic`, `compare`: positional signatures for atom
+//!   arguments, arithmetic expressions, and comparisons.
+//! - `predicate`: join and key-value predicate bundles for the planner.
+//! - `filter`: one rule's constant, equality, and placeholder filters.
+//! - `error`: user diagnostics and catalog ICEs.
 
 mod arithmetic;
 mod atom;
@@ -13,16 +21,14 @@ mod filter;
 mod predicate;
 mod rule;
 
-// External API — used by integration tests.
-// Intra-crate shortcuts.
 pub(crate) use arithmetic::ArithmeticPos;
 pub(crate) use arithmetic::FactorPos;
 pub(crate) use atom::AtomArgumentSignature;
 pub(crate) use atom::AtomSignature;
 pub(crate) use compare::ComparisonExprPos;
-pub use error::CatalogError;
-pub use error::UnsafePredicateKind;
+pub(crate) use error::CatalogError;
+pub(crate) use error::UnsafePredicateKind;
 pub(crate) use filter::Filters;
 pub(crate) use predicate::JoinPredicates;
 pub(crate) use predicate::KvPredicates;
-pub use rule::Catalog;
+pub(crate) use rule::Catalog;

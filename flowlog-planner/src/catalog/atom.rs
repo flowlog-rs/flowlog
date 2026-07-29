@@ -1,16 +1,20 @@
-//! Atom signatures for FlowLog Datalog programs.
+//! Body-atom and atom-argument signatures used by the catalog.
 
 use std::fmt;
 
-/// A signature uniquely identifying an atom occurring in a RHS position per rule.
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Ord, PartialOrd)]
+/// Identifies one body atom by polarity and its zero-based index among
+/// atoms with that polarity.
+///
+/// In `Out(x) :- A(x, y), C(y), !B(y).`, `A` is `0`, `C` is `1`,
+/// and `B` is `!0`. Positive and negative atoms use separate counters;
+/// these are not positions in the complete rule body.
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Ord, PartialOrd, Debug)]
 pub(crate) struct AtomSignature {
     is_positive: bool,
     rhs_id: usize,
 }
 
 impl AtomSignature {
-    /// Create a new atom signature.
     #[inline]
     pub(crate) fn new(is_positive: bool, rhs_id: usize) -> Self {
         Self {
@@ -19,13 +23,13 @@ impl AtomSignature {
         }
     }
 
-    /// Returns true if the atom is positive.
     #[inline]
     pub(crate) fn is_positive(&self) -> bool {
         self.is_positive
     }
 
-    /// Returns the RHS id.
+    /// Index of the atom within its polarity's body atoms, not within
+    /// the whole rule body.
     #[inline]
     pub(crate) fn rhs_id(&self) -> usize {
         self.rhs_id
@@ -34,7 +38,6 @@ impl AtomSignature {
 
 impl fmt::Display for AtomSignature {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // e.g. !1
         write!(
             f,
             "{}{}",
@@ -44,22 +47,17 @@ impl fmt::Display for AtomSignature {
     }
 }
 
-impl fmt::Debug for AtomSignature {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Delegate Debug to Display
-        fmt::Display::fmt(self, f)
-    }
-}
-
-/// A signature referencing a specific argument within an atom.
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub struct AtomArgumentSignature {
+/// Identifies one zero-based argument position inside a body atom.
+///
+/// In `Out(x) :- A(x, y), C(y), !B(y).`, `0.1` identifies `y` in
+/// `A(x, y)`, while `!0.0` identifies `y` in `!B(y)`.
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Ord, PartialOrd, Debug)]
+pub(crate) struct AtomArgumentSignature {
     atom_signature: AtomSignature,
     argument_id: usize,
 }
 
 impl AtomArgumentSignature {
-    /// Create a new atom-argument signature.
     #[inline]
     pub(crate) fn new(atom_signature: AtomSignature, argument_id: usize) -> Self {
         Self {
@@ -68,13 +66,11 @@ impl AtomArgumentSignature {
         }
     }
 
-    /// Returns true if the underlying atom is positive.
     #[inline]
     pub(crate) fn is_positive(&self) -> bool {
         self.atom_signature.is_positive()
     }
 
-    /// Reference to the underlying atom signature.
     #[inline]
     pub(crate) fn atom_signature(&self) -> &AtomSignature {
         &self.atom_signature
@@ -88,15 +84,7 @@ impl AtomArgumentSignature {
 }
 
 impl fmt::Display for AtomArgumentSignature {
-    // e.g. !2.0
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}.{}", self.atom_signature, self.argument_id)
-    }
-}
-
-impl fmt::Debug for AtomArgumentSignature {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Delegate Debug to Display
-        fmt::Display::fmt(self, f)
     }
 }

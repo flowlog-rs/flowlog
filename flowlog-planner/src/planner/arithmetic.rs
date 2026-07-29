@@ -113,7 +113,7 @@ pub struct ArithmeticArgument {
 
 impl ArithmeticArgument {
     /// Creates an ArithmeticArgument from an ArithmeticPos and a list of transformation arguments.
-    pub fn from_arithmeticpos(
+    pub(crate) fn from_arithmeticpos(
         arithmetic: &ArithmeticPos,
         var_arguments: &[TransformationArgument],
     ) -> Self {

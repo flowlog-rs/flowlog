@@ -69,7 +69,7 @@ impl RulePlanner {
         right: usize,
         direction: &str,
     ) -> Result<(), PlanError> {
-        if !catalog.check_sip_pair(left, right) {
+        if !catalog.check_sip_pair(left, right)? {
             return Ok(());
         }
         trace!("SIP: {direction} atom_pos{} -> atom_pos{}", left, right);
@@ -94,7 +94,7 @@ impl RulePlanner {
         // The two atoms are distinct, and premapping one cannot change the
         // other's fingerprint, so a single forward pass is sufficient.
         for idx in [sip_pair.0, sip_pair.1] {
-            let fp = catalog.positive_atom_fingerprint(idx);
+            let fp = catalog.positive_atom_fingerprint(idx)?;
             if catalog.original_atom_fingerprints().contains(&fp) {
                 self.create_edb_premap_transformations(catalog, idx, true)?;
             }
@@ -117,12 +117,16 @@ impl RulePlanner {
         let originals = catalog.original_atom_fingerprints();
 
         // Atom metadata
-        let left_fp = catalog.positive_atom_fingerprint(lhs_pos_idx);
-        let left_arg_sigs = catalog.positive_atom_argument_signature(lhs_pos_idx);
+        let left_fp = catalog.positive_atom_fingerprint(lhs_pos_idx)?;
+        let left_arg_sigs = catalog
+            .positive_atom_argument_signature(lhs_pos_idx)?
+            .to_vec();
 
-        let right_fp = catalog.positive_atom_fingerprint(rhs_pos_idx);
+        let right_fp = catalog.positive_atom_fingerprint(rhs_pos_idx)?;
         let right_atom_sig = AtomSignature::new(true, rhs_pos_idx);
-        let right_arg_sigs = catalog.positive_atom_argument_signature(rhs_pos_idx);
+        let right_arg_sigs = catalog
+            .positive_atom_argument_signature(rhs_pos_idx)?
+            .to_vec();
 
         // Register both atoms as consumers of their respective inputs.
         // The projection consumes LHS; the semijoin consumes the result of projection and RHS.
@@ -131,13 +135,13 @@ impl RulePlanner {
 
         // Partition arguments into shared keys and remaining values
         let (lhs_keys, lhs_vals, rhs_keys, rhs_vals) =
-            Self::partition_shared_keys(catalog, left_arg_sigs, right_arg_sigs);
+            Self::partition_shared_keys(catalog, &left_arg_sigs, &right_arg_sigs)?;
 
         Self::trace_sip_partitions(catalog, &lhs_keys, &lhs_vals, &rhs_vals);
 
         // ---- Step 1: Project LHS → join keys only ----
         let left_name = catalog.positive_atom_name(lhs_pos_idx)?.to_string();
-        let lhs_key_names = RulePlanner::attrs_from_positions(&lhs_keys, catalog);
+        let lhs_key_names = RulePlanner::attrs_from_positions(&lhs_keys, catalog)?;
         let proj_name = RulePlanner::proj_name(&left_name, &lhs_key_names);
         let proj_tx = TransformationInfo::kv_to_kv(
             left_fp,
@@ -208,30 +212,14 @@ impl RulePlanner {
     // Tracing
     // ------------------------------------------------------------------
     fn trace_sip_partitions(
-        catalog: &Catalog,
+        _catalog: &Catalog,
         lhs_keys: &[ArithmeticPos],
         lhs_vals: &[ArithmeticPos],
         rhs_vals: &[ArithmeticPos],
     ) {
-        let fmt = |pos: &ArithmeticPos| {
-            (
-                pos.clone(),
-                catalog.signature_to_argument_str(pos.init().as_var_signature().unwrap()),
-            )
-        };
-
-        trace!(
-            "SIP semijoin keys: {:?}",
-            lhs_keys.iter().map(fmt).collect::<Vec<_>>()
-        );
-        trace!(
-            "SIP semijoin LHS values: {:?}",
-            lhs_vals.iter().map(fmt).collect::<Vec<_>>()
-        );
-        trace!(
-            "SIP semijoin RHS values: {:?}",
-            rhs_vals.iter().map(fmt).collect::<Vec<_>>()
-        );
+        trace!("SIP semijoin keys: {:?}", lhs_keys);
+        trace!("SIP semijoin LHS values: {:?}", lhs_vals);
+        trace!("SIP semijoin RHS values: {:?}", rhs_vals);
     }
 }
 

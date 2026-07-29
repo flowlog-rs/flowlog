@@ -28,7 +28,7 @@ pub struct Collection {
 
 impl Collection {
     /// Creates a new collection with the given fingerprint, name, and argument signatures.
-    pub fn new(
+    pub(crate) fn new(
         fingerprint: u64,
         name: String,
         key_argument_signatures: &[ArithmeticPos],

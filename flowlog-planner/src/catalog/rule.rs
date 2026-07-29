@@ -1,7 +1,8 @@
-//! Catalog of per-rule metadata and signatures for FlowLog Datalog programs.
+//! One rule's [`Catalog`]: construction, metadata queries, and diagnostic
+//! display. Rewrites and metadata population live in child modules.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 
 use flowlog_common::SECTION_BAR;
@@ -21,109 +22,134 @@ use crate::catalog::CatalogError;
 use crate::catalog::ComparisonExprPos;
 use crate::catalog::Filters;
 
-// Implementation modules
 mod modify;
 mod populate;
 
-/// Per-rule catalog with precomputed metadata.
+/// Returns indexed metadata or an internal error describing the violated
+/// bounds.
+fn metadata_at<'a, T>(
+    metadata: &'a [T],
+    index: usize,
+    field_name: &str,
+) -> Result<&'a T, CatalogError> {
+    metadata.get(index).ok_or_else(|| {
+        CatalogError::internal(format!(
+            "{field_name} index {index} out of bounds for length {}",
+            metadata.len()
+        ))
+    })
+}
+
+/// One rule's precomputed metadata: signatures, variable mappings,
+/// filters, and superset relationships, kept in step with the rule as the
+/// planner rewrites it.
 ///
-/// This structure maintains signatures, variable mappings, filters, and superset relationships
-/// for efficient rule analysis and transformation planning.
+/// Metadata maps and sets have deterministic iteration order.
 ///
-/// Note:
-/// 1. We introduce positive and negative atom RHS indices, which refer to the positions of atoms
-///    in the rule's right-hand side (RHS) when considering only positive or negative atoms, respectively.
-///    These two indices are not same as the global RHS indices.
+/// Positive and negative atoms have separate local indices. Body-index
+/// vectors map each local index back to the complete rule body.
 #[derive(Debug)]
-pub struct Catalog {
-    /// The rule.
-    /// Rule could be modified via modification methods.
-    /// Metadata is also updated accordingly.
+pub(crate) struct Catalog {
+    /// The rule this metadata describes, including catalog rewrites.
     rule: FlowLogRule,
 
-    /// Reverse map from argument signatures to their variable strings.
-    signature_to_argument_str_map: HashMap<AtomArgumentSignature, String>,
-    /// For each variable string, the first presence (if any) in every positive atom.
-    /// Example: for `tc(x, z) :- arc(x, y), tc(y, z)` → `{ x: [Some(0.0), None], y: [Some(0.1), Some(1.0)], z: [None, Some(1.1)] }`.
-    argument_presence_in_positive_atom_map: HashMap<String, Vec<Option<AtomArgumentSignature>>>,
-    /// Original rule atom fingerprints
-    original_atom_fingerprints: HashSet<u64>,
+    /// Variable name at each variable-bearing argument position.
+    argument_variables: BTreeMap<AtomArgumentSignature, String>,
 
-    // All these positive metadata are positive indexed.
-    /// RHS positive atom fingerprints (in source order).
+    /// For each variable, its first occurrence in every positive atom.
+    ///
+    /// For `tc(x, z) :- arc(x, y), tc(y, z)`, this maps `x` to
+    /// `[Some(0.0), None]`, `y` to `[Some(0.1), Some(1.0)]`, and `z` to
+    /// `[None, Some(1.1)]`.
+    positive_argument_presence: BTreeMap<String, Vec<Option<AtomArgumentSignature>>>,
+    /// Atom fingerprints as the rule was first catalogued, before any
+    /// rewrite.
+    original_atom_fingerprints: BTreeSet<u64>,
+
+    // --- Positive atom metadata ---
+    /// Positive atom fingerprints, in source order.
     positive_atom_fingerprints: Vec<u64>,
-    /// For each RHS positive atom, its argument signatures.
+    /// Argument signatures per positive atom.
     positive_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
-    /// Variable string sets per positive atom (deduplicated).
-    positive_atom_argument_vars_str_sets: Vec<HashSet<String>>,
-    /// For each RHS positive atom, indices of positive atoms that are supersets.
+    /// Variable names per positive atom (deduplicated).
+    positive_atom_variables: Vec<BTreeSet<String>>,
+    /// Positive atoms whose variable set is a superset of this one's.
     positive_supersets: Vec<Vec<usize>>,
-    /// For each RHS positive atom, its RHS id (index).
-    positive_atom_rhs_ids: Vec<usize>,
+    /// Index in the full rule body for each positive atom.
+    positive_atom_body_indices: Vec<usize>,
 
-    // All these negative metadata are negative indexed.
-    /// RHS negative atom fingerprints (in source order).
+    // --- Negative atom metadata ---
+    /// Negative atom fingerprints, in source order.
     negative_atom_fingerprints: Vec<u64>,
-    /// For each RHS negative atom, its argument signatures.
+    /// Argument signatures per negative atom.
     negative_atom_argument_signatures: Vec<Vec<AtomArgumentSignature>>,
-    /// Variable string sets per negative atom (deduplicated).
-    negative_atom_argument_vars_str_sets: Vec<HashSet<String>>,
-    /// For each RHS negative atom, indices of positive atoms that are supersets.
+    /// Variable names per negative atom (deduplicated).
+    negative_atom_variables: Vec<BTreeSet<String>>,
+    /// Positive atoms whose variable set covers this negative atom's.
     negative_supersets: Vec<Vec<usize>>,
-    /// For each RHS negative atom, its RHS id (index).
-    negative_atom_rhs_ids: Vec<usize>,
+    /// Index in the full rule body for each negative atom.
+    negative_atom_body_indices: Vec<usize>,
 
-    /// Local filters: variable equality constraints, constant equality constraints, placeholders.
+    /// Variable-equality, constant, and placeholder constraints.
     filters: Filters,
 
     /// Comparison predicates in the rule body.
     comparison_predicates: Vec<ComparisonExpr>,
-    /// Variable string sets per comparison predicate (deduplicated).
-    comparison_predicates_vars_str_set: Vec<HashSet<String>>,
-    /// For each comparison predicate, indices of positive atoms that are supersets.
+    /// Variable names per comparison predicate (deduplicated).
+    comparison_variables: Vec<BTreeSet<String>>,
+    /// Positive atoms whose variable set covers each comparison.
     comparison_supersets: Vec<Vec<usize>>,
 
-    /// Mapping from head argument string representation to structured form.
-    head_arguments_map: HashMap<String, HeadArg>,
-    /// Head IDB fingerprint.
-    head_idb_fingerprint: u64,
+    /// Head fingerprint as first catalogued.
+    original_head_fingerprint: u64,
 
-    /// Atom argument signatures whose variable string occurs exactly once across
-    /// all predicates in the rule body (positive atoms, negative atoms, comparisons).
-    /// Grouped by atom signature for convenience elimination in planners.
-    unused_arguments_per_atom: HashMap<AtomSignature, Vec<AtomArgumentSignature>>,
+    /// Projectable argument positions whose variable is used by exactly
+    /// one body predicate and not in the head. Grouped by atom.
+    unused_arguments_per_atom: BTreeMap<AtomSignature, Vec<AtomArgumentSignature>>,
 }
 
-// Construction and lifecycle management
+// =============================================================================
+// Construction
+// =============================================================================
+
 impl Catalog {
-    /// Build a Catalog from a single rule (derives signatures, filters and helper maps).
-    pub fn from_rule(rule: &FlowLogRule) -> Result<Self, CatalogError> {
-        let mut catalog = Self {
+    fn with_empty_metadata(rule: &FlowLogRule) -> Self {
+        Self {
             rule: rule.clone(),
-            signature_to_argument_str_map: HashMap::new(),
-            argument_presence_in_positive_atom_map: HashMap::new(),
-            original_atom_fingerprints: HashSet::new(),
+            argument_variables: BTreeMap::new(),
+            positive_argument_presence: BTreeMap::new(),
+            original_atom_fingerprints: BTreeSet::new(),
             positive_atom_fingerprints: Vec::new(),
             positive_atom_argument_signatures: Vec::new(),
-            positive_atom_argument_vars_str_sets: Vec::new(),
+            positive_atom_variables: Vec::new(),
             positive_supersets: Vec::new(),
-            positive_atom_rhs_ids: Vec::new(),
+            positive_atom_body_indices: Vec::new(),
             negative_atom_fingerprints: Vec::new(),
             negative_atom_argument_signatures: Vec::new(),
-            negative_atom_argument_vars_str_sets: Vec::new(),
+            negative_atom_variables: Vec::new(),
             negative_supersets: Vec::new(),
-            negative_atom_rhs_ids: Vec::new(),
-            filters: Filters::new(HashMap::new(), HashMap::new(), HashSet::new()),
+            negative_atom_body_indices: Vec::new(),
+            filters: Filters::new(BTreeMap::new(), BTreeMap::new(), BTreeSet::new()),
             comparison_predicates: Vec::new(),
-            comparison_predicates_vars_str_set: Vec::new(),
+            comparison_variables: Vec::new(),
             comparison_supersets: Vec::new(),
-            head_arguments_map: HashMap::new(),
-            head_idb_fingerprint: rule.head().head_fingerprint(),
-            unused_arguments_per_atom: HashMap::new(),
-        };
+            original_head_fingerprint: rule.head().head_fingerprint(),
+            unused_arguments_per_atom: BTreeMap::new(),
+        }
+    }
+
+    /// Builds a catalog for `rule`, deriving every signature, filter, and
+    /// occurrence map.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::UnsafeVariable`] when a negated atom or
+    /// comparison uses a variable no positive atom binds. Returns an
+    /// internal error if derived metadata is inconsistent.
+    pub(crate) fn from_rule(rule: &FlowLogRule) -> Result<Self, CatalogError> {
+        let mut catalog = Self::with_empty_metadata(rule);
         catalog.populate_all_metadata()?;
 
-        // Store original atom fingerprints for reference
         for predicate in rule.rhs() {
             match predicate {
                 Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
@@ -131,386 +157,543 @@ impl Catalog {
                         .original_atom_fingerprints
                         .insert(atom.fingerprint());
                 }
-                _ => {}
+                Predicate::Compare(_) => {}
             }
         }
 
-        // Debug info print
         debug!("\n{}", catalog);
 
         Ok(catalog)
     }
 
-    /// Clear all metadata while keeping the rule unchanged.
-    /// This method should be called each time before recomputing metadata.
-    pub(crate) fn clear(&mut self) {
-        self.signature_to_argument_str_map.clear();
-        self.argument_presence_in_positive_atom_map.clear();
-        self.positive_atom_fingerprints.clear();
-        self.positive_atom_argument_signatures.clear();
-        self.positive_atom_argument_vars_str_sets.clear();
-        self.positive_supersets.clear();
-        self.positive_atom_rhs_ids.clear();
-        self.negative_atom_fingerprints.clear();
-        self.negative_atom_argument_signatures.clear();
-        self.negative_atom_argument_vars_str_sets.clear();
-        self.negative_supersets.clear();
-        self.negative_atom_rhs_ids.clear();
-        self.filters = Filters::new(HashMap::new(), HashMap::new(), HashSet::new());
-        self.comparison_predicates.clear();
-        self.comparison_predicates_vars_str_set.clear();
-        self.comparison_supersets.clear();
-        self.head_arguments_map.clear();
-        self.unused_arguments_per_atom.clear();
-    }
-
-    /// Update the catalog with a new rule, recomputing corresponding metadata.
+    /// Replaces the current rule and its metadata while preserving the
+    /// original atom and head identities.
+    ///
+    /// Leaves the catalog unchanged when the replacement rule is invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::UnsafeVariable`] when a negated atom or
+    /// comparison uses a variable no positive atom binds. Returns an
+    /// internal error if derived metadata is inconsistent.
     pub(crate) fn update_rule(&mut self, rule: &FlowLogRule) -> Result<(), CatalogError> {
-        self.rule = rule.clone();
-        self.clear();
-        self.populate_all_metadata()
+        let mut replacement = Self::with_empty_metadata(rule);
+        replacement.populate_all_metadata()?;
+        replacement.original_atom_fingerprints = self.original_atom_fingerprints.clone();
+        replacement.original_head_fingerprint = self.original_head_fingerprint;
+        *self = replacement;
+        Ok(())
     }
 }
 
-// Public API: Getters and query methods
+// =============================================================================
+// Queries
+// =============================================================================
+
 impl Catalog {
-    /// Get the underlying rule.
+    /// Returns the rule, including every rewrite applied so far.
     #[inline]
     pub(crate) fn rule(&self) -> &FlowLogRule {
         &self.rule
     }
 
-    /// Get the argument string for a specific signature.
-    #[inline]
-    pub(crate) fn signature_to_argument_str(&self, sig: &AtomArgumentSignature) -> &String {
-        self.signature_to_argument_str_map.get(sig).unwrap()
-    }
-
-    /// Get the core atom count for rules with no supersets or filters.
+    /// Returns the variable name at an argument position.
     ///
-    /// # Panics
-    /// Panics if the rule has any supersets or filters, as this method
-    /// is only valid for "core" rules without optimization opportunities.
+    /// # Errors
+    ///
+    /// Returns an internal error if `signature` has no variable mapping.
     #[inline]
-    pub(crate) fn core_atom_number(&self) -> usize {
-        assert!(
-            self.positive_supersets.iter().all(|s| s.is_empty()),
-            "Rule has positive supersets - not a core rule"
-        );
-        assert!(
-            self.negative_supersets.iter().all(|s| s.is_empty()),
-            "Rule has negative supersets - not a core rule"
-        );
-        assert!(
-            self.comparison_supersets.iter().all(|s| s.is_empty()),
-            "Rule has comparison supersets - not a core rule"
-        );
-        assert!(
-            self.filters.is_empty(),
-            "Rule has filters - not a core rule"
-        );
-        self.positive_atom_fingerprints.len()
+    pub(crate) fn signature_to_argument_str(
+        &self,
+        signature: &AtomArgumentSignature,
+    ) -> Result<&str, CatalogError> {
+        self.argument_variables
+            .get(signature)
+            .map(String::as_str)
+            .ok_or_else(|| {
+                CatalogError::internal(format!(
+                    "argument signature {signature} absent from signature-to-variable map"
+                ))
+            })
     }
 
-    // Get original atom fingerprints
+    /// Returns the positive-atom count for a core rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if the rule still has an optimization
+    /// opportunity.
     #[inline]
-    pub(crate) fn original_atom_fingerprints(&self) -> &HashSet<u64> {
+    pub(crate) fn core_atom_number(&self) -> Result<usize, CatalogError> {
+        let residual = if self
+            .positive_supersets
+            .iter()
+            .any(|supersets| !supersets.is_empty())
+        {
+            Some("positive supersets")
+        } else if self
+            .negative_supersets
+            .iter()
+            .any(|supersets| !supersets.is_empty())
+        {
+            Some("negative supersets")
+        } else if self
+            .comparison_supersets
+            .iter()
+            .any(|supersets| !supersets.is_empty())
+        {
+            Some("comparison supersets")
+        } else if !self.filters.is_empty() {
+            Some("filters")
+        } else {
+            None
+        };
+        if let Some(residual) = residual {
+            return Err(CatalogError::internal(format!(
+                "core rule still has {residual}: {}",
+                self.rule
+            )));
+        }
+        Ok(self.positive_atom_fingerprints.len())
+    }
+
+    /// Returns the atom fingerprints as first catalogued.
+    #[inline]
+    pub(crate) fn original_atom_fingerprints(&self) -> &BTreeSet<u64> {
         &self.original_atom_fingerprints
     }
 
-    // === Positive Atoms ===
+    // --- Positive atoms ---
 
-    /// Get the number of positive atoms in the RHS.
+    /// Returns the number of positive atoms in the body.
     #[inline]
     pub(crate) fn positive_atom_number(&self) -> usize {
         self.positive_atom_fingerprints.len()
     }
 
-    /// Get the fingerprint of a positive atom by its index.
+    /// Returns a positive atom's fingerprint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the positive atoms.
     #[inline]
-    pub(crate) fn positive_atom_fingerprint(&self, index: usize) -> u64 {
-        self.positive_atom_fingerprints[index]
+    pub(crate) fn positive_atom_fingerprint(&self, index: usize) -> Result<u64, CatalogError> {
+        metadata_at(
+            &self.positive_atom_fingerprints,
+            index,
+            "positive atom fingerprint",
+        )
+        .copied()
     }
 
-    /// Get the current (possibly rewritten) name of a positive atom by its index.
-    /// Atom names are mutated in place by `projection_modify` / `join_modify` /
-    /// `comparison_modify`, so this returns the hierarchical name that
-    /// currently describes the atom.
+    /// Returns a positive atom's current hierarchical name, reflecting
+    /// every rewrite applied so far rather than the source spelling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the positive atoms
+    /// or its body position does not contain a positive atom.
     #[inline]
     pub(crate) fn positive_atom_name(&self, index: usize) -> Result<&str, CatalogError> {
-        let rhs_idx = self.positive_atom_rhs_ids[index];
-        match &self.rule.rhs()[rhs_idx] {
-            Predicate::PositiveAtom(a) => Ok(a.name()),
-            other => Err(CatalogError::internal(format!(
-                "positive_atom_rhs_ids[{index}] points at non-positive-atom predicate {other:?}"
-            ))),
+        let body_index = self.positive_atom_rhs_id(index)?;
+        match metadata_at(self.rule.rhs(), body_index, "rule body")? {
+            Predicate::PositiveAtom(atom) => Ok(atom.name()),
+            other @ (Predicate::NegativeAtom(_) | Predicate::Compare(_)) => {
+                Err(CatalogError::internal(format!(
+                    "positive atom {index} maps to non-positive body predicate {other}"
+                )))
+            }
         }
     }
 
-    /// Get the argument signatures for a positive atom by its index.
+    /// Returns a positive atom's argument signatures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the positive atoms.
     #[inline]
     pub(crate) fn positive_atom_argument_signature(
         &self,
         index: usize,
-    ) -> &Vec<AtomArgumentSignature> {
-        &self.positive_atom_argument_signatures[index]
+    ) -> Result<&[AtomArgumentSignature], CatalogError> {
+        metadata_at(
+            &self.positive_atom_argument_signatures,
+            index,
+            "positive atom argument signatures",
+        )
+        .map(Vec::as_slice)
     }
 
-    /// For each positive atom, get indices of positive atoms with superset variable sets.
+    /// Returns, per positive atom, the positive atoms whose variable set
+    /// is a superset of its own.
     #[inline]
-    pub(crate) fn positive_supersets(&self) -> &Vec<Vec<usize>> {
+    pub(crate) fn positive_supersets(&self) -> &[Vec<usize>] {
         &self.positive_supersets
     }
 
-    /// Get the RHS id (index) of a positive atom by its index.
+    /// Returns a positive atom's index in the full rule body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the positive atoms.
     #[inline]
-    pub(crate) fn positive_atom_rhs_id(&self, index: usize) -> usize {
-        self.positive_atom_rhs_ids[index]
+    pub(crate) fn positive_atom_rhs_id(&self, index: usize) -> Result<usize, CatalogError> {
+        metadata_at(
+            &self.positive_atom_body_indices,
+            index,
+            "positive atom body index",
+        )
+        .copied()
     }
 
     /// Returns `true` if two positive atoms share at least one variable,
     /// indicating that a SIP (side-information passing) semijoin between
     /// them may be beneficial.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if either index is outside the positive
+    /// atoms.
     #[inline]
-    pub(crate) fn check_sip_pair(&self, left_atom_id: usize, right_atom_id: usize) -> bool {
-        let left_vars = &self.positive_atom_argument_vars_str_sets[left_atom_id];
-        let right_vars = &self.positive_atom_argument_vars_str_sets[right_atom_id];
-        !left_vars.is_disjoint(right_vars)
+    pub(crate) fn check_sip_pair(
+        &self,
+        left_atom_index: usize,
+        right_atom_index: usize,
+    ) -> Result<bool, CatalogError> {
+        let left_vars = metadata_at(
+            &self.positive_atom_variables,
+            left_atom_index,
+            "left positive atom variables",
+        )?;
+        let right_vars = metadata_at(
+            &self.positive_atom_variables,
+            right_atom_index,
+            "right positive atom variables",
+        )?;
+        Ok(!left_vars.is_disjoint(right_vars))
     }
 
-    // === Negative Atoms ===
-    /// Get the fingerprint of a negative atom by its index.
+    // --- Negative atoms ---
+
+    /// Returns a negative atom's fingerprint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the negative atoms.
     #[inline]
-    pub(crate) fn negative_atom_fingerprint(&self, index: usize) -> u64 {
-        self.negative_atom_fingerprints[index]
+    pub(crate) fn negative_atom_fingerprint(&self, index: usize) -> Result<u64, CatalogError> {
+        metadata_at(
+            &self.negative_atom_fingerprints,
+            index,
+            "negative atom fingerprint",
+        )
+        .copied()
     }
 
-    /// Get the current (possibly rewritten) name of a negative atom by its index.
+    /// Returns a negative atom's current hierarchical name, reflecting
+    /// every rewrite applied so far.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the negative atoms
+    /// or its body position does not contain a negative atom.
     #[inline]
     pub(crate) fn negative_atom_name(&self, index: usize) -> Result<&str, CatalogError> {
-        let rhs_idx = self.negative_atom_rhs_ids[index];
-        match &self.rule.rhs()[rhs_idx] {
-            Predicate::NegativeAtom(a) => Ok(a.name()),
-            other => Err(CatalogError::internal(format!(
-                "negative_atom_rhs_ids[{index}] points at non-negative-atom predicate {other:?}"
-            ))),
+        let body_index = self.negative_atom_rhs_id(index)?;
+        match metadata_at(self.rule.rhs(), body_index, "rule body")? {
+            Predicate::NegativeAtom(atom) => Ok(atom.name()),
+            other @ (Predicate::PositiveAtom(_) | Predicate::Compare(_)) => {
+                Err(CatalogError::internal(format!(
+                    "negative atom {index} maps to non-negative body predicate {other}"
+                )))
+            }
         }
     }
 
-    /// Get the argument signatures for a negative atom by its index.
+    /// Returns a negative atom's argument signatures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the negative atoms.
     #[inline]
     pub(crate) fn negative_atom_argument_signature(
         &self,
         index: usize,
-    ) -> &Vec<AtomArgumentSignature> {
-        &self.negative_atom_argument_signatures[index]
+    ) -> Result<&[AtomArgumentSignature], CatalogError> {
+        metadata_at(
+            &self.negative_atom_argument_signatures,
+            index,
+            "negative atom argument signatures",
+        )
+        .map(Vec::as_slice)
     }
 
-    /// For each negative atom, get indices of positive atoms with superset variable sets.
+    /// Returns, per negative atom, the positive atoms whose variable set
+    /// covers it.
     #[inline]
-    pub(crate) fn negative_supersets(&self) -> &Vec<Vec<usize>> {
+    pub(crate) fn negative_supersets(&self) -> &[Vec<usize>] {
         &self.negative_supersets
     }
 
-    /// Get the RHS id (index) of a negative atom by its index.
+    /// Returns a negative atom's index in the full rule body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the negative atoms.
     #[inline]
-    pub(crate) fn negative_atom_rhs_id(&self, index: usize) -> usize {
-        self.negative_atom_rhs_ids[index]
+    pub(crate) fn negative_atom_rhs_id(&self, index: usize) -> Result<usize, CatalogError> {
+        metadata_at(
+            &self.negative_atom_body_indices,
+            index,
+            "negative atom body index",
+        )
+        .copied()
     }
 
-    // === Atom Resolution ===
+    // --- Atom resolution ---
 
-    /// Resolve an atom signature to its argument signatures, fingerprint,
-    /// RHS id, and current hierarchical name.
+    /// Resolves an atom to its argument signatures, fingerprint,
+    /// polarity-local index, and current hierarchical name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if the signature identifies no atom or
+    /// the atom metadata is inconsistent.
     #[inline]
     pub(crate) fn resolve_atom(
         &self,
         atom_signature: &AtomSignature,
     ) -> Result<(&[AtomArgumentSignature], u64, usize, &str), CatalogError> {
-        let atom_id = atom_signature.rhs_id();
+        let atom_index = atom_signature.rhs_id();
         if atom_signature.is_positive() {
             Ok((
-                &self.positive_atom_argument_signatures[atom_id],
-                self.positive_atom_fingerprints[atom_id],
-                atom_id,
-                self.positive_atom_name(atom_id)?,
+                self.positive_atom_argument_signature(atom_index)?,
+                self.positive_atom_fingerprint(atom_index)?,
+                atom_index,
+                self.positive_atom_name(atom_index)?,
             ))
         } else {
             Ok((
-                &self.negative_atom_argument_signatures[atom_id],
-                self.negative_atom_fingerprints[atom_id],
-                atom_id,
-                self.negative_atom_name(atom_id)?,
+                self.negative_atom_argument_signature(atom_index)?,
+                self.negative_atom_fingerprint(atom_index)?,
+                atom_index,
+                self.negative_atom_name(atom_index)?,
             ))
         }
     }
 
-    /// Finds the global RHS index of an atom given its signature.
-    pub(crate) fn rhs_index_from_signature(&self, sig: AtomSignature) -> usize {
-        if sig.is_positive() {
-            self.positive_atom_rhs_ids[sig.rhs_id()]
+    /// Returns an atom's index in the full rule body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `signature` identifies no atom or its
+    /// body index is invalid.
+    pub(crate) fn rhs_index_from_signature(
+        &self,
+        signature: AtomSignature,
+    ) -> Result<usize, CatalogError> {
+        let body_index = if signature.is_positive() {
+            self.positive_atom_rhs_id(signature.rhs_id())?
         } else {
-            self.negative_atom_rhs_ids[sig.rhs_id()]
-        }
+            self.negative_atom_rhs_id(signature.rhs_id())?
+        };
+        metadata_at(self.rule.rhs(), body_index, "rule body")?;
+        Ok(body_index)
     }
 
-    // === Comparison Predicates ===
+    // --- Comparison predicates ---
 
-    /// Get a comparison predicate by its index.
+    /// Returns a comparison predicate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if `index` is outside the comparisons.
     #[inline]
-    pub(crate) fn comparison_predicate(&self, index: usize) -> ComparisonExpr {
-        self.comparison_predicates[index].clone()
+    pub(crate) fn comparison_predicate(
+        &self,
+        index: usize,
+    ) -> Result<ComparisonExpr, CatalogError> {
+        metadata_at(&self.comparison_predicates, index, "comparison predicate").cloned()
     }
 
-    /// For each comparison predicate, get indices of positive atoms with superset variable sets.
+    /// Returns, per comparison, the positive atoms whose variable set
+    /// covers it.
     #[inline]
-    pub(crate) fn comparison_supersets(&self) -> &Vec<Vec<usize>> {
+    pub(crate) fn comparison_supersets(&self) -> &[Vec<usize>] {
         &self.comparison_supersets
     }
 
-    /// First binding occurrence of variable `v` in positive atom `atom_idx`.
     #[inline]
-    fn var_sig_in_atom(&self, v: &str, atom_idx: usize) -> Option<AtomArgumentSignature> {
-        self.argument_presence_in_positive_atom_map
-            .get(v)
-            .and_then(|row| row.get(atom_idx).copied().flatten())
+    fn variable_signature_in_positive_atom(
+        &self,
+        variable: &str,
+        atom_index: usize,
+    ) -> Option<AtomArgumentSignature> {
+        self.positive_argument_presence
+            .get(variable)
+            .and_then(|presence| presence.get(atom_index).copied().flatten())
     }
 
-    /// Resolve a comparison expression with argument positions for a given positive atom and comparison predicate.
+    /// Resolves a comparison's variables to argument positions within one
+    /// positive atom.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if either index is invalid, a variable is
+    /// absent from the atom, or positional arithmetic construction fails.
     pub(crate) fn resolve_comparison_predicates(
         &self,
-        pos_atom_id: usize,
-        comp_id: usize,
+        positive_atom_index: usize,
+        comparison_index: usize,
     ) -> Result<ComparisonExprPos, CatalogError> {
-        let comp_exprs = &self.comparison_predicates[comp_id];
+        let comparison = metadata_at(
+            &self.comparison_predicates,
+            comparison_index,
+            "comparison predicate",
+        )?;
         let resolve =
-            |side: &'static str, v: &String| -> Result<AtomArgumentSignature, CatalogError> {
-                self.var_sig_in_atom(v, pos_atom_id).ok_or_else(|| {
-                CatalogError::internal(format!(
-                    "variable `{v}` in comparison {side} not found in positive atom #{pos_atom_id}"
-                ))
-            })
+            |side: &str, variable: &String| -> Result<AtomArgumentSignature, CatalogError> {
+                self.variable_signature_in_positive_atom(variable, positive_atom_index)
+                    .ok_or_else(|| {
+                        CatalogError::internal(format!(
+                            "variable `{variable}` in comparison {side} not found in positive atom \
+                             #{positive_atom_index}"
+                        ))
+                    })
             };
-        let left_var_signatures = comp_exprs
+        let left_variable_signatures = comparison
             .left()
             .vars()
             .iter()
-            .map(|&v| resolve("lhs", v))
+            .map(|&variable| resolve("left side", variable))
             .collect::<Result<Vec<_>, _>>()?;
-        let right_var_signatures = comp_exprs
+        let right_variable_signatures = comparison
             .right()
             .vars()
             .iter()
-            .map(|&v| resolve("rhs", v))
+            .map(|&variable| resolve("right side", variable))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(ComparisonExprPos::from_comparison_expr(
-            comp_exprs,
-            &left_var_signatures,
-            &right_var_signatures,
-        ))
+        ComparisonExprPos::from_comparison_expr(
+            comparison,
+            &left_variable_signatures,
+            &right_variable_signatures,
+        )
     }
 
-    /// Equalities usable as join keys between positive atoms `lhs_idx` and
-    /// `rhs_idx`, as `(comp_id, lhs_key, rhs_key)` per fusable equality.
+    /// Returns equalities usable as join keys between two positive atoms.
+    ///
+    /// Each result is `(comparison_index, left_key, right_key)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if comparison metadata is inconsistent or
+    /// an equality cannot be converted to positional arithmetic.
     pub(crate) fn equijoin_keys_for_pair(
         &self,
-        lhs_idx: usize,
-        rhs_idx: usize,
-    ) -> Vec<(usize, ArithmeticPos, ArithmeticPos)> {
+        left_atom_index: usize,
+        right_atom_index: usize,
+    ) -> Result<Vec<(usize, ArithmeticPos, ArithmeticPos)>, CatalogError> {
         // An equality qualifies when each side resolves wholly in one of the
-        // two atoms — fresh-variable equalities are desugared to bindings
+        // two atoms; fresh-variable equalities are desugared to bindings
         // before planning, so every comparison here is between two grounded
         // expressions and is safe to key a join on.
 
-        // Resolve `arith`'s variables to signatures in atom `atom_idx`;
-        // `None` if any variable is absent (side not grounded there).
-        let resolve = |arith: &Arithmetic, atom_idx: usize| -> Option<ArithmeticPos> {
-            let sigs = arith
+        let resolve_in_atom = |arithmetic: &Arithmetic,
+                               atom_index: usize|
+         -> Result<Option<ArithmeticPos>, CatalogError> {
+            let Some(signatures) = arithmetic
                 .vars()
                 .iter()
-                .map(|&v| self.var_sig_in_atom(v, atom_idx))
-                .collect::<Option<Vec<_>>>()?;
-            Some(ArithmeticPos::from_arithmetic(arith, &sigs))
+                .map(|&variable| self.variable_signature_in_positive_atom(variable, atom_index))
+                .collect::<Option<Vec<_>>>()
+            else {
+                return Ok(None);
+            };
+            ArithmeticPos::from_arithmetic(arithmetic, &signatures).map(Some)
         };
 
-        let mut out = Vec::new();
-        for (comp_id, comp) in self.comparison_predicates.iter().enumerate() {
-            if *comp.operator() != ComparisonOperator::Equal {
+        let mut keys = Vec::new();
+        for (comparison_index, comparison) in self.comparison_predicates.iter().enumerate() {
+            if *comparison.operator() != ComparisonOperator::Equal {
                 continue;
             }
-            // Non-empty superset: a single atom covers it — pushdown owns it.
-            if !self.comparison_supersets[comp_id].is_empty() {
+            let supersets = metadata_at(
+                &self.comparison_supersets,
+                comparison_index,
+                "comparison supersets",
+            )?;
+            if !supersets.is_empty() {
                 continue;
             }
-            // Try both orientations; keep `(l, r)` keying `(lhs, rhs)`.
-            let keys = resolve(comp.left(), lhs_idx)
-                .zip(resolve(comp.right(), rhs_idx))
-                .or_else(|| resolve(comp.right(), lhs_idx).zip(resolve(comp.left(), rhs_idx)));
-            if let Some((l, r)) = keys {
-                out.push((comp_id, l, r));
+            let resolved = match (
+                resolve_in_atom(comparison.left(), left_atom_index)?,
+                resolve_in_atom(comparison.right(), right_atom_index)?,
+            ) {
+                (Some(left), Some(right)) => Some((left, right)),
+                (None, _) | (_, None) => resolve_in_atom(comparison.right(), left_atom_index)?
+                    .zip(resolve_in_atom(comparison.left(), right_atom_index)?),
+            };
+            if let Some((left, right)) = resolved {
+                keys.push((comparison_index, left, right));
             }
         }
-        out
+        Ok(keys)
     }
 
-    /// Fresh shadow-column name for fused equality `comp_id`.
-    pub(crate) fn fresh_equijoin_key_name(&self, comp_id: usize) -> String {
-        // The grammar caps identifiers at one leading underscore, so users
-        // cannot occupy the `__` namespace; the loop only disambiguates
-        // against other minted names — a colliding name would assert an
-        // equality the rule never wrote.
-        let mut name = format!("__eqk{comp_id}");
-        while self
-            .argument_presence_in_positive_atom_map
-            .contains_key(&name)
-        {
+    /// Returns a fresh shadow-column name for a fused equality.
+    pub(crate) fn fresh_equijoin_key_name(&self, comparison_index: usize) -> String {
+        // User identifiers have at most one leading underscore, so the
+        // reserved `__` prefix cannot collide with source names.
+        let mut name = format!("__eqk{comparison_index}");
+        while self.positive_argument_presence.contains_key(&name) {
             name.push('_');
         }
         name
     }
 
-    // === Filters ===
+    // --- Filters ---
 
-    /// Get the local atom filters (var==var, var==const, placeholders).
+    /// Returns the rule's local filters.
     #[inline]
     pub(crate) fn filters(&self) -> &Filters {
         &self.filters
     }
 
-    // === Head Information ===
+    // --- Head information ---
 
-    /// Get the head IDB fingerprint.
+    /// Returns the head relation's original fingerprint.
     #[inline]
     pub(crate) fn head_idb_fingerprint(&self) -> u64 {
-        self.head_idb_fingerprint
+        self.original_head_fingerprint
     }
 
-    /// Get the head arguments.
+    /// Returns the head arguments.
     #[inline]
     pub(crate) fn head_arguments(&self) -> &[HeadArg] {
         self.rule.head().head_arguments()
     }
 
-    /// Get all variable strings from the head arguments.
-    pub(crate) fn head_arguments_strs(&self) -> HashSet<String> {
+    /// Returns every variable named in the head.
+    pub(crate) fn head_variables(&self) -> BTreeSet<String> {
         self.head_arguments()
             .iter()
-            .flat_map(|h| h.vars().into_iter().cloned())
+            .flat_map(|argument| argument.vars().into_iter().cloned())
             .collect()
     }
 
-    // === Unused Arguments ===
+    // --- Unused arguments ---
 
-    /// Get unused arguments grouped by atom signature.
+    /// Returns the projectable argument positions, grouped by atom.
     #[inline]
     pub(crate) fn unused_arguments_per_atom(
         &self,
-    ) -> &HashMap<AtomSignature, Vec<AtomArgumentSignature>> {
+    ) -> &BTreeMap<AtomSignature, Vec<AtomArgumentSignature>> {
         &self.unused_arguments_per_atom
     }
 
-    // === Plan Logic ===
-    /// Check if current rule planning is done.
+    // --- Plan logic ---
+
+    /// Returns `true` once every atom has been folded into the plan.
     pub(crate) fn is_planned(&self) -> bool {
         self.positive_atom_fingerprints.len() == 1
             && self.negative_atom_fingerprints.is_empty()
@@ -523,25 +706,29 @@ impl fmt::Display for Catalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", SECTION_BAR)?;
 
-        writeln!(f, "Catalog of rule:\n  {:?}", self.rule())?;
+        writeln!(f, "Catalog of rule:\n  {}", self.rule())?;
 
-        let fmt_sig_list = |sigs: &[AtomArgumentSignature],
-                            map: &HashMap<AtomArgumentSignature, String>|
+        let format_signature_list = |signatures: &[AtomArgumentSignature],
+                                     variables: &BTreeMap<AtomArgumentSignature, String>|
          -> String {
-            let mut items: Vec<String> = sigs
+            let items = signatures
                 .iter()
-                .filter_map(|s| map.get(s).map(|v| format!("{}:{}", s, v)))
-                .collect();
-            items.sort();
+                .map(|signature| {
+                    variables.get(signature).map_or_else(
+                        || format!("{signature}:<missing variable>"),
+                        |variable| format!("{signature}:{variable}"),
+                    )
+                })
+                .collect::<Vec<_>>();
             format!("[{}]", items.join(", "))
         };
 
-        // Simple index vector pretty-printer (keeps original order)
-        let fmt_idx_list = |idxs: &[usize]| -> String {
+        let format_index_list = |indices: &[usize]| -> String {
             format!(
                 "[{}]",
-                idxs.iter()
-                    .map(|i| i.to_string())
+                indices
+                    .iter()
+                    .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -549,12 +736,16 @@ impl fmt::Display for Catalog {
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Positive atoms:")?;
-        for (i, fp) in self.positive_atom_fingerprints.iter().enumerate() {
-            let args = fmt_sig_list(
-                &self.positive_atom_argument_signatures[i],
-                &self.signature_to_argument_str_map,
-            );
-            writeln!(f, "  [{:>2}] 0x{:016x} args: {}", i, fp, args)?;
+        for (atom_index, fingerprint) in self.positive_atom_fingerprints.iter().enumerate() {
+            let arguments = self
+                .positive_atom_argument_signatures
+                .get(atom_index)
+                .map(|signatures| format_signature_list(signatures, &self.argument_variables))
+                .unwrap_or_else(|| "[missing argument metadata]".to_string());
+            writeln!(
+                f,
+                "  [{atom_index:>2}] 0x{fingerprint:016x} args: {arguments}"
+            )?;
         }
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
@@ -562,112 +753,122 @@ impl fmt::Display for Catalog {
         if self.negative_atom_fingerprints.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
-            for (i, fp) in self.negative_atom_fingerprints.iter().enumerate() {
-                let args = fmt_sig_list(
-                    &self.negative_atom_argument_signatures[i],
-                    &self.signature_to_argument_str_map,
-                );
-                writeln!(f, "  [{:>2}] 0x{:016x} args: {}", i, fp, args)?;
+            for (atom_index, fingerprint) in self.negative_atom_fingerprints.iter().enumerate() {
+                let arguments = self
+                    .negative_atom_argument_signatures
+                    .get(atom_index)
+                    .map(|signatures| format_signature_list(signatures, &self.argument_variables))
+                    .unwrap_or_else(|| "[missing argument metadata]".to_string());
+                writeln!(
+                    f,
+                    "  [{atom_index:>2}] 0x{fingerprint:016x} args: {arguments}"
+                )?;
             }
         }
 
-        // NEW: print RHS index vectors with per-entry mapping
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
-        writeln!(f, "RHS indices (by atom kind):")?;
+        writeln!(f, "Body indices (by atom kind):")?;
         writeln!(
             f,
-            "  positive_atom_rhs_ids ({}): {}",
-            self.positive_atom_rhs_ids.len(),
-            fmt_idx_list(&self.positive_atom_rhs_ids)
+            "  positive ({}): {}",
+            self.positive_atom_body_indices.len(),
+            format_index_list(&self.positive_atom_body_indices)
         )?;
-        for (i, rhs_id) in self.positive_atom_rhs_ids.iter().copied().enumerate() {
-            writeln!(f, "    pos[{:>2}] -> rhs[{:>2}]", i, rhs_id)?;
+        for (atom_index, body_index) in self.positive_atom_body_indices.iter().copied().enumerate()
+        {
+            writeln!(f, "    positive[{atom_index:>2}] -> body[{body_index:>2}]")?;
         }
         writeln!(
             f,
-            "  negative_atom_rhs_ids  ({}): {}",
-            self.negative_atom_rhs_ids.len(),
-            fmt_idx_list(&self.negative_atom_rhs_ids)
+            "  negative ({}): {}",
+            self.negative_atom_body_indices.len(),
+            format_index_list(&self.negative_atom_body_indices)
         )?;
-        for (i, rhs_id) in self.negative_atom_rhs_ids.iter().copied().enumerate() {
-            writeln!(f, "    neg[{:>2}] -> rhs[{:>2}]", i, rhs_id)?;
+        for (atom_index, body_index) in self.negative_atom_body_indices.iter().copied().enumerate()
+        {
+            writeln!(f, "    negative[{atom_index:>2}] -> body[{body_index:>2}]")?;
         }
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
-        writeln!(f, "Signature ↔ Var:")?;
-        let mut sig_entries: Vec<_> = self.signature_to_argument_str_map.iter().collect();
-        sig_entries.sort_by_key(|(a, _)| a.to_string());
-        let sig_line = sig_entries
+        writeln!(f, "Argument variables:")?;
+        let signature_line = self
+            .argument_variables
             .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
+            .map(|(signature, variable)| format!("{signature}={variable}"))
             .collect::<Vec<_>>()
             .join(", ");
-        if sig_line.is_empty() {
+        if signature_line.is_empty() {
             writeln!(f, "  (empty)")?;
         } else {
-            writeln!(f, "  {}", sig_line)?;
+            writeln!(f, "  {signature_line}")?;
         }
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Argument presence per positive atom:")?;
-        let mut vars: Vec<_> = self.argument_presence_in_positive_atom_map.keys().collect();
-        vars.sort();
-        for var in vars {
-            let row = self.argument_presence_in_positive_atom_map[var]
+        for (variable, presence) in &self.positive_argument_presence {
+            let row = presence
                 .iter()
-                .map(|opt| opt.map(|s| s.to_string()).unwrap_or_else(|| "-".into()))
+                .map(|signature| {
+                    signature
+                        .map(|signature| signature.to_string())
+                        .unwrap_or_else(|| "-".to_string())
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
-            writeln!(f, "  {}: [{}]", var, row)?;
+            writeln!(f, "  {variable}: [{row}]")?;
         }
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Base filters:")?;
         if self.filters.is_empty() {
-            writeln!(f, "  (none)")?
+            writeln!(f, "  (none)")?;
         } else {
             for line in self.filters.to_string().lines() {
-                writeln!(f, "  {}", line)?;
+                writeln!(f, "  {line}")?;
             }
         }
 
-        // Render the sorted var-set for the i-th predicate, or `[]` if out of range.
-        let fmt_pred_vars = |sets: &[HashSet<String>], i: usize| -> String {
-            let Some(set) = sets.get(i) else {
-                return "vars: []".to_string();
+        let format_predicate_variables =
+            |variable_sets: &[BTreeSet<String>], index: usize| -> String {
+                let Some(variables) = variable_sets.get(index) else {
+                    return "vars: <missing metadata>".to_string();
+                };
+                format!(
+                    "vars: [{}]",
+                    variables
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             };
-            let mut vars: Vec<&str> = set.iter().map(String::as_str).collect();
-            vars.sort();
-            format!("vars: [{}]", vars.join(", "))
-        };
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
         writeln!(f, "Comparison predicates:")?;
         if self.comparison_predicates.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
-            for (i, comp_pred) in self.comparison_predicates.iter().enumerate() {
-                let vars_set = fmt_pred_vars(&self.comparison_predicates_vars_str_set, i);
-                writeln!(f, "  [{:>2}] {} ({})", i, comp_pred, vars_set)?;
+            for (index, comparison) in self.comparison_predicates.iter().enumerate() {
+                let variables = format_predicate_variables(&self.comparison_variables, index);
+                writeln!(f, "  [{index:>2}] {comparison} ({variables})")?;
             }
         }
 
         writeln!(f, "\n{}", SUBSECTION_BAR)?;
-        writeln!(f, "Supersets (per predicate → positive atom ids):")?;
-        let mut print_supersets = |label: &str, supersets: &Vec<Vec<usize>>| -> fmt::Result {
+        writeln!(f, "Covering positive atoms by predicate:")?;
+        let mut print_supersets = |label: &str, supersets: &[Vec<usize>]| -> fmt::Result {
             if supersets.is_empty() || supersets.iter().all(|supers| supers.is_empty()) {
-                writeln!(f, "  {}: (none)", label)
+                writeln!(f, "  {label}: (none)")
             } else {
-                writeln!(f, "  {}:", label)?;
-                for (i, supers) in supersets.iter().enumerate() {
-                    if !supers.is_empty() {
+                writeln!(f, "  {label}:")?;
+                for (index, superset_indices) in supersets.iter().enumerate() {
+                    if !superset_indices.is_empty() {
                         writeln!(
                             f,
-                            "    [{}] -> [{}]",
-                            i,
-                            supers
+                            "    [{index}] -> [{}]",
+                            superset_indices
                                 .iter()
-                                .map(|x| x.to_string())
+                                .map(ToString::to_string)
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         )?;
@@ -685,8 +886,12 @@ impl fmt::Display for Catalog {
         if self.unused_arguments_per_atom.is_empty() {
             writeln!(f, "  (none)")?;
         } else {
-            for (atom_sig, args) in &self.unused_arguments_per_atom {
-                writeln!(f, "  {:?} -> {:?}", atom_sig, args)?;
+            for (atom_signature, arguments) in &self.unused_arguments_per_atom {
+                let arguments = arguments
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                writeln!(f, "  {atom_signature} -> [{}]", arguments.join(", "))?;
             }
         }
 
@@ -698,27 +903,18 @@ impl fmt::Display for Catalog {
 
 #[cfg(test)]
 mod tests {
-    //! Unit tests target invariants that integration fixtures (positive
-    //! paths in e2e + 3 UnsafeVariable error fixtures) can't pin down:
-    //! within-atom equality filters, placeholder/const recording, SIP
-    //! eligibility truth table, and the "head var never unused" rule.
-    //!
-    //! Tests run the full `parse`, so the typechecker pins every literal to a
-    //! concrete type, matching how `tests/catalog_errors.rs` drives the
-    //! catalog.
     use std::io::Write;
 
     use flowlog_common::Config;
     use flowlog_common::SourceMap;
-    use flowlog_parser::Constant;
-    use flowlog_parser::DataType;
+    use flowlog_parser::FlowLogRule;
     use tempfile::NamedTempFile;
 
     use super::*;
 
-    fn catalog_for(src: &str) -> Catalog {
+    fn parsed_rule(source: &str) -> FlowLogRule {
         let mut tmp = NamedTempFile::new().expect("tempfile");
-        tmp.write_all(src.as_bytes()).expect("write");
+        tmp.write_all(source.as_bytes()).expect("write");
         let mut sm = SourceMap::new();
         let program = flowlog_parser::parse(
             &tmp.path().to_string_lossy(),
@@ -727,64 +923,16 @@ mod tests {
             &mut Config::default(),
         )
         .expect("parse failed");
-        Catalog::from_rule(program.rules()[0]).expect("catalog build failed")
+        let rules = program.rules();
+        (*rules.first().expect("test source produced no rule")).clone()
     }
 
-    /// `A(x, x)` — the second `x` must not create a fresh binding; it must
-    /// emit an equality filter mapping arg1's sig to arg0's sig. A broken
-    /// `local_var_first_occurrence_map` would re-bind and silently drop
-    /// the join predicate.
-    #[test]
-    fn repeated_var_in_atom_creates_var_eq_entry() {
-        let src = "\
-            .decl A(a: int32, b: int32)\n\
-            .decl Out(x: int32)\n\
-            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
-            .output Out\n\
-            Out(x) :- A(x, x).\n";
-        let catalog = catalog_for(src);
-        let sigs = catalog.positive_atom_argument_signature(0);
-        let var_eq = catalog.filters().var_eq_map();
-        assert_eq!(
-            var_eq.get(&sigs[1]),
-            Some(&sigs[0]),
-            "second `x` must map back to first `x`"
-        );
+    fn catalog_for(source: &str) -> Catalog {
+        Catalog::from_rule(&parsed_rule(source)).expect("catalog build failed")
     }
 
-    /// `A(_, 5)` — arg0 is a placeholder, arg1 is a const. Both must
-    /// populate their respective filter sets. Downstream codegen runs
-    /// pruning and const folding off these sets; empty sets on either
-    /// side would emit wrong filters.
     #[test]
-    fn placeholder_and_const_populate_filter_sets() {
-        let src = "\
-            .decl A(a: int32, b: int32)\n\
-            .decl Out()\n\
-            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
-            .output Out\n\
-            Out() :- A(_, 5).\n";
-        let catalog = catalog_for(src);
-        let sigs = catalog.positive_atom_argument_signature(0);
-        let filters = catalog.filters();
-        assert!(
-            filters.placeholder_set().contains(&sigs[0]),
-            "placeholder `_` missing from placeholder_set"
-        );
-        assert_eq!(
-            filters.const_map().get(&sigs[1]),
-            Some(&Constant::new(DataType::Int32, "5")),
-            "constant 5 missing from const_map"
-        );
-    }
-
-    /// `check_sip_pair` guards SIP eligibility — two positive atoms must
-    /// share at least one body variable. Inverted `is_disjoint` logic or
-    /// indexing into the wrong backing array would silently enable or
-    /// disable every semijoin the planner considers.
-    #[test]
-    fn check_sip_pair_var_share_semantics() {
-        // Shared `y` → eligible.
+    fn sip_pair_requires_a_shared_variable() {
         let shared = catalog_for(
             "\
             .decl A(a: int32, b: int32)\n\
@@ -795,12 +943,8 @@ mod tests {
             .output Out\n\
             Out(x, y, z) :- A(x, y), B(y, z).\n",
         );
-        assert!(
-            shared.check_sip_pair(0, 1),
-            "atoms sharing `y` should be SIP-eligible"
-        );
+        assert!(shared.check_sip_pair(0, 1).expect("valid atom indices"));
 
-        // No shared var → ineligible.
         let disjoint = catalog_for(
             "\
             .decl A(a: int32)\n\
@@ -811,39 +955,80 @@ mod tests {
             .output Out\n\
             Out(x, y) :- A(x), B(y).\n",
         );
-        assert!(
-            !disjoint.check_sip_pair(0, 1),
-            "atoms with no shared var must not be SIP-eligible"
-        );
+        assert!(!disjoint.check_sip_pair(0, 1).expect("valid atom indices"));
     }
 
-    /// Head variables must NEVER be marked unused, even when they appear
-    /// only once in the body. A regression would let codegen drop a
-    /// head-bound var's backing column, producing wrong rule output.
     #[test]
-    fn head_variable_never_marked_unused() {
-        let src = "\
-            .decl A(a: int32, b: int32)\n\
+    fn caller_controlled_positive_atom_index_returns_internal_error() {
+        let catalog = catalog_for(
+            "\
+            .decl A(a: int32)\n\
             .decl Out(x: int32)\n\
             .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
             .output Out\n\
-            Out(x) :- A(x, y).\n";
-        let catalog = catalog_for(src);
-        let sigs = catalog.positive_atom_argument_signature(0);
-        let x_sig = sigs[0];
-        let y_sig = sigs[1];
-        let all_unused: HashSet<&AtomArgumentSignature> = catalog
-            .unused_arguments_per_atom()
-            .values()
-            .flat_map(|v| v.iter())
-            .collect();
-        assert!(
-            !all_unused.contains(&x_sig),
-            "`x` is a head var and must never be marked unused"
+            Out(x) :- A(x).\n",
         );
-        assert!(
-            all_unused.contains(&y_sig),
-            "`y` appears once and is not in the head → should be marked unused"
+        let error = catalog
+            .positive_atom_fingerprint(1)
+            .expect_err("index 1 is outside a one-atom catalog");
+        assert_eq!(
+            error.to_string(),
+            "internal compiler error at stage `catalog`: positive atom fingerprint index 1 out \
+             of bounds for length 1"
         );
+    }
+
+    #[test]
+    fn core_atom_number_rejects_unprepared_rule() {
+        let catalog = catalog_for(
+            "\
+            .decl A(a: int32)\n\
+            .decl B(a: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x), B(x).\n",
+        );
+        let error = catalog
+            .core_atom_number()
+            .expect_err("shared-variable atoms have residual supersets");
+        assert_eq!(
+            error.to_string(),
+            "internal compiler error at stage `catalog`: core rule still has positive supersets: \
+             out(x) :- A(x), B(x)."
+        );
+    }
+
+    #[test]
+    fn invalid_rule_update_leaves_catalog_unchanged() {
+        let mut catalog = catalog_for(
+            "\
+            .decl A(a: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x).\n",
+        );
+        let original = catalog.to_string();
+        let invalid_rule = parsed_rule(
+            "\
+            .decl A(a: int32)\n\
+            .decl Blocked(a: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input Blocked(IO=\"file\", filename=\"Blocked.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x), !Blocked(other).\n",
+        );
+
+        let error = catalog
+            .update_rule(&invalid_rule)
+            .expect_err("unsafe replacement rule must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "unsafe variable `other` in negated atom `!Blocked(other)`"
+        );
+        assert_eq!(catalog.to_string(), original);
     }
 }

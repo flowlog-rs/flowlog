@@ -5,12 +5,14 @@ use std::fmt;
 use flowlog_parser::ComparisonExpr;
 use flowlog_parser::ComparisonOperator;
 
+use crate::catalog::CatalogError;
 use crate::catalog::arithmetic::ArithmeticPos;
 use crate::catalog::atom::AtomArgumentSignature;
 
-/// A comparison expression with variables resolved to their concrete positions.
+/// A comparison expression with variables resolved to their concrete
+/// positions.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ComparisonExprPos {
+pub(crate) struct ComparisonExprPos {
     left: ArithmeticPos,
     operator: ComparisonOperator,
     right: ArithmeticPos,
@@ -18,23 +20,28 @@ pub struct ComparisonExprPos {
 
 impl ComparisonExprPos {
     /// Constructs a positional comparison expression from a parsed expression.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if either signature list does not match its
+    /// expression.
     pub(crate) fn from_comparison_expr(
         compare_expr: &ComparisonExpr,
         left_var_signatures: &[AtomArgumentSignature],
         right_var_signatures: &[AtomArgumentSignature],
-    ) -> Self {
-        let left = ArithmeticPos::from_arithmetic(compare_expr.left(), left_var_signatures);
-        let right = ArithmeticPos::from_arithmetic(compare_expr.right(), right_var_signatures);
+    ) -> Result<Self, CatalogError> {
+        let left = ArithmeticPos::from_arithmetic(compare_expr.left(), left_var_signatures)?;
+        let right = ArithmeticPos::from_arithmetic(compare_expr.right(), right_var_signatures)?;
         let operator = compare_expr.operator().clone();
 
-        Self {
+        Ok(Self {
             left,
             operator,
             right,
-        }
+        })
     }
 
-    /// Construct a positional comparison expression directly from parts.
+    /// Constructs a positional comparison expression directly from parts.
     pub(crate) fn from_parts(
         left: ArithmeticPos,
         operator: ComparisonOperator,
@@ -47,19 +54,16 @@ impl ComparisonExprPos {
         }
     }
 
-    /// Returns the comparison operator.
     #[inline]
     pub(crate) fn operator(&self) -> &ComparisonOperator {
         &self.operator
     }
 
-    /// Returns the left-hand side arithmetic expression.
     #[inline]
     pub(crate) fn left(&self) -> &ArithmeticPos {
         &self.left
     }
 
-    /// Returns the right-hand side arithmetic expression.
     #[inline]
     pub(crate) fn right(&self) -> &ArithmeticPos {
         &self.right
