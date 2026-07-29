@@ -280,11 +280,39 @@ impl CodeGen {
     /// Emits the batch run loop (`worker` and `index` in scope): steps the
     /// dataflow to fixpoint, periodically flushing metrics when profiled.
     pub(crate) fn gen_batch_step_loop(&self) -> TokenStream {
-        self.gen_flush_loop(
-            quote! { worker.step() },
-            quote! {},
-            self.gen_metrics_write_batch(),
-        )
+        let step = quote! {{
+            let more = if __flowlog_idle_steps < __FLOWLOG_SPIN_BEFORE_PARK {
+                worker.step()
+            } else {
+                worker.step_or_park(Some(__FLOWLOG_PARK_TIMEOUT))
+            };
+            if more {
+                if __flowlog_activations.borrow().empty_for()
+                    == Some(std::time::Duration::ZERO)
+                {
+                    __flowlog_idle_steps = 0;
+                } else if __flowlog_idle_steps < __FLOWLOG_SPIN_BEFORE_PARK {
+                    __flowlog_idle_steps += 1;
+                }
+            }
+            more
+        }};
+        let step_loop = self.gen_flush_loop(step, quote! {}, self.gen_metrics_write_batch());
+
+        quote! {
+            {
+                // Spin briefly after scheduled work to avoid a park/wake round
+                // trip at progress barriers. Once idle, park with a bounded
+                // timeout so workers stop consuming a core while profiling can
+                // still flush on schedule.
+                const __FLOWLOG_SPIN_BEFORE_PARK: u64 = 4096;
+                const __FLOWLOG_PARK_TIMEOUT: std::time::Duration =
+                    std::time::Duration::from_millis(1);
+                let __flowlog_activations = worker.activations();
+                let mut __flowlog_idle_steps = 0u64;
+                #step_loop
+            }
+        }
     }
 
     /// Emits the incremental commit step loop (`worker`, `probe`,
