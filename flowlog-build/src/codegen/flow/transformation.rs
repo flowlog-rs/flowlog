@@ -173,8 +173,11 @@ impl CodeGen {
                     pred => {
                         let body = flat_map_body_tokens(pred, out_val);
                         Ok(quote! {
-                            let #out = #inp.clone()
-                                .flat_map(|#row_pat: #row_ty| { #body });
+                            let #out = ::flowlog_runtime::operators::flowlog_flat_map(
+                                #inp.clone(),
+                                #operator_name,
+                                |#row_pat: #row_ty| { #body },
+                            );
                         })
                     }
                 }
@@ -261,8 +264,11 @@ impl CodeGen {
                     quote! { let #out = #inp.clone(); }
                 } else {
                     quote! {
-                        let #out = #inp.clone()
-                            .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                        let #out = ::flowlog_runtime::operators::flowlog_flat_map(
+                            #inp.clone(),
+                            #operator_name,
+                            |#row_pat: #row_ty| { #flat_map_body },
+                        );
                     }
                 };
 
@@ -326,8 +332,11 @@ impl CodeGen {
                 let flat_map_body = flat_map_body_tokens(pred, out_val);
 
                 Ok(quote! {
-                    let #out = #inp.clone()
-                        .flat_map(|( #kv_param_k, #kv_param_v )| { #flat_map_body });
+                    let #out = ::flowlog_runtime::operators::flowlog_flat_map(
+                        #inp.clone(),
+                        #operator_name,
+                        |( #kv_param_k, #kv_param_v )| { #flat_map_body },
+                    );
                 })
             }
 
@@ -417,8 +426,11 @@ impl CodeGen {
                 let flat_map_body = flat_map_body_tokens(pred, out_expr);
 
                 let transformation = quote! {
-                    let #out = #inp.clone()
-                        .flat_map(#closure_param { #flat_map_body });
+                    let #out = ::flowlog_runtime::operators::flowlog_flat_map(
+                        #inp.clone(),
+                        #operator_name,
+                        #closure_param { #flat_map_body },
+                    );
                     #out_dedup_expr
                 };
 
@@ -620,25 +632,28 @@ impl CodeGen {
 
                 Ok(quote! {
                     let #out =
-                        #r.clone()
-                            .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
-                            #inter_dedup
-                            #pos_weight_concat
-                            .concat(
-                                {
-                                    ::flowlog_runtime::operators::flowlog_join_core(
-                                        #l.clone(),
-                                        #r.clone(),
-                                        #operator_name,
-                                        |aj_k, _, aj_rv| {
-                                            Some((aj_k.clone(), aj_rv.clone()))
-                                        },
-                                    )
-                                    #inter_dedup
-                                    #neg_weight_concat
-                                }
-                            )
-                            .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_value ))
+                        ::flowlog_runtime::operators::flowlog_flat_map(
+                            #r.clone()
+                                .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
+                                #inter_dedup
+                                #pos_weight_concat
+                                .concat(
+                                    {
+                                        ::flowlog_runtime::operators::flowlog_join_core(
+                                            #l.clone(),
+                                            #r.clone(),
+                                            #operator_name,
+                                            |aj_k, _, aj_rv| {
+                                                Some((aj_k.clone(), aj_rv.clone()))
+                                            },
+                                        )
+                                        #inter_dedup
+                                        #neg_weight_concat
+                                    }
+                                ),
+                            #operator_name,
+                            |( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_value ),
+                        )
                             #final_normalize;
                 })
             }
@@ -697,25 +712,28 @@ impl CodeGen {
 
                 let transformation = quote! {
                     let #out =
-                        #r.clone()
-                            .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
-                            #inter_dedup
-                            #pos_weight_concat
-                            .concat(
-                                {
-                                    ::flowlog_runtime::operators::flowlog_join_core(
-                                        #l.clone(),
-                                        #r.clone(),
-                                        #operator_name,
-                                        |aj_k, _, aj_rv| {
-                                            Some((aj_k.clone(), aj_rv.clone()))
-                                        },
-                                    )
+                        ::flowlog_runtime::operators::flowlog_flat_map(
+                            #r.clone()
+                                .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
+                                #inter_dedup
+                                #pos_weight_concat
+                                .concat(
+                                    {
+                                        ::flowlog_runtime::operators::flowlog_join_core(
+                                            #l.clone(),
+                                            #r.clone(),
+                                            #operator_name,
+                                            |aj_k, _, aj_rv| {
+                                                Some((aj_k.clone(), aj_rv.clone()))
+                                            },
+                                        )
                                         #inter_dedup
                                         #neg_weight_concat
-                                }
-                            )
-                            .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_expr ))
+                                    }
+                                ),
+                            #operator_name,
+                            |( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_expr ),
+                        )
                             #final_normalize;
                 };
 
