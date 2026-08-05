@@ -66,7 +66,7 @@ pub(super) fn row_pattern_and_fields(
 // ==================================================
 
 impl CodeGen {
-    /// Row → KV: tuple-shaped expression for the produced key or value,
+    /// Row -> KV: tuple-shaped expression for the produced key or value,
     /// drawing source fields by index from the row destructuring pattern.
     pub(super) fn build_key_val_from_row_args(
         &mut self,
@@ -81,7 +81,7 @@ impl CodeGen {
         Ok(tuple_tokens(parts))
     }
 
-    /// KV → KV: tuple-shaped expression drawing from the current `(k, v)`
+    /// KV -> KV: tuple-shaped expression drawing from the current `(k, v)`
     /// closure bindings.
     pub(super) fn build_key_val_from_kv_args(
         &mut self,
@@ -95,8 +95,8 @@ impl CodeGen {
         Ok(tuple_tokens(parts))
     }
 
-    /// Join → KV: tuple-shaped expression drawing from a `join_core`
-    /// closure's `(k, lv, rv)` bindings.
+    /// Join -> KV: tuple-shaped expression drawing from the closure's
+    /// `(k, lv, rv)` bindings.
     pub(super) fn build_key_val_from_join_args(
         &mut self,
         args: &[ArithmeticArgument],
@@ -165,7 +165,7 @@ fn param_ident(used: bool, name: &str) -> TokenStream {
     quote! { #id }
 }
 
-/// `join_core` closure idents `(k, lv, rv)`.
+/// Returns join-closure idents, with unused inputs prefixed by `_`.
 pub(super) fn compute_join_param_tokens(
     key_args: &[ArithmeticArgument],
     value_args: &[ArithmeticArgument],
@@ -389,8 +389,10 @@ impl CodeGen {
         Ok(Some(quote! { #( #parts )&&* }))
     }
 
-    /// `join_core`-closure comparison predicate, combined with `&&`. The join
-    /// operand builder always clones (`k`/`lv`/`rv` are references).
+    /// Builds a join-closure comparison predicate, combined with `&&`.
+    ///
+    /// The join operand builder clones because `k`, `lv`, and `rv` are
+    /// references.
     pub(super) fn build_join_compare_predicate(
         &mut self,
         comps: &[ComparisonExprArgument],
@@ -1064,7 +1066,7 @@ impl CodeGen {
         self.build_arithmetic_expr(expr, string_intern, &|arg| match arg {
             TransformationArgument::Jn((is_left, is_key, idx)) => {
                 let i = Index::from(*idx);
-                // `k`, `lv`, `rv` are references in join_core; clone to get owned values.
+                // Join arguments are references; expressions produce owned values.
                 let ident = if *is_key {
                     Ident::new("k", Span::call_site())
                 } else if *is_left {

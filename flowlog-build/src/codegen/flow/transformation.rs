@@ -14,9 +14,11 @@ use flowlog_planner::planner::TransformationArgument;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
+use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
+use syn::LitStr;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
@@ -66,6 +68,7 @@ impl CodeGen {
             transformation.flow(),
             edb_suffix,
         );
+        let operator_name = LitStr::new(&transformation_name, Span::call_site());
         let si = self.features.string_intern();
 
         match transformation {
@@ -483,8 +486,12 @@ impl CodeGen {
                 let join_body = join_body_tokens(pred, out_val);
 
                 Ok(quote! {
-                    let #out = #l.clone()
-                        .join_core(#r.clone(), |#jn_k, #jn_lv, #jn_rv| { #join_body });
+                    let #out = ::flowlog_runtime::operators::flowlog_join(
+                        #l.clone(),
+                        #r.clone(),
+                        #operator_name,
+                        |#jn_k, #jn_lv, #jn_rv| { #join_body },
+                    );
                 })
             }
 
@@ -545,8 +552,12 @@ impl CodeGen {
                 let join_body = join_body_tokens(pred, out_expr);
 
                 let transformation = quote! {
-                    let #out = #l.clone()
-                        .join_core(#r.clone(), |#jn_k, #jn_lv, #jn_rv| { #join_body });
+                    let #out = ::flowlog_runtime::operators::flowlog_join(
+                        #l.clone(),
+                        #r.clone(),
+                        #operator_name,
+                        |#jn_k, #jn_lv, #jn_rv| { #join_body },
+                    );
                 };
 
                 let arrange_stmt = self.register_arrangement(
@@ -615,10 +626,14 @@ impl CodeGen {
                             #pos_weight_concat
                             .concat(
                                 {
-                                    #l.clone()
-                                    .join_core(#r.clone(), |aj_k, _, aj_rv| {
-                                        Some((aj_k.clone(), aj_rv.clone()))
-                                    })
+                                    ::flowlog_runtime::operators::flowlog_join(
+                                        #l.clone(),
+                                        #r.clone(),
+                                        #operator_name,
+                                        |aj_k, _, aj_rv| {
+                                            Some((aj_k.clone(), aj_rv.clone()))
+                                        },
+                                    )
                                     #inter_dedup
                                     #neg_weight_concat
                                 }
@@ -688,10 +703,14 @@ impl CodeGen {
                             #pos_weight_concat
                             .concat(
                                 {
-                                    #l.clone()
-                                        .join_core(#r.clone(), |aj_k, _, aj_rv| {
+                                    ::flowlog_runtime::operators::flowlog_join(
+                                        #l.clone(),
+                                        #r.clone(),
+                                        #operator_name,
+                                        |aj_k, _, aj_rv| {
                                             Some((aj_k.clone(), aj_rv.clone()))
-                                        })
+                                        },
+                                    )
                                         #inter_dedup
                                         #neg_weight_concat
                                 }
@@ -820,11 +839,11 @@ fn is_identity_row_projection(args: &[ArithmeticArgument], row_arity: usize) -> 
         })
 }
 
-/// Build the body of a `join_core` closure that yields `out` either
+/// Builds the body of a join closure that yields `out` either
 /// conditionally (when `pred` is `Some`) or unconditionally.
 ///
 /// The unconditional branch returns a bare `Some(...)` because
-/// `join_core` expects an `Option`, not an iterator.
+/// The join operator expects an `Option`, not an iterator.
 fn join_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream {
     match pred {
         Some(pred) => quote! { if #pred { Some( #out ) } else { None } },
