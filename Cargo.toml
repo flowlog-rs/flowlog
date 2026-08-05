@@ -22,7 +22,7 @@ repository = "https://github.com/flowlog-rs/flowlog"
 anyhow = "1.0"
 clap = "4.5"
 codespan-reporting = "0.13"
-differential-dataflow = "0.25"
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow", rev = "9ef780beb632d00aaaf9c1bbe7ffaca26bb3fa3e" }
 educe = "0.7"
 itertools = "0.15"
 lasso = "0.7"

@@ -695,8 +695,12 @@ impl CodeGen {
             let combined = format_ident!("rel_sig_comb_{}", fp);
             match conn {
                 LoopConnective::And => stmts.push(quote! {
-                    let #combined = #gate.arrange_by_self()
-                        .join_core(#sig.arrange_by_self(), |(), _, _| std::iter::once(()));
+                    let #combined = ::flowlog_runtime::operators::flowlog_join_core(
+                        #gate.arrange_by_self(),
+                        #sig.arrange_by_self(),
+                        "Loop condition: and",
+                        |(), _, _| std::iter::once(()),
+                    );
                 }),
                 LoopConnective::Or => {
                     stmts.push(quote! { let #combined = #gate.concat(#sig.clone()) #dedup; });
@@ -850,13 +854,21 @@ fn stop_stmt(
                 #pos
                 .concatenate([
                     {
-                        keyed_arr
-                            .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
+                        ::flowlog_runtime::operators::flowlog_join_core(
+                            keyed_arr,
+                            #gate.clone(),
+                            "Loop condition: stop input",
+                            |_, v, _| std::iter::once(((), v.clone())),
+                        )
                             #neg
                     },
                     {
-                        keyed_rec_arr
-                            .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
+                        ::flowlog_runtime::operators::flowlog_join_core(
+                            keyed_rec_arr,
+                            #gate.clone(),
+                            "Loop condition: stop recursive",
+                            |_, v, _| std::iter::once(((), v.clone())),
+                        )
                             #pos
                     },
                 ])
