@@ -270,12 +270,11 @@ impl CodeGen {
                 quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) }
             };
 
-            // Apply dedup to merged collection.
-            // Inside a recursive scope we need a persistent trace to avoid
-            // re-emitting tuples across iterations → use dedup_recursive.
-            let dedup_call = self.dedup_recursive();
+            // Feedback must not re-emit tuples across iterations, so the
+            // merged collection takes the retained dedup.
             let mut block = quote! {
-                let #next_ident = #union_expr #dedup_call;
+                let #next_ident =
+                    ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(#union_expr);
             };
 
             with_plan_graph(plan_graph, |plan_graph| {
@@ -608,14 +607,12 @@ impl CodeGen {
                 );
             });
             let var_name = format_ident!("{}_var", recursive_ident);
-            let dedup = self.dedup_recursive();
-            // Only generate weight tokens and normalize when until conditions
-            // exist — these require antijoin arithmetic (pos/neg/normalize).
-            let (pos, neg, normalize) = if plan.boolean_until_conditions.is_some() {
-                let (p, n) = self.weight_concat_tokens();
-                (p, n, self.dedup_recursive())
+            // The negation only exists when until conditions do: it feeds
+            // the cancelling arithmetic inside the stop gate.
+            let neg = if plan.boolean_until_conditions.is_some() {
+                negated_weight_tokens()
             } else {
-                (quote! {}, quote! {}, quote! {})
+                quote! {}
             };
 
             // Choose the feedback source:
@@ -631,21 +628,15 @@ impl CodeGen {
             let source = if !iterative_fps.contains(fp) && has_iterative {
                 let acc_next = format_ident!("acc_next_{}", fp);
                 stmts.push(quote! {
-                    let #acc_next = #next_ident.clone().concat(#recursive_ident.clone()) #dedup;
+                    let #acc_next = ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(
+                        #next_ident.clone().concat(#recursive_ident.clone())
+                    );
                 });
                 acc_next
             } else {
                 next_ident.clone()
             };
-            let feedback = build_feedback_expr(
-                &source,
-                recursive_ident,
-                &plan,
-                &pos,
-                &neg,
-                &dedup,
-                &normalize,
-            );
+            let feedback = build_feedback_expr(&source, recursive_ident, &plan, &neg);
 
             stmts.push(quote! { #var_name.set(#feedback); });
         }
@@ -676,8 +667,10 @@ impl CodeGen {
             ))
         })?;
         let first_sig = format_ident!("rel_sig_{}", first_fp);
-        let dedup = self.dedup_recursive();
-        stmts.push(quote! { let #first_sig = #first_next.clone() #dedup; });
+        stmts.push(quote! {
+            let #first_sig =
+                ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(#first_next.clone());
+        });
         let mut gate = first_sig;
 
         // Fold remaining until relations into the gate with explicit connectives.
@@ -690,7 +683,10 @@ impl CodeGen {
                 ))
             })?;
             let sig = format_ident!("rel_sig_{}", fp);
-            stmts.push(quote! { let #sig = #next_ident.clone() #dedup; });
+            stmts.push(quote! {
+                let #sig =
+                    ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(#next_ident.clone());
+            });
 
             let combined = format_ident!("rel_sig_comb_{}", fp);
             match conn {
@@ -703,7 +699,11 @@ impl CodeGen {
                     );
                 }),
                 LoopConnective::Or => {
-                    stmts.push(quote! { let #combined = #gate.concat(#sig.clone()) #dedup; });
+                    stmts.push(quote! {
+                        let #combined = ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(
+                            #gate.concat(#sig.clone())
+                        );
+                    });
                 }
             }
             gate = combined;
@@ -761,18 +761,13 @@ fn build_iter_conditions(ranges: &[(u16, u16)]) -> TokenStream {
         .unwrap_or_else(|| quote! { false })
 }
 
-/// Build the feedback expression for one recursive variable given a `ConditionPlan`.
-///
-/// `dedup` — recursive-safe set-dedup (threshold_semigroup for batch, threshold for inc).
-/// `normalize` — convert i32 antijoin arithmetic back to native diff type.
+/// Build the feedback expression for one recursive variable given a
+/// `ConditionPlan`.
 fn build_feedback_expr(
     next: &Ident,
     recursive: &Ident,
     plan: &ConditionPlan,
-    pos: &TokenStream,
     neg: &TokenStream,
-    dedup: &TokenStream,
-    normalize: &TokenStream,
 ) -> TokenStream {
     match (
         plan.iter_while_conditions.as_deref(),
@@ -780,14 +775,7 @@ fn build_feedback_expr(
     ) {
         (None, None) => quote! { #next.clone() },
         (Some(ranges), None) => continue_stmt(next, build_iter_conditions(ranges)),
-        (None, Some(arr)) => stop_stmt(
-            quote! { #next.clone() },
-            recursive,
-            arr,
-            pos,
-            neg,
-            normalize,
-        ),
+        (None, Some(arr)) => stop_stmt(quote! { #next.clone() }, recursive, arr, neg),
         (Some(ranges), Some(arr)) => {
             let range_cond = build_iter_conditions(ranges);
             if matches!(plan.connective, Some(LoopConnective::Or)) {
@@ -798,21 +786,18 @@ fn build_feedback_expr(
                     continue_stmt(next, quote! { !(#range_cond) }),
                     recursive,
                     arr,
-                    pos,
                     neg,
-                    normalize,
                 );
-                quote! { { #allowed.concat(#blocked) #dedup } }
+                quote! {
+                    {
+                        ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(
+                            #allowed.concat(#blocked)
+                        )
+                    }
+                }
             } else {
                 // AND: rows must be in-range AND not stopped.
-                stop_stmt(
-                    continue_stmt(next, range_cond),
-                    recursive,
-                    arr,
-                    pos,
-                    neg,
-                    normalize,
-                )
+                stop_stmt(continue_stmt(next, range_cond), recursive, arr, neg)
             }
         }
     }
@@ -831,49 +816,62 @@ fn continue_stmt(next: &Ident, cond_expr: TokenStream) -> TokenStream {
     }
 }
 
-/// Convergent stop-condition: `input - (input ⋈ gate) + (recursive ⋈ gate)`.
-/// Returns `input` when gate is empty; converges to `recursive` when gate fires.
+/// Negates the weights of a stop-gate arm, so concatenating it subtracts.
 ///
-/// `normalize` converts the `i32` antijoin result back to the native diff type
-/// (`Present` for batch, `i32` 0/1 for inc).
+/// Loop conditions are rejected outside the extended modes, which always
+/// carry `i32` diffs, so this never has to lift a `Present` collection the
+/// way an antijoin does. It negates rather than overwriting because an
+/// iterative relation retracts as it replaces, and those retractions have
+/// to flip back to derivations.
+fn negated_weight_tokens() -> TokenStream {
+    quote! {
+        .inner
+        .map_in_place(|(_, _, d)| *d = -*d)
+        .as_collection()
+    }
+}
+
+/// Convergent stop-condition:
+/// `input - (input join gate) + (recursive join gate)`.
+/// Returns `input` when gate is empty; converges to `recursive` when gate
+/// fires.
 fn stop_stmt(
     input: TokenStream,
     recursive: &Ident,
     gate: &Ident,
-    pos: &TokenStream,
     neg: &TokenStream,
-    normalize: &TokenStream,
 ) -> TokenStream {
+    // The cancelling arithmetic leaves i32 diffs behind, so the retained
+    // dedup also restores the ambient diff type here.
     quote! {
         {
             let keyed = (#input).map(|t| ((), t));
             let keyed_arr = keyed.clone().arrange_by_key();
             let keyed_rec = #recursive.clone().map(|t| ((), t));
             let keyed_rec_arr = keyed_rec.arrange_by_key();
-            keyed
-                #pos
-                .concatenate([
-                    {
-                        ::flowlog_runtime::operators::flowlog_join_core(
-                            keyed_arr,
-                            #gate.clone(),
-                            "Loop condition: stop input",
-                            |_, v, _| std::iter::once(((), v.clone())),
-                        )
-                            #neg
-                    },
-                    {
-                        ::flowlog_runtime::operators::flowlog_join_core(
-                            keyed_rec_arr,
-                            #gate.clone(),
-                            "Loop condition: stop recursive",
-                            |_, v, _| std::iter::once(((), v.clone())),
-                        )
-                            #pos
-                    },
-                ])
-                .map(|((), t)| t)
-                #normalize
+            ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(
+                keyed
+                    .concatenate([
+                        {
+                            ::flowlog_runtime::operators::flowlog_join_core(
+                                keyed_arr,
+                                #gate.clone(),
+                                "Loop condition: stop input",
+                                |_, v, _| std::iter::once(((), v.clone())),
+                            )
+                                #neg
+                        },
+                        {
+                            ::flowlog_runtime::operators::flowlog_join_core(
+                                keyed_rec_arr,
+                                #gate.clone(),
+                                "Loop condition: stop recursive",
+                                |_, v, _| std::iter::once(((), v.clone())),
+                            )
+                        },
+                    ])
+                    .map(|((), t)| t)
+            )
         }
     }
 }

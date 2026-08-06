@@ -409,7 +409,7 @@ impl PlanGraph {
             format!("{}: inspect size", name),
             vec![input_variable_name],
             None,
-            steps::inspect_size(self.mode),
+            steps::INSPECT_SIZE,
             None,
         );
     }

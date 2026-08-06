@@ -412,12 +412,11 @@ impl CodeGen {
                     quote! { |( #kv_param_k, #kv_param_v )| }
                 };
 
-                // Ideally, in system design, projection (to key) in SIP optimization may introduce duplicates,
-                // we have to apply deduplication to avoid incorrect Yannakakis computation bounds.
-                // Dedup only applies when there is no predicate (predicate paths already filter).
-                let dedup_call = self.dedup_projection(recursive);
+                // SIP projection to a key can introduce duplicates, which
+                // would break the Yannakakis computation bounds. Predicate
+                // paths already filter, so only the bare projection dedups.
                 let out_dedup_expr = if dedups {
-                    quote! { let #out = #out #dedup_call; }
+                    quote! { let #out = ::flowlog_runtime::operators::flowlog_dedup(#out); }
                 } else {
                     quote! {}
                 };
@@ -591,9 +590,6 @@ impl CodeGen {
                 output,
                 flow,
             } => {
-                self.features.mark_as_collection();
-                self.features.mark_timely_map();
-
                 // Inputs / outputs
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
@@ -622,39 +618,17 @@ impl CodeGen {
                     stratum,
                 )?;
 
-                let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();
-
                 // Output expression
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
                 let out_map_value = self.build_key_val_from_kv_args(flow.value(), si)?;
-                let (inter_dedup, final_normalize) = self.dedup_antijoin(recursive);
-
                 Ok(quote! {
-                    let #out =
-                        ::flowlog_runtime::operators::flowlog_flat_map(
-                            #r.clone()
-                                .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
-                                #inter_dedup
-                                #pos_weight_concat
-                                .concat(
-                                    {
-                                        ::flowlog_runtime::operators::flowlog_join_core(
-                                            #l.clone(),
-                                            #r.clone(),
-                                            #operator_name,
-                                            |aj_k, _, aj_rv| {
-                                                Some((aj_k.clone(), aj_rv.clone()))
-                                            },
-                                        )
-                                        #inter_dedup
-                                        #neg_weight_concat
-                                    }
-                                ),
-                            #operator_name,
-                            |( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_value ),
-                        )
-                            #final_normalize;
+                    let #out = ::flowlog_runtime::operators::flowlog_antijoin(
+                        #l.clone(),
+                        #r.clone(),
+                        #operator_name,
+                        |( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_value ),
+                    );
                 })
             }
 
@@ -664,9 +638,6 @@ impl CodeGen {
                 output,
                 flow,
             } => {
-                self.features.mark_as_collection();
-                self.features.mark_timely_map();
-
                 // Inputs / outputs
                 let (left, right) = input;
                 let l_base = find_local_ident(local_fp_to_ident, left.fingerprint());
@@ -696,8 +667,6 @@ impl CodeGen {
                     stratum,
                 )?;
 
-                let (pos_weight_concat, neg_weight_concat) = self.weight_concat_tokens();
-
                 // Output expression
                 let (anti_param_k, anti_param_v) =
                     compute_kv_param_tokens(flow.key(), flow.value(), flow.compares(), None);
@@ -708,33 +677,13 @@ impl CodeGen {
                 } else {
                     quote! { ( #out_map_key, #out_map_value ) }
                 };
-                let (inter_dedup, final_normalize) = self.dedup_antijoin(recursive);
-
                 let transformation = quote! {
-                    let #out =
-                        ::flowlog_runtime::operators::flowlog_flat_map(
-                            #r.clone()
-                                .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
-                                #inter_dedup
-                                #pos_weight_concat
-                                .concat(
-                                    {
-                                        ::flowlog_runtime::operators::flowlog_join_core(
-                                            #l.clone(),
-                                            #r.clone(),
-                                            #operator_name,
-                                            |aj_k, _, aj_rv| {
-                                                Some((aj_k.clone(), aj_rv.clone()))
-                                            },
-                                        )
-                                        #inter_dedup
-                                        #neg_weight_concat
-                                    }
-                                ),
-                            #operator_name,
-                            |( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_expr ),
-                        )
-                            #final_normalize;
+                    let #out = ::flowlog_runtime::operators::flowlog_antijoin(
+                        #l.clone(),
+                        #r.clone(),
+                        #operator_name,
+                        |( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_expr ),
+                    );
                 };
 
                 let arrange_stmt = self.register_arrangement(
@@ -757,50 +706,6 @@ impl CodeGen {
 // Arrangement Management Utilities
 // =========================================================================
 impl CodeGen {
-    /// Weight-conversion tokens for antijoin arithmetic (`pos` / `neg`).
-    ///
-    /// - `DatalogBatch` (`Present` diff): convert to `1i32` / `-1i32`.
-    /// - `ExtendBatch` (`i32` diff, always `1`): `pos` is no-op, `neg` uses fixed `-1`.
-    /// - Incremental (`i32` diff, variable): `pos` is no-op, `neg` negates actual diff (`-d`).
-    pub(crate) fn weight_concat_tokens(&self) -> (TokenStream, TokenStream) {
-        let pos = if self.config.is_datalog_batch() {
-            // Convert Present diff → 1i32
-            quote! {
-                .inner
-                .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), 1i32)))
-                .as_collection()
-            }
-        } else {
-            // i32 diff — no conversion needed
-            quote! {}
-        };
-        let neg = if self.config.is_datalog_batch() {
-            // Fixed -1 weight (no retractions possible); the Present → i32
-            // diff-type change forces rebuilding the triple.
-            quote! {
-                .inner
-                .flat_map(move |(x, t, _)| std::iter::once((x, t.clone(), -1i32)))
-                .as_collection()
-            }
-        } else if self.config.is_batch() {
-            // ExtendBatch: i32 diff, always 1 — overwrite to -1 in the
-            // input buffer instead of rebuilding each triple.
-            quote! {
-                .inner
-                .map_in_place(|(_, _, d)| *d = -1i32)
-                .as_collection()
-            }
-        } else {
-            // Incremental: negate the actual diff in place.
-            quote! {
-                .inner
-                .map_in_place(|(_, _, d)| *d = -*d)
-                .as_collection()
-            }
-        };
-        (pos, neg)
-    }
-
     fn register_arrangement(
         &mut self,
         arranged_map: &mut HashMap<u64, Ident>,
