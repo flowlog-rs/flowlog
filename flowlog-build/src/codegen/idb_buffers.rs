@@ -146,9 +146,12 @@ impl CodeGen {
 // =========================================================================
 
 impl CodeGen {
-    /// `.printsize` — consolidate into a single key, inspect the multiplicity.
+    /// `.printsize` — count the relation's distinct rows and inspect the
+    /// total.
     ///
-    /// Datalog-batch: `.consolidate()` dedup.  Others: `threshold_i32()` first.
+    /// Set-normalizing first is what makes the number a row count rather
+    /// than a sum of multiplicities; collapsing every row onto one key then
+    /// turns the collection's weight into that count.
     fn gen_size_inspector(
         &self,
         var: &Ident,
@@ -173,27 +176,24 @@ impl CodeGen {
         // reports the most recent epoch's size-delta. Downstream consumers
         // surface it to stderr / file / typed API on their own terms.
         // Weights are what get summed, so a `Present` diff has to be lifted
-        // to a number first; an `i32` diff already carries one.
-        let (normalize, lift) = if self.config.is_datalog_batch() {
-            (
-                quote! { .consolidate() },
-                quote! { move |_, t, _| std::iter::once(((), t, 1_i32)) },
-            )
-        } else {
-            (
-                quote! { .threshold(|_, w| if *w > 0 { 1i32 } else { 0 }) },
-                quote! { move |_, t, d| std::iter::once(((), t, d)) },
-            )
-        };
+        // to a number first; `i32` diffs already carry one, and after the
+        // clamp it is the +1/-1 that makes `size` a per-epoch delta.
         let op_name = format!("{display}: inspect size");
+        let counted = if self.config.is_datalog_batch() {
+            quote! {
+                ::flowlog_runtime::operators::flowlog_map(
+                    ::flowlog_runtime::operators::flowlog_dedup(#var.clone()),
+                    #op_name,
+                    move |_, t, _| std::iter::once(((), t, 1_i32)),
+                )
+            }
+        } else {
+            quote! { ::flowlog_runtime::operators::flowlog_dedup(#var.clone()) }
+        };
 
         quote! {{
             let #cell_ident = #cell_ident.clone();
-            ::flowlog_runtime::operators::flowlog_map(
-                #var.clone() #normalize,
-                #op_name,
-                #lift,
-            )
+            #counted
                 .map(|_| ())
                 .consolidate()
                 .inspect(move |(_data, time, size)| {

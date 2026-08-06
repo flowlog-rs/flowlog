@@ -57,32 +57,33 @@ pub(crate) const OPT_AGGREGATE: u32 = 5;
 /// - (4): `.consolidate()` (3) + Map
 pub(crate) const POST_LEAVE_OPT_AGGREGATE: u32 = 4;
 
-/// Operators from `dedup_nonrecursive()`, the trace-free outer-scope dedup
-/// for EDBs and rule outputs. Three in both modes, differing in which:
+/// Operators from `flowlog_dedup` at an outer scope (EDBs, rule outputs,
+/// SIP projections). Three whichever diff is ambient, differing in which:
 ///
 /// - batch `.consolidate()` (3)
 /// - i32 `.threshold_total()` (3)
 pub(crate) const DEDUP_NONRECURSIVE: u32 = 3;
 
-/// Operators from `dedup_recursive()`, the in-loop dedup:
+/// Operators from a dedup inside `iterate`, whether the retained
+/// `flowlog_dedup_retained` on feedback or `flowlog_dedup` on a SIP
+/// projection:
 ///
-/// - DatalogBatch `.threshold_semigroup(...)` (3)
-/// - others `.threshold(...)` (4)
-///
-/// The SIP projection dedup (`dedup_projection`) emits `.consolidate()`
-/// in batch mode instead, also 3 operators, so these counts cover it in
-/// every mode.
+/// - DatalogBatch `.threshold_semigroup(...)` / `.consolidate()` (3)
+/// - ExtendBatch `.threshold_total(...)` (3): its loop clock
+///   `Product<(), u16>` is totally ordered
+/// - incremental `.threshold(...)` (4): `Product<u32, u16>` is not
 pub(crate) fn dedup_recursive(mode: ExecutionMode) -> u32 {
     match mode {
-        ExecutionMode::DatalogBatch => 3,
-        ExecutionMode::DatalogInc | ExecutionMode::ExtendBatch | ExecutionMode::ExtendInc => 4,
+        ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => 3,
+        ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => 4,
     }
 }
 
-/// Operators in the anti-join pipeline (excluding arrangement), by DD
-/// operator. The deref, weight-adjust, and projection steps are all
-/// `.flat_map`s (hence FlatMap); `join_core` is Join, `.concat` is
-/// Concatenate. `dedup` is the dedup expansion, 3 via `threshold_total` or
+/// Operators in `flowlog_antijoin` (excluding arrangement), by DD
+/// operator. The deref and projection steps are `.flat_map`s (hence
+/// FlatMap), as is the weight adjust on the `Present` path, while the
+/// `i32` path negates in place (MapInPlace); `join_core` is Join, `.concat`
+/// is Concatenate. `dedup` is the dedup expansion, 3 via `threshold_total` or
 /// 4 via `threshold` (see [`DEDUP_NONRECURSIVE`] / [`dedup_recursive`]).
 ///
 /// - DatalogBatch (9): FlatMap (deref) + FlatMap (pos weight) + Join
@@ -91,10 +92,16 @@ pub(crate) fn dedup_recursive(mode: ExecutionMode) -> u32 {
 ///   + FlatMap + Concatenate + FlatMap + dedup (4)
 /// - Others, outer scope (14): FlatMap + dedup (3) + Join + dedup (3)
 ///   + FlatMap + Concatenate + FlatMap + dedup (3)
+///
+/// ExtendBatch takes the outer-scope count in both scopes, since every
+/// clock it runs at is totally ordered (see [`dedup_recursive`]). Like
+/// every extended-mode row here that count is derived, not measured:
+/// `Config::profiling_enabled` refuses those modes.
 pub(crate) fn anti_join(mode: ExecutionMode, recursive: bool) -> u32 {
     match mode {
         ExecutionMode::DatalogBatch => 9,
-        ExecutionMode::DatalogInc | ExecutionMode::ExtendBatch | ExecutionMode::ExtendInc => {
+        ExecutionMode::ExtendBatch => 14,
+        ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
             if recursive {
                 17
             } else {
@@ -104,20 +111,14 @@ pub(crate) fn anti_join(mode: ExecutionMode, recursive: bool) -> u32 {
     }
 }
 
-/// Operators in `gen_size_inspector`. Batch is verified against the reach
-/// fixture; Inc swaps the first `.consolidate()` for a `.threshold()` and
-/// probes.
+/// Operators in `gen_size_inspector`, nine whichever diff is ambient: the
+/// two modes spend their FlatMap and Probe differently.
 ///
-/// - Batch (9): `.consolidate()` (3) + FlatMap + FlatMap
-///   + `.consolidate()` (3) + InspectBatch
-/// - Inc (11): `.threshold()` (4) + FlatMap + FlatMap + `.consolidate()` (3)
-///   + InspectBatch + Probe
-pub(crate) fn inspect_size(mode: ExecutionMode) -> u32 {
-    match mode {
-        ExecutionMode::DatalogBatch => 9,
-        ExecutionMode::DatalogInc | ExecutionMode::ExtendBatch | ExecutionMode::ExtendInc => 11,
-    }
-}
+/// - Batch (9): `flowlog_dedup` (3) + FlatMap (lift to `i32`)
+///   + FlatMap (collapse onto one key) + `.consolidate()` (3) + InspectBatch
+/// - Others (9): `flowlog_dedup` (3) + FlatMap (collapse onto one key)
+///   + `.consolidate()` (3) + InspectBatch + Probe
+pub(crate) const INSPECT_SIZE: u32 = 9;
 
 /// Operators in content inspectors (terminal/file). Not exercised by the
 /// reach fixture, so the names are from codegen, not a run.
