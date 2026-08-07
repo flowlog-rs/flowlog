@@ -4,66 +4,6 @@
 //! compilation unit so that downstream passes (imports, scaffold, type
 //! declarations) emit only what is required.
 
-use std::collections::HashSet;
-
-use flowlog_parser::AggregationOperator;
-use flowlog_parser::DataType;
-
-use crate::codegen::Semiring;
-
-// =========================================================================
-// AggSemiringNeeds
-// =========================================================================
-
-/// Numeric DataTypes in canonical order for semiring code generation.
-const INT_DATA_TYPES: [DataType; 8] = [
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-];
-const FLOAT_DATA_TYPES: [DataType; 2] = [DataType::Float32, DataType::Float64];
-
-/// Tracks which semiring modules (semiring x numeric type) are needed.
-/// Operators fold to their [`Semiring`] on insert, so `Count` and `Sum`
-/// aggregations share entries.
-#[derive(Default, Clone)]
-pub struct AggSemiringNeeds(HashSet<(Semiring, DataType)>);
-
-impl AggSemiringNeeds {
-    #[inline]
-    pub(crate) fn any(&self) -> bool {
-        !self.0.is_empty()
-    }
-
-    pub(crate) fn insert(&mut self, op: AggregationOperator, dt: DataType) {
-        // The typechecker rejects non-numeric aggregation inputs.
-        debug_assert!(
-            dt.is_numeric(),
-            "semiring only supports numeric types, got {dt}"
-        );
-        self.0.insert((Semiring::of(op), dt));
-    }
-
-    #[inline]
-    pub(crate) fn int_needs(&self, semiring: Semiring) -> [bool; 8] {
-        INT_DATA_TYPES.map(|dt| self.0.contains(&(semiring, dt)))
-    }
-
-    #[inline]
-    pub(crate) fn float_needs(&self, semiring: Semiring) -> [bool; 2] {
-        FLOAT_DATA_TYPES.map(|dt| self.0.contains(&(semiring, dt)))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &(Semiring, DataType)> {
-        self.0.iter()
-    }
-}
-
 // =========================================================================
 // Features
 // =========================================================================
@@ -87,12 +27,9 @@ pub struct Features {
     // -- differential-dataflow / timely --
     dd_input: bool,
     as_collection: bool,
-    threshold_total: bool,
     timely_map: bool,
     // -- dataflow features --
     recursive: bool,
-    aggregation: bool,
-    agg_semirings: AggSemiringNeeds,
     // -- library support --
     string_intern: bool,
     string_resolve: bool,
@@ -116,11 +53,9 @@ impl Features {
         // dd / timely
         (dd_input,       mark_dd_input),
         (as_collection,  mark_as_collection),
-        (threshold_total, mark_threshold_total),
         (timely_map,     mark_timely_map),
         // dataflow
         (recursive,      mark_recursive),
-        (aggregation,    mark_aggregation),
         (string_intern,  mark_string_intern),
         (string_resolve, mark_string_resolve),
         (string_resolve_out, mark_string_resolve_out),
@@ -132,22 +67,5 @@ impl Features {
         // on that path.
         (parallel_output, mark_parallel_output),
         (itoa,           mark_itoa),
-    }
-
-    // -- aggregation semirings (non-boolean) ----------------------------
-
-    #[inline]
-    pub(crate) fn mark_agg_semiring(&mut self, op: AggregationOperator, dt: DataType) {
-        self.agg_semirings.insert(op, dt);
-    }
-
-    #[inline]
-    pub fn agg_semiring(&self) -> bool {
-        self.agg_semirings.any()
-    }
-
-    #[inline]
-    pub fn agg_semirings(&self) -> &AggSemiringNeeds {
-        &self.agg_semirings
     }
 }

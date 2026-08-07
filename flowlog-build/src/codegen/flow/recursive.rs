@@ -20,21 +20,9 @@ use quote::quote;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
-use crate::codegen::aggregation::aggregation_avg_optimize;
-use crate::codegen::aggregation::aggregation_avg_post_leave;
-use crate::codegen::aggregation::aggregation_avg_pre_leave;
-use crate::codegen::aggregation::aggregation_count_optimize;
-use crate::codegen::aggregation::aggregation_count_pre_leave;
-use crate::codegen::aggregation::aggregation_max_optimize;
-use crate::codegen::aggregation::aggregation_max_pre_leave;
-use crate::codegen::aggregation::aggregation_merge_kv;
-use crate::codegen::aggregation::aggregation_min_optimize;
-use crate::codegen::aggregation::aggregation_min_pre_leave;
-use crate::codegen::aggregation::aggregation_opt_post_leave;
-use crate::codegen::aggregation::aggregation_reduce_stmt;
-use crate::codegen::aggregation::aggregation_row_chop;
-use crate::codegen::aggregation::aggregation_sum_optimize;
-use crate::codegen::aggregation::aggregation_sum_pre_leave;
+use crate::codegen::aggregation::aggregation_merge;
+use crate::codegen::aggregation::aggregation_split;
+use crate::codegen::aggregation::aggregation_token;
 
 // =========================================================================
 // Recursive Flow Generation
@@ -295,68 +283,31 @@ impl CodeGen {
             if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(idb_fp) {
                 let output_name = self.display_name(*idb_fp);
                 let agg_type = self.agg_column_type(*idb_fp, *agg_pos)?;
+                let token = aggregation_token(*agg_op);
+                let split = aggregation_split(*agg_arity, *agg_pos);
+                let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
+                block = quote! {
+                    #block
+                    let #next_ident = ::flowlog_runtime::operators::flowlog_reduce(
+                        #next_ident, #token, #split, #merge,
+                    );
+                };
 
-                // Semiring fast path: replace reduce_core with threshold_semigroup
-                // using the appropriate semigroup, avoiding a second arrangement.
-                if self.config.is_datalog_batch() {
-                    self.features.mark_as_collection();
-                    self.features.mark_agg_semiring(*agg_op, agg_type.clone());
-                    self.features.mark_threshold_total();
-                    self.features.mark_timely_map();
-                    let pipeline = match agg_op {
-                        AggregationOperator::Min => {
-                            aggregation_min_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Max => {
-                            aggregation_max_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Sum => {
-                            aggregation_sum_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Count => {
-                            aggregation_count_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Avg => {
-                            aggregation_avg_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                    };
-                    block = quote! {
-                        #block
-                        let #next_ident = #next_ident
-                            #pipeline;
-                    };
-
-                    with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.opt_aggregate_operator(
-                            output_name,
-                            next_ident.to_string(),
-                            next_ident.to_string(),
-                        );
-                    });
-                } else {
-                    self.features.mark_aggregation();
-                    let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-                    let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
-                    // Aggregate after union + dedup.
-                    let reduce_stmt =
-                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type)?;
-                    block = quote! {
-                        #block
-                        let #next_ident = #next_ident
-                            .map(#row_chop)
-                            .arrange_by_key()
-                            #reduce_stmt
-                            .as_collection(#merge_kv);
-                    };
-
-                    with_plan_graph(plan_graph, |plan_graph| {
+                // The runtime picks its strategy from the ambient difference,
+                // and the two build different operators, so the plan graph
+                // has to predict the same way.
+                let binding = next_ident.to_string();
+                with_plan_graph(plan_graph, |plan_graph| {
+                    if self.config.is_datalog_batch() {
+                        plan_graph.opt_aggregate_operator(output_name, binding.clone(), binding);
+                    } else {
                         plan_graph.general_aggregate_operator(
                             output_name,
-                            next_ident.to_string(),
-                            next_ident.to_string(),
+                            binding.clone(),
+                            binding,
                         );
-                    });
-                }
+                    }
+                });
             }
 
             union_stmts.push(block);
@@ -403,24 +354,8 @@ impl CodeGen {
                 if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
                     && self.config.is_datalog_batch()
                 {
-                    let agg_type = self.agg_column_type(*fp, *agg_pos)?;
-                    let pre_leave = match agg_op {
-                        AggregationOperator::Min => {
-                            aggregation_min_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Max => {
-                            aggregation_max_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Sum => {
-                            aggregation_sum_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Count => {
-                            aggregation_count_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Avg => {
-                            aggregation_avg_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                    };
+                    let token = aggregation_token(*agg_op);
+                    let split = aggregation_split(*agg_arity, *agg_pos);
 
                     with_plan_graph(plan_graph, |plan_graph| {
                         plan_graph.recursive_pre_leave_opt_aggregate_operator(
@@ -430,7 +365,12 @@ impl CodeGen {
                         );
                     });
 
-                    return Ok(quote! { #next_ident #pre_leave .leave(scope) });
+                    return Ok(quote! {
+                        ::flowlog_runtime::operators::flowlog_reduce_lift(
+                            #next_ident, #token, #split,
+                        )
+                            .leave(scope)
+                    });
                 }
 
                 // Mixed loop: all recursive relations leave via recursive_X, not next_X.
@@ -454,6 +394,24 @@ impl CodeGen {
                     } else {
                         return Ok(quote! { #recursive_ident.leave(scope) });
                     }
+                }
+
+                // A batch mode's output writer stamps every update `+1`.
+                // That is sound under `Present`, which has no negative, but
+                // not under `i32`: there the reduce retracts each superseded
+                // aggregate as the group tightens, and a retraction stamped
+                // `+1` reads as a second fact. The pairs sit at different
+                // inner timestamps and cannot cancel there, so `leave()` has
+                // to land them on one outer timestamp for consolidation to
+                // net them out -- the same reason the iterative arm above
+                // consolidates. Neither other case needs this:
+                // `DatalogBatch` returned above, having carried its
+                // accumulator across the boundary for `flowlog_reduce_finish`
+                // to merge, and the incremental modes hand their writer the
+                // real difference.
+                let writer_drops_sign = self.config.is_batch() && !self.config.is_datalog_batch();
+                if idb_to_aggregation_map.contains_key(fp) && writer_drops_sign {
+                    return Ok(quote! { #next_ident.leave(scope).consolidate() });
                 }
 
                 Ok(quote! { #next_ident.leave(scope) })
@@ -491,13 +449,11 @@ impl CodeGen {
         // convert the semiring diff back to a Present multiplicity.
         let mut post_leave_stmts = Vec::new();
         for (fp, target) in leave_fps.iter().zip(targets.iter()) {
-            if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
+            if let Some((_, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
                 && self.config.is_datalog_batch()
             {
-                let post_leave = match agg_op {
-                    AggregationOperator::Avg => aggregation_avg_post_leave(*agg_arity, *agg_pos),
-                    _ => aggregation_opt_post_leave(*agg_arity, *agg_pos),
-                };
+                let agg_type = self.agg_column_type(*fp, *agg_pos)?;
+                let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
 
                 with_plan_graph(plan_graph, |plan_graph| {
                     plan_graph.recursive_post_leave_opt_aggregate_operator(
@@ -508,7 +464,8 @@ impl CodeGen {
                 });
 
                 post_leave_stmts.push(quote! {
-                    let #target = #target #post_leave;
+                    let #target =
+                        ::flowlog_runtime::operators::flowlog_reduce_finish(#target, #merge);
                 });
             }
         }

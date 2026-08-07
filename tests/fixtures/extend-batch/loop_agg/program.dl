@@ -1,0 +1,45 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : loop_agg
+// Feature : aggregation inside a loop block is functional — at every round
+//           the aggregate holds one value per group (the aggregate of the
+//           relation's current contents), and the final output is the
+//           aggregate of the final contents.
+//
+// A max over a growing relation passes through stale bounds on its way up;
+// those intermediate values must be retracted when superseded, not kept as
+// facts. This is the reading the other modes already implement: the same
+// program under ExtendInc maintains the aggregate functionally, and the
+// DatalogBatch fixpoint analog (recursive_max) emits final bounds only.
+// It also preserves aggregation's one-value-per-group property, and makes a
+// loop rule that nothing in the loop consumes mean exactly what it would
+// mean written after the loop.
+//
+// Data layout
+//   Edge — chain 1→2→3→4
+//
+// Evaluation trace (Furthest shown functionally, per round):
+//   Entry   : Reach = {(1,2),(2,3),(3,4)}   Furthest = {(1,2),(2,3),(3,4)}
+//   Round 1 : + (1,3),(2,4)                 Furthest = {(1,3),(2,4),(3,4)}
+//   Round 2 : + (1,4)                       Furthest = {(1,4),(2,4),(3,4)}
+//   Round 3 : no new tuples                 (unchanged)
+//
+// Expected
+//   Furthest = {(1,4),(2,4),(3,4)} — final aggregates only. The superseded
+//   bounds (1,2),(1,3),(2,3) must not appear.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(src: int32, dst: int32)
+.decl Furthest(src: int32, node: int32)
+
+Reach(X, Y) :- Edge(X, Y).
+
+loop while { @it <= 3 }
+{
+    Reach(X, Z) :- Reach(X, Y), Edge(Y, Z).
+    Furthest(X, max(Y)) :- Reach(X, Y).
+}
+
+.output Furthest

@@ -113,24 +113,6 @@ impl DataType {
         }
     }
 
-    /// Returns the semiring type suffix, e.g. `"I32"`, `"U64"`, `"F32"`,
-    /// or `None` for types with no numeric semiring.
-    pub fn semiring_suffix(&self) -> Option<&'static str> {
-        match self {
-            Self::Int8 => Some("I8"),
-            Self::Int16 => Some("I16"),
-            Self::Int32 => Some("I32"),
-            Self::Int64 => Some("I64"),
-            Self::UInt8 => Some("U8"),
-            Self::UInt16 => Some("U16"),
-            Self::UInt32 => Some("U32"),
-            Self::UInt64 => Some("U64"),
-            Self::Float32 => Some("F32"),
-            Self::Float64 => Some("F64"),
-            Self::IntLit | Self::FloatLit | Self::String | Self::Bool | Self::FixedTuple(_) => None,
-        }
-    }
-
     /// Combines two operand types across an arithmetic operator: equal
     /// types combine to themselves, and a polymorphic literal family
     /// adopts a concrete partner of the same family. `None` on any other
@@ -327,31 +309,6 @@ mod tests {
         assert!(!nested.any_scalar(&|l| matches!(l, DataType::Bool)));
         // Zero fields reach no scalar: vacuously false for any predicate.
         assert!(!DataType::FixedTuple(vec![]).any_scalar(&|_| true));
-    }
-
-    #[rstest]
-    #[case(DataType::Int8, "I8")]
-    #[case(DataType::Int16, "I16")]
-    #[case(DataType::Int32, "I32")]
-    #[case(DataType::Int64, "I64")]
-    #[case(DataType::UInt8, "U8")]
-    #[case(DataType::UInt16, "U16")]
-    #[case(DataType::UInt32, "U32")]
-    #[case(DataType::UInt64, "U64")]
-    #[case(DataType::Float32, "F32")]
-    #[case(DataType::Float64, "F64")]
-    fn semiring_suffix_covers_every_numeric_type(#[case] dt: DataType, #[case] suffix: &str) {
-        assert_eq!(dt.semiring_suffix(), Some(suffix));
-    }
-
-    #[rstest]
-    #[case(DataType::String)]
-    #[case(DataType::Bool)]
-    #[case(DataType::FixedTuple(vec![DataType::Int32]))]
-    #[case(DataType::IntLit)]
-    #[case(DataType::FloatLit)]
-    fn semiring_suffix_is_none_for_non_numeric(#[case] dt: DataType) {
-        assert_eq!(dt.semiring_suffix(), None);
     }
 
     /// Fixtures pin only `merge`'s rejection paths; a regression that
