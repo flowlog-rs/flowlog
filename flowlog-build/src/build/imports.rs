@@ -6,7 +6,6 @@
 //! there.
 
 use proc_macro2::TokenStream;
-use quote::format_ident;
 use quote::quote;
 
 use crate::codegen::Features;
@@ -78,54 +77,12 @@ fn dd_imports(f: &Features) -> TokenStream {
     if f.dd_input() {
         out.push(quote! { use ::flowlog_runtime::differential_dataflow::input::Input; });
     }
-    if f.threshold_total() {
-        out.push(
-            quote! { use ::flowlog_runtime::differential_dataflow::operators::ThresholdTotal; },
-        );
-    }
     if f.as_collection() {
         out.push(quote! { use ::flowlog_runtime::differential_dataflow::AsCollection; });
     }
     if f.recursive() {
         out.push(quote! {
             use ::flowlog_runtime::differential_dataflow::operators::iterate::Variable;
-        });
-    }
-    if f.aggregation() {
-        out.push(quote! {
-            use ::flowlog_runtime::differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
-        });
-    }
-
-    if f.agg_semiring() {
-        // Semiring `use` statements: same as binary mode since the
-        // `mod semiring` is injected by assembly.rs via `#[path]`.
-        let semirings = f.agg_semirings();
-        let mut entries: Vec<_> = semirings
-            .iter()
-            .map(|(semiring, dt)| {
-                let mod_suffix = if dt.is_float() { "float" } else { "int" };
-                // TODO: surface as CodegenError::internal instead of panicking.
-                let suffix = dt
-                    .semiring_suffix()
-                    .expect("typechecker guarantees a numeric aggregation input");
-                (
-                    format!("{}_{mod_suffix}", semiring.module_stem()),
-                    format!("{}{}", semiring.name(), suffix),
-                )
-            })
-            .collect();
-        entries.sort();
-
-        let uses = entries.iter().map(|(mod_name, ty_name)| {
-            let mod_ident = format_ident!("{}", mod_name);
-            let ty = format_ident!("{}", ty_name);
-            quote! { use semiring::#mod_ident::#ty; }
-        });
-
-        out.push(quote! {
-            #(#uses)*
-            use ::flowlog_runtime::differential_dataflow::difference::IsZero;
         });
     }
 

@@ -5,8 +5,6 @@
 
 use flowlog_build::Features;
 use flowlog_common::Config;
-use proc_macro2::Ident;
-use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -52,7 +50,7 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     }
 
     out.push(std_imports(inc, prof, f));
-    out.push(dd_imports(f));
+    out.push(dd_core_imports(f));
 
     if f.timely_map() {
         out.push(quote! { use timely::dataflow::operators::vec::Map; });
@@ -198,19 +196,10 @@ fn std_imports(inc: bool, prof: bool, f: &Features) -> TokenStream {
     quote! { #(#out)* }
 }
 
-fn dd_imports(f: &Features) -> TokenStream {
-    let core = dd_core_imports(f);
-    let semiring = agg_semiring_imports(f);
-    quote! { #core #semiring }
-}
-
 fn dd_core_imports(f: &Features) -> TokenStream {
     let mut out = Vec::new();
     if f.dd_input() {
         out.push(quote! { use differential_dataflow::input::Input; });
-    }
-    if f.threshold_total() {
-        out.push(quote! { use differential_dataflow::operators::ThresholdTotal; });
     }
     if f.as_collection() {
         out.push(quote! { use differential_dataflow::AsCollection; });
@@ -218,11 +207,6 @@ fn dd_core_imports(f: &Features) -> TokenStream {
     if f.recursive() {
         out.push(quote! {
             use differential_dataflow::operators::iterate::Variable;
-        });
-    }
-    if f.aggregation() {
-        out.push(quote! {
-            use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
         });
     }
     quote! { #(#out)* }
@@ -241,50 +225,6 @@ fn output_buffer_imports(inc: bool, needed: bool) -> TokenStream {
         #sync
         use std::rc::Rc;
         use std::cell::RefCell;
-    }
-}
-
-fn agg_semiring_imports(f: &Features) -> TokenStream {
-    if !f.agg_semiring() {
-        return quote! {};
-    }
-    let uses = agg_semiring_uses_only(f);
-    quote! { mod semiring; #uses }
-}
-
-fn agg_semiring_uses_only(f: &Features) -> TokenStream {
-    if !f.agg_semiring() {
-        return quote! {};
-    }
-    let mut entries: Vec<_> = f
-        .agg_semirings()
-        .iter()
-        .map(|(semiring, dt)| {
-            let mod_suffix = if dt.is_float() { "float" } else { "int" };
-            // TODO: surface as CodegenError::internal instead of panicking.
-            let suffix = dt
-                .semiring_suffix()
-                .expect("typechecker guarantees a numeric aggregation input");
-            (
-                format!("{}_{mod_suffix}", semiring.module_stem()),
-                format!("{}{}", semiring.name(), suffix),
-            )
-        })
-        .collect();
-    entries.sort();
-
-    let uses: Vec<_> = entries
-        .iter()
-        .map(|(mod_name, ty_name)| {
-            let mod_ident = Ident::new(mod_name, Span::call_site());
-            let ty = Ident::new(ty_name, Span::call_site());
-            quote! { use semiring::#mod_ident::#ty; }
-        })
-        .collect();
-
-    quote! {
-        #(#uses)*
-        use differential_dataflow::difference::IsZero;
     }
 }
 
