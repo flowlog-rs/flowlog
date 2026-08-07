@@ -1,12 +1,9 @@
 //! Set-semantics dedup for generated FlowLog rules.
 //!
-//! Two entry points split the one choice types cannot make:
-//! [`flowlog_dedup`] normalizes within each timestamp, while
-//! [`flowlog_dedup_retained`] also suppresses tuples re-derived at later
-//! timestamps (loop iterations). Every other choice is compile-time
-//! dispatch on the collection's type parameters: the diff family
-//! (`Present` or `i32`) picks the operator, and for `i32` clamps the
-//! clock picks the threshold flavor via [`DedupTime`].
+//! The diff picks the mechanism and [`DedupTime`] picks the `i32` flavor
+//! by clock, so no call site chooses either. Every diff-and-clock pairing
+//! works but one: retained into `Present` at a partially ordered clock
+//! needs a threshold `Present` cannot drive, having no inverse.
 
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
@@ -19,44 +16,25 @@ use timely::order::Product;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
-/// Normalizes a collection to set semantics: every tuple accumulates to
-/// at most one unit weight at each timestamp.
+/// Holds each tuple to at most unit weight at each timestamp.
 ///
-/// Under `Present` this compacts duplicates batch by batch and forgets,
-/// so a tuple re-derived at a later timestamp is emitted again; where
-/// that re-emission must stay suppressed (feedback inside `iterate`),
-/// use [`flowlog_dedup_retained`]. The `i32` clamp accumulates through a
-/// trace and needs no such distinction.
-///
-/// Generated code calls this path-qualified, with no `use` line, which is
-/// why the dispatch lives behind a free function rather than a trait
-/// method.
-///
-/// # Panics
-///
-/// Panics if the surrounding dataflow violates Differential Dataflow's
-/// trace progress invariants, which the backing arrangement asserts.
+/// `Present` compacts a timestamp and forgets it, so a later re-derivation
+/// is emitted again; loop feedback wants [`flowlog_dedup_retained`]. The
+/// `i32` clamp accumulates through a trace, and suppresses it anyway.
 pub fn flowlog_dedup<C: FlowlogDedup>(collection: C) -> C {
     collection.dedup()
 }
 
-/// Normalizes a collection to set semantics across timestamps, rather than
-/// within each one: a tuple already carried by an earlier timestamp is not
-/// emitted again. Targeting `Present` makes that absolute, since nothing
-/// can retract it; targeting `i32` keeps the clamp's retractions, so a
+/// Holds each tuple to unit weight, and suppresses one already held from
+/// an earlier timestamp.
+///
+/// Into `Present` that is absolute, since nothing retracts; into `i32` a
 /// tuple whose count returns to zero is withdrawn and may reappear.
 ///
-/// `R` is the target diff, independent of the input's, so a collection
-/// carrying `i32` weight arithmetic can clamp back to any ambient diff.
-/// That independence is also why `R` cannot be inferred -- an `i32` input
-/// converts to `Present` or stays `i32` -- so it is named explicitly, as
-/// in `flowlog_dedup_retained::<_, Present>(rows)`. There is deliberately
-/// no `Present` to `i32` impl, so that direction fails to compile.
-///
-/// # Panics
-///
-/// Panics if the surrounding dataflow violates Differential Dataflow's
-/// trace progress invariants, which the backing arrangement asserts.
+/// `R` is the target diff, independent of the input's, which is how the
+/// antijoin's `i32` arithmetic settles back to the ambient one. It cannot
+/// be inferred, so name it: `flowlog_dedup_retained::<_, Present>(rows)`.
+/// `Present` to `i32` deliberately has no impl.
 pub fn flowlog_dedup_retained<C, R>(collection: C) -> C::Output
 where
     C: FlowlogDedupRetained<R>,
@@ -143,11 +121,20 @@ where
 // DedupTime
 // =========================================================================
 
-/// Clocks FlowLog dataflows run at, each carrying the `i32` multiplicity
-/// clamp its ordering supports: totally ordered clocks take the streaming
-/// `threshold_total`, while `Product<u32, u16>` is only partially ordered
-/// and falls back to the general `threshold`. Sealed, so widening the set
-/// is a deliberate edit here rather than an accident of inference.
+/// The clocks FlowLog dataflows run at, each knowing how to clamp `i32`
+/// multiplicities back to set semantics.
+///
+/// A clock is a root (`()` for batch, an [`Epoch`] for incremental) or
+/// `Product<root, epoch>` inside recursion. Where at most one coordinate
+/// advances the clock is a line and the streaming `threshold_total`
+/// applies; in `Product<epoch, epoch>` both advance, times like (1, 2)
+/// and (2, 1) are incomparable, and only the general `threshold` is
+/// sound.
+///
+/// Sealed, so a new width, root or counter, is one marker impl on
+/// `sealed::Epoch` and never a new clamp body. The `()` clocks stay
+/// although batch never clamps through them today, since diff and clock
+/// are independent axes.
 pub trait DedupTime: Timestamp + Lattice + sealed::Sealed {
     /// Clamps accumulated `i32` multiplicities to at most `1` per tuple.
     fn clamp_i32<'scope, D>(
@@ -157,20 +144,37 @@ pub trait DedupTime: Timestamp + Lattice + sealed::Sealed {
         D: ExchangeData + Hashable;
 }
 
+/// A time that advances: `u16` and `u32` today. Serves at either clock
+/// position, root or counter; `()` is root-only, since a counter that
+/// cannot advance is a loop that cannot iterate. Declare new widths on
+/// `sealed::Epoch`.
+pub trait Epoch: Timestamp + TotalOrder + Lattice + sealed::Epoch {}
+
+impl<E> Epoch for E where E: sealed::Epoch + Timestamp + TotalOrder + Lattice {}
+
 mod sealed {
     use timely::order::Product;
 
+    /// The one list of advancing widths. Everything else derives from
+    /// membership here, so adding a width is one marker impl
+    /// (`impl Epoch for u64 {}`).
+    pub trait Epoch {}
+
+    impl Epoch for u16 {}
+    impl Epoch for u32 {}
+
+    /// The four clock shapes, one line per `DedupTime` impl: each root
+    /// bare, and each root under an iteration counter.
     pub trait Sealed {}
 
     impl Sealed for () {}
-    impl Sealed for u32 {}
-    impl Sealed for Product<(), u16> {}
-    impl Sealed for Product<u32, u16> {}
+    impl<E: Epoch> Sealed for E {}
+    impl<I: Epoch> Sealed for Product<(), I> {}
+    impl<E: Epoch, I: Epoch> Sealed for Product<E, I> {}
 }
 
 /// Streaming clamp every totally ordered clock delegates to; the
-/// `TotalOrder` bound is what keeps the partially ordered incremental
-/// loop clock out.
+/// `TotalOrder` bound is what keeps epoch-rooted products out.
 fn clamp_total<'scope, T, D>(
     collection: VecCollection<'scope, T, D, i32>,
 ) -> VecCollection<'scope, T, D, i32>
@@ -181,6 +185,7 @@ where
     collection.threshold_total(|_, &count| if count > 0 { 1 } else { 0 })
 }
 
+/// Batch: time never advances, trivially totally ordered.
 impl DedupTime for () {
     fn clamp_i32<'scope, D>(
         collection: VecCollection<'scope, Self, D, i32>,
@@ -192,7 +197,8 @@ impl DedupTime for () {
     }
 }
 
-impl DedupTime for u32 {
+/// A bare epoch advances along a line: one body for every width.
+impl<E: Epoch> DedupTime for E {
     fn clamp_i32<'scope, D>(
         collection: VecCollection<'scope, Self, D, i32>,
     ) -> VecCollection<'scope, Self, D, i32>
@@ -203,7 +209,9 @@ impl DedupTime for u32 {
     }
 }
 
-impl DedupTime for Product<(), u16> {
+/// Iterations under the batch root stay on a line, whatever the counter
+/// width (timely: `Product<T1, T2>: TotalOrder where T1: Empty`).
+impl<I: Epoch> DedupTime for Product<(), I> {
     fn clamp_i32<'scope, D>(
         collection: VecCollection<'scope, Self, D, i32>,
     ) -> VecCollection<'scope, Self, D, i32>
@@ -214,15 +222,82 @@ impl DedupTime for Product<(), u16> {
     }
 }
 
-impl DedupTime for Product<u32, u16> {
+/// The one partially ordered clock: epoch and iteration both advance, so
+/// the streaming clamp is unsound and only the general `threshold` works.
+impl<E: Epoch, I: Epoch> DedupTime for Product<E, I> {
     fn clamp_i32<'scope, D>(
         collection: VecCollection<'scope, Self, D, i32>,
     ) -> VecCollection<'scope, Self, D, i32>
     where
         D: ExchangeData + Hashable,
     {
-        // A u16 iteration counter under a u32 epoch is only partially
-        // ordered, which rules out the streaming total-order clamp.
         collection.threshold(|_, &count| if count > 0 { 1 } else { 0 })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use timely::order::Product;
+
+    use super::*;
+
+    type Row = u64;
+    type Batch = ();
+    type Inc = u32;
+    type BatchLoop = Product<(), u16>;
+    type IncLoop = Product<u32, u16>;
+
+    /// Every supported diff-and-clock pairing type-checks through the two
+    /// entry points. The one exclusion holds by construction and cannot be
+    /// asserted here: retained into `Present` at the partially ordered
+    /// `IncLoop` clock does not compile.
+    #[test]
+    fn every_supported_diff_and_clock_pairing_compiles() {
+        fn dedups<C: FlowlogDedup>() {
+            let _ = core::marker::PhantomData::<C>;
+        }
+        fn retains<C: FlowlogDedupRetained<R>, R>() {
+            let _ = core::marker::PhantomData::<C>;
+        }
+
+        // `flowlog_dedup`: either diff, every clock.
+        dedups::<VecCollection<'static, Batch, Row, Present>>();
+        dedups::<VecCollection<'static, Inc, Row, Present>>();
+        dedups::<VecCollection<'static, BatchLoop, Row, Present>>();
+        dedups::<VecCollection<'static, IncLoop, Row, Present>>();
+        dedups::<VecCollection<'static, Batch, Row, i32>>();
+        dedups::<VecCollection<'static, Inc, Row, i32>>();
+        dedups::<VecCollection<'static, BatchLoop, Row, i32>>();
+        dedups::<VecCollection<'static, IncLoop, Row, i32>>();
+
+        // Retained into `i32`: every clock.
+        retains::<VecCollection<'static, Batch, Row, i32>, i32>();
+        retains::<VecCollection<'static, Inc, Row, i32>, i32>();
+        retains::<VecCollection<'static, BatchLoop, Row, i32>, i32>();
+        retains::<VecCollection<'static, IncLoop, Row, i32>, i32>();
+
+        // Retained into `Present`, from either diff: every totally
+        // ordered clock.
+        retains::<VecCollection<'static, Batch, Row, i32>, Present>();
+        retains::<VecCollection<'static, Batch, Row, Present>, Present>();
+        retains::<VecCollection<'static, Inc, Row, i32>, Present>();
+        retains::<VecCollection<'static, Inc, Row, Present>, Present>();
+        retains::<VecCollection<'static, BatchLoop, Row, i32>, Present>();
+        retains::<VecCollection<'static, BatchLoop, Row, Present>, Present>();
+    }
+
+    /// A new width, root or counter, is one marker impl away -- never a
+    /// new clamp body. (`Product<root, ()>`, a loop that cannot iterate,
+    /// names no clock at all.)
+    #[test]
+    fn any_declared_width_is_a_dedup_clock() {
+        fn admits<T: DedupTime>(_clock: T) {}
+        admits(());
+        admits(0u16);
+        admits(0u32);
+        admits(Product::new((), 0u16));
+        admits(Product::new((), 0u32));
+        admits(Product::new(0u32, 0u16));
+        admits(Product::new(0u32, 0u32));
     }
 }
