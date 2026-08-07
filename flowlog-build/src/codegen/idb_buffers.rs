@@ -6,6 +6,7 @@
 //! Buffers store `(data, time, diff)` triples. Batch mode hardcodes
 //! `diff = 1` (DD uses `Present`, not `i32`). Sort operates on data only.
 
+use flowlog_common::ExecutionMode;
 use flowlog_parser::DataType;
 use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
@@ -98,7 +99,7 @@ impl CodeGen {
                     if data_type
                         .iter()
                         .any(|dt| dt.any_scalar(&DataType::is_integer))
-                        || self.config.is_incremental()
+                        || self.config.mode() == ExecutionMode::Inc
                     {
                         self.features.mark_itoa();
                     }
@@ -159,10 +160,9 @@ impl CodeGen {
         cell_ident: &Ident,
         plan_graph: &mut Option<PlanGraph>,
     ) -> TokenStream {
-        let maybe_probe = if self.config.is_incremental() {
-            quote! { .probe_with(&mut probe) }
-        } else {
-            quote! {}
+        let maybe_probe = match self.config.mode() {
+            ExecutionMode::Inc => quote! { .probe_with(&mut probe) },
+            ExecutionMode::Batch => quote! {},
         };
 
         // Wiring (first arg) is the collection binding feeding the sink;
@@ -179,16 +179,17 @@ impl CodeGen {
         // to a number first; `i32` diffs already carry one, and after the
         // clamp it is the +1/-1 that makes `size` a per-epoch delta.
         let op_name = format!("{display}: inspect size");
-        let counted = if self.config.is_datalog_batch() {
-            quote! {
+        let counted = match self.config.mode() {
+            ExecutionMode::Batch => quote! {
                 ::flowlog_runtime::operators::flowlog_map(
                     ::flowlog_runtime::operators::flowlog_dedup(#var.clone()),
                     #op_name,
                     move |_, t, _| std::iter::once(((), t, 1_i32)),
                 )
-            }
-        } else {
-            quote! { ::flowlog_runtime::operators::flowlog_dedup(#var.clone()) }
+            },
+            ExecutionMode::Inc => quote! {
+                ::flowlog_runtime::operators::flowlog_dedup(#var.clone())
+            },
         };
 
         quote! {{
@@ -237,13 +238,12 @@ impl CodeGen {
         buf_ident: &Ident,
         idb: &Relation,
     ) -> (TokenStream, TokenStream, TokenStream) {
-        let (maybe_consolidate, maybe_probe) = if self.config.is_incremental() {
-            (
+        let (maybe_consolidate, maybe_probe) = match self.config.mode() {
+            ExecutionMode::Inc => (
                 quote! { .consolidate() },
                 quote! { .probe_with(&mut probe) },
-            )
-        } else {
-            (quote! {}, quote! {})
+            ),
+            ExecutionMode::Batch => (quote! {}, quote! {}),
         };
         let local_ident = Ident::new(&format!("local_{}", idb.name()), Span::call_site());
 
@@ -255,10 +255,9 @@ impl CodeGen {
         } else {
             (quote! { data }, quote! { data.clone() })
         };
-        let (diff_pat, diff_expr) = if self.config.is_batch() {
-            (quote! { _diff }, quote! { 1_i32 })
-        } else {
-            (quote! { diff }, quote! { *diff })
+        let (diff_pat, diff_expr) = match self.config.mode() {
+            ExecutionMode::Batch => (quote! { _diff }, quote! { 1_i32 }),
+            ExecutionMode::Inc => (quote! { diff }, quote! { *diff }),
         };
         let inspect_pattern = quote! { (#data_pat, time, #diff_pat) };
         let push_stmt = quote! {

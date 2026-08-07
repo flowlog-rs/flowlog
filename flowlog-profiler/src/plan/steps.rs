@@ -7,9 +7,7 @@
 //! an expansion shifts every later address and silently misattributes
 //! metrics, so re-verify this table whenever those crates move; an
 //! end-to-end profiled run of `example/graph_analysis/reach.dl` shows drift
-//! immediately. Only `DatalogBatch` and `DatalogInc` are verified; extended
-//! modes may add operators this table does not know (loop conditions, UDF
-//! pipelines), which is why profiling rejects them.
+//! immediately.
 //!
 //! Every count below composes these primitives, one per DD combinator, each
 //! listing the operators it adds. The functions further down sum them:
@@ -38,24 +36,23 @@ pub(crate) fn arrange(is_key_only: bool) -> u32 {
     if is_key_only { 2 } else { 1 }
 }
 
-/// Operators from `general_aggregate`, the group-by reduce pipeline
-/// (`reduce_core` batch / `reduce_abelian` incremental), 4 either way:
+/// Operators from the `i32` aggregate, the group-by reduce pipeline
+/// through `reduce_abelian`:
 ///
 /// - Map (row chop) + ArrangeByKey + Reduce + AsCollection (merge)
-pub(crate) const GENERAL_AGGREGATE: u32 = 4;
+pub(crate) const I32_AGGREGATE: u32 = 4;
 
-/// Operators from `opt_aggregate`, the DatalogBatch monoid fast path via
-/// `threshold_semigroup` (skips the second arrange `reduce` would add). The
-/// two Maps are the pre/post `.inner.map().as_collection()`:
+/// Operators from the `Present` aggregate, the monoid fast path via
+/// `threshold_semigroup` (skips the second arrange `reduce` would add):
 ///
 /// - (5): Map + `.threshold_semigroup()` (3) + Map
-pub(crate) const OPT_AGGREGATE: u32 = 5;
+pub(crate) const PRESENT_AGGREGATE: u32 = 5;
 
-/// Operators from the post-leave opt-aggregate step, merging semiring diffs
-/// collapsed across iterations (`.consolidate()` then convert back):
+/// Operators from the post-leave `Present` aggregate, merging semiring
+/// weights collapsed across iterations (`.consolidate()` then convert back):
 ///
 /// - (4): `.consolidate()` (3) + Map
-pub(crate) const POST_LEAVE_OPT_AGGREGATE: u32 = 4;
+pub(crate) const POST_LEAVE_PRESENT_AGGREGATE: u32 = 4;
 
 /// Operators from `flowlog_dedup` at an outer scope (EDBs, rule outputs,
 /// SIP projections). Three whichever diff is ambient, differing in which:
@@ -68,14 +65,13 @@ pub(crate) const DEDUP_NONRECURSIVE: u32 = 3;
 /// `flowlog_dedup_retained` on feedback or `flowlog_dedup` on a SIP
 /// projection:
 ///
-/// - DatalogBatch `.threshold_semigroup(...)` / `.consolidate()` (3)
-/// - ExtendBatch `.threshold_total(...)` (3): its loop clock
-///   `Product<(), u16>` is totally ordered
+/// - batch `.threshold_semigroup(...)` / `.consolidate()` (3)
 /// - incremental `.threshold(...)` (4): `Product<u32, u16>` is not
+///   totally ordered
 pub(crate) fn dedup_recursive(mode: ExecutionMode) -> u32 {
     match mode {
-        ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => 3,
-        ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => 4,
+        ExecutionMode::Batch => 3,
+        ExecutionMode::Inc => 4,
     }
 }
 
@@ -86,22 +82,16 @@ pub(crate) fn dedup_recursive(mode: ExecutionMode) -> u32 {
 /// is Concatenate. `dedup` is the dedup expansion, 3 via `threshold_total` or
 /// 4 via `threshold` (see [`DEDUP_NONRECURSIVE`] / [`dedup_recursive`]).
 ///
-/// - DatalogBatch (9): FlatMap (deref) + FlatMap (pos weight) + Join
+/// - Batch (9): FlatMap (deref) + FlatMap (pos weight) + Join
 ///   + FlatMap (neg weight) + Concatenate + FlatMap (project) + dedup (3)
-/// - Others, recursive scope (17): FlatMap + dedup (4) + Join + dedup (4)
+/// - Inc, recursive scope (17): FlatMap + dedup (4) + Join + dedup (4)
 ///   + FlatMap + Concatenate + FlatMap + dedup (4)
-/// - Others, outer scope (14): FlatMap + dedup (3) + Join + dedup (3)
+/// - Inc, outer scope (14): FlatMap + dedup (3) + Join + dedup (3)
 ///   + FlatMap + Concatenate + FlatMap + dedup (3)
-///
-/// ExtendBatch takes the outer-scope count in both scopes, since every
-/// clock it runs at is totally ordered (see [`dedup_recursive`]). Like
-/// every extended-mode row here that count is derived, not measured:
-/// `Config::profiling_enabled` refuses those modes.
 pub(crate) fn anti_join(mode: ExecutionMode, recursive: bool) -> u32 {
     match mode {
-        ExecutionMode::DatalogBatch => 9,
-        ExecutionMode::ExtendBatch => 14,
-        ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
+        ExecutionMode::Batch => 9,
+        ExecutionMode::Inc => {
             if recursive {
                 17
             } else {
@@ -116,7 +106,7 @@ pub(crate) fn anti_join(mode: ExecutionMode, recursive: bool) -> u32 {
 ///
 /// - Batch (9): `flowlog_dedup` (3) + FlatMap (lift to `i32`)
 ///   + FlatMap (collapse onto one key) + `.consolidate()` (3) + InspectBatch
-/// - Others (9): `flowlog_dedup` (3) + FlatMap (collapse onto one key)
+/// - Inc (9): `flowlog_dedup` (3) + FlatMap (collapse onto one key)
 ///   + `.consolidate()` (3) + InspectBatch + Probe
 pub(crate) const INSPECT_SIZE: u32 = 9;
 
@@ -127,7 +117,7 @@ pub(crate) const INSPECT_SIZE: u32 = 9;
 /// - Inc (5): `.consolidate()` (3) + InspectBatch + Probe
 pub(crate) fn inspect_content(mode: ExecutionMode) -> u32 {
     match mode {
-        ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => 5,
-        ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => 1,
+        ExecutionMode::Inc => 5,
+        ExecutionMode::Batch => 1,
     }
 }

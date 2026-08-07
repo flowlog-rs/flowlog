@@ -5,6 +5,7 @@
 
 use flowlog_build::Features;
 use flowlog_common::Config;
+use flowlog_common::ExecutionMode;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -12,7 +13,7 @@ use quote::quote;
 const INTERN_MAX_RETRIES: usize = 1024;
 
 pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
-    let inc = config.is_incremental();
+    let inc = config.mode() == ExecutionMode::Inc;
     let prof = config.profiling_enabled();
     let f = features;
 
@@ -52,9 +53,6 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     out.push(std_imports(inc, prof, f));
     out.push(dd_core_imports(f));
 
-    if f.timely_map() {
-        out.push(quote! { use timely::dataflow::operators::vec::Map; });
-    }
     if inc {
         out.push(quote! { use timely::dataflow::operators::probe::Handle as ProbeHandle; });
     }
@@ -200,9 +198,6 @@ fn dd_core_imports(f: &Features) -> TokenStream {
     let mut out = Vec::new();
     if f.dd_input() {
         out.push(quote! { use differential_dataflow::input::Input; });
-    }
-    if f.as_collection() {
-        out.push(quote! { use differential_dataflow::AsCollection; });
     }
     if f.recursive() {
         out.push(quote! {

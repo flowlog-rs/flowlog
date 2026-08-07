@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use flowlog_common::ExecutionMode;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -114,15 +115,12 @@ impl CodeGen {
             size_cell_clones,
         } = self.collect_inspectors(plan_graph);
 
-        // A run is either batch or incremental, never both, so build only the
-        // matching pair.
-        let (metrics_write, step_loop) = if self.config.is_incremental() {
-            (
+        let (metrics_write, step_loop) = match self.config.mode() {
+            ExecutionMode::Inc => (
                 self.gen_metrics_write_incremental(),
                 self.gen_incremental_step_loop(),
-            )
-        } else {
-            (self.gen_metrics_write_batch(), self.gen_batch_step_loop())
+            ),
+            ExecutionMode::Batch => (self.gen_metrics_write_batch(), self.gen_batch_step_loop()),
         };
 
         // Rendered after the codegen loop so the plan graph is fully

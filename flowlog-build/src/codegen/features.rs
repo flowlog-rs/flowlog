@@ -26,8 +26,6 @@ macro_rules! bool_features {
 pub struct Features {
     // -- differential-dataflow / timely --
     dd_input: bool,
-    as_collection: bool,
-    timely_map: bool,
     // -- dataflow features --
     recursive: bool,
     // -- library support --
@@ -52,8 +50,6 @@ impl Features {
     bool_features! {
         // dd / timely
         (dd_input,       mark_dd_input),
-        (as_collection,  mark_as_collection),
-        (timely_map,     mark_timely_map),
         // dataflow
         (recursive,      mark_recursive),
         (string_intern,  mark_string_intern),

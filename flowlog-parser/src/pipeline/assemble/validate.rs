@@ -1,6 +1,5 @@
 //! Apply the `.input` / `.output` / `.printsize` directives to their relations,
-//! and validate the assembled program's references, directives, and loop
-//! conditions.
+//! and validate the assembled program's references and directives.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -15,7 +14,6 @@ use crate::declaration::PrintSizeDirective;
 use crate::declaration::Relation;
 use crate::error::DirectiveKind;
 use crate::error::ParseError;
-use crate::segment::Segment;
 
 /// Reject any rule head, body atom, or ground fact whose relation
 /// name has no matching `.decl`. Mirrors the check directives already
@@ -24,33 +22,27 @@ use crate::segment::Segment;
 /// declared.
 pub(super) fn validate_relation_references(
     relations: &[Relation],
-    segments: &[Segment],
+    rules: &[FlowLogRule],
     raw_facts: &[FlowLogRule],
 ) -> Result<(), ParseError> {
     let declared: HashSet<&str> = relations.iter().map(|r| r.name()).collect();
 
-    for segment in segments {
-        let rules: &[FlowLogRule] = match segment {
-            Segment::Plain(rules) => rules,
-            Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
-        };
-        for rule in rules {
-            let head = rule.head();
-            if !declared.contains(head.name()) {
+    for rule in rules {
+        let head = rule.head();
+        if !declared.contains(head.name()) {
+            return Err(ParseError::UndeclaredInRule {
+                span: head.span(),
+                name: head.raw_name().to_string(),
+            });
+        }
+        for pred in rule.rhs() {
+            if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred
+                && !declared.contains(atom.name())
+            {
                 return Err(ParseError::UndeclaredInRule {
-                    span: head.span(),
-                    name: head.raw_name().to_string(),
+                    span: atom.span(),
+                    name: atom.raw_name().to_string(),
                 });
-            }
-            for pred in rule.rhs() {
-                if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred
-                    && !declared.contains(atom.name())
-                {
-                    return Err(ParseError::UndeclaredInRule {
-                        span: atom.span(),
-                        name: atom.raw_name().to_string(),
-                    });
-                }
             }
         }
     }
@@ -198,78 +190,13 @@ pub(super) fn validate_output_printsize_exclusion(
     Ok(())
 }
 
-/// Validate a loop block's relation references: every `.iterative` relation
-/// and every until-condition relation must have a matching `.decl`, and each
-/// until-condition relation must be nullary (arity 0).
-///
-/// Until-condition relations act as boolean flags: a non-empty `rel()` means
-/// the condition holds. Non-nullary relations are rejected so the loop guard
-/// lowers to `Collection<G, ()>` without an extra `.map(|_| ())`.
-pub(super) fn validate_loop_conditions(
-    items: &[Segment],
-    relations: &[Relation],
-) -> Result<(), ParseError> {
-    let declared: HashSet<&str> = relations.iter().map(|r| r.name()).collect();
-
-    for item in items {
-        let Some(block) = item.as_loop() else {
-            continue;
-        };
-
-        for directive in block.iterative_relations() {
-            let name = directive.name();
-            if !declared.contains(name) {
-                return Err(ParseError::UndeclaredInIterativeList {
-                    span: block.span(),
-                    name: name.to_string(),
-                });
-            }
-        }
-
-        let Some(cond) = block.condition() else {
-            continue;
-        };
-
-        let Some(until_group) = cond.until_part() else {
-            continue;
-        };
-
-        for rel in until_group.relations() {
-            let name = rel.name();
-            let Some(decl) = relations
-                .iter()
-                .find(|r| r.name() == name || r.name() == name.to_lowercase().as_str())
-            else {
-                return Err(ParseError::UndeclaredLoopCondition {
-                    span: block.span(),
-                    name: name.to_string(),
-                });
-            };
-            if decl.arity() != 0 {
-                return Err(ParseError::NonNullaryLoopCondition {
-                    span: block.span(),
-                    name: decl.raw_name().to_string(),
-                    arity: decl.arity(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Rule;
     use crate::assert_err;
     use crate::ast::Atom;
     use crate::ast::Head;
-    use crate::declaration::Attribute;
-    use crate::segment::LoopBlock;
     use crate::test_util::assembled;
-    use crate::test_util::parse_node;
-    use crate::types::DataType;
-    use crate::types::TypeRegistry;
 
     /// Build `head(...) :- body_atoms...`. Names are already lowercase, so
     /// canonicalization is a no-op.
@@ -284,9 +211,9 @@ mod tests {
     #[test]
     fn validate_relation_references_rejects_undeclared_body_atom() {
         let relations = vec![Relation::new("foo", vec![])]; // only `foo` declared
-        let segments = vec![Segment::Plain(vec![rule("foo", &["ghost"])])];
+        let rules = vec![rule("foo", &["ghost"])];
         assert_err!(
-            validate_relation_references(&relations, &segments, &[]),
+            validate_relation_references(&relations, &rules, &[]),
             ParseError::UndeclaredInRule { .. }
         );
     }
@@ -303,8 +230,8 @@ mod tests {
     #[test]
     fn validate_relation_references_accepts_a_fully_declared_program() {
         let relations = vec![Relation::new("foo", vec![]), Relation::new("bar", vec![])];
-        let segments = vec![Segment::Plain(vec![rule("foo", &["bar"])])];
-        assert!(validate_relation_references(&relations, &segments, &[]).is_ok());
+        let rules = vec![rule("foo", &["bar"])];
+        assert!(validate_relation_references(&relations, &rules, &[]).is_ok());
     }
 
     #[test]
@@ -335,40 +262,6 @@ mod tests {
                 |_| Span::DUMMY,
             )
             .is_ok()
-        );
-    }
-
-    #[test]
-    fn validate_loop_conditions_rejects_undeclared_until_relation() {
-        let block = parse_node::<LoopBlock>(Rule::loop_block, "loop until { ghost } { }");
-        assert_err!(
-            validate_loop_conditions(&[Segment::Loop(block)], &[]),
-            ParseError::UndeclaredLoopCondition { .. }
-        );
-    }
-
-    #[test]
-    fn validate_loop_conditions_rejects_undeclared_iterative_relation() {
-        let block = parse_node::<LoopBlock>(Rule::fixpoint_block, "fixpoint { .iterative ghost }");
-        assert_err!(
-            validate_loop_conditions(&[Segment::Fixpoint(block)], &[]),
-            ParseError::UndeclaredInIterativeList { .. }
-        );
-    }
-
-    #[test]
-    fn validate_loop_conditions_rejects_non_nullary_until_relation() {
-        // `flag` is declared but has arity 1: a loop condition must be nullary.
-        let reg = TypeRegistry::new();
-        let id = reg.primitive_id(DataType::Int32).unwrap();
-        let flag = Relation::new(
-            "flag",
-            vec![Attribute::with_type("x".into(), DataType::Int32, id)],
-        );
-        let block = parse_node::<LoopBlock>(Rule::loop_block, "loop until { flag } { }");
-        assert_err!(
-            validate_loop_conditions(&[Segment::Loop(block)], &[flag]),
-            ParseError::NonNullaryLoopCondition { .. }
         );
     }
 

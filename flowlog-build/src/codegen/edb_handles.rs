@@ -1,5 +1,6 @@
 //! Per-EDB `(handle, collection)` declarations for the dataflow scope.
 
+use flowlog_common::ExecutionMode;
 use flowlog_parser::DataType;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -96,28 +97,29 @@ impl CodeGen {
         let hs: Vec<_> = edb_names.iter().map(|n| format_ident!("h{}", n)).collect();
 
         // Incremental mode additionally binds a probe handle as the last element.
-        if self.config.is_incremental() {
-            let probe = format_ident!("probe");
-            match hs.len() {
-                0 => (quote! { ( #probe, ) }, quote! { #probe }),
-                1 => {
-                    let h = &hs[0];
-                    (quote! { ( #h, #probe ) }, quote! { ( #h, #probe ) })
+        match self.config.mode() {
+            ExecutionMode::Inc => {
+                let probe = format_ident!("probe");
+                match hs.len() {
+                    0 => (quote! { ( #probe, ) }, quote! { #probe }),
+                    1 => {
+                        let h = &hs[0];
+                        (quote! { ( #h, #probe ) }, quote! { ( #h, #probe ) })
+                    }
+                    _ => (
+                        quote! { ( #(#hs),*, #probe ) },
+                        quote! { ( #(#hs),*, #probe ) },
+                    ),
                 }
-                _ => (
-                    quote! { ( #(#hs),*, #probe ) },
-                    quote! { ( #(#hs),*, #probe ) },
-                ),
             }
-        } else {
-            match hs.len() {
+            ExecutionMode::Batch => match hs.len() {
                 0 => (quote! { _handles }, quote! { () }),
                 1 => {
                     let h = &hs[0];
                     (quote! { #h }, quote! { #h })
                 }
                 _ => (quote! { ( #(#hs),* ) }, quote! { ( #(#hs),* ) }),
-            }
+            },
         }
     }
 }

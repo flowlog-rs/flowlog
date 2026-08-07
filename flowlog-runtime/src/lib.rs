@@ -1,4 +1,4 @@
-//! FlowLog runtime — types and re-exports consumed by generated code.
+//! FlowLog runtime: types and re-exports consumed by generated code.
 //!
 //! This crate is the runtime half of the FlowLog library-mode toolchain.
 //! Pair it with [`flowlog-build`] in your `[build-dependencies]`:
@@ -22,7 +22,7 @@
 //! | [`txn`] | Transaction state types shared with incremental drivers |
 //!
 //! The re-exported crates (`timely`, `differential_dataflow`, etc.) are
-//! used internally by the generated code — you should not need to
+//! used internally by the generated code; you should not need to
 //! reference them directly.
 
 pub mod intern;
@@ -33,11 +33,11 @@ pub mod txn;
 
 /// Trait implemented by every generated input relation struct.
 ///
-/// The generated `DatalogBatchEngine` calls [`Relation::to_tuple`] at
+/// The generated `BatchEngine` calls [`Relation::to_tuple`] at
 /// insert time to convert user-facing structs (e.g. `Edge { x: 1, y: 2 }`)
 /// into the internal differential-dataflow tuple representation.
 ///
-/// You don't implement this trait manually — `flowlog-build` generates an
+/// You don't implement this trait manually; `flowlog-build` generates an
 /// impl for each `.input` relation declared in your `.dl` program.
 pub trait Relation: Sized {
     /// The internal DD tuple type (e.g. `(i32, i32)`).

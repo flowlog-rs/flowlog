@@ -13,7 +13,6 @@ mod substitute;
 mod validate;
 
 use std::collections::HashMap;
-use std::mem;
 
 use flowlog_common::FileId;
 use flowlog_common::Span;
@@ -36,31 +35,14 @@ use crate::error::ParseError;
 use crate::error::grammar_bug;
 use crate::program::InlineFact;
 use crate::program::Program;
-use crate::segment::LoopBlock;
-use crate::segment::Segment;
 use crate::types::TypeRegistry;
-
-/// Seal `pending` rules into a `Segment::Plain` appended to `out`, emptying
-/// `pending`. Does nothing when `pending` is empty.
-#[inline]
-fn flush_rules(pending: &mut Vec<FlowLogRule>, out: &mut Vec<Segment>) {
-    if !pending.is_empty() {
-        out.push(Segment::Plain(mem::take(pending)));
-    }
-}
 
 /// Parse a fully-included source string (after [`resolve_includes`] has run)
 /// and assemble it into a [`Program`].
 ///
-/// Rules and loop/fixpoint blocks become [`Segment`]s in source order: each
-/// loop or fixpoint block is its own segment, and every run of plain rules
-/// between blocks (or trailing after the last) is sealed into one
-/// `Segment::Plain`.
-pub(super) fn collect_program(
-    source: &str,
-    extended: bool,
-    file: FileId,
-) -> Result<Program, ParseError> {
+/// Rules are collected in source order, with each `.init`'s instantiated
+/// rules spliced in at the position the `.init` held.
+pub(super) fn collect_program(source: &str, file: FileId) -> Result<Program, ParseError> {
     let mut pairs = FlowLogParser::parse(Rule::main_grammar, source)
         .map_err(|e| ParseError::syntax_from_pest(&e, file))?;
     let parsed_rule = pairs
@@ -79,12 +61,11 @@ pub(super) fn collect_program(
     let mut udfs: Vec<ExternFn> = Vec::new();
     let mut udf_spans: HashMap<String, Span> = HashMap::new();
     let mut raw_facts: Vec<FlowLogRule> = Vec::new();
-    let mut current_rules: Vec<FlowLogRule> = Vec::new();
-    let mut segments: Vec<Segment> = Vec::new();
+    let mut rules: Vec<FlowLogRule> = Vec::new();
     let mut comps: HashMap<String, CompDecl> = HashMap::new();
-    // Each `.init` is recorded with the `segments.len()` value at the
-    // point it appeared, so the inliner's output rules splice in at
-    // that exact position: preserving source-order use-before-def.
+    // Each `.init` is recorded with the `rules.len()` value at the point it
+    // appeared, so the inliner's output rules splice in at that exact
+    // position: preserving source-order use-before-def.
     let mut inits_at_pos: Vec<(InitDecl, usize)> = Vec::new();
 
     for node in parsed_rule.into_inner() {
@@ -127,11 +108,8 @@ pub(super) fn collect_program(
                 comps.insert(comp.name.clone(), comp);
             }
             Rule::init_decl => {
-                // Flush any pending rules before recording the init's
-                // position so the position points just after them.
-                flush_rules(&mut current_rules, &mut segments);
                 let init = InitDecl::from_parsed_rule(Node::new(node, file))?;
-                inits_at_pos.push((init, segments.len()));
+                inits_at_pos.push((init, rules.len()));
             }
 
             // --- I/O directives ---
@@ -144,27 +122,11 @@ pub(super) fn collect_program(
             Rule::printsize_directive => printsize_directives
                 .push(PrintSizeDirective::from_parsed_rule(Node::new(node, file))?),
 
-            // --- Rules and loop/fixpoint blocks ---
+            // --- Rules ---
             // A rule carries its own trailing `.plan`; there is no separate
             // plan node to track.
             Rule::rule => {
-                current_rules.extend(FlowLogRule::expand_from_parsed_rule(node, file)?);
-            }
-            Rule::loop_block => {
-                let block = LoopBlock::from_parsed_rule(Node::new(node, file))?;
-                if !extended {
-                    return Err(ParseError::LoopBlockInStandardMode { span: block.span() });
-                }
-                flush_rules(&mut current_rules, &mut segments);
-                segments.push(Segment::Loop(block));
-            }
-            Rule::fixpoint_block => {
-                let block = LoopBlock::from_parsed_rule(Node::new(node, file))?;
-                if !extended {
-                    return Err(ParseError::LoopBlockInStandardMode { span: block.span() });
-                }
-                flush_rules(&mut current_rules, &mut segments);
-                segments.push(Segment::Fixpoint(block));
+                rules.extend(FlowLogRule::expand_from_parsed_rule(node, file)?);
             }
 
             // --- Ground facts ---
@@ -192,11 +154,8 @@ pub(super) fn collect_program(
         }
     }
 
-    // Seal any rules that trail after the last loop block.
-    flush_rules(&mut current_rules, &mut segments);
-
     // Expand `.comp` / `.init` into prefixed primitive forms.
-    // Each init's emitted rules splice into `segments` at the
+    // Each init's emitted rules splice into `rules` at the
     // position recorded when the `.init` was parsed; rules
     // referencing the init's relations must appear *after* the
     // `.init` in source order, otherwise the stratifier catches
@@ -243,10 +202,9 @@ pub(super) fn collect_program(
         input_directives.extend(out.input_directives);
         output_directives.extend(out.output_directives);
         printsize_directives.extend(out.printsize_directives);
-        if !out.rules.is_empty() {
-            segments.insert(pos + shift, Segment::Plain(out.rules));
-            shift += 1;
-        }
+        let at = pos + shift;
+        shift += out.rules.len();
+        rules.splice(at..at, out.rules);
     }
 
     validate::apply_directives(
@@ -256,21 +214,20 @@ pub(super) fn collect_program(
         printsize_directives,
     )?;
     validate::validate_output_printsize_exclusion(&relations)?;
-    validate::validate_loop_conditions(&segments, &relations)?;
 
-    inline::normalize_dots(&mut relations, &mut segments, &mut raw_facts);
+    inline::normalize_dots(&mut relations, &mut rules, &mut raw_facts);
 
     // Eliminate equality assignments (`v = expr`) by substitution before the
     // catalog/planner, which ground variables only through positive atoms. An
     // all-assignment rule is left body-less for the fold stage to materialize
     // as a fact.
-    substitute::substitute_assignments(&mut segments)?;
+    substitute::substitute_assignments(&mut rules)?;
 
-    validate::validate_relation_references(&relations, &segments, &raw_facts)?;
+    validate::validate_relation_references(&relations, &rules, &raw_facts)?;
 
     let mut program = Program {
         relations,
-        segments,
+        rules,
         udfs,
         type_registry,
         facts: HashMap::new(),
@@ -293,9 +250,9 @@ fn extract_fact(program: &mut Program, fact_rule: FlowLogRule) -> Result<(), Par
 mod tests {
     use super::*;
     use crate::assert_err;
-    // `DuplicateDecl` / `DuplicateExternFn` / `LoopBlockInStandardMode` are
-    // produced inline while assembling the program, so `collect_program` is
-    // their producing function.
+    // `DuplicateDecl` and `DuplicateExternFn` are produced inline while
+    // assembling the program, so `collect_program` is their producing
+    // function.
 
     #[test]
     fn collect_program_rejects_duplicate_decl() {
@@ -303,7 +260,6 @@ mod tests {
         assert_err!(
             collect_program(
                 ".decl edge(x: number)\n.decl Edge(y: number)\n",
-                true,
                 FileId::new(0),
             ),
             ParseError::DuplicateDecl { .. }
@@ -315,76 +271,19 @@ mod tests {
         assert_err!(
             collect_program(
                 ".extern fn hash(x: int64) -> int64\n.extern fn hash(y: int64) -> int64\n",
-                true,
                 FileId::new(0),
             ),
             ParseError::DuplicateExternFn { .. }
         );
     }
 
-    #[test]
-    fn collect_program_rejects_loop_block_in_standard_mode() {
-        // extended = false -> `loop`/`fixpoint` blocks require Extended mode.
-        assert_err!(
-            collect_program(
-                ".decl edge(x: number, y: number)\n.output edge\nfixpoint { edge(X, Y) :- edge(X, Y). }\n",
-                false,
-                FileId::new(0),
-            ),
-            ParseError::LoopBlockInStandardMode { .. }
-        );
-    }
-
-    /// Parse and assemble `src` in extended mode, panicking on failure.
+    /// Parse and assemble `src`, panicking on failure.
     fn assembled(src: &str) -> Program {
-        collect_program(src, true, FileId::new(0)).expect("assembly should succeed")
+        collect_program(src, FileId::new(0)).expect("assembly should succeed")
     }
 
-    /// Rules and loop blocks land in `segments` in source order, with a
-    /// fixpoint block as its own segment between the surrounding rule groups.
-    #[test]
-    fn segments_preserve_source_order_with_fixpoint_isolated() {
-        let program = assembled(
-            "
-            .decl a(x: number)
-            .decl b(x: number)
-            .decl c(x: number)
-            .output c
-            a(X) :- b(X).
-            fixpoint { b(X) :- a(X). }
-            c(X) :- a(X).
-            ",
-        );
-        let items = program.segments();
-        assert_eq!(items.len(), 3);
-        assert!(matches!(&items[0], Segment::Plain(r) if r.len() == 1));
-        assert!(matches!(&items[1], Segment::Fixpoint(_)));
-        assert!(matches!(&items[2], Segment::Plain(r) if r.len() == 1));
-    }
-
-    /// Consecutive top-level rules collapse into a single `Plain` segment
-    /// before a loop barrier.
-    #[test]
-    fn multiple_rules_before_loop_form_one_segment() {
-        let program = assembled(
-            "
-            .decl a(x: number)
-            .decl b(x: number)
-            .output a
-            a(1) :- b(1).
-            a(2) :- b(2).
-            fixpoint { a(X) :- b(X). }
-            ",
-        );
-        let items = program.segments();
-        assert_eq!(items.len(), 2);
-        assert!(matches!(&items[0], Segment::Plain(r) if r.len() == 2));
-        assert!(matches!(&items[1], Segment::Fixpoint(_)));
-    }
-
-    /// Rules emitted by a `.init` splice into the segment sequence at the
-    /// position the `.init` held in source order, between the surrounding
-    /// rule segments.
+    /// Rules emitted by a `.init` splice into the rule list at the position
+    /// the `.init` held in source order, between the surrounding rules.
     #[test]
     fn init_rules_splice_at_source_position() {
         let program = assembled(
@@ -402,15 +301,11 @@ mod tests {
             b(X) :- a(X).
             ",
         );
-        let heads: Vec<Vec<&str>> = program
-            .segments()
-            .iter()
-            .map(|seg| seg.as_rules().iter().map(|r| r.head().name()).collect())
-            .collect();
+        let heads: Vec<&str> = program.rules().iter().map(|r| r.head().name()).collect();
         assert_eq!(
             heads,
-            vec![vec!["a"], vec!["c\u{b7}t"], vec!["b"]],
-            "init-emitted rules must sit between the surrounding rule segments"
+            vec!["a", "c\u{b7}t", "b"],
+            "init-emitted rules must sit between the surrounding rules"
         );
     }
 }
