@@ -1,4 +1,4 @@
-//! Incremental mode (`DatalogInc` / `ExtendInc`) main function generation.
+//! Incremental mode (`Inc`) main function generation.
 //!
 //! Generates a `fn main()` that:
 //! 1. Constructs the timely dataflow graph with a probe handle.

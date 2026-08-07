@@ -56,9 +56,9 @@ pub mod policy {
     include!(concat!(env!("OUT_DIR"), "/policy.rs"));
 }
 
-use policy::DatalogBatchEngine;
+use policy::BatchEngine;
 
-let mut engine = DatalogBatchEngine::new(4); // 4 timely workers
+let mut engine = BatchEngine::new(4); // 4 timely workers
 engine.insert_edge(vec![(1, 2), (2, 3)]);
 let results = engine.run();
 ```

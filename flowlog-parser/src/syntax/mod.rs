@@ -7,12 +7,10 @@
 //! - `node`: the typed cursor over parse pairs.
 //! - `lexeme`: the pair-to-node conversion contract every AST type
 //!   implements.
-//! - `ast` / `declaration` / `segment`: the AST node types, in
-//!   containment order.
+//! - `ast` / `declaration`: the AST node types, in containment order.
 
 pub(crate) mod ast;
 pub(crate) mod declaration;
 pub(crate) mod grammar;
 pub(crate) mod lexeme;
 pub(crate) mod node;
-pub(crate) mod segment;

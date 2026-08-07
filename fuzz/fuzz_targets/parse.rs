@@ -26,7 +26,7 @@ fuzz_target!(|data: &[u8]| {
     };
     let mut sm = SourceMap::new();
     let mut config = Config {
-        mode: ExecutionMode::ExtendBatch,
+        mode: ExecutionMode::Batch,
         ..Config::default()
     };
     let _ = parse(path_str, &[], &mut sm, &mut config);

@@ -180,7 +180,7 @@ impl CodeGen {
         // Weights are what get summed, so a `Present` diff has to be lifted
         // to a number first; `i32` diffs already carry one, and after the
         // clamp it is the +1/-1 that makes `size` a per-epoch delta.
-        let to_countable = if self.config.is_datalog_batch() {
+        let to_countable = if self.config.is_batch() {
             quote! {
                 .inner
                 .flat_map(move |(_, t, _)| std::iter::once(((), t, 1_i32)))

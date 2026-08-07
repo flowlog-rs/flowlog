@@ -35,7 +35,6 @@ use crate::declaration::RawTypeOp;
 use crate::declaration::Relation;
 use crate::declaration::SuperRef;
 use crate::error::ParseError;
-use crate::segment::Segment;
 use crate::types::TypeRegistry;
 
 /// Output of inlining one `.init`.
@@ -692,7 +691,7 @@ fn rewrite_rule(rule: &mut FlowLogRule, scope: &Scope<'_>) -> Result<(), ParseEr
 /// facts.
 pub(super) fn normalize_dots(
     relations: &mut [Relation],
-    segments: &mut [Segment],
+    rules: &mut [FlowLogRule],
     raw_facts: &mut [FlowLogRule],
 ) {
     for rel in relations.iter_mut() {
@@ -701,7 +700,9 @@ pub(super) fn normalize_dots(
             rel.set_name(renamed);
         }
     }
-    for_each_rule_mut(segments, normalize_rule_dots);
+    for rule in rules.iter_mut() {
+        normalize_rule_dots(rule);
+    }
     for fact in raw_facts.iter_mut() {
         normalize_rule_dots(fact);
     }
@@ -728,23 +729,6 @@ fn normalize_rule_dots(rule: &mut FlowLogRule) {
 /// user-written name.
 const INLINER_SEP: &str = "\u{b7}";
 
-/// Apply `f` to every rule in every segment, including rules nested
-/// inside loop/fixpoint blocks.
-fn for_each_rule_mut<F>(segments: &mut [Segment], mut f: F)
-where
-    F: FnMut(&mut FlowLogRule),
-{
-    for seg in segments.iter_mut() {
-        let rules: &mut [FlowLogRule] = match seg {
-            Segment::Plain(rs) => rs.as_mut_slice(),
-            Segment::Loop(b) | Segment::Fixpoint(b) => b.rules_mut(),
-        };
-        for rule in rules {
-            f(rule);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use flowlog_common::FileId;
@@ -755,7 +739,6 @@ mod tests {
     use crate::Predicate;
     use crate::Program;
     use crate::Rule;
-    use crate::StopRelation;
     use crate::assert_err;
     use crate::test_util::assembled;
     use crate::test_util::parse_pair;
@@ -928,14 +911,6 @@ mod tests {
             .collect()
     }
 
-    fn loop_blocks(program: &Program) -> Vec<&crate::segment::LoopBlock> {
-        program
-            .segments()
-            .iter()
-            .filter_map(|s| s.as_loop())
-            .collect()
-    }
-
     /// The inliner rewrites dotted instance names (`c.R` -> `c\u{b7}R`) on
     /// `name` for Rust ident safety, but leaves `raw_name` carrying the
     /// original literal-dot form: that's what the I/O sinks use for
@@ -1063,7 +1038,7 @@ mod tests {
         let program = assembled(src).expect("assembles");
         let rule = program
             .rules()
-            .into_iter()
+            .iter()
             .find(|r| r.head().name() == "main\u{b7}r")
             .expect("main\u{b7}r rule");
         let body: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();
@@ -1162,7 +1137,7 @@ mod tests {
         let program = assembled(src).expect("assembles");
         let rules: Vec<_> = program
             .rules()
-            .into_iter()
+            .iter()
             .filter(|r| r.head().name() == "s\u{b7}foo")
             .collect();
         assert_eq!(rules.len(), 1, "exactly one s\u{b7}foo rule survives");
@@ -1271,68 +1246,6 @@ mod tests {
         assert_eq!(tuples.len(), 1);
     }
 
-    /// A loop condition may name an inliner-produced relation in its dotted
-    /// surface form: condition validation runs before dot normalization, so the
-    /// dotted spelling still matches the declaration. After normalization the
-    /// declaration carries `\u{b7}` while the condition keeps the user's dot.
-    #[test]
-    fn loop_until_dotted_inliner_relation_passes_validation() {
-        let src = "
-            .comp C { .decl Holds() }
-            .init c = C
-            .decl edge(x: number, y: number)
-            .output edge
-            edge(1, 2).
-            loop until { c.Holds } {
-                edge(X, Y) :- edge(Y, X).
-            }
-        ";
-        let program = assembled(src).expect("assembles");
-        assert!(
-            program
-                .relations()
-                .iter()
-                .any(|r| r.name() == "c\u{b7}holds")
-        );
-        let block = loop_blocks(&program)[0];
-        let names: Vec<&str> = block
-            .condition()
-            .expect("loop has a condition")
-            .until_part()
-            .expect("condition has an until part")
-            .relations()
-            .map(StopRelation::name)
-            .collect();
-        assert_eq!(names, vec!["c.holds"]);
-    }
-
-    /// `.iterative` accepts a dotted inliner-produced name; the directive stores
-    /// the canonical dotted spelling while the declaration is normalized to
-    /// `\u{b7}`. Same gap family as the loop-until pin above.
-    #[test]
-    fn iterative_dotted_inliner_relation_keeps_dotted_spelling() {
-        let src = "
-            .comp C { .decl S(x: number) }
-            .init c = C
-            .decl edge(x: number)
-            .output edge
-            fixpoint {
-                .iterative c.S
-                c.S(X) :- edge(X).
-                edge(X) :- c.S(X).
-            }
-        ";
-        let program = assembled(src).expect("assembles");
-        assert!(program.relations().iter().any(|r| r.name() == "c\u{b7}s"));
-        let block = loop_blocks(&program)[0];
-        let names: Vec<&str> = block
-            .iterative_relations()
-            .iter()
-            .map(|d| d.name())
-            .collect();
-        assert_eq!(names, vec!["c.s"]);
-    }
-
     /// `.plan` inside a `.comp` body permutes the rule's positive atoms at parse
     /// time, so the inlined / prefixed rule reaches the planner already in hint
     /// order, and `plan_pinned` survives inlining.
@@ -1353,7 +1266,7 @@ mod tests {
         let program = assembled(src).expect("assembles");
         let rule = program
             .rules()
-            .into_iter()
+            .iter()
             .find(|r| r.head().name() == "c\u{b7}h")
             .expect("instantiated H rule");
         let names: Vec<&str> = rule.rhs().iter().map(|p| p.name()).collect();

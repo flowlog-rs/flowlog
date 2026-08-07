@@ -17,15 +17,11 @@ set -euo pipefail
 #        script from `commands.txt` and emits `<rel>_t<N>` delta files
 #        computed host-side via set diff against the prior snapshot.
 #   3. Builds the runner with `flowlog_build::Builder::mode(...)` set
-#      per the fixture's category (`DatalogBatch`, `DatalogInc`,
-#      `ExtendBatch`).
+#      per the fixture's category (`Batch`, `Inc`).
 #   4. Runs the bare binary and reuses `compare_expected_outputs` from
 #      `common.sh` to diff against `expected/`.
 
-# Categories exercised by lib mode. extend-inc is intentionally omitted
-# (no fixtures yet AND lib synthesizer doesn't support the mode); add
-# it here when both gaps close.
-CATEGORIES=(datalog-batch datalog-inc extend-batch)
+CATEGORIES=(batch inc)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -41,10 +37,10 @@ usage() {
 Usage:
   $(basename "$0") [-j N] [--shard I/N] [test_name ...]
 
-Run FlowLog library-mode end-to-end tests against the datalog-batch,
-datalog-inc, and extend-batch fixtures. Batch fixtures (CSV in, files
-out) drive a single \`engine.run()\`; incremental fixtures (with
-\`commands.txt\`) drive a commit script on \`DatalogIncrementalEngine\`
+Run FlowLog library-mode end-to-end tests against the batch and inc
+fixtures. Batch fixtures (CSV in, files out) drive a single
+\`engine.run()\`; incremental fixtures (with
+\`commands.txt\`) drive a commit script on \`IncrementalEngine\`
 and emit per-epoch \`<rel>_t<N>\` delta files computed host-side from
 successive snapshots.
 
@@ -89,13 +85,6 @@ run_test() {
     local incremental=0
     [[ -f "$test_dir/commands.txt" ]] && incremental=1
 
-    # extend-batch fixtures need `Builder::mode(ExtendBatch)`; plain datalog
-    # fixtures keep the default fast-path `DatalogBatch` mode.
-    if [[ "$category" == "extend-batch" ]]; then
-        LIB_RUNNER_EXTENDED=1
-    else
-        LIB_RUNNER_EXTENDED=0
-    fi
     LIB_RUNNER_INC=$incremental
 
     # Per-fixture `compile_flags`: translate to Builder knob env vars.

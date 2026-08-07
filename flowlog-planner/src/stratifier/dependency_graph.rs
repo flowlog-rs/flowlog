@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Predicate;
 
-/// Dependency relationships between rules in one segment.
+/// Dependency relationships between a program's rules.
 ///
 /// An edge points from a consumer to a rule producing one of its body
 /// relations. Ordered sets make later component traversal deterministic.

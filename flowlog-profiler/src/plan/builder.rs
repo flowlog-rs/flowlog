@@ -435,7 +435,7 @@ mod tests {
     /// operator's own address slot.
     #[test]
     fn recording_across_a_scope_boundary_keeps_addresses_distinct() {
-        let mut graph = PlanGraph::new(ExecutionMode::DatalogBatch);
+        let mut graph = PlanGraph::new(ExecutionMode::Batch);
         graph.map_join_operator("outer".into(), vec![], "a".into(), 1);
         graph.enter_scope();
         graph.map_join_operator("inner".into(), vec![], "b".into(), 1);

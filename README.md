@@ -93,7 +93,7 @@ A `.dl` program compiles through five stages; three side modules assist the plan
 
 - **parser** — `.dl` → typed AST, each node source-located.
 - **typechecker** — resolves literal types (`1` → `int32`).
-- **stratifier** — groups rules into strata (one per `loop` / `fixpoint`) for ordered recursion.
+- **stratifier** — groups rules into dependency-ordered strata; a stratum with a cycle recurses to fixpoint.
 - **planner** — lowers rules to a Differential Dataflow plan, sharing sub-plans to reuse arrangements.
 - **codegen** — emits the plan as Timely + Differential Dataflow Rust.
 
@@ -120,10 +120,10 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 - `-F, --fact-dir <DIR>` — prepend `<DIR>` to relative `filename=` paths in `.input` directives.
 - `-o <PATH>` — output executable path; defaults to the program stem (`reach.dl` → `./reach`).
 - `-D, --output-dir <DIR>` — where to materialize `.output` relations; `-` prints tuples to stderr.
-- `--mode <MODE>` — `datalog-batch` (default), `datalog-inc`, `extend-batch`, or `extend-inc` (extended modes WIP).
+- `--mode <MODE>` — `batch` (default) or `inc`.
 - `--sip` — sideways information passing: filter later body atoms by earlier bindings to shrink joins (off by default).
 - `--str-intern` — intern string columns at load for faster joins and lower memory (off by default).
-- `-P, --profile` — collect execution statistics (Datalog modes only).
+- `-P, --profile` — collect execution statistics.
 - `-h, --help` — full help text.
 
 ## Testing
