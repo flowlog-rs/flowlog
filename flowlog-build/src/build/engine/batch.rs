@@ -1,4 +1,4 @@
-//! `DatalogBatchEngine` struct + `run()` body assembly for library mode.
+//! `BatchEngine` struct + `run()` body assembly for library mode.
 //!
 //! The generated engine is a host-side buffer with a terminal `run()`
 //! method. Users stage typed tuples via `insert_<rel>(Vec<rel::Foo>)` (or
@@ -45,7 +45,7 @@ pub(crate) fn gen_lib_engine(
     quote! {
         #struct_def
 
-        impl DatalogBatchEngine {
+        impl BatchEngine {
             /// Create an engine configured for `workers` timely workers.
             /// Worker count is fixed at construction because inputs are
             /// pre-bucketed per worker during `insert_*` — and because
@@ -89,7 +89,7 @@ fn gen_engine_struct(edbs: &[&Relation], string_intern: bool) -> TokenStream {
         .collect();
 
     quote! {
-        pub struct DatalogBatchEngine {
+        pub struct BatchEngine {
             #(#fields,)*
             workers: usize,
         }

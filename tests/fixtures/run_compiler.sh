@@ -5,9 +5,7 @@ set -euo pipefail
 #
 # Layout:
 #   tests/fixtures/<category>/          Category determines --mode flag:
-#     datalog-batch  → (default)         datalog-inc  → --mode datalog-inc
-#     extend-batch   → --mode extend-batch
-#     extend-inc     → --mode extend-inc
+#     batch  → (default)    inc  → --mode inc
 #
 #   tests/fixtures/<category>/<test_name>/
 #     program.dl     Datalog source (must use .output directives)
@@ -20,9 +18,9 @@ set -euo pipefail
 #   tests/fixtures/run_compiler.sh                          # run all tests
 #   tests/fixtures/run_compiler.sh <test_name> [test_name ...] # run specific tests
 
-# Categories exercised by binary mode. Add `extend-inc` here when the
+# Categories exercised by binary mode.
 # first such fixture lands (binary mode already supports the mode).
-CATEGORIES=(datalog-batch datalog-inc extend-batch)
+CATEGORIES=(batch inc)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -40,10 +38,8 @@ Usage:
   $(basename "$0") [-j N] [--shard I/N] [test_name ...]
 
 Run FlowLog binary-mode end-to-end tests. Tests are organized by category:
-  datalog-batch/  Standard batch Datalog evaluation (default mode)
-  datalog-inc/    Incremental Datalog evaluation
-  extend-batch/   Extended batch evaluation (loops)
-  extend-inc/     Extended incremental evaluation
+  batch/  Batch evaluation (default mode)
+  inc/    Incremental evaluation
 
 Each test directory contains:
   program.dl      Datalog source using .output directives
@@ -73,10 +69,8 @@ EOF
 mode_flag_for_category() {
     local category="$1"
     case "$category" in
-        datalog-batch) echo "" ;;
-        datalog-inc)   echo "--mode datalog-inc" ;;
-        extend-batch)  echo "--mode extend-batch" ;;
-        extend-inc)    echo "--mode extend-inc" ;;
+        batch) echo "" ;;
+        inc)   echo "--mode inc" ;;
         *) die "Unknown category: $category" ;;
     esac
 }

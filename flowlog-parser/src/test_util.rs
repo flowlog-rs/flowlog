@@ -65,7 +65,7 @@ pub(crate) fn assembled(src: &str) -> Result<Program, ParseError> {
     let mut tmp = NamedTempFile::new().expect("tempfile");
     tmp.write_all(src.as_bytes()).expect("write");
     let mut sm = SourceMap::new();
-    crate::parse_syntactic(&tmp.path().to_string_lossy(), true, &[], &mut sm)
+    crate::parse_syntactic(&tmp.path().to_string_lossy(), &[], &mut sm)
 }
 
 /// Rung 2: [`assembled`] then type-check (literals pinned, casts lowered). Its

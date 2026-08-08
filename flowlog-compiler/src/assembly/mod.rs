@@ -4,8 +4,8 @@
 //! and assembles a complete `main.rs` source by delegating to a
 //! mode-specific assembler:
 //!
-//! - [`batch`] — single-pass run-to-completion execution.
-//! - [`inc`] — interactive incremental shell with epoch-based updates.
+//! - [`batch`]: single-pass run-to-completion execution.
+//! - [`inc`]: interactive incremental shell with epoch-based updates.
 
 pub(crate) mod batch;
 pub(crate) mod inc;
@@ -28,12 +28,8 @@ impl Compiler {
         let input = self.gen_input(parts, &merge_section);
 
         let main_fn = match self.config.mode() {
-            ExecutionMode::DatalogBatch | ExecutionMode::ExtendBatch => {
-                batch::gen_batch_main(parts, &input, &merge_section)
-            }
-            ExecutionMode::DatalogInc | ExecutionMode::ExtendInc => {
-                inc::gen_incremental_main(parts, &input, &merge_section)
-            }
+            ExecutionMode::Batch => batch::gen_batch_main(parts, &input, &merge_section),
+            ExecutionMode::Inc => inc::gen_incremental_main(parts, &input, &merge_section),
         };
 
         let type_declarations = &parts.type_declarations;

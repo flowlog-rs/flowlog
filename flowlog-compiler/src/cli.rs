@@ -31,9 +31,8 @@ pub struct Cli {
     #[arg(short = 'D', long, value_name = "DIR")]
     pub output_dir: Option<String>,
 
-    /// Execution strategy: `datalog-batch` (default), `datalog-inc`,
-    /// `extend-batch`, or `extend-inc`.
-    #[arg(long, value_enum, default_value = "datalog-batch", value_name = "MODE")]
+    /// Execution strategy: `batch` (default) or `inc`.
+    #[arg(long, value_enum, default_value = "batch", value_name = "MODE")]
     mode: ExecutionMode,
 
     /// Collect per-rule execution statistics (timing, tuple counts, ...).

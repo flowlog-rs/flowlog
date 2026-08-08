@@ -479,7 +479,7 @@ Out() :- {body}.
             &mut Config::default(),
         )
         .expect("parse rule");
-        Catalog::from_rule(program.rules()[0]).expect("build catalog")
+        Catalog::from_rule(&program.rules()[0]).expect("build catalog")
     }
 
     mod map_modify {

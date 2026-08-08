@@ -1,5 +1,5 @@
 //! `Display` for a parsed program: a readable dump of its relations, extern
-//! functions, segments, and facts.
+//! functions, rules, and facts.
 
 use std::fmt;
 
@@ -7,7 +7,6 @@ use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
 
 use super::Program;
-use crate::segment::Segment;
 
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -34,22 +33,11 @@ impl fmt::Display for Program {
             writeln!(f)?;
         }
 
-        if !self.segments.is_empty() {
+        if !self.rules.is_empty() {
             writeln!(f, "Program (source order)")?;
             writeln!(f, "{SUBSECTION_BAR}")?;
-            for (i, item) in self.segments.iter().enumerate() {
-                match item {
-                    Segment::Plain(rules) => {
-                        writeln!(f, "[Segment {}]", i)?;
-                        for rule in rules {
-                            writeln!(f, "  {}", rule)?;
-                        }
-                    }
-                    Segment::Loop(block) | Segment::Fixpoint(block) => {
-                        writeln!(f, "[Loop {}]", i)?;
-                        writeln!(f, "  {}", block)?;
-                    }
-                }
+            for (i, rule) in self.rules.iter().enumerate() {
+                writeln!(f, "[{}] {}", i, rule)?;
             }
             writeln!(f)?;
         }

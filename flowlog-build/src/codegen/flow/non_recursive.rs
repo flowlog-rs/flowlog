@@ -123,7 +123,7 @@ impl CodeGen {
                 let name = self.display_name(*idb_fp);
                 let binding = output.to_string();
                 with_plan_graph(plan_graph, |plan_graph| {
-                    if self.config.is_datalog_batch() {
+                    if self.config.is_batch() {
                         plan_graph.opt_aggregate_operator(name, binding.clone(), binding);
                     } else {
                         plan_graph.general_aggregate_operator(name, binding.clone(), binding);

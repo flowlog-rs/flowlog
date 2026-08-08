@@ -366,7 +366,7 @@ mod tests {
             .extern fn f(a: int8) -> int64\n\
             Flag(f(1) + x) :- Item(x).\n";
         let program = checked(src).expect("type-check should succeed");
-        let rule = program.rules()[0];
+        let rule = &program.rules()[0];
         let head_arith = match &rule.head().head_arguments()[0] {
             HeadArg::Arith(a) => a,
             other => panic!("expected Arith head arg, got {other:?}"),

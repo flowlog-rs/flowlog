@@ -6,7 +6,7 @@
 //! | Component | Description |
 //! |-----------|-------------|
 //! | [`Relation`] declarations | Schema: name, attribute types, EDB/IDB role |
-//! | [`Segment`]s | Rules and loop blocks in source order |
+//! | Rules | Every rule, in source order |
 //! | UDF declarations | External scalar functions (`.extern fn`) |
 //! | Inline facts | Ground tuples written directly in source (`rel(1, 2).`) |
 
@@ -21,7 +21,6 @@ pub use fact::InlineFact;
 use crate::ast::FlowLogRule;
 use crate::declaration::ExternFn;
 use crate::declaration::Relation;
-use crate::segment::Segment;
 use crate::types::TypeRegistry;
 
 // =============================================================================
@@ -37,9 +36,8 @@ use crate::types::TypeRegistry;
 pub struct Program {
     /// All relation declarations (`.decl`), in source order.
     pub(crate) relations: Vec<Relation>,
-    /// Ordered sequence of [`Segment`]s (plain rule groups and loop blocks),
-    /// in source order, preserved exactly across included files.
-    pub(crate) segments: Vec<Segment>,
+    /// Every rule in source order, preserved exactly across included files.
+    pub(crate) rules: Vec<FlowLogRule>,
     /// External scalar UDF declarations (`.extern fn`).
     pub(crate) udfs: Vec<ExternFn>,
     /// Inline ground facts, keyed by canonical relation name.
@@ -157,50 +155,27 @@ impl Program {
             .collect()
     }
 
-    // --- Segments & rules ---
+    // --- Rules ---
 
-    /// Ordered program items (rule segments and loop blocks) in source order.
+    /// Returns every rule in source order.
     #[must_use]
     #[inline]
-    pub fn segments(&self) -> &[Segment] {
-        &self.segments
+    pub fn rules(&self) -> &[FlowLogRule] {
+        &self.rules
     }
 
-    /// Mutable version of [`segments`](Self::segments).
-    pub(crate) fn segments_mut(&mut self) -> &mut [Segment] {
-        &mut self.segments
-    }
-
-    /// Returns every rule in source order, including rules inside loop blocks.
-    #[must_use]
-    pub fn rules(&self) -> Vec<&FlowLogRule> {
-        self.segments
-            .iter()
-            .flat_map(|segment| {
-                let rules: &[FlowLogRule] = match segment {
-                    Segment::Plain(rules) => rules,
-                    Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
-                };
-                rules
-            })
-            .collect()
+    /// Mutable version of [`rules`](Self::rules). Owned so a stage can add
+    /// or drop rules, not only rewrite them in place.
+    #[inline]
+    pub(crate) fn rules_mut(&mut self) -> &mut Vec<FlowLogRule> {
+        &mut self.rules
     }
 
     /// Returns the rule with global source-order ID `rule_id`.
     #[must_use]
+    #[inline]
     pub fn rule(&self, rule_id: usize) -> Option<&FlowLogRule> {
-        let mut remaining = rule_id;
-        for segment in &self.segments {
-            let rules: &[FlowLogRule] = match segment {
-                Segment::Plain(rules) => rules,
-                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
-            };
-            if let Some(rule) = rules.get(remaining) {
-                return Some(rule);
-            }
-            remaining = remaining.saturating_sub(rules.len());
-        }
-        None
+        self.rules.get(rule_id)
     }
 
     // --- Inline facts ---
@@ -236,12 +211,12 @@ impl Program {
 
     // --- Internal ---
 
-    /// Split-borrow of the registry (shared) and segments (mutable): going
+    /// Split-borrow of the registry (shared) and rules (mutable): going
     /// through a method lets the borrow checker see the two fields are
     /// disjoint.
     #[inline]
-    pub(crate) fn registry_and_segments_mut(&mut self) -> (&TypeRegistry, &mut [Segment]) {
-        (&self.type_registry, &mut self.segments)
+    pub(crate) fn registry_and_rules_mut(&mut self) -> (&TypeRegistry, &mut [FlowLogRule]) {
+        (&self.type_registry, &mut self.rules)
     }
 
     #[inline]
@@ -256,16 +231,14 @@ mod tests {
     use crate::test_util::assembled;
 
     #[test]
-    fn rules_include_loop_bodies_in_source_order() {
+    fn rules_are_returned_in_source_order() {
         let program = assembled(
             "
             .decl a(x: number)
             .decl b(x: number)
             .output a
             a(X) :- b(X).
-            fixpoint {
-                a(2) :- b(2).
-            }
+            a(2) :- b(2).
             a(1) :- b(1).
             ",
         )

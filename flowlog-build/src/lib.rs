@@ -16,8 +16,8 @@
 //! // src/lib.rs
 //! pub mod policy { include!(concat!(env!("OUT_DIR"), "/policy.rs")); }
 //!
-//! use policy::DatalogBatchEngine;
-//! let mut engine = DatalogBatchEngine::new(4);
+//! use policy::BatchEngine;
+//! let mut engine = BatchEngine::new(4);
 //! engine.insert_edge(vec![(1, 2), (2, 3)]);
 //! let results = engine.run();
 //! ```
@@ -115,12 +115,11 @@ impl Builder {
         self
     }
 
-    /// Set the execution mode. Defaults to [`ExecutionMode::DatalogBatch`].
+    /// Set the execution mode. Defaults to [`ExecutionMode::Batch`].
     ///
-    /// Batch modes (`DatalogBatch`, `ExtendBatch`) emit a
-    /// `DatalogBatchEngine` with a single `run()` method. Incremental
-    /// modes (`DatalogInc`, `ExtendInc`) emit a
-    /// `DatalogIncrementalEngine` that maintains state across
+    /// `Batch` emits a `BatchEngine` with a single `run()`
+    /// method. `Inc` emits a
+    /// `IncrementalEngine` that maintains state across
     /// `Transaction`-scoped commits.
     pub fn mode(mut self, mode: ExecutionMode) -> Self {
         self.mode = mode;
@@ -139,9 +138,6 @@ impl Builder {
     /// - the generated engine registers timely + DD arrangement loggers
     ///   and writes `log/time/*.log` and `log/memory/*.log` cwd-relative
     ///   at runtime (batch: once at end; incremental: per commit).
-    ///
-    /// Not supported under `ExtendBatch` / `ExtendInc`; compilation
-    /// panics if the combination is requested.
     pub fn profile(mut self, enabled: bool) -> Self {
         self.profile = enabled;
         self
