@@ -20,5 +20,4 @@ pub use reduce::Max;
 pub use reduce::Min;
 pub use reduce::Sum;
 pub use reduce::flowlog_reduce;
-pub use reduce::flowlog_reduce_finish;
-pub use reduce::flowlog_reduce_lift;
+pub use reduce::flowlog_reduce_leave;

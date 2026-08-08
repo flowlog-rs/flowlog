@@ -144,7 +144,7 @@ impl CodeGen {
         )?;
 
         // --- Leave outputs --------------------------------------------------
-        let (leave_pattern, leave_stmt, post_leave) = self.build_leave_outputs(
+        let (leave_pattern, leave_stmt) = self.build_leave_outputs(
             leave_fps,
             &next_bindings,
             &recursive_bindings,
@@ -169,7 +169,6 @@ impl CodeGen {
 
                 #leave_stmt
             });
-            #post_leave
         })
     }
 
@@ -316,8 +315,9 @@ impl CodeGen {
         Ok((next_bindings, union_stmts))
     }
 
-    /// Assemble the `.leave()` expression(s) and any post-leave
-    /// consolidation needed by batch-mode aggregated relations.
+    /// Assemble the `.leave()` expression(s); aggregated relations in
+    /// batch mode leave through `flowlog_reduce_leave`, which owns the
+    /// boundary fold.
     fn build_leave_outputs(
         &self,
         leave_fps: &[u64],
@@ -326,7 +326,7 @@ impl CodeGen {
         iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         plan_graph: &mut Option<PlanGraph>,
-    ) -> Result<(TokenStream, TokenStream, TokenStream), CodegenError> {
+    ) -> Result<(TokenStream, TokenStream), CodegenError> {
         // Resolve target identifiers and construct pattern.
         let targets: Vec<Ident> = leave_fps
             .iter()
@@ -348,14 +348,17 @@ impl CodeGen {
                     ))
                 })?;
 
-                // For aggregated relations (min/max/sum/count/avg) in datalog-batch mode:
-                // convert to semiring diff before leave() so cross-iteration aggregates
-                // are computed by consolidation after leave.
+                // Aggregated relations in datalog-batch mode complete across
+                // the boundary: `flowlog_reduce_leave` lifts contributions
+                // into the semiring diff, leaves, and folds every iteration
+                // once at the outer timestamp.
                 if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
                     && self.config.is_datalog_batch()
                 {
                     let token = aggregation_token(*agg_op);
                     let split = aggregation_split(*agg_arity, *agg_pos);
+                    let agg_type = self.agg_column_type(*fp, *agg_pos)?;
+                    let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
 
                     with_plan_graph(plan_graph, |plan_graph| {
                         plan_graph.recursive_pre_leave_opt_aggregate_operator(
@@ -366,10 +369,9 @@ impl CodeGen {
                     });
 
                     return Ok(quote! {
-                        ::flowlog_runtime::operators::flowlog_reduce_lift(
-                            #next_ident, #token, #split,
+                        ::flowlog_runtime::operators::flowlog_reduce_leave(
+                            #next_ident, scope, #token, #split, #merge,
                         )
-                            .leave(scope)
                     });
                 }
 
@@ -405,10 +407,10 @@ impl CodeGen {
                 // to land them on one outer timestamp for consolidation to
                 // net them out -- the same reason the iterative arm above
                 // consolidates. Neither other case needs this:
-                // `DatalogBatch` returned above, having carried its
-                // accumulator across the boundary for `flowlog_reduce_finish`
-                // to merge, and the incremental modes hand their writer the
-                // real difference.
+                // `DatalogBatch` returned above, having completed its
+                // accumulator across the boundary via `flowlog_reduce_leave`,
+                // and the incremental modes hand their writer the real
+                // difference.
                 let writer_drops_sign = self.config.is_batch() && !self.config.is_datalog_batch();
                 if idb_to_aggregation_map.contains_key(fp) && writer_drops_sign {
                     return Ok(quote! { #next_ident.leave(scope).consolidate() });
@@ -445,16 +447,11 @@ impl CodeGen {
             _ => quote! { ( #(#leave_exprs),* ) },
         };
 
-        // Post-leave: for batch-mode aggregated relations, consolidate and
-        // convert the semiring diff back to a Present multiplicity.
-        let mut post_leave_stmts = Vec::new();
+        // The boundary fold's outer-scope operators (consolidate + map) are
+        // built by `flowlog_reduce_leave` at the leave site; only their
+        // addresses are recorded here, after the scope exit.
         for (fp, target) in leave_fps.iter().zip(targets.iter()) {
-            if let Some((_, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
-                && self.config.is_datalog_batch()
-            {
-                let agg_type = self.agg_column_type(*fp, *agg_pos)?;
-                let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
-
+            if idb_to_aggregation_map.contains_key(fp) && self.config.is_datalog_batch() {
                 with_plan_graph(plan_graph, |plan_graph| {
                     plan_graph.recursive_post_leave_opt_aggregate_operator(
                         self.display_name(*fp),
@@ -462,17 +459,10 @@ impl CodeGen {
                         target.to_string(),
                     );
                 });
-
-                post_leave_stmts.push(quote! {
-                    let #target =
-                        ::flowlog_runtime::operators::flowlog_reduce_finish(#target, #merge);
-                });
             }
         }
 
-        let post_leave = quote! { #(#post_leave_stmts)* };
-
-        Ok((pattern, leave_stmt, post_leave))
+        Ok((pattern, leave_stmt))
     }
 
     /// Build `recursive_X` identifier names and the `fp → recursive_X` binding map.

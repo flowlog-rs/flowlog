@@ -7,10 +7,11 @@
 //! semiring accumulates the column, and whether the aggregate rides in the
 //! difference position or through an arrangement, are both internal.
 //!
-//! Recursive rules under `Present` split the work across the loop boundary,
-//! because a group is only complete once every iteration has contributed to
-//! it: [`flowlog_reduce_lift`] runs inside the loop and
-//! [`flowlog_reduce_finish`] after `leave()`.
+//! Recursive rules under `Present` defer completion to the loop boundary,
+//! because a group is only complete once every iteration has contributed:
+//! [`flowlog_reduce_leave`] lifts contributions inside the scope, leaves,
+//! and folds them once at the outer timestamp, where the fixpoint is
+//! final.
 
 mod semiring;
 
@@ -31,9 +32,11 @@ use semiring::Scalar;
 use semiring::Semiring;
 use semiring::Smallest;
 use semiring::Total;
+use timely::dataflow::Scope;
 use timely::dataflow::operators::vec::Map;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
+use timely::progress::timestamp::Refines;
 
 // =========================================================================
 // Operators
@@ -70,51 +73,45 @@ where
     R::reduce(collection, A::contribute, split, merge)
 }
 
-/// Cuts rows into group-by keys and moves each row's contribution into the
-/// difference position.
+/// Completes an aggregate across a recursive scope: the single fold over
+/// every iteration's contributions, deferred to `leave`, where the
+/// fixpoint is final.
 ///
-/// The aggregate rides there from here on, which is what lets it survive
-/// `leave()` and be completed by [`flowlog_reduce_finish`] once the loop has
-/// quiesced.
-pub fn flowlog_reduce_lift<'scope, A, T, D, K, V, C>(
-    collection: VecCollection<'scope, T, D, Present>,
-    _aggregation: A,
-    split: impl FnMut(D) -> (K, V) + 'static,
-) -> VecCollection<'scope, T, K, A::Semiring>
-where
-    A: Aggregation<V, C>,
-    C: Scalar,
-    T: Timestamp,
-    D: Data,
-    K: Data,
-    V: Data,
-{
-    lift(collection, A::contribute, split)
-}
-
-/// Completes an aggregate carried out of a recursive scope.
-///
-/// After `leave()` the accumulators of every iteration land on the same outer
-/// timestamp; consolidating merges them into one aggregate per key, which
-/// `merge` rebuilds rows from. Which aggregation this completes follows from
-/// the collection's difference type, so unlike [`flowlog_reduce_lift`] there
-/// is no token to pass.
+/// Inside the scope, each row's contribution is lifted into the semiring
+/// difference; `leave` lands every iteration on one outer timestamp, and
+/// one consolidation there is the whole fold -- the same
+/// defer-the-arithmetic pattern as `flowlog_antijoin`. The in-scope
+/// [`flowlog_reduce`] output this consumes exists for feedback; the
+/// answer is produced here.
 ///
 /// # Panics
 ///
-/// Panics if the surrounding dataflow violates Differential Dataflow's trace
-/// progress invariants, which the backing arrangement asserts.
-pub fn flowlog_reduce_finish<'scope, T, K, S, O>(
-    collection: VecCollection<'scope, T, K, S>,
-    merge: impl FnMut(K, S::Value) -> O + 'static,
-) -> VecCollection<'scope, T, O, Present>
+/// Panics if the surrounding dataflow violates Differential Dataflow's
+/// trace progress invariants, which the backing arrangement asserts.
+pub fn flowlog_reduce_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
+    collection: VecCollection<'inner, TInner, D, Present>,
+    outer: Scope<'outer, TOuter>,
+    _aggregation: A,
+    split: impl FnMut(D) -> (K, V) + 'static,
+    merge: impl FnMut(K, C) -> O + 'static,
+) -> VecCollection<'outer, TOuter, O, Present>
 where
-    T: Timestamp + Lattice,
+    A: Aggregation<V, C>,
+    C: Scalar,
+    TInner: Timestamp + Refines<TOuter>,
+    TOuter: Timestamp + Lattice,
+    D: Data,
     K: ExchangeData + Hashable,
-    S: Semiring + ExchangeData,
+    V: Data,
+    A::Semiring: ExchangeData,
     O: Data,
 {
-    lower(collection.consolidate(), merge)
+    lower(
+        lift(collection, A::contribute, split)
+            .leave(outer)
+            .consolidate(),
+        merge,
+    )
 }
 
 /// Shared last half of the `Present` pipeline: the settled aggregate comes
