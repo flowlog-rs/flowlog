@@ -1,20 +1,18 @@
 //! Group-by aggregation for generated FlowLog rules.
 //!
-//! [`flowlog_reduce`] is the whole surface for a non-recursive rule. Callers
-//! pass an aggregation token and two closures describing the row shape --
-//! `split` cuts a row into its group-by key and the aggregated column,
-//! `merge` puts an output row back together -- and name nothing else. Which
-//! semiring accumulates the column, and whether the aggregate rides in the
-//! difference position or through an arrangement, are both internal.
+//! A call names an aggregation and how to cut a row apart and put one
+//! back together; which semiring accumulates the column, and whether the
+//! aggregate rides in the difference position or through an arrangement,
+//! are internal.
 //!
-//! Recursive rules under `Present` split the work across the loop boundary,
-//! because a group is only complete once every iteration has contributed to
-//! it: [`flowlog_reduce_lift`] runs inside the loop and
-//! [`flowlog_reduce_finish`] after `leave()`.
+//! [`flowlog_reduce`] serves a rule under either weight. A recursive rule
+//! under `Present` needs [`flowlog_reduce_leave`] as well, because
+//! `Present` cannot retract a superseded aggregate: the group can only be
+//! folded once the fixpoint is final, at the loop boundary. An `i32` reduce
+//! withdraws its own previous answer and so needs no boundary.
 
 mod semiring;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
@@ -31,9 +29,10 @@ use semiring::Scalar;
 use semiring::Semiring;
 use semiring::Smallest;
 use semiring::Total;
-use timely::dataflow::operators::vec::Map;
+use timely::dataflow::Scope;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
+use timely::progress::timestamp::Refines;
 
 use crate::operators::map::flowlog_map;
 
@@ -44,14 +43,10 @@ use crate::operators::map::flowlog_map;
 /// Groups rows by key and reduces each group under `aggregation`.
 ///
 /// `split` cuts each row into its group-by key and the aggregated column;
-/// `merge` rebuilds an output row from a key and the group's result. Output
-/// rows carry unit differences, so the result is a set again and downstream
-/// operators see no trace of the accumulation.
-///
-/// # Panics
-///
-/// Panics if the surrounding dataflow violates Differential Dataflow's trace
-/// progress invariants, which the backing arrangement asserts.
+/// `merge` rebuilds an output row from a key and the group's result.
+/// `aggregation` is read for its type alone, which is what picks the
+/// semiring. Output rows carry unit weights, so the result is a set again
+/// and downstream operators see no trace of the accumulation.
 pub fn flowlog_reduce<'scope, A, T, D, K, V, C, O, R>(
     collection: VecCollection<'scope, T, D, R>,
     name: &str,
@@ -73,53 +68,40 @@ where
     R::reduce(collection, name, A::contribute, split, merge)
 }
 
-/// Cuts rows into group-by keys and moves each row's contribution into the
-/// difference position.
+/// Completes a `Present` aggregate across a recursive scope: the single
+/// fold over every iteration's contributions, deferred to `leave`, where
+/// the fixpoint is final.
 ///
-/// The aggregate rides there from here on, which is what lets it survive
-/// `leave()` and be completed by [`flowlog_reduce_finish`] once the loop has
-/// quiesced.
-pub fn flowlog_reduce_lift<'scope, A, T, D, K, V, C>(
-    collection: VecCollection<'scope, T, D, Present>,
+/// Inside the scope each row's contribution is lifted into the semiring
+/// weight; `leave` lands every iteration on one outer timestamp, and one
+/// consolidation there is the whole fold. The in-scope [`flowlog_reduce`]
+/// output this consumes exists for feedback; the answer is produced here.
+pub fn flowlog_reduce_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
+    collection: VecCollection<'inner, TInner, D, Present>,
+    outer: Scope<'outer, TOuter>,
     name: &str,
     _aggregation: A,
     split: impl FnMut(D) -> (K, V) + 'static,
-) -> VecCollection<'scope, T, K, A::Semiring>
+    merge: impl FnMut(K, C) -> O + 'static,
+) -> VecCollection<'outer, TOuter, O, Present>
 where
     A: Aggregation<V, C>,
     C: Scalar,
-    T: Timestamp,
+    TInner: Timestamp + Refines<TOuter>,
+    TOuter: Timestamp + Lattice,
     D: Data,
-    K: Data,
-    V: Data,
-{
-    lift(collection, name, A::contribute, split)
-}
-
-/// Completes an aggregate carried out of a recursive scope.
-///
-/// After `leave()` the accumulators of every iteration land on the same outer
-/// timestamp; consolidating merges them into one aggregate per key, which
-/// `merge` rebuilds rows from. Which aggregation this completes follows from
-/// the collection's difference type, so unlike [`flowlog_reduce_lift`] there
-/// is no token to pass.
-///
-/// # Panics
-///
-/// Panics if the surrounding dataflow violates Differential Dataflow's trace
-/// progress invariants, which the backing arrangement asserts.
-pub fn flowlog_reduce_finish<'scope, T, K, S, O>(
-    collection: VecCollection<'scope, T, K, S>,
-    name: &str,
-    merge: impl FnMut(K, S::Value) -> O + 'static,
-) -> VecCollection<'scope, T, O, Present>
-where
-    T: Timestamp + Lattice,
     K: ExchangeData + Hashable,
-    S: Semiring + ExchangeData,
+    V: Data,
+    A::Semiring: ExchangeData,
     O: Data,
 {
-    lower(collection.consolidate(), name, merge)
+    lower(
+        lift(collection, name, A::contribute, split)
+            .leave(outer)
+            .consolidate(),
+        name,
+        merge,
+    )
 }
 
 /// Shared last half of the `Present` pipeline: the settled aggregate comes
@@ -165,19 +147,18 @@ where
 // Strategies
 // =========================================================================
 
-/// How a difference type computes a group-by aggregate.
+/// How a weight family computes a group-by aggregate.
 ///
-/// The two are not a performance choice. `Present` has no inverse, so it
-/// cannot retract a superseded aggregate, and the only way to aggregate
-/// under it is to put the accumulation where consolidation will find it:
-/// the difference position. `i32` can negate, so it takes Differential
-/// Dataflow's own reduce and lets it withdraw the previous answer.
+/// Not a performance choice: `Present` has no inverse, so it cannot retract
+/// a superseded aggregate, and the only way to accumulate under it is where
+/// consolidation will find it, in the weight position. `i32` can negate, so
+/// it takes Differential Dataflow's own reduce and lets it withdraw the
+/// previous answer.
 ///
-/// The trait is parameterized by the timestamp so each half can ask of the
-/// clock only what it needs: the `Present` half thresholds, which requires a
-/// total order, while the `i32` half arranges, which does not. That is what
-/// lets an incremental rule aggregate inside a loop, where the clock is only
-/// partially ordered.
+/// Parameterized by the timestamp so each impl asks of the clock only what
+/// it needs: the `Present` half thresholds and wants a total order, the
+/// `i32` half arranges and does not. That is what lets an incremental rule
+/// aggregate inside a loop, where the clock is partially ordered.
 pub trait ReduceStrategy<T: Timestamp + Lattice>: Semigroup + Sized {
     /// See [`flowlog_reduce`].
     fn reduce<'scope, D, K, V, S, O>(
@@ -201,7 +182,7 @@ impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for Present {
         name: &str,
         contribute: impl Fn(&V) -> S + 'static,
         split: impl FnMut(D) -> (K, V) + 'static,
-        mut merge: impl FnMut(K, S::Value) -> O + 'static,
+        merge: impl FnMut(K, S::Value) -> O + 'static,
     ) -> VecCollection<'scope, T, O, Self>
     where
         D: Data,
@@ -210,17 +191,17 @@ impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for Present {
         S: Semiring + ExchangeData,
         O: Data,
     {
-        lift(collection, name, contribute, split)
-            .threshold_semigroup(|_key, new, current| match current {
-                // An aggregate that does not supersede the one already
-                // reported is not news: emitting it would restate a row
-                // downstream already has.
-                Some(current) => new.supersedes(current).then_some(*new),
-                None => (!new.is_zero()).then_some(*new),
-            })
-            .inner
-            .map(move |(key, time, aggregate)| (merge(key, aggregate.finish()), time, Present))
-            .as_collection()
+        let thresholded =
+            lift(collection, name, contribute, split).threshold_semigroup(|_key, new, current| {
+                match current {
+                    // An aggregate that does not supersede the one already
+                    // reported is not news: emitting it would restate a row
+                    // downstream already has.
+                    Some(current) => new.supersedes(current).then_some(*new),
+                    None => (!new.is_zero()).then_some(*new),
+                }
+            });
+        lower(thresholded, name, merge)
     }
 }
 
