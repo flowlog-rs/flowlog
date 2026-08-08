@@ -1,0 +1,34 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_recursive
+// Feature : negation inside a recursive rule (anti-join in a loop scope)
+//
+// The negated atom sits in the recursive rule itself, so the anti-join runs
+// inside the `iterate` scope at `Product<(), u16>` rather than at the outer
+// timestamp.  Every other batch negation fixture is stratified and therefore
+// non-recursive, so this is the only one reaching the in-loop anti-join.
+// `Blocked` is an input, so negating it stays stratified.
+//
+// Data layout
+//   Seed    (node: int32)              — {1}
+//   Edge    (src: int32, dst: int32)   — 1->2, 2->3, 2->4, 3->9, 4->5
+//   Blocked (node: int32)              — {3}
+//
+// Expected
+//   1 is seeded; 1->2 passes; 2->3 is blocked so 3 is never derived (and
+//   3->9 therefore never fires); 2->4 and 4->5 pass.
+//   Reach = {1,2,4,5}
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Seed(node: int32)
+.input Seed(IO="file", filename="Seed.csv", delimiter=",")
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Blocked(node: int32)
+.input Blocked(IO="file", filename="Blocked.csv", delimiter=",")
+
+.decl Reach(node: int32)
+Reach(x) :- Seed(x).
+Reach(y) :- Reach(x), Edge(x, y), !Blocked(y).
+.output Reach

@@ -148,9 +148,12 @@ impl CodeGen {
 // =========================================================================
 
 impl CodeGen {
-    /// `.printsize` — consolidate into a single key, inspect the multiplicity.
+    /// `.printsize` — count the relation's distinct rows and inspect the
+    /// total.
     ///
-    /// Datalog-batch: `.consolidate()` dedup.  Others: `threshold_i32()` first.
+    /// Set-normalizing first is what makes the number a row count rather
+    /// than a sum of multiplicities; collapsing every row onto one key then
+    /// turns the collection's weight into that count.
     fn gen_size_inspector(
         &self,
         var: &Ident,
@@ -174,25 +177,23 @@ impl CodeGen {
         // (batch: single epoch → final count). Always overwrite — the cell
         // reports the most recent epoch's size-delta. Downstream consumers
         // surface it to stderr / file / typed API on their own terms.
-        let dedup = if self.config.is_datalog_batch() {
+        // Weights are what get summed, so a `Present` diff has to be lifted
+        // to a number first; `i32` diffs already carry one, and after the
+        // clamp it is the +1/-1 that makes `size` a per-epoch delta.
+        let to_countable = if self.config.is_datalog_batch() {
             quote! {
-                .consolidate()
                 .inner
-                .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
+                .flat_map(move |(_, t, _)| std::iter::once(((), t, 1_i32)))
+                .as_collection()
             }
         } else {
-            quote! {
-                .threshold(|_, w| if *w > 0 { 1i32 } else { 0 })
-                .inner
-                .flat_map(move |(_, t, d)| std::iter::once(((), t.clone(), d)))
-            }
+            quote! {}
         };
 
         quote! {{
             let #cell_ident = #cell_ident.clone();
-            #var.clone()
-                #dedup
-                .as_collection()
+            ::flowlog_runtime::operators::flowlog_dedup(#var.clone())
+                #to_countable
                 .map(|_| ())
                 .consolidate()
                 .inspect(move |(_data, time, size)| {
