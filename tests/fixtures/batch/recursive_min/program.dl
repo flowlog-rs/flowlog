@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : recursive_min
-// Feature : recursive min aggregation in datalog-batch mode
+// Feature : recursive min aggregation in batch mode
 // Covers  : compilation + execution of min() under recursive propagation
 //
 // Data layout

@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : recursive_min_delta
-// Feature : recursive min aggregation in datalog-inc mode
+// Feature : recursive min aggregation in inc mode
 // Focus   : after deleting an edge, the maintained minimum must increase
 //
 // Initial shortest distances from source 1:

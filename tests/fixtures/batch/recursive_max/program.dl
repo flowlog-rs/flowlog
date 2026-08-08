@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : recursive_max
-// Feature : recursive max aggregation in datalog-batch mode
+// Feature : recursive max aggregation in batch mode
 // Covers  : compilation + execution of max() under recursive propagation
 //
 // Data layout

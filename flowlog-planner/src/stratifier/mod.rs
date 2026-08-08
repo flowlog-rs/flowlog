@@ -17,11 +17,9 @@
 //! - `dependency_graph`: rule dependency edges between rules.
 //! - `scc`: dependency cycles, found and ordered for evaluation.
 //! - `core`: the [`Stratifier`] driver and relation metadata.
-//! - `error`: user diagnostics for structurally invalid programs.
 
 mod core;
 mod dependency_graph;
-mod error;
 mod scc;
 
 pub(crate) use self::core::Stratifier;

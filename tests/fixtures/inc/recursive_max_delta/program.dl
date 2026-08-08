@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : recursive_max_delta
-// Feature : recursive max aggregation in datalog-inc mode
+// Feature : recursive max aggregation in inc mode
 // Focus   : after deleting an edge, the maintained maximum must decrease
 //
 // Initial longest distances from source 1:

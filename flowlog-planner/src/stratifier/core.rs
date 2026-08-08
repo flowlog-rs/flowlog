@@ -20,7 +20,6 @@ use tracing::info;
 use tracing::warn;
 
 use crate::stratifier::dependency_graph::DependencyGraph;
-use crate::stratifier::error::StratifyError;
 use crate::stratifier::scc;
 
 // =============================================================================
@@ -106,12 +105,7 @@ impl Stratifier {
     }
 
     /// Returns a program's strata in evaluation order.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`StratifyError`] when the program is structurally invalid:
-    /// a forward reference to a later stratum, or an empty recursive stratum.
-    pub(crate) fn from_program(program: &Program) -> Result<Self, StratifyError> {
+    pub(crate) fn from_program(program: &Program) -> Self {
         // A `.init` splices its instance's rules in at the position the
         // `.init` held, so a relation may be defined by a later instance than
         // the one referencing it. Stratifying the whole program as one SCC
@@ -131,8 +125,6 @@ impl Stratifier {
         };
 
         instance.build_stratum_metadata();
-        instance.validate_forward_references()?;
-        instance.validate_recursive_strata()?;
         instance.warn_aggregation();
 
         debug!("\n{}", instance);
@@ -142,7 +134,7 @@ impl Stratifier {
             instance.strata.iter().filter(|s| s.is_recursive).count()
         );
 
-        Ok(instance)
+        instance
     }
 
     /// Returns ordered strata for `rules`, whose indices are the global
@@ -249,82 +241,6 @@ impl Stratifier {
             stratum.available_relations.extend(&edb_fps);
             accumulated.extend(&stratum.leave_relations);
         }
-    }
-
-    /// Rejects references to IDBs unavailable until a later stratum.
-    ///
-    /// EDBs, same-stratum heads, and relations with no defining rule are valid.
-    fn validate_forward_references(&self) -> Result<(), StratifyError> {
-        let edb_fps = self.program.edb_fingerprints();
-        let program_rules = self.program.rules();
-        // An orphan relation has no defining rule and remains empty. Only a
-        // relation defined in a later stratum is a forward reference.
-        let defined_fps: HashSet<u64> = program_rules
-            .iter()
-            .map(|rule| rule.head().head_fingerprint())
-            .collect();
-
-        for stratum in &self.strata {
-            let heads: HashSet<u64> = stratum
-                .rule_ids
-                .iter()
-                .map(|&rule_id| program_rules[rule_id].head().head_fingerprint())
-                .collect();
-
-            for &rule_id in &stratum.rule_ids {
-                let rule = &program_rules[rule_id];
-                for predicate in rule.rhs() {
-                    let (fp, atom_span) = match predicate {
-                        Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => {
-                            (atom.fingerprint(), atom.span())
-                        }
-                        Predicate::Compare(_) => continue,
-                    };
-                    if edb_fps.contains(&fp)
-                        || stratum.available_relations.contains(&fp)
-                        || heads.contains(&fp)
-                        || !defined_fps.contains(&fp)
-                    {
-                        continue;
-                    }
-                    let rel_name = display_name(&self.program, fp, "<unknown>");
-                    // Fall back to the rule's span if the atom has no recorded
-                    // position (synthesized atoms, dummies in tests).
-                    let span = if atom_span.is_dummy() {
-                        rule.span()
-                    } else {
-                        atom_span
-                    };
-                    return Err(StratifyError::ForwardReference {
-                        rule: rule_id,
-                        span,
-                        rel: rel_name,
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Validates that each recursive stratum has a feedback relation.
-    ///
-    /// The emitted iterative scope requires at least one feedback variable.
-    fn validate_recursive_strata(&self) -> Result<(), StratifyError> {
-        let program_rules = self.program.rules();
-        for (idx, stratum) in self.strata.iter().enumerate() {
-            if stratum.is_recursive && stratum.recursive_relations.is_empty() {
-                let rules = stratum
-                    .rule_ids
-                    .iter()
-                    .map(|&rule_id| (rule_id, program_rules[rule_id].span()))
-                    .collect();
-                return Err(StratifyError::RecursiveStratumEmpty {
-                    stratum: idx + 1,
-                    rules,
-                });
-            }
-        }
-        Ok(())
     }
 
     /// Emits warnings for non-monotone aggregation in recursive strata.
@@ -438,14 +354,6 @@ fn body_atom_fps(rule: &FlowLogRule) -> impl Iterator<Item = u64> + '_ {
     })
 }
 
-/// Returns the source spelling of a relation, including synthesized relations.
-fn display_name(program: &Program, fp: u64, canonical: &str) -> String {
-    program
-        .relation_by_fingerprint(fp)
-        .map(|relation| relation.raw_name().to_string())
-        .unwrap_or_else(|| canonical.to_string())
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -496,8 +404,7 @@ mod tests {
             .init a = A\n\
             .init b = B\n\
             .output a.Out\n";
-        Stratifier::from_program(&parse_program(src))
-            .expect("cross-instance forward reference must stratify");
+        Stratifier::from_program(&parse_program(src));
     }
 
     /// Negation on a back-edge inside a recursive SCC must warn.
@@ -513,7 +420,7 @@ mod tests {
             B(x, y) :- A(x, y).\n\
             .output A\n\
             .output B\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratify should succeed");
+        Stratifier::from_program(&parse_program(src));
         assert!(logs_contain("Negation in recursive stratum"));
     }
 
@@ -528,7 +435,7 @@ mod tests {
             .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
             A(x, y) :- Edge(x, y), !A(x, y).\n\
             .output A\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratify should succeed");
+        Stratifier::from_program(&parse_program(src));
         assert!(logs_contain("Negation in recursive stratum"));
     }
 
@@ -544,7 +451,7 @@ mod tests {
             Running(x, sum(cost)) :- Edge(x, y, cost).\n\
             Running(x, sum(cost)) :- Running(x, prev), Edge(x, y, cost).\n\
             .output Running\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratify should succeed");
+        Stratifier::from_program(&parse_program(src));
         assert!(logs_contain("`sum` in recursive stratum"));
     }
 
@@ -560,7 +467,7 @@ mod tests {
             Best(x, min(cost)) :- Edge(x, y, cost).\n\
             Best(x, min(cost)) :- Best(x, b), Edge(x, y, cost).\n\
             .output Best\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratify should succeed");
+        Stratifier::from_program(&parse_program(src));
         assert!(!logs_contain("fixpoint may never converge"));
     }
 
@@ -580,7 +487,7 @@ mod tests {
             Reach(x, y) :- Edge(x, y).\n\
             Reach(x, z) :- Edge(x, y), Reach(y, z).\n\
             Out(x) :- A(x).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratify should succeed");
+        let s = Stratifier::from_program(&parse_program(src));
         assert!(s.strata().len() >= 3);
         assert_eq!(
             s.strata()
@@ -609,7 +516,7 @@ mod tests {
             .expect("param relation missing")
             .fingerprint();
 
-        let s = Stratifier::from_program(&program).expect("stratify should succeed");
+        let s = Stratifier::from_program(&program);
         let first = s.strata().first().expect("first stratum missing");
 
         assert!(
@@ -632,7 +539,7 @@ mod tests {
             active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
             degree(x, count(y)) :- active_edge(x, y).\n\
             removed(x) :- degree(x, d), d < 2.\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratify should succeed");
+        let s = Stratifier::from_program(&parse_program(src));
 
         assert_eq!(s.strata().len(), 1);
         let stratum = s.strata().first().expect("recursive stratum missing");
@@ -667,7 +574,7 @@ mod tests {
             Mid(x, y) :- Edge(x, y).\n\
             Out(x) :- Mid(x, y).\n";
         let program = parse_program(src);
-        let s = Stratifier::from_program(&program).expect("stratify should succeed");
+        let s = Stratifier::from_program(&program);
 
         let mid_fp = fp_of(&program, "mid");
         let first = s.strata().first().expect("first stratum missing");
@@ -690,7 +597,7 @@ mod tests {
             .output Final\n\
             Final(x, y) :- Edge(x, y).\n";
         let program = parse_program(src);
-        let s = Stratifier::from_program(&program).expect("stratify should succeed");
+        let s = Stratifier::from_program(&program);
 
         let final_fp = fp_of(&program, "final");
         let last = s.strata().last().expect("last stratum missing");
@@ -714,7 +621,7 @@ mod tests {
             B(x, y) :- A(x, y).\n\
             Out(x) :- A(x, y), B(x, y).\n";
         let program = parse_program(src);
-        let s = Stratifier::from_program(&program).expect("stratify should succeed");
+        let s = Stratifier::from_program(&program);
 
         assert!(s.strata().len() >= 3, "expected at least 3 strata");
         let a_fp = fp_of(&program, "a");
@@ -745,7 +652,7 @@ mod tests {
             .output A\n\
             B(x) :- Edge(x, y).\n\
             A(x) :- Edge(x, y), !B(x).\n";
-        Stratifier::from_program(&parse_program(src)).expect("stratify should succeed");
+        Stratifier::from_program(&parse_program(src));
         assert!(
             !logs_contain("Negation in recursive stratum"),
             "non-recursive negation should not fire the recursive-stratum warning"
@@ -771,13 +678,11 @@ mod tests {
             active_edge(x, y) :- edge(x, y), !removed(x), !removed(y).\n\
             degree(x, count(y)) :- active_edge(x, y).\n\
             removed(x) :- degree(x, d), d < 2.\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratify should succeed");
+        let s = Stratifier::from_program(&parse_program(src));
         let stratum = s.strata().first().expect("recursive stratum missing");
         assert!(stratum.recursive_relations().is_sorted());
         assert!(stratum.leave_relations().is_sorted());
     }
-
-    // --- User errors ---
 
     /// The base rule forms its own stratum and the self-referential rule a
     /// recursive one after it.
@@ -790,7 +695,7 @@ mod tests {
             .output Reach\n\
             Reach(x, y) :- Edge(x, y).\n\
             Reach(x, z) :- Edge(x, y), Reach(y, z).\n";
-        let s = Stratifier::from_program(&parse_program(src)).expect("stratify should succeed");
+        let s = Stratifier::from_program(&parse_program(src));
         assert_eq!(s.strata().len(), 2);
         assert!(!s.strata()[0].is_recursive());
         assert!(s.strata()[1].is_recursive());
