@@ -420,6 +420,7 @@ dependencies = [
  "lasso",
  "ordered-float",
  "regex",
+ "rstest",
  "rustc-hash",
  "serde",
  "tempfile",

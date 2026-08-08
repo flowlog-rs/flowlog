@@ -58,9 +58,6 @@ pub struct CodeParts {
 
     /// Type aliases and constants for the `(Data, Diff, Time)` triple.
     pub type_declarations: TokenStream,
-
-    /// Rendered semiring module files: `(relative_path, content)`.
-    pub semiring_modules: Vec<(String, String)>,
 }
 
 impl CodeGen {
@@ -133,7 +130,6 @@ impl CodeGen {
         let profile_ops = render_profile_ops_const(plan_graph.as_ref())?;
 
         let type_declarations = self.gen_type_declarations();
-        let semiring_modules = self.render_semiring_modules();
 
         Ok(CodeParts {
             edb_decls,
@@ -153,7 +149,6 @@ impl CodeGen {
             metrics_write,
             step_loop,
             type_declarations,
-            semiring_modules,
         })
     }
 }

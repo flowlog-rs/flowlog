@@ -10,8 +10,7 @@
 //!     ├── main.rs                 # assembled dataflow + runtime shell
 //!     ├── relation.rs             # `Relation` trait + per-EDB handlers
 //!     ├── cmd.rs, prompt.rs       # incremental-mode only (shell)
-//!     ├── udf.rs                  # optional, copied from `Config::udf_file`
-//!     └── semiring/…              # optional, one file per semiring variant
+//!     └── udf.rs                  # optional, copied from `Config::udf_file`
 //! ```
 //!
 //! `write_project` lays out these files from already-rendered strings;
@@ -22,7 +21,6 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use flowlog_build::CodeParts;
 use flowlog_build::Features;
 use flowlog_common::Config;
 use toml_edit::Array;
@@ -48,7 +46,6 @@ impl Compiler {
     /// only when the program needs them.
     pub(crate) fn write_project(
         &self,
-        parts: &CodeParts,
         main_rs: &str,
         relation_rs: &str,
         cargo_toml: &str,
@@ -72,11 +69,6 @@ impl Compiler {
         if config.is_incremental() {
             write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
             write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
-        }
-
-        // Aggregation-specific semiring modules (paths are relative to src/).
-        for (rel_path, content) in &parts.semiring_modules {
-            write_file(&src_dir.join(rel_path), content)?;
         }
 
         // Optional UDF module — copied verbatim from a user-supplied file.
@@ -174,7 +166,7 @@ pub(crate) fn render_cargo_toml(
             // to trip `-Dwarnings`.
             deps["itoa"] = "1.0".into();
         }
-        if features.agg_semiring() || features.string_intern() {
+        if features.string_intern() {
             deps["serde"] = value(inline_versioned_dep("1.0", &["derive"]));
         }
         if config.is_incremental() {

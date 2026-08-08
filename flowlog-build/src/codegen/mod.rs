@@ -13,17 +13,14 @@ mod flow;
 mod idb_buffers;
 mod ident;
 mod profile;
-mod semiring;
 mod ty;
 
-// External API — used by flowlog-compiler via lib.rs re-exports.
-// `AggSemiringNeeds` leaks through `Features::agg_semirings()`.
+// External API -- used by flowlog-compiler via lib.rs re-exports.
 use std::collections::HashMap;
 
 pub use arg::const_to_token;
 pub use code_parts::CodeParts;
 pub use error::CodegenError;
-pub use features::AggSemiringNeeds;
 pub use features::Features;
 use flowlog_common::Config;
 use flowlog_parser::DataType;
@@ -33,7 +30,6 @@ use flowlog_profiler::PlanGraph;
 pub use idb_buffers::field_accessor;
 pub use idb_buffers::gen_drain_block;
 use proc_macro2::Ident;
-pub use semiring::Semiring;
 pub use ty::data::data_type_tokens;
 pub(crate) use ty::data::row_is_copy;
 // Intra-crate shortcuts used by build/ (library mode).

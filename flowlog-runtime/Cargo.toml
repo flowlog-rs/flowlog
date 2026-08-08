@@ -23,5 +23,8 @@ serde = { workspace = true }
 tempfile.workspace = true
 timely.workspace = true
 
+[dev-dependencies]
+rstest.workspace = true
+
 [lints]
 workspace = true
