@@ -59,9 +59,17 @@ jobs:
         # Short smoke on push; the deeper run happens on the daily schedule.
         # Pin gnu explicitly — the runner otherwise defaults to musl, whose
         # static libc breaks the sanitizer.
-        run: cargo fuzz run ${{ matrix.target }} --target x86_64-unknown-linux-gnu -- -max_total_time=${{ github.event_name == 'schedule' && '600' || '120' }}
+        #
+        # -timeout bounds one input; -max_total_time cannot, since it is
+        # only checked between inputs. Without the bound, one pathological
+        # input hangs the job until the GitHub timeout cancels it, and a
+        # cancelled job skips the artifact and issue steps below (they run
+        # on `failure()` only). A healthy parse is sub-millisecond, so 10s
+        # means hang: libFuzzer kills the input, writes a `timeout-*`
+        # artifact, and fails the run like any other find.
+        run: cargo fuzz run ${{ matrix.target }} --target x86_64-unknown-linux-gnu -- -timeout=10 -max_total_time=${{ github.event_name == 'schedule' && '600' || '120' }}
 
-      - name: 📤 Upload crash artifacts
+      - name: 📤 Upload fuzz artifacts
         if: failure()
         uses: actions/upload-artifact@v7
         with:
@@ -69,7 +77,7 @@ jobs:
           path: fuzz/artifacts/
           if-no-files-found: ignore
 
-      - name: 📣 File an issue on crash
+      - name: 📣 File an issue on a find
         if: failure()
         uses: actions/github-script@v9
         with:
@@ -81,31 +89,35 @@ jobs:
             try {
               files = fs.readdirSync(dir).filter(f => /^(crash|timeout|oom|leak)-/.test(f));
             } catch (e) {}
-            // No crash artifact => the failure was infra/build, not a fuzz find.
+            // No artifact => the failure was infra/build, not a fuzz find.
             if (files.length === 0) return;
             const { owner, repo } = context.repo;
             const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
             const marker = `<!-- fuzz-crash-${target} -->`;
             const file = files[0];
+            const kind = file.split('-')[0]; // crash | timeout | oom | leak
             const buf = fs.readFileSync(`${dir}/${file}`);
             const hex = buf.toString('hex').replace(/(..)/g, '$1 ').trim().slice(0, 800);
             const text = buf.toString('utf8');
             const printable = /^[\x09\x0a\x0d\x20-\x7e]*$/.test(text)
               ? text.slice(0, 1000) : '(non-UTF-8 — see hex)';
-            const body = `${marker}\n**Fuzzing found a crash in \`${target}\`** ([run](${runUrl})).\n\n`
+            const body = `${marker}\n**Fuzzing found a ${kind} in \`${target}\`** ([run](${runUrl})).\n\n`
               + `Artifact \`${file}\` (${buf.length} bytes).\n\n`
               + `Input (text):\n\`\`\`\n${printable}\n\`\`\`\n\n`
               + `Input (hex):\n\`\`\`\n${hex}\n\`\`\`\n\n`
               + `Reproduce — download the artifact from the run, then:\n`
-              + `\`\`\`\ncargo +nightly fuzz run ${target} <artifact>\n\`\`\``;
+              + `\`\`\`\ncargo +nightly fuzz run ${target} <artifact> -- -timeout=10\n\`\`\``;
             const { data: open } = await github.rest.issues.listForRepo({
               owner, repo, state: 'open', labels: 'fuzz-crash', per_page: 50,
             });
             const existing = open.find(i => (i.body || '').includes(marker));
             if (existing) {
+              // Bump on the nightly only: every push re-finds an open
+              // issue, and a comment per push is noise.
+              if (context.eventName !== 'schedule') return;
               await github.rest.issues.createComment({ owner, repo, issue_number: existing.number,
-                body: `Still crashing as of ${runUrl} (artifact \`${file}\`).` });
+                body: `Still reproducing as of ${runUrl} (artifact \`${file}\`).` });
             } else {
-              await github.rest.issues.create({ owner, repo, title: `Fuzz: crash in \`${target}\``,
+              await github.rest.issues.create({ owner, repo, title: `Fuzz: ${kind} in \`${target}\``,
                 body, labels: ['fuzz-crash', 'bug'] });
             }
