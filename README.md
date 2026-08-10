@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/flowlog-rs/flowlog/main/FlowLog.png" alt="FlowLog Logo" width="320"/>
+  <img src=".github/social-preview.png" alt="FlowLog: Datalog compiled to Differential Dataflow" width="720"/>
 </p>
 
 
