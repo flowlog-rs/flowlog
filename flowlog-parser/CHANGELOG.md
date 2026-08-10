@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.1.0...flowlog-parser-v0.2.0) - 2026-08-10
+
+### Other
+
+- *(build)* [**breaking**] extract planner into flowlog-planner crate ([#273](https://github.com/flowlog-rs/flowlog/pull/273))
+
 ## [0.1.0](https://github.com/flowlog-rs/flowlog/releases/tag/flowlog-parser-v0.1.0) - 2026-07-26
 
 ### Added
