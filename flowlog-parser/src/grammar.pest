@@ -218,34 +218,33 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 // Note: "x + y * z" is parsed left-to-right as "(x + y) * z"
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
-// `as_cast` first so `as` wins over a UDF named `as` (reserved keyword).
-// `paren_expr` gives explicit grouping: since arithmetic has no operator
-// precedence (it folds strictly left-to-right), parentheses are the only
-// way to override evaluation order, e.g. `x * (a + b)`.
-// One operand of an expression. Ordered choice: `tuple_lit` precedes
-// `paren_expr` because both open with `(`; the comma in a tuple literal is the
-// tiebreaker.
-factor = { as_cast | call_expr | tuple_lit | paren_expr | constant | variable }
+// One operand of an expression. `as_cast` first so `as` wins over a UDF
+// named `as` (reserved keyword).
+factor = { as_cast | call_expr | paren_factor | constant | variable }
 
-// A fixed-tuple literal. Constructs a tuple, or destructures one when matched
-// against a bound variable; a `_` element ignores that component on destructure:
-//   x = (a, b)     construct a 2-tuple
-//   (a, b) = x     destructure into `a` and `b`
-//   (a, _) = x     destructure, ignoring the second component
-//   (a,)           1-tuple — the trailing comma is required
-//   (a)            not a tuple: plain grouping, handled by `paren_expr`
-// The mandatory comma keeps `tuple_lit` distinct from `paren_expr`.
-tuple_lit  = { "(" ~ tuple_elem ~ (("," ~ tuple_elem)+ | ",") ~ ")" }
-tuple_elem = { arithmetic_expr | placeholder }
+// Any `(`-headed operand: a tuple literal, or explicit grouping (the only
+// way to override evaluation order, e.g. `x * (a + b)`, since arithmetic
+// folds strictly left-to-right with no precedence). Commas decide which:
+//   (a, b)     tuple literal: constructs a tuple, or destructures one
+//              when matched against a bound variable
+//   (a, b,)    the same tuple; a trailing comma is allowed
+//   (a, _)     tuple literal; `_` ignores that component on destructure
+//   (a,)       1-tuple; the trailing comma keeps it distinct from grouping
+//   (a + b)    grouping
+//   (a)        grouping (not a 1-tuple)
+//   (_)        rejected in lowering (`ParseError::GroupedPlaceholder`)
+// One rule owns `(` so the interior is parsed exactly once. As separate
+// `(`-headed alternatives of `factor`, pest re-parses the whole interior
+// for each alternative that fails, which is exponential in paren depth
+// (issue #289: a 38-byte fuzz input timed out).
+// `arithmetic_expr` before `placeholder`: pest commits to the first match,
+// so `_x` must parse as a variable before `placeholder` can eat its `_`.
+paren_factor = { "(" ~ paren_elem ~ ("," ~ paren_elem)* ~ trailing_comma? ~ ")" }
+paren_elem = _{ arithmetic_expr | placeholder }
 
-// Parenthesised sub-expression. Both wrappers are silent (`_`): a
-// single-factor `(x)` surfaces as the bare inner factor, while a
-// multi-term `(a + b)` surfaces as `group_expr` (the `+` requires an
-// operator). A group node thus exists only when the grouping affects
-// the left-to-right fold.
-paren_expr  = _{ "(" ~ paren_inner ~ ")" }
-paren_inner = _{ group_expr | factor }
-group_expr  =  { factor ~ (arithmetic_op ~ factor)+ }
+// Visible (not silent) so `(a,)` leaves a second child for the lowering
+// to see; the element lowering drops it.
+trailing_comma = { "," }
 
 // `as(factor, TargetType)` — explicit cast, runtime no-op. Inner is a
 // single `factor` (not `arithmetic_expr`) so the typechecker can lower
