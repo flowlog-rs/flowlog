@@ -218,8 +218,9 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 // Note: "x + y * z" is parsed left-to-right as "(x + y) * z"
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
-// One operand of an expression. `as_cast` first so `as` wins over a UDF
-// named `as` (reserved keyword).
+// One operand of an expression. `as_cast` must precede `variable`, or a
+// bare `as` matches as a variable and the cast never parses; `call_expr`
+// refuses `as` outright (see `call_expr`).
 factor = { as_cast | call_expr | paren_factor | constant | variable }
 
 // Any `(`-headed operand: a tuple literal, or explicit grouping (the only
@@ -420,7 +421,11 @@ head_arg = { aggregate_expr | arithmetic_expr }
 // a hit becomes a built-in call, otherwise a UDF (`.extern fn`) call.
 // Appears inside expressions, never bare in a body.
 // Example: cat(a, b), strlen(x), my_udf(x, y + 1)
+// `!as_kw` because a failed `as_cast` (a bad type in `as(x, 5)`) would
+// otherwise retry here as a call named `as`, re-parsing the interior at
+// every nesting level (issue #298: a 151-byte input took 19s).
 call_expr = {
+    !as_kw ~
     identifier ~
     "(" ~
     (arithmetic_expr ~ ("," ~ arithmetic_expr)*)? ~
