@@ -479,6 +479,38 @@ mod tests {
         assert!(FlowLogParser::parse(Rule::arithmetic_expr, "()").is_err());
     }
 
+    /// A malformed cast stops the expression at the bare `as`, leaving
+    /// `(x, 5)` for the enclosing rule, rather than being taken as a call
+    /// named `as` (issue #298).
+    #[test]
+    fn malformed_cast_is_not_accepted_as_a_call() {
+        use crate::test_util::parse_pair;
+
+        // `5` is not a type, so `as_cast` fails at its type argument.
+        assert_eq!(parse_pair(Rule::arithmetic_expr, "as(x, 5)").as_str(), "as");
+    }
+
+    /// The reserved-name guard keys on a whole word, so a UDF whose name
+    /// only starts with `as` is still a call.
+    #[test]
+    fn udf_whose_name_starts_with_as_still_parses() {
+        let arith: Arithmetic = parse_node(Rule::arithmetic_expr, "assert(x)");
+        assert!(matches!(arith.init(), Factor::FnCall(c) if c.name() == "assert"));
+    }
+
+    /// A 200-deep unterminated cast nest stops at the bare `as` instead of
+    /// re-parsing every level; the mechanism is documented at `call_expr`
+    /// in grammar.pest (issue #298). A *valid* nest cannot pin this: pest
+    /// never backtracks out of a successful alternative, so only a failing
+    /// nest exercises the retry.
+    #[test]
+    fn unclosed_cast_nest_is_refused_without_backtracking_blowup() {
+        use crate::test_util::parse_pair;
+
+        let src = "as(".repeat(200);
+        assert_eq!(parse_pair(Rule::arithmetic_expr, &src).as_str(), "as");
+    }
+
     /// Each grammar factor kind parses to its variant. Contents are tested
     /// in each variant's own module (`cast.rs`, `fn_call.rs`, `builtin.rs`,
     /// `tuple.rs`); `TupleProj` is absent because it has no surface syntax.
