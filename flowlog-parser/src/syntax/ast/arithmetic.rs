@@ -149,14 +149,7 @@ impl Lexeme for Factor {
             Rule::call_expr => parse_call_expr(inner)?,
             Rule::variable => Self::Var(inner.text().to_string()),
             Rule::constant => Self::Const(inner.lower()?),
-            Rule::tuple_lit => Self::Tuple(inner.lower()?),
-            // Multi-term parenthesised sub-expression: the grammar's
-            // `group_expr` requires at least one operator, so `Group` is
-            // constructed only when grouping affects the fold.
-            Rule::group_expr => Self::Group(Box::new(inner.lower()?)),
-            // Single-factor parens `(x)`: the paren wrappers are silent in
-            // the grammar, so the bare inner factor pair surfaces here.
-            Rule::factor => Self::from_parsed_rule(inner)?,
+            Rule::paren_factor => parse_paren_factor(inner)?,
             other => return Err(grammar_bug(format!("invalid factor rule: {other:?}"))),
         })
     }
@@ -181,6 +174,36 @@ fn parse_call_expr(node: Node) -> Result<Factor, ParseError> {
     } else {
         Ok(Factor::FnCall(FnCall::new(name, args, span)))
     }
+}
+
+/// Resolves a `paren_factor` (`(`-headed operand) into a [`Factor`]: any
+/// comma (a second element or the trailing-comma marker) commits it to a
+/// [`Factor::Tuple`]; otherwise the interior is grouping and becomes a
+/// [`Factor::Group`], or, single-factor, collapses to the bare factor.
+fn parse_paren_factor(node: Node) -> Result<Factor, ParseError> {
+    let span = node.span();
+    let mut children = node.children();
+    let first = children.next_any("parenthesised operand")?;
+    let mut rest = children.peekable();
+
+    if rest.peek().is_none() {
+        // A single comma-free element: plain grouping.
+        if first.rule() == Rule::placeholder {
+            return Err(ParseError::GroupedPlaceholder { span: first.span() });
+        }
+        let expr: Arithmetic = first.lower()?;
+        if expr.rest.is_empty() {
+            return Ok(expr.init);
+        }
+        return Ok(Factor::Group(Box::new(expr)));
+    }
+
+    let fields = std::iter::once(first)
+        .chain(rest)
+        .filter(|c| c.rule() != Rule::trailing_comma)
+        .map(|c| c.lower())
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Factor::Tuple(TupleLit::new(fields, span)))
 }
 
 // =============================================================================
@@ -391,6 +414,69 @@ mod tests {
         };
         assert!(matches!(inner.init(), Factor::Var(v) if v == "b"));
         assert!(!inner.rest().is_empty());
+    }
+
+    /// A comma is what commits parens to a tuple literal: a lone trailing
+    /// comma is a 1-tuple, a `_` element stays a placeholder, and a
+    /// trailing comma after multiple elements is accepted but renders
+    /// canonically without it. Comma-free parens are grouping, pinned by
+    /// `single_factor_parens_collapse_to_the_factor`.
+    #[rstest]
+    #[case("(a,)", "(a,)")]
+    #[case("(_, b)", "(_, b)")]
+    #[case("(a + 1, b)", "(a + 1, b)")]
+    #[case("(a, b,)", "(a, b)")]
+    #[case("(_,)", "(_,)")]
+    fn comma_commits_parens_to_a_tuple(#[case] src: &str, #[case] rendered: &str) {
+        let arith: Arithmetic = parse_node(Rule::arithmetic_expr, src);
+        assert!(matches!(arith.init(), Factor::Tuple(_)), "src={src}");
+        assert_eq!(arith.to_string(), rendered);
+    }
+
+    /// A lone parenthesised `_` is rejected with its dedicated error.
+    #[test]
+    fn grouped_placeholder_is_rejected() {
+        use flowlog_common::FileId;
+
+        use crate::assert_err;
+        use crate::test_util::parse_pair;
+
+        let pair = parse_pair(Rule::arithmetic_expr, "(_)");
+        let result = Arithmetic::from_parsed_rule(Node::new(pair, FileId::new(0)));
+        assert_err!(result, ParseError::GroupedPlaceholder { .. });
+    }
+
+    /// A 200-deep paren nest parses and collapses to the bare factor.
+    /// Under split `(`-headed rules this input would hang the suite; the
+    /// mechanism is documented at `paren_factor` in grammar.pest
+    /// (issue #289).
+    #[test]
+    fn deeply_nested_parens_parse_without_backtracking_blowup() {
+        let src = format!("{}x{}", "(".repeat(200), ")".repeat(200));
+        let arith: Arithmetic = parse_node(Rule::arithmetic_expr, &src);
+        assert!(matches!(arith.init(), Factor::Var(v) if v == "x"));
+    }
+
+    /// A 200-deep unclosed paren nest is rejected; the failure path must
+    /// stay free of the re-parsing blowup too (issue #289).
+    #[test]
+    fn unclosed_paren_nest_is_rejected_without_backtracking_blowup() {
+        use pest::Parser as _;
+
+        use crate::FlowLogParser;
+
+        assert!(FlowLogParser::parse(Rule::arithmetic_expr, &"(".repeat(200)).is_err());
+    }
+
+    /// Empty parens are rejected by the grammar: `paren_factor` requires
+    /// at least one element.
+    #[test]
+    fn empty_parens_are_rejected() {
+        use pest::Parser as _;
+
+        use crate::FlowLogParser;
+
+        assert!(FlowLogParser::parse(Rule::arithmetic_expr, "()").is_err());
     }
 
     /// Each grammar factor kind parses to its variant. Contents are tested

@@ -330,6 +330,11 @@ pub enum ParseError {
     #[error("rule body reduces to nothing but its head is not a constant fact")]
     GroundRuleNotConst { span: Span },
 
+    /// A `_` placeholder alone in parentheses. `(_)` is neither grouping
+    /// (a placeholder is not an expression) nor a tuple (no comma).
+    #[error("`_` cannot be grouped: `(_)` is neither a tuple nor an expression")]
+    GroupedPlaceholder { span: Span },
+
     /// A string token is not a valid Rust string literal. FlowLog strings
     /// follow Rust syntax (quoted with Rust's escape alphabet, or raw);
     /// unknown escapes are errors, unlike Souffle's pass-through.
@@ -941,6 +946,13 @@ impl Diagnostic for ParseError {
                 *span,
                 format!("`{literal}` does not fit `{expected:?}`"),
             )),
+
+            ParseError::GroupedPlaceholder { span } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "a 1-tuple that ignores its component is `(_,)`; grouping needs an expression"
+                        .into(),
+                ]),
 
             ParseError::InvalidStringLiteral { span, reason } => {
                 base.with_labels(labels(*span, reason.clone()))
