@@ -16,8 +16,33 @@ impl CodeGen {
     /// ```ignore
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
     /// ```
+    ///
+    /// The collection is rebound through the outer-scope set clamp unless
+    /// [`flowlog_common::Config::skips_edb_normalization`] waives it for
+    /// this relation.
     pub(crate) fn gen_edb_decls(&mut self, plan_graph: &mut Option<PlanGraph>) -> Vec<TokenStream> {
-        let normalize = self.dedup_nonrecursive();
+        // A trusted caller already delivers set-correct deltas, so the clamp
+        // is pure cost for them: one arrangement per EDB on the hottest
+        // path. Every downstream dedup (rule outputs, recursion) stays in
+        // place either way.
+        let trusted = self.config.skips_edb_normalization();
+
+        // `.fact` rows are the compiler's own startup inserts, outside the
+        // caller's promise: the source may list a row twice, so a relation
+        // seeded that way keeps its clamp. Decided per relation here,
+        // before the `&mut self` call below.
+        let clamped: Vec<bool> = self
+            .program
+            .edbs()
+            .iter()
+            .map(|rel| !trusted || self.program.has_inline_facts(rel.name()))
+            .collect();
+
+        let normalize = if trusted && !clamped.iter().any(|keep| *keep) {
+            quote! {}
+        } else {
+            self.dedup_nonrecursive()
+        };
 
         let edbs = self.program.edbs();
         if edbs.is_empty() {
@@ -47,8 +72,10 @@ impl CodeGen {
         });
 
         let str_intern = self.config.str_intern_enabled();
+        let empty = TokenStream::new();
         edbs.iter()
-            .map(|rel| {
+            .zip(clamped)
+            .map(|(rel, normalize_this)| {
                 let handle = format_ident!("h{}", rel.name());
                 // The collection binding comes from the global ident map —
                 // never re-derived from the name — so it always matches the
@@ -58,11 +85,13 @@ impl CodeGen {
                 // Record the source-file input and dedup operators when profiling is on
                 with_plan_graph(plan_graph, |plan_graph| {
                     plan_graph.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
-                    plan_graph.input_dedup_operator(
-                        rel.raw_name().to_string(),
-                        coll.to_string(),
-                        coll.to_string(),
-                    );
+                    if normalize_this {
+                        plan_graph.input_dedup_operator(
+                            rel.raw_name().to_string(),
+                            coll.to_string(),
+                            coll.to_string(),
+                        );
+                    }
                 });
 
                 // The matching `InputSession` handle is always typed from the
@@ -72,10 +101,11 @@ impl CodeGen {
                 // inference (e.g. fact-only or orphan relations whose element
                 // type is otherwise un-inferable).
                 let ty = data_type_tokens(&rel.data_type(), str_intern);
+                let clamp = if normalize_this { &normalize } else { &empty };
 
                 quote! {
                     let (#handle, #coll) = scope.new_collection::<#ty, Diff>();
-                    let #coll = #coll #normalize;
+                    let #coll = #coll #clamp;
                 }
             })
             .collect()
@@ -117,6 +147,154 @@ impl CodeGen {
                 }
                 _ => (quote! { ( #(#hs),* ) }, quote! { ( #(#hs),* ) }),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use flowlog_common::Config;
+    use flowlog_common::ExecutionMode;
+    use flowlog_common::SourceMap;
+    use rstest::rstest;
+    use tempfile::NamedTempFile;
+
+    use super::*;
+
+    const PROGRAM: &str = "\
+        .decl Edge(src: int32, dst: int32)\n\
+        .decl Reach(src: int32, dst: int32)\n\
+        .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+        .output Reach\n\
+        Reach(s, d) :- Edge(s, d).\n";
+
+    /// `Seed` is fed by the compiler's own `.fact` rows and `Edge` only by
+    /// the caller: the two halves of the trusted-inputs decision in one
+    /// program.
+    const PROGRAM_WITH_FACTS: &str = "\
+        .decl Edge(src: int32, dst: int32)\n\
+        .decl Seed(src: int32, dst: int32)\n\
+        .decl Reach(src: int32, dst: int32)\n\
+        .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
+        .output Reach\n\
+        Seed(1, 2).\n\
+        Seed(1, 2).\n\
+        Reach(s, d) :- Edge(s, d).\n\
+        Reach(s, d) :- Seed(s, d).\n";
+
+    /// The rendered `let (h<rel>, <rel>) = ...` block under one flag
+    /// combination. Goes through [`CodeGen`] rather than a hand-built map
+    /// because `gen_edb_decls` resolves collection idents through the
+    /// global fingerprint map.
+    fn edb_decls_of(source: &str, mode: ExecutionMode, trusted_set_inputs: bool) -> Vec<String> {
+        let mut tmp = NamedTempFile::new().expect("temp file");
+        tmp.write_all(source.as_bytes()).expect("write program");
+        let mut config = Config {
+            program: tmp.path().to_string_lossy().into_owned(),
+            mode,
+            trusted_set_inputs,
+            ..Config::default()
+        };
+        let path = config.program.clone();
+        let program = flowlog_parser::parse(&path, &[], &mut SourceMap::new(), &mut config)
+            .expect("program parses");
+
+        let mut cg = CodeGen::new(config, program);
+        cg.make_global_ident_map();
+        cg.gen_edb_decls(&mut None)
+            .iter()
+            .map(TokenStream::to_string)
+            .collect()
+    }
+
+    fn edb_decls(mode: ExecutionMode, trusted_set_inputs: bool) -> String {
+        edb_decls_of(PROGRAM, mode, trusted_set_inputs).join("\n")
+    }
+
+    /// The one declaration whose handle ident derives from `name`. Handle
+    /// idents are the lowercased relation name, as `Relation::name` returns.
+    fn decl_for(decls: &[String], name: &str) -> String {
+        let handle = format!("h{} ,", name.to_lowercase());
+        decls
+            .iter()
+            .find(|decl| decl.contains(&handle))
+            .unwrap_or_else(|| panic!("no declaration for {name} in {decls:?}"))
+            .clone()
+    }
+
+    #[rstest]
+    #[case::datalog_batch(ExecutionMode::DatalogBatch, "consolidate")]
+    #[case::datalog_inc(ExecutionMode::DatalogInc, "threshold_total")]
+    #[case::extend_batch(ExecutionMode::ExtendBatch, "threshold_total")]
+    #[case::extend_inc(ExecutionMode::ExtendInc, "threshold_total")]
+    fn edb_inputs_are_clamped_by_default(
+        #[case] mode: ExecutionMode,
+        #[case] expected_clamp: &str,
+    ) {
+        let decls = edb_decls(mode, false);
+        assert!(
+            decls.contains(expected_clamp),
+            "{mode:?} must clamp EDB inputs by default, got: `{decls}`"
+        );
+    }
+
+    #[test]
+    fn trusted_set_inputs_drops_the_incremental_edb_clamp() {
+        let decls = edb_decls(ExecutionMode::DatalogInc, true);
+        assert!(
+            !decls.contains("threshold"),
+            "trusted inputs must emit no input clamp, got: `{decls}`"
+        );
+        assert!(
+            decls.contains("new_collection"),
+            "the input collection itself must still be declared, got: `{decls}`"
+        );
+    }
+
+    /// Only `DatalogInc` inputs are the caller's deltas; the other modes
+    /// feed themselves and must ignore the promise.
+    #[rstest]
+    #[case::datalog_batch(ExecutionMode::DatalogBatch, "consolidate")]
+    #[case::extend_batch(ExecutionMode::ExtendBatch, "threshold_total")]
+    #[case::extend_inc(ExecutionMode::ExtendInc, "threshold_total")]
+    fn trusted_set_inputs_leaves_every_other_mode_clamped(
+        #[case] mode: ExecutionMode,
+        #[case] expected_clamp: &str,
+    ) {
+        let decls = edb_decls(mode, true);
+        assert!(
+            decls.contains(expected_clamp),
+            "{mode:?} must keep its EDB clamp under trusted inputs, got: `{decls}`"
+        );
+    }
+
+    /// `.fact` rows are inserted by the generated engine itself and can
+    /// repeat, so the caller's promise cannot cover the relation they seed.
+    #[test]
+    fn a_relation_with_inline_facts_keeps_its_clamp_under_trusted_inputs() {
+        let decls = edb_decls_of(PROGRAM_WITH_FACTS, ExecutionMode::DatalogInc, true);
+        let seed = decl_for(&decls, "Seed");
+        let edge = decl_for(&decls, "Edge");
+        assert!(
+            seed.contains("threshold_total"),
+            "a `.fact`-seeded relation must stay clamped, got: `{seed}`"
+        );
+        assert!(
+            !edge.contains("threshold_total"),
+            "a caller-only relation must drop its clamp, got: `{edge}`"
+        );
+    }
+
+    /// Without the promise the per-relation split must not appear at all.
+    #[test]
+    fn inline_facts_change_nothing_by_default() {
+        for decl in edb_decls_of(PROGRAM_WITH_FACTS, ExecutionMode::DatalogInc, false) {
+            assert!(
+                decl.contains("threshold_total"),
+                "every EDB is clamped by default, got: `{decl}`"
+            );
         }
     }
 }

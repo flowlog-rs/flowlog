@@ -39,7 +39,12 @@ pub(crate) fn assemble(pipeline: &Pipeline, out_dir: &Path) -> io::Result<String
     let (results_struct, lib_engine) = if config.is_incremental() {
         (
             gen_incremental_results(&pipeline.program),
-            gen_lib_incremental_engine(&pipeline.program, string_intern, &pipeline.parts),
+            gen_lib_incremental_engine(
+                &pipeline.program,
+                string_intern,
+                config.inlines_single_worker(),
+                &pipeline.parts,
+            ),
         )
     } else {
         (

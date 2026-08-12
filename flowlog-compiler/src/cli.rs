@@ -98,6 +98,11 @@ impl Cli {
             output_to_stdout: self.output_dir.as_deref() == Some("-"),
             serialize_load: false,
             metrics_flush_interval_ms: self.metrics_flush_interval_ms,
+            // Both stay off in binary mode: the compiled binary owns the
+            // worker threads it spawns and loads its own facts, so no caller
+            // is in a position to inline a worker or vouch for the deltas.
+            inline_single_worker: false,
+            trusted_set_inputs: false,
         }
     }
 
@@ -111,5 +116,31 @@ impl Cli {
             self.build_dir.clone(),
             self.check,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The binary owns its worker threads and loads its own facts, so
+    /// neither library-mode option is reachable from the CLI whatever
+    /// flags are passed.
+    #[test]
+    fn binary_mode_config_never_opts_into_the_library_options() {
+        let config = Cli {
+            program: "policy.dl".to_string(),
+            mode: ExecutionMode::DatalogInc,
+            profile: true,
+            sip: true,
+            str_intern: true,
+            ..Cli::default()
+        }
+        .to_config();
+
+        assert!(!config.inline_single_worker);
+        assert!(!config.trusted_set_inputs);
+        assert!(!config.inlines_single_worker());
+        assert!(!config.skips_edb_normalization());
     }
 }
