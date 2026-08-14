@@ -5,10 +5,12 @@ Shared support crate for [FlowLog](https://github.com/flowlog-rs/flowlog), a Dat
 ## Layout
 
 - `config` — shared pipeline configuration (`Config`, `ExecutionMode`).
-- `diag` — the `Diagnostic` trait and its renderer.
 - `fmt` — Rust token pretty-printing and diagnostic report layout.
 - `hash` — hashing helper.
-- `source` — spans, file identifiers, and the source map.
+
+Errors, spans, and diagnostic rendering live in
+[`flowlog-error`](../flowlog-error); depend on that crate directly for
+`FlowlogError`, `Span`, `SourceMap`, and `Diagnostic`.
 
 ## License
 

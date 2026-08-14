@@ -1,0 +1,21 @@
+[package]
+name = "flowlog-error"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Error vocabulary for FlowLog."
+readme = "README.md"
+keywords = ["datalog", "dataflow", "compiler"]
+categories = ["compilers", "database"]
+
+[dependencies]
+codespan-reporting.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

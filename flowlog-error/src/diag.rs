@@ -4,8 +4,6 @@
 //! boxes it into [`BoxError`] for `?`, and [`emit`] renders it via
 //! `codespan-reporting`.
 
-use std::error::Error as StdError;
-use std::fmt;
 use std::io;
 use std::process;
 
@@ -13,13 +11,11 @@ use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use codespan_reporting::diagnostic::Label;
 use codespan_reporting::term;
 
+use crate::error::FlowlogError;
+use crate::error::InternalError;
 use crate::source::FileId;
 use crate::source::SourceMap;
 use crate::source::Span;
-
-/// Canonical bug-report URL for [`InternalError`] — shared by every stage
-/// so all "please file a bug" notes point at the same tracker.
-pub const BUG_URL: &str = "https://github.com/flowlog-rs/flowlog/issues/new";
 
 /// Build a primary label for `span`, or `None` if the span is dummy.
 pub fn primary_label(span: Span) -> Option<Label<FileId>> {
@@ -31,7 +27,7 @@ pub fn secondary_label(span: Span) -> Option<Label<FileId>> {
     (!span.is_dummy()).then(|| Label::secondary(span.file, span.range()))
 }
 
-/// Primary label for `span` carrying `msg`, as a `Vec` for
+/// Build a primary label for `span` carrying `msg`, as a `Vec` for
 /// `CsDiagnostic::with_labels`. Empty for dummy spans.
 pub fn labels(span: Span, msg: impl Into<String>) -> Vec<Label<FileId>> {
     primary_label(span)
@@ -42,18 +38,14 @@ pub fn labels(span: Span, msg: impl Into<String>) -> Vec<Label<FileId>> {
 
 /// Error types that can be rendered as a source-annotated diagnostic.
 ///
-/// `to_diagnostic` builds the `codespan-reporting` diagnostic; `is_internal`
-/// marks compiler bugs (vs. user errors) to drive exit code and the bug note.
-pub trait Diagnostic: StdError + Send + Sync + 'static {
+/// Extends [`FlowlogError`] for the errors that have a span to point at; an
+/// error without one implements that trait alone.
+pub trait Diagnostic: FlowlogError {
     fn to_diagnostic(&self) -> CsDiagnostic<FileId>;
-
-    fn is_internal(&self) -> bool {
-        false
-    }
 }
 
-/// Heap-allocated [`Diagnostic`] — the error type returned by pipeline entry
-/// points.
+/// Heap-allocated [`Diagnostic`]: the error type returned by pipeline
+/// entry points.
 pub type BoxError = Box<dyn Diagnostic>;
 
 impl<E: Diagnostic> From<E> for BoxError {
@@ -62,49 +54,11 @@ impl<E: Diagnostic> From<E> for BoxError {
     }
 }
 
-/// An invariant violation inside the compiler (as opposed to a user error).
-/// Renders as an `internal compiler error` with a "file a bug" note.
-#[derive(Debug)]
-pub struct InternalError {
-    pub(crate) stage: &'static str,
-    pub(crate) detail: String,
-    pub(crate) bug_url: &'static str,
-}
-
-impl InternalError {
-    pub fn new(stage: &'static str, detail: impl Into<String>, bug_url: &'static str) -> Self {
-        Self {
-            stage,
-            detail: detail.into(),
-            bug_url,
-        }
-    }
-}
-
-impl fmt::Display for InternalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "internal compiler error at stage `{}`: {}",
-            self.stage, self.detail
-        )
-    }
-}
-
-impl StdError for InternalError {}
-
 impl Diagnostic for InternalError {
     fn to_diagnostic(&self) -> CsDiagnostic<FileId> {
         CsDiagnostic::bug()
-            .with_message(format!(
-                "internal compiler error at stage `{}`: {}",
-                self.stage, self.detail
-            ))
-            .with_notes(vec![format!("please file a bug at {}", self.bug_url)])
-    }
-
-    fn is_internal(&self) -> bool {
-        true
+            .with_message(self.to_string())
+            .with_notes(vec![format!("please file a bug at {}", self.bug_url())])
     }
 }
 
@@ -133,6 +87,9 @@ pub fn emit_and_exit(err: impl Into<BoxError>, sources: &SourceMap) -> ! {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as StdError;
+    use std::fmt;
+
     use codespan_reporting::diagnostic::Label;
 
     use super::*;
@@ -158,6 +115,8 @@ mod tests {
                 .with_labels(vec![Label::primary(self.span.file, self.span.range())])
         }
     }
+
+    impl FlowlogError for DemoError {}
 
     #[test]
     fn question_mark_boxes_stage_error() {

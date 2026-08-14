@@ -1,4 +1,4 @@
-//! Source location primitives — spans, file identifiers, and the source map.
+//! Source location primitives: spans, file identifiers, and the source map.
 
 use std::fs;
 use std::io;
@@ -18,7 +18,8 @@ impl FileId {
     pub const DUMMY: FileId = FileId(u32::MAX);
 
     /// Construct a `FileId` from a raw index. Ids normally come from a
-    /// [`SourceMap`]; exposed only so other crates' tests can mint placeholders.
+    /// [`SourceMap`]; exposed only so tests in other crates can mint
+    /// placeholders.
     #[doc(hidden)]
     pub const fn new(raw: u32) -> Self {
         FileId(raw)
