@@ -14,6 +14,9 @@ tempfile = "3"
 [dependencies.flowlog-common]
 path = "../flowlog-common"
 
+[dependencies.flowlog-error]
+path = "../flowlog-error"
+
 [dependencies.flowlog-parser]
 path = "../flowlog-parser"
 

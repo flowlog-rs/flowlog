@@ -2,7 +2,7 @@
 
 use flowlog_common::Config;
 use flowlog_common::ExecutionMode;
-use flowlog_common::SourceMap;
+use flowlog_error::SourceMap;
 use flowlog_parser::parse;
 use libfuzzer_sys::fuzz_target;
 

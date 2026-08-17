@@ -107,10 +107,16 @@ checksum = "26b73573e6edcd2af0cdf47bd6cb58f0b3839491263c314eaad1ccf24430e1de"
 name = "flowlog-common"
 version = "0.1.0"
 dependencies = [
- "codespan-reporting",
  "prettyplease",
  "proc-macro2",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "flowlog-error"
+version = "0.1.0"
+dependencies = [
+ "codespan-reporting",
 ]
 
 [[package]]
@@ -118,6 +124,7 @@ name = "flowlog-fuzz"
 version = "0.0.0"
 dependencies = [
  "flowlog-common",
+ "flowlog-error",
  "flowlog-parser",
  "libfuzzer-sys",
  "tempfile",
@@ -130,6 +137,7 @@ dependencies = [
  "codespan-reporting",
  "educe",
  "flowlog-common",
+ "flowlog-error",
  "litrs",
  "ordered-float",
  "pest",
