@@ -100,6 +100,23 @@ parse_output_relations() {
 # literal dots, plus a `.csv` extension (e.g. `Reach.csv`, `a.P.csv`). Mirrors
 # the compiler's `<RawName>.csv` convention so lib-mode output matches the
 # `expected/` files. Falls back to `<lower>.csv` if no directive is found.
+# Returns 0 when the relation is declared with `.printsize` rather than
+# `.output`. Library mode surfaces those as a `<name>_size` count field, not
+# as a row Vec, so the writer block differs.
+is_printsize_relation() {
+    local dl_file="$1" want_lower="$2"
+    local f raw rawlower
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        while IFS= read -r raw; do
+            [[ -n "$raw" ]] || continue
+            rawlower="${raw,,}"; rawlower="${rawlower//./·}"
+            [[ "$rawlower" == "$want_lower" ]] && return 0
+        done < <(grep -oE '^[[:space:]]*\.printsize[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' "$f" 2>/dev/null | awk '{print $2}')
+    done < <(all_dl_files "$dl_file")
+    return 1
+}
+
 output_filename_for() {
     local dl_file="$1" want_lower="$2"
     local f raw rawlower
@@ -470,6 +487,19 @@ gen_writer_block() {
     local dl_file="$1"
     local lower_name="$2"
     local output_basename="$3"
+
+    if is_printsize_relation "$dl_file" "$lower_name"; then
+        cat <<EOF
+    {
+        let f = std::fs::File::create("output/${output_basename}")
+            .expect("create output/${output_basename}");
+        let mut w = std::io::BufWriter::new(f);
+        writeln!(w, "{}", results.${lower_name}_size).expect("write");
+        w.flush().expect("flush");
+    }
+EOF
+        return 0
+    fi
 
     local fields
     fields=$(parse_decl_fields "$dl_file" "$lower_name") || {

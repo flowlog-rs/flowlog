@@ -50,3 +50,22 @@ every crate in the workspace.
 9. **Messages state the violated expectation with the offending values.**
    What was attempted, on what, and which rule broke. User diagnostics
    label every relevant span, not just the site of the report.
+
+10. **Runtime input failures return the runtime's error currency.** A file
+    the user named that is missing, unreadable, or malformed has no span
+    to point at, so it is neither a source diagnostic nor an internal
+    error: `flowlog-runtime` returns `RuntimeError`, which the generated
+    driver prints with the relation and path before exiting 1. Resource
+    exhaustion is the exception, and panics: an interner out of keys is
+    the allocation failure it looks like, and no caller can act on it. A
+    variant earns its place when a caller acts on it; today the acting is
+    structural: a row that fails to decode is skipped and reported, and a
+    cursor that fails stops the load.
+
+11. **Every error type implements `FlowlogError`.** The trait lives in
+    `flowlog-error`, carries `is_internal`, and is what lets a caller read
+    a message and tell our bug from the user's mistake without knowing
+    which stage produced it. `Diagnostic` extends it for errors that have
+    a span to render; `RuntimeError` implements it plainly, because a data
+    file is not the program's source. The crate stays light because
+    compiled programs carry it.

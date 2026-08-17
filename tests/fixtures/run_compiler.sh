@@ -304,6 +304,7 @@ main() {
             [[ -d "$cat_dir" ]] || continue
             for test_dir in "$cat_dir"/*/; do
                 [[ -f "$test_dir/program.dl" ]] || continue
+                skipped_by_marker "$test_dir" && continue
                 tasks+=("${cat}|${test_dir%/}")
             done
         done

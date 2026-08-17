@@ -27,6 +27,12 @@ set -euo pipefail
 # it here when both gaps close.
 CATEGORIES=(datalog-batch datalog-inc extend-batch)
 
+# Library mode has no input layer: this runner reads `data/<Rel>.csv` itself
+# and feeds rows through the typed API, so a fixture whose facts live in any
+# other format has nothing to read. Such a fixture carries a `lib_skip` file
+# and is left out of collection rather than counted as passing.
+SKIP_MARKER=lib_skip
+
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 # Runner-crate base; sequential mode uses `runner`, parallel mode uses
@@ -53,6 +59,7 @@ Each test directory under tests/fixtures/<category>/<name>/ contains:
   data/           Input CSV files (filename matches relation name)
   expected/       Expected output files (one per relation or epoch)
   commands.txt    Optional — makes the fixture incremental
+  lib_skip        Optional — skip in this runner; contents are the reason
 
 Options:
   -j N            Run up to N workers in parallel (default 1). Each worker
@@ -328,6 +335,7 @@ main() {
             [[ -d "$cat_dir" ]] || continue
             for test_dir in "$cat_dir"/*/; do
                 [[ -f "$test_dir/program.dl" ]] || continue
+                skipped_by_marker "$test_dir" && continue
                 tasks+=("${cat}|${test_dir%/}")
             done
         done

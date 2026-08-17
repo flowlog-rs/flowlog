@@ -1,0 +1,15 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : ord_multi_worker
+// Feature : ord() under -w 4 — the serialized text load must intern in file
+//           order regardless of worker count, so every ord value matches the
+//           single-worker run. Present-diff batch semantics hide duplicate
+//           loads entirely; ord values are the only suite-visible detector
+//           of a broken worker-0 collapse.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Words(w: symbol)
+.input Words(IO="file", filename="Words.csv")
+
+.decl Codes(w: symbol, c: int32)
+Codes(w, ord(w)) :- Words(w).
+.output Codes

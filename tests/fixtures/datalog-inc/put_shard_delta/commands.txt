@@ -1,0 +1,11 @@
+begin
+put s alpha,1 +1
+put s beta,2 +1
+put t 10,1 +1
+put t 11,2 +1
+commit
+begin
+put s alpha,1 -1
+put t 10,1 -1
+commit
+quit

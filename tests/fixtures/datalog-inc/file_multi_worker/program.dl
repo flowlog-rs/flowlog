@@ -1,0 +1,13 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : file_multi_worker
+// Feature : file command at -w 2 — byte-range shares must load each row
+//           exactly once; the -1 pass leaves zero, so a double-read on
+//           either worker survives as a live tuple in the i32 diffs
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(id: int32, val: int32)
+.input Data(IO="command", delimiter=",")
+
+.decl Out(id: int32, val: int32)
+Out(id, v) :- Data(id, v).
+.output Out

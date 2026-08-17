@@ -1,0 +1,15 @@
+// ============================================================================
+// Suite   : printsize_count
+// Feature : `.printsize` writes its count to a file
+// Covers  : the file form of `.printsize` is one decimal line, `<count>\n`,
+//           at `<outdir>/<RawName>.csv`. Nothing pinned this before, so the
+//           format was free to drift whenever the sink moved.
+// ============================================================================
+
+.decl Edge(a: int32, b: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Reach(a: int32, b: int32)
+Reach(x, y) :- Edge(x, y).
+Reach(x, z) :- Reach(x, y), Edge(y, z).
+.printsize Reach

@@ -1,0 +1,21 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : put_shard_delta
+// Feature : put ownership at -w 2 — exactly one worker may apply each tuple,
+//           for a string-keyed and an int-keyed relation. The +1 then -1
+//           passes leave zero; a double-accept survives as a live tuple in
+//           the i32 diffs, so the _t2 deltas are the detector.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl S(k: symbol, v: int32)
+.input S(IO="command", delimiter=",")
+
+.decl T(k: int32, v: int32)
+.input T(IO="command", delimiter=",")
+
+.decl OutS(k: symbol, v: int32)
+OutS(k, v) :- S(k, v).
+.output OutS
+
+.decl OutT(k: int32, v: int32)
+OutT(k, v) :- T(k, v).
+.output OutT

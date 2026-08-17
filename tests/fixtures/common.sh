@@ -190,6 +190,15 @@ find_test() {
     return 1
 }
 
+# Whether a runner excludes this fixture. A runner sets `SKIP_MARKER` to a
+# filename before sourcing this file; a fixture carrying that file is left
+# out of collection entirely, so it is never counted, run, or tallied. Used
+# for fixtures a runner structurally cannot execute rather than ones it
+# fails on.
+skipped_by_marker() {
+    [[ -n "${SKIP_MARKER:-}" && -f "$1/${SKIP_MARKER}" ]]
+}
+
 # Count tests across the configured categories. If named tests are passed as
 # arguments, count those instead.
 count_tests() {
@@ -202,6 +211,7 @@ count_tests() {
             [[ -d "$cat_dir" ]] || continue
             for test_dir in "$cat_dir"/*/; do
                 [[ -f "$test_dir/program.dl" ]] || continue
+                skipped_by_marker "$test_dir" && continue
                 ((count++)) || true
             done
         done
@@ -250,6 +260,7 @@ all_test_names() {
         [[ -d "$cat_dir" ]] || continue
         for test_dir in "$cat_dir"/*/; do
             [[ -f "$test_dir/program.dl" ]] || continue
+            skipped_by_marker "$test_dir" && continue
             basename "$test_dir"
         done
     done | sort
