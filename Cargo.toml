@@ -2,6 +2,7 @@
 members = [
     "flowlog-runtime",
     "flowlog-common",
+    "flowlog-error",
     "flowlog-parser",
     "flowlog-planner",
     "flowlog-build",
@@ -25,6 +26,7 @@ codespan-reporting = "0.13"
 differential-dataflow = "0.25"
 educe = "0.7"
 itertools = "0.15"
+itoa = "1.0"
 lasso = "0.7"
 litrs = "1.0"
 ordered-float = "5.1"
@@ -32,10 +34,12 @@ pest = "2.8"
 pest_derive = "2.8"
 pretty_assertions = "1.4"
 prettyplease = "0.3"
+rayon = "1.11"
 proc-macro2 = "1.0"
 quote = "1.0"
 regex = "1.11"
 rstest = "0.26"
+rusqlite = "0.40"
 rustc-hash = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -51,6 +55,7 @@ tracing-test = "0.2"
 # Internal crates.
 flowlog-build = { path = "flowlog-build", version = "0.4.0" }
 flowlog-common = { path = "flowlog-common", version = "0.1.0" }
+flowlog-error = { path = "flowlog-error", version = "0.1.0" }
 flowlog-parser = { path = "flowlog-parser", version = "0.1.0" }
 flowlog-planner = { path = "flowlog-planner", version = "0.1.0" }
 flowlog-profiler = { path = "flowlog-profiler", version = "0.1.0" }

@@ -9,9 +9,11 @@ You typically don't call into it directly.
 
 ## What it offers
 
-- `Relation` trait — implemented by each generated input struct.
-- `io` — parallel-ingest helpers: `partition`, `byte_range_reader`, and
-  first-column sharding.
+- `io` — reading relations into the engine and writing them back out: a
+  `RelationSpec` describes each relation, the `relation!` macro defines its
+  handler, and the ingest drivers pull rows through a per-format reader
+  into its `RowSink`. Also `partition`, first-column sharding, and atomic
+  file writes.
 - `intern` — thread-safe string-interning pool.
 - `sort` — `k_way_merge` and `topk` used by generated `ORDER BY` / `LIMIT`
   drain code.

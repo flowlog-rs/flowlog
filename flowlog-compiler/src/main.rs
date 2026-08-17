@@ -3,10 +3,10 @@
 //! Parses a single Datalog program, runs the pipeline, and writes out the resulting executable.
 
 use clap::Parser;
-use flowlog_common::SourceMap;
-use flowlog_common::emit_and_exit;
 use flowlog_compiler::Cli;
 use flowlog_compiler::Compiler;
+use flowlog_error::SourceMap;
+use flowlog_error::emit_and_exit;
 use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
 use tracing_subscriber::EnvFilter;

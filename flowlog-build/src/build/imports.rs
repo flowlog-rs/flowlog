@@ -5,6 +5,8 @@
 //! timely, `lasso`, `ordered_float`, `serde` are all re-exported from
 //! there.
 
+use flowlog_parser::DataType;
+use flowlog_parser::Program;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
@@ -17,6 +19,7 @@ use crate::codegen::Features;
 pub(crate) fn gen_lib_imports(
     relops_body: &TokenStream,
     features: &Features,
+    program: &Program,
     profile: bool,
 ) -> TokenStream {
     let ordered_float_import = features
@@ -45,7 +48,7 @@ pub(crate) fn gen_lib_imports(
         out.push(quote! { use ::flowlog_runtime::timely::dataflow::operators::vec::Map; });
     }
 
-    out.push(string_intern_imports(features));
+    out.push(string_intern_imports(features, program));
     if features.ordered_float() {
         out.push(quote! { use ::flowlog_runtime::ordered_float::OrderedFloat; });
     }
@@ -133,23 +136,33 @@ fn dd_imports(f: &Features) -> TokenStream {
 }
 
 /// `intern` / `resolve` / `Spur` imports; empty when interning is off.
-fn string_intern_imports(f: &Features) -> TokenStream {
+///
+/// Bare `intern` appears where a flow builds a new string and in inline
+/// string facts; loading interns inside the runtime's readers and drains
+/// resolve through `EncodeField`, so each name follows its callers or the
+/// generated crate's -Dwarnings build fails on it.
+fn string_intern_imports(f: &Features, program: &Program) -> TokenStream {
     if !f.string_intern() {
         return quote! {};
     }
 
-    let base = quote! {
-        use ::flowlog_runtime::lasso::Spur;
-        use ::flowlog_runtime::intern::intern;
-    };
+    let facts = program.facts();
+    let any_inline_string = program.edbs().iter().any(|rel| {
+        facts.get(rel.name()).is_some_and(|rows| !rows.is_empty())
+            && rel
+                .data_type()
+                .iter()
+                .any(|dt| matches!(dt, DataType::String))
+    });
+
+    let base = quote! { use ::flowlog_runtime::lasso::Spur; };
+
+    let intern = (f.string_intern_calls() || any_inline_string)
+        .then(|| quote! { use ::flowlog_runtime::intern::intern; });
 
     let resolve = f
         .string_resolve()
         .then(|| quote! { use ::flowlog_runtime::intern::resolve; });
 
-    let resolve_out = f
-        .string_resolve_out()
-        .then(|| quote! { use ::flowlog_runtime::intern::resolve_out; });
-
-    quote! { #base #resolve #resolve_out }
+    quote! { #base #intern #resolve }
 }

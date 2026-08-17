@@ -7,10 +7,11 @@
 use std::io;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use flowlog_common::BUG_URL;
-use flowlog_common::Diagnostic;
-use flowlog_common::FileId;
-use flowlog_common::InternalError;
+use flowlog_error::BUG_URL;
+use flowlog_error::Diagnostic;
+use flowlog_error::FileId;
+use flowlog_error::FlowlogError;
+use flowlog_error::InternalError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -35,7 +36,9 @@ impl Diagnostic for CompilerError {
             CompilerError::Internal(ie) => ie.to_diagnostic(),
         }
     }
+}
 
+impl FlowlogError for CompilerError {
     fn is_internal(&self) -> bool {
         matches!(self, CompilerError::Internal(_))
     }

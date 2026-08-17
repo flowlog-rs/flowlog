@@ -273,7 +273,7 @@ pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
             .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
 }
 
-fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
+pub fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
     match dt {
         DataType::Float32 => quote! { OrderedFloat<f32> },
         DataType::Float64 => quote! { OrderedFloat<f64> },
@@ -308,7 +308,7 @@ mod tests {
 
     /// An empty program — the only supported way to build one is to parse.
     fn empty_program() -> Program {
-        use flowlog_common::SourceMap;
+        use flowlog_error::SourceMap;
         use tempfile::NamedTempFile;
         let tmp = NamedTempFile::new().expect("temp file");
         flowlog_parser::parse(

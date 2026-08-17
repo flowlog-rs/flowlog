@@ -83,30 +83,17 @@ impl CodeGen {
             }
 
             if idb.output() {
-                if data_type
-                    .iter()
-                    .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
-                {
-                    self.features.mark_string_resolve_out();
-                }
-
                 self.features.mark_output_buffers();
 
-                // Both file sinks build rows via `gen_row_bytes`: `itoa` for
-                // integer columns and the incremental diff, `rayon` for the
-                // parallel drain. Stderr uses neither. The scaffold gates the
-                // deps on these marks.
-                if !self.config.output_to_stdout() && !data_type.is_empty() {
-                    if data_type
+                // Every file sink formats inside the runtime now, so the
+                // only generated code still resolving interned strings is
+                // the stderr sink and the ORDER BY comparators.
+                if (self.config.output_to_stdout() || idb.output_order_by().is_some())
+                    && data_type
                         .iter()
-                        .any(|dt| dt.any_scalar(&DataType::is_integer))
-                        || self.config.is_incremental()
-                    {
-                        self.features.mark_itoa();
-                    }
-                    if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
-                        self.features.mark_parallel_output();
-                    }
+                        .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
+                {
+                    self.features.mark_string_resolve_out();
                 }
 
                 // Wiring (first arg) is the collection binding feeding the
@@ -295,16 +282,22 @@ impl CodeGen {
 // Drain & merge
 // =========================================================================
 
-/// Emit the per-IDB drain block: pull worker buffers, optionally sort/limit,
-/// then iterate with `write_row` against the sink set up by `sink_preamble`.
+/// Emit the per-IDB drain block: take the worker buffers and hand every
+/// row to `write_row`, in whatever order the relation asked for.
 ///
-/// `write_row` runs once per row with `row: &(tuple, Ts, i32)` in scope.
-/// `sink_postamble` runs once after the last row, with the preamble's
-/// bindings still in scope — file sinks use it to `flush()` explicitly
-/// (relying on `BufWriter::Drop` would silently swallow flush errors).
-/// The block evaluates to `()`; callers that need to capture a value (e.g.
-/// library mode pushing into a typed `Vec`) should pre-declare the target
-/// binding outside the block and have `write_row` mutate it.
+/// `write_row` runs once per row with `tuple`, `time`, and `diff` in scope.
+/// `sink_preamble` runs before the first row and `sink_postamble` after the
+/// last, with the preamble's bindings still live; a file sink uses the
+/// postamble to finish its writer, because letting `Drop` do it would
+/// discard a failed tail write.
+///
+/// The ordering itself lives in the runtime. Only the comparator is
+/// generated, because comparing column 3 descending needs the column's
+/// type; how the sorted runs are then merged does not.
+///
+/// The block evaluates to `()`; a caller that needs a value (library mode
+/// filling a typed `Vec`) declares the binding outside and has `write_row`
+/// mutate it.
 pub fn gen_drain_block(
     buf_ident: &Ident,
     idb: &Relation,
@@ -317,62 +310,41 @@ pub fn gen_drain_block(
     let limit = idb.output_limit();
     let elem_ty = tuple_type(idb, string_intern);
 
-    match (order_by.as_ref(), limit) {
-        (None, _) => quote! {{
-            #sink_preamble
-            for worker_buf in #buf_ident.lock().unwrap().drain(..) {
-                for row in &worker_buf {
-                    #write_row
-                }
-            }
-            #sink_postamble
-        }},
+    let take = quote! {
+        let per_worker: Vec<Vec<#elem_ty>> =
+            std::mem::take(&mut *#buf_ident.lock().expect("output buffer poisoned"));
+    };
+    let each = quote! { |tuple, time, diff| { #write_row } };
 
-        (Some(spec), None) => {
-            let cmp_body_sort = order_comparators(spec, string_intern);
-            let cmp_body_merge = cmp_body_sort.clone();
-            quote! {{
-                let mut per_worker: Vec<Vec<#elem_ty>> =
-                    std::mem::take(&mut *#buf_ident.lock().unwrap());
-                for buf in per_worker.iter_mut() {
-                    buf.sort_by(|a: &#elem_ty, b: &#elem_ty| {
-                        #(#cmp_body_sort)*
-                        std::cmp::Ordering::Equal
-                    });
-                }
-                #sink_preamble
-                ::flowlog_runtime::sort::k_way_merge(
-                    per_worker,
-                    |a: &#elem_ty, b: &#elem_ty| {
-                        #(#cmp_body_merge)*
-                        std::cmp::Ordering::Equal
-                    },
-                    |val| {
-                        let row = &val;
-                        #write_row
-                    },
-                );
-                #sink_postamble
-            }}
-        }
-
-        (Some(spec), Some(n)) => {
+    let pump = match (order_by.as_ref(), limit) {
+        (None, _) => quote! {
+            ::flowlog_runtime::io::for_each_flat(per_worker, #each);
+        },
+        (Some(spec), limit) => {
             let cmp_body = order_comparators(spec, string_intern);
-            quote! {{
-                let all: Vec<#elem_ty> = #buf_ident.lock().unwrap()
-                    .drain(..).flatten().collect();
-                let all = ::flowlog_runtime::sort::topk(all, #n, |a: &#elem_ty, b: &#elem_ty| {
+            let cmp = quote! {
+                |a: &#elem_ty, b: &#elem_ty| {
                     #(#cmp_body)*
                     std::cmp::Ordering::Equal
-                });
-                #sink_preamble
-                for row in &all {
-                    #write_row
                 }
-                #sink_postamble
-            }}
+            };
+            match limit {
+                None => quote! {
+                    ::flowlog_runtime::io::for_each_sorted(per_worker, #cmp, #each);
+                },
+                Some(n) => quote! {
+                    ::flowlog_runtime::io::for_each_topk(per_worker, #n, #cmp, #each);
+                },
+            }
         }
-    }
+    };
+
+    quote! {{
+        #take
+        #sink_preamble
+        #pump
+        #sink_postamble
+    }}
 }
 
 // =========================================================================

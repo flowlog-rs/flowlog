@@ -3,14 +3,15 @@
 //! [`BuildError`] covers infrastructure and input-validation failures
 //! raised while driving a `build.rs` compilation. Pipeline-stage errors
 //! (parse / stratify / plan / codegen) flow through this crate as their
-//! own [`Diagnostic`] types inside a [`flowlog_common::BoxError`]; they
+//! own [`Diagnostic`] types inside a [`flowlog_error::BoxError`]; they
 //! don't round-trip through `BuildError`.
 
 use std::io;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use flowlog_common::Diagnostic;
-use flowlog_common::FileId;
+use flowlog_error::Diagnostic;
+use flowlog_error::FileId;
+use flowlog_error::FlowlogError;
 use thiserror::Error;
 
 /// Infrastructure failure raised by the library-mode build flow.
@@ -20,11 +21,11 @@ use thiserror::Error;
 /// catches before handing off to the pipeline. Distinct from:
 ///
 /// - [`crate::CodegenError`] — user-source errors caught during codegen.
-/// - [`flowlog_common::InternalError`] — compiler invariant violations
+/// - [`flowlog_error::InternalError`] — compiler invariant violations
 ///   that render as "please file a bug" ICEs.
 ///
 /// [`Diagnostic::is_internal`] returns `false` for every `BuildError`
-/// variant, so a top-level renderer (e.g. [`flowlog_common::emit_and_exit`])
+/// variant, so a top-level renderer (e.g. [`flowlog_error::emit_and_exit`])
 /// exits with code `1` and omits the bug-report note — the user fixes
 /// their build setup, not their `.dl` program.
 #[non_exhaustive]
@@ -44,3 +45,5 @@ impl Diagnostic for BuildError {
         CsDiagnostic::error().with_message(self.to_string())
     }
 }
+
+impl FlowlogError for BuildError {}

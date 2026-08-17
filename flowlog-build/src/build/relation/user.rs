@@ -5,15 +5,12 @@
 //! engine converts user tuples to the internal `Tuple` representation
 //! (interning strings, wrapping floats) inline at the insert / drain sites.
 
-use flowlog_parser::DataType;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::Index;
 
 use super::user_struct_ident;
-use crate::codegen::tuple_tokens;
 use crate::codegen::user_tuple_tokens;
 
 /// Emit `pub mod rel { pub type Edge = (i32, i32); … }`.
@@ -49,50 +46,4 @@ fn gen_type_alias(rel: &Relation) -> TokenStream {
     let ident = user_struct_ident(rel);
     let tuple_ty = user_tuple_tokens(&rel.data_type());
     quote! { pub type #ident = #tuple_ty; }
-}
-
-/// Expression converting position `i` of a user-tuple binding `src` to its
-/// internal tuple slot. `f32 → OrderedFloat(f32)`, `String → Spur` under
-/// interning. Positions with no transform return `src.i` unchanged.
-pub(crate) fn user_to_tuple_expr(
-    dt: &DataType,
-    string_intern: bool,
-    src: TokenStream,
-) -> TokenStream {
-    match dt {
-        DataType::Float32 | DataType::Float64 => quote! { OrderedFloat(#src) },
-        DataType::String if string_intern => quote! { intern(&#src) },
-        // A tuple column is a nested tuple — convert each field positionally.
-        DataType::FixedTuple(fields) => {
-            let elems = fields.iter().enumerate().map(|(i, f)| {
-                let idx = Index::from(i);
-                user_to_tuple_expr(f, string_intern, quote! { #src.#idx })
-            });
-            tuple_tokens(elems)
-        }
-        _ => src,
-    }
-}
-
-/// Inverse of `user_to_tuple_expr`: internal slot → user-facing expression,
-/// used at drain time. Interned strings resolve through the flat snapshot
-/// path (`resolve_out`) since drain runs after the dataflow's fixpoint.
-pub(crate) fn tuple_to_user_expr(
-    dt: &DataType,
-    string_intern: bool,
-    src: TokenStream,
-) -> TokenStream {
-    match dt {
-        DataType::Float32 | DataType::Float64 => quote! { (#src).into_inner() },
-        DataType::String if string_intern => quote! { resolve_out(#src).to_string() },
-        // Inverse of `user_to_tuple_expr` for a tuple column (nested tuple).
-        DataType::FixedTuple(fields) => {
-            let elems = fields.iter().enumerate().map(|(i, f)| {
-                let idx = Index::from(i);
-                tuple_to_user_expr(f, string_intern, quote! { #src.#idx })
-            });
-            tuple_tokens(elems)
-        }
-        _ => src,
-    }
 }

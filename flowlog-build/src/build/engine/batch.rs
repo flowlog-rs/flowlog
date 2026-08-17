@@ -12,22 +12,15 @@
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
-use proc_macro2::Literal;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use super::needs_conversion;
-use super::per_position_tuple;
-use super::user_to_tuple_convert;
 use crate::CodeParts;
-use crate::build::relation::input_struct_ident;
-use crate::build::relation::inputs_field_ident;
 use crate::build::relation::printsize_field_ident;
 use crate::build::relation::results_field_ident;
-use crate::build::relation::user::tuple_to_user_expr;
 use crate::build::relation::user_struct_ident;
-use crate::data_type_tokens;
+use crate::codegen::inputs_field_ident;
 use crate::gen_drain_block;
 
 pub(crate) fn gen_lib_engine(
@@ -37,9 +30,9 @@ pub(crate) fn gen_lib_engine(
 ) -> TokenStream {
     let edbs = program.edbs();
 
-    let struct_def = gen_engine_struct(&edbs, string_intern);
+    let struct_def = gen_engine_struct(&edbs);
     let new_body = gen_new_body(&edbs);
-    let method_blocks = gen_per_rel_methods(&edbs, string_intern);
+    let method_blocks = gen_per_rel_methods(&edbs);
     let run_body = gen_run_body(program, &edbs, parts, string_intern);
 
     quote! {
@@ -66,25 +59,23 @@ pub(crate) fn gen_lib_engine(
 }
 
 // =========================================================================
-// Engine struct: per-EDB pre-bucketed input.
-//
-// Each non-nullary EDB carries `<rel>_data: Vec<Vec<Tuple>>` of length
-// `workers` — one bucket per worker. `insert_<rel>` chunk-distributes the
-// input across buckets in a single pass (with a 1-item spread of any
-// remainder), so `run()` has no host-side partition.
-//
-// Nullary EDBs (presence booleans) use `Vec<Vec<()>>` for layout symmetry
-// — only bucket[0] is ever non-empty, so worker 0 ingests the singleton
-// fact and others get nothing.
+// Engine struct: one flat `Vec` of user tuples per EDB, shared read-only
+// with the workers at `run()`; each worker's `VecReader` opens its index
+// range and decodes its share in `accept`, exactly like a file share.
+// Nullary EDBs are a presence flag worker 0 applies.
 // =========================================================================
 
-fn gen_engine_struct(edbs: &[&Relation], string_intern: bool) -> TokenStream {
+fn gen_engine_struct(edbs: &[&Relation]) -> TokenStream {
     let fields: Vec<TokenStream> = edbs
         .iter()
         .map(|rel| {
             let field = data_field_ident(rel);
-            let tuple_ty = data_type_tokens(&rel.data_type(), string_intern);
-            quote! { #field: Vec<Vec<#tuple_ty>> }
+            if rel.arity() == 0 {
+                quote! { #field: bool }
+            } else {
+                let user_ty = user_struct_ident(rel);
+                quote! { #field: Vec<rel::#user_ty> }
+            }
         })
         .collect();
 
@@ -101,7 +92,11 @@ fn gen_new_body(edbs: &[&Relation]) -> TokenStream {
         .iter()
         .map(|rel| {
             let f = data_field_ident(rel);
-            quote! { #f: vec![Vec::new(); workers] }
+            if rel.arity() == 0 {
+                quote! { #f: false }
+            } else {
+                quote! { #f: Vec::new() }
+            }
         })
         .collect();
     quote! {
@@ -116,60 +111,32 @@ fn gen_new_body(edbs: &[&Relation]) -> TokenStream {
 // Per-relation user API: `insert_<rel>(iterator)`, `set_<rel>()` (nullary).
 // =========================================================================
 
-fn gen_per_rel_methods(edbs: &[&Relation], string_intern: bool) -> Vec<TokenStream> {
-    edbs.iter()
-        .copied()
-        .map(|rel| gen_one_rel_methods(rel, string_intern))
-        .collect()
+fn gen_per_rel_methods(edbs: &[&Relation]) -> Vec<TokenStream> {
+    edbs.iter().copied().map(gen_one_rel_methods).collect()
 }
 
-fn gen_one_rel_methods(rel: &Relation, string_intern: bool) -> TokenStream {
+fn gen_one_rel_methods(rel: &Relation) -> TokenStream {
     let name = rel.name();
     let data = data_field_ident(rel);
 
     if rel.arity() == 0 {
-        // Nullary relations encode presence: call `set_foo()` to assert
-        // the fact, or don't call it at all. Bucket 0 → worker 0 ingests
-        // the singleton.
         let set = format_ident!("set_{}", name);
         return quote! {
             /// Assert the nullary fact. Omit the call if it should not hold.
             pub fn #set(&mut self) {
-                self.#data[0].push(());
+                self.#data = true;
             }
         };
     }
 
     let struct_ident = user_struct_ident(rel);
     let insert = format_ident!("insert_{}", name);
-    // `extend` chooses its bucket-side body based on whether per-position
-    // conversion is needed — identity case is a direct `Vec::extend` from
-    // a sized sub-iterator (`Take<vec::IntoIter>` implements `TrustedLen`,
-    // so the realloc check collapses and it lowers close to a memcpy).
-    let extend = if needs_conversion(rel, string_intern) {
-        let map_expr = user_to_tuple_convert(rel, string_intern);
-        quote! { bucket.extend(iter.by_ref().take(take).map(|item| #map_expr)) }
-    } else {
-        quote! { bucket.extend(iter.by_ref().take(take)) }
-    };
-
     quote! {
-        /// Stage a batch of tuples, evenly distributed across worker
-        /// buckets. Callable multiple times; each call just appends.
-        pub fn #insert(&mut self, items: Vec<rel::#struct_ident>) {
-            let total = items.len();
-            if total == 0 { return; }
-            let workers = self.workers;
-            let chunk = total / workers;
-            let remainder = total % workers;
-            let mut iter = items.into_iter();
-            for i in 0..workers {
-                let take = chunk + if i < remainder { 1 } else { 0 };
-                if take == 0 { continue; }
-                let bucket = &mut self.#data[i];
-                bucket.reserve(take);
-                #extend;
-            }
+        /// Stage a batch of tuples. Callable multiple times; each call
+        /// just appends. Distribution and slot conversion happen on the
+        /// workers at `run()`.
+        pub fn #insert(&mut self, mut items: Vec<rel::#struct_ident>) {
+            self.#data.append(&mut items);
         }
     }
 }
@@ -200,7 +167,6 @@ fn gen_run_body(
     let step_loop = &parts.step_loop;
 
     let (host_partitions, worker_partition_clones) = gen_host_partitions(edbs);
-    let inputs_new_args = gen_inputs_new_args(edbs);
     let typed_ingest = gen_typed_ingest(edbs);
     let drain_locals = gen_drain_blocks(program, string_intern);
     let result_fields = gen_result_fields(program);
@@ -232,7 +198,6 @@ fn gen_run_body(
                         #dataflow_return
                     });
 
-                let mut inputs = Inputs::new(#(#inputs_new_args),*);
                 #(#typed_ingest)*
                 inputs.apply_inline_all(index);
                 inputs.close_all();
@@ -253,64 +218,53 @@ fn gen_run_body(
 }
 
 // =========================================================================
-// Per-worker slot wrap — buckets are already populated per worker by
-// `insert_<rel>`, so this just wraps each bucket in a `Mutex` and shares
-// the resulting slot array via `Arc`. Each slot is touched by exactly one
-// worker; `mem::take` under the uncontended lock moves the bucket out
-// without per-tuple work.
+// Host share — each relation's rows move into an `Arc` the workers read;
+// decode runs on the workers, so nothing is cloned or moved per tuple.
 // =========================================================================
 
-/// Emit, per EDB, a slot array `Arc<Vec<Mutex<Vec<Tuple>>>>` on the host
-/// (`host`) plus a matching `let x = x.clone();` for the worker closure
-/// (`clones`). No partition pass — buckets ship as-is.
+/// Emit, per EDB, the host-side `Arc` over its staged rows (`host`) plus
+/// a matching `let x = x.clone();` for the worker closure (`clones`).
 fn gen_host_partitions(edbs: &[&Relation]) -> (Vec<TokenStream>, Vec<TokenStream>) {
     let mut host = Vec::with_capacity(edbs.len());
     let mut clones = Vec::with_capacity(edbs.len());
     for rel in edbs {
         let d = data_field_ident(rel);
         let slots = partition_slots_ident(rel);
-        host.push(quote! {
-            let #slots = std::sync::Arc::new(
-                self.#d
-                    .into_iter()
-                    .map(std::sync::Mutex::new)
-                    .collect::<Vec<_>>(),
-            );
-        });
-        clones.push(quote! { let #slots = #slots.clone(); });
+        if rel.arity() == 0 {
+            host.push(quote! { let #slots = self.#d; });
+            clones.push(quote! { let #slots = #slots; });
+        } else {
+            host.push(quote! { let #slots = std::sync::Arc::new(self.#d); });
+            clones.push(quote! { let #slots = #slots.clone(); });
+        }
     }
     (host, clones)
 }
 
-/// `Inputs::new(EdgeInput::new(hedge), NodeInput::new(hnode), …)` — handles
-/// (`h<name>`) are bound by the earlier `#handle_binding`.
-fn gen_inputs_new_args(edbs: &[&Relation]) -> Vec<TokenStream> {
-    edbs.iter()
-        .map(|rel| {
-            let input_struct = input_struct_ident(rel);
-            let handle = format_ident!("h{}", rel.name());
-            quote! { #input_struct::new(#handle) }
-        })
-        .collect()
-}
-
-/// Per-worker ingest: take our pre-partitioned slot by value and move each
-/// tuple into the matching `InputSession`. No per-tuple clone — DD
-/// re-shuffles by key downstream.
+/// Per-worker ingest: open this worker's index range of the shared rows
+/// and drive it into the relation's sink, decoding in `accept` like any
+/// other source. A nullary relation is a presence flag worker 0 applies
+/// through the put path.
 fn gen_typed_ingest(edbs: &[&Relation]) -> Vec<TokenStream> {
     edbs.iter()
         .map(|rel| {
             let field = inputs_field_ident(rel);
             let slots = partition_slots_ident(rel);
-            quote! {
-                {
-                    let my_part = std::mem::take(
-                        &mut *#slots[index].lock().expect("partition slot poisoned"),
-                    );
-                    for tuple in my_part {
-                        inputs.#field.update_tuple(tuple, SEMIRING_ONE);
+            if rel.arity() == 0 {
+                return quote! {
+                    if #slots {
+                        // One row of the empty tuple asserts the fact, with
+                        // no text to render and re-parse.
+                        ::flowlog_runtime::io::Ingest::load_vec(
+                            &mut inputs.#field, &[()], SEMIRING_ONE, workers, index,
+                        );
                     }
-                }
+                };
+            }
+            quote! {
+                ::flowlog_runtime::io::Ingest::load_vec(
+                    &mut inputs.#field, &#slots[..], SEMIRING_ONE, workers, index,
+                );
             }
         })
         .collect()
@@ -352,14 +306,24 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
             });
         } else {
             let struct_ident = user_struct_ident(rel);
-            let user_tuple = tuple_to_user_convert(rel, string_intern);
-            let write_row = quote! {
-                #field.push(#user_tuple);
+            // A host Vec is a writer like any other, and the only one whose
+            // close cannot fail.
+            let preamble = quote! {
+                let mut sink =
+                    ::flowlog_runtime::io::VecWriter::<rel::#struct_ident>::new();
             };
-            let drain = gen_drain_block(&buf, rel, quote! {}, write_row, quote! {}, string_intern);
+            let write_row = quote! {
+                let _ = (&time, &diff);
+                ::flowlog_runtime::io::Writer::push(&mut sink, tuple, None);
+            };
+            // The drain block evaluates to its postamble, so the writer
+            // stays scoped inside and the field is bound from the result.
+            // Declaring the field first would let a relation named `Sink`
+            // shadow the writer local, which is legal Datalog.
+            let postamble = quote! { sink.into_rows() };
+            let drain = gen_drain_block(&buf, rel, preamble, write_row, postamble, string_intern);
             blocks.push(quote! {
-                let mut #field: Vec<rel::#struct_ident> = Vec::new();
-                #drain
+                let #field: Vec<rel::#struct_ident> = #drain;
             });
         }
     }
@@ -391,19 +355,4 @@ fn data_field_ident(rel: &Relation) -> Ident {
 
 fn partition_slots_ident(rel: &Relation) -> Ident {
     format_ident!("{}_parts", rel.name())
-}
-
-/// Internal `Tuple` `row.0` → user-tuple. Used at drain time (batch-only
-/// binding: the shared buffer row is `(Tuple, Ts, i32)`).
-fn tuple_to_user_convert(rel: &Relation, string_intern: bool) -> TokenStream {
-    per_position_tuple(
-        rel,
-        string_intern,
-        quote! { row.0.clone() },
-        |i| {
-            let idx = Literal::usize_unsuffixed(i);
-            quote! { row.0.#idx.clone() }
-        },
-        |dt, src| tuple_to_user_expr(dt, string_intern, src),
-    )
 }

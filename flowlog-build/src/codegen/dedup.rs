@@ -94,7 +94,7 @@ mod tests {
 
     /// An empty program — the only supported way to build one is to parse.
     fn empty_program() -> Program {
-        use flowlog_common::SourceMap;
+        use flowlog_error::SourceMap;
         use tempfile::NamedTempFile;
         let tmp = NamedTempFile::new().expect("temp file");
         flowlog_parser::parse(

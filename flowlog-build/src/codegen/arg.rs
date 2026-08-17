@@ -31,7 +31,7 @@ use crate::codegen::tuple_tokens;
 // Row pattern + field identifiers for RowToX transformations
 // ==================================================
 
-/// Build a row destructuring pattern `(x0, x1, …)` and the matching field
+/// Build a row destructuring pattern `(x0, x1, ...)` and the matching field
 /// idents. Unused slots are prefixed with `_` so the borrow checker and the
 /// unused-variable lint stay quiet.
 pub(super) fn row_pattern_and_fields(
@@ -66,7 +66,7 @@ pub(super) fn row_pattern_and_fields(
 // ==================================================
 
 impl CodeGen {
-    /// Row → KV: tuple-shaped expression for the produced key or value,
+    /// Row to KV: tuple-shaped expression for the produced key or value,
     /// drawing source fields by index from the row destructuring pattern.
     pub(super) fn build_key_val_from_row_args(
         &mut self,
@@ -81,7 +81,7 @@ impl CodeGen {
         Ok(tuple_tokens(parts))
     }
 
-    /// KV → KV: tuple-shaped expression drawing from the current `(k, v)`
+    /// KV to KV: tuple-shaped expression drawing from the current `(k, v)`
     /// closure bindings.
     pub(super) fn build_key_val_from_kv_args(
         &mut self,
@@ -95,7 +95,7 @@ impl CodeGen {
         Ok(tuple_tokens(parts))
     }
 
-    /// Join → KV: tuple-shaped expression drawing from a `join_core`
+    /// Join to KV: tuple-shaped expression drawing from a `join_core`
     /// closure's `(k, lv, rv)` bindings.
     pub(super) fn build_key_val_from_join_args(
         &mut self,
@@ -114,7 +114,7 @@ impl CodeGen {
 // Closure parameter utilities
 // ==================================================
 
-/// Per-index usage mask for a row of `arity` slots — `true` where any of
+/// Per-index usage mask for a row of `arity` slots; `true` where any of
 /// the given argument lists references that slot. Feeds
 /// [`row_pattern_and_fields`] so unused slots become `_x<i>`.
 fn compute_row_params_tokens(
@@ -158,7 +158,7 @@ fn compute_row_params_tokens(
     used
 }
 
-/// Emit `name` when `used`, otherwise `_name` — so unused closure
+/// Emit `name` when `used`, otherwise `_name`; so unused closure
 /// parameters don't trigger the `unused_variables` lint in generated code.
 fn param_ident(used: bool, name: &str) -> TokenStream {
     let id = format_ident!("{}{}", if used { "" } else { "_" }, name);
@@ -295,7 +295,7 @@ impl CodeGen {
             }
         };
         // Negation is a prefix on the boolean expression (`!`), not an outer
-        // paren wrap — keeps the generated `if` condition free of redundant
+        // paren wrap; keeps the generated `if` condition free of redundant
         // parens (`-D warnings` in the generated crate flags those).
         match op {
             ComparisonOperator::Contains { negated } => {
@@ -310,7 +310,7 @@ impl CodeGen {
             }
             ComparisonOperator::Match { negated } => {
                 // `match(pattern, s)` is a *full* match, so anchor with
-                // `^(?:…)$` (the `regex` crate searches by default). A bad
+                // `^(?:...)$` (the `regex` crate searches by default). A bad
                 // pattern yields `false` rather than aborting.
                 let neg = if *negated {
                     quote! { ! }
@@ -562,7 +562,7 @@ pub(super) fn build_row_constraints_predicate(
 /// Every numeric constant emits an unsuffixed literal so Rust's own
 /// inference picks the matching width from the enclosing tuple type.
 /// Returns `CodegenError::internal` for an unpinned literal family or a
-/// spelling that does not parse — the typechecker pins every literal to
+/// spelling that does not parse; the typechecker pins every literal to
 /// a width its spelling fits.
 pub fn const_to_token(
     constant: &Constant,
@@ -720,7 +720,7 @@ impl CodeGen {
         F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
     {
         // Numeric fold: left-to-right, parenthesising intermediate steps
-        // only — the outermost expression stays bare to avoid Rust's
+        // only; the outermost expression stays bare to avoid Rust's
         // `unused_parens` lint when it's used as a function argument.
         let rest = expr.rest();
         let mut result = self.factor_to_token(expr.init(), string_intern, resolve_var)?;
@@ -783,6 +783,9 @@ impl CodeGen {
         }
         if string_intern && returns_string {
             self.features.mark_string_intern();
+            // The wrapper interning a string-returning UDF's result calls
+            // `intern` in the flow.
+            self.features.mark_string_intern_calls();
         }
 
         self.features.mark_udf();
@@ -817,7 +820,7 @@ impl CodeGen {
                 let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
                 Ok(quote! { ( #inner ) })
             }
-            // Tuple construct → Rust tuple literal `(a, b)` (singleton `(a,)`).
+            // Tuple construct to Rust tuple literal `(a, b)` (singleton `(a,)`).
             FactorArgument::Tuple { fields } => {
                 let field_toks = fields
                     .iter()
@@ -825,7 +828,7 @@ impl CodeGen {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(tuple_tokens(field_toks))
             }
-            // Tuple projection → Rust tuple field access `(tuple).i`.
+            // Tuple projection to Rust tuple field access `(tuple).i`.
             FactorArgument::TupleProj { tuple, index } => {
                 let rec = self.build_arithmetic_expr(tuple, string_intern, resolve_var)?;
                 let idx = Index::from(*index);
@@ -865,7 +868,7 @@ impl CodeGen {
                 }
             }
             FactorArgument::FnCall { name, args } => {
-                // UDF returns Spur when string_intern is on — resolve for display.
+                // UDF returns Spur when string_intern is on; resolve for display.
                 let call = self.fncall_to_token(name, args, string_intern, resolve_var)?;
                 Ok(if string_intern {
                     self.features.mark_string_resolve();
@@ -887,7 +890,7 @@ impl CodeGen {
             }
             FactorArgument::Group(a) => {
                 // Grammar guarantees a `Group` is multi-term, hence numeric
-                // (string concat is `cat`) — no display resolution needed.
+                // (string concat is `cat`); no display resolution needed.
                 let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
                 Ok(quote! { ( #inner ) })
             }
@@ -913,7 +916,7 @@ impl CodeGen {
         }
     }
 
-    /// Inline lowering for an engine built-in (Soufflé-style intrinsic).
+    /// Inline lowering for an engine built-in (Souffle-style intrinsic).
     /// Each op emits its own Rust template; no `udf::` indirection.
     fn builtin_to_token<F>(
         &mut self,
@@ -927,8 +930,13 @@ impl CodeGen {
     {
         // `cat(a, b)` wants display-ready tokens (the inner factors
         // must lower to something `Display`-able for `format!`).
-        // Other built-ins want raw value tokens — handled below.
+        // Other built-ins want raw value tokens; handled below.
         if matches!(op, BuiltinOperator::Cat) {
+            // cat re-interns its product, so the generated flow calls
+            // `intern` directly.
+            if string_intern {
+                self.features.mark_string_intern_calls();
+            }
             debug_assert_eq!(args.len(), 2, "cat() arity is enforced at parse time");
             // After typecheck, a string-typed `cat` arg has no
             // arithmetic `rest`; only Cat could produce a compound
@@ -953,8 +961,11 @@ impl CodeGen {
 
         // Avoid marking `resolve` for ops that never read a string param
         // (e.g. `to_string(n)`), otherwise an unused helper leaks into the
-        // generated binary.
+        // generated binary. `ord` takes a string param but consumes the
+        // interned key itself, never the text, so it is excluded even
+        // though its parameter table says String.
         if string_intern
+            && !matches!(op, BuiltinOperator::Ord)
             && op
                 .param_allowed_types()
                 .iter()
@@ -970,6 +981,12 @@ impl CodeGen {
                 quote! { (#t).as_str() }
             }
         };
+        // Marked eagerly rather than inside the closure (which cannot
+        // borrow `self`): every op below whose result is a string routes
+        // through `emit_string`, and only those consult it.
+        if string_intern && matches!(op, BuiltinOperator::Substr | BuiltinOperator::ToString) {
+            self.features.mark_string_intern_calls();
+        }
         let emit_string = |body: TokenStream| -> TokenStream {
             if string_intern {
                 quote! { intern(&#body) }
@@ -980,7 +997,7 @@ impl CodeGen {
 
         match op {
             BuiltinOperator::Strlen => {
-                // Char count, not byte count — Soufflé semantics.
+                // Char count, not byte count; Souffle semantics.
                 let s = read_str(&raw[0]);
                 Ok(quote! { ((#s).chars().count() as i32) })
             }
@@ -1005,7 +1022,7 @@ impl CodeGen {
                 Ok(emit_string(quote! { (#n).to_string() }))
             }
             BuiltinOperator::ToNumber => {
-                // Return 0 on parse failure to stay total — Soufflé
+                // Return 0 on parse failure to stay total; Souffle
                 // doesn't pin a behaviour for this case.
                 let s = read_str(&raw[0]);
                 Ok(quote! { ((#s).parse::<i32>().unwrap_or(0)) })
@@ -1087,7 +1104,7 @@ impl CodeGen {
 
 impl CodeGen {
     /// Look up the declared parameter types of `.extern fn <name>(...)`.
-    /// Returns an empty Vec if the name doesn't match any extern decl —
+    /// Returns an empty Vec if the name doesn't match any extern decl;
     /// this should be unreachable after the parser's UDF reclassification
     /// pass, but we tolerate it to keep codegen total.
     pub(super) fn udf_param_types(&self, name: &str) -> Vec<DataType> {

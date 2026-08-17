@@ -27,7 +27,6 @@ use tracing::info;
 
 use crate::Compiler;
 use crate::imports;
-use crate::relation;
 use crate::scaffold;
 
 impl Compiler {
@@ -40,14 +39,18 @@ impl Compiler {
         &mut self,
         program_planner: &ProgramPlanner,
         plan_graph: &mut Option<PlanGraph>,
-    ) -> Result<(), flowlog_common::BoxError> {
+    ) -> Result<(), flowlog_error::BoxError> {
         let parts = self.codegen.generate(program_planner, plan_graph)?;
         let features = self.codegen.features();
 
         // `src/relation.rs` — Relation trait + per-EDB `Rel{name}` input handlers.
-        let relation_body =
-            relation::gen_relation(&self.program, features, self.config.is_batch())?;
-        let relation_extras = imports::gen_binary_relation_extras(&self.program, features);
+        let relation_body = flowlog_build::gen_relation(
+            &self.program,
+            features,
+            self.config.is_batch(),
+            self.config.serialize_load(),
+        )?;
+        let relation_extras = imports::gen_binary_relation_extras(&self.program);
         let relation_rs = flowlog_common::pretty_print(quote! {
             #![allow(non_camel_case_types)]
             #relation_body

@@ -58,17 +58,29 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub use build::BuildError;
+pub use codegen::AggSemiringNeeds;
+pub use codegen::CodeGen;
+pub use codegen::CodeParts;
+pub use codegen::CodegenError;
+pub use codegen::Features;
+pub use codegen::Semiring;
+pub use codegen::const_to_token;
+pub use codegen::data_type_tokens;
+pub use codegen::field_accessor;
+pub use codegen::gen_drain_block;
+pub use codegen::gen_inputs_container;
+pub use codegen::gen_relation;
+pub use codegen::handle_ident;
+pub use codegen::input_struct_ident;
+pub use codegen::inputs_field_ident;
+pub use codegen::internal_column_tokens;
 // Internal codegen re-exports — only consumed by `flowlog-compiler`.
 // Hidden from docs.rs for the same reason as the pipeline modules above.
 #[doc(hidden)]
-pub use codegen::{
-    AggSemiringNeeds, CodeGen, CodeParts, CodegenError, Features, Semiring, const_to_token,
-    data_type_tokens, field_accessor, gen_drain_block,
-};
-use flowlog_common::BoxError;
 pub use flowlog_common::ExecutionMode;
-use flowlog_common::SourceMap;
-use flowlog_common::emit;
+use flowlog_error::BoxError;
+use flowlog_error::SourceMap;
+use flowlog_error::emit;
 
 /// Compile a single `.dl` program with default options.
 ///

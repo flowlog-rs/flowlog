@@ -214,6 +214,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -321,6 +340,7 @@ dependencies = [
  "clap",
  "codespan-reporting",
  "flowlog-common",
+ "flowlog-error",
  "flowlog-parser",
  "flowlog-planner",
  "flowlog-profiler",
@@ -343,7 +363,6 @@ name = "flowlog-common"
 version = "0.1.0"
 dependencies = [
  "clap",
- "codespan-reporting",
  "prettyplease",
  "proc-macro2",
  "syn 3.0.3",
@@ -358,6 +377,7 @@ dependencies = [
  "codespan-reporting",
  "flowlog-build",
  "flowlog-common",
+ "flowlog-error",
  "flowlog-parser",
  "flowlog-planner",
  "flowlog-profiler",
@@ -371,12 +391,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowlog-error"
+version = "0.1.0"
+dependencies = [
+ "codespan-reporting",
+ "tempfile",
+]
+
+[[package]]
 name = "flowlog-parser"
 version = "0.1.0"
 dependencies = [
  "codespan-reporting",
  "educe",
  "flowlog-common",
+ "flowlog-error",
  "litrs",
  "ordered-float",
  "pest",
@@ -393,6 +422,7 @@ version = "0.1.0"
 dependencies = [
  "codespan-reporting",
  "flowlog-common",
+ "flowlog-error",
  "flowlog-parser",
  "flowlog-profiler",
  "itertools 0.15.0",
@@ -407,6 +437,7 @@ name = "flowlog-profiler"
 version = "0.1.0"
 dependencies = [
  "flowlog-common",
+ "flowlog-error",
  "rstest",
  "serde",
  "serde_json",
@@ -418,12 +449,16 @@ name = "flowlog-runtime"
 version = "0.3.0"
 dependencies = [
  "differential-dataflow",
+ "flowlog-error",
+ "itoa",
  "lasso",
  "ordered-float",
+ "rayon",
  "regex",
  "rustc-hash",
  "serde",
  "tempfile",
+ "thiserror",
  "timely",
 ]
 
@@ -820,6 +855,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
 ]
 
 [[package]]

@@ -30,6 +30,7 @@ pub(crate) fn assemble(pipeline: &Pipeline, out_dir: &Path) -> io::Result<String
     let lib_imports = gen_lib_imports(
         &pipeline.relations,
         &pipeline.features,
+        &pipeline.program,
         config.profiling_enabled(),
     );
     let type_declarations = &pipeline.parts.type_declarations;

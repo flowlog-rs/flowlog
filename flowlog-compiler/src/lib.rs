@@ -18,7 +18,7 @@
 //! - [`build`] — the two-stage pipeline behind [`Compiler::compile`]
 //!   (`emit_sources`, then shell out to cargo).
 //! - [`scaffold`] — write the emitted crate to disk + render Cargo metadata.
-//! - [`assembly`], [`io`], [`relation`], [`imports`] — codegen modules that
+//! - [`assembly`], [`io`], [`imports`] - codegen modules that
 //!   produce the token streams spliced into the emitted `main.rs` and
 //!   `relation.rs`.
 
@@ -29,14 +29,13 @@ mod error;
 mod imports;
 mod io;
 mod options;
-mod relation;
 mod scaffold;
 
 pub use cli::Cli;
 pub use error::CompilerError;
 use flowlog_build::CodeGen;
-use flowlog_common::BoxError;
 use flowlog_common::Config;
+use flowlog_error::BoxError;
 use flowlog_parser::Program;
 use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;

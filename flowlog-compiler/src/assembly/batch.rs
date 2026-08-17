@@ -38,7 +38,6 @@ pub(crate) fn gen_batch_main(
         ..
     } = parts;
     let Input {
-        registry_inserts,
         file_ingests,
         maybe_peers,
         ..
@@ -78,17 +77,11 @@ pub(crate) fn gen_batch_main(
                         println!("{:?}:\tDataflow assembled", timer.elapsed());
                     }
 
-                    // Register input handlers, ingest data, then close inputs
+                    // Build the input handlers, ingest data, then close them
                     // so the dataflow can drain to fixpoint.
-                    let mut rels: HashMap<String, Box<dyn Relation>> = HashMap::new();
-                    #(#registry_inserts)*
                     #(#file_ingests)*
-                    for r in rels.values_mut() {
-                        r.apply_inline(index);
-                    }
-                    for r in rels.values_mut() {
-                        r.close();
-                    }
+                    inputs.apply_inline_all(index);
+                    inputs.close_all();
 
                     #step_loop
 

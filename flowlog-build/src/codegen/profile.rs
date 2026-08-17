@@ -346,26 +346,26 @@ fn gen_metrics_write_core(
                 let mut rows: Vec<&OpMetrics> = map.values().collect();
                 rows.sort_by(|a, b| a.addr.cmp(&b.addr));
 
-                // Periodic flushes can be interrupted mid-write, so route the
-                // table through an atomic write.
-                ::flowlog_runtime::io::write_atomic(#ops_path_expr, |w| {
-                    writeln!(w, #ops_header, "addr", "acts", "active_ms", "name")?;
-                    for m in &rows {
-                        // Non-applicable dimensions print `n/a`.
-                        let (acts, active_ms) = m.time.as_ref().map_or_else(
-                            || ("n/a".to_string(), "n/a".to_string()),
-                            |t| (
-                                t.activations.to_string(),
-                                format!("{:.3}", t.total_active.as_secs_f64() * 1000.0),
-                            ),
-                        );
-                        writeln!(w, #ops_header, fmt_addr(&m.addr), acts, active_ms, m.name)?;
-                    }
-                    if rows.is_empty() {
-                        writeln!(w, "(no operators recorded)")?;
-                    }
-                    Ok(())
-                })?;
+                // Periodic flushes can be interrupted mid-write, so the
+                // table goes out through the same atomic file every other
+                // output uses.
+                let mut w = ::flowlog_runtime::io::AtomicFile::create(#ops_path_expr)?;
+                writeln!(w, #ops_header, "addr", "acts", "active_ms", "name")?;
+                for m in &rows {
+                    // Non-applicable dimensions print `n/a`.
+                    let (acts, active_ms) = m.time.as_ref().map_or_else(
+                        || ("n/a".to_string(), "n/a".to_string()),
+                        |t| (
+                            t.activations.to_string(),
+                            format!("{:.3}", t.total_active.as_secs_f64() * 1000.0),
+                        ),
+                    );
+                    writeln!(w, #ops_header, fmt_addr(&m.addr), acts, active_ms, m.name)?;
+                }
+                if rows.is_empty() {
+                    writeln!(w, "(no operators recorded)")?;
+                }
+                    w.commit()?;
 
                 // Channel table, sorted by topology for stable output.
                 let info = chan_info.borrow();
@@ -388,21 +388,20 @@ fn gen_metrics_write_core(
                     .collect();
                 chans.sort();
 
-                ::flowlog_runtime::io::write_atomic(#chans_path_expr, |w| {
+                let mut w = ::flowlog_runtime::io::AtomicFile::create(#chans_path_expr)?;
+                writeln!(
+                    w,
+                    #chans_header,
+                    "scope", "src", "src_port", "tgt", "tgt_port", "batch", "sent", "recvd"
+                )?;
+                for (scope, src, src_port, tgt, tgt_port, batch, sent, recvd) in chans {
                     writeln!(
                         w,
                         #chans_header,
-                        "scope", "src", "src_port", "tgt", "tgt_port", "batch", "sent", "recvd"
+                        fmt_addr(scope), src, src_port, tgt, tgt_port, batch, sent, recvd
                     )?;
-                    for (scope, src, src_port, tgt, tgt_port, batch, sent, recvd) in chans {
-                        writeln!(
-                            w,
-                            #chans_header,
-                            fmt_addr(scope), src, src_port, tgt, tgt_port, batch, sent, recvd
-                        )?;
-                    }
-                    Ok(())
-                })
+                }
+                w.commit()
             };
             if let Err(e) = dump() {
                 eprintln!("flowlog profiling: metrics dump into {} failed: {e}", #dir);

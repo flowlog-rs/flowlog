@@ -1,7 +1,9 @@
-//! FlowLog runtime — types and re-exports consumed by generated code.
+//! FlowLog runtime: what compiled FlowLog programs run on.
 //!
-//! This crate is the runtime half of the FlowLog library-mode toolchain.
-//! Pair it with [`flowlog-build`] in your `[build-dependencies]`:
+//! Both toolchain halves link this crate. A binary compiled by
+//! `flowlog-compiler` drives its relations through [`io`]; a host program
+//! using library mode pairs it with `flowlog-build` in
+//! `[build-dependencies]`:
 //!
 //! ```toml
 //! [dependencies]
@@ -15,42 +17,26 @@
 //!
 //! | Module | Purpose |
 //! |--------|---------|
-//! | [`Relation`] | Trait implemented by every generated input struct |
-//! | [`io`] | Byte-range file reader + first-column sharding for parallel ingestion |
-//! | [`intern`] | Thread-safe string interning pool (`lasso`) |
-//! | [`txn`] | Transaction state types shared with incremental drivers |
+//! | [`io`] | Reading relations into the engine and writing them back out |
+//! | [`intern`] | The process-global string pool; interned keys are what string columns hold |
+//! | [`txn`] | The epoch-broadcast protocol incremental drivers coordinate through |
+//! | [`error`] | [`RuntimeError`], everything the runtime can fail at |
 //!
 //! The re-exported crates (`timely`, `differential_dataflow`, etc.) are
-//! used internally by the generated code — you should not need to
+//! used internally by the generated code; you should not need to
 //! reference them directly.
 
+pub mod error;
 pub mod intern;
 pub mod io;
-pub mod sort;
 pub mod txn;
-
-/// Trait implemented by every generated input relation struct.
-///
-/// The generated `DatalogBatchEngine` calls [`Relation::to_tuple`] at
-/// insert time to convert user-facing structs (e.g. `Edge { x: 1, y: 2 }`)
-/// into the internal differential-dataflow tuple representation.
-///
-/// You don't implement this trait manually — `flowlog-build` generates an
-/// impl for each `.input` relation declared in your `.dl` program.
-pub trait Relation: Sized {
-    /// The internal DD tuple type (e.g. `(i32, i32)`).
-    type Tuple;
-    /// Relation name (lowercase), matching the DD input session key.
-    fn relation_name() -> &'static str;
-    /// Convert self into the internal tuple layout.
-    fn to_tuple(self) -> Self::Tuple;
-}
 
 // Re-exports for generated code. The `include!()`'d code references these
 // via `::flowlog_runtime::timely::*`, `::flowlog_runtime::differential_dataflow::*`,
 // etc. Users should not need to use them directly.
 #[doc(hidden)]
 pub use differential_dataflow;
+pub use error::RuntimeError;
 #[doc(hidden)]
 pub use lasso;
 #[doc(hidden)]

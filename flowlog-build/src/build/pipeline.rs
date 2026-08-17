@@ -11,9 +11,9 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-use flowlog_common::BoxError;
 use flowlog_common::Config;
-use flowlog_common::SourceMap;
+use flowlog_error::BoxError;
+use flowlog_error::SourceMap;
 use flowlog_parser::Program;
 use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
@@ -66,7 +66,12 @@ impl Pipeline {
         let mut cg = CodeGen::new(config.clone(), program.clone());
         let parts = cg.generate(&program_planner, &mut plan_graph)?;
         let features = cg.features().clone();
-        let relations = gen_input_module(&program, &features)?;
+        let relations = gen_input_module(
+            &program,
+            &features,
+            !config.is_incremental(),
+            config.serialize_load(),
+        )?;
 
         Ok(Self {
             config,

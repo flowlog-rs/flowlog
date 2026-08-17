@@ -29,20 +29,15 @@
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
-use proc_macro2::Literal;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use super::per_position_tuple;
-use super::user_to_tuple_convert;
 use crate::CodeParts;
-use crate::build::relation::input_struct_ident;
-use crate::build::relation::inputs_field_ident;
 use crate::build::relation::printsize_field_ident;
 use crate::build::relation::results_field_ident;
-use crate::build::relation::user::tuple_to_user_expr;
 use crate::build::relation::user_struct_ident;
+use crate::codegen::inputs_field_ident;
 use crate::data_type_tokens;
 
 pub(crate) fn gen_lib_incremental_engine(
@@ -58,9 +53,9 @@ pub(crate) fn gen_lib_incremental_engine(
     let engine_struct = gen_engine_struct(program, &non_nullary_edbs, &nullary_edbs, string_intern);
     let new_body = gen_new_body(program, &non_nullary_edbs, &nullary_edbs, parts);
     let clear_staged_body = gen_clear_staged_body(&non_nullary_edbs, &nullary_edbs);
-    let commit_body = gen_commit_body(program, &non_nullary_edbs, &nullary_edbs, string_intern);
+    let commit_body = gen_commit_body(program, &non_nullary_edbs, &nullary_edbs);
     let drop_body = gen_drop_body();
-    let staging_methods = gen_staging_methods(&non_nullary_edbs, &nullary_edbs, string_intern);
+    let staging_methods = gen_staging_methods(&non_nullary_edbs, &nullary_edbs);
 
     quote! {
         #inc_imports
@@ -155,8 +150,8 @@ fn gen_engine_struct(
         .iter()
         .map(|rel| {
             let ident = staged_ident(rel);
-            let tuple_ty = data_type_tokens(&rel.data_type(), string_intern);
-            quote! { #ident: Vec<Vec<(#tuple_ty, i32)>> }
+            let user_ty = user_struct_ident(rel);
+            quote! { #ident: (Vec<rel::#user_ty>, Vec<rel::#user_ty>) }
         })
         .collect();
 
@@ -172,9 +167,12 @@ fn gen_engine_struct(
         .iter()
         .map(|rel| {
             let ident = slots_ident(rel);
-            let tuple_ty = data_type_tokens(&rel.data_type(), string_intern);
+            let user_ty = user_struct_ident(rel);
             quote! {
-                #ident: Arc<Vec<::std::sync::Mutex<Vec<(#tuple_ty, i32)>>>>
+                #ident: Arc<::std::sync::Mutex<(
+                    Arc<Vec<rel::#user_ty>>,
+                    Arc<Vec<rel::#user_ty>>,
+                )>>
             }
         })
         .collect();
@@ -250,11 +248,10 @@ fn gen_new_body(
         .map(|rel| {
             let ident = slots_ident(rel);
             quote! {
-                let #ident = Arc::new(
-                    (0..workers)
-                        .map(|_| ::std::sync::Mutex::new(Vec::new()))
-                        .collect::<Vec<_>>(),
-                );
+                let #ident = Arc::new(::std::sync::Mutex::new((
+                    Arc::new(Vec::new()),
+                    Arc::new(Vec::new()),
+                )));
             }
         })
         .collect();
@@ -291,7 +288,7 @@ fn gen_new_body(
         .iter()
         .map(|rel| {
             let ident = staged_ident(rel);
-            quote! { #ident: vec![Vec::new(); workers] }
+            quote! { #ident: (Vec::new(), Vec::new()) }
         })
         .collect();
 
@@ -374,7 +371,7 @@ fn gen_new_body(
 // =========================================================================
 
 fn gen_worker_closure(
-    program: &Program,
+    _program: &Program,
     non_nullary_edbs: &[&Relation],
     nullary_edbs: &[&Relation],
     parts: &CodeParts,
@@ -390,8 +387,6 @@ fn gen_worker_closure(
     let metrics_write = &parts.metrics_write;
     let step_loop = &parts.step_loop;
 
-    let inputs_new_args = gen_inputs_new_args(program);
-
     let edge_apply_blocks: Vec<TokenStream> = non_nullary_edbs
         .iter()
         .map(|rel| {
@@ -399,11 +394,14 @@ fn gen_worker_closure(
             let field = inputs_field_ident(rel);
             quote! {
                 {
-                    let my_chunk = ::std::mem::take(
-                        &mut *#slots[index].lock().expect("slot poisoned"),
-                    );
-                    for (tuple, diff) in my_chunk {
-                        inputs.#field.update_tuple(tuple, diff);
+                    let (ins, rem) = {
+                        let guard = #slots.lock().expect("slot poisoned");
+                        (guard.0.clone(), guard.1.clone())
+                    };
+                    for (rows, diff) in [(&ins, 1_i32), (&rem, -1_i32)] {
+                        ::flowlog_runtime::io::Ingest::load_vec(
+                            &mut inputs.#field, &rows[..], diff, peers, index,
+                        );
                     }
                 }
             }
@@ -418,7 +416,9 @@ fn gen_worker_closure(
             quote! {
                 if index == 0 {
                     if let Some(diff) = #slots.lock().expect("slot poisoned").take() {
-                        inputs.#field.update_tuple((), diff);
+                        ::flowlog_runtime::io::Ingest::load_vec(
+                            &mut inputs.#field, &[()], diff, peers, index,
+                        );
                     }
                 }
             }
@@ -428,6 +428,7 @@ fn gen_worker_closure(
     quote! {
         move |worker| {
             let index = worker.index();
+            let peers = worker.peers();
             #profile_init
             #(#local_bufs)*
 
@@ -443,7 +444,6 @@ fn gen_worker_closure(
                     #dataflow_return
                 });
 
-            let mut inputs = Inputs::new(#(#inputs_new_args),*);
             inputs.apply_inline_all(index);
 
             let mut time_stamp: Ts = 0;
@@ -499,18 +499,6 @@ fn gen_worker_closure(
     }
 }
 
-fn gen_inputs_new_args(program: &Program) -> Vec<TokenStream> {
-    program
-        .edbs()
-        .iter()
-        .map(|rel| {
-            let input_struct = input_struct_ident(rel);
-            let handle = format_ident!("h{}", rel.name());
-            quote! { #input_struct::new(#handle) }
-        })
-        .collect()
-}
-
 // =========================================================================
 // `clear_staged()` body — zeroes host-side staged buffers without
 // freeing the per-worker Vec allocations. Called by `begin()`/`abort()`.
@@ -525,9 +513,8 @@ fn gen_clear_staged_body(
         .map(|rel| {
             let staged = staged_ident(rel);
             quote! {
-                for bucket in self.#staged.iter_mut() {
-                    bucket.clear();
-                }
+                self.#staged.0.clear();
+                self.#staged.1.clear();
             }
         })
         .collect();
@@ -554,7 +541,6 @@ fn gen_commit_body(
     program: &Program,
     non_nullary_edbs: &[&Relation],
     nullary_edbs: &[&Relation],
-    string_intern: bool,
 ) -> TokenStream {
     // `mem::take` moves each staged bucket into the shared slot, leaving
     // the staging Vec empty for the next commit cycle without freeing
@@ -565,10 +551,10 @@ fn gen_commit_body(
             let staged = staged_ident(rel);
             let slots = slots_ident(rel);
             quote! {
-                for (i, bucket) in self.#staged.iter_mut().enumerate() {
-                    *self.#slots[i].lock().expect("slot poisoned") =
-                        ::std::mem::take(bucket);
-                }
+                *self.#slots.lock().expect("slot poisoned") = (
+                    Arc::new(::std::mem::take(&mut self.#staged.0)),
+                    Arc::new(::std::mem::take(&mut self.#staged.1)),
+                );
             }
         })
         .collect();
@@ -584,7 +570,7 @@ fn gen_commit_body(
         })
         .collect();
 
-    let drain_blocks = gen_drain_blocks(program, string_intern);
+    let drain_blocks = gen_drain_blocks(program);
     let result_field_names = gen_result_field_names(program);
 
     quote! {
@@ -614,7 +600,7 @@ fn gen_commit_body(
 /// non-nullary outputs, `i32` net diff for nullary, and the raw size
 /// delta for `.printsize` cells. The engine no longer folds across
 /// commits; callers maintain a snapshot if they need one.
-fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> {
+fn gen_drain_blocks(program: &Program) -> Vec<TokenStream> {
     let mut blocks = Vec::new();
 
     for rel in program.output_idbs() {
@@ -637,7 +623,9 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
             });
         } else {
             let struct_ident = user_struct_ident(rel);
-            let user_tuple = tuple_to_user_from_row(rel, string_intern);
+            let user_tuple = quote! {
+                ::flowlog_runtime::io::EncodeField::<rel::#struct_ident>::encode_field(row.0)
+            };
             blocks.push(quote! {
                 let #field: Vec<(rel::#struct_ident, i32)> = {
                     let drained: Vec<Vec<_>> = ::std::mem::take(
@@ -705,14 +693,10 @@ fn gen_drop_body() -> TokenStream {
 // relations, `set_<rel>` / `unset_<rel>` for nullary.
 // =========================================================================
 
-fn gen_staging_methods(
-    non_nullary_edbs: &[&Relation],
-    nullary_edbs: &[&Relation],
-    string_intern: bool,
-) -> TokenStream {
+fn gen_staging_methods(non_nullary_edbs: &[&Relation], nullary_edbs: &[&Relation]) -> TokenStream {
     let per_rel: Vec<TokenStream> = non_nullary_edbs
         .iter()
-        .map(|rel| gen_one_rel_staging(rel, string_intern))
+        .map(|rel| gen_one_rel_staging(rel))
         .collect();
     let nullary: Vec<TokenStream> = nullary_edbs
         .iter()
@@ -725,52 +709,35 @@ fn gen_staging_methods(
     }
 }
 
-fn gen_one_rel_staging(rel: &Relation, string_intern: bool) -> TokenStream {
+fn gen_one_rel_staging(rel: &Relation) -> TokenStream {
     let name = rel.name();
     let struct_ident = user_struct_ident(rel);
     let staged = staged_ident(rel);
     let insert = format_ident!("insert_{}", name);
     let remove = format_ident!("remove_{}", name);
 
-    // `user_to_tuple_convert` already short-circuits to `quote! { item }` when
-    // no per-position conversion is needed, so no local guard is required.
-    let map_expr = user_to_tuple_convert(rel, string_intern);
-
-    let distribute = |diff_tok: TokenStream| -> TokenStream {
+    let stage = |side: TokenStream| -> TokenStream {
         quote! {
             if items.is_empty() { return; }
             self.ensure_txn();
-            let total = items.len();
-            let workers = self.workers;
-            let chunk = total / workers;
-            let remainder = total % workers;
-            let mut iter = items.into_iter();
-            for i in 0..workers {
-                let take = chunk + if i < remainder { 1 } else { 0 };
-                if take == 0 { continue; }
-                let bucket = &mut self.#staged[i];
-                bucket.reserve(take);
-                for item in iter.by_ref().take(take) {
-                    bucket.push((#map_expr, #diff_tok));
-                }
-            }
+            self.#staged.#side.append(&mut items);
         }
     };
 
-    let insert_body = distribute(quote! { 1_i32 });
-    let remove_body = distribute(quote! { -1_i32 });
+    let insert_body = stage(quote! { 0 });
+    let remove_body = stage(quote! { 1 });
 
     quote! {
         /// Stage tuples to insert at the next `commit()`. Auto-begins
         /// a transaction if none is active; an empty `items` slice is
         /// a no-op and does not auto-begin.
-        pub fn #insert(&mut self, items: Vec<rel::#struct_ident>) {
+        pub fn #insert(&mut self, mut items: Vec<rel::#struct_ident>) {
             #insert_body
         }
 
         /// Stage tuples to retract at the next `commit()`. Same
         /// auto-begin + empty-slice semantics as `insert`.
-        pub fn #remove(&mut self, items: Vec<rel::#struct_ident>) {
+        pub fn #remove(&mut self, mut items: Vec<rel::#struct_ident>) {
             #remove_body
         }
     }
@@ -796,22 +763,6 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
             self.#staged = Some(-1);
         }
     }
-}
-
-/// Output-row tuple → user-tuple. The drain consumes each row by value
-/// (`for row in worker_buf`), so the tuple at `row.0` and its fields
-/// can be moved out without cloning.
-fn tuple_to_user_from_row(rel: &Relation, string_intern: bool) -> TokenStream {
-    per_position_tuple(
-        rel,
-        string_intern,
-        quote! { row.0 },
-        |i| {
-            let idx = Literal::usize_unsuffixed(i);
-            quote! { row.0.#idx }
-        },
-        |dt, src| tuple_to_user_expr(dt, string_intern, src),
-    )
 }
 
 // =========================================================================
