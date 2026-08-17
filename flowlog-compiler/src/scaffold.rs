@@ -9,7 +9,6 @@
 //! └── src/
 //!     ├── main.rs                 # assembled dataflow + runtime shell
 //!     ├── relation.rs             # `Relation` trait + per-EDB handlers
-//!     ├── cmd.rs, prompt.rs       # incremental-mode only (shell)
 //!     ├── udf.rs                  # optional, copied from `Config::udf_file`
 //!     └── semiring/…              # optional, one file per semiring variant
 //! ```
@@ -44,8 +43,9 @@ impl Compiler {
     ///
     /// Arguments are pre-rendered file contents; this function only decides
     /// _where_ they go and creates intermediate directories. Optional files
-    /// (incremental-mode shell, semiring modules, UDF stub) are written
-    /// only when the program needs them.
+    /// (semiring modules, UDF stub) are written only when the program needs
+    /// them. The incremental shell is a dependency rather than a file, so
+    /// nothing is written for it.
     pub(crate) fn write_project(
         &self,
         parts: &CodeParts,
@@ -67,12 +67,6 @@ impl Compiler {
         )?;
         write_file(&src_dir.join("main.rs"), main_rs)?;
         write_file(&src_dir.join("relation.rs"), relation_rs.trim_start())?;
-
-        // Incremental shell: REPL command parser + readline wrapper.
-        if config.is_incremental() {
-            write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
-            write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
-        }
 
         // Aggregation-specific semiring modules (paths are relative to src/).
         for (rel_path, content) in &parts.semiring_modules {
@@ -168,20 +162,36 @@ pub(crate) fn render_cargo_toml(
             deps["serde"] = value(inline_versioned_dep("1.0", &["derive"]));
         }
         if config.is_incremental() {
-            deps["rustyline"] = "18".into();
+            // The shell's own crate, which carries `rustyline` for it: a batch
+            // program needs neither and depends on neither.
+            deps["flowlog-shell"] = "0.1".into();
         }
     }
 
-    // `FLOWLOG_RUNTIME_PATH` redirects the runtime dependency to a local
-    // checkout via `[patch.crates-io]`. The test harness sets it so generated
-    // crates build against the workspace runtime instead of crates.io —
-    // required whenever the workspace runtime has unpublished additions.
-    if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
-        let mut patch = InlineTable::new();
-        patch.insert("path", path.into());
-        doc["patch"] = Item::Table(Table::new());
-        doc["patch"]["crates-io"] = Item::Table(Table::new());
-        doc["patch"]["crates-io"]["flowlog-runtime"] = value(patch);
+    // `FLOWLOG_LOCAL_ROOT` points at a workspace checkout, redirecting every
+    // FlowLog dependency this program actually declares to `<root>/<crate>`
+    // via `[patch.crates-io]`. The test harness sets it so generated crates
+    // build against the workspace instead of crates.io, which is required
+    // whenever any of those crates has unpublished additions. Only the
+    // emitted deps are patched, because cargo warns about a patch that no
+    // crate in the graph uses.
+    if let Ok(root) = env::var("FLOWLOG_LOCAL_ROOT") {
+        let local: Vec<String> = doc["dependencies"]
+            .as_table()
+            .into_iter()
+            .flat_map(Table::iter)
+            .map(|(name, _)| name.to_string())
+            .filter(|name| name.starts_with("flowlog-"))
+            .collect();
+        if !local.is_empty() {
+            doc["patch"] = Item::Table(Table::new());
+            doc["patch"]["crates-io"] = Item::Table(Table::new());
+            for name in local {
+                let mut patch = InlineTable::new();
+                patch.insert("path", format!("{root}/{name}").into());
+                doc["patch"]["crates-io"][name.as_str()] = value(patch);
+            }
+        }
     }
 
     let mut rendered = doc.to_string();
@@ -239,13 +249,6 @@ fn write_file(path: &Path, contents: &str) -> io::Result<()> {
 // =========================================================================
 // Embedded templates
 // =========================================================================
-
-const CMD_RS_TMPL: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/cmd_rs.tpl"));
-const PROMPT_RS_TMPL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/templates/prompt_rs.tpl"
-));
 
 #[cfg(test)]
 mod tests {

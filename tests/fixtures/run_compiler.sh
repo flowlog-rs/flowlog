@@ -30,10 +30,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 readonly COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
 readonly BUILD_DIR="${ROOT_DIR}/target/e2e"
 
-# Build generated crates against the workspace runtime instead of crates.io,
-# so unpublished flowlog-runtime additions are testable (scaffold emits a
-# [patch.crates-io] entry when this is set).
-export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
+# Build generated crates against this workspace instead of crates.io, so
+# unpublished additions are testable: the scaffold patches every FlowLog
+# dependency a program declares to `<root>/<crate>`.
+export FLOWLOG_LOCAL_ROOT="${ROOT_DIR}"
 
 usage() {
     cat <<EOF

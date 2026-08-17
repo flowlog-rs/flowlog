@@ -38,11 +38,10 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
 
     if inc {
         out.push(quote! {
-            mod cmd;
-            mod prompt;
-            use cmd::Cmd;
             use ::flowlog_runtime::txn::{TxnAction, TxnOp, TxnState};
-            use prompt::Prompt;
+            use ::flowlog_shell::cmd;
+            use ::flowlog_shell::Cmd;
+            use ::flowlog_shell::Prompt;
             use std::sync::{Arc, RwLock};
         });
     }

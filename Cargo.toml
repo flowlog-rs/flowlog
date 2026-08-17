@@ -7,6 +7,7 @@ members = [
     "flowlog-planner",
     "flowlog-build",
     "flowlog-compiler",
+    "flowlog-shell",
     "flowlog-profiler",
     "flowlog-visualizer",
 ]
@@ -34,13 +35,14 @@ pest = "2.8"
 pest_derive = "2.8"
 pretty_assertions = "1.4"
 prettyplease = "0.3"
-rayon = "1.11"
 proc-macro2 = "1.0"
 quote = "1.0"
+rayon = "1.11"
 regex = "1.11"
 rstest = "0.26"
 rusqlite = "0.40"
 rustc-hash = "2.0"
+rustyline = "18"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 syn = "3.0"

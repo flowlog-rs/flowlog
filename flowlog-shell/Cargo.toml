@@ -1,0 +1,21 @@
+[package]
+name = "flowlog-shell"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Interactive shell for a compiled FlowLog program: command language and prompt."
+readme = "README.md"
+keywords = ["datalog", "dataflow", "repl"]
+categories = ["command-line-interface", "database"]
+
+[dependencies]
+rustyline.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+
+[lints]
+workspace = true

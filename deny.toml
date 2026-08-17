@@ -18,16 +18,21 @@ ignore = []
 
 [licenses]
 # Allow-list derived from the licenses actually present in the tree
-# (`cargo metadata`). Anything not listed fails the build. `Zlib` and
-# `Unicode-3.0` are mandatory — one dependency each requires them with no
-# OR-alternative. LGPL appears only as an OR-alternative to MIT, so it is
-# deliberately absent (we never have to accept it).
+# (`cargo metadata`). Anything not listed fails the build. `Zlib`,
+# `Unicode-3.0`, and `BSL-1.0` are mandatory — one or two dependencies each
+# require them with no OR-alternative. `BSL-1.0` (Boost, permissive) is the
+# sole license of `clipboard-win` and `error-code`, which rustyline declares
+# under `cfg(windows)` unconditionally: no feature removes them. They are
+# vetted because no `[graph] targets` is set, deliberately, so a Windows
+# user's closure is checked too. LGPL appears only as an OR-alternative to
+# MIT, so it is deliberately absent (we never have to accept it).
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MIT",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "BSL-1.0",
     "ISC",
     "Zlib",
     "Unicode-3.0",
