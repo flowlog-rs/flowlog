@@ -39,7 +39,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 usage() {
     cat <<EOF
 Usage:
-  $(basename "$0") [-j N] [--shard I/N] [test_name ...]
+  $(basename "$0") [-j N] [--shard I/N] [--category NAME]
+             [--inline] [--trusted-inputs] [test_name ...]
 
 Run FlowLog library-mode end-to-end tests against the datalog-batch,
 datalog-inc, and extend-batch fixtures. Batch fixtures (CSV in, files
@@ -60,6 +61,17 @@ Options:
                   so the shared crate state in lib mode is sharded rather
                   than locked.
   --shard I/N     Run only shard I of N (the fixtures split into N groups).
+  --category NAME Run only the named category (repeatable). One of:
+                  ${CATEGORIES[*]}.
+  --inline        Build incremental fixtures with
+                  \`Builder::inline_single_worker(true)\`. Requires WORKERS=1
+                  (the generated engine owns one worker).
+  --trusted-inputs
+                  Build incremental fixtures with
+                  \`Builder::trusted_set_inputs(true)\`.
+
+Both option flags apply to datalog-inc fixtures only; the batch categories
+run unchanged so a filtered invocation still covers them.
 
 Examples:
   $(basename "$0")                     # run every fixture sequentially
@@ -67,6 +79,7 @@ Examples:
   $(basename "$0") agg_sum             # one batch test
   $(basename "$0") recursive_tc_delta  # one incremental test
   $(basename "$0") --shard 1/8         # first of 8 shards
+  $(basename "$0") --category datalog-inc --inline --trusted-inputs
 EOF
 }
 
@@ -97,6 +110,17 @@ run_test() {
         LIB_RUNNER_EXTENDED=0
     fi
     LIB_RUNNER_INC=$incremental
+
+    # Suite-wide `--inline` / `--trusted-inputs` apply to the DatalogInc
+    # engine only: that is the one mode `Builder::inline_single_worker` and
+    # `Builder::trusted_set_inputs` are honored by.
+    if (( incremental )) && [[ "$category" != extend-* ]]; then
+        LIB_RUNNER_INLINE=$LIB_OPT_INLINE
+        LIB_RUNNER_TRUSTED_INPUTS=$LIB_OPT_TRUSTED_INPUTS
+    else
+        LIB_RUNNER_INLINE=0
+        LIB_RUNNER_TRUSTED_INPUTS=0
+    fi
 
     # Per-fixture `compile_flags`: translate to Builder knob env vars.
     LIB_RUNNER_STR_INTERN=0
@@ -296,22 +320,82 @@ run_tasks_parallel() {
 # Entry point
 ###############################################################################
 
+# Strip the lib-only option flags out of the argument list, leaving what
+# `parse_jobs_flag` understands in `LIB_PARSED_ARGS`. A literal `--` ends
+# option parsing: it is dropped, and every remaining word is forwarded as
+# a positional test name even if it looks like a flag.
+parse_lib_option_flags() {
+    LIB_OPT_INLINE=0
+    LIB_OPT_TRUSTED_INPUTS=0
+    LIB_OPT_CATEGORIES=()
+    LIB_PARSED_ARGS=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --inline)          LIB_OPT_INLINE=1; shift ;;
+            --trusted-inputs)  LIB_OPT_TRUSTED_INPUTS=1; shift ;;
+            --category)
+                [[ $# -ge 2 ]] || die "--category needs a category name"
+                lib_check_category "$2"
+                LIB_OPT_CATEGORIES+=("$2")
+                shift 2
+                ;;
+            --category=*)
+                lib_check_category "${1#--category=}"
+                LIB_OPT_CATEGORIES+=("${1#--category=}")
+                shift
+                ;;
+            --)                shift; LIB_PARSED_ARGS+=("$@"); break ;;
+            *)                 LIB_PARSED_ARGS+=("$1"); shift ;;
+        esac
+    done
+}
+
+# Reject a `--category` value lib mode has no fixtures for, so a typo
+# fails loudly instead of silently running zero tests.
+lib_check_category() {
+    local want="$1" cat
+    for cat in "${CATEGORIES[@]}"; do
+        [[ "$cat" == "$want" ]] && return 0
+    done
+    die "Unknown category: ${want} (expected one of: ${CATEGORIES[*]})"
+}
+
+# `--inline` generates an engine that owns one timely worker, so a runner
+# asking for more would trip its `new()` assert mid-suite. Say so up front.
+check_inline_worker_count() {
+    (( LIB_OPT_INLINE )) || return 0
+    [[ -z "${WORKERS:-}" || "${WORKERS}" == 1 ]] || die \
+        "--inline builds a one-worker engine, but WORKERS=${WORKERS}; unset it or set WORKERS=1"
+}
+
 main() {
+    parse_lib_option_flags "$@"
+    set -- "${LIB_PARSED_ARGS[@]+"${LIB_PARSED_ARGS[@]}"}"
     parse_jobs_flag usage "$@"
     apply_shard
+    check_inline_worker_count
     local jobs="$PARSED_JOBS"
     set -- "${PARSED_POSITIONAL[@]}"
 
+    # `--category` narrows discovery. It selects nothing extra once test
+    # names are given (a name already pins its category), and `--shard`
+    # names tests from every category, so both combinations are rejected.
+    local -a categories=("${CATEGORIES[@]}")
+    if (( ${#LIB_OPT_CATEGORIES[@]} )); then
+        [[ -z "$PARSED_SHARD" ]] && (( $# == 0 )) \
+            || die "--category cannot be combined with --shard or test names"
+        categories=("${LIB_OPT_CATEGORIES[@]}")
+    fi
+
     echo ""
     echo -e "  ${BOLD}FlowLog Fixture Tests (library mode)${NC}"
-    echo ""
-
-    total=$(count_tests "$@")
-    if (( jobs > 1 )); then
-        echo -e "  ${DIM}Running ${total} tests (parallel, -j ${jobs})...${NC}"
-    else
-        echo -e "  ${DIM}Running ${total} tests...${NC}"
+    if (( LIB_OPT_INLINE || LIB_OPT_TRUSTED_INPUTS )); then
+        local opts=""
+        (( LIB_OPT_INLINE ))         && opts+=" inline_single_worker"
+        (( LIB_OPT_TRUSTED_INPUTS )) && opts+=" trusted_set_inputs"
+        echo -e "  ${DIM}datalog-inc Builder options:${opts}${NC}"
     fi
+    echo ""
 
     # Build the flat (category, test_dir) task list.
     local -a tasks=()
@@ -323,7 +407,7 @@ main() {
             tasks+=("${cat}|${TESTS_DIR}/${cat}/${name}")
         done
     else
-        for cat in "${CATEGORIES[@]}"; do
+        for cat in "${categories[@]}"; do
             local cat_dir="${TESTS_DIR}/${cat}"
             [[ -d "$cat_dir" ]] || continue
             for test_dir in "$cat_dir"/*/; do
@@ -331,6 +415,14 @@ main() {
                 tasks+=("${cat}|${test_dir%/}")
             done
         done
+    fi
+    (( ${#tasks[@]} )) || die "No fixtures selected"
+
+    total=${#tasks[@]}
+    if (( jobs > 1 )); then
+        echo -e "  ${DIM}Running ${total} tests (parallel, -j ${jobs})...${NC}"
+    else
+        echo -e "  ${DIM}Running ${total} tests...${NC}"
     fi
 
     if (( jobs > 1 )); then

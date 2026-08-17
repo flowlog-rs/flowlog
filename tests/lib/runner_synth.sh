@@ -14,6 +14,8 @@
 #   # Optional Builder knobs — unset = default (off). Set to 1 to enable.
 #   LIB_RUNNER_SIP=1
 #   LIB_RUNNER_STR_INTERN=1
+#   LIB_RUNNER_INLINE=1
+#   LIB_RUNNER_TRUSTED_INPUTS=1
 #
 #   source "${ROOT_DIR}/tests/lib/runner_synth.sh"
 #
@@ -305,9 +307,11 @@ EOF
 ###############################################################################
 #
 # Honors optional globals:
-#   LIB_RUNNER_SIP=1         → Builder::sip(true)
-#   LIB_RUNNER_STR_INTERN=1  → Builder::string_intern(true)
-#   LIB_RUNNER_EXTENDED=1    → Builder::mode(ExecutionMode::ExtendBatch)
+#   LIB_RUNNER_SIP=1            -> Builder::sip(true)
+#   LIB_RUNNER_STR_INTERN=1     -> Builder::string_intern(true)
+#   LIB_RUNNER_EXTENDED=1       -> Builder::mode(ExecutionMode::ExtendBatch)
+#   LIB_RUNNER_INLINE=1         -> Builder::inline_single_worker(true)
+#   LIB_RUNNER_TRUSTED_INPUTS=1 -> Builder::trusted_set_inputs(true)
 #
 # `test_dir` may be empty when called for a warm-up build.
 write_build_rs() {
@@ -328,6 +332,8 @@ write_build_rs() {
     local knob_setters=""
     (( ${LIB_RUNNER_SIP:-0} ))        && knob_setters+=$'        .sip(true)\n'
     (( ${LIB_RUNNER_STR_INTERN:-0} )) && knob_setters+=$'        .string_intern(true)\n'
+    (( ${LIB_RUNNER_INLINE:-0} ))     && knob_setters+=$'        .inline_single_worker(true)\n'
+    (( ${LIB_RUNNER_TRUSTED_INPUTS:-0} )) && knob_setters+=$'        .trusted_set_inputs(true)\n'
 
     # Pick exactly one mode line. Defaults to `DatalogBatch`; `LIB_RUNNER_INC`
     # toggles to incremental and combines with `LIB_RUNNER_EXTENDED`.

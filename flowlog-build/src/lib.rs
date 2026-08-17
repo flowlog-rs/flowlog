@@ -99,6 +99,8 @@ pub struct Builder {
     pub(crate) include_dirs: Vec<PathBuf>,
     pub(crate) udf_file: Option<PathBuf>,
     pub(crate) metrics_flush_interval_ms: u64,
+    pub(crate) inline_single_worker: bool,
+    pub(crate) trusted_set_inputs: bool,
 }
 
 impl Builder {
@@ -154,6 +156,44 @@ impl Builder {
     /// snapshots mid-run. Ignored unless [`Self::profile`] is set.
     pub fn metrics_flush_interval_ms(mut self, ms: u64) -> Self {
         self.metrics_flush_interval_ms = ms;
+        self
+    }
+
+    /// Generate a `DatalogIncrementalEngine` that owns its single timely
+    /// worker and steps it on the thread that calls `commit()`, instead of
+    /// handing each commit to a spawned worker thread. Defaults to `false`.
+    ///
+    /// The generated engine is one-worker-only. It still takes a worker
+    /// count so that the same call sites compile against either shape,
+    /// but `new(1)` is the sole accepted value and any other panics.
+    /// Nothing shared is emitted for it: no worker thread, barrier,
+    /// transaction snapshot, or shared output buffer. That also makes the
+    /// engine `!Send`.
+    ///
+    /// Supported by [`ExecutionMode::DatalogInc`] only, and not alongside
+    /// [`Self::profile`], whose loggers live in the spawned worker closure.
+    /// Either combination fails the build with an explanatory error.
+    pub fn inline_single_worker(mut self, enabled: bool) -> Self {
+        self.inline_single_worker = enabled;
+        self
+    }
+
+    /// Promise that every EDB update handed to the generated engine already
+    /// is a set-correct net delta: a fact is inserted only while absent and
+    /// retracted only while resident. Defaults to `false`.
+    ///
+    /// Honored by [`ExecutionMode::DatalogInc`] only, where it drops the
+    /// clamp that normalizes input multiplicities to 0/1. The clamp is
+    /// dropped per relation, and only for relations the caller alone feeds:
+    /// a relation seeded with `.fact` rows keeps its clamp, because those
+    /// rows are the compiler's inserts rather than the caller's. Derived
+    /// relations keep their own dedup either way.
+    ///
+    /// Nothing checks the promise: a caller that re-inserts a resident fact
+    /// or retracts an absent one pushes a multiplicity other than 0/1 into
+    /// every rule reading that relation.
+    pub fn trusted_set_inputs(mut self, enabled: bool) -> Self {
+        self.trusted_set_inputs = enabled;
         self
     }
 

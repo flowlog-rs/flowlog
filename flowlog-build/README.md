@@ -92,6 +92,51 @@ fn main() {
 }
 ```
 
+### Incremental engine options
+
+Two opt-in options reshape the `DatalogIncrementalEngine` generated for
+`ExecutionMode::DatalogInc`. Both default to `false`.
+`trusted_set_inputs` is ignored by other modes; `inline_single_worker`
+is rejected outside `DatalogInc`.
+
+```rust,no_run
+use flowlog_build::Builder;
+use flowlog_build::ExecutionMode;
+
+// build.rs
+fn main() {
+    Builder::default()
+        .mode(ExecutionMode::DatalogInc)
+        .inline_single_worker(true)  // one worker, on the calling thread
+        .trusted_set_inputs(true)    // caller guarantees set-correct deltas
+        .compile(&["policy.dl"], &[] as &[&std::path::Path])
+        .expect("compile policy.dl");
+}
+```
+
+**`inline_single_worker(true)`** generates an engine that owns its single
+timely worker and steps it inside `commit()`, instead of handing each
+commit to a spawned worker thread. It removes the thread, the barriers,
+and the shared output buffers from the commit path, which is worth it
+when commits are small and frequent. In exchange the engine is
+one-worker-only and `!Send`:
+
+```rust,ignore
+let mut engine = DatalogIncrementalEngine::new(1); // any other count panics
+```
+
+Requires `ExecutionMode::DatalogInc` and rejects `profile(true)`; either
+combination fails the build with an explanatory error.
+
+**`trusted_set_inputs(true)`** drops the clamp that normalizes input
+multiplicities to 0/1 on the EDB relations the caller alone feeds. The
+contract is that every committed EDB update is already a set-correct net
+delta: a fact is inserted only while absent and retracted only while
+resident. Nothing checks it, and breaking it pushes a multiplicity other
+than 0/1 into every rule that reads the relation. Relations seeded with
+`.fact` rows keep their clamp (those inserts are the compiler's, not
+yours), and derived relations are deduplicated either way.
+
 See the [API docs](https://docs.rs/flowlog-build) for the full `Builder` surface.
 
 ## Error Rendering

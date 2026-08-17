@@ -43,10 +43,19 @@ pub struct Config {
     pub mode: ExecutionMode,
     /// Collect per-rule execution statistics (timing, tuple counts).
     pub profile: bool,
+    /// Let an incremental engine own its single timely worker on the calling
+    /// thread instead of a spawned one. Requested here; the build also has
+    /// to satisfy [`Config::inlines_single_worker`].
+    pub inline_single_worker: bool,
     /// Enable Sideways Information Passing.
     pub sip: bool,
     /// Intern string columns as compact integer keys at load time.
     pub str_intern: bool,
+    /// Caller guarantee that every EDB update already is a set-correct net
+    /// delta: a fact is inserted only while absent and retracted only while
+    /// resident. Unchecked; breaking it leaves multiplicities above 1 in the
+    /// derived relations.
+    pub trusted_set_inputs: bool,
     /// Path to a Rust source file containing UDF implementations.
     pub udf_file: Option<String>,
     /// Extra search directories for `.include` directives.
@@ -121,6 +130,28 @@ impl Config {
         self.sip
     }
 
+    /// Returns `true` if the incremental engine is generated in its inline
+    /// single-worker shape. Gated to [`ExecutionMode::DatalogInc`]: the
+    /// extended incremental mode is not covered yet. Requesting it
+    /// alongside profiling or in any other mode is rejected by the
+    /// library-mode build rather than silently downgraded here.
+    pub fn inlines_single_worker(&self) -> bool {
+        self.inline_single_worker && self.mode == ExecutionMode::DatalogInc
+    }
+
+    /// Returns `true` if the EDB input clamp may be dropped: the caller
+    /// promised set-correct net deltas and the mode is
+    /// [`ExecutionMode::DatalogInc`], the one mode whose inputs are exactly
+    /// those caller-supplied deltas. Every other mode also feeds itself
+    /// (file loads, batch inserts) and keeps the clamp regardless.
+    ///
+    /// Answers the question per program, not per relation: a relation
+    /// seeded with `.fact` rows is fed by the compiler too, so codegen
+    /// keeps its clamp even when this returns `true`.
+    pub fn skips_edb_normalization(&self) -> bool {
+        self.trusted_set_inputs && self.mode == ExecutionMode::DatalogInc
+    }
+
     /// Whether string interning is enabled.
     pub fn str_intern_enabled(&self) -> bool {
         self.str_intern
@@ -159,4 +190,86 @@ pub fn program_stem(program: &str) -> &str {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("unknown_program")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every variant, so a new mode has to state its answers here rather
+    /// than inherit them from a wildcard.
+    const ALL_MODES: [ExecutionMode; 4] = [
+        ExecutionMode::DatalogBatch,
+        ExecutionMode::DatalogInc,
+        ExecutionMode::ExtendBatch,
+        ExecutionMode::ExtendInc,
+    ];
+
+    #[test]
+    fn both_opt_in_options_default_to_off() {
+        let config = Config::default();
+        assert!(!config.inline_single_worker);
+        assert!(!config.trusted_set_inputs);
+        assert!(!config.inlines_single_worker());
+        assert!(!config.skips_edb_normalization());
+    }
+
+    #[test]
+    fn edb_normalization_is_kept_in_every_mode_unless_inputs_are_trusted() {
+        for mode in ALL_MODES {
+            let config = Config {
+                mode,
+                ..Config::default()
+            };
+            assert!(
+                !config.skips_edb_normalization(),
+                "{mode:?} must normalize EDB inputs by default"
+            );
+        }
+    }
+
+    #[test]
+    fn only_datalog_inc_skips_edb_normalization_when_inputs_are_trusted() {
+        for mode in ALL_MODES {
+            let config = Config {
+                mode,
+                trusted_set_inputs: true,
+                ..Config::default()
+            };
+            assert_eq!(
+                config.skips_edb_normalization(),
+                mode == ExecutionMode::DatalogInc,
+                "{mode:?} skip decision under trusted inputs"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_single_worker_is_honored_when_asked_for() {
+        let config = Config {
+            mode: ExecutionMode::DatalogInc,
+            inline_single_worker: true,
+            ..Config::default()
+        };
+        assert!(config.inlines_single_worker());
+    }
+
+    /// The inline shape is only generated for the one incremental engine
+    /// that carries it; every other mode ignores the request outright, and
+    /// the library-mode build rejects it before reaching codegen.
+    #[test]
+    fn only_datalog_inc_inlines_its_single_worker() {
+        for mode in ALL_MODES {
+            let config = Config {
+                mode,
+                inline_single_worker: true,
+                ..Config::default()
+            };
+            assert_eq!(
+                config.inlines_single_worker(),
+                mode == ExecutionMode::DatalogInc,
+                "{mode:?} inline decision"
+            );
+        }
+    }
 }

@@ -33,12 +33,14 @@ use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
 pub use idb_buffers::field_accessor;
 pub use idb_buffers::gen_drain_block;
+pub(crate) use idb_buffers::local_buf_ident;
 use proc_macro2::Ident;
 pub use semiring::Semiring;
 pub use ty::data::data_type_tokens;
 pub(crate) use ty::data::row_is_copy;
 // Intra-crate shortcuts used by build/ (library mode).
 pub(crate) use ty::data::{tuple_tokens, user_tuple_tokens};
+pub(crate) use ty::tuple_type;
 
 pub struct CodeGen {
     pub(crate) config: Config,

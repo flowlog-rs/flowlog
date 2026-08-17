@@ -207,6 +207,14 @@ impl CodeGen {
 // Buffer lifecycle
 // =========================================================================
 
+/// Binding of the per-worker local output buffer for `idb`: declared by
+/// [`InspectorCodegen::local_decls`] and pushed to by its inspector. An
+/// engine that reads those rows without the shared-buffer handoff resolves
+/// the ident through here rather than re-spelling it.
+pub(crate) fn local_buf_ident(idb: &Relation) -> Ident {
+    Ident::new(&format!("local_{}", idb.name()), Span::call_site())
+}
+
 impl CodeGen {
     /// Shared buffer: `Arc<Mutex<Vec<Vec<T>>>>`.
     /// Worker 0 drains after barrier.
@@ -244,7 +252,7 @@ impl CodeGen {
         } else {
             (quote! {}, quote! {})
         };
-        let local_ident = Ident::new(&format!("local_{}", idb.name()), Span::call_site());
+        let local_ident = local_buf_ident(idb);
 
         // The four cases below are independent: arity==0 picks the data
         // half (unit-typed key vs cloneable tuple), is_batch picks the
