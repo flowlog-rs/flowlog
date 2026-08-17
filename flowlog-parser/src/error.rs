@@ -240,6 +240,45 @@ pub enum ParseError {
     #[error("`.input {name}` is not allowed: relation `{name}` has a tuple-typed column")]
     TupleInInput { span: Span, name: String },
 
+    /// `.input R(IO="...")` naming storage no reader implements. The set is
+    /// closed, so a misspelling would otherwise leave the relation with no
+    /// startup facts and no complaint.
+    #[error("unknown `.input` IO `{io}`")]
+    UnknownInputIo { span: Span, io: String },
+
+    /// `.input R(delimiter="...")` that names no single byte to split cells
+    /// on, or names one the line reader has already consumed.
+    #[error("`.input` delimiter must be one ASCII character, not \"{}\"", .value.escape_debug())]
+    InvalidDelimiter { span: Span, value: String },
+
+    /// `.output R(IO="...")` naming a sink FlowLog does not write. Only a
+    /// delimited text file exists, so anything else would be written as a
+    /// file under another name.
+    #[error("unknown `.output` IO `{io}`")]
+    UnknownOutputIo { span: Span, io: String },
+
+    /// `.output R(order_by="...")` that names no column of `relation`, or
+    /// spells a clause the sink cannot read.
+    #[error("invalid `order_by` for relation `{relation}`: {reason}")]
+    InvalidOrderBy {
+        span: Span,
+        relation: String,
+        reason: String,
+    },
+
+    /// `.output R(limit="...")` whose value is not a row count.
+    #[error("invalid `limit` `{value}` for relation `{relation}`")]
+    InvalidLimit {
+        span: Span,
+        relation: String,
+        value: String,
+    },
+
+    /// `.output R(limit=...)` with no `order_by`, which leaves which rows
+    /// survive up to the order they were derived in.
+    #[error("`limit` on relation `{relation}` needs an `order_by`")]
+    LimitWithoutOrderBy { span: Span, relation: String },
+
     /// `.init c = Foo<...>` where `Foo` was never declared as a `.comp`.
     #[error("unknown component `{name}`")]
     UnknownComponent { span: Span, name: String },
@@ -337,8 +376,9 @@ pub enum ParseError {
     GroupedPlaceholder { span: Span },
 
     /// A string token is not a valid Rust string literal. FlowLog strings
-    /// follow Rust syntax (quoted with Rust's escape alphabet, or raw);
-    /// unknown escapes are errors, unlike Souffle's pass-through.
+    /// follow Rust syntax (quoted with Rust's escape alphabet, or raw), so
+    /// an unknown escape is an error and a pattern that needs a literal
+    /// backslash belongs in a raw string.
     #[error("invalid string literal: {reason}")]
     InvalidStringLiteral { span: Span, reason: String },
 
@@ -773,6 +813,53 @@ impl Diagnostic for ParseError {
                     "tuples are constructed by rules, not read from facts; remove `.input {name}` \
                      or change the column to a non-tuple type"
                 )]),
+
+            ParseError::UnknownInputIo { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "`IO=` selects the storage: \"file\" reads a delimited text file, \
+                     \"command\" takes `put` tuples only, \"sqlite\" reads a database"
+                        .into(),
+                ]),
+
+            ParseError::InvalidDelimiter { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "a delimiter is one ASCII character, written as a string literal: \
+                     a tab is \"\\t\". A newline cannot delimit cells because the reader \
+                     consumes it to end the line"
+                        .into(),
+                ]),
+
+            ParseError::UnknownOutputIo { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "FlowLog writes a delimited text file: drop the `IO=` or set it to \
+                     \"file\", and use the compiler's output directory to choose where \
+                     rows go"
+                        .into(),
+                ]),
+
+            ParseError::InvalidOrderBy { span, relation, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "an `order_by` lists columns of `{relation}` by name, each optionally \
+                     followed by ASC or DESC: order_by=\"b DESC, a\""
+                )]),
+
+            ParseError::InvalidLimit { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "a `limit` is a row count, written as a string literal: limit=\"10\"".into(),
+                ]),
+
+            ParseError::LimitWithoutOrderBy { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "add an `order_by` so the rows that survive the limit are the same \
+                     on every run"
+                        .into(),
+                ]),
 
             ParseError::Syntax { span, .. }
             | ParseError::LoopBlockInStandardMode { span }

@@ -54,7 +54,7 @@ and the drain runs on the host thread after `timely::execute` returns.
 
 ### 4. Order
 
-Three shapes, dispatched on `(output_order_by(), output_limit())`:
+Three shapes, dispatched on the sink's `(order_by(), limit())`:
 
 | case | shape | peak memory |
 |---|---|---|
@@ -171,19 +171,20 @@ form for an arity-1 row and turn `p` into `(p,)` with no compile error.
 `TextRows` owns its buffers (`Vec<u8>` + `itoa::Buffer` + the delimiter) rather
 than borrowing them: borrowed fields cost 9–15% on the hot path, and owning
 them is what removes `::itoa` from generated crates entirely. The delimiter is
-`&[u8]`, not `u8` — `output_delimiter()` returns a `String` and multi-byte
-delimiters work today.
+one `u8`: the parser resolves `delimiter=` to a single ASCII byte, so a file
+written here reads back through FlowLog's own reader.
 
 ### `writer/` — accept rows and persist them
 
-Laid out as `reader/` is, file for file:
+Role for role with `reader/`, though the filenames differ: a reader is
+named for where facts come from, a writer for what it emits:
 
-| | `reader/` | `writer/` |
-|---|---|---|
-| `mod.rs` | `Reader` trait | `Writer` trait |
-| `text.rs` | `TextReader` | `TextWriter` + `TextRows` |
-| `vec.rs` | `VecReader` | `VecWriter` |
-| `line.rs` | `LineReader` (put) | — no put sink — |
+| `reader/` | `writer/` |
+|---|---|
+| `mod.rs` — `Reader` trait | `mod.rs` — `Writer` trait |
+| `file.rs` — `FileReader` | `text.rs` — `TextWriter` + `TextRows` |
+| `host.rs` — `HostReader` | `vec.rs` — `VecWriter` |
+| `put.rs` — `PutReader` | — no put sink — |
 
 ```rust
 /// Accepts drained rows and persists them: the write-side counterpart of
@@ -278,10 +279,8 @@ pub struct OutputSpec<'a> {
     /// The `.decl` spelling, for error messages.
     pub relation: &'a str,
     pub path: &'a str,
-    /// Full delimiter bytes: `output_delimiter()` returns a `String`, and
-    /// multi-byte delimiters work today.
-    pub delim: &'static [u8],
-    pub incremental: bool,
+    /// Cell separator: one ASCII byte, matching the read side.
+    pub delim: u8,
 }
 ```
 

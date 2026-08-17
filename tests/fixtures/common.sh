@@ -132,6 +132,11 @@ compare_expected_outputs() {
     local expected_file
 
     for expected_file in "$test_dir"/expected/*; do
+        # A suite whose whole output goes to stdout (`.printsize`) has no
+        # expected files, and an unmatched glob would otherwise be reported
+        # as one missing relation named `*`.
+        [[ -e "$expected_file" ]] || continue
+
         local rel_name
         local actual_file
         rel_name="$(basename "$expected_file")"
@@ -168,6 +173,39 @@ compare_expected_outputs() {
         return 0
     fi
 
+    echo -e "$diff_detail"
+    return 1
+}
+
+# Assert every line of `expected_stdout` appears in the run log.
+#
+# Presence, not an exact diff: the log holds stderr as well, and the merge
+# blocks that report `.printsize` run concurrently, so neither the surrounding
+# lines nor the order between reports is fixed. A suite with no
+# `expected_stdout` passes trivially.
+compare_expected_stdout() {
+    local test_dir="$1"
+    local run_log="$2"
+    local expected_file="${test_dir}/expected_stdout"
+
+    [[ -f "$expected_file" ]] || return 0
+
+    local all_match=1
+    local diff_detail=""
+    local line
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        if ! grep -qxF -- "$line" "$run_log"; then
+            all_match=0
+            diff_detail+="      stdout: missing line '${line}'\n"
+        fi
+    done < "$expected_file"
+
+    if (( all_match )); then
+        return 0
+    fi
+
+    diff_detail+="$(tail -10 "$run_log" | sed 's/^/         /')\n"
     echo -e "$diff_detail"
     return 1
 }

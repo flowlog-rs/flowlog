@@ -16,10 +16,19 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum Format {
-    /// A delimited text file.
+    /// A delimited text file: one row per line, cells separated by one byte.
+    ///
+    /// A cell may hold any bytes except `delim`, which ends the cell, and
+    /// `\n` or `\r`, which end the row. Nothing quotes or escapes either, in
+    /// either direction, so a value carrying one does not survive being
+    /// written and read back: the delimiter has to be a byte the data does
+    /// not contain. Leading and trailing whitespace around a cell is not
+    /// preserved.
     Text {
-        /// Cell separator, a single byte.
+        /// Cell separator: one ASCII byte, never `\n` or `\r`, which the
+        /// parser establishes when it resolves the directive.
         delim: u8,
+        /// Whether the first line names columns instead of holding a row.
         has_header: bool,
     },
 }
@@ -34,7 +43,8 @@ pub struct RelationSpec {
     /// Relation name, for diagnostics and table lookup.
     pub name: &'static str,
     pub arity: usize,
-    /// Cell separator, a single byte.
+    /// Cell separator for a `put` tuple, under the same rule a file's cells
+    /// follow (see [`Format::Text`]).
     pub delim: u8,
     pub format: Format,
     /// How column 0 decides ownership of a `put` tuple.
@@ -72,9 +82,10 @@ pub struct OutputSpec<'a> {
     /// Relation name as the `.decl` spells it, for diagnostics.
     pub relation: &'a str,
     pub path: &'a str,
-    /// Full separator bytes, not one byte: `delimiter=` is any string
-    /// literal, so a multi-byte separator is legal.
-    pub delim: &'static [u8],
+    /// Cell separator, under the rule a read follows too: a file FlowLog
+    /// writes is read back by FlowLog's own reader, so both directions take
+    /// the same one byte (see [`Format::Text`]).
+    pub delim: u8,
 }
 
 /// First-column ownership rule for a `put` tuple.

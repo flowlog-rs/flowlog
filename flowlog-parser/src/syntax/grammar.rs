@@ -73,8 +73,8 @@ mod tests {
         );
     }
 
-    /// Every refusal class: unknown escapes (Souffle would pass these
-    /// through; we direct them to raw strings), malformed unicode
+    /// Every refusal class: unknown escapes (which Souffle 2.5 refuses
+    /// too, so a raw string is the portable spelling), malformed unicode
     /// escapes, and a trailing lone backslash.
     #[rstest]
     #[case(r#""a\.b""#)]

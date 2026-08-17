@@ -137,7 +137,7 @@ pub(super) fn apply_directives(
                         name: rel.raw_name().to_string(),
                     });
                 }
-                rel.set_input_params(d.parameters().clone());
+                rel.set_input(d.parameters(), d.span())?;
             }
             None => {
                 return Err(ParseError::UndeclaredInDirective {
@@ -150,12 +150,7 @@ pub(super) fn apply_directives(
     }
     for d in output_directives {
         match relations.iter_mut().find(|r| r.name() == d.relation_name()) {
-            Some(rel) => {
-                rel.set_output(true);
-                if !d.parameters().is_empty() {
-                    rel.set_output_params(d.parameters().clone())?;
-                }
-            }
+            Some(rel) => rel.set_output(d.parameters(), d.span())?,
             None => {
                 return Err(ParseError::UndeclaredInDirective {
                     span: d.span(),
@@ -386,7 +381,8 @@ mod tests {
     fn validate_output_printsize_exclusion_rejects_both_on_one_relation() {
         // `.output R` + `.printsize R` both target `R.csv`: a conflict.
         let mut r = Relation::new("r", vec![]);
-        r.set_output(true);
+        r.set_output(&HashMap::new(), Span::DUMMY)
+            .expect("no parameters");
         r.set_printsize(true);
         assert_err!(
             validate_output_printsize_exclusion(&[r]),

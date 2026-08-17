@@ -1,11 +1,12 @@
 // ============================================================================
 // Suite   : output_raw_delimiter
-// Feature : output `delimiter` is written whole, and string columns are raw
-// Covers  : a multi-byte `delimiter="||"` emits both bytes at every column
-//           boundary, and a string column is written with no quoting and no
-//           escaping even when it contains the delimiter or a paren. Pins the
-//           two properties a type-directed encoder could silently change:
-//           narrowing the delimiter to one byte, and "helpfully" quoting.
+// Feature : output string columns are written raw, with no quoting or escaping
+// Covers  : a string column is written verbatim even when it contains the
+//           output delimiter or a paren, so a row can hold more separators
+//           than the arity implies. Pins the property a type-directed encoder
+//           could silently change: "helpfully" quoting a cell.
+// Note    : the delimiter is one byte on both directions (see the parser's
+//           `resolve_delim`), so `delimiter="|"` here, not `"||"`.
 // ============================================================================
 
 .decl Raw(s: string, n: int32)
@@ -13,4 +14,4 @@
 
 .decl Wide(s: string, n: int32)
 Wide(s, n) :- Raw(s, n).
-.output Wide(delimiter="||", order_by="n")
+.output Wide(delimiter="|", order_by="n")

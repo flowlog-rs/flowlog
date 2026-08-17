@@ -20,6 +20,7 @@ pub use fact::InlineFact;
 
 use crate::ast::FlowLogRule;
 use crate::declaration::ExternFn;
+use crate::declaration::InputSource;
 use crate::declaration::Relation;
 use crate::segment::Segment;
 use crate::types::TypeRegistry;
@@ -107,13 +108,13 @@ impl Program {
         self.edbs().iter().map(|rel| rel.fingerprint()).collect()
     }
 
-    #[cfg(test)]
+    /// EDB relations whose facts are read from a file on disk.
     #[must_use]
     #[inline]
     pub fn file_backed_relations(&self) -> Vec<&Relation> {
         self.relations
             .iter()
-            .filter(|rel| rel.is_file_backed())
+            .filter(|rel| rel.input().is_some_and(InputSource::is_file_backed))
             .collect()
     }
 

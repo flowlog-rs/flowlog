@@ -1,0 +1,19 @@
+// ============================================================================
+// Suite   : nullary_edb_file
+// Feature : a nullary relation read from a fact file
+// Covers  : a nullary relation's rows are empty lines, so one empty line
+//           asserts the fact. Soufflé reads the same file the same way; this
+//           pins the parity. Before, `.input` on a nullary relation was
+//           accepted and then dropped, so the rule never fired and nothing
+//           said why.
+// ============================================================================
+
+.decl Enabled()
+.input Enabled(IO="file", filename="Enabled.facts")
+
+.decl Score(id: int32)
+.input Score(IO="file", filename="Score.csv", delimiter=",")
+
+.decl Live(id: int32)
+Live(x) :- Score(x), Enabled().
+.output Live(order_by="id")

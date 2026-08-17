@@ -123,7 +123,7 @@ mod tests {
         OutputSpec {
             relation: "Out",
             path: "",
-            delim: b"\t",
+            delim: b'\t',
         }
     }
 

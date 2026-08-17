@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use flowlog_build::CodeParts;
+use flowlog_parser::InputSource;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
@@ -27,19 +28,18 @@ pub(crate) struct Input {
 }
 
 impl Compiler {
-    /// The path a relation's input is loaded from: its filename under the
+    /// The path a relation's input is loaded from: `file_name` under the
     /// fact directory when one is set.
-    fn ingest_path(&self, rel: &Relation) -> String {
-        let file_name = rel.input_file_name();
+    fn ingest_path(&self, file_name: &str) -> String {
         self.options
             .fact_dir()
             .map(|dir| {
                 Path::new(dir)
-                    .join(&file_name)
+                    .join(file_name)
                     .to_string_lossy()
                     .into_owned()
             })
-            .unwrap_or(file_name)
+            .unwrap_or_else(|| file_name.to_owned())
     }
 
     /// Build the binary-mode EDB registry + preload fragments from the
@@ -47,32 +47,42 @@ impl Compiler {
     pub(crate) fn gen_input(&self, parts: &CodeParts, merge_section: &TokenStream) -> Input {
         let edbs = self.program.edbs();
 
-        // One definition of "a relation this preload ingests", so the three
-        // questions asked of it below cannot drift apart.
-        let ingestable: Vec<&Relation> = edbs
-            .iter()
-            .filter(|rel| rel.is_file_backed() && rel.arity() > 0)
-            .copied()
+        // One definition, so the three questions asked of it below cannot
+        // drift apart, and the program's own notion of file-backed rather
+        // than a second one here. Arity is not a filter: a nullary
+        // relation's file holds empty rows and reads like any other. Each
+        // relation carries the file it reads, so no later step re-derives
+        // one; every file-backed source names one, so the filter drops
+        // nothing.
+        let preload_files: Vec<(&Relation, &str)> = self
+            .program
+            .file_backed_relations()
+            .into_iter()
+            .filter_map(|rel| {
+                rel.input()
+                    .and_then(InputSource::filename)
+                    .map(|n| (rel, n))
+            })
             .collect();
         let has_inline_facts = !self.program.facts().is_empty();
-        let needs_preload = !ingestable.is_empty() || has_inline_facts;
+        let needs_preload = !preload_files.is_empty() || has_inline_facts;
 
         // Which loads must serialize under `ord` is the runtime's call,
         // made per relation inside the runtime reader (a text scan interns
         // while reading and collapses to worker 0; a dictionary-encoded
         // scan does not). Every worker just calls `load` with its own
         // coordinates.
-        let maybe_peers = if ingestable.is_empty() {
+        let maybe_peers = if preload_files.is_empty() {
             quote! {}
         } else {
             quote! { let peers = worker.peers(); }
         };
 
-        let file_ingests: Vec<TokenStream> = ingestable
+        let file_ingests: Vec<TokenStream> = preload_files
             .iter()
-            .map(|rel| {
+            .map(|(rel, file_name)| {
                 let rel_name = rel.name();
-                let path = self.ingest_path(rel);
+                let path = self.ingest_path(file_name);
                 // Every worker calls with its own coordinates; whether it
                 // gets a share is the source's decision. A fatal load error
                 // would otherwise leave the relation silently short, so it

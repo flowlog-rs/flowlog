@@ -8,7 +8,7 @@
 
 use flowlog_parser::DataType;
 use flowlog_parser::InlineFact;
-use flowlog_parser::InputIo;
+use flowlog_parser::InputSource;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
@@ -132,12 +132,15 @@ fn gen_one_rel_nullary(
 
     // Batch mode uses the `Present` semiring which has no i32 representation
     // or negation, so "false" collapses to a no-op; absence is indistinguishable.
+    // Batch applies the caller's diff rather than naming `SEMIRING_ONE`:
+    // the value is the same, and the constant is imported only for
+    // programs that declare `.fact` rows.
     let apply_tuple_body = if is_batch {
         quote! {
             if index != 0 { return; }
             let s = tuple.trim();
             if s.eq_ignore_ascii_case("true") {
-                self.session.update((), SEMIRING_ONE);
+                self.session.update((), diff);
             } else if !s.eq_ignore_ascii_case("false") {
                 eprintln!(
                     "[relation][{}] nullary expects tuple 'True' or 'False', got {:?}",
@@ -227,18 +230,24 @@ fn gen_one_rel_nonnullary(
 
     let dts = rel.data_type();
 
-    let delim_byte: u8 = rel
-        .input_delimiter()
-        .as_bytes()
-        .first()
-        .copied()
-        .unwrap_or(b',');
+    // Validated to one ASCII byte when the `.input` directive was resolved,
+    // so nothing here can narrow a multi-byte value down to its first byte.
+    let delim_byte = rel.input().and_then(InputSource::delim).unwrap_or(b'\t');
 
     let shard_key = shard_key_for(&dts[0], string_intern);
-    let format_expr = match rel.input_io() {
-        Some(InputIo::File) | None => {
-            let has_header = rel.input_has_header();
+    // A relation with no `.input` still reaches here for its `.fact` rows and
+    // for `put`, and reads its tuples as text either way.
+    let format_expr = match rel.input() {
+        Some(InputSource::File { .. } | InputSource::Command { .. }) | None => {
+            let has_header = rel.input().is_some_and(InputSource::has_header);
             quote! { ::flowlog_runtime::io::Format::Text { delim: #delim_byte, has_header: #has_header } }
+        }
+        // The reader is parked, not written: the parser resolves the source so
+        // the seam exists, and this arm is what un-parking replaces.
+        Some(InputSource::Sqlite { .. }) => {
+            return Err(CodegenError::internal(format!(
+                "relation `{raw_name}`: `IO=\"sqlite\"` input is not implemented"
+            )));
         }
     };
     // Absent unless the relation declares `.fact` rows: `Ingest` supplies a

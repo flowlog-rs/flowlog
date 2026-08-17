@@ -1,9 +1,12 @@
 // ============================================================================
 // Suite   : printsize_count
-// Feature : `.printsize` writes its count to a file
-// Covers  : the file form of `.printsize` is one decimal line, `<count>\n`,
-//           at `<outdir>/<RawName>.csv`. Nothing pinned this before, so the
-//           format was free to drift whenever the sink moved.
+// Feature : `.printsize` reports its count on stdout, never as a file
+// Covers  : the report is one line, `<RawName>\t<count>`, on stdout whatever
+//           `-D` names. Pins both halves, because the format drifted once
+//           already when the sink moved: a count is metadata about a
+//           relation, not a row of it, so it is not written like one.
+// Note    : Souffle reports `.printsize` the same way, and ignores any
+//           `IO=`/`-D` given for it.
 // ============================================================================
 
 .decl Edge(a: int32, b: int32)

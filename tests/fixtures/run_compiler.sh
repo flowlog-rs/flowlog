@@ -13,6 +13,7 @@ set -euo pipefail
 #     program.dl     Datalog source (must use .output directives)
 #     data/          Optional CSV input facts copied into generated project
 #     expected/      Expected output files (one per output relation)
+#     expected_stdout Optional lines that must appear on stdout (.printsize)
 #     commands.txt   Optional incremental transcript (enables incremental mode)
 #     runtime_flags  Optional runtime flags (e.g. -w 4 for multi-worker)
 #
@@ -49,6 +50,7 @@ Each test directory contains:
   program.dl      Datalog source using .output directives
   data/           Optional CSV input facts
   expected/       Expected output files (one per relation)
+  expected_stdout Optional lines that must appear on stdout (.printsize)
   commands.txt    Optional incremental command transcript
   runtime_flags   Optional runtime flags (e.g. -w 4)
 
@@ -210,11 +212,17 @@ run_test() {
     local use_sort=0
     [[ -f "$test_dir/runtime_flags" ]] && grep -q -- '-w' "$test_dir/runtime_flags" && use_sort=1
 
-    local mismatch_detail
-    if mismatch_detail=$(compare_expected_outputs "$test_dir" "$output_dir" "$use_sort"); then
+    # Both comparisons run before either is reported, so a suite that writes
+    # files *and* prints a count shows every mismatch in one failure.
+    local mismatch_detail stdout_detail files_ok stdout_ok
+    mismatch_detail=$(compare_expected_outputs "$test_dir" "$output_dir" "$use_sort") \
+        && files_ok=1 || files_ok=0
+    stdout_detail=$(compare_expected_stdout "$test_dir" "$run_log") \
+        && stdout_ok=1 || stdout_ok=0
+    if (( files_ok && stdout_ok )); then
         ((passed++)) || true
     else
-        record_failure "$full_name" "output mismatch" "$mismatch_detail"
+        record_failure "$full_name" "output mismatch" "${mismatch_detail}${stdout_detail}"
     fi
 
     rm -rf "$work_dir"

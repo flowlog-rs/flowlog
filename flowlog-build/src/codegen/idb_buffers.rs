@@ -7,6 +7,7 @@
 //! `diff = 1` (DD uses `Present`, not `i32`). Sort operates on data only.
 
 use flowlog_parser::DataType;
+use flowlog_parser::OutputSink;
 use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -88,7 +89,8 @@ impl CodeGen {
                 // Every file sink formats inside the runtime now, so the
                 // only generated code still resolving interned strings is
                 // the stderr sink and the ORDER BY comparators.
-                if (self.config.output_to_stdout() || idb.output_order_by().is_some())
+                if (self.config.output_to_stdout()
+                    || idb.output_sink().is_some_and(|s| s.order_by().is_some()))
                     && data_type
                         .iter()
                         .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
@@ -306,8 +308,9 @@ pub fn gen_drain_block(
     sink_postamble: TokenStream,
     string_intern: bool,
 ) -> TokenStream {
-    let order_by = idb.output_order_by();
-    let limit = idb.output_limit();
+    let sink = idb.output_sink();
+    let order_by = sink.and_then(OutputSink::order_by);
+    let limit = sink.and_then(OutputSink::limit);
     let elem_ty = tuple_type(idb, string_intern);
 
     let take = quote! {

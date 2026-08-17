@@ -8,10 +8,13 @@
 //!   whole buffer to `flowlog_runtime::io::TextWriter`, which formats it
 //!   across cores; the rest go through [`flowlog_build::gen_drain_block`],
 //!   which applies `ORDER BY` / `LIMIT` and is shared with library mode.
-//! - **`.printsize`**: read the shared size cell and report it to stderr.
+//! - **`.printsize`**: read the shared size cell and print the count to
+//!   stdout, which is neither of the above: a count is metadata about a
+//!   relation, not a row of it.
 
 use flowlog_build::gen_drain_block;
 use flowlog_parser::DataType;
+use flowlog_parser::OutputSink;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
 use proc_macro2::Literal;
@@ -60,15 +63,17 @@ impl Compiler {
     }
 
     /// Bind `let spec = ...;` describing one relation's output file.
-    fn gen_output_spec(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
+    fn gen_output_spec(
+        &self,
+        idb: &Relation,
+        sink: &OutputSink,
+    ) -> Result<TokenStream, CompilerError> {
         let base_dir = self.require_output_dir("writing IDB output to files")?;
-        let out_path_stmt = gen_out_path_stmt(
-            &idb.output_file_name(),
-            base_dir,
-            self.config.is_incremental(),
-        );
+        let out_path_stmt =
+            gen_out_path_stmt(sink.filename(), base_dir, self.config.is_incremental());
         let raw_name = idb.raw_name();
-        let delim = Literal::byte_string(idb.output_delimiter().as_bytes());
+        // Only the text sink reaches here; a database one is refused above.
+        let delim = Literal::u8_suffixed(sink.delim().unwrap_or(b'\t'));
         Ok(quote! {
             #out_path_stmt
             let spec = ::flowlog_runtime::io::OutputSpec {
@@ -81,6 +86,22 @@ impl Compiler {
 
     /// Drain one `.output` relation's shared buffer through its sink.
     fn gen_output_drain(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
+        // Only an `.output` relation is drained, so the sink is present; a
+        // missing one means an earlier stage handed over the wrong relation.
+        let sink = idb.output_sink().ok_or_else(|| {
+            CompilerError::internal(format!(
+                "relation `{}` is drained without an `.output`",
+                idb.raw_name()
+            ))
+        })?;
+        // The writer is parked, not written: the parser resolves the sink so
+        // the seam exists, and this arm is what un-parking replaces.
+        if let OutputSink::Sqlite { .. } = sink {
+            return Err(CompilerError::internal(format!(
+                "relation `{}`: `IO=\"sqlite\"` output is not implemented",
+                idb.raw_name()
+            )));
+        }
         let buf_ident = Ident::new(&format!("buf_{}", idb.name()), Span::call_site());
         let string_intern = self.codegen.features().string_intern();
         let is_incremental = self.config.is_incremental();
@@ -89,7 +110,7 @@ impl Compiler {
         // so the runtime can format it across cores. Nullary, ORDER BY /
         // LIMIT, and stderr go row by row.
         if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
-            let spec = self.gen_output_spec(idb)?;
+            let spec = self.gen_output_spec(idb, sink)?;
             return Ok(quote! {{
                 #spec
                 let per_worker = ::std::mem::take(
@@ -114,7 +135,7 @@ impl Compiler {
                 quote! {},
             )
         } else {
-            let spec = self.gen_output_spec(idb)?;
+            let spec = self.gen_output_spec(idb, sink)?;
             // A nullary relation writes its presence marker and never a
             // diff column, even in an incremental epoch.
             let diff_expr = if is_incremental && idb.arity() > 0 {
@@ -156,42 +177,20 @@ impl Compiler {
         ))
     }
 
-    /// Read one `.printsize` cell and either write the count to a file
-    /// (`<outdir>/<RawName>.csv`, one line) or, when `-D -` is set,
-    /// `eprintln!` the `(time, size)` pair to stderr.
+    /// Read one `.printsize` cell and print `<RawName>\t<count>` to stdout.
     ///
-    /// Mutual exclusion with `.output R` on the same relation is enforced
-    /// at parse time, so this never races an output drain over one path.
+    /// A count is metadata about a relation, not a row of it, so it goes to
+    /// stdout whatever `-D` names and whatever storage the relation's
+    /// `.output` would use. Souffle reports it the same way, and for the same
+    /// reason: `.printsize` is a diagnostic, not a sink.
     fn gen_size_report(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
         let cell = Ident::new(&format!("size_{}", idb.name()), Span::call_site());
-        if self.config.output_to_stdout() {
-            let prefix = idb.raw_name().to_string();
-            return Ok(quote! {{
-                let (t, size) = &*#cell.lock().unwrap();
-                eprintln!("[size][{}] t={:?} size={}", #prefix, t, size);
-            }});
-        }
-
-        let base_dir = self.require_output_dir("writing `.printsize` to a file")?;
-        let file_name = idb.output_file_name();
         let raw_name = idb.raw_name();
-        // A count is a one-column row, so it goes out through the writer
-        // every other file uses; the delimiter is never reached.
+        // One `println!` per report, so concurrent merge blocks interleave
+        // whole lines rather than halves.
         Ok(quote! {{
             let (_, size) = *#cell.lock().unwrap();
-            let out_path = format!("{}/{}", #base_dir, #file_name);
-            let spec = ::flowlog_runtime::io::OutputSpec {
-                relation: #raw_name,
-                path: &out_path,
-                delim: b"\t",
-            };
-            let written = ::flowlog_runtime::io::TextWriter::write_file(
-                &spec, vec![vec![((size,), 0u32, 1)]], false,
-            );
-            if let Err(e) = written {
-                eprintln!("[flowlog] fatal: {e}");
-                std::process::exit(1);
-            }
+            println!("{}\t{}", #raw_name, size);
         }})
     }
 }

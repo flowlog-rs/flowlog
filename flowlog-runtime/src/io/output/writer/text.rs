@@ -224,7 +224,7 @@ mod tests {
         let spec = OutputSpec {
             relation: "Out",
             path,
-            delim: b"\t",
+            delim: b'\t',
         };
         if parallel {
             let writer = <TextWriter as Writer<(i32, i32)>>::open(&spec).expect("open");

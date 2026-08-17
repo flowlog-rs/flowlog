@@ -37,7 +37,7 @@ use crate::txn::Diff;
 pub struct TextRows {
     bytes: Vec<u8>,
     itoa: itoa::Buffer,
-    delim: &'static [u8],
+    delim: u8,
 }
 
 /// Shows the run, not the integer scratch, whose contents are whatever the
@@ -46,17 +46,16 @@ impl fmt::Debug for TextRows {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TextRows")
             .field("bytes", &String::from_utf8_lossy(&self.bytes))
-            .field("delim", &String::from_utf8_lossy(self.delim))
+            .field("delim", &self.delim.escape_ascii().to_string())
             .finish_non_exhaustive()
     }
 }
 
 impl TextRows {
-    /// An empty run whose columns are separated by `delim`.
-    ///
-    /// The delimiter is a byte string, not a byte: a relation's
-    /// `delimiter=` is any decoded string literal, so `"||"` is legal.
-    pub fn new(delim: &'static [u8]) -> Self {
+    /// An empty run whose columns are separated by `delim`: one ASCII
+    /// byte, which the parser establishes when it resolves the directive,
+    /// so a file written here reads back through FlowLog's own reader.
+    pub fn new(delim: u8) -> Self {
         Self {
             bytes: Vec::new(),
             itoa: itoa::Buffer::new(),
@@ -70,7 +69,7 @@ impl TextRows {
     }
 
     /// The column separator this run was opened with.
-    pub fn delim(&self) -> &'static [u8] {
+    pub fn delim(&self) -> u8 {
         self.delim
     }
 
@@ -103,7 +102,7 @@ impl TextRows {
     /// Append the column delimiter.
     #[inline]
     pub fn push_delim(&mut self) {
-        self.bytes.extend_from_slice(self.delim);
+        self.bytes.push(self.delim);
     }
 
     /// Append bytes exactly as given, with no quoting and no escaping.
@@ -304,7 +303,7 @@ mod tests {
 
     /// Encode one row into a tab-delimited run and read the bytes back.
     fn row<T: Encode<TextRows>>(value: T, diff: Option<Diff>) -> String {
-        let mut rows = TextRows::new(b"\t");
+        let mut rows = TextRows::new(b'\t');
         rows.push(value, diff);
         String::from_utf8(rows.as_bytes().to_vec()).expect("utf-8")
     }
@@ -316,13 +315,13 @@ mod tests {
         assert_eq!(row((7i32, true), None), "7\ttrue\n");
     }
 
-    /// A delimiter is any byte string, not a single byte: `delimiter="||"`
-    /// is legal and every column boundary carries all of it.
+    /// The declared delimiter reaches every column boundary, not just the
+    /// first, and a row still ends in a newline rather than a separator.
     #[test]
-    fn a_multi_byte_delimiter_is_written_whole() {
-        let mut rows = TextRows::new(b"||");
+    fn the_delimiter_separates_every_column() {
+        let mut rows = TextRows::new(b'|');
         rows.push((1i32, 2i32, 3i32), None);
-        assert_eq!(rows.as_bytes(), b"1||2||3\n");
+        assert_eq!(rows.as_bytes(), b"1|2|3\n");
     }
 
     /// Integers render as `Display` at the extremes of their width.
@@ -368,7 +367,7 @@ mod tests {
     /// tells it apart from a bare value.
     #[test]
     fn a_one_field_tuple_column_keeps_its_comma() {
-        let mut rows = TextRows::new(b"\t");
+        let mut rows = TextRows::new(b'\t');
         rows.push((intern("p"), (intern("q"),)), None);
         assert_eq!(rows.as_bytes(), b"p\t(q,)\n");
     }
@@ -470,7 +469,7 @@ mod tests {
     /// allocation.
     #[test]
     fn rows_accumulate_until_cleared() {
-        let mut rows = TextRows::new(b",");
+        let mut rows = TextRows::new(b',');
         rows.push((1i32,), None);
         rows.push((2i32,), None);
         assert_eq!(rows.as_bytes(), b"1\n2\n");
