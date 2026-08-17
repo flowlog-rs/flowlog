@@ -3,7 +3,7 @@
 // Feature : put ownership at -w 2 — exactly one worker may apply each tuple,
 //           for a string-keyed and an int-keyed relation. The +1 then -1
 //           passes leave zero; a double-accept survives as a live tuple in
-//           the i32 diffs, so the _t2 deltas are the detector.
+//           the i32 diffs, so the _t1 deltas are the detector.
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl S(k: symbol, v: int32)

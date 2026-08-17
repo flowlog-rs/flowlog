@@ -7,7 +7,7 @@ members = [
     "flowlog-planner",
     "flowlog-build",
     "flowlog-compiler",
-    "flowlog-shell",
+    "flowlog-txn",
     "flowlog-profiler",
     "flowlog-visualizer",
 ]

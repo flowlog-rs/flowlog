@@ -8,7 +8,6 @@ use crate::error::RuntimeError;
 use crate::io::output::encode::Encode;
 use crate::io::output::writer::Writer;
 use crate::io::spec::OutputSpec;
-use crate::txn::Diff;
 
 /// Collects rows as host tuples, dropping multiplicity.
 ///
@@ -50,7 +49,7 @@ impl<U, T: Encode<Vec<U>>> Writer<T> for VecWriter<U> {
     }
 
     #[inline]
-    fn push(&mut self, row: T, _diff: Option<Diff>) {
+    fn push(&mut self, row: T, _diff: Option<i32>) {
         row.encode(&mut self.rows);
     }
 
@@ -67,7 +66,7 @@ impl<U, T: Encode<Vec<U>>> Writer<T> for VecWriter<U> {
 #[derive(Debug)]
 pub struct DeltaWriter<U> {
     rows: Vec<U>,
-    diffs: Vec<Diff>,
+    diffs: Vec<i32>,
 }
 
 impl<U> DeltaWriter<U> {
@@ -80,7 +79,7 @@ impl<U> DeltaWriter<U> {
     }
 
     /// The rows collected so far, each with its multiplicity.
-    pub fn into_rows(self) -> Vec<(U, Diff)> {
+    pub fn into_rows(self) -> Vec<(U, i32)> {
         self.rows.into_iter().zip(self.diffs).collect()
     }
 }
@@ -92,7 +91,7 @@ impl<U> Default for DeltaWriter<U> {
 }
 
 impl<U, T: Encode<Vec<U>>> Writer<T> for DeltaWriter<U> {
-    type Out = Vec<(U, Diff)>;
+    type Out = Vec<(U, i32)>;
 
     /// Ignores the spec: a host `Vec` has no path and no delimiter.
     fn open(_spec: &OutputSpec<'_>) -> Result<Self, RuntimeError> {
@@ -102,12 +101,12 @@ impl<U, T: Encode<Vec<U>>> Writer<T> for DeltaWriter<U> {
     /// A row pushed without a diff counts once, which is what a batch
     /// drain means by an unqualified row.
     #[inline]
-    fn push(&mut self, row: T, diff: Option<Diff>) {
+    fn push(&mut self, row: T, diff: Option<i32>) {
         row.encode(&mut self.rows);
         self.diffs.push(diff.unwrap_or(1));
     }
 
-    fn finish(self) -> Result<Vec<(U, Diff)>, RuntimeError> {
+    fn finish(self) -> Result<Vec<(U, i32)>, RuntimeError> {
         Ok(self.into_rows())
     }
 }

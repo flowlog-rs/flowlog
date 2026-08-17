@@ -17,7 +17,6 @@ use ordered_float::OrderedFloat;
 
 use crate::intern::resolve_out;
 use crate::io::output::encode::Encode;
-use crate::txn::Diff;
 
 // =============================================================================
 // TextRows
@@ -85,7 +84,7 @@ impl TextRows {
     /// type cannot say: a nullary relation writes no diff even in
     /// incremental mode, where every other relation writes one.
     #[inline]
-    pub fn push<T: Encode<TextRows>>(&mut self, row: T, diff: Option<Diff>) {
+    pub fn push<T: Encode<TextRows>>(&mut self, row: T, diff: Option<i32>) {
         row.encode(self);
         if let Some(diff) = diff {
             self.push_delim();
@@ -302,7 +301,7 @@ mod tests {
     use crate::intern::intern;
 
     /// Encode one row into a tab-delimited run and read the bytes back.
-    fn row<T: Encode<TextRows>>(value: T, diff: Option<Diff>) -> String {
+    fn row<T: Encode<TextRows>>(value: T, diff: Option<i32>) -> String {
         let mut rows = TextRows::new(b'\t');
         rows.push(value, diff);
         String::from_utf8(rows.as_bytes().to_vec()).expect("utf-8")

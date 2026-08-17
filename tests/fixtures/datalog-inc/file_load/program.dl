@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : file_load
-// Feature : file command bulk-loads CSV, verify _t1
+// Feature : file command bulk-loads CSV, verify _t0
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Data(id: int32, val: int32)

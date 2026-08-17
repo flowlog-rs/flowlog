@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : multi_txn
-// Feature : 3 transactions in sequence with mixed ops, verify _t1/_t2/_t3
+// Feature : 3 transactions in sequence with mixed ops, verify _t0/_t1/_t2
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Data(id: int32, val: int32)

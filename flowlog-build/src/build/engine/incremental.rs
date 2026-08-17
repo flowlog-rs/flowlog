@@ -19,7 +19,7 @@
 //! - Workers wait on an `Arc<Barrier>` of `workers + 1` parties; the
 //!   host (user) thread is the extra party and drives the protocol.
 //! - Transaction state is broadcast through an
-//!   `Arc<RwLock<TxnState>>` from `flowlog_runtime::txn`.
+//!   `Arc<RwLock<TxnState>>` from `flowlog_txn::driver`.
 //! - Commit protocol: host moves per-worker staged buckets into shared
 //!   `Mutex<Vec<_>>` slots, publishes a `TxnAction::Commit` snapshot,
 //!   then barriers twice (start + end) before draining output buffers.
@@ -130,7 +130,7 @@ pub(crate) fn gen_lib_incremental_engine(
 fn gen_imports() -> TokenStream {
     quote! {
         use ::flowlog_runtime::timely::dataflow::operators::probe::Handle as ProbeHandle;
-        use ::flowlog_runtime::txn::{TxnAction, TxnState};
+        use ::flowlog_txn::driver::{TxnAction, TxnState};
     }
 }
 

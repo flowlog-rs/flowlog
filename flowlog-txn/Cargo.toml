@@ -1,5 +1,5 @@
 [package]
-name = "flowlog-shell"
+name = "flowlog-txn"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
@@ -11,8 +11,14 @@ readme = "README.md"
 keywords = ["datalog", "dataflow", "repl"]
 categories = ["command-line-interface", "database"]
 
+[features]
+default = ["prompt"]
+# The terminal: rustyline and the `prompt` module. Off for library-mode
+# hosts, whose generated engine speaks `txn` but never opens a prompt.
+prompt = ["dep:rustyline"]
+
 [dependencies]
-rustyline.workspace = true
+rustyline = { workspace = true, optional = true }
 
 [dev-dependencies]
 rstest.workspace = true

@@ -6,7 +6,6 @@
 
 use std::path::Path;
 
-use flowlog_build::CodeParts;
 use flowlog_parser::InputSource;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
@@ -18,13 +17,20 @@ use crate::Compiler;
 pub(crate) struct Input {
     pub file_ingests: Vec<TokenStream>,
     pub maybe_peers: TokenStream,
-    pub preload: TokenStream,
+    /// Feed every `.input` file and inline fact into the sessions. Uses
+    /// `inputs` directly, so it must run before the event callback exists.
+    pub preload_ingest: TokenStream,
+    /// Run the preload epoch through the event callback `on`, which it
+    /// rebinds mutably; nothing when there is no preload.
+    pub preload_epoch: TokenStream,
     /// Resolve a txn's relation name to a field, for `put` and for `file`.
     /// Incremental mode only: no other mode learns a name at run time.
     pub put_dispatch: TokenStream,
     pub file_dispatch: TokenStream,
     /// The relation names the txn prompt completes against.
     pub rel_names: TokenStream,
+    /// The epoch preload leaves off at: one when it ran, zero otherwise.
+    pub start_time: u32,
 }
 
 impl Compiler {
@@ -44,7 +50,7 @@ impl Compiler {
 
     /// Build the binary-mode EDB registry + preload fragments from the
     /// program's input relations and the compiler's fact directory.
-    pub(crate) fn gen_input(&self, parts: &CodeParts, merge_section: &TokenStream) -> Input {
+    pub(crate) fn gen_input(&self) -> Input {
         let edbs = self.program.edbs();
 
         // One definition, so the three questions asked of it below cannot
@@ -130,6 +136,10 @@ impl Compiler {
                 );
             }
         });
+        // A failed load ends the process rather than the command: this
+        // worker's share may already be in its session, and the commit
+        // would otherwise land a partially loaded relation with no abort
+        // path.
         let file_dispatch = dispatch(&|field| {
             quote! {
                 if let Err(e) = ::flowlog_runtime::io::Ingest::load_file(
@@ -148,23 +158,24 @@ impl Compiler {
             static REL_NAMES: &[&str] = &[#(#name_literals),*];
         };
 
-        let flush = &parts.flush;
-        let preload = if needs_preload {
+        let preload_ingest = if needs_preload {
             quote! {
                 #(#file_ingests)*
                 inputs.apply_inline_all(index);
-                time_stamp += 1;
-                inputs.advance_to_all(time_stamp);
-                inputs.flush_all();
-                while probe.less_than(&time_stamp) {
-                    worker.step();
-                }
-                #(#flush)*
-                barrier.wait();
-                if index == 0 {
-                    #merge_section
-                }
-                barrier.wait();
+            }
+        } else {
+            quote! {}
+        };
+
+        // The epoch itself (advance, merge, rendezvous) is the shell's
+        // `preload_epoch`, answered by the same callback every later epoch
+        // uses, so preload work is metered and drained like a commit's.
+        // The rebinding makes the callback mutable only here: a program
+        // with no preload keeps it immutable, and `-Dwarnings` clean.
+        let preload_epoch = if needs_preload {
+            quote! {
+                let mut on = on;
+                ::flowlog_txn::driver::preload_epoch(&shared, index == 0, 0, &mut on);
             }
         } else {
             quote! {}
@@ -173,10 +184,12 @@ impl Compiler {
         Input {
             file_ingests,
             maybe_peers,
-            preload,
+            preload_ingest,
+            preload_epoch,
             put_dispatch,
             file_dispatch,
             rel_names,
+            start_time: u32::from(needs_preload),
         }
     }
 }

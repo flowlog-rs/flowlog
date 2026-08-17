@@ -14,7 +14,6 @@ use crate::io::output::encode::Encode;
 use crate::io::output::encode::text::TextRows;
 use crate::io::output::writer::Writer;
 use crate::io::spec::OutputSpec;
-use crate::txn::Diff;
 
 /// One `write` syscall per megabyte rather than per row. A few drains run
 /// concurrently in file mode, but 1 MiB each is negligible next to the data.
@@ -51,7 +50,7 @@ impl TextWriter {
     /// [`push`](Writer::push).
     pub fn write_file<T, Ts>(
         spec: &OutputSpec<'_>,
-        per_worker: Vec<Vec<(T, Ts, Diff)>>,
+        per_worker: Vec<Vec<(T, Ts, i32)>>,
         with_diff: bool,
     ) -> Result<(), RuntimeError>
     where
@@ -128,7 +127,7 @@ impl TextWriter {
     /// formatting in parallel.
     fn write_parallel<T, Ts>(
         mut self,
-        per_worker: Vec<Vec<(T, Ts, Diff)>>,
+        per_worker: Vec<Vec<(T, Ts, i32)>>,
         with_diff: bool,
     ) -> Result<(), RuntimeError>
     where
@@ -139,7 +138,7 @@ impl TextWriter {
         let mut pool: Vec<TextRows> = (0..lanes)
             .map(|_| TextRows::new(self.rows.delim()))
             .collect();
-        let mut segments: Vec<Vec<(T, Ts, Diff)>> = (0..lanes).map(|_| Vec::new()).collect();
+        let mut segments: Vec<Vec<(T, Ts, i32)>> = (0..lanes).map(|_| Vec::new()).collect();
 
         // Flattening preserves worker-then-row order, and drops each
         // worker's allocation as it is consumed, so the rows still resident
@@ -194,7 +193,7 @@ impl<T: Encode<TextRows>> Writer<T> for TextWriter {
     /// truncated and partly written, so there is nothing to salvage by
     /// continuing.
     #[inline]
-    fn push(&mut self, row: T, diff: Option<Diff>) {
+    fn push(&mut self, row: T, diff: Option<i32>) {
         self.rows.clear();
         self.rows.push(row, diff);
         if let Err(source) = self.out.write_all(self.rows.as_bytes()) {

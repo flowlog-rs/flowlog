@@ -1,12 +1,14 @@
-//! Batch-mode `fn main()` generator.
+//! Batch mode (`DatalogBatch` / `ExtendBatch`) main function generation.
 //!
-//! Runs the dataflow once, to fixpoint, then writes outputs:
+//! Generates a `fn main()` that runs the dataflow once, to fixpoint, and
+//! then writes outputs. Each worker:
 //!
-//! 1. Construct the timely dataflow graph from generator fragments.
-//! 2. Build the EDB registry and ingest all data (files + inline facts).
-//! 3. Close input handles and step the worker until idle.
-//! 4. Flush worker-local output buffers into the shared buffers.
-//! 5. Worker 0 drains the shared buffers (sort / limit / write).
+//! 1. builds the timely dataflow graph from generator fragments,
+//! 2. ingests its share of the input (files and inline facts),
+//! 3. closes its input handles and steps to fixpoint,
+//! 4. flushes its output buffers into the shared ones, and exits.
+//!
+//! The main thread then drains the shared buffers (sort / limit / write).
 
 use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
@@ -46,19 +48,16 @@ pub(crate) fn gen_batch_main(
     quote! {
         fn main() {
             let args: Vec<String> = std::env::args().collect();
-            let barrier = worker_barrier_from_args(&args);
+            let timer = Instant::now();
 
-            // Shared output machinery constructed before workers spawn.
             #(#output_bufs)*
             #(#size_cell_decls)*
 
             timely::execute_from_args(args.into_iter(), {
-                let barrier = barrier.clone();
                 #(#output_buf_clones)*
                 #(#size_cell_clones)*
 
                 move |worker| {
-                    let timer = Instant::now();
                     let index = worker.index();
                     #maybe_peers
 
@@ -77,28 +76,26 @@ pub(crate) fn gen_batch_main(
                         println!("{:?}:\tDataflow assembled", timer.elapsed());
                     }
 
-                    // Build the input handlers, ingest data, then close them
-                    // so the dataflow can drain to fixpoint.
                     #(#file_ingests)*
                     inputs.apply_inline_all(index);
                     inputs.close_all();
 
+                    if index == 0 {
+                        println!("{:?}:\tInputs ingested", timer.elapsed());
+                    }
+
                     #step_loop
 
-                    // Flush per-worker output buffers into the shared ones,
-                    // then worker 0 merges and writes results.
                     #(#flush)*
-                    barrier.wait();
 
                     #metrics_write
-
-                    if index == 0 {
-                        println!("{:?}:\tDataflow executed", timer.elapsed());
-                        #merge_section
-                    }
                 }
             })
             .unwrap();
+
+            println!("{:?}:\tDataflow executed", timer.elapsed());
+            #merge_section
+            println!("{:?}:\tOutputs written", timer.elapsed());
         }
     }
 }

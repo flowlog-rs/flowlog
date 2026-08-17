@@ -8,33 +8,37 @@
 
 use std::path::PathBuf;
 
-/// How many copies of a tuple an update applies, matching the runtime's own
-/// `txn::Diff`.
-///
-/// Spelled here rather than imported so the shell needs no dependency on the
-/// runtime: it is a transparent alias either way, so a program's generated
-/// code passes one where the other is expected. The shell exists only in
-/// incremental mode, so this is signed and nothing here has to work for the
-/// batch semiring.
+/// How many copies of a tuple an update applies: `+1` inserts, `-1`
+/// retracts, and larger magnitudes scale the count.
 pub type Diff = i32;
+
+/// One update a transaction stages: the payload of a `put` or `file`
+/// line, and what a commit hands every worker to apply.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TxnOp {
+    /// `put <rel> <tuple> [diff]`: apply `diff` copies of `tuple`
+    /// (serialized form) to `rel`.
+    Put {
+        rel: String,
+        tuple: String,
+        diff: Diff,
+    },
+    /// `file <rel> <path> [diff]`: apply `diff` copies of every row in
+    /// `path` to `rel`.
+    File {
+        rel: String,
+        path: PathBuf,
+        diff: Diff,
+    },
+}
 
 /// One command a shell line asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cmd {
     /// `txn` / `begin`
     Begin,
-    /// `put <rel> <tuple> [diff]`
-    Put {
-        rel: String,
-        tuple: String,
-        diff: Diff,
-    },
-    /// `file <rel> <path> [diff]`
-    File {
-        rel: String,
-        path: PathBuf,
-        diff: Diff,
-    },
+    /// `put` / `file`: one op staged into the open transaction.
+    Stage(TxnOp),
     /// `commit` / `done`
     Commit,
     /// `abort` / `rollback`
@@ -208,20 +212,20 @@ pub fn parse_line(line: &str) -> Option<Cmd> {
         // The arity is the pattern, so the optional `[diff]` needs no count:
         // a third argument is the tail, and a fourth fails to match.
         "put" => match args {
-            [rel, tuple, diff @ ..] if diff.len() <= 1 => Some(Cmd::Put {
+            [rel, tuple, diff @ ..] if diff.len() <= 1 => Some(Cmd::Stage(TxnOp::Put {
                 diff: parse_diff(diff.first().map(String::as_str))?,
                 rel: std::mem::take(rel),
                 tuple: std::mem::take(tuple),
-            }),
+            })),
             _ => err("usage: put <rel> <tuple> [diff]"),
         },
 
         "file" => match args {
-            [rel, path, diff @ ..] if diff.len() <= 1 => Some(Cmd::File {
+            [rel, path, diff @ ..] if diff.len() <= 1 => Some(Cmd::Stage(TxnOp::File {
                 diff: parse_diff(diff.first().map(String::as_str))?,
                 rel: std::mem::take(rel),
                 path: PathBuf::from(std::mem::take(path)),
-            }),
+            })),
             _ => err("usage: file <rel> <path> [diff]"),
         },
 
@@ -364,11 +368,11 @@ mod tests {
     fn put_defaults_to_asserting_once() {
         assert_eq!(
             parse_line("put Edge 1,2"),
-            Some(Cmd::Put {
+            Some(Cmd::Stage(TxnOp::Put {
                 rel: "Edge".to_string(),
                 tuple: "1,2".to_string(),
                 diff: 1,
-            })
+            }))
         );
     }
 
@@ -380,7 +384,7 @@ mod tests {
     #[case("put R x 3", 3)]
     #[case("put R x -3", -3)]
     fn a_diff_carries_its_sign_and_magnitude(#[case] line: &str, #[case] expected: Diff) {
-        let Some(Cmd::Put { diff, .. }) = parse_line(line) else {
+        let Some(Cmd::Stage(TxnOp::Put { diff, .. })) = parse_line(line) else {
             panic!("expected a put")
         };
         assert_eq!(diff, expected);
@@ -391,11 +395,11 @@ mod tests {
     fn file_reads_a_path() {
         assert_eq!(
             parse_line("file Edge data/edge.csv -1"),
-            Some(Cmd::File {
+            Some(Cmd::Stage(TxnOp::File {
                 rel: "Edge".to_string(),
                 path: PathBuf::from("data/edge.csv"),
                 diff: -1,
-            })
+            }))
         );
     }
 

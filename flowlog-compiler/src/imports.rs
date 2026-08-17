@@ -38,15 +38,13 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
 
     if inc {
         out.push(quote! {
-            use ::flowlog_runtime::txn::{TxnAction, TxnOp, TxnState};
-            use ::flowlog_shell::cmd;
-            use ::flowlog_shell::Cmd;
-            use ::flowlog_shell::Prompt;
-            use std::sync::{Arc, RwLock};
+            use ::flowlog_txn::cmd::TxnOp;
+            use ::flowlog_txn::driver::{drive, follow, Event, SharedTxn};
+            use ::flowlog_txn::Prompt;
         });
     }
 
-    out.push(std_imports(inc, prof, f));
+    out.push(std_imports(prof, f));
     out.push(dd_imports(f));
 
     if f.timely_map() {
@@ -81,37 +79,6 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     quote! { #(#out)* }
 }
 
-pub(crate) fn gen_worker_helpers() -> TokenStream {
-    quote! {
-        fn workers_from_args(args: &[String]) -> usize {
-            let mut i = 0;
-            while i < args.len() {
-                if args[i] == "-w" && i + 1 < args.len() {
-                    if let Ok(n) = args[i + 1].parse::<usize>() {
-                        return n.max(1);
-                    }
-                    i += 2;
-                    continue;
-                }
-                if let Some(rest) = args[i].strip_prefix("-w=") {
-                    if let Ok(n) = rest.parse::<usize>() {
-                        return n.max(1);
-                    }
-                }
-                i += 1;
-            }
-            1
-        }
-
-        fn worker_barrier_from_args(
-            args: &[String],
-        ) -> std::sync::Arc<std::sync::Barrier> {
-            let workers = workers_from_args(args);
-            std::sync::Arc::new(std::sync::Barrier::new(workers))
-        }
-    }
-}
-
 /// Imports brought into the generated binary's `relation` module so the
 /// shared relation codegen can reference the runtime's ingest entry points
 /// unqualified.
@@ -134,7 +101,7 @@ pub(crate) fn gen_binary_relation_extras(program: &flowlog_parser::Program) -> T
     }
 }
 
-fn std_imports(inc: bool, prof: bool, f: &Features) -> TokenStream {
+fn std_imports(prof: bool, f: &Features) -> TokenStream {
     if prof {
         let rc_refcell = if f.output_buffers() {
             quote! {}
@@ -144,7 +111,7 @@ fn std_imports(inc: bool, prof: bool, f: &Features) -> TokenStream {
                 use std::rc::Rc;
             }
         };
-        let output_buf = output_buffer_imports(inc, f.output_buffers());
+        let output_buf = output_buffer_imports(f.output_buffers());
 
         return quote! {
             #rc_refcell
@@ -154,7 +121,7 @@ fn std_imports(inc: bool, prof: bool, f: &Features) -> TokenStream {
     }
 
     let mut out = Vec::new();
-    out.push(output_buffer_imports(inc, f.output_buffers()));
+    out.push(output_buffer_imports(f.output_buffers()));
     out.push(quote! { use std::time::Instant; });
     quote! { #(#out)* }
 }
@@ -189,17 +156,12 @@ fn dd_core_imports(f: &Features) -> TokenStream {
     quote! { #(#out)* }
 }
 
-fn output_buffer_imports(inc: bool, needed: bool) -> TokenStream {
+fn output_buffer_imports(needed: bool) -> TokenStream {
     if !needed {
         return quote! {};
     }
-    let sync = if inc {
-        quote! { use std::sync::Mutex; }
-    } else {
-        quote! { use std::sync::{Arc, Mutex}; }
-    };
     quote! {
-        #sync
+        use std::sync::{Arc, Mutex};
         use std::rc::Rc;
         use std::cell::RefCell;
     }

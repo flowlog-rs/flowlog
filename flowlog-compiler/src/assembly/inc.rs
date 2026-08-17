@@ -1,11 +1,10 @@
 //! Incremental mode (`DatalogInc` / `ExtendInc`) main function generation.
 //!
-//! Generates a `fn main()` that:
-//! 1. Constructs the timely dataflow graph with a probe handle.
-//! 2. Builds the relation registry and runs the preload epoch (if any).
-//! 3. Enters an interactive command loop where worker 0 drives
-//!    transactions (`begin` / `put` / `file` / `commit` / `quit`)
-//!    and non-zero workers follow via shared state + barriers.
+//! Generates a `fn main()` that builds the timely dataflow graph, runs the
+//! preload epoch, and hands the transaction loop to the shell: worker 0
+//! `drive`s at the prompt, every other worker `follow`s, and one generated
+//! callback answers each `Event` with what only this program knows: op
+//! dispatch, the advance sequence, the output merge, the shutdown drain.
 
 use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
@@ -37,27 +36,25 @@ pub(crate) fn gen_incremental_main(
         ..
     } = p;
     let Input {
-        preload,
+        preload_ingest,
+        preload_epoch,
         put_dispatch,
         file_dispatch,
         rel_names,
+        start_time,
         ..
     } = rp;
 
     quote! {
         fn main() {
             let args: Vec<String> = std::env::args().collect();
-
-            let shared_txn: Arc<RwLock<TxnState>> =
-                Arc::new(RwLock::new(TxnState::default()));
-            let barrier = worker_barrier_from_args(&args);
+            let shared = SharedTxn::from_args(&args);
 
             #(#output_bufs)*
             #(#size_cell_decls)*
 
             timely::execute_from_args(args.into_iter(), {
-                let shared_txn = shared_txn.clone();
-                let barrier = barrier.clone();
+                let shared = shared.clone();
                 #(#output_buf_clones)*
                 #(#size_cell_clones)*
 
@@ -86,213 +83,58 @@ pub(crate) fn gen_incremental_main(
 
                     let mut time_stamp: u32 = 0;
 
-                    #preload
+                    #preload_ingest
 
-                    // Apply a list of txn ops to this worker's input handles.
-                    //
-                    // A txn names its relation as a string, so this is the
-                    // one place a relation is chosen by a value that does
-                    // not exist until run time. Matching resolves it without
-                    // the allocation, hash, and vtable a name-keyed map
-                    // would cost, and it runs once per command rather than
-                    // once per row.
-                    fn apply_ops(
-                        inputs: &mut Inputs,
-                        ops: &[TxnOp],
-                        peers: usize,
-                        index: usize,
-                    ) {
-                        for op in ops {
-                            match op {
-                                TxnOp::Put { rel, tuple, diff } => {
-                                    #put_dispatch
-                                }
-                                TxnOp::File { rel, path, diff } => {
-                                    // Fatal load errors still end the process:
-                                    // this worker's share may already be in its
-                                    // session, and the commit would otherwise
-                                    // land a partially loaded relation with no
-                                    // abort path.
-                                    #file_dispatch
+                    let on = |event: Event| match event {
+                        Event::Apply(ops) => {
+                            for op in &ops {
+                                match op {
+                                    TxnOp::Put { rel, tuple, diff } => {
+                                        #put_dispatch
+                                    }
+                                    TxnOp::File { rel, path, diff } => {
+                                        #file_dispatch
+                                    }
                                 }
                             }
                         }
-                    }
+                        Event::Advance(t) => {
+                            time_stamp = t;
+                            inputs.advance_to_all(time_stamp);
+                            inputs.flush_all();
+                            #step_loop
+
+                            #metrics_write
+
+                            #(#flush)*
+                        }
+                        Event::Merge(t) => {
+                            // The merge fragment names `time_stamp` in its
+                            // epoch-stamped file paths.
+                            let time_stamp = t;
+                            #merge_section
+                        }
+                        Event::Close(t) => {
+                            inputs.close_all();
+                            while probe.less_than(&t) {
+                                worker.step();
+                            }
+                        }
+                    };
+
+                    #preload_epoch
 
                     if index == 0 {
                         println!("{:?}:\tDataflow assembled", timer.elapsed());
-                        println!(
-                            "FlowLog Incremental Interactive Shell, type 'help' for commands."
-                        );
                     }
 
-                    let mut last_epoch_seen: u32 = 0;
-
-                    // -------------------------------
-                    // Worker != 0: listen & apply published txn snapshots
-                    // -------------------------------
-                    if index != 0 {
-                        loop {
-                            barrier.wait();
-
-                            let snap = shared_txn.read().unwrap().clone();
-                            assert!(
-                                snap.epoch > last_epoch_seen,
-                                "stale epoch observed"
-                            );
-                            last_epoch_seen = snap.epoch;
-
-                            match snap.action {
-                                TxnAction::Commit => {
-                                    apply_ops(&mut inputs, snap.pending.as_slice(), peers, index);
-
-                                    time_stamp += 1;
-                                    inputs.advance_to_all(time_stamp);
-                                    inputs.flush_all();
-                                    #step_loop
-
-                                    #metrics_write
-
-                                    // Flush thread-local buffers into shared buffers.
-                                    #(#flush)*
-
-                                    barrier.wait();
-                                }
-
-                                TxnAction::Quit => {
-                                    inputs.close_all();
-                                    while probe.less_than(&time_stamp) {
-                                        worker.step();
-                                    }
-
-                                    barrier.wait();
-                                    break;
-                                }
-
-                                TxnAction::None => {
-                                    unreachable!("worker 0 only publishes Commit or Quit");
-                                }
-                            }
-
-                            barrier.wait();
-                        }
-                        return;
-                    }
-
-                    // -------------------------------
-                    // Worker 0: interactive driver
-                    // -------------------------------
-                    let rel_words = REL_NAMES.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
-                    let mut prompt = Prompt::new(rel_words);
-
-                    let mut local_txn: TxnState = TxnState::default();
-                    let mut in_txn: bool = false;
-
-                    loop {
-                        let Some(c) = prompt.next_cmd(time_stamp) else { continue };
-
-                        match c {
-                            Cmd::Help => println!("{}", cmd::help_text()),
-
-                            Cmd::Begin => {
-                                in_txn = true;
-                                local_txn.clear_pending();
-                                println!("(txn begin)");
-                            }
-
-                            Cmd::Abort => {
-                                in_txn = false;
-                                local_txn.clear_pending();
-                                println!("(txn aborted)");
-                            }
-
-                            Cmd::Put { rel, tuple, diff } => {
-                                if !in_txn {
-                                    in_txn = true;
-                                    local_txn.clear_pending();
-                                }
-                                local_txn.enqueue(TxnOp::Put { rel, tuple, diff });
-                                println!("(queued put)");
-                            }
-
-                            Cmd::File { rel, path, diff } => {
-                                if !in_txn {
-                                    in_txn = true;
-                                    local_txn.clear_pending();
-                                }
-                                local_txn.enqueue(TxnOp::File { rel, path, diff });
-                                println!("(queued file)");
-                            }
-
-                            Cmd::Commit => {
-                                if !in_txn {
-                                    println!("(no active txn)");
-                                    continue;
-                                }
-
-                                let round_timer = Instant::now();
-
-                                let next_epoch = shared_txn.read().unwrap().epoch + 1;
-                                {
-                                    let mut w = shared_txn.write().unwrap();
-                                    *w = local_txn.as_commit_snapshot(next_epoch);
-                                }
-
-                                barrier.wait();
-
-                                // Apply exactly what got published (keeps behavior consistent).
-                                let snap = shared_txn.read().unwrap().clone();
-                                apply_ops(&mut inputs, snap.pending.as_slice(), peers, index);
-
-                                time_stamp += 1;
-                                inputs.advance_to_all(time_stamp);
-                                inputs.flush_all();
-                                #step_loop
-
-                                #metrics_write
-
-                                // Flush thread-local buffers into shared buffers.
-                                #(#flush)*
-
-                                barrier.wait();
-
-                                if index == 0 {
-                                    // === Merge output buffers (sort, limit, write) ===
-                                    #merge_section
-
-                                    println!("{:?}:\tCommitted & executed", round_timer.elapsed());
-                                }
-
-                                in_txn = false;
-                                local_txn.clear_pending();
-
-                                barrier.wait();
-
-                                {
-                                    let mut w = shared_txn.write().unwrap();
-                                    w.action = TxnAction::None;
-                                    w.pending.clear();
-                                }
-                            }
-
-                            Cmd::Quit => {
-                                let next_epoch = shared_txn.read().unwrap().epoch + 1;
-                                {
-                                    let mut w = shared_txn.write().unwrap();
-                                    *w = TxnState::as_quit_snapshot(next_epoch);
-                                }
-
-                                barrier.wait();
-
-                                inputs.close_all();
-                                while probe.less_than(&time_stamp) {
-                                    worker.step();
-                                }
-
-                                barrier.wait();
-                                break;
-                            }
-                        }
+                    if index == 0 {
+                        let rel_words =
+                            REL_NAMES.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+                        let mut prompt = Prompt::new(rel_words);
+                        drive(&shared, #start_time, |t| prompt.next_cmd(t), on);
+                    } else {
+                        follow(&shared, #start_time, on);
                     }
                 }
             })

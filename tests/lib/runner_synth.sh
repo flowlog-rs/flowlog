@@ -300,11 +300,14 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# Both flowlog-runtime and flowlog-build are path-pinned to the in-repo
-# crates so a local change to either is exercised by the lib-mode test
-# suites. (Pre-leanness this pinned flowlog-runtime to crates.io 0.2,
-# which silently masked any local-only runtime change.)
+# Every FlowLog crate is path-pinned to the in-repo checkout so a local
+# change to any of them is exercised by the lib-mode test suites.
+# (Pre-leanness this pinned flowlog-runtime to crates.io 0.2, which
+# silently masked any local-only runtime change.)
 flowlog-runtime = { path = "${ROOT_DIR}/flowlog-runtime" }
+# The incremental engine speaks the shell's txn protocol; no terminal, so
+# no default features. Unused by batch programs, harmlessly.
+flowlog-txn = { path = "${ROOT_DIR}/flowlog-txn", default-features = false }
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
@@ -424,6 +427,22 @@ gen_csv_loader() {
 
     local pascal
     pascal=$(pascal_case "$lower_name")
+
+    # A nullary relation has no row struct and no insert_: its file is one
+    # assertion per line, and the engine's API is the presence call
+    # `set_<rel>()`, so any non-empty file asserts the fact.
+    if [[ -z "$typed_fields" ]]; then
+        cat <<EOF
+    {
+        let __src = std::fs::read_to_string("data/${csv}")
+            .expect("read data/${csv}");
+        if __src.lines().count() > 0 {
+            engine.set_${lower_name}();
+        }
+    }
+EOF
+        return 0
+    fi
 
     # Build a positional tuple literal: `(parse_col_0, parse_col_1, ...)`.
     # The user-facing type `rel::<Pascal>` is a tuple alias now — no named
@@ -972,9 +991,9 @@ EOF
     {
         engine.begin();
 ${preload_inserts}
-        commit_num += 1;
         let results = engine.commit();
 ${delta_blocks}
+        commit_num += 1;
     }
 EOF
 )
@@ -1018,9 +1037,9 @@ ${preload_block}
         match head.as_str() {
             "begin" | "txn" => engine.begin(),
             "commit" | "done" => {
-                commit_num += 1;
                 let results = engine.commit();
 ${delta_blocks}
+                commit_num += 1;
             }
             "abort" | "rollback" => engine.abort(),
             "put" => {

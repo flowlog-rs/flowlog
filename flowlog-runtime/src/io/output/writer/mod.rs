@@ -15,7 +15,6 @@ pub mod vec;
 
 use crate::error::RuntimeError;
 use crate::io::spec::OutputSpec;
-use crate::txn::Diff;
 
 /// A relation's destination, taking drained rows one at a time.
 ///
@@ -42,12 +41,14 @@ pub trait Writer<T>: Sized {
     /// Acquire the destination `spec` names.
     fn open(spec: &OutputSpec<'_>) -> Result<Self, RuntimeError>;
 
-    /// Take one row, with its multiplicity when the sink writes one.
+    /// Take one row, with its multiplicity when the sink writes one:
+    /// `Some` is incremental mode's trailing signed count column, `None`
+    /// is batch, whose semiring carries no count at all.
     ///
     /// `diff` is the caller's call rather than the row's: a nullary
     /// relation carries none even in an incremental epoch, where every
     /// other relation does.
-    fn push(&mut self, row: T, diff: Option<Diff>);
+    fn push(&mut self, row: T, diff: Option<i32>);
 
     /// Finish the destination and hand it over.
     ///

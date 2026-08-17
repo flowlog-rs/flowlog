@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 // Suite   : insert
-// Feature : put command inserts tuples, verify _t1 all +1
+// Feature : put command inserts tuples, verify _t0 all +1
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Edge(src: int32, dst: int32)

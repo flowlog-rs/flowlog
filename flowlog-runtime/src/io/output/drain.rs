@@ -13,14 +13,16 @@ use std::cmp::Ordering;
 
 use crate::error::RuntimeError;
 use crate::io::output::writer::Writer;
-use crate::txn::Diff;
 
 /// One buffered output row: the slot tuple, the time it was derived at,
 /// and its multiplicity.
 ///
 /// The time is carried for the sinks that report it and ignored by the
-/// rest; a comparator never reads it.
-pub type Row<T, Ts> = (T, Ts, Diff);
+/// rest; a comparator reads neither it nor the multiplicity. Batch
+/// mode has no multiplicity (its semiring is presence), so its generated
+/// code buffers a literal `1` here and drains with the diff withheld; a
+/// row generic over its multiplicity would let batch store `()` instead.
+pub type Row<T, Ts> = (T, Ts, i32);
 
 // =============================================================================
 // Ordering
@@ -78,7 +80,7 @@ where
 /// The general form: `f` sees the whole row, including the time, which the
 /// stderr sink reports and every other sink ignores. [`drain_flat`] is this
 /// with a [`Writer`] on the end.
-pub fn for_each_flat<T, Ts, F: FnMut(T, Ts, Diff)>(per_worker: Vec<Vec<Row<T, Ts>>>, mut f: F) {
+pub fn for_each_flat<T, Ts, F: FnMut(T, Ts, i32)>(per_worker: Vec<Vec<Row<T, Ts>>>, mut f: F) {
     for buffer in per_worker {
         for (tuple, time, diff) in buffer {
             f(tuple, time, diff);
@@ -89,7 +91,7 @@ pub fn for_each_flat<T, Ts, F: FnMut(T, Ts, Diff)>(per_worker: Vec<Vec<Row<T, Ts
 /// Hand every row to `f` in `cmp` order.
 pub fn for_each_sorted<T, Ts, F, C>(mut per_worker: Vec<Vec<Row<T, Ts>>>, cmp: C, mut f: F)
 where
-    F: FnMut(T, Ts, Diff),
+    F: FnMut(T, Ts, i32),
     C: Fn(&Row<T, Ts>, &Row<T, Ts>) -> Ordering,
 {
     for buffer in &mut per_worker {
@@ -103,7 +105,7 @@ where
 /// Hand the first `n` rows in `cmp` order to `f`.
 pub fn for_each_topk<T, Ts, F, C>(per_worker: Vec<Vec<Row<T, Ts>>>, n: usize, cmp: C, mut f: F)
 where
-    F: FnMut(T, Ts, Diff),
+    F: FnMut(T, Ts, i32),
     C: Fn(&Row<T, Ts>, &Row<T, Ts>) -> Ordering,
 {
     let all: Vec<Row<T, Ts>> = per_worker.into_iter().flatten().collect();

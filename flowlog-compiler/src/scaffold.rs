@@ -164,7 +164,7 @@ pub(crate) fn render_cargo_toml(
         if config.is_incremental() {
             // The shell's own crate, which carries `rustyline` for it: a batch
             // program needs neither and depends on neither.
-            deps["flowlog-shell"] = "0.1".into();
+            deps["flowlog-txn"] = "0.1".into();
         }
     }
 
