@@ -9,8 +9,8 @@
 // don't each repeat `into_inner().next().ok_or_else(|| grammar_bug(...))`:
 // the accessors centralize that lookup and its error text.
 
-use flowlog_common::FileId;
-use flowlog_common::Span;
+use flowlog_error::FileId;
+use flowlog_error::Span;
 use pest::iterators::Pair;
 use pest::iterators::Pairs;
 

@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::mem;
 
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::Arithmetic;
 use crate::Atom;

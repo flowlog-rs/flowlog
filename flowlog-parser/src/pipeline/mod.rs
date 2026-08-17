@@ -16,7 +16,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use flowlog_common::Config;
-use flowlog_common::SourceMap;
+use flowlog_error::SourceMap;
 use include::resolve_includes;
 use tracing::debug;
 use tracing::info;

@@ -5,7 +5,7 @@
 //! span and the user's spelling so diagnostics can refer back to the fact as
 //! written.
 
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::Constant;
 use crate::ast::FlowLogRule;

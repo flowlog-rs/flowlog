@@ -1,6 +1,6 @@
 //! Infer and pin an expression (`Arithmetic`/`Factor`).
 
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::Arithmetic;
 use crate::ArithmeticOperator;
@@ -290,7 +290,7 @@ fn pin_fn_call(fc: &mut FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::Span;
+    use flowlog_error::Span;
 
     use super::*;
     use crate::ArithmeticOperator;

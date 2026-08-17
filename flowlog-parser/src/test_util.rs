@@ -11,8 +11,8 @@
 use std::io::Write;
 
 use flowlog_common::Config;
-use flowlog_common::FileId;
-use flowlog_common::SourceMap;
+use flowlog_error::FileId;
+use flowlog_error::SourceMap;
 use pest::Parser as _;
 use pest::iterators::Pair;
 use tempfile::NamedTempFile;

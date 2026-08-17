@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use educe::Educe;
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use super::Arithmetic;
 use crate::Lexeme;
@@ -251,7 +251,7 @@ impl Lexeme for ComparisonExpr {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
+    use flowlog_error::FileId;
     use rstest::rstest;
 
     use super::*;

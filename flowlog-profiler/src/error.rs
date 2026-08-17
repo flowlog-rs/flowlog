@@ -5,8 +5,8 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
-use flowlog_common::BUG_URL;
-use flowlog_common::InternalError;
+use flowlog_error::BUG_URL;
+use flowlog_error::InternalError;
 
 /// A failed operation on profiling artifacts.
 #[derive(Debug)]

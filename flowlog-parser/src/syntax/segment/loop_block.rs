@@ -11,8 +11,8 @@
 use std::fmt;
 
 use educe::Educe;
-use flowlog_common::Span;
 use flowlog_common::compute_fp;
+use flowlog_error::Span;
 
 use super::LoopCondition;
 use crate::Lexeme;

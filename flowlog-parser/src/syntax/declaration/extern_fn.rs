@@ -5,7 +5,7 @@
 use std::fmt;
 
 use educe::Educe;
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use super::Attribute;
 use crate::Node;
@@ -136,7 +136,7 @@ fn parse_param(node: Node, registry: &TypeRegistry) -> Result<Attribute, ParseEr
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
+    use flowlog_error::FileId;
 
     use super::*;
     use crate::test_util::parse_pair;

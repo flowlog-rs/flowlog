@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::ast::FlowLogRule;
 use crate::ast::Predicate;
@@ -747,7 +747,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
+    use flowlog_error::FileId;
 
     use super::*;
     use crate::DataType;

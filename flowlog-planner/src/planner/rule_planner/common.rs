@@ -941,7 +941,7 @@ pub(super) fn test_setup(src: &str) -> (RulePlanner, Catalog) {
     use std::io::Write;
 
     use flowlog_common::Config;
-    use flowlog_common::SourceMap;
+    use flowlog_error::SourceMap;
     use tempfile::NamedTempFile;
 
     let mut tmp = NamedTempFile::new().expect("tempfile");

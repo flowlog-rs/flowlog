@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use flowlog_common::SUBSECTION_BAR;
-use flowlog_common::Span;
+use flowlog_error::Span;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::HeadArg;
@@ -727,7 +727,7 @@ mod tests {
     fn parse_program(source: &str) -> Program {
         use flowlog_common::Config;
         use flowlog_common::ExecutionMode;
-        use flowlog_common::SourceMap;
+        use flowlog_error::SourceMap;
         use tempfile::NamedTempFile;
         let mut tmp = NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(source.as_bytes())

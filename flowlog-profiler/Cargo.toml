@@ -13,6 +13,7 @@ categories = ["compilers", "development-tools::profiling", "database"]
 
 [dependencies]
 flowlog-common.workspace = true
+flowlog-error.workspace = true
 
 serde = { workspace = true }
 serde_json.workspace = true

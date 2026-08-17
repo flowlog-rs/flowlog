@@ -5,7 +5,7 @@
 //! alias (`=`), subtype (`<:`), and tuple forms. Referenced type names
 //! stay as source strings for [`crate::types::TypeRegistry`] to resolve.
 
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::Node;
 use crate::Rule;
@@ -80,7 +80,7 @@ fn parse_tuple_fields(tuple_type: Node) -> Result<Vec<(String, String)>, ParseEr
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
+    use flowlog_error::FileId;
 
     use super::*;
     use crate::assert_err;

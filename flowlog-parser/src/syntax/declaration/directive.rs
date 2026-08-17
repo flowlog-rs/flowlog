@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use educe::Educe;
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::Lexeme;
 use crate::Node;
@@ -211,7 +211,7 @@ pub(crate) fn parse_io_params(node: Node) -> Result<HashMap<String, String>, Par
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
+    use flowlog_error::FileId;
 
     use super::*;
     use crate::test_util::parse_pair;

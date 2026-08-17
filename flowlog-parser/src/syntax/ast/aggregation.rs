@@ -6,7 +6,7 @@
 use std::fmt;
 
 use educe::Educe;
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use super::Arithmetic;
 use crate::Lexeme;
@@ -173,7 +173,7 @@ impl Lexeme for Aggregation {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
+    use flowlog_error::FileId;
     use pest::Parser;
 
     use super::*;

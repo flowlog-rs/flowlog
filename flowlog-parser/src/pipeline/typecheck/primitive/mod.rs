@@ -25,7 +25,7 @@ mod rule;
 use std::collections::HashMap;
 
 use flowlog_common::Config;
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::Arithmetic;
 use crate::BuiltinOperator;

@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use educe::Educe;
-use flowlog_common::Span;
 use flowlog_common::compute_fp;
+use flowlog_error::Span;
 
 use super::Attribute;
 use crate::Node;
@@ -15,6 +15,16 @@ use crate::error::grammar_bug;
 use crate::types::DataType;
 use crate::types::TypeId;
 use crate::types::TypeRegistry;
+
+/// Where a relation's input facts are stored.
+///
+/// What is in the file decides how a worker takes its share of the rows and
+/// whether a cell arrives as text or already typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputIo {
+    /// A delimited text file: `IO="file"`, or no `IO=` at all.
+    File,
+}
 
 /// A relation schema with input/output annotations.
 #[derive(Debug, Clone, Educe)]
@@ -307,22 +317,33 @@ impl Relation {
         self.input_params.is_some()
     }
 
-    /// Check whether this relation is file-backed (`IO="file"`).
-    /// Returns false for `IO="command"` (interactive-only) and for
-    /// relations that have no `.input` directive at all.
+    /// Which storage backs this relation's `.input`, or `None` when it has
+    /// no `.input` directive or names an IO that is not read from a file
+    /// (`IO="command"` is interactive-only).
     ///
     /// Within an `.input` directive, absent `IO=` defaults to `"file"`
     /// (Souffle semantics): so `.input Edge` and
-    /// `.input Edge(filename="...")` are both file-backed.
+    /// `.input Edge(filename="...")` are both text files.
+    #[must_use]
+    #[inline]
+    pub fn input_io(&self) -> Option<InputIo> {
+        self.input_params
+            .as_ref()
+            .and_then(|params| match params.get("IO") {
+                None => Some(InputIo::File),
+                Some(io) if io.eq_ignore_ascii_case("file") => Some(InputIo::File),
+                Some(_) => None,
+            })
+    }
+
+    /// Check whether this relation's facts are loaded from a file on disk.
+    ///
+    /// Returns false for `IO="command"` (interactive-only) and for
+    /// relations that have no `.input` directive at all.
     #[must_use]
     #[inline]
     pub fn is_file_backed(&self) -> bool {
-        self.input_params
-            .as_ref()
-            .is_some_and(|params| match params.get("IO") {
-                None => true,
-                Some(io) => io.eq_ignore_ascii_case("file"),
-            })
+        self.input_io().is_some()
     }
 
     /// Check if this is an output/printsize relation.
@@ -537,7 +558,7 @@ impl fmt::Display for Relation {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
+    use flowlog_error::FileId;
 
     use super::*;
     use crate::assert_err;
@@ -661,6 +682,26 @@ mod tests {
     fn is_file_backed_false_when_no_input_directive() {
         let rel = Relation::new("r", attrs());
         assert!(!rel.is_file_backed());
+    }
+
+    /// An absent `IO=` is a text file, matching Souffle.
+    #[test]
+    fn input_io_defaults_to_file_when_io_absent() {
+        let mut rel = Relation::new("r", attrs());
+        rel.set_input_params(HashMap::new());
+        assert_eq!(rel.input_io(), Some(InputIo::File));
+    }
+
+    /// An IO this build cannot read from a file has no storage, so a
+    /// caller cannot mistake it for one it can open.
+    #[test]
+    fn input_io_is_none_for_an_unreadable_io() {
+        let mut rel = Relation::new("r", attrs());
+        let mut params = HashMap::new();
+        params.insert("IO".to_string(), "command".to_string());
+        rel.set_input_params(params);
+
+        assert_eq!(rel.input_io(), None);
     }
 
     /// `set_name` updates `name` (canonical, Rust-ident-safe) but

@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::Lexeme;
 use crate::Node;

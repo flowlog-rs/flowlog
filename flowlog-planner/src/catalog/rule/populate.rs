@@ -337,7 +337,7 @@ mod tests {
     use std::io::Write;
 
     use flowlog_common::Config;
-    use flowlog_common::SourceMap;
+    use flowlog_error::SourceMap;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
     use tempfile::NamedTempFile;

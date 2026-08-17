@@ -3,7 +3,7 @@
 use std::fmt;
 
 use educe::Educe;
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use super::Factor;
 use crate::Lexeme;

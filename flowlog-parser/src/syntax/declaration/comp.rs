@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::Node;
 use crate::Rule;

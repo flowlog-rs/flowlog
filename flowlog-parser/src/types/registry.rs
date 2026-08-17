@@ -9,8 +9,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use flowlog_common::FileId;
-use flowlog_common::Span;
+use flowlog_error::FileId;
+use flowlog_error::Span;
 use pest::iterators::Pair;
 
 use super::DataType;

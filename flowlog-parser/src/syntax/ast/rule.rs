@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use std::fmt;
 
 use educe::Educe;
-use flowlog_common::FileId;
-use flowlog_common::Span;
+use flowlog_error::FileId;
+use flowlog_error::Span;
 use pest::iterators::Pair;
 
 use super::AtomArg;

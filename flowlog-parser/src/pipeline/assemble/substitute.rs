@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use crate::Arithmetic;
 use crate::AtomArg;

@@ -12,8 +12,8 @@ use std::fmt;
 use std::iter;
 
 use educe::Educe;
-use flowlog_common::Span;
 use flowlog_common::compute_fp;
+use flowlog_error::Span;
 
 use crate::Lexeme;
 use crate::Node;

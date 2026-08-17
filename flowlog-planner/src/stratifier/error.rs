@@ -5,10 +5,11 @@
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use codespan_reporting::diagnostic::Label;
-use flowlog_common::Diagnostic;
-use flowlog_common::FileId;
-use flowlog_common::Span;
-use flowlog_common::primary_label;
+use flowlog_error::Diagnostic;
+use flowlog_error::FileId;
+use flowlog_error::FlowlogError;
+use flowlog_error::Span;
+use flowlog_error::primary_label;
 use thiserror::Error;
 
 /// Errors raised while stratifying a FlowLog program.
@@ -154,6 +155,8 @@ impl Diagnostic for StratifyError {
     }
 }
 
+impl FlowlogError for StratifyError {}
+
 /// Returns one primary label per rule, annotated with its ID.
 fn rule_labels(rules: &[(usize, Span)]) -> Vec<Label<FileId>> {
     rules
@@ -170,7 +173,7 @@ fn rule_labels(rules: &[(usize, Span)]) -> Vec<Label<FileId>> {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::SourceMap;
+    use flowlog_error::SourceMap;
 
     use super::*;
 

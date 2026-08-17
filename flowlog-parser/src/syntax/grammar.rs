@@ -4,8 +4,8 @@
 //! readers each pull one value off a raw token: a span, or a decoded
 //! string literal.
 
-use flowlog_common::FileId;
-use flowlog_common::Span;
+use flowlog_error::FileId;
+use flowlog_error::Span;
 use litrs::StringLit;
 use pest::iterators::Pair;
 use pest_derive::Parser;

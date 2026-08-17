@@ -13,6 +13,7 @@ categories = ["compilers", "parser-implementations", "database"]
 
 [dependencies]
 flowlog-common.workspace = true
+flowlog-error.workspace = true
 
 codespan-reporting.workspace = true
 educe = { workspace = true }

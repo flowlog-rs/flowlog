@@ -4,9 +4,9 @@
 //! so a caller can read a message and tell our bug from the user's mistake
 //! without knowing which stage produced it.
 //!
-//! - [`error`]: the trait, [`InternalError`], and [`BUG_URL`].
-//! - [`source`]: spans, file ids, and the map that resolves them.
-//! - [`diag`]: rendering a span-carrying error as a source diagnostic.
+//! - `error`: the trait, [`InternalError`], and [`BUG_URL`].
+//! - `source`: spans, file ids, and the map that resolves them.
+//! - `diag`: rendering a span-carrying error as a source diagnostic.
 
 mod diag;
 mod error;

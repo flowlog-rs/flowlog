@@ -26,6 +26,7 @@ pub(crate) use directive::InputDirective;
 pub(crate) use directive::OutputDirective;
 pub(crate) use directive::PrintSizeDirective;
 pub use extern_fn::ExternFn;
+pub use relation::InputIo;
 pub use relation::Relation;
 pub(crate) use type_decl::RawTypeOp;
 pub(crate) use type_decl::split_type_alias;

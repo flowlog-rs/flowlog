@@ -18,14 +18,15 @@ use std::path::PathBuf;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
 use codespan_reporting::diagnostic::Label;
-use flowlog_common::BUG_URL;
-use flowlog_common::Diagnostic;
-use flowlog_common::FileId;
-use flowlog_common::InternalError;
-use flowlog_common::Span;
-use flowlog_common::labels;
-use flowlog_common::primary_label;
-use flowlog_common::secondary_label;
+use flowlog_error::BUG_URL;
+use flowlog_error::Diagnostic;
+use flowlog_error::FileId;
+use flowlog_error::FlowlogError;
+use flowlog_error::InternalError;
+use flowlog_error::Span;
+use flowlog_error::labels;
+use flowlog_error::primary_label;
+use flowlog_error::secondary_label;
 use thiserror::Error;
 
 use crate::AggregationOperator;
@@ -1068,7 +1069,9 @@ impl Diagnostic for ParseError {
 
         }
     }
+}
 
+impl FlowlogError for ParseError {
     fn is_internal(&self) -> bool {
         matches!(self, ParseError::Internal(_))
     }
@@ -1088,9 +1091,9 @@ pub fn grammar_bug(detail: impl Into<String>) -> ParseError {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::BoxError;
-    use flowlog_common::SourceMap;
-    use flowlog_common::emit;
+    use flowlog_error::BoxError;
+    use flowlog_error::SourceMap;
+    use flowlog_error::emit;
 
     use super::*;
 

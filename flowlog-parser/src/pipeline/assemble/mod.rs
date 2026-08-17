@@ -15,8 +15,8 @@ mod validate;
 use std::collections::HashMap;
 use std::mem;
 
-use flowlog_common::FileId;
-use flowlog_common::Span;
+use flowlog_error::FileId;
+use flowlog_error::Span;
 use pest::Parser;
 
 use crate::FlowLogParser;

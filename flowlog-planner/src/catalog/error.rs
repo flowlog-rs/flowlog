@@ -3,13 +3,14 @@
 use std::fmt;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use flowlog_common::BUG_URL;
-use flowlog_common::Diagnostic;
-use flowlog_common::FileId;
-use flowlog_common::InternalError;
-use flowlog_common::Span;
-use flowlog_common::primary_label;
-use flowlog_common::secondary_label;
+use flowlog_error::BUG_URL;
+use flowlog_error::Diagnostic;
+use flowlog_error::FileId;
+use flowlog_error::FlowlogError;
+use flowlog_error::InternalError;
+use flowlog_error::Span;
+use flowlog_error::primary_label;
+use flowlog_error::secondary_label;
 use thiserror::Error;
 
 /// Which body predicate carried an unsafe variable. Only affects the
@@ -86,7 +87,9 @@ impl Diagnostic for CatalogError {
             CatalogError::Internal(ie) => ie.to_diagnostic(),
         }
     }
+}
 
+impl FlowlogError for CatalogError {
     fn is_internal(&self) -> bool {
         matches!(self, CatalogError::Internal(_))
     }
@@ -98,7 +101,7 @@ impl Diagnostic for CatalogError {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::SourceMap;
+    use flowlog_error::SourceMap;
 
     use super::*;
 

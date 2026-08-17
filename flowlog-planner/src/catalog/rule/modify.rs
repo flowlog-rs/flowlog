@@ -451,8 +451,8 @@ mod tests {
     use std::io::Write;
 
     use flowlog_common::Config;
-    use flowlog_common::SourceMap;
     use flowlog_common::compute_fp;
+    use flowlog_error::SourceMap;
     use tempfile::NamedTempFile;
 
     use super::*;

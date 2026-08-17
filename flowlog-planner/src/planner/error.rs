@@ -5,13 +5,14 @@
 //! and invariant violations use [`PlanError::internal`].
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use flowlog_common::BUG_URL;
-use flowlog_common::Diagnostic;
-use flowlog_common::FileId;
-use flowlog_common::InternalError;
-use flowlog_common::Span;
-use flowlog_common::primary_label;
-use flowlog_common::secondary_label;
+use flowlog_error::BUG_URL;
+use flowlog_error::Diagnostic;
+use flowlog_error::FileId;
+use flowlog_error::FlowlogError;
+use flowlog_error::InternalError;
+use flowlog_error::Span;
+use flowlog_error::primary_label;
+use flowlog_error::secondary_label;
 use flowlog_parser::AggregationOperator;
 use thiserror::Error;
 
@@ -81,7 +82,9 @@ impl Diagnostic for PlanError {
             PlanError::Internal(ie) => ie.to_diagnostic(),
         }
     }
+}
 
+impl FlowlogError for PlanError {
     fn is_internal(&self) -> bool {
         match self {
             PlanError::InconsistentAggregation { .. } => false,
@@ -97,7 +100,7 @@ impl Diagnostic for PlanError {
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::Span;
+    use flowlog_error::Span;
 
     use super::*;
     use crate::catalog::UnsafePredicateKind;

@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use flowlog_common::BoxError;
 use flowlog_common::Config;
+use flowlog_error::BoxError;
 use flowlog_parser::Program;
 use flowlog_profiler::PlanGraph;
 
@@ -102,8 +102,8 @@ fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
 mod tests {
     use std::io::Write;
 
-    use flowlog_common::SourceMap;
     use flowlog_common::compute_fp;
+    use flowlog_error::SourceMap;
     use tempfile::NamedTempFile;
 
     use super::*;

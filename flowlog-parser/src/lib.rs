@@ -48,6 +48,7 @@ pub use ast::TupleElem;
 pub use ast::TupleLit;
 pub use declaration::Attribute;
 pub use declaration::ExternFn;
+pub use declaration::InputIo;
 pub use declaration::Relation;
 pub use error::DirectiveKind;
 pub use error::ParseError;

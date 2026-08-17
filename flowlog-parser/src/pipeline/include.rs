@@ -8,9 +8,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use flowlog_common::FileId;
-use flowlog_common::SourceMap;
-use flowlog_common::Span;
+use flowlog_error::FileId;
+use flowlog_error::SourceMap;
+use flowlog_error::Span;
 use pest::Parser;
 use tracing::debug;
 use tracing::warn;

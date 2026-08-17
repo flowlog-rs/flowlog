@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use educe::Educe;
-use flowlog_common::Span;
+use flowlog_error::Span;
 
 use super::BuiltinCall;
 use super::BuiltinOperator;
@@ -436,7 +436,7 @@ mod tests {
     /// A lone parenthesised `_` is rejected with its dedicated error.
     #[test]
     fn grouped_placeholder_is_rejected() {
-        use flowlog_common::FileId;
+        use flowlog_error::FileId;
 
         use crate::assert_err;
         use crate::test_util::parse_pair;
