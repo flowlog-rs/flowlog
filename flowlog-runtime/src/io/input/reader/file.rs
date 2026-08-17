@@ -1,4 +1,4 @@
-//! Delimited text files, split across workers by byte range.
+//! A delimited text file as a reader, split across workers by byte range.
 
 use std::fs::File;
 use std::io::BufRead;
@@ -6,12 +6,11 @@ use std::io::BufReader;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
-use std::marker::PhantomData;
 use std::path::Path;
 
 use crate::error::RuntimeError;
 use crate::io::input::decode::Decode;
-use crate::io::input::decode::text::Line;
+use crate::io::input::decode::untyped::TextRow;
 use crate::io::input::reader::Reader;
 use crate::io::spec::Format;
 use crate::io::spec::InputSpec;
@@ -25,7 +24,7 @@ use crate::io::spec::InputSpec;
 /// that budget.
 ///
 /// Returns `None` on I/O error (logged to stderr).
-pub(crate) fn byte_range_reader(
+pub(crate) fn open_byte_range(
     path: &Path,
     index: usize,
     peers: usize,
@@ -96,22 +95,22 @@ pub(crate) fn byte_range_reader(
 }
 
 // =============================================================================
-// TextReader
+// FileReader
 // =============================================================================
 
 /// A worker's cursor over one byte range of a delimited text file.
 #[derive(Debug)]
-pub(crate) struct TextReader<T> {
+pub(crate) struct FileReader {
     reader: BufReader<File>,
     delim: u8,
     byte_budget: u64,
     bytes_consumed: u64,
     line: Vec<u8>,
-    slot: PhantomData<T>,
     line_number: u64,
+    nullary: bool,
 }
 
-impl<'src, T: for<'l> Decode<Line<'l>>> Reader<'src, T> for TextReader<T> {
+impl<'src, T: for<'l> Decode<TextRow<'l>>> Reader<'src, T> for FileReader {
     type Source = Path;
 
     /// A text scan interns strings as it reads, so under `uses_ord` it
@@ -131,17 +130,17 @@ impl<'src, T: for<'l> Decode<Line<'l>>> Reader<'src, T> for TextReader<T> {
             (spec.peers, spec.index)
         };
 
-        let Some((reader, byte_budget)) = byte_range_reader(spec.source, index, peers) else {
+        let Some((reader, byte_budget)) = open_byte_range(spec.source, index, peers) else {
             return Ok(None);
         };
         let mut rows = Self {
             reader,
-            slot: PhantomData,
             delim,
             byte_budget,
             bytes_consumed: 0,
             line: Vec::with_capacity(256),
             line_number: 0,
+            nullary: spec.rel.arity == 0,
         };
         // Only worker 0's range starts at the top of the file, so only it
         // sees the header. An error here keeps the legacy empty-load.
@@ -153,8 +152,10 @@ impl<'src, T: for<'l> Decode<Line<'l>>> Reader<'src, T> for TextReader<T> {
 
     /// The next row in this worker's range, or `None` at its end.
     ///
-    /// Blank lines are skipped rather than yielded as empty rows. An error
-    /// is fatal: the cursor makes no forward-progress promise after one.
+    /// Blank lines are filler and skipped, except for a nullary relation,
+    /// whose rows are empty: no bytes means the fact does not hold, one
+    /// empty line means it does. An error is fatal: the cursor makes no
+    /// forward-progress promise after one.
     // One call site per monomorphized drive loop: inlining puts the row's
     // construction and the accessors' shape match in one function, so the
     // per-row dispatch constant-folds away.
@@ -164,7 +165,7 @@ impl<'src, T: for<'l> Decode<Line<'l>>> Reader<'src, T> for TextReader<T> {
             if !self.read_line()? {
                 return Ok(None);
             }
-            if self.line.is_empty() {
+            if self.line.is_empty() && !self.nullary {
                 continue;
             }
 
@@ -180,7 +181,7 @@ impl<'src, T: for<'l> Decode<Line<'l>>> Reader<'src, T> for TextReader<T> {
                 });
             };
 
-            return Ok(Some(T::decode(&Line {
+            return Ok(Some(T::decode(&TextRow {
                 text: line,
                 delim: self.delim,
                 position: self.line_number,
@@ -190,7 +191,7 @@ impl<'src, T: for<'l> Decode<Line<'l>>> Reader<'src, T> for TextReader<T> {
     }
 }
 
-impl<T> TextReader<T> {
+impl FileReader {
     /// Read one line into `self.line`, stripped of its terminator.
     ///
     /// Returns `false` at end of input.
@@ -244,6 +245,18 @@ mod tests {
         uses_ord: false,
     };
 
+    static R_NULLARY: RelationSpec = RelationSpec {
+        name: "R",
+        arity: 0,
+        delim: b'\t',
+        format: Format::Text {
+            delim: b'\t',
+            has_header: false,
+        },
+        shard: ShardKey::Str,
+        uses_ord: false,
+    };
+
     /// Spec over `path` for worker `index` of `peers`, tab-delimited.
     fn spec(path: &Path, has_header: bool, peers: usize, index: usize) -> InputSpec<'_> {
         InputSpec {
@@ -268,7 +281,7 @@ mod tests {
     fn read(path: &Path, has_header: bool, peers: usize, index: usize) -> Vec<(String, String)> {
         let mut out = Vec::new();
         let Some(mut r) =
-            <TextReader<(String, String)>>::open(&spec(path, has_header, peers, index))
+            <FileReader as Reader<(String, String)>>::open(&spec(path, has_header, peers, index))
                 .expect("open")
         else {
             return out;
@@ -297,6 +310,34 @@ mod tests {
     fn blank_lines_are_skipped() {
         let (_dir, path) = rows_over("a\t1\n\nb\t2\n");
         assert_eq!(read(&path, false, 1, 0).len(), 2);
+    }
+
+    /// A nullary relation's rows are the empty lines a wider relation
+    /// would skip, so the file's byte count is what says whether the fact
+    /// holds. Souffle reads the same bytes the same way.
+    #[test]
+    fn a_nullary_relation_reads_empty_lines_as_rows() {
+        let count = |content: &str| {
+            let (_dir, path) = rows_over(content);
+            let spec = InputSpec {
+                rel: &R_NULLARY,
+                source: path.as_path(),
+                peers: 1,
+                index: 0,
+            };
+            let mut rows = 0;
+            if let Some(mut r) = <FileReader as Reader<()>>::open(&spec).expect("open") {
+                while let Some(row) = Reader::<()>::next(&mut r).expect("cursor") {
+                    row.expect("row");
+                    rows += 1;
+                }
+            }
+            rows
+        };
+
+        assert_eq!(count(""), 0, "no bytes: the fact does not hold");
+        assert_eq!(count("\n"), 1, "one empty line: the fact holds");
+        assert_eq!(count("\n\n\n"), 3);
     }
 
     /// The final line is read even without a trailing newline.

@@ -1,9 +1,22 @@
 //! How a source's record becomes a slot tuple.
 //!
-//! One trait, with one impl set per kind of record:
+//! One trait, with one impl set per kind of record, split on whether the
+//! record's fields already carry types: that is what decides whether
+//! decoding one can fail at all.
 //!
-//! - [`text`]: a delimited [`Line`](text::Line), parsed cell by cell.
-//! - [`typed`]: an already-typed record, converted per position.
+//! - [`untyped`]: a delimited [`TextRow`](untyped::TextRow),
+//!   parsed cell by cell, and refusable.
+//! - [`typed`]: an already-typed record, reshaped per position.
+//!
+//! Five words, fixed here so neither half reaches for a sixth:
+//!
+//! | word   | what it names                                          |
+//! |--------|--------------------------------------------------------|
+//! | record | whatever [`Decode`] consumes, whichever source it is   |
+//! | row    | the text record, one line of a file or one `put`       |
+//! | tuple  | the slot tuple built from it, which the dataflow holds |
+//! | cell   | one column of a row, still text and still to parse    |
+//! | field  | one column of a typed record, a value to reshape      |
 //!
 //! Every reader ends at the same call, `T::decode(&record)`, where `T` is
 //! the relation's slot tuple. Generated code names the pair as its
@@ -11,8 +24,8 @@
 //! already exists here: no relation generates a decoder of its own, and a
 //! mispaired one does not compile.
 
-pub mod text;
 pub mod typed;
+pub mod untyped;
 
 use crate::error::RuntimeError;
 

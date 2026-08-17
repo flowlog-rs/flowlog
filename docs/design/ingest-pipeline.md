@@ -19,9 +19,9 @@ Every fact passes through the same four roles, whatever its source:
 
 | source | acquire | distribute | decode |
 |--------------|---------------------------|----------------------------------|----------------------|
-| `.input` file | `TextReader::open(spec)` | share derived at `open` (byte range) | `accept` (`FromCell`) |
-| `put` line | broadcast to every worker | share derived at `open` (ownership hash) | `accept` (`FromCell`) |
-| host `Vec` | `insert_*` appends to one flat `Vec`, shared read-only (`Arc`) | share derived at `open` (index range) | `accept` (`FromCell`) |
+| `.input` file | `FileReader::open(spec)` | share derived at `open` (byte range) | `next` (`DecodeCell`) |
+| `put` line | broadcast to every worker | share derived at `open` (ownership hash) | `next` (`DecodeCell`) |
+| host `Vec` | `insert_*` appends to one flat `Vec`, shared read-only (`Arc`) | share derived at `open` (index range) | `next` (`DecodeField`) |
 | inline `.fact` | compiled into the program | worker 0 | constant-folded at compile time |
 
 Every runtime source derives its share at `open`: a file by byte range, a
@@ -32,9 +32,9 @@ is its one answer. The vec is shared read-only rather than split by
 moves, because decode runs on the worker and only reads the source;
 nothing is bucketed at insert.
 
-Decode has no excuse to vary at all: it runs in `accept`, on the worker,
-for every runtime source. Inline facts are the one exception, because a
-constant needs no runtime decode.
+Decode has no excuse to vary at all: it runs in the reader's `next`, on
+the worker, for every runtime source. Inline facts are the one exception,
+because a constant needs no runtime decode.
 
 ## The contracts
 
@@ -43,11 +43,13 @@ InputSpec<'a, Src>   rel + source: &'a Src + peers + index; one spec type,
                      Src names what the reader opens
 Reader<'src, T>      type Source; open(&InputSpec<Source>) -> Option<Self>;
                      next() -> the relation's slot tuples, ready to apply
-  TextReader<T>      Source = Path   share = byte range    parses each line
-  VecReader<U, T>    Source = [U]    share = index range   converts per position
-  LineReader<T>      Source = str    share = the line, if column 0 hashes here
-ParseRow / ParseCell how one text line becomes a slot tuple (text's own)
-FromUser             how one host tuple becomes a slot tuple (vec's own)
+  FileReader         Source = Path  share = byte range   parses each line
+  HostReader<'_, U>  Source = [U]   share = index range  reshapes per position
+  PutReader<'_>      Source = str   share = the line, if column 0 hashes here
+Decode<TextRow>      how one text row becomes a slot tuple, cell by cell
+                     (DecodeCell), and refusable
+Decode<Rows>         how one host tuple becomes one, field by field
+                     (DecodeField), infallibly
 Ingest / Loader      the handler's typed and erased faces; every entry point
                      pumps tuples straight into the relation's Session
 ```

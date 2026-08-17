@@ -1,12 +1,16 @@
 //! The share-cursor contract, and one reader per kind of source.
 //!
-//! - `text`: delimited text files, split across workers by byte range.
-//! - `vec`: host-supplied typed rows, split across workers by index range.
-//! - `line`: one broadcast `put` line, owned by the worker it hashes to.
+//! Named for where the facts come from, not how they are spelled: two of
+//! these read the same delimited text, and which format a record arrives in
+//! is `decode`'s axis instead.
+//!
+//! - `file`: a delimited text file, split across workers by byte range.
+//! - `put`: one broadcast `put` tuple, owned by the worker it hashes to.
+//! - `host`: rows a host program supplied, split by index range.
 
-pub(crate) mod line;
-pub(crate) mod text;
-pub(crate) mod vec;
+pub(crate) mod file;
+pub(crate) mod host;
+pub(crate) mod put;
 
 use crate::error::RuntimeError;
 use crate::io::spec::InputSpec;

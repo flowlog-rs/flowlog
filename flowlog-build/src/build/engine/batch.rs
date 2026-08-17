@@ -60,9 +60,9 @@ pub(crate) fn gen_lib_engine(
 
 // =========================================================================
 // Engine struct: one flat `Vec` of user tuples per EDB, shared read-only
-// with the workers at `run()`; each worker's `VecReader` opens its index
-// range and decodes its share in `accept`, exactly like a file share.
-// Nullary EDBs are a presence flag worker 0 applies.
+// with the workers at `run()`; each worker's `HostReader` opens its index
+// range and decodes its share, exactly like a file share. Nullary EDBs are
+// a presence flag worker 0 applies.
 // =========================================================================
 
 fn gen_engine_struct(edbs: &[&Relation]) -> TokenStream {

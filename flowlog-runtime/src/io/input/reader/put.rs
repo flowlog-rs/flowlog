@@ -1,20 +1,22 @@
-//! One broadcast `put` line as a reader.
+//! One broadcast `put` tuple as a reader.
 //!
-//! Every worker receives every REPL line, so a share here is not a range:
-//! `open` decodes column 0 and answers whether this worker owns the line,
+//! Every worker receives every `put`, so a share here is not a range:
+//! `open` decodes column 0 and answers whether this worker owns the tuple,
 //! which is the broadcast source's way of deriving a share. The ownership
 //! hashes live here too: every worker computes the same answer for the
 //! same value, and that agreement is what settles ownership without the
-//! workers exchanging a message. The owner's cursor yields the line once.
-
-use std::marker::PhantomData;
+//! workers exchanging a message. The owner's cursor yields the tuple once.
+//!
+//! A `IO="command"` relation is not only fed from here: the shell's `file`
+//! command sends the same relation through the file reader instead, which
+//! is why this one is named for the `put` rather than for the storage.
 
 use lasso::Spur;
 
 use crate::error::RuntimeError;
 use crate::io::input::decode::Decode;
-use crate::io::input::decode::text::DecodeCell;
-use crate::io::input::decode::text::Line;
+use crate::io::input::decode::untyped::DecodeCell;
+use crate::io::input::decode::untyped::TextRow;
 use crate::io::input::reader::Reader;
 use crate::io::spec::InputSpec;
 use crate::io::spec::ShardKey;
@@ -55,14 +57,13 @@ fn first_cell(line: &str, delim: u8) -> &str {
 }
 
 /// The owning worker's cursor over one `put` line.
-pub(crate) struct LineReader<'src, T> {
+pub(crate) struct PutReader<'src> {
     line: &'src str,
     delim: u8,
     done: bool,
-    slot: PhantomData<T>,
 }
 
-impl<'src, T: for<'l> Decode<Line<'l>>> Reader<'src, T> for LineReader<'src, T> {
+impl<'src, T: for<'l> Decode<TextRow<'l>>> Reader<'src, T> for PutReader<'src> {
     type Source = str;
 
     /// Answers ownership from column 0: the worker it hashes to under the
@@ -105,7 +106,6 @@ impl<'src, T: for<'l> Decode<Line<'l>>> Reader<'src, T> for LineReader<'src, T> 
             line,
             delim: spec.rel.delim,
             done: false,
-            slot: PhantomData,
         }))
     }
 
@@ -115,7 +115,7 @@ impl<'src, T: for<'l> Decode<Line<'l>>> Reader<'src, T> for LineReader<'src, T> 
         }
         self.done = true;
         // A put has no position in a file; 0 marks it as such.
-        Ok(Some(T::decode(&Line {
+        Ok(Some(T::decode(&TextRow {
             text: self.line,
             delim: self.delim,
             position: 0,

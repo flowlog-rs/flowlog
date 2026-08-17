@@ -1,11 +1,9 @@
 //! Host-supplied typed rows as a reader.
 //!
 //! The engine holds one flat `Vec` of host tuples per relation; workers
-//! share it read-only, each opening its index range the way a text reader
-//! opens a byte range. A row is one tuple, converted per position — the
-//! host already parsed everything, so nothing here can fail.
-
-use std::marker::PhantomData;
+//! share it read-only, each opening its index range the way the file
+//! reader opens a byte range. A row is one tuple, converted per position:
+//! the host already parsed everything, so nothing here can fail.
 
 use crate::error::RuntimeError;
 use crate::io::input::decode::Decode;
@@ -13,14 +11,13 @@ use crate::io::input::reader::Reader;
 use crate::io::spec::InputSpec;
 
 /// A worker's cursor over its index range of one relation's rows.
-pub(crate) struct VecReader<'a, U, T> {
+pub(crate) struct HostReader<'a, U> {
     rows: &'a [U],
     next: usize,
     end: usize,
-    slot: PhantomData<T>,
 }
 
-impl<'src, U, T: Decode<U>> Reader<'src, T> for VecReader<'src, U, T> {
+impl<'src, U, T: Decode<U>> Reader<'src, T> for HostReader<'src, U> {
     type Source = [U];
 
     /// The share is the index range `[len*index/peers, len*(index+1)/peers)`,
@@ -40,12 +37,7 @@ impl<'src, U, T: Decode<U>> Reader<'src, T> for VecReader<'src, U, T> {
         let len = rows.len();
         let next = len * index / peers;
         let end = len * (index + 1) / peers;
-        Ok((next < end).then_some(Self {
-            rows,
-            next,
-            end,
-            slot: PhantomData,
-        }))
+        Ok((next < end).then_some(Self { rows, next, end }))
     }
 
     fn next(&mut self) -> Result<Option<Result<T, RuntimeError>>, RuntimeError> {
@@ -106,7 +98,7 @@ mod tests {
             index,
         };
         let mut seen = Vec::new();
-        if let Some(mut r) = <VecReader<'_, _, Slot>>::open(&spec).expect("open") {
+        if let Some(mut r) = <HostReader<'_, _> as Reader<Slot>>::open(&spec).expect("open") {
             while let Some(row) = r.next().expect("cursor") {
                 seen.push(row.expect("typed rows cannot fail"));
             }

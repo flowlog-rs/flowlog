@@ -1,16 +1,11 @@
 //! Converting one already-typed record into a slot tuple.
 //!
-//! The typed source's whole conversion: a record is one tuple a host
-//! program built (`insert_edge(vec![(7, "a".to_string())])`), so its types
-//! were checked when that program compiled and only two fields change
-//! shape on the way in: a `String` interns where the slot is a `Spur`,
-//! and a float wraps. [`DecodeField`] is the per-position rule; the
-//! [`Decode`] impls apply it across every arity.
+//! A record is a tuple a host program built, so its types were fixed when
+//! that program compiled: `insert_edge(vec![(7, "a".to_string())])`. Only
+//! a field's shape changes on the way in, never whether it is valid.
 //!
-//! Nothing here can refuse a record today, because a well-typed value has
-//! no invalid state. The fallible [`Decode`] face is kept anyway, so a
-//! conversion that ever can fail reports like any other source instead of
-//! being trusted.
+//! [`DecodeField`] holds the per-position rules; the [`Decode`] impls apply
+//! them across every arity.
 
 use lasso::Spur;
 use ordered_float::OrderedFloat;
@@ -21,28 +16,25 @@ use crate::io::input::decode::Decode;
 
 /// Build one slot field from the record field at the same position.
 ///
-/// Implemented per `(record field, slot field)` pair, so the pairing is
-/// checked when the generated crate compiles: a program whose `Rows` says
-/// `String` where its `Tuple` says `i32` does not build, and the values
-/// arriving at run time have nothing left to prove.
+/// One impl per legal pair, so the compiler checks the pairing: a program
+/// whose `Rows` says `String` where its `Tuple` says `i32` does not build.
 ///
-/// The pairs, exhaustively:
-///
-/// | record field       | slot field         | rule            |
-/// |--------------------|--------------------|-----------------|
-/// | integers, `bool`   | the same type      | copy            |
-/// | `String`           | `Spur`             | intern          |
-/// | `String`           | `String`           | clone           |
-/// | `f32` / `f64`      | `OrderedFloat<_>`  | wrap            |
+/// | record field     | slot field        | rule   |
+/// |------------------|-------------------|--------|
+/// | integers, `bool` | the same type     | copy   |
+/// | `String`         | `Spur`            | intern |
+/// | `String`         | `String`          | clone  |
+/// | `f32` / `f64`    | `OrderedFloat<_>` | wrap   |
 pub trait DecodeField<F> {
     fn decode_field(field: &F) -> Self;
 }
 
-/// The identity, for a field whose slot type is its own: `7i32` is
-/// already the slot value. `String` to `String` is the interning-off
-/// spelling of a string column, and the one clone here: the record is
-/// borrowed, and the session needs an owned value.
-macro_rules! identity_field {
+/// The pairs whose slot type is the record type, which pass through
+/// unchanged: `7i32` is already the slot value.
+///
+/// `String` is here because a string column spells itself that way with
+/// interning off.
+macro_rules! decode_field {
     ($($ty:ty),+ $(,)?) => {$(
         impl DecodeField<$ty> for $ty {
             #[inline]
@@ -53,7 +45,7 @@ macro_rules! identity_field {
     )+};
 }
 
-identity_field!(i8, i16, i32, i64, u8, u16, u32, u64, bool, String);
+decode_field!(i8, i16, i32, i64, u8, u16, u32, u64, bool, String);
 
 /// A string column under interning: `"a"` becomes the same [`Spur`] an
 /// equal string computed during the run would get, which is what lets a
@@ -67,7 +59,7 @@ impl DecodeField<String> for Spur {
 
 /// A float column: the slot wraps, because a differential tuple must be
 /// `Ord` and a bare float is not (`NaN`).
-macro_rules! float_field {
+macro_rules! decode_float_field {
     ($($ty:ty),+ $(,)?) => {$(
         impl DecodeField<$ty> for OrderedFloat<$ty> {
             #[inline]
@@ -78,9 +70,9 @@ macro_rules! float_field {
     )+};
 }
 
-float_field!(f32, f64);
+decode_float_field!(f32, f64);
 
-/// A nullary relation's host row carries no fields either.
+/// A nullary relation has no columns, so its host row is the empty tuple.
 impl Decode<()> for () {
     #[inline]
     fn decode(_record: &()) -> Result<Self, RuntimeError> {
@@ -88,9 +80,10 @@ impl Decode<()> for () {
     }
 }
 
-/// A record converts per position, which also covers a nested tuple
-/// column: its slot is itself a tuple, so these impls recurse. Arity 2
-/// expands to:
+/// One [`Decode`] impl per arity, and the matching [`DecodeField`] impl so
+/// that a tuple is itself a field.
+///
+/// For example, Arity 2 expands to:
 ///
 /// ```ignore
 /// impl<F0, F1, S0: DecodeField<F0>, S1: DecodeField<F1>>
@@ -102,13 +95,10 @@ impl Decode<()> for () {
 /// }
 /// ```
 ///
-/// so `(i32, Spur)::decode(&(7, "a".to_string()))` is
+/// so `<(i32, Spur)>::decode(&(7, "a".to_string()))` is
 /// `Ok((7, intern("a")))`.
-macro_rules! decode_record {
+macro_rules! decode_tuple {
     ($(($($s:ident . $f:ident . $i:tt),+))+) => {$(
-        // The per-position body lives on `DecodeField`, so a tuple is
-        // itself a field: that is what makes a nested tuple column
-        // recurse with no extra rule.
         impl<$($f,)+ $($s: DecodeField<$f>,)+> DecodeField<($($f,)+)> for ($($s,)+) {
             #[inline]
             fn decode_field(record: &($($f,)+)) -> Self {
@@ -125,7 +115,7 @@ macro_rules! decode_record {
     )+};
 }
 
-decode_record! {
+decode_tuple! {
     (S0.F0.0)
     (S0.F0.0, S1.F1.1)
     (S0.F0.0, S1.F1.1, S2.F2.2)

@@ -22,9 +22,9 @@ pub mod spec;
 
 pub use atomic::AtomicFile;
 pub use input::decode::Decode;
-pub use input::decode::text::DecodeCell;
-pub use input::decode::text::Line;
 pub use input::decode::typed::DecodeField;
+pub use input::decode::untyped::DecodeCell;
+pub use input::decode::untyped::TextRow;
 pub use input::ingest::Ingest;
 pub use input::session::Session;
 pub use output::drain_flat;

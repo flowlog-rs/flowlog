@@ -18,11 +18,11 @@ use timely::progress::Timestamp;
 
 use crate::error::RuntimeError;
 use crate::io::input::decode::Decode;
-use crate::io::input::decode::text::Line;
+use crate::io::input::decode::untyped::TextRow;
 use crate::io::input::reader::Reader;
-use crate::io::input::reader::line::LineReader;
-use crate::io::input::reader::text::TextReader;
-use crate::io::input::reader::vec::VecReader;
+use crate::io::input::reader::file::FileReader;
+use crate::io::input::reader::host::HostReader;
+use crate::io::input::reader::put::PutReader;
 use crate::io::input::session::Session;
 use crate::io::spec::InputSpec;
 use crate::io::spec::RelationSpec;
@@ -79,7 +79,11 @@ pub trait Ingest: Sized {
     type Diff: Semigroup + Copy + 'static;
     /// The slot tuple this relation's rows decode into, as the dataflow
     /// holds it: interned strings, wrapped floats.
-    type Tuple: for<'l> Decode<Line<'l>> + Decode<Self::Rows> + Data;
+    ///
+    /// Decoding from text is not required here but on the two entry points
+    /// that read it, so the two modes ask for what they use: a compiled
+    /// program takes `file` and `put`, a host program only its own rows.
+    type Tuple: Decode<Self::Rows> + Data;
     /// The host-facing tuple [`load_vec`](Self::load_vec) accepts, as a
     /// host program builds it: plain `String`, bare floats.
     type Rows;
@@ -105,28 +109,18 @@ pub trait Ingest: Sized {
     /// A row the relation refuses is reported and skipped. An error that
     /// would leave the relation silently short is returned instead, because
     /// a partly-read input is indistinguishable from a smaller one.
-    ///
-    /// A nullary relation has no columns for a file to hold, so it reports
-    /// and reads nothing. That is not an `Err`: nothing was applied, and a
-    /// mistyped command should not end an interactive session.
     fn load_file(
         &mut self,
         path: &Path,
         diff: Self::Diff,
         peers: usize,
         index: usize,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), RuntimeError>
+    where
+        Self::Tuple: for<'l> Decode<TextRow<'l>>,
+    {
         let rel = self.spec();
         let name = rel.name;
-        if rel.arity == 0 {
-            if index == 0 {
-                eprintln!(
-                    "[relation][{name}] nullary relations take no file; \
-                     use `put {name} True|False`"
-                );
-            }
-            return Ok(());
-        }
         let spec = InputSpec {
             rel,
             source: path,
@@ -134,7 +128,7 @@ pub trait Ingest: Sized {
             index,
         };
         let session = self.session();
-        ingest::<TextReader<Self::Tuple>, Self::Tuple, _, _>(
+        ingest::<FileReader, Self::Tuple, _, _>(
             &spec,
             |t| session.update(t, diff),
             |e| eprintln!("[relation][{name}] {e} reading {}", path.display()),
@@ -147,7 +141,10 @@ pub trait Ingest: Sized {
     /// it, so exactly one applies it. A one-row source has nothing to skip
     /// past, so a refusal is the whole call failing: reported, with nothing
     /// applied anywhere.
-    fn load_line(&mut self, line: &str, diff: Self::Diff, peers: usize, index: usize) {
+    fn load_line(&mut self, line: &str, diff: Self::Diff, peers: usize, index: usize)
+    where
+        Self::Tuple: for<'l> Decode<TextRow<'l>>,
+    {
         let rel = self.spec();
         let name = rel.name;
         let spec = InputSpec {
@@ -157,7 +154,7 @@ pub trait Ingest: Sized {
             index,
         };
         let session = self.session();
-        let result = ingest::<LineReader<'_, Self::Tuple>, Self::Tuple, _, _>(
+        let result = ingest::<PutReader<'_>, Self::Tuple, _, _>(
             &spec,
             |t| session.update(t, diff),
             |e| eprintln!("[relation][{name}] {e} in put"),
@@ -182,7 +179,7 @@ pub trait Ingest: Sized {
             index,
         };
         let session = self.session();
-        if let Err(e) = ingest::<VecReader<'_, Self::Rows, Self::Tuple>, Self::Tuple, _, _>(
+        if let Err(e) = ingest::<HostReader<'_, Self::Rows>, Self::Tuple, _, _>(
             &spec,
             |t| session.update(t, diff),
             |e| eprintln!("[relation][{name}] {e} in a host-supplied row"),
@@ -260,7 +257,9 @@ mod tests {
     use ordered_float::OrderedFloat;
 
     use super::*;
+    use crate::intern::intern;
     use crate::io::ShardKey;
+    use crate::io::input::decode::typed::DecodeField;
     use crate::io::spec::Format;
 
     const fn text_rel(uses_ord: bool, shard: ShardKey) -> RelationSpec {
@@ -274,6 +273,23 @@ mod tests {
             },
             shard,
             uses_ord,
+        }
+    }
+
+    /// A slot that cannot decode text at all, only host rows: no
+    /// `Decode<TextRow>` impl exists for it anywhere.
+    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+    struct HostOnlySlot {
+        a: i32,
+        b: Spur,
+    }
+
+    impl Decode<(i32, String)> for HostOnlySlot {
+        fn decode(record: &(i32, String)) -> Result<Self, RuntimeError> {
+            Ok(Self {
+                a: i32::decode_field(&record.0),
+                b: Spur::decode_field(&record.1),
+            })
         }
     }
 
@@ -302,7 +318,7 @@ mod tests {
     fn read(spec: &InputSpec<'_>) -> (Vec<(String, i64)>, Vec<String>) {
         let mut rows = Vec::new();
         let mut skipped = Vec::new();
-        ingest::<TextReader<_>, (String, i64), _, _>(
+        ingest::<FileReader, (String, i64), _, _>(
             spec,
             |t| rows.push(t),
             |e| skipped.push(e.to_string()),
@@ -347,7 +363,7 @@ mod tests {
             .write_all(b"a,1\n\xFF\xFE,2\n")
             .expect("write");
         let mut rows: Vec<(String, i64)> = Vec::new();
-        let err = ingest::<TextReader<_>, (String, i64), _, _>(
+        let err = ingest::<FileReader, (String, i64), _, _>(
             &text_spec(&path, false, 1, 0),
             |t| rows.push(t),
             |_| {},
@@ -408,7 +424,7 @@ mod tests {
             index,
         };
         let mut rows = Vec::new();
-        ingest::<LineReader<'_, _>, (Spur, i64), _, _>(&spec, |t| rows.push(t), |_| {})
+        ingest::<PutReader<'_>, (Spur, i64), _, _>(&spec, |t| rows.push(t), |_| {})
             .expect("cursor");
         rows
     }
@@ -501,5 +517,45 @@ mod tests {
     #[test]
     fn inline_facts_default_to_none() {
         RelMixed::new(InputSession::new()).inline_facts(0);
+    }
+
+    /// A slot type with no text decoding whatsoever still ingests host rows,
+    /// because the text bound sits on `load_file` and `load_line` rather than
+    /// on `Tuple`: a host program's relation never proves it can parse a
+    /// line. This is what lets a slot be something other than a tuple, which
+    /// is the only route past the twelve-column ceiling that `Ord` and
+    /// `Clone` put on tuples.
+    #[test]
+    fn a_slot_that_cannot_decode_text_still_ingests_host_rows() {
+        static R_HOST: RelationSpec = text_rel(false, ShardKey::Int);
+        let rows = vec![(7i32, "a".to_string()), (8, "b".to_string())];
+        let spec = InputSpec {
+            rel: &R_HOST,
+            source: rows.as_slice(),
+            peers: 1,
+            index: 0,
+        };
+
+        let mut got = Vec::new();
+        ingest::<HostReader<'_, (i32, String)>, HostOnlySlot, _, _>(
+            &spec,
+            |t| got.push(t),
+            |_| panic!("a typed record cannot be refused"),
+        )
+        .expect("ingest");
+
+        assert_eq!(
+            got,
+            vec![
+                HostOnlySlot {
+                    a: 7,
+                    b: intern("a")
+                },
+                HostOnlySlot {
+                    a: 8,
+                    b: intern("b")
+                },
+            ]
+        );
     }
 }
