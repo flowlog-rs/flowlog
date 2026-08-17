@@ -1,0 +1,9 @@
+begin
+put score 1,80 +1
+put score 2,90 +1
+put enabled True
+commit
+begin
+put enabled False
+commit
+quit

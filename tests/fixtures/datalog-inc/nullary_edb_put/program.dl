@@ -1,0 +1,19 @@
+// ============================================================================
+// Suite   : nullary_edb_put
+// Feature : a nullary relation fed directly, rather than derived
+// Covers   : `put <rel> True|False` on a nullary EDB, the one input path with
+//            no coverage at all. Every other nullary fixture declares an IDB,
+//            so the generated nullary handler was never exercised: its
+//            `load_line` override, its spec, and the imports that only it
+//            uses. Also pins that a retraction actually withdraws the fact.
+// ============================================================================
+
+.decl Enabled()
+.input Enabled(IO="command")
+
+.decl Score(id: int32, val: int32)
+.input Score(IO="command", delimiter=",")
+
+.decl Live(id: int32)
+Live(x) :- Score(x, _), Enabled().
+.output Live

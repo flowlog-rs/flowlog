@@ -34,10 +34,6 @@ pub fn gen_relation(
     let str_intern = features.string_intern();
     let facts = program.facts();
     let has_any_inline = edbs.iter().any(|rel| facts.contains_key(rel.name()));
-    // A nullary relation reads `True`/`False` rather than a delimited row,
-    // so it overrides `put`; the names that override needs are imported
-    // only when one exists.
-    let has_nullary = edbs.iter().any(|rel| rel.arity() == 0);
 
     let needs_ordered_float = edbs
         .iter()
@@ -89,19 +85,7 @@ pub fn gen_relation(
         })
         .collect::<Result<_, _>>()?;
 
-    let nullary_imports = if has_nullary {
-        quote! {
-            use ::flowlog_runtime::differential_dataflow::input::InputSession;
-            use std::path::Path;
-            use std::time::Instant;
-        }
-    } else {
-        quote! {}
-    };
-
     let preamble = quote! {
-        #nullary_imports
-
         use super::{Diff, Ts};
         #semiring_one_import
         #spur_import
@@ -134,14 +118,16 @@ fn gen_one_rel_nullary(
     let raw_name = rel.raw_name();
     let struct_name = input_struct_ident(rel);
 
-    let nullary_apply_inline = match facts {
+    // Absent unless the relation declares `.fact` rows, exactly as for a
+    // non-nullary relation: `Ingest` supplies a do-nothing default.
+    let nullary_inline_facts = match facts {
         Some(rows) if !rows.is_empty() => quote! {
-            fn apply_inline(&mut self, index: usize) {
+            fn inline_facts(&mut self, index: usize) {
                 if index != 0 { return; }
                 self.session.update((), SEMIRING_ONE);
             }
         },
-        _ => quote! { fn apply_inline(&mut self, _index: usize) {} },
+        _ => quote! {},
     };
 
     // Batch mode uses the `Present` semiring which has no i32 representation
@@ -222,7 +208,7 @@ fn gen_one_rel_nullary(
                 #apply_tuple_body
             }
 
-            #nullary_apply_inline
+            #nullary_inline_facts
         }
     })
 }
