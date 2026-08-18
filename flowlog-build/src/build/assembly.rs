@@ -22,11 +22,10 @@ use crate::build::results::gen_incremental_results;
 use crate::codegen::Features;
 
 /// Render the library-mode source file for one compiled program.
-pub(crate) fn assemble(pipeline: &Pipeline, out_dir: &Path) -> io::Result<String> {
+pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     let config = &pipeline.config;
     let string_intern = pipeline.features.string_intern();
 
-    let semiring_mod = gen_semiring_mod(pipeline, out_dir);
     let lib_imports = gen_lib_imports(
         &pipeline.relations,
         &pipeline.features,
@@ -71,7 +70,6 @@ pub(crate) fn assemble(pipeline: &Pipeline, out_dir: &Path) -> io::Result<String
             use ::flowlog_runtime::timely;
             use ::flowlog_runtime::serde;
             use ::flowlog_runtime::ordered_float;
-            #semiring_mod
             #lib_imports
             #type_declarations
             #profile_structs
@@ -115,19 +113,4 @@ fn gen_udf_mod(features: &Features, udf_file: Option<&Path>) -> io::Result<Token
         #[path = #path_lit]
         mod udf;
     })
-}
-
-/// Emit `#[path = "..."] mod semiring;` when the program needs any
-/// aggregation semiring module. The module file is written out separately
-/// by [`crate::Builder::emit_semiring_modules`].
-fn gen_semiring_mod(pipeline: &Pipeline, out_dir: &Path) -> TokenStream {
-    if pipeline.parts.semiring_modules.is_empty() {
-        return quote! {};
-    }
-    let mod_path = out_dir.join("semiring").join("mod.rs");
-    let mod_path_str = mod_path.to_string_lossy().into_owned();
-    quote! {
-        #[path = #mod_path_str]
-        mod semiring;
-    }
 }

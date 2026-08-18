@@ -62,8 +62,8 @@ pub use build::BuildError;
 // Hidden from docs.rs for the same reason as the pipeline modules above.
 #[doc(hidden)]
 pub use codegen::{
-    AggSemiringNeeds, CodeGen, CodeParts, CodegenError, Features, Semiring, const_to_token,
-    data_type_tokens, field_accessor, gen_drain_block,
+    CodeGen, CodeParts, CodegenError, Features, const_to_token, data_type_tokens, field_accessor,
+    gen_drain_block,
 };
 use flowlog_common::BoxError;
 pub use flowlog_common::ExecutionMode;
@@ -202,44 +202,9 @@ impl Builder {
             })?;
 
         let output = build::Pipeline::build(self, program_path, sm)?;
-        let source = build::assemble(&output, out_dir).map_err(BuildError::from)?;
-        self.emit_semiring_modules(&output, out_dir)
-            .map_err(BuildError::from)?;
+        let source = build::assemble(&output).map_err(BuildError::from)?;
         fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;
         self.emit_rerun_if_changed(program_path);
-        Ok(())
-    }
-
-    /// Write aggregation-specific semiring modules to `$OUT_DIR/semiring/`.
-    ///
-    /// Library mode only has `flowlog-runtime` as a runtime dep, so we
-    /// prepend aliases that route `serde` / `ordered_float` /
-    /// `differential_dataflow` through `::flowlog_runtime::` — keeping
-    /// the templates mode-agnostic with binary mode.
-    fn emit_semiring_modules(&self, output: &build::Pipeline, out_dir: &Path) -> io::Result<()> {
-        if output.parts.semiring_modules.is_empty() {
-            return Ok(());
-        }
-        let semiring_dir = out_dir.join("semiring");
-        fs::create_dir_all(&semiring_dir)?;
-
-        const LIB_ALIASES: &str = "\
-use ::flowlog_runtime::serde;
-use ::flowlog_runtime::ordered_float;
-use ::flowlog_runtime::differential_dataflow;
-";
-
-        for (rel_path, content) in &output.parts.semiring_modules {
-            let fname = Path::new(rel_path)
-                .file_name()
-                .expect("semiring module path has no file name");
-            let dst = semiring_dir.join(fname);
-            if fname == "mod.rs" {
-                fs::write(dst, content)?;
-            } else {
-                fs::write(dst, format!("{LIB_ALIASES}{content}"))?;
-            }
-        }
         Ok(())
     }
 

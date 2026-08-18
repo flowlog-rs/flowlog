@@ -16,10 +16,6 @@ use crate::error::ParseError;
 use crate::error::grammar_bug;
 
 /// Supported aggregation operators.
-///
-/// Declared `pub` because `Features::agg_semirings()` exposes an
-/// `AggSemiringNeeds` whose entries `flowlog-compiler` iterates over,
-/// calling [`Self::semiring_mod`] / [`Self::semiring_prefix`] on each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AggregationOperator {
     Min,
@@ -27,43 +23,6 @@ pub enum AggregationOperator {
     Count,
     Sum,
     Avg,
-}
-
-impl AggregationOperator {
-    /// Normalize Count to Sum (they share the same semiring).
-    #[must_use]
-    pub fn semiring_canonical(self) -> Self {
-        match self {
-            Self::Count => Self::Sum,
-            other => other,
-        }
-    }
-
-    /// Lowercase name for semiring module paths (e.g. `"min"`, `"sum"`).
-    ///
-    /// `Count` shares its semiring with `Sum`.
-    #[must_use]
-    pub fn semiring_mod(self) -> &'static str {
-        match self {
-            Self::Min => "min",
-            Self::Max => "max",
-            Self::Sum | Self::Count => "sum",
-            Self::Avg => "avg",
-        }
-    }
-
-    /// Title-case prefix for semiring type names (e.g. `"Min"`, `"Sum"`).
-    ///
-    /// `Count` shares its semiring with `Sum`.
-    #[must_use]
-    pub fn semiring_prefix(self) -> &'static str {
-        match self {
-            Self::Min => "Min",
-            Self::Max => "Max",
-            Self::Sum | Self::Count => "Sum",
-            Self::Avg => "Avg",
-        }
-    }
 }
 
 impl fmt::Display for AggregationOperator {
@@ -190,44 +149,9 @@ mod tests {
         assert_eq!(agg.vars().len(), 2);
     }
 
-    /// `semiring_mod` maps every operator to its lowercase semiring module
-    /// name, with `Count` sharing `Sum`'s. Pins the exact strings so a body
-    /// replaced by a constant (`""` / `"xyzzy"`) is caught.
-    #[test]
-    fn semiring_mod_maps_every_operator() {
-        let cases = [
-            (AggregationOperator::Min, "min"),
-            (AggregationOperator::Max, "max"),
-            (AggregationOperator::Count, "sum"),
-            (AggregationOperator::Sum, "sum"),
-            (AggregationOperator::Avg, "avg"),
-        ];
-        for (op, expected) in cases {
-            assert_eq!(op.semiring_mod(), expected, "{op:?}");
-        }
-    }
-
-    /// `semiring_prefix` maps every operator to its title-case semiring type
-    /// prefix, with `Count` sharing `Sum`'s. Pins the exact strings so a body
-    /// replaced by a constant is caught.
-    #[test]
-    fn semiring_prefix_maps_every_operator() {
-        let cases = [
-            (AggregationOperator::Min, "Min"),
-            (AggregationOperator::Max, "Max"),
-            (AggregationOperator::Count, "Sum"),
-            (AggregationOperator::Sum, "Sum"),
-            (AggregationOperator::Avg, "Avg"),
-        ];
-        for (op, expected) in cases {
-            assert_eq!(op.semiring_prefix(), expected, "{op:?}");
-        }
-    }
-
     /// `Display` for `AggregationOperator` renders the surface keyword:
-    /// `Count` prints `count` and `Avg` prints `average`, distinct from the
-    /// semiring names.
-    /// Pins the exact strings so a no-op `fmt` (empty output) is caught.
+    /// `Count` prints `count` and `Avg` prints `average`. Pins the exact
+    /// strings so a no-op `fmt` (empty output) is caught.
     #[test]
     fn operator_display_renders_surface_keyword() {
         let cases = [

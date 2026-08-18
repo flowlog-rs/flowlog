@@ -10,7 +10,6 @@
 use std::collections::HashSet;
 use std::mem;
 
-use flowlog_parser::AggregationOperator;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -22,14 +21,9 @@ use tracing::trace;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
-use crate::codegen::aggregation::aggregation_avg_optimize;
-use crate::codegen::aggregation::aggregation_count_optimize;
-use crate::codegen::aggregation::aggregation_max_optimize;
-use crate::codegen::aggregation::aggregation_merge_kv;
-use crate::codegen::aggregation::aggregation_min_optimize;
-use crate::codegen::aggregation::aggregation_reduce_stmt;
-use crate::codegen::aggregation::aggregation_row_chop;
-use crate::codegen::aggregation::aggregation_sum_optimize;
+use crate::codegen::aggregation::aggregation_kind;
+use crate::codegen::aggregation::aggregation_merge;
+use crate::codegen::aggregation::aggregation_split;
 
 // =========================================================================
 // Non-Recursive Flow Generation
@@ -63,8 +57,7 @@ impl CodeGen {
     }
 
     /// Emit per-IDB post-processing: union the contributing heads, dedup,
-    /// and apply aggregation (fast-path semiring for `DatalogBatch`, generic
-    /// `reduce_core` otherwise).
+    /// and apply aggregation.
     pub(crate) fn gen_non_recursive_post_flows(
         &mut self,
         bound_fps: &HashSet<u64>,
@@ -114,68 +107,29 @@ impl CodeGen {
             if let Some((agg_op, agg_pos, agg_arity)) = stratum.idb_to_aggregation_map().get(idb_fp)
             {
                 let agg_type = self.agg_column_type(*idb_fp, *agg_pos)?;
+                let kind = aggregation_kind(*agg_op);
+                let split = aggregation_split(*agg_arity, *agg_pos);
+                let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
+                let op_name = format!("Reduce: {}", self.display_name(*idb_fp));
+                block = quote! {
+                    #block
+                    let #output = ::flowlog_runtime::operators::flowlog_reduce(
+                        #output, #op_name, #kind, #split, #merge,
+                    );
+                };
 
-                // `DatalogBatch`-only fast path: compute the aggregation with
-                // a monoid via `threshold_semigroup`, skipping the second
-                // arrangement that `reduce_core` would introduce.
-                if self.config.is_datalog_batch() {
-                    self.features.mark_as_collection();
-                    self.features.mark_agg_semiring(*agg_op, agg_type.clone());
-                    self.features.mark_threshold_total();
-                    self.features.mark_timely_map();
-                    let pipeline = match agg_op {
-                        AggregationOperator::Min => {
-                            aggregation_min_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Max => {
-                            aggregation_max_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Sum => {
-                            aggregation_sum_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Count => {
-                            aggregation_count_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Avg => {
-                            aggregation_avg_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                    };
-                    block = quote! {
-                        #block
-                        let #output = #output
-                            #pipeline;
-                    };
-
-                    with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.opt_aggregate_operator(
-                            self.display_name(*idb_fp),
-                            output.to_string(),
-                            output.to_string(),
-                        );
-                    });
-                } else {
-                    self.features.mark_aggregation();
-                    let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-                    let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
-                    let reduce_stmt =
-                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type)?;
-                    block = quote! {
-                        #block
-                        let #output = #output
-                            .map(#row_chop)
-                            .arrange_by_key()
-                            #reduce_stmt
-                            .as_collection(#merge_kv);
-                    };
-
-                    with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.general_aggregate_operator(
-                            self.display_name(*idb_fp),
-                            output.to_string(),
-                            output.to_string(),
-                        );
-                    });
-                }
+                // The runtime picks its strategy from the ambient difference,
+                // and the two build different operators, so the plan graph
+                // has to predict the same way.
+                let name = self.display_name(*idb_fp);
+                let binding = output.to_string();
+                with_plan_graph(plan_graph, |plan_graph| {
+                    if self.config.is_datalog_batch() {
+                        plan_graph.opt_aggregate_operator(name, binding.clone(), binding);
+                    } else {
+                        plan_graph.general_aggregate_operator(name, binding.clone(), binding);
+                    }
+                });
             }
 
             flows.push(block);

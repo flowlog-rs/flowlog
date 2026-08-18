@@ -273,7 +273,7 @@ pub(crate) fn row_is_copy(types: &[DataType], string_intern: bool) -> bool {
             .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
 }
 
-fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
+pub(crate) fn internal_column_tokens(dt: &DataType, string_intern: bool) -> TokenStream {
     match dt {
         DataType::Float32 => quote! { OrderedFloat<f32> },
         DataType::Float64 => quote! { OrderedFloat<f64> },
