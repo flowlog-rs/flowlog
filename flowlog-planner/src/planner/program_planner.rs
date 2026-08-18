@@ -27,7 +27,7 @@ impl ProgramPlanner {
         program: &Program,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Self, BoxError> {
-        let stratifier = Stratifier::from_program(program, config.is_extended())?;
+        let stratifier = Stratifier::from_program(program);
         let mut optimizer = Optimizer::new();
         let mut strata: Vec<StratumPlanner> = stratifier
             .strata()
@@ -51,11 +51,10 @@ impl ProgramPlanner {
 ///
 /// Soundness: the earlier binding only stays correct as long as none of the
 /// IDBs its value transitively depends on have been updated between the two
-/// strata. Under standard Datalog stratification, all consumers come after
-/// all definers, so this is automatic; in extended mode the user controls
-/// the segment order and may update an IDB *between* two consumers with the
-/// same content-addressed transformation. The transitive check below keeps
-/// the later emission whenever that's the case.
+/// strata. Stratification puts all consumers after all definers, so this
+/// holds; the transitive check below keeps the later emission on the
+/// remaining cases where an IDB is rewritten between two consumers of the
+/// same content-addressed transformation.
 fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
     let mut idb_writes: HashMap<u64, Vec<usize>> = HashMap::new();
     for (idx, stratum) in strata.iter().enumerate() {
@@ -108,7 +107,7 @@ mod tests {
 
     use super::*;
 
-    /// Round-trip a tiny program through parse → typecheck → program-plan,
+    /// Round-trip a tiny program through parse, typecheck, and program-plan,
     /// mirroring the temp-file pattern used by `stratifier::core::tests`.
     fn analyze(src: &str) -> ProgramPlanner {
         let mut tmp = NamedTempFile::new().expect("tempfile");
@@ -123,8 +122,10 @@ mod tests {
 
     /// Dyck has three strata:
     ///   0: `Zero`, `One` rule heads from `Arc`.
-    ///   1: `Dyck` base joins (`Zero⋈Zero`, `One⋈One`) — non-recursive.
-    ///   2: `Dyck` recursive joins (`Zero⋈Dyck⋈Zero`, …) — recursive.
+    ///   1: `Dyck` base joins (`Zero join Zero`, `One join One`),
+    ///      non-recursive.
+    ///   2: `Dyck` recursive joins (`Zero join Dyck join Zero`, ...),
+    ///      recursive.
     ///
     /// Stratum 2's prelude would otherwise re-key `Zero`/`One` the same way
     /// stratum 1 does. The prune drops those duplicate emissions; what
@@ -152,7 +153,7 @@ mod tests {
         assert_eq!(pp.strata().len(), 3, "dyck should stratify into 3 strata");
 
         // Structural invariant: each surviving output fingerprint belongs to
-        // exactly one stratum — no duplicate emissions across strata.
+        // exactly one stratum: no duplicate emissions across strata.
         let mut owner: HashMap<u64, usize> = HashMap::new();
         for (idx, stratum) in pp.strata().iter().enumerate() {
             for t in stratum.non_recursive_transformations() {
@@ -163,7 +164,7 @@ mod tests {
             }
         }
 
-        // Headline count: 12 unpruned → 8 after prune (four Zero/One re-keys
+        // Headline count: 12 unpruned becomes 8 after prune (four re-keys
         // collapse). Locks the savings number in for regression.
         assert_eq!(
             owner.len(),
@@ -256,7 +257,7 @@ mod tests {
     }
 
     /// Equal output fingerprint must imply equal content (operation, input
-    /// fps, flow) across all per-rule transformations — otherwise dedup
+    /// fps, flow) across all per-rule transformations; otherwise dedup
     /// would substitute a different transformation.
     #[test]
     fn equal_fingerprint_implies_equal_content() {

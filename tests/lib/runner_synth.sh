@@ -23,7 +23,7 @@
 #   (cd "$LIB_RUNNER_DIR" && cargo run --release)
 #
 # Runtime: the synthesized `main.rs` reads `WORKERS` from the environment
-# and passes it to `DatalogBatchEngine::new(n)`. Unset → workers=1.
+# and passes it to `BatchEngine::new(n)`. Unset → workers=1.
 
 [[ -n "${FLOWLOG_LIB_RUNNER_SYNTH_SH_LOADED:-}" ]] && return 0
 FLOWLOG_LIB_RUNNER_SYNTH_SH_LOADED=1
@@ -305,9 +305,9 @@ EOF
 ###############################################################################
 #
 # Honors optional globals:
-#   LIB_RUNNER_SIP=1         → Builder::sip(true)
-#   LIB_RUNNER_STR_INTERN=1  → Builder::string_intern(true)
-#   LIB_RUNNER_EXTENDED=1    → Builder::mode(ExecutionMode::ExtendBatch)
+#   LIB_RUNNER_SIP=1         -> Builder::sip(true)
+#   LIB_RUNNER_STR_INTERN=1  -> Builder::string_intern(true)
+#   LIB_RUNNER_INC=1         -> Builder::mode(ExecutionMode::Inc)
 #
 # `test_dir` may be empty when called for a warm-up build.
 write_build_rs() {
@@ -329,17 +329,10 @@ write_build_rs() {
     (( ${LIB_RUNNER_SIP:-0} ))        && knob_setters+=$'        .sip(true)\n'
     (( ${LIB_RUNNER_STR_INTERN:-0} )) && knob_setters+=$'        .string_intern(true)\n'
 
-    # Pick exactly one mode line. Defaults to `DatalogBatch`; `LIB_RUNNER_INC`
-    # toggles to incremental and combines with `LIB_RUNNER_EXTENDED`.
+    # Defaults to `Batch`; `LIB_RUNNER_INC` toggles to incremental.
     local mode_setter=""
     if (( ${LIB_RUNNER_INC:-0} )); then
-        if (( ${LIB_RUNNER_EXTENDED:-0} )); then
-            mode_setter=$'        .mode(flowlog_build::ExecutionMode::ExtendInc)\n'
-        else
-            mode_setter=$'        .mode(flowlog_build::ExecutionMode::DatalogInc)\n'
-        fi
-    elif (( ${LIB_RUNNER_EXTENDED:-0} )); then
-        mode_setter=$'        .mode(flowlog_build::ExecutionMode::ExtendBatch)\n'
+        mode_setter=$'        .mode(flowlog_build::ExecutionMode::Inc)\n'
     fi
     knob_setters+="$mode_setter"
 
@@ -532,7 +525,7 @@ EOF
 # Synthesize a fresh main.rs that drives the engine for the current test.
 #
 # Reads `WORKERS` from the environment and passes it to
-# `DatalogBatchEngine::new(n)`. Unset or unparseable → 1 worker.
+# `BatchEngine::new(n)`. Unset or unparseable → 1 worker.
 write_main_rs() {
     local dl_file="$1"
     local main_rs="${LIB_RUNNER_DIR}/src/main.rs"
@@ -571,7 +564,7 @@ pub mod prog {
     include!(concat!(env!("OUT_DIR"), "/program.rs"));
 }
 
-use prog::DatalogBatchEngine;
+use prog::BatchEngine;
 use prog::rel::*;
 use std::io::Write;
 
@@ -583,7 +576,7 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
 
-    let mut engine = DatalogBatchEngine::new(workers);
+    let mut engine = BatchEngine::new(workers);
 ${load_calls}
     let results = engine.run();
 
@@ -597,7 +590,7 @@ EOF
 ###############################################################################
 #
 # Reads binary-inc fixtures (`commands.txt` transcript + `<rel>_t<N>`
-# per-epoch delta expected files) and drives `DatalogIncrementalEngine`
+# per-epoch delta expected files) and drives `IncrementalEngine`
 # through typed insert/remove/set/unset calls. Since the library returns
 # full snapshots rather than per-epoch deltas, the synthesized main.rs
 # keeps a host-side mirror of every output relation and diffs it against
@@ -958,7 +951,7 @@ pub mod prog {
     include!(concat!(env!("OUT_DIR"), "/program.rs"));
 }
 
-use prog::DatalogIncrementalEngine;
+use prog::IncrementalEngine;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
@@ -969,7 +962,7 @@ fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    let mut engine = DatalogIncrementalEngine::new(workers);
+    let mut engine = IncrementalEngine::new(workers);
 
 ${prev_decls}
 

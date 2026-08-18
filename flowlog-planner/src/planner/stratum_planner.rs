@@ -11,7 +11,6 @@ use flowlog_common::SUBSECTION_BAR;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::HeadArg;
-use flowlog_parser::LoopCondition;
 use flowlog_parser::Program;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -49,16 +48,8 @@ pub struct StratumPlanner {
     /// Fingerprints of collections that enter recursion.
     recursion_enter_collections: Vec<u64>,
 
-    /// Fingerprints of accumulative recursive collections within recursion.
-    ///
-    /// These use `Variable::new` with concat-with-self feedback for monotone
-    /// growth.
-    recursion_accumulate_recursive_collections: Vec<u64>,
-
-    /// Fingerprints of iterative recursive collections within recursion.
-    ///
-    /// These use `Variable::new_from` with replacement at each step.
-    recursion_iterative_recursive_collections: Vec<u64>,
+    /// Fingerprints of the collections that feed back into the recursion.
+    recursion_feedback_collections: Vec<u64>,
 
     /// Fingerprints of collections that exit recursion.
     recursion_leave_collections: Vec<u64>,
@@ -75,10 +66,6 @@ pub struct StratumPlanner {
     /// Only populated for rules whose heads contain an aggregation argument.
     /// Values are `(AggregationOperator, output_position, output_arity)`.
     idb_to_aggregation_map: HashMap<u64, (AggregationOperator, usize, usize)>,
-
-    /// Loop condition for this stratum, if it was declared as a loop block.
-    /// `None` for plain strata (which run to fixpoint implicitly).
-    loop_condition: Option<LoopCondition>,
 
     /// Atom fingerprints unioned across every rule's rhs. Computed once at
     /// stratum construction so codegen can tell which transformation inputs
@@ -205,15 +192,9 @@ impl StratumPlanner {
         let mut stratum_planner = Self {
             rule_planners,
             is_recursive,
-            recursion_accumulate_recursive_collections: stratified
-                .accumulate_recursive_relations()
-                .to_vec(),
-            recursion_iterative_recursive_collections: stratified
-                .iterative_recursive_relations()
-                .to_vec(),
+            recursion_feedback_collections: stratified.recursive_relations().to_vec(),
             recursion_leave_collections: stratified.leave_relations().to_vec(),
             idb_to_aggregation_map,
-            loop_condition: stratified.loop_condition().cloned(),
             atom_fps,
             ..Self::default()
         };
@@ -274,16 +255,10 @@ impl StratumPlanner {
         &self.recursion_enter_collections
     }
 
-    /// Get fingerprints of accumulative recursive collections within recursion.
+    /// Get fingerprints of the collections that feed back into the recursion.
     #[inline]
-    pub fn recursion_accumulate_recursive_collections(&self) -> &[u64] {
-        &self.recursion_accumulate_recursive_collections
-    }
-
-    /// Get fingerprints of iterative recursive collections within recursion.
-    #[inline]
-    pub fn recursion_iterative_recursive_collections(&self) -> &[u64] {
-        &self.recursion_iterative_recursive_collections
+    pub fn recursion_feedback_collections(&self) -> &[u64] {
+        &self.recursion_feedback_collections
     }
 
     /// Get fingerprints of collections that leave recursion.
@@ -316,12 +291,6 @@ impl StratumPlanner {
     #[inline]
     pub fn idb_to_aggregation_map(&self) -> &HashMap<u64, (AggregationOperator, usize, usize)> {
         &self.idb_to_aggregation_map
-    }
-
-    /// Get the loop condition for this stratum, if it is a loop block.
-    #[inline]
-    pub fn loop_condition(&self) -> Option<&LoopCondition> {
-        self.loop_condition.as_ref()
     }
 
     /// Map of atom fingerprint to `"name(arg1, ..., argN)"` label for every
@@ -609,7 +578,7 @@ mod tests {
             &mut config,
         )
         .expect("parse");
-        let rules = program.rules().into_iter().cloned().collect();
+        let rules = program.rules().to_vec();
         (rules, sources)
     }
 

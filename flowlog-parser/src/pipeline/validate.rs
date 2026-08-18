@@ -116,22 +116,6 @@ mod tests {
     }
 
     #[test]
-    fn rules_inside_loop_blocks_are_validated() {
-        let src = "\
-            .decl Edge(x: int32, y: int32)\n\
-            .decl Reach(x: int32, y: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output Reach\n\
-            fixpoint {\n\
-                Reach(x, y) :- Edge(x, z).\n\
-            }\n";
-        assert_err!(
-            validated(src),
-            ParseError::UnknownHeadVariable { var, .. } if var == "y"
-        );
-    }
-
-    #[test]
     fn bound_head_variables_are_accepted() {
         let src = "\
             .decl Edge(x: int32, y: int32)\n\

@@ -97,7 +97,7 @@ mod tests {
             .output Big\n\
             Big(x) :- Item(x), x > 100.\n";
         let program = checked(src).expect("type-check should succeed");
-        let rule = program.rules()[0];
+        let rule = &program.rules()[0];
         let cmp = match &rule.rhs()[1] {
             Predicate::Compare(c) => c,
             other => panic!("expected comparison, got {other:?}"),

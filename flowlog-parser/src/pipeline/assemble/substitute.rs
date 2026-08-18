@@ -31,20 +31,13 @@ use crate::Predicate;
 use crate::TupleElem;
 use crate::TupleLit;
 use crate::error::ParseError;
-use crate::segment::Segment;
 
-/// Rewrite every rule in `segments`, removing equality assignments by
+/// Rewrite every rule in `rules`, removing equality assignments by
 /// substitution. A rule that reduces to an empty body (all its literals were
 /// assignments) is left in place for the fold stage to convert to a fact.
-pub(crate) fn substitute_assignments(segments: &mut [Segment]) -> Result<(), ParseError> {
-    for seg in segments.iter_mut() {
-        let rules: &mut Vec<FlowLogRule> = match seg {
-            Segment::Plain(rules) => rules,
-            Segment::Loop(block) | Segment::Fixpoint(block) => block.rules_mut(),
-        };
-        for rule in rules.iter_mut() {
-            substitute_rule(rule)?;
-        }
+pub(crate) fn substitute_assignments(rules: &mut [FlowLogRule]) -> Result<(), ParseError> {
+    for rule in rules.iter_mut() {
+        substitute_rule(rule)?;
     }
     Ok(())
 }
@@ -356,10 +349,7 @@ fn subst_factor(factor: &mut Factor, var: &str, value: &Arithmetic) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Rule;
     use crate::assert_err;
-    use crate::segment::LoopBlock;
-    use crate::test_util::parse_node;
     use crate::test_util::parse_rule;
 
     /// Substituting an assignment of a *computed* expression into a negated
@@ -398,34 +388,5 @@ mod tests {
             compare_vars.iter().all(|v| v == "x"),
             "assignment vars must be fully substituted away: {rule}"
         );
-    }
-
-    /// `substitute_assignments` also runs inside `fixpoint`/`loop` blocks: it
-    /// reaches into a loop block's rules rather than skipping them.
-    #[test]
-    fn assignment_inside_fixpoint_substituted() {
-        let block: LoopBlock = parse_node(
-            Rule::fixpoint_block,
-            "fixpoint {\n\
-               R(t) :- A(x), t = x + 1.\n\
-               R(t) :- R(x), t = x + 1, x < 5.\n\
-             }",
-        );
-        let mut segments = vec![Segment::Fixpoint(block)];
-        substitute_assignments(&mut segments).expect("substitutes");
-        let Segment::Fixpoint(block) = &segments[0] else {
-            unreachable!("still a fixpoint segment");
-        };
-        for rule in block.rules() {
-            let assignments = rule
-                .rhs()
-                .iter()
-                .filter(|p| matches!(p, Predicate::Compare(e) if *e.operator() == ComparisonOperator::Equal))
-                .count();
-            assert_eq!(
-                assignments, 0,
-                "assignments inside blocks must be substituted"
-            );
-        }
     }
 }

@@ -242,7 +242,7 @@ impl PlanGraph {
         );
     }
 
-    pub fn general_aggregate_operator(
+    pub fn i32_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -252,12 +252,12 @@ impl PlanGraph {
             format!("{}: aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::GENERAL_AGGREGATE,
+            steps::I32_AGGREGATE,
             None,
         );
     }
 
-    pub fn opt_aggregate_operator(
+    pub fn present_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -267,7 +267,7 @@ impl PlanGraph {
             format!("{}: opt aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::OPT_AGGREGATE,
+            steps::PRESENT_AGGREGATE,
             None,
         );
     }
@@ -344,7 +344,7 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_pre_leave_opt_aggregate_operator(
+    pub fn recursive_pre_leave_present_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -370,7 +370,7 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_post_leave_opt_aggregate_operator(
+    pub fn recursive_post_leave_present_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -380,7 +380,7 @@ impl PlanGraph {
             format!("{}: post-leave opt aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::POST_LEAVE_OPT_AGGREGATE,
+            steps::POST_LEAVE_PRESENT_AGGREGATE,
             None,
         );
     }
@@ -435,7 +435,7 @@ mod tests {
     /// operator's own address slot.
     #[test]
     fn recording_across_a_scope_boundary_keeps_addresses_distinct() {
-        let mut graph = PlanGraph::new(ExecutionMode::DatalogBatch);
+        let mut graph = PlanGraph::new(ExecutionMode::Batch);
         graph.map_join_operator("outer".into(), vec![], "a".into(), 1);
         graph.enter_scope();
         graph.map_join_operator("inner".into(), vec![], "b".into(), 1);

@@ -40,10 +40,6 @@ pub(crate) fn gen_lib_imports(
 
     out.push(dd_imports(features));
 
-    if features.timely_map() {
-        out.push(quote! { use ::flowlog_runtime::timely::dataflow::operators::vec::Map; });
-    }
-
     out.push(string_intern_imports(features));
     if features.ordered_float() {
         out.push(quote! { use ::flowlog_runtime::ordered_float::OrderedFloat; });
@@ -76,9 +72,6 @@ fn dd_imports(f: &Features) -> TokenStream {
 
     if f.dd_input() {
         out.push(quote! { use ::flowlog_runtime::differential_dataflow::input::Input; });
-    }
-    if f.as_collection() {
-        out.push(quote! { use ::flowlog_runtime::differential_dataflow::AsCollection; });
     }
     if f.recursive() {
         out.push(quote! {

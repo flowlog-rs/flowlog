@@ -131,14 +131,6 @@ pub enum ParseError {
     )]
     OutputAndPrintsizeConflict { span: Span, name: String },
 
-    /// A loop's `iterative [...]` list names a relation that was never `.decl`-d.
-    #[error("iterative list references undeclared relation `{name}`")]
-    UndeclaredInIterativeList { span: Span, name: String },
-
-    /// A loop's `until`/`while` condition names a relation that was never `.decl`-d.
-    #[error("loop condition references undeclared relation `{name}`")]
-    UndeclaredLoopCondition { span: Span, name: String },
-
     /// A rule head or body atom names a relation that was never `.decl`-d.
     #[error("rule references undeclared relation `{name}`")]
     UndeclaredInRule { span: Span, name: String },
@@ -146,18 +138,6 @@ pub enum ParseError {
     /// A ground fact names a relation that was never `.decl`-d.
     #[error("fact references undeclared relation `{name}`")]
     UndeclaredInFact { span: Span, name: String },
-
-    /// A `loop` / `fixpoint` block appeared outside `extend-*` mode.
-    #[error("`loop`/`fixpoint` blocks require `--mode extend-batch` or `extend-inc`")]
-    LoopBlockInStandardMode { span: Span },
-
-    /// A loop's until-condition names a relation with nonzero arity.
-    #[error("loop condition relation `{name}` must be nullary, but is declared with arity {arity}")]
-    NonNullaryLoopCondition {
-        span: Span,
-        name: String,
-        arity: usize,
-    },
 
     /// A built-in call passes the wrong number of arguments. Carries the
     /// keyword as the user spelled it.
@@ -624,18 +604,6 @@ impl Diagnostic for ParseError {
                     "add a `.decl {name}(...)` before this directive"
                 )]),
 
-            ParseError::UndeclaredInIterativeList { span, name } => base
-                .with_labels(primary_only(*span))
-                .with_notes(vec![format!(
-                    "either `.decl {name}(...)` it, or drop `{name}` from the iterative list"
-                )]),
-
-            ParseError::UndeclaredLoopCondition { span, name } => base
-                .with_labels(primary_only(*span))
-                .with_notes(vec![format!(
-                    "declare `{name}` as a nullary relation with `.decl {name}()` and derive it inside the loop"
-                )]),
-
             ParseError::UndeclaredInRule { span, name }
             | ParseError::UndeclaredInFact { span, name } => base
                 .with_labels(primary_only(*span))
@@ -774,8 +742,6 @@ impl Diagnostic for ParseError {
                 )]),
 
             ParseError::Syntax { span, .. }
-            | ParseError::LoopBlockInStandardMode { span }
-            | ParseError::NonNullaryLoopCondition { span, .. }
             | ParseError::BuiltinArity { span, .. }
             | ParseError::AssignmentVarInNegation { span, .. }
             | ParseError::GroundRuleNotConst { span }

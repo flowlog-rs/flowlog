@@ -1,4 +1,4 @@
-//! `DatalogIncrementalEngine` codegen for library mode.
+//! `IncrementalEngine` codegen for library mode.
 //!
 //! Mirrors [`super::batch::gen_lib_engine`] but drives a stateful,
 //! epoch-based incremental engine. The surface matches binary-mode's
@@ -67,7 +67,7 @@ pub(crate) fn gen_lib_incremental_engine(
 
         #engine_struct
 
-        impl DatalogIncrementalEngine {
+        impl IncrementalEngine {
             /// Spawn a pool of `workers` timely workers on a dedicated
             /// thread and return the engine handle. The dataflow stays
             /// alive for the engine's lifetime; `Drop` joins it.
@@ -99,7 +99,7 @@ pub(crate) fn gen_lib_incremental_engine(
             pub fn commit(&mut self) -> IncrementalResults {
                 assert!(
                     self.in_txn,
-                    "DatalogIncrementalEngine::commit called with no active transaction; \
+                    "IncrementalEngine::commit called with no active transaction; \
                      call begin() or stage at least one update first",
                 );
                 let results = { #commit_body };
@@ -120,7 +120,7 @@ pub(crate) fn gen_lib_incremental_engine(
             }
         }
 
-        impl Drop for DatalogIncrementalEngine {
+        impl Drop for IncrementalEngine {
             fn drop(&mut self) {
                 #drop_body
             }
@@ -213,7 +213,7 @@ fn gen_engine_struct(
         .collect();
 
     quote! {
-        pub struct DatalogIncrementalEngine {
+        pub struct IncrementalEngine {
             workers: usize,
             epoch: u32,
             in_txn: bool,

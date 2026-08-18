@@ -8,6 +8,7 @@
 use std::io;
 use std::path::Path;
 
+use flowlog_common::ExecutionMode;
 use flowlog_common::pretty_print;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -35,16 +36,15 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     let profile_structs = &pipeline.parts.profile_structs;
     let profile_ops = &pipeline.parts.profile_ops;
     let rel_module = gen_public_rel_module(&pipeline.program);
-    let (results_struct, lib_engine) = if config.is_incremental() {
-        (
+    let (results_struct, lib_engine) = match config.mode() {
+        ExecutionMode::Inc => (
             gen_incremental_results(&pipeline.program),
             gen_lib_incremental_engine(&pipeline.program, string_intern, &pipeline.parts),
-        )
-    } else {
-        (
+        ),
+        ExecutionMode::Batch => (
             gen_batch_results(&pipeline.program),
             gen_lib_engine(&pipeline.program, string_intern, &pipeline.parts),
-        )
+        ),
     };
     let udf_mod = gen_udf_mod(&pipeline.features, config.udf_file().map(Path::new))?;
 

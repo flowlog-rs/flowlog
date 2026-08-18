@@ -10,6 +10,7 @@
 use std::collections::HashSet;
 use std::mem;
 
+use flowlog_common::ExecutionMode;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -123,11 +124,12 @@ impl CodeGen {
                 // has to predict the same way.
                 let name = self.display_name(*idb_fp);
                 let binding = output.to_string();
-                with_plan_graph(plan_graph, |plan_graph| {
-                    if self.config.is_datalog_batch() {
-                        plan_graph.opt_aggregate_operator(name, binding.clone(), binding);
-                    } else {
-                        plan_graph.general_aggregate_operator(name, binding.clone(), binding);
+                with_plan_graph(plan_graph, |plan_graph| match self.config.mode() {
+                    ExecutionMode::Batch => {
+                        plan_graph.present_aggregate_operator(name, binding.clone(), binding);
+                    }
+                    ExecutionMode::Inc => {
+                        plan_graph.i32_aggregate_operator(name, binding.clone(), binding);
                     }
                 });
             }

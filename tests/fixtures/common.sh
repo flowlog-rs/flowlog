@@ -22,10 +22,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/shared.sh"
 
 readonly TESTS_DIR="${ROOT_DIR}/tests/fixtures"
 
-# Each runner declares its own CATEGORIES before sourcing this file —
-# common.sh defines no default. extend-inc is intentionally absent from
-# both runners today (no fixtures exist; lib mode doesn't yet support
-# the mode); add it to both runners when those gaps close.
+# Each runner declares its own CATEGORIES before sourcing this file --
+# common.sh defines no default.
 [[ -n "${CATEGORIES+x}" ]] || die "CATEGORIES must be set by the runner before sourcing common.sh"
 readonly -a CATEGORIES
 

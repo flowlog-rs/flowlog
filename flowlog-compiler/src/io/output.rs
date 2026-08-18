@@ -11,6 +11,7 @@
 //! - **`.printsize`**: read the shared size cell and report it to stderr.
 
 use flowlog_build::gen_drain_block;
+use flowlog_common::ExecutionMode;
 use flowlog_parser::DataType;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
@@ -76,7 +77,7 @@ impl Compiler {
     fn gen_output_drain(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
         let buf_ident = Ident::new(&format!("buf_{}", idb.name()), Span::call_site());
         let string_intern = self.codegen.features().string_intern();
-        let is_incremental = self.config.is_incremental();
+        let is_incremental = self.config.mode() == ExecutionMode::Inc;
 
         // File sinks without ORDER BY take the bounded-streaming parallel drain
         // (same bytes and row order, resolve+format spread across cores).

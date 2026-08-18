@@ -23,6 +23,7 @@ use std::path::Path;
 
 use flowlog_build::Features;
 use flowlog_common::Config;
+use flowlog_common::ExecutionMode;
 use toml_edit::Array;
 use toml_edit::DocumentMut;
 use toml_edit::InlineTable;
@@ -66,9 +67,12 @@ impl Compiler {
         write_file(&src_dir.join("relation.rs"), relation_rs.trim_start())?;
 
         // Incremental shell: REPL command parser + readline wrapper.
-        if config.is_incremental() {
-            write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
-            write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
+        match config.mode() {
+            ExecutionMode::Inc => {
+                write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
+                write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
+            }
+            ExecutionMode::Batch => {}
         }
 
         // Optional UDF module — copied verbatim from a user-supplied file.
@@ -169,8 +173,9 @@ pub(crate) fn render_cargo_toml(
         if features.string_intern() {
             deps["serde"] = value(inline_versioned_dep("1.0", &["derive"]));
         }
-        if config.is_incremental() {
-            deps["rustyline"] = "18".into();
+        match config.mode() {
+            ExecutionMode::Inc => deps["rustyline"] = "18".into(),
+            ExecutionMode::Batch => {}
         }
     }
 

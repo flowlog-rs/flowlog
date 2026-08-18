@@ -4,11 +4,11 @@
 //! language engine. The crate is laid out as the compilation story:
 //!
 //! - `types`: the type vocabulary ([`DataType`], the registry).
-//! - `syntax`: what the user wrote — grammar, string decoding, and the
-//!   AST node layers (`ast`, `declaration`, `segment`).
-//! - `pipeline`: what happens to it — the stages from source text to a
+//! - `syntax`: what the user wrote; grammar, string decoding, and the
+//!   AST node layers (`ast`, `declaration`).
+//! - `pipeline`: what happens to it; the stages from source text to a
 //!   checked, optimized [`Program`], in execution order.
-//! - `program`: what comes out — the [`Program`] container.
+//! - `program`: what comes out; the [`Program`] container.
 //!
 //! [`parse`] runs the whole pipeline; [`check_program`],
 //! [`fold_constants`], and [`prune`] expose the individual stages.
@@ -60,13 +60,6 @@ pub use pipeline::prune::prune;
 pub use pipeline::typecheck::check_program;
 pub use program::InlineFact;
 pub use program::Program;
-pub use segment::IterativeDirective;
-pub use segment::LoopBlock;
-pub use segment::LoopCondition;
-pub use segment::LoopConnective;
-pub use segment::Segment;
-pub use segment::StopGroup;
-pub use segment::StopRelation;
 pub(crate) use syntax::ast;
 pub(crate) use syntax::declaration;
 // The pest bridge is crate-internal: downstream crates consume the AST,
@@ -77,7 +70,6 @@ pub(crate) use syntax::grammar::decode_string;
 pub(crate) use syntax::grammar::span_of;
 pub(crate) use syntax::lexeme::Lexeme;
 pub(crate) use syntax::node::Node;
-pub(crate) use syntax::segment;
 pub use types::DataType;
 pub(crate) use types::TypeId;
 pub(crate) use types::TypeRegistry;

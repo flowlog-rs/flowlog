@@ -18,9 +18,7 @@ mod rule;
 use self::rule::Disposition;
 use self::rule::classify;
 use self::rule::fold_rule;
-use crate::InlineFact;
 use crate::Program;
-use crate::Segment;
 use crate::error::ParseError;
 
 /// Fold every constant expression in `program`, eliminate rules a constant
@@ -31,32 +29,22 @@ use crate::error::ParseError;
 /// concrete (not the polymorphic `Int`/`Float` placeholders). Elimination can
 /// strand now-dead relations; [`prune`](crate::prune) cleans those up.
 pub fn fold_constants(program: &mut Program) -> Result<(), ParseError> {
-    let mut new_facts: Vec<(String, InlineFact)> = Vec::new();
-
-    for segment in program.segments_mut() {
-        // Inside loop/fixpoint blocks `classify` value-folds but never removes
-        // a rule (removing a recursive rule could change fixpoint semantics);
-        // an emptied body is the exception, folding to a fact in any segment.
-        let (rules, in_loop) = match segment {
-            Segment::Plain(rules) => (rules, false),
-            Segment::Loop(block) | Segment::Fixpoint(block) => (block.rules_mut(), true),
-        };
-        let taken = std::mem::take(rules);
-        let mut kept = Vec::with_capacity(taken.len());
-        for mut rule in taken {
-            fold_rule(&mut rule);
-            match classify(&rule, in_loop)? {
-                Disposition::Keep => kept.push(rule),
-                Disposition::Remove => {}
-                Disposition::ToFact(name, fact) => new_facts.push((name, fact)),
+    // Rebuild rather than `retain`: classifying is fallible, and a rule can
+    // leave as a fact rather than a rule, so this is a fallible filter-map.
+    // Taking the list also releases the borrow, letting each fact go straight
+    // to `facts_mut` instead of through a staging vector.
+    let mut kept = Vec::with_capacity(program.rules().len());
+    for mut rule in std::mem::take(program.rules_mut()) {
+        fold_rule(&mut rule);
+        match classify(&rule)? {
+            Disposition::Keep => kept.push(rule),
+            Disposition::Remove => {}
+            Disposition::ToFact(name, fact) => {
+                program.facts_mut().entry(name).or_default().push(fact);
             }
         }
-        *rules = kept;
     }
-
-    for (name, fact) in new_facts {
-        program.facts_mut().entry(name).or_default().push(fact);
-    }
+    *program.rules_mut() = kept;
     Ok(())
 }
 
@@ -84,7 +72,7 @@ mod tests {
             .output Out\n\
             Out(x) :- Item(x), x > 2 + 3.\n";
         let program = folded(src).expect("program type-checks");
-        let rule = program.rules()[0];
+        let rule = &program.rules()[0];
         let cmp = match &rule.rhs()[1] {
             Predicate::Compare(c) => c,
             other => panic!("expected comparison, got {other:?}"),
@@ -109,7 +97,7 @@ mod tests {
             .output Out\n\
             Out(10 * 2) :- Item(x).\n";
         let program = folded(src).expect("program type-checks");
-        let rule = program.rules()[0];
+        let rule = &program.rules()[0];
         let head = match &rule.head().head_arguments()[0] {
             HeadArg::Arith(a) => a,
             other => panic!("expected arith head arg, got {other:?}"),
@@ -132,7 +120,7 @@ mod tests {
             .output Out\n\
             Out(x) :- Item(x), x > 100 + 100.\n";
         let program = folded(src).expect("program type-checks");
-        let rule = program.rules()[0];
+        let rule = &program.rules()[0];
         let cmp = match &rule.rhs()[1] {
             Predicate::Compare(c) => c,
             other => panic!("expected comparison, got {other:?}"),
@@ -154,7 +142,7 @@ mod tests {
             .output Out\n\
             Out(x) :- Item(x), 1 < 2.\n";
         let program = folded(src).expect("program type-checks");
-        let rule = program.rules()[0];
+        let rule = &program.rules()[0];
         assert_eq!(
             rule.rhs().len(),
             1,
@@ -220,7 +208,7 @@ mod tests {
             .output Out\n\
             Out(x + 5) :- Item(x).\n";
         let program = folded(src).expect("program type-checks");
-        let rule = program.rules()[0];
+        let rule = &program.rules()[0];
         let head = match &rule.head().head_arguments()[0] {
             HeadArg::Arith(a) => a,
             other => panic!("expected arith head arg, got {other:?}"),

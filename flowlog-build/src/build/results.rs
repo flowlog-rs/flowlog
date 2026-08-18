@@ -2,7 +2,7 @@
 //!
 //! Two structs, two semantics:
 //!
-//! - `BatchResults` (returned by `DatalogBatchEngine::run()`) is a
+//! - `BatchResults` (returned by `BatchEngine::run()`) is a
 //!   snapshot. One field per output-surfaced relation:
 //!     - `.output Foo` (arity > 0) → `pub foo: Vec<rel::Foo>`
 //!     - `.output Foo` (nullary)   → `pub foo: bool`
@@ -27,7 +27,7 @@ use crate::build::relation::printsize_field_ident;
 use crate::build::relation::results_field_ident;
 use crate::build::relation::user_struct_ident;
 
-/// `BatchResults` — returned by `DatalogBatchEngine::run()`.
+/// `BatchResults` — returned by `BatchEngine::run()`.
 pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {
     let struct_ident = format_ident!("BatchResults");
     let mut fields: Vec<TokenStream> = Vec::new();

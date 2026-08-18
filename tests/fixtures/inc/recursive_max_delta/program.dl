@@ -1,25 +1,24 @@
 // ════════════════════════════════════════════════════════════════════════════
-// Suite   : recursive_max
-// Feature : recursive max aggregation in datalog-batch mode
-// Covers  : compilation + execution of max() under recursive propagation
+// Suite   : recursive_max_delta
+// Feature : recursive max aggregation in inc mode
+// Focus   : after deleting an edge, the maintained maximum must decrease
 //
-// Data layout
-//   Source(node:i32)               — single seed node 1
-//   Edge(src:i32, dst:i32, w:i32) — weighted DAG with multiple paths
-//
-// Expected longest distances from source 1:
+// Initial longest distances from source 1:
 //   1 -> 1 : 0
-//   1 -> 2 : 5   via direct edge
+//   1 -> 2 : 5
 //   1 -> 3 : 1
-//   1 -> 4 : 11  via 1 -> 3 -> 4
-//   1 -> 5 : 14  via 1 -> 2 -> 5
+//   1 -> 4 : 11
+//   1 -> 5 : 14   via 1 -> 2 -> 5
+//
+// After deleting edge (2,5,9):
+//   1 -> 5 : 12   via 1 -> 3 -> 4 -> 5
 // ════════════════════════════════════════════════════════════════════════════
 
 .decl Source(node: int32)
-.input Source(IO="file", filename="Source.csv", delimiter=",")
+.input Source(IO="command", delimiter=",")
 
 .decl Edge(src: int32, dst: int32, weight: int32)
-.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+.input Edge(IO="command", delimiter=",")
 
 .decl MaxDist(node: int32, dist: int32)
 MaxDist(s, max(0)) :- Source(s).
