@@ -18,6 +18,7 @@
 //! | [`Relation`] | Trait implemented by every generated input struct |
 //! | [`io`] | Byte-range file reader + first-column sharding for parallel ingestion |
 //! | [`intern`] | Thread-safe string interning pool (`lasso`) |
+//! | [`operators`] | Named dataflow operators used by generated rules |
 //! | [`txn`] | Transaction state types shared with incremental drivers |
 //!
 //! The re-exported crates (`timely`, `differential_dataflow`, etc.) are
@@ -26,6 +27,7 @@
 
 pub mod intern;
 pub mod io;
+pub mod operators;
 pub mod sort;
 pub mod txn;
 

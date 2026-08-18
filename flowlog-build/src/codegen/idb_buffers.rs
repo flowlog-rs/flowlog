@@ -55,8 +55,6 @@ impl CodeGen {
             let data_type = idb.data_type();
 
             if idb.printsize() {
-                self.features.mark_as_collection();
-                self.features.mark_timely_map();
                 let cell_ident = Ident::new(&format!("size_{}", name), Span::call_site());
                 cg.size_cell_decls.push(quote! {
                     let #cell_ident: std::sync::Arc<std::sync::Mutex<(Ts, i32)>> =
@@ -174,25 +172,28 @@ impl CodeGen {
         // (batch: single epoch → final count). Always overwrite — the cell
         // reports the most recent epoch's size-delta. Downstream consumers
         // surface it to stderr / file / typed API on their own terms.
-        let dedup = if self.config.is_datalog_batch() {
-            quote! {
-                .consolidate()
-                .inner
-                .flat_map(move |(_, t, _)| std::iter::once(((), t.clone(), 1_i32)))
-            }
+        // Weights are what get summed, so a `Present` diff has to be lifted
+        // to a number first; an `i32` diff already carries one.
+        let (normalize, lift) = if self.config.is_datalog_batch() {
+            (
+                quote! { .consolidate() },
+                quote! { move |_, t, _| std::iter::once(((), t, 1_i32)) },
+            )
         } else {
-            quote! {
-                .threshold(|_, w| if *w > 0 { 1i32 } else { 0 })
-                .inner
-                .flat_map(move |(_, t, d)| std::iter::once(((), t.clone(), d)))
-            }
+            (
+                quote! { .threshold(|_, w| if *w > 0 { 1i32 } else { 0 }) },
+                quote! { move |_, t, d| std::iter::once(((), t, d)) },
+            )
         };
+        let op_name = format!("{display}: inspect size");
 
         quote! {{
             let #cell_ident = #cell_ident.clone();
-            #var.clone()
-                #dedup
-                .as_collection()
+            ::flowlog_runtime::operators::flowlog_map(
+                #var.clone() #normalize,
+                #op_name,
+                #lift,
+            )
                 .map(|_| ())
                 .consolidate()
                 .inspect(move |(_data, time, size)| {

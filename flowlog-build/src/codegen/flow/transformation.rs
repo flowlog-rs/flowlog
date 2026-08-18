@@ -14,9 +14,11 @@ use flowlog_planner::planner::TransformationArgument;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
+use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
+use syn::LitStr;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
@@ -66,6 +68,7 @@ impl CodeGen {
             transformation.flow(),
             edb_suffix,
         );
+        let operator_name = LitStr::new(&transformation_name, Span::call_site());
         let si = self.features.string_intern();
 
         match transformation {
@@ -119,12 +122,9 @@ impl CodeGen {
                 // In-place forms need a `Copy` row (fields are copied out via
                 // `*row`); `map_in_place` also needs the projection to keep
                 // every column's type, so `*row = <projection>` typechecks.
-                let key_free = flow.key().is_empty();
-                let identity_projection =
-                    key_free && is_identity_row_projection(flow.value(), input.arity().1);
+                let identity_projection = is_identity_row_projection(flow.value(), input.arity().1);
                 let row_copy = row_is_copy(&itype, si);
                 let type_preserving = !identity_projection
-                    && key_free
                     && row_copy
                     && self.row_projection_preserves_type(flow.value(), &input_type)?;
                 let is_identity = pred.is_none() && identity_projection;
@@ -155,23 +155,32 @@ impl CodeGen {
                     None if identity_projection => Ok(quote! { let #out = #inp.clone(); }),
                     // Identity + predicate: retain surviving rows in place.
                     Some(p) if identity_projection && row_copy => Ok(quote! {
-                        let #out = #inp.clone()
-                            .filter(|&#row_pat: &#row_ty| #p);
+                        let #out = ::flowlog_runtime::operators::flowlog_filter(
+                            #inp.clone(),
+                            #operator_name,
+                            |&#row_pat: &#row_ty, _, _| #p,
+                        );
                     }),
                     // Same-typed rewrite, no predicate: overwrite rows in place.
                     None if type_preserving => Ok(quote! {
-                        let #out = #inp.clone()
-                            .map_in_place(|row: &mut #row_ty| {
+                        let #out = ::flowlog_runtime::operators::flowlog_map_in_place(
+                            #inp.clone(),
+                            #operator_name,
+                            |row: &mut #row_ty, _, _| {
                                 let #row_pat = *row;
                                 *row = #out_val;
-                            });
+                            },
+                        );
                     }),
                     // General projection: rebuild each row.
                     pred => {
                         let body = flat_map_body_tokens(pred, out_val);
                         Ok(quote! {
-                            let #out = #inp.clone()
-                                .flat_map(|#row_pat: #row_ty| { #body });
+                            let #out = ::flowlog_runtime::operators::flowlog_map(
+                                #inp.clone(),
+                                #operator_name,
+                                |#row_pat: #row_ty, t, d| { #body },
+                            );
                         })
                     }
                 }
@@ -258,8 +267,11 @@ impl CodeGen {
                     quote! { let #out = #inp.clone(); }
                 } else {
                     quote! {
-                        let #out = #inp.clone()
-                            .flat_map(|#row_pat: #row_ty| { #flat_map_body });
+                        let #out = ::flowlog_runtime::operators::flowlog_map(
+                            #inp.clone(),
+                            #operator_name,
+                            |#row_pat: #row_ty, t, d| { #flat_map_body },
+                        );
                     }
                 };
 
@@ -323,8 +335,11 @@ impl CodeGen {
                 let flat_map_body = flat_map_body_tokens(pred, out_val);
 
                 Ok(quote! {
-                    let #out = #inp.clone()
-                        .flat_map(|( #kv_param_k, #kv_param_v )| { #flat_map_body });
+                    let #out = ::flowlog_runtime::operators::flowlog_map(
+                        #inp.clone(),
+                        #operator_name,
+                        |( #kv_param_k, #kv_param_v ), t, d| { #flat_map_body },
+                    );
                 })
             }
 
@@ -395,9 +410,9 @@ impl CodeGen {
 
                 // Closure parameter depends on whether input is key-only
                 let closure_param = if input.is_k_only() {
-                    quote! { |#kv_param_k| }
+                    quote! { |#kv_param_k, t, d| }
                 } else {
-                    quote! { |( #kv_param_k, #kv_param_v )| }
+                    quote! { |( #kv_param_k, #kv_param_v ), t, d| }
                 };
 
                 // Ideally, in system design, projection (to key) in SIP optimization may introduce duplicates,
@@ -414,8 +429,11 @@ impl CodeGen {
                 let flat_map_body = flat_map_body_tokens(pred, out_expr);
 
                 let transformation = quote! {
-                    let #out = #inp.clone()
-                        .flat_map(#closure_param { #flat_map_body });
+                    let #out = ::flowlog_runtime::operators::flowlog_map(
+                        #inp.clone(),
+                        #operator_name,
+                        #closure_param { #flat_map_body },
+                    );
                     #out_dedup_expr
                 };
 
@@ -483,8 +501,12 @@ impl CodeGen {
                 let join_body = join_body_tokens(pred, out_val);
 
                 Ok(quote! {
-                    let #out = #l.clone()
-                        .join_core(#r.clone(), |#jn_k, #jn_lv, #jn_rv| { #join_body });
+                    let #out = ::flowlog_runtime::operators::flowlog_join(
+                        #l.clone(),
+                        #r.clone(),
+                        #operator_name,
+                        |#jn_k, #jn_lv, #jn_rv| { #join_body },
+                    );
                 })
             }
 
@@ -545,8 +567,12 @@ impl CodeGen {
                 let join_body = join_body_tokens(pred, out_expr);
 
                 let transformation = quote! {
-                    let #out = #l.clone()
-                        .join_core(#r.clone(), |#jn_k, #jn_lv, #jn_rv| { #join_body });
+                    let #out = ::flowlog_runtime::operators::flowlog_join(
+                        #l.clone(),
+                        #r.clone(),
+                        #operator_name,
+                        |#jn_k, #jn_lv, #jn_rv| { #join_body },
+                    );
                 };
 
                 let arrange_stmt = self.register_arrangement(
@@ -609,21 +635,28 @@ impl CodeGen {
 
                 Ok(quote! {
                     let #out =
-                        #r.clone()
-                            .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
-                            #inter_dedup
-                            #pos_weight_concat
-                            .concat(
-                                {
-                                    #l.clone()
-                                    .join_core(#r.clone(), |aj_k, _, aj_rv| {
-                                        Some((aj_k.clone(), aj_rv.clone()))
-                                    })
-                                    #inter_dedup
-                                    #neg_weight_concat
-                                }
-                            )
-                            .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_value ))
+                        ::flowlog_runtime::operators::flowlog_map(
+                            #r.clone()
+                                .flat_map_ref(|#anti_param_k, #anti_param_v| std::iter::once(( #anti_param_k.clone(), #anti_param_v.clone() )))
+                                #inter_dedup
+                                #pos_weight_concat
+                                .concat(
+                                    {
+                                        ::flowlog_runtime::operators::flowlog_join(
+                                            #l.clone(),
+                                            #r.clone(),
+                                            #operator_name,
+                                            |aj_k, _, aj_rv| {
+                                                Some((aj_k.clone(), aj_rv.clone()))
+                                            },
+                                        )
+                                        #inter_dedup
+                                        #neg_weight_concat
+                                    }
+                                ),
+                            #operator_name,
+                            |( #anti_param_k, #anti_param_v ), t, d| std::iter::once(( #out_map_value, t, d )),
+                        )
                             #final_normalize;
                 })
             }
@@ -682,21 +715,28 @@ impl CodeGen {
 
                 let transformation = quote! {
                     let #out =
-                        #r.clone()
-                            .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
-                            #inter_dedup
-                            #pos_weight_concat
-                            .concat(
-                                {
-                                    #l.clone()
-                                        .join_core(#r.clone(), |aj_k, _, aj_rv| {
-                                            Some((aj_k.clone(), aj_rv.clone()))
-                                        })
+                        ::flowlog_runtime::operators::flowlog_map(
+                            #r.clone()
+                                .flat_map_ref(|#anti_param_k, #anti_param_v | std::iter::once( ( #anti_param_k.clone(), #anti_param_v.clone() ) ))
+                                #inter_dedup
+                                #pos_weight_concat
+                                .concat(
+                                    {
+                                        ::flowlog_runtime::operators::flowlog_join(
+                                            #l.clone(),
+                                            #r.clone(),
+                                            #operator_name,
+                                            |aj_k, _, aj_rv| {
+                                                Some((aj_k.clone(), aj_rv.clone()))
+                                            },
+                                        )
                                         #inter_dedup
                                         #neg_weight_concat
-                                }
-                            )
-                            .flat_map(|( #anti_param_k, #anti_param_v )| std::iter::once( #out_map_expr ))
+                                    }
+                                ),
+                            #operator_name,
+                            |( #anti_param_k, #anti_param_v ), t, d| std::iter::once(( #out_map_expr, t, d )),
+                        )
                             #final_normalize;
                 };
 
@@ -795,15 +835,19 @@ fn expect_arranged(
     })
 }
 
-/// Build the body of a `flat_map` closure that yields `out` either
+/// Build the body of a `flowlog_map` closure that yields `out` either
 /// conditionally (when `pred` is `Some`) or unconditionally.
 ///
-/// The unconditional branch uses `std::iter::once` because `flat_map`
+/// The unconditional branch uses `std::iter::once` because the operator
 /// expects an iterator.
+///
+/// A projection rewrites the row only, so it hands back the `t` and `d`
+/// its closure was given: the row keeps the timestamp and weight it
+/// arrived with.
 fn flat_map_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream {
     match pred {
-        Some(pred) => quote! { if #pred { Some( #out ) } else { None } },
-        None => quote! { std::iter::once( #out ) },
+        Some(pred) => quote! { if #pred { Some(( #out, t, d )) } else { None } },
+        None => quote! { std::iter::once(( #out, t, d )) },
     }
 }
 
@@ -820,11 +864,11 @@ fn is_identity_row_projection(args: &[ArithmeticArgument], row_arity: usize) -> 
         })
 }
 
-/// Build the body of a `join_core` closure that yields `out` either
+/// Builds the body of a join closure that yields `out` either
 /// conditionally (when `pred` is `Some`) or unconditionally.
 ///
 /// The unconditional branch returns a bare `Some(...)` because
-/// `join_core` expects an `Option`, not an iterator.
+/// The join operator expects an `Option`, not an iterator.
 fn join_body_tokens(pred: Option<TokenStream>, out: TokenStream) -> TokenStream {
     match pred {
         Some(pred) => quote! { if #pred { Some( #out ) } else { None } },
