@@ -26,12 +26,22 @@ impl CodeGen {
     }
 
     /// Emit `const SEMIRING_ONE: Diff = ...`.
+    ///
+    /// The constant carries `allow(dead_code)`: only generated programs
+    /// that preload files or apply inline facts reference it, and which
+    /// of those paths exist varies per program and mode.
     pub(crate) fn semiring_one_value(&self) -> TokenStream {
         match self.config.mode() {
             ExecutionMode::DatalogBatch => {
-                quote! { const SEMIRING_ONE: Diff = differential_dataflow::difference::Present; }
+                quote! {
+                    #[allow(dead_code)]
+                    const SEMIRING_ONE: Diff = differential_dataflow::difference::Present;
+                }
             }
-            _ => quote! { const SEMIRING_ONE: Diff = 1; },
+            _ => quote! {
+                #[allow(dead_code)]
+                const SEMIRING_ONE: Diff = 1;
+            },
         }
     }
 }

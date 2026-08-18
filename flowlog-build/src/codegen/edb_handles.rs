@@ -11,14 +11,15 @@ use crate::codegen::CodeGen;
 use crate::codegen::ty::data::data_type_tokens;
 
 impl CodeGen {
-    /// Generate per-EDB declarations as `(handle, collection)` pairs:
+    /// Generate per-EDB declarations as `(handle, collection)` pairs,
+    /// set-normalizing the input so duplicate facts cannot inflate
+    /// multiplicities:
     ///
     /// ```ignore
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
+    /// let <rel> = flowlog_dedup(<rel>);
     /// ```
     pub(crate) fn gen_edb_decls(&mut self, plan_graph: &mut Option<PlanGraph>) -> Vec<TokenStream> {
-        let normalize = self.dedup_nonrecursive();
-
         let edbs = self.program.edbs();
         if edbs.is_empty() {
             return Vec::new();
@@ -75,7 +76,7 @@ impl CodeGen {
 
                 quote! {
                     let (#handle, #coll) = scope.new_collection::<#ty, Diff>();
-                    let #coll = #coll #normalize;
+                    let #coll = ::flowlog_runtime::operators::flowlog_dedup(#coll);
                 }
             })
             .collect()

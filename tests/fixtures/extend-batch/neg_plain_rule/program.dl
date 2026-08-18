@@ -1,0 +1,29 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : neg_plain_rule
+// Feature : negation in a plain (loop-free) rule under extend-batch
+//
+// The same anti-join as datalog-batch/neg_antijoin, compiled in extend-batch
+// mode.  The mode is the point: extend-batch carries `i32` diffs where
+// datalog-batch carries `Present`, so the anti-join's arms are clamped to
+// 0/1 before the +1/-1 weights cancel, and the surviving rows are clamped
+// back to `i32` rather than to `Present`.  Because the rule is loop-free,
+// that clamp runs at the outer `()` timestamp — the one anti-join path no
+// other fixture reaches.
+//
+// Data layout
+//   Assign (person: int32, task: int32)  — ten assignments
+//   Done   (person: int32, task: int32)  — seven completions
+//
+// Expected
+//   Pending = Assign - Done = {(1,102),(2,202),(4,401)}
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Assign(person: int32, task: int32)
+.input Assign(IO="file", filename="Assign.csv", delimiter=",")
+
+.decl Done(person: int32, task: int32)
+.input Done(IO="file", filename="Done.csv", delimiter=",")
+
+.decl Pending(person: int32, task: int32)
+Pending(p, t) :- Assign(p, t), !Done(p, t).
+.output Pending

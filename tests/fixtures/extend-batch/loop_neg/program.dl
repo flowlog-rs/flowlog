@@ -1,0 +1,40 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : loop_neg
+// Feature : negation inside a fixpoint block under extend-batch
+//
+// The same blocked traversal as datalog-batch/neg_recursive, but the
+// recursive step lives in an explicit `fixpoint` block and the mode carries
+// `i32` diffs.  That combination puts the anti-join's clamps on the loop
+// clock `Product<(), u16>` with `i32` weights: totally ordered, so they take
+// the streaming `threshold_total` rather than the general `threshold` an
+// incremental loop needs.  No other fixture reaches that cell.
+// `Blocked` is an input, so negating it stays stratified.
+//
+// Data layout
+//   Seed    (node: int32)              — {1}
+//   Edge    (src: int32, dst: int32)   — 1->2, 2->3, 2->4, 3->9, 4->5
+//   Blocked (node: int32)              — {3}
+//
+// Expected
+//   1 is seeded; 1->2 passes; 2->3 is blocked so 3 is never derived (and
+//   3->9 therefore never fires); 2->4 and 4->5 pass.
+//   Reach = {1,2,4,5}
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Seed(node: int32)
+.input Seed(IO="file", filename="Seed.csv", delimiter=",")
+
+.decl Edge(src: int32, dst: int32)
+.input Edge(IO="file", filename="Edge.csv", delimiter=",")
+
+.decl Blocked(node: int32)
+.input Blocked(IO="file", filename="Blocked.csv", delimiter=",")
+
+.decl Reach(node: int32)
+Reach(x) :- Seed(x).
+
+fixpoint {
+    Reach(y) :- Reach(x), Edge(x, y), !Blocked(y).
+}
+
+.output Reach

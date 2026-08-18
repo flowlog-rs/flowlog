@@ -72,7 +72,6 @@ impl CodeGen {
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::new();
-        let dedup_stats = self.dedup_nonrecursive();
 
         for (idb_fp, head_fps) in stratum.idb_to_heads_map() {
             let output = self.find_global_ident(*idb_fp);
@@ -109,8 +108,7 @@ impl CodeGen {
             });
 
             let mut block = quote! {
-                let #output = #concat_expr
-                    #dedup_stats;
+                let #output = ::flowlog_runtime::operators::flowlog_dedup(#concat_expr);
             };
 
             if let Some((agg_op, agg_pos, agg_arity)) = stratum.idb_to_aggregation_map().get(idb_fp)
