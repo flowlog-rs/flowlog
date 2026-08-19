@@ -105,25 +105,6 @@ impl Program {
         self.edbs().iter().map(|rel| rel.fingerprint()).collect()
     }
 
-    #[cfg(test)]
-    #[must_use]
-    #[inline]
-    pub fn file_backed_relations(&self) -> Vec<&Relation> {
-        self.relations
-            .iter()
-            .filter(|rel| rel.is_file_backed())
-            .collect()
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn inline_fact_relations(&self) -> Vec<&Relation> {
-        self.relations
-            .iter()
-            .filter(|rel| self.has_inline_facts(rel.name()))
-            .collect()
-    }
-
     // --- IDB outputs (`.output` / `.printsize`) ---
 
     /// IDB relations (those annotated with `.output` or `.printsize`).
@@ -142,7 +123,10 @@ impl Program {
     #[must_use]
     #[inline]
     pub fn output_idbs(&self) -> Vec<&Relation> {
-        self.relations.iter().filter(|rel| rel.output()).collect()
+        self.relations
+            .iter()
+            .filter(|rel| rel.has_output())
+            .collect()
     }
 
     /// IDB relations annotated with `.printsize`, in declaration order.
@@ -227,6 +211,7 @@ impl Program {
 
 #[cfg(test)]
 mod tests {
+    use crate::InputSource;
     use crate::Relation;
     use crate::test_util::assembled;
 
@@ -262,19 +247,22 @@ mod tests {
         assert!(program.rule(1).is_none());
     }
 
-    /// `edbs()` is the union of file-backed (`.input`) relations and relations
-    /// with inline facts; `file_backed_relations()` and `inline_fact_relations()`
-    /// are the individual subsets, and a relation may belong to both.
+    /// `edbs()` is the union of relations carrying an `.input` and relations
+    /// carrying inline facts, and the two overlap. Neither holds a `put`-fed
+    /// `IO="command"` source, which reads no file and declares no facts yet
+    /// is available before evaluation all the same.
     #[test]
-    fn edb_subsets_track_file_backed_inline_and_overlap_relations() {
+    fn edbs_unions_file_backed_inline_and_put_fed_relations() {
         let program = assembled(
             "
             .decl file_only(x: number)
             .decl fact_only(x: number)
+            .decl cmd_only(x: number)
             .decl both(x: number)
             .decl out(x: number)
             .input file_only(IO=\"file\", filename=\"file_only.csv\", delimiter=\",\")
             .input both(IO=\"file\", filename=\"both.csv\", delimiter=\",\")
+            .input cmd_only(IO=\"command\", delimiter=\",\")
             .output out
 
             fact_only(1).
@@ -282,6 +270,7 @@ mod tests {
 
             out(X) :- file_only(X).
             out(X) :- fact_only(X).
+            out(X) :- cmd_only(X).
             out(X) :- both(X).
             ",
         )
@@ -292,18 +281,22 @@ mod tests {
             v.sort_unstable();
             v
         };
+        let file_backed: Vec<&Relation> = program
+            .relations()
+            .iter()
+            .filter(|rel| rel.input().is_some_and(InputSource::is_file_backed))
+            .collect();
+        let inline_facts: Vec<&Relation> = program
+            .relations()
+            .iter()
+            .filter(|rel| program.has_inline_facts(rel.name()))
+            .collect();
 
         assert_eq!(
             names(program.edbs()),
-            vec!["both", "fact_only", "file_only"]
+            vec!["both", "cmd_only", "fact_only", "file_only"]
         );
-        assert_eq!(
-            names(program.file_backed_relations()),
-            vec!["both", "file_only"]
-        );
-        assert_eq!(
-            names(program.inline_fact_relations()),
-            vec!["both", "fact_only"]
-        );
+        assert_eq!(names(file_backed), vec!["both", "file_only"]);
+        assert_eq!(names(inline_facts), vec!["both", "fact_only"]);
     }
 }

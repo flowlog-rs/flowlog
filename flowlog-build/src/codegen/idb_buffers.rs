@@ -8,6 +8,8 @@
 
 use flowlog_common::ExecutionMode;
 use flowlog_parser::DataType;
+use flowlog_parser::OrderKey;
+use flowlog_parser::OutputSink;
 use flowlog_parser::Relation;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -81,7 +83,7 @@ impl CodeGen {
                 self.features.mark_ordered_float();
             }
 
-            if idb.output() {
+            if idb.has_output() {
                 if data_type
                     .iter()
                     .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
@@ -313,11 +315,12 @@ pub fn gen_drain_block(
     sink_postamble: TokenStream,
     string_intern: bool,
 ) -> TokenStream {
-    let order_by = idb.output_order_by();
-    let limit = idb.output_limit();
+    let sink = idb.output_sink();
+    let order_by = sink.and_then(OutputSink::order_by);
+    let limit = sink.and_then(OutputSink::limit);
     let elem_ty = tuple_type(idb, string_intern);
 
-    match (order_by.as_ref(), limit) {
+    match (order_by, limit) {
         (None, _) => quote! {{
             #sink_preamble
             for worker_buf in #buf_ident.lock().unwrap().drain(..) {
@@ -423,10 +426,7 @@ fn resolve_string_leaves(access: &TokenStream, data_type: &DataType) -> TokenStr
 /// Comparator chain for ORDER BY — emits a sequence of statements suitable
 /// for a `sort_by(|a, b| { ... std::cmp::Ordering::Equal })` closure body.
 /// Compares by data columns only; time and diff are ignored.
-pub(crate) fn order_comparators(
-    spec: &[(usize, DataType, bool)],
-    string_intern: bool,
-) -> Vec<TokenStream> {
+pub(crate) fn order_comparators(spec: &[OrderKey], string_intern: bool) -> Vec<TokenStream> {
     spec.iter()
         .map(|(col_idx, data_type, ascending)| {
             let a_expr = field_accessor(*col_idx, data_type, quote! { a }, string_intern);

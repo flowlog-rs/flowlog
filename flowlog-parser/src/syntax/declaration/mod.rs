@@ -4,7 +4,8 @@
 //! - [`Relation`]: a relation `.decl` with its attributes and I/O config.
 //! - [`ExternFn`]: an `.extern fn` signature.
 //! - [`InputDirective`] / [`OutputDirective`] / [`PrintSizeDirective`]:
-//!   `.input` / `.output` / `.printsize`, each folded into its `Relation`.
+//!   `.input` / `.output` / `.printsize`, each folded into its `Relation`
+//!   as an [`InputSource`] / [`OutputSink`].
 //! - `comp`: raw `.comp` / `.init` AST, inlined and discarded before
 //!   typechecking.
 //! - `type_decl`: raw `.type` declaration parsing.
@@ -23,7 +24,10 @@ pub(crate) use comp::RawItem;
 pub(crate) use comp::RawRelation;
 pub(crate) use comp::SuperRef;
 pub(crate) use directive::InputDirective;
+pub use directive::InputSource;
+pub use directive::OrderKey;
 pub(crate) use directive::OutputDirective;
+pub use directive::OutputSink;
 pub(crate) use directive::PrintSizeDirective;
 pub use extern_fn::ExternFn;
 pub use relation::Relation;
