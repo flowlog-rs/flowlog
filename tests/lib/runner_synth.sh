@@ -77,9 +77,11 @@ parse_input_filename() {
     echo "${rel}.csv"
 }
 
-# Extract output relation names (lowercase, one per line) from a .dl file
-# and any sibling included .dl files. Treats `.printsize` as `.output` so
-# callers that pre-rewrite the .dl aren't required. Anchored to line-start
+# Extract `.output` relation names (lowercase, one per line) from a .dl file
+# and any sibling included .dl files. `.printsize` is deliberately not one of
+# them: it surfaces as a `<rel>_size` count on the results struct, with no
+# rows field for a writer to read, so a relation carrying only `.printsize`
+# gets no writer at all. Anchored to line-start
 # (modulo whitespace) so commented directives are skipped. The `.` in the
 # name pattern admits component-instance relations like `a.P`; on output
 # the dot is rewritten to `·` (U+00B7) to mirror the inliner's rename
@@ -88,7 +90,7 @@ parse_output_relations() {
     local dl_file="$1"
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
-        (grep -oE '^[[:space:]]*\.(output|printsize)[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' "$f" 2>/dev/null || true) \
+        (grep -oE '^[[:space:]]*\.output[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' "$f" 2>/dev/null || true) \
             | awk '{ name = tolower($2); gsub(/\./, "·", name); print name }'
     done < <(all_dl_files "$dl_file") \
         | sort -u
@@ -542,7 +544,7 @@ write_main_rs() {
         load_calls+=$(gen_csv_loader "$dl_file" "$rel" "$(basename "$csv_path")")$'\n'
     done < <(parse_input_relations "$dl_file")
 
-    # Output writers — one block per .output/.printsize relation. File name
+    # Output writers — one block per `.output` relation. File name
     # is the case-preserved `<RawName>.csv` (via output_filename_for), matching
     # the compiler's Soufflé-compat convention that compare_expected_outputs
     # diffs against.

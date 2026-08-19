@@ -200,6 +200,13 @@ run_test() {
         return
     fi
 
+    # `.printsize` reports on stdout rather than writing a file, so distill
+    # those lines into one; the usual `expected/<name>` comparison pins them
+    # from there.
+    if grep -q '^\[size\]' "$run_log" 2>/dev/null; then
+        grep '^\[size\]' "$run_log" > "${output_dir}/printsize"
+    fi
+
     # 4) Compare
     local use_sort=0
     [[ -f "$test_dir/runtime_flags" ]] && grep -q -- '-w' "$test_dir/runtime_flags" && use_sort=1

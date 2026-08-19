@@ -1,0 +1,20 @@
+// ============================================================================
+// Suite   : printsize
+// Feature : `.printsize` reports a count on stdout, and is legal alongside
+//           `.output` on the same relation
+// ============================================================================
+
+.decl Data(a: int32, b: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+// Both directives on one relation: rows to a file, count to stdout. This was
+// a parse error until the count stopped competing for `<RawName>.csv`.
+.decl Both(a: int32, b: int32)
+Both(a, b) :- Data(a, b).
+.output Both
+.printsize Both
+
+// Count only, so nothing is written for it at all.
+.decl Distinct(a: int32)
+Distinct(a) :- Data(a, b).
+.printsize Distinct
