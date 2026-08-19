@@ -209,12 +209,10 @@ fn gen_run_body(
         let workers = self.workers;
         #(#host_partitions)*
 
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(workers));
         #(#output_bufs)*
         #(#size_cell_decls)*
 
         timely::execute(timely::Config::process(workers), {
-            let barrier = barrier.clone();
             #(#output_buf_clones)*
             #(#size_cell_clones)*
             #(#worker_partition_clones)*
@@ -240,7 +238,6 @@ fn gen_run_body(
                 #step_loop
 
                 #(#flush)*
-                barrier.wait();
 
                 #metrics_write
             }
