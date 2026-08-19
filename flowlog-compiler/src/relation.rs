@@ -11,6 +11,7 @@ use flowlog_build::const_to_token;
 use flowlog_build::data_type_tokens;
 use flowlog_parser::DataType;
 use flowlog_parser::InlineFact;
+use flowlog_parser::InputSource;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
@@ -252,12 +253,13 @@ fn gen_one_rel_nonnullary(
 
     let dts = rel.data_type();
 
-    let delim_byte: u8 = rel
-        .input_delimiter()
-        .as_bytes()
-        .first()
-        .copied()
-        .unwrap_or(b',');
+    // The handler carries a delimiter whichever way the relation is fed, so
+    // codegen fills the field even where nothing splits on it: a relation
+    // with no `.input` has only typed `.fact` rows, and an `IO="sqlite"`
+    // source reports no delimiter because its columns arrive already typed.
+    // Sqlite input is unimplemented and still counts as file-backed, so it
+    // reaches `apply_file` and reads the database as delimited text.
+    let delim_byte = rel.input().and_then(InputSource::delim).unwrap_or(b'\t');
 
     let tuple_ty = data_type_tokens(&dts, string_intern);
 
@@ -295,7 +297,7 @@ fn gen_one_rel_nonnullary(
     };
     let tuple_parse_stmts = gen_parse_from_str(raw_name, &dts, string_intern);
     let file_parse_stmts = gen_parse_from_bytes(raw_name, &dts, string_intern);
-    let has_header = rel.input_has_header();
+    let has_header = rel.input().is_some_and(InputSource::has_header);
     let inline_body = gen_inline_facts(facts, string_intern)?;
     let apply_inline_impl = if inline_body.is_empty() {
         quote! { fn apply_inline(&mut self, _index: usize) {} }

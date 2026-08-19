@@ -8,6 +8,8 @@ use flowlog_common::Span;
 use flowlog_common::compute_fp;
 
 use super::Attribute;
+use super::InputSource;
+use super::OutputSink;
 use crate::Node;
 use crate::Rule;
 use crate::error::ParseError;
@@ -35,21 +37,11 @@ pub struct Relation {
     /// Attributes of the relation.
     attributes: Vec<Attribute>,
 
-    /// Input parameters (e.g., filename="file.csv", IO="file")
-    input_params: Option<HashMap<String, String>>,
+    /// The resolved `.input` specification.
+    input: Option<InputSource>,
 
-    /// Whether to output detailed results
-    output: bool,
-
-    /// Output parameters (e.g., delimiter="|")
-    output_params: Option<HashMap<String, String>>,
-
-    /// Validated `output(limit=...)` value, populated by `set_output_params`.
-    output_limit_value: Option<usize>,
-
-    /// Validated `output(order_by=...)` spec (attribute index, type, ascending),
-    /// populated by `set_output_params`.
-    output_order_by_spec: Option<Vec<(usize, DataType, bool)>>,
+    /// The resolved `.output` specification.
+    output: Option<OutputSink>,
 
     /// Whether to print results size (e.g. row count)
     printsize: bool,
@@ -134,11 +126,8 @@ impl Relation {
             raw_name,
             fingerprint,
             attributes,
-            input_params: None,
-            output: false,
-            output_params: None,
-            output_limit_value: None,
-            output_order_by_spec: None,
+            input: None,
+            output: None,
             printsize: false,
             span,
         })
@@ -165,11 +154,8 @@ impl Relation {
             raw_name,
             fingerprint,
             attributes,
-            input_params: None,
-            output: false,
-            output_params: None,
-            output_limit_value: None,
-            output_order_by_spec: None,
+            input: None,
+            output: None,
             printsize: false,
             span,
         }
@@ -260,220 +246,80 @@ impl Relation {
         self.attributes.iter().map(|a| a.declared_id()).collect()
     }
 
-    /// Get the input filename.
-    /// Defaults to `<RelationName>.facts` (case-preserved, matching
-    /// Souffle) when no filename parameter is set.
+    /// This relation's `.input` directive, or `None` when it has none.
     #[must_use]
     #[inline]
-    pub fn input_file_name(&self) -> String {
-        self.input_param("filename")
-            .map_or_else(|| format!("{}.facts", self.raw_name()), str::to_owned)
+    pub fn input(&self) -> Option<&InputSource> {
+        self.input.as_ref()
     }
 
-    /// Get the input delimiter for a file-backed relation. Default is TAB,
-    /// matching Souffle.
+    /// This relation's `.output` directive, or `None` when FlowLog does not
+    /// write it.
     #[must_use]
     #[inline]
-    pub fn input_delimiter(&self) -> String {
-        self.input_param("delimiter").unwrap_or("\t").to_string()
+    pub fn output_sink(&self) -> Option<&OutputSink> {
+        self.output.as_ref()
     }
 
-    /// Whether to skip the first (header) line when reading this file-backed relation.
-    #[must_use]
-    #[inline]
-    pub fn input_has_header(&self) -> bool {
-        self.input_param("header")
-            .is_some_and(|v| v.eq_ignore_ascii_case("true"))
-    }
-
-    /// Whether to print size for this relation.
+    /// Returns `true` if this relation's row count is reported
+    /// (`.printsize`).
     #[must_use]
     #[inline]
     pub fn printsize(&self) -> bool {
         self.printsize
     }
 
-    /// Whether to output results for this relation.
+    /// Returns `true` if this relation has an `.output` directive, whatever
+    /// storage it names.
     #[must_use]
     #[inline]
-    pub fn output(&self) -> bool {
-        self.output
+    pub fn has_output(&self) -> bool {
+        self.output.is_some()
     }
 
-    /// Check whether this relation has a `.input` directive.
+    /// Returns `true` if this relation has an `.input` directive, whatever
+    /// storage it names.
     #[must_use]
     #[inline]
     pub fn has_input(&self) -> bool {
-        self.input_params.is_some()
+        self.input.is_some()
     }
 
-    /// Check whether this relation is file-backed (`IO="file"`).
-    /// Returns false for `IO="command"` (interactive-only) and for
-    /// relations that have no `.input` directive at all.
-    ///
-    /// Within an `.input` directive, absent `IO=` defaults to `"file"`
-    /// (Souffle semantics): so `.input Edge` and
-    /// `.input Edge(filename="...")` are both file-backed.
-    #[must_use]
-    #[inline]
-    pub fn is_file_backed(&self) -> bool {
-        self.input_params
-            .as_ref()
-            .is_some_and(|params| match params.get("IO") {
-                None => true,
-                Some(io) => io.eq_ignore_ascii_case("file"),
-            })
-    }
-
-    /// Check if this is an output/printsize relation.
-    /// Notice not every IDB is an output/printsize relation.
+    /// Returns `true` if anything of this relation is reported at all,
+    /// rows or count; an IDB no directive names derives silently.
     #[must_use]
     #[inline]
     pub fn is_output_printsize(&self) -> bool {
-        self.output || self.printsize
+        self.output.is_some() || self.printsize
     }
 
-    /// Look up an entry in the `.input` parameter map.
-    fn input_param(&self, key: &str) -> Option<&str> {
-        self.input_params
-            .as_ref()
-            .and_then(|m| m.get(key))
-            .map(String::as_str)
-    }
-
-    /// Look up an entry in the `.output` parameter map.
-    fn output_param(&self, key: &str) -> Option<&str> {
-        self.output_params
-            .as_ref()
-            .and_then(|m| m.get(key))
-            .map(String::as_str)
-    }
-
-    /// Set input parameters for this relation.
-    pub(crate) fn set_input_params(&mut self, params: HashMap<String, String>) {
-        self.input_params = Some(params);
-    }
-
-    /// Mark relation for output.
-    pub(crate) fn set_output(&mut self, output: bool) {
-        self.output = output;
-    }
-
-    /// Set output parameters for this relation.
+    /// Adopt a `.input` directive's parameters, resolving them against this
+    /// relation's name for the filename default.
     ///
-    /// Validates the `limit` and `order_by` entries up-front, returning a
-    /// [`ParseError::Internal`] if either is malformed (bad `limit` value,
-    /// `limit` without `order_by`, unknown attribute, etc.). On success, the
-    /// validated values are cached on the relation so the codegen-facing
-    /// accessors are infallible.
-    pub(crate) fn set_output_params(
+    /// `span` labels the directive, which is where a parameter this relation
+    /// cannot be read with is reported.
+    pub(crate) fn set_input(
         &mut self,
-        params: HashMap<String, String>,
+        params: &HashMap<String, String>,
+        span: Span,
     ) -> Result<(), ParseError> {
-        // Parse `order_by` first so `limit` validation can refer to it.
-        let order_by_spec = if let Some(spec) = params.get("order_by") {
-            let mut parsed: Vec<(usize, DataType, bool)> = Vec::new();
-            for part in spec.split(',') {
-                let tokens: Vec<&str> = part.split_whitespace().collect();
-                if tokens.is_empty() {
-                    return Err(grammar_bug(format!(
-                        "empty order_by clause for relation `{}`",
-                        self.raw_name
-                    )));
-                }
-                if tokens.len() > 2 {
-                    return Err(grammar_bug(format!(
-                        "unexpected extra tokens in order_by clause `{}` for relation `{}`",
-                        part.trim(),
-                        self.raw_name
-                    )));
-                }
-                let attr_name = tokens[0].to_lowercase();
-                let ascending = match tokens.get(1) {
-                    Some(d) if d.eq_ignore_ascii_case("asc") => true,
-                    Some(d) if d.eq_ignore_ascii_case("desc") => false,
-                    Some(d) => {
-                        return Err(grammar_bug(format!(
-                            "invalid order_by direction `{d}` for relation `{}`, expected ASC or DESC",
-                            self.raw_name
-                        )));
-                    }
-                    None => true,
-                };
-                let (idx, attr) = self
-                    .attributes
-                    .iter()
-                    .enumerate()
-                    .find(|(_, a)| a.name() == attr_name)
-                    .ok_or_else(|| {
-                        grammar_bug(format!(
-                            "order_by attribute `{attr_name}` not found in relation `{}`",
-                            self.raw_name
-                        ))
-                    })?;
-                parsed.push((idx, attr.data_type().clone(), ascending));
-            }
-            Some(parsed)
-        } else {
-            None
-        };
-
-        // Parse `limit`; require `order_by` whenever `limit` is set.
-        let limit_value = if let Some(raw) = params.get("limit") {
-            let limit = raw.parse::<usize>().map_err(|_| {
-                grammar_bug(format!(
-                    "invalid limit `{raw}` for relation `{}`, expected a non-negative integer",
-                    self.raw_name
-                ))
-            })?;
-            if order_by_spec.is_none() {
-                return Err(grammar_bug(format!(
-                    "limit requires order_by for relation `{}`",
-                    self.raw_name
-                )));
-            }
-            Some(limit)
-        } else {
-            None
-        };
-
-        self.output_params = Some(params);
-        self.output_limit_value = limit_value;
-        self.output_order_by_spec = order_by_spec;
+        self.input = Some(InputSource::from_params(params, &self.raw_name, span)?);
         Ok(())
     }
 
-    /// Get the output delimiter. Defaults to TAB, matching Souffle.
-    #[must_use]
-    #[inline]
-    pub fn output_delimiter(&self) -> String {
-        self.output_param("delimiter").unwrap_or("\t").to_string()
-    }
-
-    /// Get the output filename. Honors `filename=` from `.output`
-    /// params; defaults to `<RawName>.csv` (case-preserved, matching
-    /// Souffle).
-    #[must_use]
-    #[inline]
-    pub fn output_file_name(&self) -> String {
-        self.output_param("filename")
-            .map_or_else(|| format!("{}.csv", self.raw_name()), str::to_owned)
-    }
-
-    /// Get the output row limit, if specified. Validated at parse time by
-    /// `set_output_params`.
-    #[must_use]
-    #[inline]
-    pub fn output_limit(&self) -> Option<usize> {
-        self.output_limit_value
-    }
-
-    /// Get the output ordering specification, if specified. Validated at
-    /// parse time by `set_output_params`.
-    #[must_use]
-    #[inline]
-    pub fn output_order_by(&self) -> Option<Vec<(usize, DataType, bool)>> {
-        self.output_order_by_spec.clone()
+    /// Adopt a `.output` directive's parameters, resolving them against this
+    /// relation's name and attributes.
+    ///
+    /// `span` labels the directive, which is where a parameter this relation
+    /// cannot be written with is reported.
+    pub(crate) fn set_output(
+        &mut self,
+        params: &HashMap<String, String>,
+        span: Span,
+    ) -> Result<(), ParseError> {
+        let sink = OutputSink::from_params(params, &self.raw_name, &self.attributes, span)?;
+        self.output = Some(sink);
+        Ok(())
     }
 
     /// Whether this `.output` relation takes the parallel file-drain path
@@ -482,7 +328,9 @@ impl Relation {
     /// and the `itoa` feature marking (in two crates) share one predicate.
     #[must_use]
     pub fn uses_parallel_file_drain(&self, output_to_stdout: bool) -> bool {
-        !output_to_stdout && self.arity() > 0 && self.output_order_by().is_none()
+        !output_to_stdout
+            && self.arity() > 0
+            && self.output.as_ref().is_some_and(|s| s.order_by().is_none())
     }
 
     /// Set printsize flag.
@@ -510,20 +358,14 @@ impl fmt::Display for Relation {
         }
         write!(f, ")")?;
 
-        // Add input directive on the same line if present
-        if let Some(params) = &self.input_params {
-            write!(f, " .input(")?;
-            let mut param_strs: Vec<String> = params
-                .iter()
-                .map(|(k, v)| format!("{}=\"{}\"", k, v))
-                .collect();
-            param_strs.sort(); // Ensure consistent order
-            write!(f, "{})", param_strs.join(", "))?;
+        // Every parameter is rendered resolved, so what a relation prints is
+        // what it will read and write, not what the user happened to write.
+        if let Some(source) = &self.input {
+            write!(f, " .input({source})")?;
         }
 
-        // Add output directive on the same line if present
-        if self.output {
-            write!(f, " .output")?;
+        if let Some(sink) = &self.output {
+            write!(f, " .output({sink})")?;
         }
 
         // Add printsize directive on the same line if present
@@ -538,129 +380,124 @@ impl fmt::Display for Relation {
 #[cfg(test)]
 mod tests {
     use flowlog_common::FileId;
+    use rstest::rstest;
 
     use super::*;
     use crate::assert_err;
     use crate::test_util::parse_pair;
     use crate::types::DataType::Int32;
-    use crate::types::DataType::String;
+    use crate::types::DataType::String as Str;
     use crate::types::TypeRegistry;
 
     fn attrs() -> Vec<Attribute> {
         let reg = TypeRegistry::new();
         vec![
             Attribute::with_type("id".into(), Int32, reg.primitive_id(Int32).unwrap()),
-            Attribute::with_type("name".into(), String, reg.primitive_id(String).unwrap()),
+            Attribute::with_type("name".into(), Str, reg.primitive_id(Str).unwrap()),
         ]
     }
 
-    #[test]
-    fn output_limit_set_when_valid() {
-        let mut rel = Relation::new("r", attrs());
-        let mut params = HashMap::new();
-        params.insert("limit".to_string(), "42".to_string());
-        params.insert("order_by".to_string(), "id".to_string());
-        rel.set_output_params(params).unwrap();
-        assert_eq!(rel.output_limit(), Some(42));
+    /// Directive parameters as the parser hands them over.
+    fn params<const N: usize>(pairs: [(&str, &str); N]) -> HashMap<String, String> {
+        pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
-    #[test]
-    fn output_limit_without_order_by() {
-        let mut rel = Relation::new("r", attrs());
-        let mut params = HashMap::new();
-        params.insert("limit".to_string(), "42".to_string());
-        let err = rel.set_output_params(params).unwrap_err();
-        assert!(matches!(err, ParseError::Internal(_)));
-        assert!(err.to_string().contains("limit requires order_by"));
-    }
+    // What each resolved parameter *means* is pinned on `InputSource` and
+    // `OutputSink` themselves; these cover only what a relation adds:
+    // adopting a directive, and supplying the name and attributes it
+    // resolves against.
 
     #[test]
-    fn output_limit_bad_value() {
-        let mut rel = Relation::new("r", attrs());
-        let mut params = HashMap::new();
-        params.insert("limit".to_string(), "abc".to_string());
-        let err = rel.set_output_params(params).unwrap_err();
-        assert!(matches!(err, ParseError::Internal(_)));
-        assert!(err.to_string().contains("invalid limit"));
-    }
-
-    #[test]
-    fn output_order_by_single_asc_default() {
-        let mut rel = Relation::new("r", attrs());
-        let mut params = HashMap::new();
-        params.insert("order_by".to_string(), "id".to_string());
-        rel.set_output_params(params).unwrap();
-        let spec = rel.output_order_by().unwrap();
-        assert_eq!(spec, vec![(0, Int32, true)]);
-    }
-
-    #[test]
-    fn output_order_by_multi_mixed() {
-        let mut rel = Relation::new("r", attrs());
-        let mut params = HashMap::new();
-        params.insert("order_by".to_string(), "name DESC, id ASC".to_string());
-        rel.set_output_params(params).unwrap();
-        let spec = rel.output_order_by().unwrap();
-        assert_eq!(spec, vec![(1, String, false), (0, Int32, true)]);
-    }
-
-    #[test]
-    fn output_order_by_unknown_attr_is_rejected() {
-        let mut rel = Relation::new("r", attrs());
-        let mut params = HashMap::new();
-        params.insert("order_by".to_string(), "nonexistent".to_string());
-        let err = rel.set_output_params(params).unwrap_err();
-        assert!(matches!(err, ParseError::Internal(_)));
-        assert!(err.to_string().contains("not found"));
-    }
-
-    // Delimiter escape decoding now happens uniformly at parse time (see the
-    // `syntax::grammar::decode_string` tests and the `delimiter_tab` fixture);
-    // the accessors just return the already-decoded stored value.
-
-    #[test]
-    fn input_delimiter_defaults_to_tab() {
+    fn a_relation_with_no_directive_is_neither_read_nor_written() {
         let rel = Relation::new("r", attrs());
-        assert_eq!(rel.input_delimiter(), "\t");
+        assert!(rel.input().is_none());
+        assert!(rel.output_sink().is_none());
+        assert!(!rel.has_input());
+        assert!(!rel.has_output());
+    }
+
+    /// The `.input` filename default is the relation's case-preserved
+    /// surface name, matching Souffle, not its canonical lowercase one.
+    #[test]
+    fn an_adopted_input_defaults_its_filename_to_the_raw_name() {
+        let mut rel = Relation::new("Edge", attrs());
+        rel.set_input(&HashMap::new(), Span::DUMMY).unwrap();
+        assert_eq!(rel.input().unwrap().filename(), Some("Edge.facts"));
+        assert!(rel.has_input());
     }
 
     #[test]
-    fn output_delimiter_defaults_to_tab() {
-        let rel = Relation::new("r", attrs());
-        assert_eq!(rel.output_delimiter(), "\t");
+    fn an_adopted_output_defaults_its_filename_to_the_raw_name() {
+        let mut rel = Relation::new("Path", attrs());
+        rel.set_output(&HashMap::new(), Span::DUMMY).unwrap();
+        assert_eq!(rel.output_sink().unwrap().filename(), "Path.csv");
+        assert!(rel.has_output());
     }
 
+    /// An `order_by` names a column, so only the relation can resolve it:
+    /// the directive it comes from has no attributes.
     #[test]
-    fn input_file_name_defaults_to_raw_name_dot_facts() {
-        let rel = Relation::new("Edge", attrs());
-        assert_eq!(rel.input_file_name(), "Edge.facts");
-    }
-
-    #[test]
-    fn is_file_backed_defaults_true_when_io_absent() {
+    fn an_adopted_output_resolves_order_by_against_the_relations_attributes() {
         let mut rel = Relation::new("r", attrs());
-        rel.set_input_params(HashMap::new());
-        assert!(rel.is_file_backed());
+        rel.set_output(&params([("order_by", "name DESC")]), Span::DUMMY)
+            .unwrap();
+        assert_eq!(
+            rel.output_sink().unwrap().order_by(),
+            Some([(1, Str, false)].as_slice())
+        );
     }
 
+    /// A parameter the relation cannot be read or written with leaves it
+    /// with no directive at all, rather than a half-resolved one.
     #[test]
-    fn is_file_backed_false_for_explicit_non_file_io() {
+    fn a_refused_input_leaves_the_relation_unread() {
         let mut rel = Relation::new("r", attrs());
-        let mut params = HashMap::new();
-        params.insert("IO".to_string(), "command".to_string());
-        rel.set_input_params(params);
-        assert!(!rel.is_file_backed());
+        assert_err!(
+            rel.set_input(&params([("delimiter", "::")]), Span::DUMMY),
+            ParseError::InvalidDelimiter { .. }
+        );
+        assert!(!rel.has_input());
     }
 
-    /// A relation with NO `.input` directive at all must NOT be
-    /// file-backed; only the presence of the directive (regardless
-    /// of `IO=` value) makes it so. Pins the `input_params == None`
-    /// arm against a regression that would mistakenly try to open
-    /// `<RawName>.facts` for purely-IDB relations.
     #[test]
-    fn is_file_backed_false_when_no_input_directive() {
-        let rel = Relation::new("r", attrs());
-        assert!(!rel.is_file_backed());
+    fn a_refused_output_leaves_the_relation_unwritten() {
+        let mut rel = Relation::new("r", attrs());
+        assert_err!(
+            rel.set_output(&params([("order_by", "nonexistent")]), Span::DUMMY),
+            ParseError::InvalidOrderBy { .. }
+        );
+        assert!(!rel.has_output());
+    }
+
+    /// Rows are formatted across cores only when nothing constrains their
+    /// order: an `ORDER BY`, a nullary relation, and stderr each keep the
+    /// sequential drain.
+    #[rstest]
+    //     order_by       arity  to_stdout  parallel
+    #[case(None, 2, false, true)]
+    #[case(Some("id"), 2, false, false)]
+    #[case(None, 0, false, false)]
+    #[case(None, 2, true, false)]
+    fn only_an_unordered_multi_column_file_sink_drains_in_parallel(
+        #[case] order_by: Option<&str>,
+        #[case] arity: usize,
+        #[case] output_to_stdout: bool,
+        #[case] parallel: bool,
+    ) {
+        let mut rel = Relation::new("r", attrs().into_iter().take(arity).collect());
+        let p = order_by.map_or_else(HashMap::new, |spec| params([("order_by", spec)]));
+        rel.set_output(&p, Span::DUMMY).unwrap();
+        assert_eq!(rel.uses_parallel_file_drain(output_to_stdout), parallel);
+    }
+
+    /// A relation with no `.output` drains nothing, so it never takes the
+    /// parallel path whatever its shape.
+    #[test]
+    fn a_relation_with_no_output_never_drains_in_parallel() {
+        assert!(!Relation::new("r", attrs()).uses_parallel_file_drain(false));
     }
 
     /// `set_name` updates `name` (canonical, Rust-ident-safe) but
@@ -678,22 +515,21 @@ mod tests {
         assert_eq!(rel.raw_name(), "c.R");
     }
 
-    /// `.output Foo(filename="x.tsv")` overrides the default
-    /// `<RawName>.csv` shape. Pins the param plumbing; a regression
-    /// would silently drop the user's filename and write to `Foo.csv`.
+    /// A rendered relation spells out both directives resolved, so it shows
+    /// what will actually be read and written.
     #[test]
-    fn output_file_name_honors_filename_param() {
-        let mut rel = Relation::new("Foo", attrs());
-        let mut params = HashMap::new();
-        params.insert("filename".to_string(), "x.tsv".to_string());
-        rel.set_output_params(params).unwrap();
-        assert_eq!(rel.output_file_name(), "x.tsv");
-    }
-
-    #[test]
-    fn output_file_name_defaults_to_raw_name_dot_csv() {
-        let rel = Relation::new("Path", attrs());
-        assert_eq!(rel.output_file_name(), "Path.csv");
+    fn display_renders_both_directives_resolved() {
+        let mut rel = Relation::new("Edge", attrs());
+        rel.set_input(&params([("delimiter", ",")]), Span::DUMMY)
+            .unwrap();
+        rel.set_output(&params([("filename", "out.tsv")]), Span::DUMMY)
+            .unwrap();
+        assert_eq!(
+            rel.to_string(),
+            ".decl edge(id: int32, name: string) \
+             .input(IO=\"file\", filename=\"Edge.facts\", delimiter=\",\", header=\"false\") \
+             .output(IO=\"file\", filename=\"out.tsv\", delimiter=\"\\t\")"
+        );
     }
 
     /// Parse `.decl` source through a fresh registry. Returns the `Result`
@@ -713,7 +549,7 @@ mod tests {
         let rel = parse_decl(".decl Edge(src: number, dst: symbol)").expect("decl parses");
         assert_eq!(rel.name(), "edge");
         assert_eq!(rel.raw_name(), "Edge");
-        assert_eq!(rel.data_type(), vec![Int32, String]);
+        assert_eq!(rel.data_type(), vec![Int32, Str]);
     }
 
     #[test]

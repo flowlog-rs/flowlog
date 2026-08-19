@@ -309,7 +309,7 @@ fn resolve_instance(
             RawItem::Input { name, params, span } => {
                 let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
                 match output.relations.iter_mut().find(|r| r.name() == lc) {
-                    Some(rel) => rel.set_input_params(params),
+                    Some(rel) => rel.set_input(&params, span)?,
                     None => output
                         .input_directives
                         .push(InputDirective::new(lc, params, span)),
@@ -318,12 +318,7 @@ fn resolve_instance(
             RawItem::Output { name, params, span } => {
                 let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
                 match output.relations.iter_mut().find(|r| r.name() == lc) {
-                    Some(rel) => {
-                        rel.set_output(true);
-                        if !params.is_empty() {
-                            rel.set_output_params(params)?;
-                        }
-                    }
+                    Some(rel) => rel.set_output(&params, span)?,
                     None => output
                         .output_directives
                         .push(OutputDirective::new(lc, params, span)),
@@ -1066,7 +1061,7 @@ mod tests {
         let program = assembled(src).expect("assembles");
         let g = find_relation(&program, "g");
         assert!(
-            g.output(),
+            g.has_output(),
             ".output of a global relation from inside a comp should apply"
         );
     }

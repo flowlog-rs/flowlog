@@ -7,6 +7,8 @@
 use std::path::Path;
 
 use flowlog_build::CodeParts;
+use flowlog_parser::InputSource;
+use flowlog_parser::Relation;
 use proc_macro2::Ident;
 use proc_macro2::Span;
 use proc_macro2::TokenStream;
@@ -42,9 +44,7 @@ impl Compiler {
             })
             .collect();
 
-        let has_file_backed_edbs = edbs
-            .iter()
-            .any(|rel| rel.is_file_backed() && rel.arity() > 0);
+        let has_file_backed_edbs = edbs.iter().any(|rel| preload_file(rel).is_some());
         let has_inline_facts = !self.program.facts().is_empty();
         let needs_preload = has_file_backed_edbs || has_inline_facts;
 
@@ -61,10 +61,10 @@ impl Compiler {
 
         let file_ingests: Vec<TokenStream> = edbs
             .iter()
-            .filter(|rel| rel.is_file_backed() && rel.arity() > 0)
-            .map(|rel| {
+            .filter_map(|rel| preload_file(rel).map(|name| (rel, name)))
+            .map(|(rel, file_name)| {
                 let rel_name = rel.name();
-                let file_name = rel.input_file_name();
+                let file_name = file_name.to_string();
                 let path = self
                     .options
                     .fact_dir()
@@ -127,4 +127,18 @@ impl Compiler {
             preload,
         }
     }
+}
+
+/// The file this relation's facts are read from before the first round,
+/// `None` when it has none.
+///
+/// A nullary relation's file holds nothing a reader could take a column
+/// from, and a `put`-fed source waits for tuples instead of reading at all.
+fn preload_file(rel: &Relation) -> Option<&str> {
+    if rel.arity() == 0 {
+        return None;
+    }
+    rel.input()
+        .filter(|source| source.is_file_backed())
+        .and_then(InputSource::filename)
 }

@@ -13,6 +13,7 @@
 use flowlog_build::gen_drain_block;
 use flowlog_common::ExecutionMode;
 use flowlog_parser::DataType;
+use flowlog_parser::OutputSink;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
 use proc_macro2::Literal;
@@ -75,6 +76,25 @@ impl Compiler {
 
     /// Drain one `.output` relation's shared buffer through its sink.
     fn gen_output_drain(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
+        // Only an `.output` relation is drained, so the sink is present; a
+        // missing one means an earlier stage handed over the wrong relation.
+        let sink = idb.output_sink().ok_or_else(|| {
+            CompilerError::internal(format!(
+                "relation `{}` is drained without an `.output`",
+                idb.raw_name()
+            ))
+        })?;
+        let delim = match sink {
+            OutputSink::File { delim, .. } => *delim,
+            // The writer is parked, not written: the parser resolves the sink
+            // so the seam exists, and this arm is what un-parking replaces.
+            OutputSink::Sqlite { .. } => {
+                return Err(CompilerError::internal(format!(
+                    "relation `{}`: `IO=\"sqlite\"` output is not implemented",
+                    idb.raw_name()
+                )));
+            }
+        };
         let buf_ident = Ident::new(&format!("buf_{}", idb.name()), Span::call_site());
         let string_intern = self.codegen.features().string_intern();
         let is_incremental = self.config.mode() == ExecutionMode::Inc;
@@ -84,12 +104,12 @@ impl Compiler {
         // Nullary, ORDER BY/LIMIT, and stderr stay on the sequential path.
         if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
             let base_dir = self.require_output_dir("writing IDB output to files")?;
-            let out_path_stmt =
-                gen_out_path_stmt(&idb.output_file_name(), base_dir, is_incremental);
+            let out_path_stmt = gen_out_path_stmt(sink.filename(), base_dir, is_incremental);
             return Ok(gen_parallel_file_drain(
                 &buf_ident,
                 idb,
                 out_path_stmt,
+                delim,
                 string_intern,
                 is_incremental,
             ));
@@ -105,10 +125,9 @@ impl Compiler {
             )
         } else {
             let base_dir = self.require_output_dir("writing IDB output to files")?;
-            let file_preamble =
-                gen_file_preamble(&idb.output_file_name(), base_dir, is_incremental);
+            let file_preamble = gen_file_preamble(sink.filename(), base_dir, is_incremental);
             let (scratch_decls, write_row) =
-                gen_file_row_writer(idb, string_intern, is_incremental);
+                gen_file_row_writer(idb, delim, string_intern, is_incremental);
             (
                 quote! { #file_preamble #scratch_decls },
                 write_row,
@@ -144,7 +163,10 @@ impl Compiler {
         }
 
         let base_dir = self.require_output_dir("writing `.printsize` to a file")?;
-        let file_name = idb.output_file_name();
+        // A `.printsize` relation has no `.output` to take a filename from
+        // (the two are mutually exclusive), so it names its count file the
+        // Souffle way itself.
+        let file_name = format!("{}.csv", idb.raw_name());
         Ok(quote! {{
             use std::io::Write as _;
             let (_, size) = *#cell.lock().unwrap();
@@ -226,6 +248,7 @@ fn gen_stderr_preamble() -> TokenStream {
 /// and emits it with a single `write_all`.
 fn gen_file_row_writer(
     idb: &Relation,
+    delim: u8,
     string_intern: bool,
     is_incremental: bool,
 ) -> (TokenStream, TokenStream) {
@@ -240,7 +263,7 @@ fn gen_file_row_writer(
         );
     }
 
-    let (row_writer, uses_itoa) = gen_row_bytes(idb, string_intern, is_incremental);
+    let (row_writer, uses_itoa) = gen_row_bytes(idb, delim, string_intern, is_incremental);
     let itoa_decl = if uses_itoa {
         quote! { let mut itoa_buf = ::itoa::Buffer::new(); }
     } else {
@@ -334,11 +357,12 @@ fn gen_parallel_file_drain(
     buf_ident: &Ident,
     idb: &Relation,
     out_path_stmt: TokenStream,
+    delim: u8,
     string_intern: bool,
     is_incremental: bool,
 ) -> TokenStream {
     debug_assert!(idb.arity() > 0, "nullary outputs use the sequential path");
-    let (row_writer, uses_itoa) = gen_row_bytes(idb, string_intern, is_incremental);
+    let (row_writer, uses_itoa) = gen_row_bytes(idb, delim, string_intern, is_incremental);
     let seg_rows = Literal::usize_unsuffixed(PARALLEL_DRAIN_SEG_ROWS);
 
     // `::itoa::Buffer` is per-segment scratch; omit when no column needs it so
@@ -463,14 +487,19 @@ fn gen_value_bytes(
     }
 }
 
-fn gen_row_bytes(idb: &Relation, string_intern: bool, is_incremental: bool) -> (TokenStream, bool) {
-    let delim = Literal::byte_string(idb.output_delimiter().as_bytes());
+fn gen_row_bytes(
+    idb: &Relation,
+    delim: u8,
+    string_intern: bool,
+    is_incremental: bool,
+) -> (TokenStream, bool) {
+    let delim = Literal::u8_suffixed(delim);
     let mut uses_itoa = false;
     let mut stmts: Vec<TokenStream> = Vec::new();
 
     for (i, dt) in idb.data_type().iter().enumerate() {
         if i > 0 {
-            stmts.push(quote! { bytes.extend_from_slice(#delim); });
+            stmts.push(quote! { bytes.push(#delim); });
         }
         let idx = Literal::usize_unsuffixed(i);
         // Column value, accessed raw as `row.0.<i>`. `gen_value_bytes` applies
@@ -485,7 +514,7 @@ fn gen_row_bytes(idb: &Relation, string_intern: bool, is_incremental: bool) -> (
         // renders the '-' itself for negatives.
         uses_itoa = true;
         stmts.push(quote! {
-            bytes.extend_from_slice(#delim);
+            bytes.push(#delim);
             if row.2 >= 0 {
                 bytes.push(b'+');
             }
