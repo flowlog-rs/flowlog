@@ -167,24 +167,6 @@ pub(super) fn apply_directives(
     Ok(())
 }
 
-/// Reject `.output R` and `.printsize R` on the same relation: both target
-/// `<RawName>.csv`, so the second would silently clobber the first. Checked
-/// after the directives are applied, so it catches the conflict whether they
-/// came from the top level, from inside a `.comp`, or one of each.
-pub(super) fn validate_output_printsize_exclusion(
-    relations: &[Relation],
-) -> Result<(), ParseError> {
-    for rel in relations {
-        if rel.has_output() && rel.printsize() {
-            return Err(ParseError::OutputAndPrintsizeConflict {
-                span: rel.span(),
-                name: rel.raw_name().to_string(),
-            });
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,18 +249,6 @@ mod tests {
         assert_err!(
             apply_directives(&mut [], vec![], vec![output], vec![]),
             ParseError::UndeclaredInDirective { .. }
-        );
-    }
-
-    #[test]
-    fn validate_output_printsize_exclusion_rejects_both_on_one_relation() {
-        // `.output R` + `.printsize R` both target `R.csv`: a conflict.
-        let mut r = Relation::new("r", vec![]);
-        r.set_output(&HashMap::new(), Span::DUMMY).unwrap();
-        r.set_printsize(true);
-        assert_err!(
-            validate_output_printsize_exclusion(&[r]),
-            ParseError::OutputAndPrintsizeConflict { .. }
         );
     }
 

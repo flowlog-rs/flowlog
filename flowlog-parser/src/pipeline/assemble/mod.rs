@@ -213,7 +213,6 @@ pub(super) fn collect_program(source: &str, file: FileId) -> Result<Program, Par
         output_directives,
         printsize_directives,
     )?;
-    validate::validate_output_printsize_exclusion(&relations)?;
 
     inline::normalize_dots(&mut relations, &mut rules, &mut raw_facts);
 

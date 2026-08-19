@@ -122,15 +122,6 @@ pub enum ParseError {
         name: String,
     },
 
-    /// A relation carries both `.output` and `.printsize`. Both write
-    /// to the same `<RawName>.csv` path, so the second would silently
-    /// clobber the first; rejected up-front. Use one or the other.
-    #[error(
-        "relation `{name}` has both `.output` and `.printsize`; \
-         both write `{name}.csv`; pick one"
-    )]
-    OutputAndPrintsizeConflict { span: Span, name: String },
-
     /// A rule head or body atom names a relation that was never `.decl`-d.
     #[error("rule references undeclared relation `{name}`")]
     UndeclaredInRule { span: Span, name: String },
@@ -620,13 +611,6 @@ impl Diagnostic for ParseError {
                 "duplicate directive",
                 "first directive here",
             )),
-
-            ParseError::OutputAndPrintsizeConflict { span, .. } => base
-                .with_labels(primary_only(*span))
-                .with_notes(vec![
-                    "remove either the `.output` or the `.printsize` directive for this relation"
-                        .to_string(),
-                ]),
 
             ParseError::DuplicateAttribute { span, prior, .. } => base.with_labels(dup_labels(
                 *span,

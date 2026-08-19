@@ -1,14 +1,15 @@
 //! Binary-mode output sink + drain codegen.
 //!
-//! For each IDB that is `.output`'d or `.printsize`'d, emits the post-barrier
-//! code that runs on worker 0:
+//! For each IDB that is `.output`'d or `.printsize`'d, emits the code that
+//! runs once the dataflow is done:
 //!
 //! - **`.output`**: drain the shared buffer and write each row to a file
-//!   (default) or stderr (`-D -`). File sinks without `ORDER BY` use the
+//!   (default) or stdout (`-D -`). File sinks without `ORDER BY` use the
 //!   bounded-streaming parallel drain ([`gen_parallel_file_drain`]); the rest
 //!   go through [`flowlog_build::gen_drain_block`], which applies `ORDER BY` /
 //!   `LIMIT` and is shared with library mode.
-//! - **`.printsize`**: read the shared size cell and report it to stderr.
+//! - **`.printsize`**: read the shared size cell and print the count to
+//!   stdout, where Souffle reports it.
 
 use flowlog_build::gen_drain_block;
 use flowlog_common::ExecutionMode;
@@ -37,40 +38,67 @@ const OUTPUT_BUFFER_BYTES: usize = 1 << 20;
 const PARALLEL_DRAIN_SEG_ROWS: usize = 8192;
 
 impl Compiler {
-    /// The merge section spliced into `main()` after the barrier (worker 0
-    /// only): empty-output touches, derived `.output` drains, then `.printsize`
-    /// reports.
+    /// The `.output` drains and the `.printsize` reports.
     ///
-    /// In file mode the blocks run in concurrent scoped threads — each writes a
-    /// distinct file, so the kernel parallelizes the writes, and every drain is
-    /// bounded-streaming so concurrent drains stay memory-safe. Stderr (`-D -`)
-    /// stays sequential since all blocks share one stream.
+    /// Under `-D -` both land on stdout, so a relation's rows are followed by
+    /// its own count, in declaration order. Nothing fans out there: one
+    /// stream takes one writer at a time regardless.
+    ///
+    /// Writing files, the rows never reach stdout and only the counts do, so
+    /// there is nothing to group them with. The drains fan out instead, each
+    /// owning a distinct file the kernel can write in parallel, each
+    /// bounded-streaming, though that bound is per drain: running D of them
+    /// holds D times as much. The counts follow once the scope has joined,
+    /// never inside it, so their order is the program's and not the
+    /// scheduler's.
     pub(crate) fn gen_merge_section(&self) -> Result<TokenStream, CompilerError> {
-        let mut blocks = Vec::new();
-        for idb in self.program.output_idbs() {
-            blocks.push(self.gen_output_drain(idb)?);
-        }
-        for idb in self.program.printsize_idbs() {
-            blocks.push(self.gen_size_report(idb)?);
-        }
-
-        if blocks.is_empty() || self.config.output_to_stdout() {
+        if self.config.output_to_stdout() {
+            let mut blocks = Vec::new();
+            for idb in self.program.idbs() {
+                if idb.has_output() {
+                    blocks.push(self.gen_output_drain(idb)?);
+                }
+                if idb.printsize() {
+                    blocks.push(self.gen_size_report(idb));
+                }
+            }
             return Ok(quote! { #(#blocks)* });
         }
+
+        let drains: Vec<TokenStream> = self
+            .program
+            .output_idbs()
+            .into_iter()
+            .map(|idb| self.gen_output_drain(idb))
+            .collect::<Result<_, _>>()?;
+        let reports: Vec<TokenStream> = self
+            .program
+            .printsize_idbs()
+            .into_iter()
+            .map(|idb| self.gen_size_report(idb))
+            .collect();
+
+        let drain_section = if drains.is_empty() {
+            quote! {}
+        } else {
+            quote! {
+                std::thread::scope(|merge_scope| {
+                    #( merge_scope.spawn(|| #drains); )*
+                });
+            }
+        };
         Ok(quote! {
-            std::thread::scope(|merge_scope| {
-                #( merge_scope.spawn(|| #blocks); )*
-            });
+            #drain_section
+            #(#reports)*
         })
     }
 
-    /// Resolve `-D <outdir>` or return the canonical "unset" error
-    /// using `context` to disambiguate. Centralised because every
-    /// file-emitting block needs the same lookup with a slightly
-    /// different message.
-    fn require_output_dir(&self, context: &'static str) -> Result<&str, CompilerError> {
+    /// Resolve `-D <outdir>`, or the canonical "unset" error.
+    fn require_output_dir(&self) -> Result<&str, CompilerError> {
         self.options.output_dir().ok_or_else(|| {
-            CompilerError::internal(format!("binary mode {context} but `output_dir` is unset"))
+            CompilerError::internal(
+                "binary mode writing IDB output to files but `output_dir` is unset".to_string(),
+            )
         })
     }
 
@@ -101,9 +129,9 @@ impl Compiler {
 
         // File sinks without ORDER BY take the bounded-streaming parallel drain
         // (same bytes and row order, resolve+format spread across cores).
-        // Nullary, ORDER BY/LIMIT, and stderr stay on the sequential path.
+        // Nullary, ORDER BY/LIMIT, and stdout stay on the sequential path.
         if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
-            let base_dir = self.require_output_dir("writing IDB output to files")?;
+            let base_dir = self.require_output_dir()?;
             let out_path_stmt = gen_out_path_stmt(sink.filename(), base_dir, is_incremental);
             return Ok(gen_parallel_file_drain(
                 &buf_ident,
@@ -115,16 +143,17 @@ impl Compiler {
             ));
         }
 
-        // Stderr is unbuffered, so only the file sink needs the explicit final
-        // flush; `BufWriter::Drop` would swallow a failed tail write.
+        // Stdout flushes on each newline, so only the file sink needs the
+        // explicit final flush; `BufWriter::Drop` would swallow a failed tail
+        // write.
         let (sink_preamble, write_row, sink_postamble) = if self.config.output_to_stdout() {
             (
-                gen_stderr_preamble(),
-                gen_write_row_stderr(idb, string_intern),
+                gen_stdout_preamble(),
+                gen_write_row_stdout(idb, string_intern),
                 quote! {},
             )
         } else {
-            let base_dir = self.require_output_dir("writing IDB output to files")?;
+            let base_dir = self.require_output_dir()?;
             let file_preamble = gen_file_preamble(sink.filename(), base_dir, is_incremental);
             let (scratch_decls, write_row) =
                 gen_file_row_writer(idb, delim, string_intern, is_incremental);
@@ -145,39 +174,21 @@ impl Compiler {
         ))
     }
 
-    /// Read one `.printsize` cell and either write the count to a file
-    /// (`<outdir>/<RawName>.csv`, single line, Soufflé-shaped) or, when
-    /// `-D -` is set, `eprintln!` the `(time, size)` pair to stderr.
+    /// One `.printsize` cell as a line on stdout, in the same bracketed debug
+    /// shape the `-D -` row sink uses, so a relation reads as one block where
+    /// both land on the stream, and one shape everywhere else.
     ///
-    /// Mutual exclusion with `.output R` on the same relation is
-    /// enforced at parse time, so we never race against an output
-    /// drain over the same path.
-    fn gen_size_report(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
+    /// `t` rides along because the cell holds one epoch's delta: under
+    /// `--mode inc` the number is a change, and the timestamp is what says
+    /// which epoch it belongs to. Souffle prints a bare `<name>\t<count>`
+    /// instead; one shape is worth more here than that parity.
+    fn gen_size_report(&self, idb: &Relation) -> TokenStream {
         let cell = Ident::new(&format!("size_{}", idb.name()), Span::call_site());
-        if self.config.output_to_stdout() {
-            let prefix = idb.raw_name().to_string();
-            return Ok(quote! {{
-                let (t, size) = &*#cell.lock().unwrap();
-                eprintln!("[size][{}] t={:?} size={}", #prefix, t, size);
-            }});
-        }
-
-        let base_dir = self.require_output_dir("writing `.printsize` to a file")?;
-        // A `.printsize` relation has no `.output` to take a filename from
-        // (the two are mutually exclusive), so it names its count file the
-        // Souffle way itself.
-        let file_name = format!("{}.csv", idb.raw_name());
-        Ok(quote! {{
-            use std::io::Write as _;
-            let (_, size) = *#cell.lock().unwrap();
-            let out_path = format!("{}/{}", #base_dir, #file_name);
-            let mut out = std::io::BufWriter::new(
-                std::fs::File::create(&out_path)
-                    .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
-            );
-            writeln!(out, "{}", size).expect("printsize write failed");
-            out.flush().expect("printsize flush failed");
-        }})
+        let name = idb.raw_name().to_string();
+        quote! {{
+            let (t, size) = &*#cell.lock().unwrap();
+            println!("[size][{}]  t={:?}  size={}", #name, t, size);
+        }}
     }
 }
 
@@ -225,10 +236,10 @@ fn split_file_extension(file_name: &str) -> (&str, &str) {
     }
 }
 
-fn gen_stderr_preamble() -> TokenStream {
+fn gen_stdout_preamble() -> TokenStream {
     quote! {
         use std::io::Write as _;
-        let mut out = std::io::stderr();
+        let mut out = std::io::stdout();
     }
 }
 
@@ -238,8 +249,8 @@ fn gen_stderr_preamble() -> TokenStream {
 // `gen_row_bytes` builds one row's bytes for both file sinks — sequential and
 // parallel — so the two paths cannot drift. Strings are copied verbatim,
 // integers go through `itoa`, floats/bool through `core::fmt`; the bytes match
-// each value's `Display`. Pinned by the `output_all_types*` fixtures. (Stderr
-// uses a separate `Debug` format; see `gen_write_row_stderr`.)
+// each value's `Display`. Pinned by the `output_all_types*` fixtures. (The
+// stdout sink keeps a separate `Debug` format; see `gen_write_row_stdout`.)
 // =========================================================================
 
 /// Sequential file sink: returns `(scratch_decls, write_row)`. The caller
@@ -281,7 +292,7 @@ fn gen_file_row_writer(
     (scratch_decls, write_row)
 }
 
-fn gen_write_row_stderr(idb: &Relation, string_intern: bool) -> TokenStream {
+fn gen_write_row_stdout(idb: &Relation, string_intern: bool) -> TokenStream {
     let prefix = idb.raw_name().to_string();
     if idb.arity() == 0 {
         return quote! {
@@ -292,8 +303,8 @@ fn gen_write_row_stderr(idb: &Relation, string_intern: bool) -> TokenStream {
     }
 
     let fields = data_field_accessors(idb, string_intern);
-    // Stderr format shows `Debug` representations for readability; files get
-    // `Display` for machine-consumable output.
+    // The stdout format shows `Debug` representations for readability; files
+    // get `Display` for machine-consumable output.
     let fmt_cols = vec!["{:?}"; idb.arity()].join(", ");
     let fmt = Literal::string(&format!(
         "[tuple][{prefix}]  t={{:?}}  data=({fmt_cols})  diff={{:+}}"
@@ -314,21 +325,21 @@ fn data_field_accessors(idb: &Relation, string_intern: bool) -> Vec<TokenStream>
         .enumerate()
         .map(|(i, dt)| {
             let idx = Literal::usize_unsuffixed(i);
-            stderr_accessor(&quote! { row.0.#idx }, dt, string_intern)
+            stdout_accessor(&quote! { row.0.#idx }, dt, string_intern)
         })
         .collect()
 }
 
 /// Debug-printable accessor for one value at `access`: interned-string leaves
 /// resolve to `&str`; tuple columns rebuild as a nested tuple of resolved
-/// leaves. Used only by the stderr sink.
-fn stderr_accessor(access: &TokenStream, dt: &DataType, string_intern: bool) -> TokenStream {
+/// leaves. Used only by the stdout sink.
+fn stdout_accessor(access: &TokenStream, dt: &DataType, string_intern: bool) -> TokenStream {
     match dt {
         DataType::String if string_intern => quote! { resolve_out(#access) },
         DataType::FixedTuple(fields) => {
             let elems = fields.iter().enumerate().map(|(j, fdt)| {
                 let jdx = Literal::usize_unsuffixed(j);
-                stderr_accessor(&quote! { (#access).#jdx }, fdt, string_intern)
+                stdout_accessor(&quote! { (#access).#jdx }, fdt, string_intern)
             });
             quote! { ( #(#elems),* ) }
         }
