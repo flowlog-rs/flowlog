@@ -179,7 +179,7 @@ run_test() {
 
     # `use_sort=1`: lib mode output order is non-deterministic.
     local mismatch_detail
-    if mismatch_detail=$(compare_expected_outputs "$test_dir" "${LIB_RUNNER_DIR}/output" 1); then
+    if mismatch_detail=$(compare_expected_outputs "$test_dir" "${LIB_RUNNER_DIR}/output" 1 printsize); then
         ((passed++)) || true
     else
         record_failure "$full_name" "output mismatch" "$mismatch_detail"

@@ -124,6 +124,11 @@ compare_expected_outputs() {
     local test_dir="$1"
     local output_dir="$2"
     local use_sort="${3:-0}"
+    # Space-separated expected names to leave uncompared, for an expectation
+    # one runner cannot produce: `.printsize` prints a line on stdout in
+    # compiler mode, while library mode exposes the count as a typed
+    # `<rel>_size` field, so there is no such file to diff.
+    local skip_names="${4:-}"
 
     local all_match=1
     local diff_detail=""
@@ -133,6 +138,9 @@ compare_expected_outputs() {
         local rel_name
         local actual_file
         rel_name="$(basename "$expected_file")"
+        if [[ " $skip_names " == *" $rel_name "* ]]; then
+            continue
+        fi
         actual_file="${output_dir}/${rel_name}"
 
         if [[ ! -f "$actual_file" ]]; then

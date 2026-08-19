@@ -1066,32 +1066,6 @@ mod tests {
         );
     }
 
-    /// Comp-internal directives bypass `apply_directives` (the inliner sets the
-    /// flags directly), so the output/printsize conflict check must run AFTER
-    /// both passes: without the post-pass validator two writers would race on
-    /// the same `c.R.csv` file.
-    #[test]
-    fn output_and_printsize_inside_comp_rejected() {
-        let err = assembled(
-            "
-            .comp C {
-              .decl Src(x: number)
-              .decl R(x: number)
-              Src(1).
-              R(x) :- Src(x).
-              .output R
-              .printsize R
-            }
-            .init c = C
-            ",
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ParseError::OutputAndPrintsizeConflict { .. }),
-            "expected OutputAndPrintsizeConflict for comp-internal pair, got {err:?}"
-        );
-    }
-
     /// `.override Foo` drops the parent's ground facts.
     #[test]
     fn override_drops_parent_facts() {

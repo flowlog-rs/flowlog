@@ -47,6 +47,35 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
             use ::flowlog_runtime::txn::{TxnAction, TxnOp, TxnState};
             use prompt::Prompt;
             use std::sync::{Arc, RwLock};
+
+            // Only the incremental binary sizes a barrier; batch mode joins
+            // its workers rather than synchronizing them.
+            fn workers_from_args(args: &[String]) -> usize {
+                let mut i = 0;
+                while i < args.len() {
+                    if args[i] == "-w" && i + 1 < args.len() {
+                        if let Ok(n) = args[i + 1].parse::<usize>() {
+                            return n.max(1);
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    if let Some(rest) = args[i].strip_prefix("-w=") {
+                        if let Ok(n) = rest.parse::<usize>() {
+                            return n.max(1);
+                        }
+                    }
+                    i += 1;
+                }
+                1
+            }
+
+            fn worker_barrier_from_args(
+                args: &[String],
+            ) -> std::sync::Arc<std::sync::Barrier> {
+                let workers = workers_from_args(args);
+                std::sync::Arc::new(std::sync::Barrier::new(workers))
+            }
         });
     }
 
@@ -80,37 +109,6 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     }
 
     quote! { #(#out)* }
-}
-
-pub(crate) fn gen_worker_helpers() -> TokenStream {
-    quote! {
-        fn workers_from_args(args: &[String]) -> usize {
-            let mut i = 0;
-            while i < args.len() {
-                if args[i] == "-w" && i + 1 < args.len() {
-                    if let Ok(n) = args[i + 1].parse::<usize>() {
-                        return n.max(1);
-                    }
-                    i += 2;
-                    continue;
-                }
-                if let Some(rest) = args[i].strip_prefix("-w=") {
-                    if let Ok(n) = rest.parse::<usize>() {
-                        return n.max(1);
-                    }
-                }
-                i += 1;
-            }
-            1
-        }
-
-        fn worker_barrier_from_args(
-            args: &[String],
-        ) -> std::sync::Arc<std::sync::Barrier> {
-            let workers = workers_from_args(args);
-            std::sync::Arc::new(std::sync::Barrier::new(workers))
-        }
-    }
 }
 
 /// Imports brought into the generated binary's `relation` module so the

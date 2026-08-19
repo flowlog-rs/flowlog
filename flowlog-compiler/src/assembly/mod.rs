@@ -22,7 +22,6 @@ impl Compiler {
         &self,
         parts: &CodeParts,
         imports: &proc_macro2::TokenStream,
-        worker_helpers: &proc_macro2::TokenStream,
     ) -> Result<String, CompilerError> {
         let merge_section = self.gen_merge_section()?;
         let input = self.gen_input(parts, &merge_section);
@@ -41,7 +40,6 @@ impl Compiler {
             #type_declarations
             #profile_structs
             #profile_ops
-            #worker_helpers
             #main_fn
         };
 

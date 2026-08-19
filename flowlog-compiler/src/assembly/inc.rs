@@ -53,6 +53,7 @@ pub(crate) fn gen_incremental_main(
             #(#output_bufs)*
             #(#size_cell_decls)*
 
+            let timer = Instant::now();
             timely::execute_from_args(args.into_iter(), {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
@@ -60,7 +61,6 @@ pub(crate) fn gen_incremental_main(
                 #(#size_cell_clones)*
 
                 move |worker| {
-                    let timer = Instant::now();
                     let peers = worker.peers();
                     let index = worker.index();
 
