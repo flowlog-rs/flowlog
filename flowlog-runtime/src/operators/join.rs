@@ -15,16 +15,12 @@ use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::containers::BatchContainer;
 use timely::container::PushInto;
 
-/// An equijoin of two arrangements sharing a common key type, under the
-/// name FlowLog gives the join step.
+/// An equijoin of two arrangements sharing a common key type, recorded on
+/// the timely operator under the name FlowLog gives the join step.
 ///
 /// `result` extracts an iterator from each matching pair, and its full
 /// contents are emitted with the product of the two input weights.
 /// Correctness depends heavily on the behavior of `result`.
-///
-/// `name` is accepted but not yet recorded on the operator: released
-/// differential-dataflow hard-codes `Join`. It reaches `join_traces` once
-/// upstream ships the hook, without touching any call site.
 pub fn flowlog_join<'scope, Tr1, Tr2, I, L, R1, R2, KC>(
     arranged1: Arranged<'scope, Tr1>,
     arranged2: Arranged<'scope, Tr2>,
@@ -43,10 +39,6 @@ where
     I: IntoIterator<Item: Data>,
     L: FnMut(KC::ReadItem<'_>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
 {
-    // Recording the name waits on a differential-dataflow release whose
-    // `join_traces` takes one; the pinned bump is parked in PR #281.
-    let _ = name;
-
     let mut emit = move |key: KC::ReadItem<'_>,
                          left: BatchVal<'_, Tr1>,
                          right: BatchVal<'_, Tr2>,
@@ -68,6 +60,7 @@ where
     >(
         arranged1,
         arranged2,
+        name,
         move |key, left, right, time, left_diff, right_diff, output| {
             for datum in emit(key, left, right, time, left_diff, right_diff) {
                 output.push_into(datum);
