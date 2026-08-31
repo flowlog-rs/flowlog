@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-profiler-v0.1.0...flowlog-profiler-v0.2.0) - 2026-08-31
+
+### Added
+
+- *(runtime)* own set-semantics dedup and antijoin ([#283](https://github.com/flowlog-rs/flowlog/pull/283))
+
+### Other
+
+- [**breaking**] drop extended execution modes and loop blocks ([#286](https://github.com/flowlog-rs/flowlog/pull/286))
+
 ## [0.1.0](https://github.com/flowlog-rs/flowlog/releases/tag/flowlog-profiler-v0.1.0) - 2026-07-26
 
 ### Added
