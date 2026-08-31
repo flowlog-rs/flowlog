@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.1.0...flowlog-parser-v0.2.0) - 2026-08-31
+
+### Added
+
+- *(compiler)* [**breaking**] report `.printsize` on stdout, route `-D -` to stdout, split output by sink ([#309](https://github.com/flowlog-rs/flowlog/pull/309))
+- *(runtime)* own group-by aggregation ([#284](https://github.com/flowlog-rs/flowlog/pull/284))
+
+### Fixed
+
+- *(parser)* refuse `as` as a call name so a failed cast is not re-parsed ([#300](https://github.com/flowlog-rs/flowlog/pull/300))
+- *(parser)* parse parenthesised factors without exponential backtracking ([#294](https://github.com/flowlog-rs/flowlog/pull/294))
+
+### Other
+
+- *(parser)* [**breaking**] resolve io directive parameters into typed sources ([#308](https://github.com/flowlog-rs/flowlog/pull/308))
+- [**breaking**] drop extended execution modes and loop blocks ([#286](https://github.com/flowlog-rs/flowlog/pull/286))
+- *(build)* [**breaking**] extract planner into flowlog-planner crate ([#273](https://github.com/flowlog-rs/flowlog/pull/273))
+
 ## [0.1.0](https://github.com/flowlog-rs/flowlog/releases/tag/flowlog-parser-v0.1.0) - 2026-07-26
 
 ### Added

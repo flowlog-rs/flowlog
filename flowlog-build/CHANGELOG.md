@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.4.0...flowlog-build-v0.5.0) - 2026-08-31
+
+### Added
+
+- *(compiler)* [**breaking**] report `.printsize` on stdout, route `-D -` to stdout, split output by sink ([#309](https://github.com/flowlog-rs/flowlog/pull/309))
+- *(runtime)* own group-by aggregation ([#284](https://github.com/flowlog-rs/flowlog/pull/284))
+- *(runtime)* own set-semantics dedup and antijoin ([#283](https://github.com/flowlog-rs/flowlog/pull/283))
+- *(runtime)* add FlowLog join and map operators ([#282](https://github.com/flowlog-rs/flowlog/pull/282))
+
+### Other
+
+- *(parser)* [**breaking**] resolve io directive parameters into typed sources ([#308](https://github.com/flowlog-rs/flowlog/pull/308))
+- [**breaking**] drop extended execution modes and loop blocks ([#286](https://github.com/flowlog-rs/flowlog/pull/286))
+- *(build)* [**breaking**] extract planner into flowlog-planner crate ([#273](https://github.com/flowlog-rs/flowlog/pull/273))
+
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.4...flowlog-build-v0.4.0) - 2026-07-26
 
 ### Breaking
