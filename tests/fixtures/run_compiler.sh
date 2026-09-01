@@ -28,7 +28,7 @@ readonly COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
 readonly BUILD_DIR="${ROOT_DIR}/target/e2e"
 
 # Build generated crates against the workspace runtime instead of crates.io,
-# so unpublished flowlog-runtime additions are testable (scaffold emits a
+# so unpublished flowlog-runtime additions are testable (the scaffold emits a
 # [patch.crates-io] entry when this is set).
 export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
 
@@ -116,7 +116,11 @@ run_generated_binary() {
     if [[ -f "$test_dir/runtime_flags" ]]; then
         mapfile -t runtime_flags < "$test_dir/runtime_flags"
     fi
-    (cd "$work_dir" && ./program "${runtime_flags[@]}" >"$run_log" 2>&1)
+    if (( ${#runtime_flags[@]} )); then
+        (cd "$work_dir" && ./program "${runtime_flags[@]}" >"$run_log" 2>&1)
+    else
+        (cd "$work_dir" && ./program >"$run_log" 2>&1)
+    fi
 }
 
 ###############################################################################
@@ -179,7 +183,15 @@ run_test() {
         done < "$test_dir/include_dirs"
     fi
 
-    if ! "$COMPILER_BIN" -D output "${compile_flags[@]}" "$test_dir/program.dl" -o "$work_dir/program" >"$compile_log" 2>&1; then
+    local compile_status=0
+    if (( ${#compile_flags[@]} )); then
+        "$COMPILER_BIN" -D output "${compile_flags[@]}" "$test_dir/program.dl" \
+            -o "$work_dir/program" >"$compile_log" 2>&1 || compile_status=$?
+    else
+        "$COMPILER_BIN" -D output "$test_dir/program.dl" \
+            -o "$work_dir/program" >"$compile_log" 2>&1 || compile_status=$?
+    fi
+    if (( compile_status != 0 )); then
         local detail
         detail="$(cat "$compile_log" 2>/dev/null | tail -20 | sed 's/^/         /')"
         record_failure "$full_name" "compilation failed" "$detail"
@@ -271,7 +283,11 @@ main() {
     parse_jobs_flag usage "$@"
     apply_shard
     local jobs="$PARSED_JOBS"
-    set -- "${PARSED_POSITIONAL[@]}"
+    if (( ${#PARSED_POSITIONAL[@]} )); then
+        set -- "${PARSED_POSITIONAL[@]}"
+    else
+        set --
+    fi
 
     echo ""
     echo -e "  ${BOLD}FlowLog Fixture Tests (binary mode)${NC}"

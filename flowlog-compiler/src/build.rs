@@ -24,6 +24,7 @@ use flowlog_common::ExecutionMode;
 use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
 use quote::quote;
+use tempfile::NamedTempFile;
 use tracing::info;
 
 use crate::Compiler;
@@ -158,23 +159,62 @@ fn run_cargo(build_dir: &Path, args: &[&str]) -> io::Result<()> {
     Ok(())
 }
 
-/// Copy a built binary into place and make it executable on Unix.
+/// Stage a built binary beside its destination, sign it, and atomically install it.
 fn install_binary(src: &Path, dest: &Path) -> io::Result<()> {
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::copy(src, dest)?;
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let mut staged = NamedTempFile::new_in(parent)?;
+    let mut input = fs::File::open(src)?;
+    io::copy(&mut input, staged.as_file_mut())?;
 
-    // On Unix, `fs::copy` preserves the source's permission bits which may
-    // not include the executable flag if the cargo target dir was created
-    // with an unusual umask — set it explicitly.
+    // Set the final mode on the staged inode before atomic publication.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(dest, fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(staged.path(), fs::Permissions::from_mode(0o755))?;
     }
 
+    #[cfg(target_os = "macos")]
+    sign_macos_binary(staged.path())?;
+
+    staged.persist(dest).map_err(|error| error.error)?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn sign_macos_binary(path: &Path) -> io::Result<()> {
+    let verify = || {
+        process::Command::new("/usr/bin/codesign")
+            .args(["--verify", "--strict", "--verbose=2"])
+            .arg(path)
+            .output()
+    };
+    // rustc/ld already emits a valid linker signature on current macOS
+    // toolchains. Preserve it: force-signing large generated executables
+    // needlessly rewrites their Mach-O link-edit region.
+    if verify()?.status.success() {
+        return Ok(());
+    }
+    let output = process::Command::new("/usr/bin/codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(path)
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "failed to ad-hoc sign generated executable '{}': {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let verified = verify()?;
+    if verified.status.success() {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "generated executable signature verification failed for '{}': {}",
+        path.display(),
+        String::from_utf8_lossy(&verified.stderr).trim()
+    )))
 }
 
 /// Ensure the destination path carries the platform-specific executable

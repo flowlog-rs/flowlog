@@ -49,14 +49,18 @@ pub(crate) fn gen_incremental_main(
             let shared_txn: Arc<RwLock<TxnState>> =
                 Arc::new(RwLock::new(TxnState::default()));
             let barrier = worker_barrier_from_args(&args);
+            let input_failed = std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            );
 
             #(#output_bufs)*
             #(#size_cell_decls)*
 
             let timer = Instant::now();
-            timely::execute_from_args(args.into_iter(), {
+            let guards = match timely::execute_from_args(args.into_iter(), {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
+                let input_failed = input_failed.clone();
                 #(#output_buf_clones)*
                 #(#size_cell_clones)*
 
@@ -93,27 +97,28 @@ pub(crate) fn gen_incremental_main(
                         ops: &[TxnOp],
                         peers: usize,
                         index: usize,
-                    ) {
+                    ) -> Result<(), String> {
                         for op in ops {
                             match op {
                                 TxnOp::Put { rel, tuple, diff } => {
                                     let r = rels
                                         .get_mut(&rel.to_ascii_lowercase())
-                                        .unwrap_or_else(|| {
-                                            panic!("unknown relation: '{rel}'")
-                                        });
-                                    r.apply_tuple(tuple, *diff, peers, index);
+                                        .ok_or_else(|| format!(
+                                            "unknown input relation {rel:?}"
+                                        ))?;
+                                    r.apply_tuple(tuple, *diff, peers, index)?;
                                 }
                                 TxnOp::File { rel, path, diff } => {
                                     let r = rels
                                         .get_mut(&rel.to_ascii_lowercase())
-                                        .unwrap_or_else(|| {
-                                            panic!("unknown relation: '{rel}'")
-                                        });
-                                    r.apply_file(path.as_path(), *diff, peers, index);
+                                        .ok_or_else(|| format!(
+                                            "unknown input relation {rel:?}"
+                                        ))?;
+                                    r.apply_file(path.as_path(), *diff, peers, index)?;
                                 }
                             }
                         }
+                        Ok(())
                     }
 
                     if index == 0 {
@@ -141,7 +146,25 @@ pub(crate) fn gen_incremental_main(
 
                             match snap.action {
                                 TxnAction::Commit => {
-                                    apply_ops(&mut rels, snap.pending.as_slice(), peers, index);
+                                    if let Err(error) = apply_ops(
+                                        &mut rels, snap.pending.as_slice(), peers, index
+                                    ) {
+                                        if !input_failed.swap(
+                                            true,
+                                            std::sync::atomic::Ordering::AcqRel,
+                                        ) {
+                                            eprintln!("[flowlog-runtime::io] {error}");
+                                        }
+                                    }
+                                    barrier.wait();
+                                    if input_failed.load(
+                                        std::sync::atomic::Ordering::Acquire,
+                                    ) {
+                                        for r in rels.values_mut() {
+                                            r.close();
+                                        }
+                                        return;
+                                    }
 
                                     time_stamp += 1;
                                     for r in rels.values_mut() {
@@ -243,7 +266,25 @@ pub(crate) fn gen_incremental_main(
 
                                 // Apply exactly what got published (keeps behavior consistent).
                                 let snap = shared_txn.read().unwrap().clone();
-                                apply_ops(&mut rels, snap.pending.as_slice(), peers, index);
+                                if let Err(error) = apply_ops(
+                                    &mut rels, snap.pending.as_slice(), peers, index
+                                ) {
+                                    if !input_failed.swap(
+                                        true,
+                                        std::sync::atomic::Ordering::AcqRel,
+                                    ) {
+                                        eprintln!("[flowlog-runtime::io] {error}");
+                                    }
+                                }
+                                barrier.wait();
+                                if input_failed.load(
+                                    std::sync::atomic::Ordering::Acquire,
+                                ) {
+                                    for r in rels.values_mut() {
+                                        r.close();
+                                    }
+                                    return;
+                                }
 
                                 time_stamp += 1;
                                 for r in rels.values_mut() {
@@ -300,8 +341,22 @@ pub(crate) fn gen_incremental_main(
                         }
                     }
                 }
-            })
-            .unwrap();
+            }) {
+                Ok(guards) => guards,
+                Err(error) => {
+                    eprintln!("[flowlog-runtime] cannot start workers: {error}");
+                    std::process::exit(2);
+                }
+            };
+            for result in guards.join() {
+                if let Err(error) = result {
+                    eprintln!("[flowlog-runtime] worker failed: {error}");
+                    std::process::exit(2);
+                }
+            }
+            if input_failed.load(std::sync::atomic::Ordering::Acquire) {
+                std::process::exit(2);
+            }
         }
     }
 }

@@ -156,7 +156,7 @@ pub(crate) fn gen_binary_relation_extras(
     };
 
     let byte_range_import = if needs_byte_range {
-        quote! { use ::flowlog_runtime::io::byte_range_reader as __byte_range_reader; }
+        quote! { use ::flowlog_runtime::io::try_byte_range_reader as __byte_range_reader; }
     } else {
         quote! {}
     };

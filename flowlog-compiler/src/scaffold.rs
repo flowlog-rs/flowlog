@@ -144,8 +144,10 @@ pub(crate) fn render_cargo_toml(
         deps["timely"] = "0.31".into();
         deps["differential-dataflow"] = "0.25".into();
         deps["mimalloc"] = "0.1".into();
-        // 0.2.3 is the minimum carrying the `regex` re-export that generated
-        // `match(...)` code resolves through (`::flowlog_runtime::regex`).
+        // The release PR will publish the next compatible 0.3.x runtime before
+        // the compiler reaches `main`. Development builds patch this dependency
+        // to the workspace runtime below, so the feature PR does not name an
+        // unpublished exact version.
         deps["flowlog-runtime"] = "0.3".into();
 
         if features.string_intern() {
@@ -181,8 +183,8 @@ pub(crate) fn render_cargo_toml(
 
     // `FLOWLOG_RUNTIME_PATH` redirects the runtime dependency to a local
     // checkout via `[patch.crates-io]`. The test harness sets it so generated
-    // crates build against the workspace runtime instead of crates.io —
-    // required whenever the workspace runtime has unpublished additions.
+    // crates build against the workspace runtime while compiler/runtime changes
+    // are still on `main-next` and not yet published.
     if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
         let mut patch = InlineTable::new();
         patch.insert("path", path.into());

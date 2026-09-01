@@ -289,7 +289,11 @@ main() {
     parse_jobs_flag usage "$@"
     apply_shard
     local jobs="$PARSED_JOBS"
-    set -- "${PARSED_POSITIONAL[@]}"
+    if (( ${#PARSED_POSITIONAL[@]} )); then
+        set -- "${PARSED_POSITIONAL[@]}"
+    else
+        set --
+    fi
 
     echo ""
     echo -e "  ${BOLD}FlowLog Fixture Tests (library mode)${NC}"
