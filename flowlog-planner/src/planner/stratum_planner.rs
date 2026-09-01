@@ -478,7 +478,8 @@ impl StratumPlanner {
             .difference(&recursion_output_fps)
             .filter(|fp| available_fps.contains(fp))
             .copied()
-            .collect()
+            .collect();
+        self.recursion_enter_collections.sort_unstable();
     }
 
     /// Maps each IDB fingerprint to the materialized rule heads that produce

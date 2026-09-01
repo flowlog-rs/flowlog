@@ -67,7 +67,9 @@ impl CodeGen {
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut flows = Vec::new();
 
-        for (idb_fp, head_fps) in stratum.idb_to_heads_map() {
+        let mut idb_heads: Vec<_> = stratum.idb_to_heads_map().iter().collect();
+        idb_heads.sort_unstable_by_key(|(idb_fp, _)| **idb_fp);
+        for (idb_fp, head_fps) in idb_heads {
             let output = self.find_global_ident(*idb_fp);
             let outs: Vec<Ident> = head_fps
                 .iter()

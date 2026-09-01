@@ -84,6 +84,15 @@ jobs:
       - name: 🔨 Build flowlog-compiler (release)
         run: cargo build --release -p flowlog-compiler --target ${{ matrix.target }}
 
+      - name: 🖊️ Sign macOS compiler
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/flowlog-compiler${{ matrix.ext }}"
+          codesign --force --sign - "$binary"
+          codesign --verify --strict --verbose=2 "$binary"
+
       # Bash + tar + sha256sum/shasum are available on all three runners
       # (Windows includes Git Bash + bsdtar via the system PATH), so a
       # single bash step packages every platform identically.
