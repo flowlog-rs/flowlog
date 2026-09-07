@@ -1,51 +1,37 @@
-//! I/O and partition helpers used by the generated engine code.
+//! I/O helpers used by the generated engine code.
 //!
-//! - [`partition`]: split an owned `Vec` into per-worker slices for the
-//!   library-mode batch engine's ingest path.
-//! - [`byte_range_reader`]: split a CSV file across timely workers so each
-//!   reads its own byte slice (binary mode).
-//! - [`shard_int`] / [`shard_str`] / [`shard_spur`]: pick the owning worker
-//!   for a tuple based on its first column (binary mode).
+//! - [`Loader`]: reading a relation into the engine from a file, a `put`,
+//!   or a host program's rows, using its [`Relation`] declaration
+//!   (module `input`, surfaced here).
 //! - [`write_atomic`]: write a file via a temp sibling and rename so a
 //!   reader never sees a half-written file.
+//!
+//! The remaining helpers predate [`Loader`] and serve the code today's
+//! compiler still generates:
+//!
+//! - [`byte_range_reader`]: split a text file across timely workers so
+//!   each reads its own byte slice.
+//! - [`shard_int`] / [`shard_str`] / [`shard_spur`]: pick the owning worker
+//!   for a tuple based on its first column.
+
+pub(crate) mod input;
 
 use std::fs::File;
 use std::io;
-use std::io::BufRead;
 use std::io::BufReader;
 use std::io::BufWriter;
-use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 
+pub use input::decode::Decode;
+pub use input::decode::text::DecodeCell;
+pub use input::decode::text::TextRow;
+pub use input::decode::typed::DecodeField;
+pub use input::loader::Loader;
+pub use input::reader::put::Put;
+pub use input::relation::Relation;
 use lasso::Spur;
 use tempfile::NamedTempFile;
-
-// =========================================================================
-// Per-worker partitioning
-// =========================================================================
-
-/// Split `v` into `n` roughly-equal owned partitions, in order.
-///
-/// Each element moves by value into its partition (no `Arc` sharing, no
-/// per-tuple clone), so a consumer takes ownership of its slice directly.
-///
-/// `n.max(1)` partitions are produced; if `v.len() < n` some partitions
-/// are empty. The last partition absorbs any remainder when the division
-/// doesn't come out evenly.
-pub fn partition<T>(v: Vec<T>, n: usize) -> Vec<Vec<T>> {
-    let n = n.max(1);
-    let chunk = v.len() / n;
-    let mut iter = v.into_iter();
-    (0..n)
-        .map(|i| {
-            let take = if i + 1 == n { iter.len() } else { chunk };
-            iter.by_ref().take(take).collect()
-        })
-        .collect()
-}
 
 // =========================================================================
 // Byte-range file reader
@@ -65,69 +51,20 @@ pub fn byte_range_reader(
     index: usize,
     peers: usize,
 ) -> Option<(BufReader<File>, u64)> {
-    let mut file = File::open(path)
+    let open = || -> io::Result<_> {
+        let file = File::open(path)?;
+        let len = file.metadata()?.len();
+        let range = input::reader::file::byte_range(file, len, index, peers)?;
+        Ok((range.reader, range.budget))
+    };
+    open()
         .inspect_err(|e| {
             eprintln!(
                 "[flowlog-runtime::io] failed to open {}: {e}",
                 path.display()
             );
         })
-        .ok()?;
-
-    let file_size = file
-        .metadata()
-        .inspect_err(|e| {
-            eprintln!(
-                "[flowlog-runtime::io] failed to stat {}: {e}",
-                path.display()
-            );
-        })
-        .ok()?
-        .len();
-
-    let chunk = file_size / peers as u64;
-    let start = chunk * index as u64;
-    let end = if index == peers - 1 {
-        file_size
-    } else {
-        chunk * (index + 1) as u64
-    };
-
-    // Nothing to read for this worker.
-    if start >= end {
-        return Some((BufReader::new(file), 0));
-    }
-
-    // Any worker whose range begins at byte 0 reads from the start with no
-    // alignment skip; there's no previous byte to peek at. Worker 0 always
-    // hits this; others hit it when `chunk == 0` (peers > file_size), which
-    // puts the whole file on the last worker.
-    if start == 0 {
-        return Some((BufReader::new(file), end));
-    }
-
-    // Non-zero start: seek to `start - 1` and peek the byte just before our
-    // range. If it's a newline we're on a line boundary; otherwise skip the
-    // rest of the partial line.
-    if file.seek(SeekFrom::Start(start - 1)).is_err() {
-        return Some((BufReader::new(file), 0));
-    }
-
-    let mut reader = BufReader::new(file);
-    let mut peek = [0u8; 1];
-    if reader.read_exact(&mut peek).is_err() {
-        return Some((reader, 0));
-    }
-
-    if peek[0] == b'\n' {
-        // Exactly on a line boundary.
-        return Some((reader, end - start));
-    }
-
-    // Mid-line: skip the rest of this partial line.
-    let mut discard = Vec::new();
-    let skipped = reader.read_until(b'\n', &mut discard).unwrap_or(0);
-    Some((reader, (end - start).saturating_sub(skipped as u64)))
+        .ok()
 }
 
 // =========================================================================

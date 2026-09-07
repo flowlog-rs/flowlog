@@ -11,9 +11,12 @@ You typically don't call into it directly.
 
 - `RuntimeArgs` (optional `cli` feature) - executable argument parsing with
   directory defaults and Timely worker options.
-- `Relation` trait — implemented by each generated input struct.
-- `io` — parallel-ingest helpers: `partition`, `byte_range_reader`, and
-  first-column sharding.
+- `io` — reading relations into the engine: one `Loader` per relation,
+  fed from a file, a `put`, or a host program's rows, with the worker
+  share and the decoding settled in the runtime; plus the pre-`Loader`
+  helpers (`byte_range_reader`, first-column sharding) that
+  generated code still uses.
+- `error` — `RuntimeError`, everything the runtime can fail at.
 - `intern` — thread-safe string-interning pool.
 - `sort` — `k_way_merge` and `topk` used by generated `ORDER BY` / `LIMIT`
   drain code.
