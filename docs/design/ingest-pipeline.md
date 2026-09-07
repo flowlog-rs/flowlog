@@ -46,7 +46,7 @@ relation's arity; it does not receive the relation declaration.
 |-----------------|----------------------------------------------------------------|
 | `relation.rs`   | `Relation` (`NAME`, `ARITY`, `Tuple`, `facts`) |
 | `loader.rs`     | `Loader<R, T, D>`: worker settings, loading sources, and managing the session |
-| `reader/put.rs` | `Put` and its reader |
+| `reader/put.rs` | The single-text-row reader |
 | `reader.rs`     | `Reader<T>`: the shared row-reading contract, and the `ingest` loop |
 | `reader/`       | Source-specific readers and their constructors |
 | `decode.rs`     | `Decode<Src>`: the shared row-decoding contract |
@@ -56,11 +56,10 @@ Two facts the rustdoc cannot carry on any one item:
 
 - Text-decode bounds sit on the entry points that read text (`load_file`,
   `load_put`), not on `Relation`. A host program's relation never proves it
-  can parse a line, which is what lets a slot be a struct rather than a
-  tuple: the route past the twelve-column ceiling `Ord` puts on tuples.
-  Every decoder is an impl that already exists in the runtime, selected by
-  the pair of slot tuple and record type; no relation generates one, and a
-  mispaired one does not compile.
+  can parse a line. Every decoder is an impl that already exists in the
+  runtime, selected by the pair of slot tuple and record type; no relation
+  generates one, and a mispaired one does not compile. Only `Relation` and
+  `Loader` are exposed from `io::input`; readers and decoding are internal.
 - Readers yield finished tuples rather than records because a lending
   `Record<'_>` would need a generic associated type; decode running inside
   `next` is that constraint, not a preference.
@@ -82,7 +81,7 @@ later step:
 
 ```rust
 pub struct RelEdge;
-impl ::flowlog_runtime::io::Relation for RelEdge {
+impl ::flowlog_runtime::io::input::Relation for RelEdge {
     const NAME: &'static str = "Edge";
     const ARITY: usize = 2;
     type Tuple = (i32, Spur);
@@ -96,7 +95,7 @@ Each worker constructs its loader once:
 ```rust
 let mut loader = Loader::<RelEdge, Ts, Diff>::new(session, peers, index, uses_ord)?;
 loader.load_file(path, b'\t', false, diff)?;
-loader.load_put(&put, b'\t', diff)?;
+loader.load_put(text, ordinal, b'\t', diff)?;
 loader.load_rows(&rows, diff)?;
 ```
 
@@ -106,7 +105,7 @@ file-options wrapper. Text puts take their delimiter directly too. Typed
 host rows do not carry any text-format settings.
 
 A compiled binary will call `load_file` at preload and `load_put` /
-`load_flag` per transaction op, passing the op's index as the `Put`
-ordinal. A library-mode engine will stage `insert_edge(rows)` into one
-flat `Vec`, share it with the workers in an `Arc` at `run()` or `commit()`,
-and have every worker call `load_rows` using its loader's fixed partition.
+`load_flag` per transaction op, passing the op's index as `ordinal`.
+A library-mode engine can stage typed batches for `run()` or `commit()`.
+Every worker calls `load_rows` for each batch with the same weight, using
+its loader's fixed partition.

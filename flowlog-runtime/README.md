@@ -11,11 +11,12 @@ You typically don't call into it directly.
 
 - `RuntimeArgs` (optional `cli` feature) - executable argument parsing with
   directory defaults and Timely worker options.
-- `io` — reading relations into the engine: one `Loader` per relation,
-  fed from a file, a `put`, or a host program's rows, with the worker
-  share and the decoding settled in the runtime; plus the pre-`Loader`
-  helpers (`byte_range_reader`, first-column sharding) that
-  generated code still uses.
+- `io::input` — `Relation` declarations and one `Loader` per relation,
+  fed from files, text puts, or typed host rows. The runtime owns worker
+  partitioning and decoding.
+- `io` also retains the legacy byte-range reader and first-column
+  sharding helpers until generated input code migrates to `Loader`.
+- `io::write_atomic` — atomic output-file replacement.
 - `error` — `RuntimeError`, everything the runtime can fail at.
 - `intern` — thread-safe string-interning pool.
 - `sort` — `k_way_merge` and `topk` used by generated `ORDER BY` / `LIMIT`

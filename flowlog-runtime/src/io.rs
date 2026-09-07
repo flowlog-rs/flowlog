@@ -1,20 +1,10 @@
-//! I/O helpers used by the generated engine code.
+//! Relation input and atomic output-file writing.
 //!
-//! - [`Loader`]: reading a relation into the engine from a file, a `put`,
-//!   or a host program's rows, using its [`Relation`] declaration
-//!   (module `input`, surfaced here).
-//! - [`write_atomic`]: write a file via a temp sibling and rename so a
-//!   reader never sees a half-written file.
-//!
-//! The remaining helpers predate [`Loader`] and serve the code today's
-//! compiler still generates:
-//!
-//! - [`byte_range_reader`]: split a text file across timely workers so
-//!   each reads its own byte slice.
-//! - [`shard_int`] / [`shard_str`] / [`shard_spur`]: pick the owning worker
-//!   for a tuple based on its first column.
+//! [`input`] owns relation loading; [`write_atomic`] replaces completed
+//! output files without exposing a partial write. The byte-range and
+//! sharding helpers support the older generated input path.
 
-pub(crate) mod input;
+pub mod input;
 
 use std::fs::File;
 use std::io;
@@ -23,13 +13,6 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 
-pub use input::decode::Decode;
-pub use input::decode::text::DecodeCell;
-pub use input::decode::text::TextRow;
-pub use input::decode::typed::DecodeField;
-pub use input::loader::Loader;
-pub use input::reader::put::Put;
-pub use input::relation::Relation;
 use lasso::Spur;
 use tempfile::NamedTempFile;
 

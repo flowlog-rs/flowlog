@@ -18,12 +18,6 @@ use crate::io::input::decode::Decode;
 ///
 /// Source and destination types select the conversion. Unsupported pairs
 /// are rejected at compile time, not while loading a row.
-///
-/// ```compile_fail
-/// use flowlog_runtime::io::DecodeField;
-///
-/// let _: i32 = DecodeField::decode_field(&String::from("7"));
-/// ```
 pub trait DecodeField<Src> {
     fn decode_field(field: &Src) -> Self;
 }

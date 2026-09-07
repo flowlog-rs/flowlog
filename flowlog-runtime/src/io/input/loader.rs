@@ -18,7 +18,6 @@ use crate::io::input::reader::Reader;
 use crate::io::input::reader::file::FileReader;
 use crate::io::input::reader::host::HostReader;
 use crate::io::input::reader::ingest;
-use crate::io::input::reader::put::Put;
 use crate::io::input::reader::put::PutReader;
 use crate::io::input::relation::Relation;
 
@@ -117,9 +116,18 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
 
     /// Applies one `put` on its owning worker with weight `diff`.
     ///
+    /// `ordinal` is the operation's index in the transaction. Every worker
+    /// must receive the same text and ordinal so exactly one applies it.
+    ///
     /// A decoding error is returned with no update applied. Text follows the
     /// delimiter rules of [`load_file`](Self::load_file).
-    pub fn load_put(&mut self, put: &Put<'_>, delimiter: u8, diff: D) -> Result<(), RuntimeError>
+    pub fn load_put(
+        &mut self,
+        text: &str,
+        ordinal: usize,
+        delimiter: u8,
+        diff: D,
+    ) -> Result<(), RuntimeError>
     where
         R::Tuple: for<'l> Decode<TextRow<'l>>,
     {
@@ -129,7 +137,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
             return Ok(());
         };
         validate_delimiter(delimiter)?;
-        let Some(mut reader) = PutReader::open(put, delimiter, peers, index) else {
+        let Some(mut reader) = PutReader::open(text, ordinal, delimiter, peers, index) else {
             return Ok(());
         };
         if let Some(tuple) = reader.next()? {
@@ -143,7 +151,13 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     ///
     /// The text is decoded as a standalone boolean. Ownership and error
     /// handling follow [`load_put`](Self::load_put).
-    pub fn load_flag(&mut self, put: &Put<'_>, delimiter: u8, diff: D) -> Result<(), RuntimeError>
+    pub fn load_flag(
+        &mut self,
+        text: &str,
+        ordinal: usize,
+        delimiter: u8,
+        diff: D,
+    ) -> Result<(), RuntimeError>
     where
         R: Relation<Tuple = ()>,
         D: Neg<Output = D>,
@@ -154,7 +168,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
             return Ok(());
         };
         validate_delimiter(delimiter)?;
-        let Some(mut reader) = PutReader::open(put, delimiter, peers, index) else {
+        let Some(mut reader) = PutReader::open(text, ordinal, delimiter, peers, index) else {
             return Ok(());
         };
         if let Some(holds) = Reader::<bool>::next(&mut reader)? {
@@ -165,8 +179,10 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
 
     /// Loads this worker's share of typed host rows with weight `diff`.
     ///
-    /// Rejections from a custom [`Decode`] implementation are reported and
-    /// skipped. The built-in typed conversions do not reject rows.
+    /// Field types select the conversion: integers and booleans keep their
+    /// values, strings stay owned or are interned, and floats become
+    /// ordered floats. Tuple-valued fields are converted recursively.
+    /// Unsupported source and destination pairs fail to compile.
     pub fn load_rows<U>(&mut self, rows: &[U], diff: D) -> Result<(), RuntimeError>
     where
         R::Tuple: Decode<U>,
@@ -398,6 +414,37 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case(0, false, vec![((1,), 2), ((3,), -3)])]
+    #[case(1, false, vec![((2,), 2), ((4,), -3)])]
+    #[case(0, true, vec![((1,), 2), ((2,), 2), ((3,), -3), ((4,), -3)])]
+    #[case(1, true, vec![])]
+    fn load_rows_partitions_each_batch_with_its_own_weight(
+        #[case] index: usize,
+        #[case] uses_ord: bool,
+        #[case] expected: Vec<((i32,), i32)>,
+    ) {
+        let got = deliveries::<Numbers>(2, index, uses_ord, |loader| {
+            loader.load_rows(&[(1,), (2,)], 2).expect("insert batch");
+            loader.load_rows(&[(3,), (4,)], -3).expect("retract batch");
+        });
+        assert_eq!(got, expected);
+    }
+
+    #[rstest]
+    #[case(0, &[])]
+    #[case(1, &[])]
+    #[case(0, &[(7,)])]
+    fn an_empty_host_partition_applies_nothing(
+        #[case] index: usize,
+        #[case] rows: &'static [(i32,)],
+    ) {
+        let got = deliveries::<Numbers>(2, index, false, move |loader| {
+            loader.load_rows(rows, -1).expect("host rows");
+        });
+        assert!(got.is_empty());
+    }
+
     #[test]
     fn load_file_applies_rows_and_skips_a_refused_one() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -542,11 +589,9 @@ mod tests {
             loader
                 .load_file(&path, 0xA9, false, 1)
                 .expect("no reader opened");
-            let put = Put {
-                text: "invalid",
-                ordinal: 1,
-            };
-            loader.load_put(&put, 0xA9, 1).expect("no reader opened");
+            loader
+                .load_put("invalid", 1, 0xA9, 1)
+                .expect("no reader opened");
             loader.inline_facts(1);
         });
         assert!(got.is_empty());
@@ -555,11 +600,7 @@ mod tests {
     #[test]
     fn ord_applies_every_put_on_worker_zero() {
         let got = deliveries::<WithFacts>(4, 0, true, |loader| {
-            let put = Put {
-                text: "1\ta",
-                ordinal: 3,
-            };
-            loader.load_put(&put, b'\t', 1).expect("put");
+            loader.load_put("1\ta", 3, b'\t', 1).expect("put");
         });
         assert_eq!(got, vec![((1, intern("a")), 1)]);
     }
@@ -584,11 +625,7 @@ mod tests {
     #[test]
     fn load_put_applies_the_owned_tuple() {
         let got = deliveries::<Mixed>(1, 0, false, |loader| {
-            let put = Put {
-                text: "7,z,true,2.5",
-                ordinal: 0,
-            };
-            loader.load_put(&put, b',', -1).expect("put");
+            loader.load_put("7,z,true,2.5", 0, b',', -1).expect("put");
         });
         assert_eq!(got, vec![((7, intern("z"), true, OrderedFloat(2.5)), -1)]);
     }
@@ -596,11 +633,9 @@ mod tests {
     #[test]
     fn a_refused_put_is_the_calls_error() {
         let got = deliveries::<Mixed>(1, 0, false, |loader| {
-            let put = Put {
-                text: "x,z,true,2.5",
-                ordinal: 0,
-            };
-            let err = loader.load_put(&put, b',', 1).expect_err("x is not i32");
+            let err = loader
+                .load_put("x,z,true,2.5", 0, b',', 1)
+                .expect_err("x is not i32");
             assert!(
                 matches!(
                     err,
@@ -619,12 +654,8 @@ mod tests {
     #[test]
     fn a_non_owner_does_not_decode_a_put() {
         let updates = deliveries::<Numbers>(2, 0, false, |loader| {
-            let put = Put {
-                text: "invalid",
-                ordinal: 1,
-            };
             loader
-                .load_put(&put, b',', 1)
+                .load_put("invalid", 1, b',', 1)
                 .expect("not this worker's put");
         });
         assert!(updates.is_empty());
@@ -641,14 +672,10 @@ mod tests {
     ) {
         let mut loader =
             Loader::<Flagged, Ts, Diff>::new(InputSession::new(), 2, index, false).expect("loader");
-        let put = Put {
-            text: "True",
-            ordinal: 0,
-        };
         let result = if flag {
-            loader.load_flag(&put, 0xA9, 1)
+            loader.load_flag("True", 0, 0xA9, 1)
         } else {
-            loader.load_put(&put, 0xA9, 1)
+            loader.load_put("True", 0, 0xA9, 1)
         };
         assert!(matches!(
             result,
@@ -660,8 +687,7 @@ mod tests {
     fn load_flag_asserts_on_true_and_retracts_on_false() {
         let got = deliveries::<Flagged>(1, 0, false, |loader| {
             for (ordinal, text) in ["True", " false "].into_iter().enumerate() {
-                let put = Put { text, ordinal };
-                loader.load_flag(&put, b',', 1).expect("flag");
+                loader.load_flag(text, ordinal, b',', 1).expect("flag");
             }
         });
         assert_eq!(got, vec![((), -1), ((), 1)]);
@@ -670,12 +696,8 @@ mod tests {
     #[test]
     fn load_flag_refuses_any_other_spelling() {
         let got = deliveries::<Flagged>(1, 0, false, |loader| {
-            let put = Put {
-                text: "maybe",
-                ordinal: 0,
-            };
             let err = loader
-                .load_flag(&put, b',', 1)
+                .load_flag("maybe", 0, b',', 1)
                 .expect_err("maybe is not a flag");
             assert!(
                 matches!(
@@ -692,12 +714,8 @@ mod tests {
     #[test]
     fn load_flag_on_a_non_owner_is_a_no_op() {
         let got = deliveries::<Flagged>(2, 0, false, |loader| {
-            let put = Put {
-                text: "maybe",
-                ordinal: 1,
-            };
             loader
-                .load_flag(&put, b',', 1)
+                .load_flag("maybe", 1, b',', 1)
                 .expect("not this worker's put");
         });
         assert!(got.is_empty());
@@ -706,11 +724,9 @@ mod tests {
     #[test]
     fn ord_excluded_workers_skip_flag_validation() {
         let updates = deliveries::<Flagged>(2, 1, true, |loader| {
-            let put = Put {
-                text: "invalid",
-                ordinal: 1,
-            };
-            loader.load_flag(&put, 0xA9, 1).expect("excluded worker");
+            loader
+                .load_flag("invalid", 1, 0xA9, 1)
+                .expect("excluded worker");
         });
         assert!(updates.is_empty());
     }
