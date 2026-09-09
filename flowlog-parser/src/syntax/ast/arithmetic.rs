@@ -336,6 +336,30 @@ mod tests {
     use super::*;
     use crate::test_util::parse_node;
 
+    #[rstest]
+    #[case("?x")]
+    #[case("?as")]
+    #[case("?True")]
+    fn prefixed_factor_preserves_variable_name(#[case] src: &str) {
+        assert_eq!(
+            parse_node::<Factor>(Rule::factor, src),
+            Factor::Var(src.to_string())
+        );
+    }
+
+    #[rstest]
+    #[case("?x + x")]
+    #[case("(?x + ?y) * ?z")]
+    #[case("strlen(?text)")]
+    #[case("as(?x, number)")]
+    #[case("(?x, ?y)")]
+    fn prefixed_variables_round_trip_in_expressions(#[case] src: &str) {
+        assert_eq!(
+            parse_node::<Arithmetic>(Rule::arithmetic_expr, src).to_string(),
+            src
+        );
+    }
+
     /// `vars()` preserves order and duplicates; `vars_set()` dedups. The
     /// two accessors exist because downstream passes need both: variable
     /// binding passes count occurrences (repeat = join predicate), while

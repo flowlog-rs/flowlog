@@ -26,8 +26,10 @@ identifier = @{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_")* }
 // `assert`, `match` vs `matches`). Silent: produces no node.
 word_boundary = _{ !(ASCII_ALPHANUMERIC | "_") }
 
-// Variable reference - variables used in rules and queries
-variable = { identifier }
+// Accept Doop's variable spelling without rewriting its rules. Keep the
+// prefix in the name so `x` and `?x` bind independently.
+// Atomicity keeps whitespace and comments out of the token.
+variable = @{ "?"? ~ identifier }
 
 // Attribute name - names of relation attributes (columns)
 attribute_name = { identifier }

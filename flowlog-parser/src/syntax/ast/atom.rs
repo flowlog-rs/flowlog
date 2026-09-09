@@ -180,6 +180,9 @@ mod tests {
 
     #[rstest]
     #[case("x", AtomArg::Var("x".into()))]
+    #[case("?x", AtomArg::Var("?x".into()))]
+    #[case("?_temp123", AtomArg::Var("?_temp123".into()))]
+    #[case("?True", AtomArg::Var("?True".into()))]
     #[case("_", AtomArg::Placeholder)]
     #[case("42", AtomArg::Const(Constant::new(DataType::IntLit, "42")))]
     fn atom_arg_parses_each_variant(#[case] src: &str, #[case] expected: AtomArg) {
@@ -248,11 +251,10 @@ mod tests {
         assert_eq!(atom.fingerprint(), compute_fp("path"));
     }
 
-    /// Display round-trips the source: the surface spelling is kept and
-    /// parentheses are always included (a nullary atom prints as `done()`).
     #[rstest]
     #[case("done()")]
     #[case("Edge(x, 1, _)")]
+    #[case("Edge(?x, x, ?_temp123, _)")]
     fn display_round_trips_source(#[case] src: &str) {
         assert_eq!(parse_node::<Atom>(Rule::atom, src).to_string(), src);
     }
