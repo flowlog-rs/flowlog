@@ -1,9 +1,5 @@
-//! Command-line interface for the FlowLog compiler binary.
-//!
-//! `Cli` is the clap front-end. It owns every CLI/driver concern (output
-//! paths, build directory, fact directory, `--save-temps`) and projects the
-//! pipeline-relevant subset onto a shared [`flowlog_common::Config`] via
-//! [`Cli::to_config`].
+//! Command-line parsing and conversion into pipeline [`Config`] and build
+//! [`CompileOptions`].
 
 use clap::Parser;
 use flowlog_common::Config;
@@ -65,13 +61,16 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub udf_file: Option<String>,
 
-    /// Build the generated Rust crate in DIR and keep it afterwards.
-    /// Reusing the same DIR skips dependency rebuilds, reuses incremental
-    /// artifacts across recompiles, and leaves the generated sources
-    /// readable. Without it, the crate is built in a hidden scratch
-    /// directory that is removed after a successful build.
+    /// Keep the generated Rust project in DIR after compilation.
+    /// Without this option, a hidden scratch project is removed on success.
     #[arg(short = 'B', long, value_name = "DIR")]
     pub build_dir: Option<String>,
+
+    /// Store Cargo artifacts in DIR, shared across generated projects.
+    /// Relative paths start at the compiler's working directory. Overrides
+    /// CARGO_TARGET_DIR; when omitted, Cargo uses its environment and config.
+    #[arg(short = 'T', long, value_name = "DIR")]
+    pub target_dir: Option<String>,
 
     /// Type-check the generated crate with `cargo check` instead of building
     /// an executable. Faster; conflicts with `-o`.
@@ -102,7 +101,7 @@ impl Cli {
         }
     }
 
-    /// Project the CLI onto the compiler options.
+    /// Extracts build settings and applies the default executable path.
     pub fn to_compile_options(&self) -> CompileOptions {
         CompileOptions::new(
             &self.program,
@@ -110,6 +109,7 @@ impl Cli {
             self.output_dir.clone(),
             self.fact_dir.clone(),
             self.build_dir.clone(),
+            self.target_dir.clone(),
             self.check,
         )
     }
