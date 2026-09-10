@@ -3,7 +3,7 @@
 //! - [`ArithmeticOperator`]: `+ | - | * | / | %`
 //! - [`Factor`]: atomic operands (variables, constants, calls, casts,
 //!   groups, and tuples)
-//! - [`Arithmetic`]: `factor (op, factor)*`, folded left-to-right
+//! - [`Arithmetic`]: a left-to-right fold with precedence encoded as groups
 
 use std::collections::HashSet;
 use std::fmt;
@@ -84,9 +84,9 @@ pub enum Factor {
     Builtin(BuiltinCall),
     /// `as(factor, T)` cast.
     Cast(Box<Cast>),
-    /// Parenthesised sub-expression, kept so its grouping survives the
-    /// left-to-right fold. Always multi-term: single-factor parens like
-    /// `(x)` collapse to the bare factor at parse time.
+    /// Evaluation boundary from parentheses or operator precedence.
+    /// Always multi-term at parse time: single-factor expressions like
+    /// `(x)` collapse to the bare factor.
     Group(Box<Arithmetic>),
     /// `(e0, e1, ...)` tuple literal.
     Tuple(TupleLit),
@@ -192,10 +192,7 @@ fn parse_paren_factor(node: Node) -> Result<Factor, ParseError> {
             return Err(ParseError::GroupedPlaceholder { span: first.span() });
         }
         let expr: Arithmetic = first.lower()?;
-        if expr.rest.is_empty() {
-            return Ok(expr.init);
-        }
-        return Ok(Factor::Group(Box::new(expr)));
+        return Ok(expr.into_factor());
     }
 
     let fields = std::iter::once(first)
@@ -210,8 +207,9 @@ fn parse_paren_factor(node: Node) -> Result<Factor, ParseError> {
 // Arithmetic
 // =============================================================================
 
-/// `factor (op, factor)*` expression, folded left-to-right with no
-/// operator precedence (grouping requires explicit parentheses).
+/// A left-to-right fold over factors. Parsing groups `*`, `/`, and `%`
+/// before `+` and `-`; operators at the same precedence associate left.
+/// Explicit parentheses preserve their own evaluation boundaries.
 #[derive(Debug, Clone, Educe)]
 #[educe(PartialEq, Eq, Hash)]
 pub struct Arithmetic {
@@ -231,6 +229,65 @@ impl Arithmetic {
             rest,
             span: Span::DUMMY,
         }
+    }
+
+    /// Preserves evaluation order when embedding an expression as an operand.
+    fn into_factor(self) -> Factor {
+        if self.rest.is_empty() {
+            self.init
+        } else {
+            Factor::Group(Box::new(self))
+        }
+    }
+
+    /// Groups multiplicative runs, preserving source order and operand spans.
+    fn with_precedence(
+        span: Span,
+        init: Factor,
+        init_span: Span,
+        steps: Vec<(ArithmeticOperator, Factor, Span)>,
+    ) -> Self {
+        let mut term = Self {
+            init,
+            rest: Vec::new(),
+            span: init_span,
+        };
+        // Each completed multiplicative term keeps its following additive
+        // operator. Fresh terms keep explicit groups opaque, so a / (b * c)
+        // cannot become a / b * c. Flat runs avoid nesting per operator.
+        let mut terms = Vec::new();
+        for (op, factor, factor_span) in steps {
+            match op {
+                ArithmeticOperator::Plus | ArithmeticOperator::Minus => {
+                    terms.push((term, op));
+                    term = Self {
+                        init: factor,
+                        rest: Vec::new(),
+                        span: factor_span,
+                    };
+                }
+                ArithmeticOperator::Multiply
+                | ArithmeticOperator::Divide
+                | ArithmeticOperator::Modulo => {
+                    term.rest.push((op, factor));
+                    term.span = term.span.merge(factor_span);
+                }
+            }
+        }
+
+        let mut terms = terms.into_iter();
+        let Some((first, mut op)) = terms.next() else {
+            term.span = span;
+            return term;
+        };
+        let init = first.into_factor();
+        let mut rest = Vec::new();
+        for (next, following_op) in terms {
+            rest.push((op, next.into_factor()));
+            op = following_op;
+        }
+        rest.push((op, term.into_factor()));
+        Self { init, rest, span }
     }
 
     /// A bare variable as an expression: `Factor::Var(name)` with no operators.
@@ -310,16 +367,22 @@ impl Lexeme for Arithmetic {
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         let span = node.span();
         let mut children = node.children();
-        let init = children.lower_next::<Factor>("initial factor")?;
+        let initial = children.next_any("initial factor")?;
+        let init_span = initial.span();
+        let init = initial.lower()?;
 
-        let mut rest = Vec::new();
+        let mut steps = Vec::new();
         while let Some(op_node) = children.next() {
             let op = op_node.lower::<ArithmeticOperator>()?;
-            let factor = children.lower_next::<Factor>("factor after operator")?;
-            rest.push((op, factor));
+            let factor_node = children.next_any("factor after operator")?;
+            let factor_span = factor_node.span();
+            let factor = factor_node.lower::<Factor>()?;
+            steps.push((op, factor, factor_span));
         }
 
-        Ok(Self { init, rest, span })
+        // Group after lowering nested factors so normalization state does not
+        // accumulate on the stack while descending through parentheses.
+        Ok(Self::with_precedence(span, init, init_span, steps))
     }
 }
 
@@ -390,6 +453,54 @@ mod tests {
             parse_node::<Arithmetic>(Rule::arithmetic_expr, src).to_string(),
             src
         );
+    }
+
+    #[rstest]
+    #[case("a + b * c", "a + (b * c)")]
+    #[case("a + b / c", "a + (b / c)")]
+    #[case("a + b % c", "a + (b % c)")]
+    #[case("a - b * c", "a - (b * c)")]
+    #[case("a - b / c", "a - (b / c)")]
+    #[case("a - b % c", "a - (b % c)")]
+    #[case("a * b + c", "(a * b) + c")]
+    #[case("a / b - c", "(a / b) - c")]
+    #[case("a % b + c", "(a % b) + c")]
+    #[case("a * b + c / d - e % f", "(a * b) + (c / d) - (e % f)")]
+    #[case("a - b + c - d", "a - b + c - d")]
+    #[case("a / b * c % d", "a / b * c % d")]
+    #[case("a + b / c * d % e", "a + (b / c * d % e)")]
+    #[case("(a + b) * c", "(a + b) * c")]
+    #[case("a / (b * c)", "a / (b * c)")]
+    #[case("a - (b - c)", "a - (b - c)")]
+    #[case("a + (b / c) * d", "a + ((b / c) * d)")]
+    #[case("a + b / (c * d)", "a + (b / (c * d))")]
+    #[case("-3 + 2 * -4", "-3 + (2 * -4)")]
+    #[case("f(a + b * c)", "f(a + (b * c))")]
+    #[case("(a + b * c, d)", "(a + (b * c), d)")]
+    fn precedence_groups_round_trip(#[case] src: &str, #[case] rendered: &str) {
+        let expr: Arithmetic = parse_node(Rule::arithmetic_expr, src);
+        assert_eq!(expr.to_string(), rendered);
+        assert_eq!(
+            parse_node::<Arithmetic>(Rule::arithmetic_expr, rendered),
+            expr
+        );
+    }
+
+    #[test]
+    fn implicit_groups_keep_their_operand_spans() {
+        let src = "a * b + c / d - e % f";
+        let expr: Arithmetic = parse_node(Rule::arithmetic_expr, src);
+        assert_eq!(&src[expr.span().range()], src);
+        for (factor, expected) in [
+            (expr.init(), "a * b"),
+            (&expr.rest()[0].1, "c / d"),
+            (&expr.rest()[1].1, "e % f"),
+        ] {
+            let Factor::Group(group) = factor else {
+                panic!("expected a precedence group");
+            };
+            assert_eq!(&src[group.span().range()], expected);
+        }
     }
 
     /// A parenthesised sub-expression parses into `Factor::Group`,

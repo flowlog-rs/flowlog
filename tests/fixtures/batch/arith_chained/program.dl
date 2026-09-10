@@ -1,13 +1,16 @@
-// ════════════════════════════════════════════════════════════════════════════
-// Suite   : arith_chained
-// Feature : chained arithmetic operators in head (left-to-right evaluation)
-// Covers  : a + b * c is parsed as (a + b) * c, not a + (b * c)
-// ════════════════════════════════════════════════════════════════════════════
+// Mixed arithmetic follows precedence; parentheses override it.
 
 .decl Data(a: int32, b: int32, c: int32)
 .input Data(IO="file", filename="Data.csv", delimiter=",")
 
-// (a + b) * c, not a + (b * c)
-.decl Out(a: int32, b: int32, c: int32, result: int32)
-Out(a, b, c, a + b * c) :- Data(a, b, c).
+.decl Out(a: int32, b: int32, c: int32, unparenthesized: int32, multiplication_first: int32, addition_first: int32)
+Out(a, b, c, a + b * c, a + (b * c), (a + b) * c) :- Data(a, b, c).
 .output Out
+
+.decl Ops(a: int32, division: int32, remainder: int32, division_chain: int32, subtraction_chain: int32, divided_group: int32)
+Ops(a, a + 8 / 2, a + 8 % 3, (a + 24) / 2 * 3, a - 5 - 3, (a + 24) / (2 * 3)) :- Data(a, _, _).
+.output Ops
+
+.decl Filtered(a: int32)
+Filtered(a) :- Data(a, _, _), a + 2 * 3 = 7.
+.output Filtered
