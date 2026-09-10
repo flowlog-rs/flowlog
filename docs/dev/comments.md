@@ -168,6 +168,11 @@ parser-specific.
     earlier version of the code outranks the code in the reader's head,
     and they pay for the contradiction before they can dismiss it.
 
+17. **Factor repeated semantic logic.** When the same unit of behavior is
+    implemented more than three times, extract it into a shared helper
+    that owns its contract. Judge duplication by semantics rather than
+    matching syntax.
+
 ## Enforcement
 
 A rule a tool can check belongs in the tool, not in this file (rustfmt,
