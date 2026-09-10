@@ -216,8 +216,7 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 // =============================================================================
 // Mathematical expressions with basic operators
 
-// Simple arithmetic without precedence
-// Note: "x + y * z" is parsed left-to-right as "(x + y) * z"
+// Arithmetic with precedence
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
 // One operand of an expression. `as_cast` must precede `variable`, or a
@@ -225,9 +224,8 @@ arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 // refuses `as` outright (see `call_expr`).
 factor = { as_cast | call_expr | paren_factor | constant | variable }
 
-// Any `(`-headed operand: a tuple literal, or explicit grouping (the only
-// way to override evaluation order, e.g. `x * (a + b)`, since arithmetic
-// folds strictly left-to-right with no precedence). Commas decide which:
+// Any `(`-headed operand: a tuple literal, or explicit grouping that
+// overrides operator precedence, e.g. `x * (a + b)`. Commas decide which:
 //   (a, b)     tuple literal: constructs a tuple, or destructures one
 //              when matched against a bound variable
 //   (a, b,)    the same tuple; a trailing comma is allowed

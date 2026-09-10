@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Arithmetic now evaluates `*`, `/`, and `%` before `+` and `-`, matching
+  Souffle. Operators at the same precedence remain left-associative, and
+  parentheses override precedence. This changes previously unparenthesized
+  mixed expressions: `1 + 2 * 3` now yields `7`; use `(1 + 2) * 3` to retain `9`.
+
 ## [0.1.0](https://github.com/flowlog-rs/flowlog/releases/tag/flowlog-parser-v0.1.0) - 2026-07-26
 
 ### Added

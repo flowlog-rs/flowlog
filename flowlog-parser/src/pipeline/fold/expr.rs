@@ -56,8 +56,8 @@ fn fold_factor(f: &mut Factor) {
     }
 }
 
-/// Evaluate a fully-constant multi-term `Arithmetic` left-to-right (matching
-/// the parser's left-associative, no-precedence fold). `None` if it isn't
+/// Evaluate a fully-constant multi-term `Arithmetic` left-to-right after
+/// folding its precedence groups. `None` if it isn't
 /// fully constant or any step can't be folded (see [`eval_arith`]).
 fn try_eval(a: &Arithmetic) -> Option<Constant> {
     if a.rest().is_empty() {
@@ -74,4 +74,42 @@ fn try_eval(a: &Arithmetic) -> Option<Constant> {
         acc = eval_arith(op, &acc, rhs)?;
     }
     Some(acc)
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use crate::Constant;
+    use crate::DataType;
+    use crate::Factor;
+    use crate::HeadArg;
+    use crate::test_util::folded;
+
+    #[rstest]
+    #[case("1 + 2 * 3", "7")]
+    #[case("1 + 8 / 2", "5")]
+    #[case("1 + 8 % 3", "3")]
+    #[case("10 - 2 * 3", "4")]
+    #[case("20 / 2 * 3", "30")]
+    #[case("20 - 5 - 3", "12")]
+    #[case("(1 + 2) * 3", "9")]
+    #[case("24 / (2 * 3)", "4")]
+    #[case("20 - (5 - 3)", "18")]
+    #[case("-3 + 2 * -4", "-11")]
+    fn constant_folding_respects_precedence(#[case] expr: &str, #[case] expected: &str) {
+        let src = format!(
+            ".decl Item(x: int32)\n.input Item\n\
+             .decl Out(x: int32)\n.output Out\nOut({expr}) :- Item(_).\n"
+        );
+        let program = folded(&src).expect("program type-checks");
+        let HeadArg::Arith(expr) = &program.rules()[0].head().head_arguments()[0] else {
+            panic!("expected arithmetic head");
+        };
+        assert!(expr.rest().is_empty());
+        assert_eq!(
+            expr.init(),
+            &Factor::Const(Constant::new(DataType::Int32, expected))
+        );
+    }
 }
