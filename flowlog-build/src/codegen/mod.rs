@@ -87,3 +87,65 @@ impl CodeGen {
         self.collect_parts(program_planner.strata(), plan_graph)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use flowlog_common::SourceMap;
+    use flowlog_planner::planner::ProgramPlanner;
+    use tempfile::NamedTempFile;
+
+    use super::*;
+
+    fn generated_flows(src: &str) -> String {
+        let mut tmp = NamedTempFile::new().expect("tempfile");
+        tmp.write_all(src.as_bytes()).expect("write");
+        let mut source_map = SourceMap::new();
+        let config = Config::default();
+        let mut parse_config = config.clone();
+        let program = flowlog_parser::parse(
+            &tmp.path().to_string_lossy(),
+            &[],
+            &mut source_map,
+            &mut parse_config,
+        )
+        .expect("parse");
+        let planner = ProgramPlanner::from_program(&config, &program, &mut None).expect("plan");
+        let mut codegen = CodeGen::new(config, program);
+        codegen
+            .generate(&planner, &mut None)
+            .expect("codegen")
+            .flows
+            .into_iter()
+            .map(|tokens| tokens.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn generated_flow_order_is_deterministic() {
+        let source = "\
+            .decl A(x: symbol, a: symbol, b: symbol, c: symbol)\n\
+            .decl B(x: symbol, y: symbol, z: symbol)\n\
+            .decl P(x: symbol)\n\
+            .decl Q(x: symbol)\n\
+            .decl R(x: symbol)\n\
+            .decl S(x: symbol)\n\
+            .input A\n\
+            .input B\n\
+            .output P\n\
+            .output Q\n\
+            .output R\n\
+            .output S\n\
+            P(x) :- A(x, \"one\", \"two\", _), B(x, y, z).\n\
+            Q(x) :- A(x, \"one\", \"two\", _), B(x, y, z).\n\
+            R(x) :- A(x, \"one\", \"two\", _).\n\
+            R(x) :- S(x).\n\
+            S(x) :- R(x).\n";
+        let expected = generated_flows(source);
+        for _ in 0..32 {
+            assert_eq!(generated_flows(source), expected);
+        }
+    }
+}

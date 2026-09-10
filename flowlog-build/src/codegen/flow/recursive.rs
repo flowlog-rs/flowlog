@@ -179,7 +179,9 @@ impl CodeGen {
         let mut next_bindings: HashMap<u64, Ident> = HashMap::new();
         let mut union_stmts = Vec::new();
 
-        for (idb_fp, head_fps) in idb_to_heads_map {
+        let mut idb_heads: Vec<_> = idb_to_heads_map.iter().collect();
+        idb_heads.sort_unstable_by_key(|(idb_fp, _)| **idb_fp);
+        for (idb_fp, head_fps) in idb_heads {
             // Determine output binding name and union sources.
             let next_ident = format_ident!("next_{}", idb_fp);
             next_bindings.insert(*idb_fp, next_ident.clone());
@@ -401,7 +403,9 @@ impl CodeGen {
     ) -> Result<Vec<TokenStream>, CodegenError> {
         let mut stmts = Vec::new();
 
-        for (fp, recursive_ident) in recursive_bindings {
+        let mut recursive_entries: Vec<_> = recursive_bindings.iter().collect();
+        recursive_entries.sort_unstable_by_key(|(fp, _)| **fp);
+        for (fp, recursive_ident) in recursive_entries {
             let next_ident = next_bindings.get(fp).ok_or_else(|| {
                 CodegenError::internal(format!(
                     "recursive relation fingerprint 0x{fp:016x} missing \

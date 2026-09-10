@@ -85,8 +85,8 @@ pub(crate) fn gen_relation(
         /// Operations supported by a dynamic relation handler.
         ///
         /// Implementations are generated per EDB relation and backed by an
-        /// [`InputSession`]. Implementations are expected to be robust:
-        /// parsing and I/O errors should be reported to stderr and skipped.
+        /// [`InputSession`]. Input errors abort evaluation so an incomplete
+        /// relation cannot be mistaken for a valid result.
         pub(crate) trait Relation {
             /// Apply a single tuple update.
             ///
@@ -94,7 +94,13 @@ pub(crate) fn gen_relation(
             /// Implementations should shard by the first column and apply the update
             /// only on the matching worker.
             #[allow(dead_code)]
-            fn apply_tuple(&mut self, tuple: &str, diff: Diff, peers: usize, index: usize);
+            fn apply_tuple(
+                &mut self,
+                tuple: &str,
+                diff: Diff,
+                peers: usize,
+                index: usize,
+            ) -> Result<(), String>;
 
             /// Apply updates from a file.
             ///
@@ -102,7 +108,13 @@ pub(crate) fn gen_relation(
             /// only its ~1/N byte slice of the file, parsing and applying `diff`
             /// to each row within its range.
             #[allow(dead_code)]
-            fn apply_file(&mut self, path: &Path, diff: Diff, peers: usize, index: usize);
+            fn apply_file(
+                &mut self,
+                path: &Path,
+                diff: Diff,
+                peers: usize,
+                index: usize,
+            ) -> Result<(), String>;
 
             /// Apply inline facts directly from program.
             #[allow(dead_code)]
@@ -150,35 +162,36 @@ fn gen_one_rel_nullary(
     // or negation, so "false" collapses to a no-op — absence is indistinguishable.
     let apply_tuple_body = if is_batch {
         quote! {
-            if index != 0 { return; }
+            if index != 0 { return Ok(()); }
             let s = tuple.trim();
             if s.eq_ignore_ascii_case("true") {
                 self.h_mut().update((), SEMIRING_ONE);
             } else if !s.eq_ignore_ascii_case("false") {
-                eprintln!(
-                    "[relation][{}] nullary expects tuple 'True' or 'False', got {:?}",
+                return Err(format!(
+                    "relation {} expects nullary tuple 'True' or 'False', got {:?}",
                     #raw_name,
                     s
-                );
+                ));
             }
+            Ok(())
         }
     } else {
         quote! {
-            if index != 0 { return; }
+            if index != 0 { return Ok(()); }
             let s = tuple.trim();
             let d: Diff = if s.eq_ignore_ascii_case("true") {
                 1
             } else if s.eq_ignore_ascii_case("false") {
                 -1
             } else {
-                eprintln!(
-                    "[relation][{}] nullary expects tuple 'True' or 'False', got {:?}",
+                return Err(format!(
+                    "relation {} expects nullary tuple 'True' or 'False', got {:?}",
                     #raw_name,
                     s
-                );
-                return;
+                ));
             };
             self.h_mut().update((), d);
+            Ok(())
         }
     };
 
@@ -205,20 +218,29 @@ fn gen_one_rel_nullary(
         }
 
         impl Relation for #struct_name {
-            fn apply_tuple(&mut self, tuple: &str, _diff: Diff, _peers: usize, index: usize) {
+            fn apply_tuple(
+                &mut self,
+                tuple: &str,
+                _diff: Diff,
+                _peers: usize,
+                index: usize,
+            ) -> Result<(), String> {
                 // Nullary: only worker0 applies (avoid multiplying diffs across workers).
                 #apply_tuple_body
             }
 
-            fn apply_file(&mut self, path: &Path, _diff: Diff, _peers: usize, index: usize) {
-                if index != 0 { return; }
-
-                // Nullary relations only allow tuple interaction.
-                eprintln!(
-                    "[relation][{}] nullary relation does not support file ingestion. Use: put {} True|False",
-                    #raw_name,
-                    path.display()
-                );
+            fn apply_file(
+                &mut self,
+                path: &Path,
+                _diff: Diff,
+                _peers: usize,
+                index: usize,
+            ) -> Result<(), String> {
+                if index != 0 { return Ok(()); }
+                Err(format!(
+                    "relation {} is nullary and cannot load file {}; use a tuple update",
+                    #raw_name, path.display()
+                ))
             }
 
             #nullary_apply_inline
@@ -264,28 +286,28 @@ fn gen_one_rel_nonnullary(
     let tuple_ty = data_type_tokens(&dts, string_intern);
 
     let shard_tuple = match &dts[0] {
-        DataType::Int8 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
-        DataType::Int16 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
-        DataType::Int32 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
-        DataType::Int64 => quote! { if !shard_int(f0, peers, index) { return; } },
-        DataType::UInt8 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
-        DataType::UInt16 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
-        DataType::UInt32 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
-        DataType::UInt64 => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        DataType::Int8 => quote! { if !shard_int(f0 as i64, peers, index) { return Ok(()); } },
+        DataType::Int16 => quote! { if !shard_int(f0 as i64, peers, index) { return Ok(()); } },
+        DataType::Int32 => quote! { if !shard_int(f0 as i64, peers, index) { return Ok(()); } },
+        DataType::Int64 => quote! { if !shard_int(f0, peers, index) { return Ok(()); } },
+        DataType::UInt8 => quote! { if !shard_int(f0 as i64, peers, index) { return Ok(()); } },
+        DataType::UInt16 => quote! { if !shard_int(f0 as i64, peers, index) { return Ok(()); } },
+        DataType::UInt32 => quote! { if !shard_int(f0 as i64, peers, index) { return Ok(()); } },
+        DataType::UInt64 => quote! { if !shard_int(f0 as i64, peers, index) { return Ok(()); } },
         DataType::Float32 => {
-            quote! { if !shard_int(f0.into_inner().to_bits() as i64, peers, index) { return; } }
+            quote! { if !shard_int(f0.into_inner().to_bits() as i64, peers, index) { return Ok(()); } }
         }
         DataType::Float64 => {
-            quote! { if !shard_int(f0.into_inner().to_bits() as i64, peers, index) { return; } }
+            quote! { if !shard_int(f0.into_inner().to_bits() as i64, peers, index) { return Ok(()); } }
         }
         DataType::String => {
             if string_intern {
-                quote! { if !shard_spur(f0, peers, index) { return; } }
+                quote! { if !shard_spur(f0, peers, index) { return Ok(()); } }
             } else {
-                quote! { if !shard_str(f0.as_str(), peers, index) { return; } }
+                quote! { if !shard_str(f0.as_str(), peers, index) { return Ok(()); } }
             }
         }
-        DataType::Bool => quote! { if !shard_int(f0 as i64, peers, index) { return; } },
+        DataType::Bool => quote! { if !shard_int(f0 as i64, peers, index) { return Ok(()); } },
         // Records never appear in EDB input, so an input relation cannot have
         // a record first column to shard on.
         DataType::FixedTuple(_) => {
@@ -323,7 +345,7 @@ fn gen_one_rel_nonnullary(
         ///
         /// - Parses tuples using the relation delimiter.
         /// - Shards updates by the first column across `peers`.
-        /// - Reports parse / I/O errors to stderr and skips malformed rows.
+        /// - Rejects the complete evaluation on a parse or I/O error.
         #[allow(dead_code)]
         pub(crate) struct #struct_name {
             h: Option<InputSession<Ts, #tuple_ty, Diff>>,
@@ -349,23 +371,43 @@ fn gen_one_rel_nonnullary(
         }
 
         impl Relation for #struct_name {
-            fn apply_tuple(&mut self, tuple: &str, diff: Diff, peers: usize, index: usize) {
+            fn apply_tuple(
+                &mut self,
+                tuple: &str,
+                diff: Diff,
+                peers: usize,
+                index: usize,
+            ) -> Result<(), String> {
                 let tuple = tuple.trim();
                 let delim = self.delim as char;
                 let mut it = tuple.split(delim).map(|s| s.trim());
 
                 #tuple_parse_stmts
+                if let Some(extra) = it.next() {
+                    return Err(format!(
+                        "relation {} tuple {:?} has an extra column {:?}",
+                        #raw_name, tuple, extra
+                    ));
+                }
 
                 #shard_tuple
                 self.h_mut().update(#update_expr, diff);
+                Ok(())
             }
 
-            fn apply_file(&mut self, path: &Path, diff: Diff, peers: usize, index: usize) {
+            fn apply_file(
+                &mut self,
+                path: &Path,
+                diff: Diff,
+                peers: usize,
+                index: usize,
+            ) -> Result<(), String> {
                 let load_start = Instant::now();
-                let (mut reader, byte_budget) = match __byte_range_reader(path, index, peers) {
-                    Some(r) => r,
-                    None => return,
-                };
+                let (mut reader, byte_budget) = __byte_range_reader(path, index, peers)
+                    .map_err(|error| format!(
+                        "relation {} cannot read {}: {}",
+                        #raw_name, path.display(), error
+                    ))?;
                 let delim = self.delim;
                 let has_header = self.has_header;
 
@@ -374,11 +416,13 @@ fn gen_one_rel_nonnullary(
                 if has_header && index == 0 {
                     buf.clear();
                     match reader.read_until(b'\n', &mut buf) {
-                        Ok(0) => return,
+                        Ok(0) => return Ok(()),
                         Ok(_) => bytes_consumed += buf.len() as u64,
                         Err(e) => {
-                            eprintln!("[relation][{}] I/O error reading {}: {}", #raw_name, path.display(), e);
-                            return;
+                            return Err(format!(
+                                "relation {} cannot read header from {}: {}",
+                                #raw_name, path.display(), e
+                            ));
                         }
                     }
                 }
@@ -388,8 +432,10 @@ fn gen_one_rel_nonnullary(
                         Ok(0) => break,
                         Ok(_) => {}
                         Err(e) => {
-                            eprintln!("[relation][{}] I/O error reading {}: {}", #raw_name, path.display(), e);
-                            break;
+                            return Err(format!(
+                                "relation {} cannot read {}: {}",
+                                #raw_name, path.display(), e
+                            ));
                         }
                     }
                     bytes_consumed += buf.len() as u64;
@@ -400,18 +446,26 @@ fn gen_one_rel_nonnullary(
                     if buf.is_empty() { continue; }
 
                     let line = &buf;
-                    let row = (|| -> Option<_> {
+                    let row = (|| -> Result<_, String> {
                         let mut cols = line.split(|&b| b == delim);
                         #file_parse_stmts
-                        Some(#update_expr)
-                    })();
-                    if let Some(row) = row {
-                        self.h_mut().update(row, diff);
-                    }
+                        if let Some(extra) = cols.next() {
+                            return Err(format!(
+                                "relation {} row in {} has an extra column {:?}: {:?}",
+                                #raw_name,
+                                path.display(),
+                                String::from_utf8_lossy(extra),
+                                String::from_utf8_lossy(line)
+                            ));
+                        }
+                        Ok(#update_expr)
+                    })()?;
+                    self.h_mut().update(row, diff);
                 }
                 if index == 0 {
                     println!("{:?}:\tData loaded for {}", load_start.elapsed(), #raw_name);
                 }
+                Ok(())
             }
 
             #apply_inline_impl
@@ -488,23 +542,43 @@ fn gen_parse_from_str(rel_label: &str, dts: &[DataType], string_intern: bool) ->
                 let s = match it.next() {
                     Some(s) => s,
                     None => {
-                        eprintln!("[relation][{}] bad tuple '{}': missing col {}", #rel_label, tuple, #idx);
-                        return;
+                        return Err(format!(
+                            "relation {} tuple {:?} is missing column {}",
+                            #rel_label, tuple, #idx
+                        ));
                     }
                 };
             };
             match dt {
                 DataType::Int8 => parse_str_scalar(&v, quote! { i8 }, "i8", rel_label, idx, &get),
-                DataType::Int16 => parse_str_scalar(&v, quote! { i16 }, "i16", rel_label, idx, &get),
-                DataType::Int32 => parse_str_scalar(&v, quote! { i32 }, "i32", rel_label, idx, &get),
-                DataType::Int64 => parse_str_scalar(&v, quote! { i64 }, "i64", rel_label, idx, &get),
+                DataType::Int16 => {
+                    parse_str_scalar(&v, quote! { i16 }, "i16", rel_label, idx, &get)
+                }
+                DataType::Int32 => {
+                    parse_str_scalar(&v, quote! { i32 }, "i32", rel_label, idx, &get)
+                }
+                DataType::Int64 => {
+                    parse_str_scalar(&v, quote! { i64 }, "i64", rel_label, idx, &get)
+                }
                 DataType::UInt8 => parse_str_scalar(&v, quote! { u8 }, "u8", rel_label, idx, &get),
-                DataType::UInt16 => parse_str_scalar(&v, quote! { u16 }, "u16", rel_label, idx, &get),
-                DataType::UInt32 => parse_str_scalar(&v, quote! { u32 }, "u32", rel_label, idx, &get),
-                DataType::UInt64 => parse_str_scalar(&v, quote! { u64 }, "u64", rel_label, idx, &get),
-                DataType::Bool => parse_str_scalar(&v, quote! { bool }, "bool", rel_label, idx, &get),
-                DataType::Float32 => parse_str_float(&v, quote! { f32 }, "f32", rel_label, idx, &get),
-                DataType::Float64 => parse_str_float(&v, quote! { f64 }, "f64", rel_label, idx, &get),
+                DataType::UInt16 => {
+                    parse_str_scalar(&v, quote! { u16 }, "u16", rel_label, idx, &get)
+                }
+                DataType::UInt32 => {
+                    parse_str_scalar(&v, quote! { u32 }, "u32", rel_label, idx, &get)
+                }
+                DataType::UInt64 => {
+                    parse_str_scalar(&v, quote! { u64 }, "u64", rel_label, idx, &get)
+                }
+                DataType::Bool => {
+                    parse_str_scalar(&v, quote! { bool }, "bool", rel_label, idx, &get)
+                }
+                DataType::Float32 => {
+                    parse_str_float(&v, quote! { f32 }, "f32", rel_label, idx, &get)
+                }
+                DataType::Float64 => {
+                    parse_str_float(&v, quote! { f64 }, "f64", rel_label, idx, &get)
+                }
                 DataType::String => {
                     let field = if string_intern {
                         quote! { let #v: Spur = intern(s); }
@@ -543,11 +617,10 @@ fn parse_str_scalar(
         let #v: #ty = match s.parse::<#ty>() {
             Ok(v) => v,
             Err(_) => {
-                eprintln!(
-                    "[relation][{}] bad tuple '{}': col {} not {}: '{}'",
+                return Err(format!(
+                    "relation {} tuple {:?} column {} is not {}: {:?}",
                     #rel_label, tuple, #idx, #ty_name, s
-                );
-                return;
+                ));
             }
         };
     }
@@ -567,11 +640,10 @@ fn parse_str_float(
         let #v: OrderedFloat<#ty> = match s.parse::<#ty>() {
             Ok(v) => OrderedFloat(v),
             Err(_) => {
-                eprintln!(
-                    "[relation][{}] bad tuple '{}': col {} not {}: '{}'",
+                return Err(format!(
+                    "relation {} tuple {:?} column {} is not {}: {:?}",
                     #rel_label, tuple, #idx, #ty_name, s
-                );
-                return;
+                ));
             }
         };
     }
@@ -588,14 +660,11 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                 let raw = match cols.next() {
                     Some(b) => b,
                     None => {
-                        eprintln!(
-                            "[relation][{}] bad row in {}: '{:?}' (missing col {})",
-                            #rel_label,
-                            path.display(),
-                            String::from_utf8_lossy(&line),
-                            #idx
-                        );
-                        return None;
+                        return Err(format!(
+                            "relation {} row in {} is missing column {}: {:?}",
+                            #rel_label, path.display(), #idx,
+                            String::from_utf8_lossy(line)
+                        ));
                     }
                 };
             };
@@ -634,7 +703,7 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
                     parse_float_bytes(&v, quote! { f64 }, "f64", rel_label, idx, &get_raw)
                 }
                 DataType::String => {
-                    let utf8 = utf8_trim_or_return_none(rel_label, idx);
+                    let utf8 = utf8_trim_or_error(rel_label, idx);
                     let field = if string_intern {
                         quote! { let #v: Spur = intern(s); }
                     } else {
@@ -662,18 +731,17 @@ fn gen_parse_from_bytes(rel_label: &str, dts: &[DataType], string_intern: bool) 
     quote! { #(#stmts)* }
 }
 
-/// Decode the raw column bytes as utf8 + trim, binding `s`. Bails out of the
-/// enclosing `(|| -> Option<_> { … })()` closure with `None` on invalid utf8.
-fn utf8_trim_or_return_none(rel_label: &str, idx: usize) -> TokenStream {
+/// Decode raw column bytes as UTF-8, trim them, and bind `s`.
+fn utf8_trim_or_error(rel_label: &str, idx: usize) -> TokenStream {
     quote! {
         let s = match std::str::from_utf8(raw) {
             Ok(s) => s.trim(),
             Err(_) => {
-                eprintln!(
-                    "[relation][{}] bad row in {}: '{:?}' (col {} not utf8)",
-                    #rel_label, path.display(), String::from_utf8_lossy(&line), #idx
-                );
-                return None;
+                return Err(format!(
+                    "relation {} row in {} column {} is not UTF-8: {:?}",
+                    #rel_label, path.display(), #idx,
+                    String::from_utf8_lossy(line)
+                ));
             }
         };
     }
@@ -689,18 +757,18 @@ fn parse_scalar_bytes(
     idx: usize,
     get_raw: &TokenStream,
 ) -> TokenStream {
-    let utf8 = utf8_trim_or_return_none(rel_label, idx);
+    let utf8 = utf8_trim_or_error(rel_label, idx);
     quote! {
         #get_raw
         #utf8
         let #v: #ty = match s.parse::<#ty>() {
             Ok(v) => v,
             Err(_) => {
-                eprintln!(
-                    "[relation][{}] bad row in {}: '{:?}' (col {} not {}: '{}')",
-                    #rel_label, path.display(), String::from_utf8_lossy(&line), #idx, #ty_name, s
-                );
-                return None;
+                return Err(format!(
+                    "relation {} row in {} column {} is not {}: {:?} in {:?}",
+                    #rel_label, path.display(), #idx, #ty_name, s,
+                    String::from_utf8_lossy(line)
+                ));
             }
         };
     }
@@ -716,18 +784,18 @@ fn parse_float_bytes(
     idx: usize,
     get_raw: &TokenStream,
 ) -> TokenStream {
-    let utf8 = utf8_trim_or_return_none(rel_label, idx);
+    let utf8 = utf8_trim_or_error(rel_label, idx);
     quote! {
         #get_raw
         #utf8
         let #v: OrderedFloat<#ty> = match s.parse::<#ty>() {
             Ok(v) => OrderedFloat(v),
             Err(_) => {
-                eprintln!(
-                    "[relation][{}] bad row in {}: '{:?}' (col {} not {}: '{}')",
-                    #rel_label, path.display(), String::from_utf8_lossy(&line), #idx, #ty_name, s
-                );
-                return None;
+                return Err(format!(
+                    "relation {} row in {} column {} is not {}: {:?} in {:?}",
+                    #rel_label, path.display(), #idx, #ty_name, s,
+                    String::from_utf8_lossy(line)
+                ));
             }
         };
     }

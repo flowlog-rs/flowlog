@@ -64,12 +64,16 @@ pub(crate) fn gen_batch_main(
     quote! {
         fn main() {
             let args: Vec<String> = std::env::args().collect();
+            let input_failed = std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            );
 
             #(#output_bufs)*
             #(#size_cell_decls)*
 
             let timer = Instant::now();
-            timely::execute_from_args(args.into_iter(), {
+            let guards = match timely::execute_from_args(args.into_iter(), {
+                let input_failed = input_failed.clone();
                 #(#output_buf_clones)*
                 #(#size_cell_clones)*
 
@@ -97,8 +101,16 @@ pub(crate) fn gen_batch_main(
                     let mut rels: HashMap<String, Box<dyn Relation>> = HashMap::new();
                     #(#registry_inserts)*
                     #(#file_ingests)*
-                    for r in rels.values_mut() {
-                        r.apply_inline(index);
+                    if !input_failed.load(std::sync::atomic::Ordering::Acquire) {
+                        for r in rels.values_mut() {
+                            r.apply_inline(index);
+                        }
+                    }
+                    if input_failed.load(std::sync::atomic::Ordering::Acquire) {
+                        for r in rels.values_mut() {
+                            r.close();
+                        }
+                        return;
                     }
                     for r in rels.values_mut() {
                         r.close();
@@ -110,9 +122,22 @@ pub(crate) fn gen_batch_main(
 
                     #metrics_write
                 }
-            })
-            .unwrap();
-
+            }) {
+                Ok(guards) => guards,
+                Err(error) => {
+                    eprintln!("[flowlog-runtime] cannot start workers: {error}");
+                    std::process::exit(2);
+                }
+            };
+            for result in guards.join() {
+                if let Err(error) = result {
+                    eprintln!("[flowlog-runtime] worker failed: {error}");
+                    std::process::exit(2);
+                }
+            }
+            if input_failed.load(std::sync::atomic::Ordering::Acquire) {
+                std::process::exit(2);
+            }
             println!("{:?}:\tDataflow executed", timer.elapsed());
             #merge_section
         }

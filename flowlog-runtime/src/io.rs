@@ -2,8 +2,8 @@
 //!
 //! - [`partition`]: split an owned `Vec` into per-worker slices for the
 //!   library-mode batch engine's ingest path.
-//! - [`byte_range_reader`]: split a CSV file across timely workers so each
-//!   reads its own byte slice (binary mode).
+//! - [`byte_range_reader`] / [`try_byte_range_reader`]: split a CSV file
+//!   across timely workers so each reads its own byte slice (binary mode).
 //! - [`shard_int`] / [`shard_str`] / [`shard_spur`]: pick the owning worker
 //!   for a tuple based on its first column (binary mode).
 //! - [`write_atomic`]: write a file via a temp sibling and rename so a
@@ -53,37 +53,24 @@ pub fn partition<T>(v: Vec<T>, n: usize) -> Vec<Vec<T>> {
 
 /// Open a byte-range slice of `path` for worker `index` out of `peers`.
 ///
-/// Returns `Some((reader, bytes_to_read))` on success. The reader is
+/// Returns `(reader, bytes_to_read)` on success. The reader is
 /// pre-seeked to the start of the worker's range (aligned to the next
 /// line boundary for non-zero workers). The caller should read up to
 /// `bytes_to_read` bytes, stopping at the first complete line beyond
 /// that budget.
-///
-/// Returns `None` on I/O error (logged to stderr).
-pub fn byte_range_reader(
+pub fn try_byte_range_reader(
     path: &Path,
     index: usize,
     peers: usize,
-) -> Option<(BufReader<File>, u64)> {
-    let mut file = File::open(path)
-        .inspect_err(|e| {
-            eprintln!(
-                "[flowlog-runtime::io] failed to open {}: {e}",
-                path.display()
-            );
-        })
-        .ok()?;
-
-    let file_size = file
-        .metadata()
-        .inspect_err(|e| {
-            eprintln!(
-                "[flowlog-runtime::io] failed to stat {}: {e}",
-                path.display()
-            );
-        })
-        .ok()?
-        .len();
+) -> io::Result<(BufReader<File>, u64)> {
+    if peers == 0 || index >= peers {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("worker index {index} is outside peer count {peers}"),
+        ));
+    }
+    let mut file = File::open(path)?;
+    let file_size = file.metadata()?.len();
 
     let chunk = file_size / peers as u64;
     let start = chunk * index as u64;
@@ -95,7 +82,7 @@ pub fn byte_range_reader(
 
     // Nothing to read for this worker.
     if start >= end {
-        return Some((BufReader::new(file), 0));
+        return Ok((BufReader::new(file), 0));
     }
 
     // Any worker whose range begins at byte 0 reads from the start with no
@@ -103,31 +90,45 @@ pub fn byte_range_reader(
     // hits this; others hit it when `chunk == 0` (peers > file_size), which
     // puts the whole file on the last worker.
     if start == 0 {
-        return Some((BufReader::new(file), end));
+        return Ok((BufReader::new(file), end));
     }
 
     // Non-zero start: seek to `start - 1` and peek the byte just before our
     // range. If it's a newline we're on a line boundary; otherwise skip the
     // rest of the partial line.
-    if file.seek(SeekFrom::Start(start - 1)).is_err() {
-        return Some((BufReader::new(file), 0));
-    }
+    file.seek(SeekFrom::Start(start - 1))?;
 
     let mut reader = BufReader::new(file);
     let mut peek = [0u8; 1];
-    if reader.read_exact(&mut peek).is_err() {
-        return Some((reader, 0));
-    }
+    reader.read_exact(&mut peek)?;
 
     if peek[0] == b'\n' {
         // Exactly on a line boundary.
-        return Some((reader, end - start));
+        return Ok((reader, end - start));
     }
 
     // Mid-line: skip the rest of this partial line.
     let mut discard = Vec::new();
-    let skipped = reader.read_until(b'\n', &mut discard).unwrap_or(0);
-    Some((reader, (end - start).saturating_sub(skipped as u64)))
+    let skipped = reader.read_until(b'\n', &mut discard)?;
+    Ok((reader, (end - start).saturating_sub(skipped as u64)))
+}
+
+/// Compatibility wrapper for callers that intentionally tolerate input I/O
+/// failures. Newly generated engines use [`try_byte_range_reader`] so a bad
+/// input cannot silently produce an incomplete result.
+pub fn byte_range_reader(
+    path: &Path,
+    index: usize,
+    peers: usize,
+) -> Option<(BufReader<File>, u64)> {
+    try_byte_range_reader(path, index, peers)
+        .inspect_err(|error| {
+            eprintln!(
+                "[flowlog-runtime::io] failed to open a byte range for {}: {error}",
+                path.display()
+            );
+        })
+        .ok()
 }
 
 // =========================================================================
@@ -198,6 +199,24 @@ pub fn write_atomic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_range_reader_reports_missing_input() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let error = try_byte_range_reader(&dir.path().join("missing.csv"), 0, 1)
+            .expect_err("missing input must fail");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn byte_range_reader_rejects_invalid_worker_range() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("input.csv");
+        std::fs::write(&path, b"1\n").expect("write input");
+        let error = try_byte_range_reader(&path, 1, 1).expect_err("invalid worker must fail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(error.to_string(), "worker index 1 is outside peer count 1");
+    }
 
     /// A completed write leaves the destination with exactly the bytes
     /// written and no leftover temp sibling in the directory.

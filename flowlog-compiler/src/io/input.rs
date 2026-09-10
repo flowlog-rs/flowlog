@@ -59,6 +59,12 @@ impl Compiler {
             quote! {}
         };
 
+        // A generated binary/commit is fail-closed as a unit: Relation may have
+        // applied valid rows before discovering a malformed one, but assembly
+        // never publishes that partial epoch. Once any worker reports failure,
+        // loading later relations cannot contribute to a usable result and is
+        // deliberately skipped. Workers already inside the same parallel file
+        // read finish their current call and converge on the shared failure flag.
         let file_ingests: Vec<TokenStream> = edbs
             .iter()
             .filter_map(|rel| preload_file(rel).map(|name| (rel, name)))
@@ -79,16 +85,36 @@ impl Compiler {
                     // Worker 0 alone reads the whole file (`peers = 1, index = 0`);
                     // other workers skip loading. Interning order thus matches `-w 1`.
                     quote! {
-                        if index == 0 {
-                            rels.get_mut(#rel_name).unwrap()
-                                .apply_file(std::path::Path::new(#path), SEMIRING_ONE, 1, 0);
+                        if index == 0 && !input_failed.load(
+                            std::sync::atomic::Ordering::Acquire,
+                        ) {
+                            if let Err(error) = rels.get_mut(#rel_name).unwrap().apply_file(
+                                std::path::Path::new(#path), SEMIRING_ONE, 1, 0
+                            ) {
+                                if !input_failed.swap(
+                                    true,
+                                    std::sync::atomic::Ordering::AcqRel,
+                                ) {
+                                    eprintln!("[flowlog-runtime::io] {error}");
+                                }
+                            }
                         }
                     }
                 } else {
                     // Each worker ingests its own ~1/N byte-range slice in parallel.
                     quote! {
-                        rels.get_mut(#rel_name).unwrap()
-                            .apply_file(std::path::Path::new(#path), SEMIRING_ONE, peers, index);
+                        if !input_failed.load(std::sync::atomic::Ordering::Acquire) {
+                            if let Err(error) = rels.get_mut(#rel_name).unwrap().apply_file(
+                                std::path::Path::new(#path), SEMIRING_ONE, peers, index
+                            ) {
+                                if !input_failed.swap(
+                                    true,
+                                    std::sync::atomic::Ordering::AcqRel,
+                                ) {
+                                    eprintln!("[flowlog-runtime::io] {error}");
+                                }
+                            }
+                        }
                     }
                 }
             })
@@ -98,8 +124,17 @@ impl Compiler {
         let preload = if needs_preload {
             quote! {
                 #(#file_ingests)*
-                for (_, r) in rels.iter_mut() {
-                    r.apply_inline(index);
+                if !input_failed.load(std::sync::atomic::Ordering::Acquire) {
+                    for (_, r) in rels.iter_mut() {
+                        r.apply_inline(index);
+                    }
+                }
+                barrier.wait();
+                if input_failed.load(std::sync::atomic::Ordering::Acquire) {
+                    for (_, r) in rels.iter_mut() {
+                        r.close();
+                    }
+                    return;
                 }
                 time_stamp += 1;
                 for (_, r) in rels.iter_mut() {

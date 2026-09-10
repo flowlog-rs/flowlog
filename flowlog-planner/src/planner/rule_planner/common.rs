@@ -513,10 +513,20 @@ impl RulePlanner {
             return Ok(false);
         }
 
+        let mut groups: Vec<_> = groups
+            .iter()
+            .map(|(&atom, arguments)| {
+                let mut arguments = arguments.clone();
+                arguments.sort_unstable();
+                (atom, arguments)
+            })
+            .collect();
+        groups.sort_unstable_by_key(|(atom, _)| *atom);
+
         let mut applied = false;
 
         // Process each atom that has unused arguments
-        for (atom_signature, to_delete) in groups.clone() {
+        for (atom_signature, to_delete) in groups {
             let current_transformation_index = self.transformation_infos.len();
 
             let rhs_index = catalog.rhs_index_from_signature(atom_signature)?;

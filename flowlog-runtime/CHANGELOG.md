@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- generated executables now fail closed when an input file is missing,
+  unreadable, or malformed; `try_byte_range_reader` exposes the checked ingest
+  primitive without breaking the existing tolerant helper
+
 ## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.2.5...flowlog-runtime-v0.3.0) - 2026-07-26
 
 ### Breaking

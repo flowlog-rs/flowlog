@@ -80,7 +80,12 @@ impl RulePlanner {
     /// Try to apply any available filter in priority order.
     fn apply_filter(&mut self, catalog: &mut Catalog) -> Result<bool, PlanError> {
         // (1) var == var
-        if let Some((&left, &right)) = catalog.filters().var_eq_map().iter().next() {
+        if let Some((&left, &right)) = catalog
+            .filters()
+            .var_eq_map()
+            .iter()
+            .min_by_key(|(left, right)| (*left, *right))
+        {
             let rhs_index = catalog.rhs_index_from_signature(*left.atom_signature())?;
             trace!(
                 "Variables equality filter:\n  Atom: {}\n  Arguments: {} == {}",
@@ -90,7 +95,12 @@ impl RulePlanner {
         }
 
         // (2) var == const
-        if let Some((&var_sig, const_val)) = catalog.filters().const_map().iter().next() {
+        if let Some((&var_sig, const_val)) = catalog
+            .filters()
+            .const_map()
+            .iter()
+            .min_by_key(|(signature, _)| *signature)
+        {
             let rhs_index = catalog.rhs_index_from_signature(*var_sig.atom_signature())?;
             trace!(
                 "Constant equality filter:\n  Atom: {}\n  Arguments: {} == {}",
@@ -100,7 +110,7 @@ impl RulePlanner {
         }
 
         // (3) placeholder
-        if let Some(&var_sig) = catalog.filters().placeholder_set().iter().next() {
+        if let Some(&var_sig) = catalog.filters().placeholder_set().iter().min() {
             let rhs_index = catalog.rhs_index_from_signature(*var_sig.atom_signature())?;
             trace!(
                 "Placeholder filter:\n  Atom: {}\n  Arguments: {}",

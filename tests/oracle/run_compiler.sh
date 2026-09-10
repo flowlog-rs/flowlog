@@ -83,7 +83,7 @@ init_paths() {
     mkdir -p "$LOG_DIR" "$FLOWLOG_OUT_DIR"
 
 # Build generated crates against the workspace runtime instead of crates.io,
-# so unpublished flowlog-runtime additions are testable (scaffold emits a
+# so unpublished flowlog-runtime additions are testable (the scaffold emits a
 # [patch.crates-io] entry when this is set).
 export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
 }
@@ -123,7 +123,13 @@ invoke_compiler() {
     log "$YELLOW" "COMPILE" "$COMPILER_BIN $prog_path -F $facts_dir -D $output_dir -o $executable --mode $MODE ${extra_flags}"
     local extra_arr=()
     [[ -n "$extra_flags" ]] && read -ra extra_arr <<< "$extra_flags"
-    "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" -o "$executable" --mode "$MODE" "${extra_arr[@]}"
+    if (( ${#extra_arr[@]} )); then
+        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" \
+            -o "$executable" --mode "$MODE" "${extra_arr[@]}"
+    else
+        "$COMPILER_BIN" "$prog_path" -F "$facts_dir" -D "$output_dir" \
+            -o "$executable" --mode "$MODE"
+    fi
 }
 
 ###############################################################################
