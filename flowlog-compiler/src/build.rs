@@ -58,9 +58,8 @@ impl Compiler {
             #relation_extras
         });
 
-        // `src/main.rs` — dataflow scope, timely::execute, EDB registry, drain.
         let bin_imports = imports::gen_imports(&self.config, features);
-        let main_rs = self.assemble_main(&parts, &bin_imports)?;
+        let main_rs = self.assemble(&parts, &bin_imports)?;
 
         // Cargo project metadata.
         let cargo_toml = scaffold::render_cargo_toml(

@@ -23,40 +23,33 @@ const OUTPUT_BUFFER_BYTES: usize = 1 << 20;
 /// amortize per-segment overhead while keeping the transient buffers small.
 const PARALLEL_DRAIN_SEG_ROWS: usize = 8192;
 
-pub(super) fn gen_file_preamble(
-    file_name: &str,
-    base_dir: &str,
-    is_incremental: bool,
-) -> TokenStream {
-    let out_path = gen_out_path_stmt(file_name, base_dir, is_incremental);
+pub(super) fn gen_file_preamble(file_name: &str, is_incremental: bool) -> TokenStream {
+    let out_path = gen_out_path_stmt(file_name, is_incremental);
     quote! {
         use std::io::Write as _;
         #out_path
         let mut out = std::io::BufWriter::with_capacity(
             #OUTPUT_BUFFER_BYTES,
             std::fs::File::create(&out_path)
-                .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
+                .unwrap_or_else(|error| {
+                    eprintln!("failed to create '{}': {}", out_path.display(), error);
+                    std::process::exit(1);
+                }),
         );
     }
 }
 
-/// Bind `let out_path = ...;` for a file sink. `file_name` is the full
-/// filename (including any extension); by default `<RawName>.csv` per
-/// Souffle, overridable via the `.output Foo(filename="...")` parameter.
-/// Incremental mode inserts the epoch immediately before the file extension
-/// (or at the end if no extension) so each epoch gets its own file.
-pub(super) fn gen_out_path_stmt(
-    file_name: &str,
-    base_dir: &str,
-    is_incremental: bool,
-) -> TokenStream {
+/// Emits an `out_path` binding using the runtime `output_dir`. Absolute
+/// filenames stay absolute. Incremental output inserts `_t<epoch>` before
+/// the extension, or at the end when no extension is present.
+pub(super) fn gen_out_path_stmt(file_name: &str, is_incremental: bool) -> TokenStream {
     if is_incremental {
         let (stem, ext) = split_file_extension(file_name);
         quote! {
-            let out_path = format!("{}/{}_t{}{}", #base_dir, #stem, time_stamp, #ext);
+            let out_path = output_dir.join(format!("{}_t{}{}", #stem, time_stamp, #ext));
         }
     } else {
-        quote! { let out_path = format!("{}/{}", #base_dir, #file_name); }
+        quote! { let out_path = output_dir.join(#file_name); }
     }
 }
 
@@ -151,7 +144,10 @@ pub(super) fn gen_parallel_file_drain(
         let mut out = std::io::BufWriter::with_capacity(
             #OUTPUT_BUFFER_BYTES,
             std::fs::File::create(&out_path)
-                .unwrap_or_else(|e| panic!("failed to create {}: {}", out_path, e)),
+                .unwrap_or_else(|error| {
+                    eprintln!("failed to create '{}': {}", out_path.display(), error);
+                    std::process::exit(1);
+                }),
         );
 
         // Own the per-worker buffers; the shared Vec is left empty.

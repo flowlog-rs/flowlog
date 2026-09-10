@@ -93,11 +93,9 @@ impl CodeGen {
 
                 self.features.mark_output_buffers();
 
-                // Both file sinks build rows via `gen_row_bytes`: `itoa` for
-                // integer columns and the incremental diff, `rayon` for the
-                // parallel drain. Stderr uses neither. The scaffold gates the
-                // deps on these marks.
-                if !self.config.output_to_stdout() && !data_type.is_empty() {
+                // Executables can switch from stdout to files at startup,
+                // so retain file-drain dependencies for either default sink.
+                if !data_type.is_empty() {
                     if data_type
                         .iter()
                         .any(|dt| dt.any_scalar(&DataType::is_integer))
@@ -105,7 +103,7 @@ impl CodeGen {
                     {
                         self.features.mark_itoa();
                     }
-                    if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
+                    if idb.uses_parallel_file_drain(false) {
                         self.features.mark_parallel_output();
                     }
                 }

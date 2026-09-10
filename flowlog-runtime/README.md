@@ -9,6 +9,8 @@ You typically don't call into it directly.
 
 ## What it offers
 
+- `RuntimeArgs` (optional `cli` feature) - executable argument parsing with
+  directory defaults and Timely worker options.
 - `Relation` trait — implemented by each generated input struct.
 - `io` — parallel-ingest helpers: `partition`, `byte_range_reader`, and
   first-column sharding.
