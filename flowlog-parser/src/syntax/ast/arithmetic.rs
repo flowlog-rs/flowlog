@@ -180,27 +180,41 @@ fn parse_call_expr(node: Node) -> Result<Factor, ParseError> {
 /// comma (a second element or the trailing-comma marker) commits it to a
 /// [`Factor::Tuple`]; otherwise the interior is grouping and becomes a
 /// [`Factor::Group`], or, single-factor, collapses to the bare factor.
-fn parse_paren_factor(node: Node) -> Result<Factor, ParseError> {
-    let span = node.span();
-    let mut children = node.children();
-    let first = children.next_any("parenthesised operand")?;
-    let mut rest = children.peekable();
+fn parse_paren_factor(mut node: Node) -> Result<Factor, ParseError> {
+    loop {
+        let span = node.span();
+        let mut children = node.children();
+        let first = children.next_any("parenthesised operand")?;
+        let mut rest = children.peekable();
 
-    if rest.peek().is_none() {
-        // A single comma-free element: plain grouping.
+        if rest.peek().is_some() {
+            let fields = std::iter::once(first)
+                .chain(rest)
+                .filter(|c| c.rule() != Rule::trailing_comma)
+                .map(|c| c.lower())
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(Factor::Tuple(TupleLit::new(fields, span)));
+        }
+
         if first.rule() == Rule::placeholder {
             return Err(ParseError::GroupedPlaceholder { span: first.span() });
         }
+
+        // Redundant parentheses collapse to the same factor. Peel them here
+        // so their depth does not add recursive AST-construction frames.
+        let mut operands = first.clone().children();
+        let factor = operands.next_any("initial factor")?;
+        if operands.next().is_none() {
+            let inner = factor.children().next_any("factor value")?;
+            if inner.rule() == Rule::paren_factor {
+                node = inner;
+                continue;
+            }
+        }
+
         let expr: Arithmetic = first.lower()?;
         return Ok(expr.into_factor());
     }
-
-    let fields = std::iter::once(first)
-        .chain(rest)
-        .filter(|c| c.rule() != Rule::trailing_comma)
-        .map(|c| c.lower())
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(Factor::Tuple(TupleLit::new(fields, span)))
 }
 
 // =============================================================================
@@ -568,28 +582,48 @@ mod tests {
         assert_eq!(arith.to_string(), rendered);
     }
 
-    /// A lone parenthesised `_` is rejected with its dedicated error.
-    #[test]
-    fn grouped_placeholder_is_rejected() {
+    #[rstest]
+    #[case("(_)")]
+    #[case("(((_)))")]
+    fn grouped_placeholder_is_rejected(#[case] src: &str) {
         use flowlog_common::FileId;
 
         use crate::assert_err;
         use crate::test_util::parse_pair;
 
-        let pair = parse_pair(Rule::arithmetic_expr, "(_)");
+        let pair = parse_pair(Rule::arithmetic_expr, src);
         let result = Arithmetic::from_parsed_rule(Node::new(pair, FileId::new(0)));
         assert_err!(result, ParseError::GroupedPlaceholder { .. });
     }
 
-    /// A 200-deep paren nest parses and collapses to the bare factor.
+    /// A 200-deep paren nest parses and collapses redundant groups.
     /// Under split `(`-headed rules this input would hang the suite; the
     /// mechanism is documented at `paren_factor` in grammar.pest
     /// (issue #289).
-    #[test]
-    fn deeply_nested_parens_parse_without_backtracking_blowup() {
-        let src = format!("{}x{}", "(".repeat(200), ")".repeat(200));
+    #[rstest]
+    #[case("x", "x")]
+    #[case("a+b*c", "(a + (b * c))")]
+    #[case("a,b", "(a, b)")]
+    #[case("x,", "(x,)")]
+    fn deeply_nested_parens_parse_without_backtracking_blowup(
+        #[case] inner: &str,
+        #[case] rendered: &str,
+    ) {
+        let src = format!("{}{inner}{}", "(".repeat(200), ")".repeat(200));
         let arith: Arithmetic = parse_node(Rule::arithmetic_expr, &src);
-        assert!(matches!(arith.init(), Factor::Var(v) if v == "x"));
+        assert_eq!(arith.to_string(), rendered);
+        assert_eq!(arith, parse_node(Rule::arithmetic_expr, rendered));
+    }
+
+    #[test]
+    fn redundant_parens_preserve_inner_group_span() {
+        let src = "(((a+b*c)))";
+        let arith: Arithmetic = parse_node(Rule::arithmetic_expr, src);
+        assert_eq!(&src[arith.span().range()], src);
+        let Factor::Group(group) = arith.init() else {
+            panic!("expected a group");
+        };
+        assert_eq!(&src[group.span().range()], "a+b*c");
     }
 
     /// A 200-deep unclosed paren nest is rejected; the failure path must
