@@ -1,17 +1,6 @@
-//! Pipeline stages behind [`Compiler::compile`].
-//!
-//! The compile pipeline has two halves:
-//!
-//! 1. **`emit_sources`** — run the generator over the program and write a
-//!    complete Cargo project (`main.rs`, `relation.rs`, `Cargo.toml`, etc.)
-//!    under [`CompileOptions::build_dir`]. No external tools are invoked.
-//! 2. **`build`** — shell out to `cargo build --release` in that directory,
-//!    copy the resulting binary to [`CompileOptions::executable_path`], and
-//!    remove the scratch crate unless the user named a build directory
-//!    (a named directory persists and doubles as a recompile cache).
-//!
-//! Both are `pub(crate)`; external callers use [`Compiler::compile`] which
-//! runs them in sequence.
+//! Source generation, Cargo invocation, and executable installation.
+//! Cargo messages provide artifact paths; project cleanup handles scratch
+//! directories separately from reusable Cargo artifacts.
 
 use std::env;
 use std::fs;
@@ -32,11 +21,7 @@ use crate::relation;
 use crate::scaffold;
 
 impl Compiler {
-    /// Produce the scaffolded Rust crate in [`CompileOptions::build_dir`].
-    ///
-    /// Runs all code-generation passes (dataflow graph, relation handlers,
-    /// output drain, imports) and writes the resulting source files to disk.
-    /// Pure codegen — cargo is not invoked here.
+    /// Writes the generated Cargo project without invoking Cargo.
     pub(crate) fn emit_sources(
         &mut self,
         program_planner: &ProgramPlanner,
@@ -45,7 +30,6 @@ impl Compiler {
         let parts = self.codegen.generate(program_planner, plan_graph)?;
         let features = self.codegen.features();
 
-        // `src/relation.rs` — Relation trait + per-EDB `Rel{name}` input handlers.
         let relation_body = relation::gen_relation(
             &self.program,
             features,
@@ -61,7 +45,6 @@ impl Compiler {
         let bin_imports = imports::gen_imports(&self.config, features);
         let main_rs = self.assemble(&parts, &bin_imports)?;
 
-        // Cargo project metadata.
         let cargo_toml = scaffold::render_cargo_toml(
             &self.options.crate_name(),
             &self.config,
@@ -75,23 +58,34 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compile the emitted crate with `cargo build --release`, install the
-    /// binary at [`CompileOptions::executable_path`], and remove the crate
-    /// directory unless [`CompileOptions::keeps_build_dir`] holds.
+    /// Builds and installs the generated executable. Scratch projects are
+    /// removed only after installation succeeds.
     pub(crate) fn build(&self) -> io::Result<()> {
         let build_dir = self.options.build_dir();
         let crate_name = self.options.crate_name();
         let executable_path = self.options.executable_path();
 
-        run_cargo(&build_dir, &["build", "--release"])?;
-
-        // Cargo produces the binary under the sanitized crate name; copy it
-        // to the user's requested path (appending `.exe` on Windows if the
-        // user omitted it).
-        let built = build_dir
-            .join("target")
-            .join("release")
-            .join(format!("{crate_name}{}", env::consts::EXE_SUFFIX));
+        // Cargo settings can change both the artifact directory and platform
+        // layout. Reading its JSON costs a parser dependency but avoids
+        // duplicating those rules when locating the executable.
+        let messages = run_cargo(
+            &build_dir,
+            self.options.target_dir(),
+            &[
+                "build",
+                "--release",
+                "--message-format=json-render-diagnostics",
+            ],
+        )?;
+        let built = find_executable(&messages, &crate_name).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "cargo build in '{}' succeeded but reported no executable for '{crate_name}'",
+                    build_dir.display()
+                ),
+            )
+        })?;
         let dest = exe_with_platform_suffix(executable_path);
         install_binary(&built, &dest)?;
         info!("Executable written to '{}'", dest.display());
@@ -101,17 +95,16 @@ impl Compiler {
         Ok(())
     }
 
-    /// Type-check the emitted crate with `cargo check`.
+    /// Type-checks the generated project without producing an executable.
     pub(crate) fn check(&self) -> io::Result<()> {
         let build_dir = self.options.build_dir();
-        run_cargo(&build_dir, &["check"])?;
+        run_cargo(&build_dir, self.options.target_dir(), &["check"])?;
         self.cleanup_build_dir(&build_dir)?;
         Ok(())
     }
 
-    /// Remove the crate directory unless [`CompileOptions::keeps_build_dir`]
-    /// holds; a kept directory persists as the recompile cache (see
-    /// [`CompileOptions::build_dir`]).
+    /// Removes the generated project unless
+    /// [`crate::CompileOptions::keeps_build_dir`] holds.
     fn cleanup_build_dir(&self, build_dir: &Path) -> io::Result<()> {
         if !self.options.keeps_build_dir() {
             fs::remove_dir_all(build_dir).map_err(|e| {
@@ -128,23 +121,52 @@ impl Compiler {
     }
 }
 
-/// Invoke `cargo <args>` in `build_dir` and propagate any failure.
-///
-/// Surfaces a friendly "install Rust via rustup" hint if `cargo` isn't on
-/// `PATH`, and otherwise forwards cargo's stderr so users can see the
-/// underlying compiler error.
-fn run_cargo(build_dir: &Path, args: &[&str]) -> io::Result<()> {
-    let output = process::Command::new("cargo")
-        .args(args)
-        .current_dir(build_dir)
-        .output()
-        .map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => io::Error::new(
-                io::ErrorKind::NotFound,
-                "cargo not found — install Rust via https://rustup.rs",
-            ),
-            kind => io::Error::new(kind, format!("failed to run cargo: {e}")),
+/// Finds the named binary in Cargo artifact messages, including cached
+/// builds. Ignores non-JSON stdout from procedural macros.
+fn find_executable(messages: &[u8], crate_name: &str) -> Option<PathBuf> {
+    for line in messages.split(|byte| *byte == b'\n') {
+        let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        if message["reason"] == "compiler-artifact"
+            && message["target"]["name"] == crate_name
+            && message["target"]["kind"]
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
+            && let Some(path) = message["executable"].as_str()
+        {
+            return Some(PathBuf::from(path));
+        }
+    }
+    None
+}
+
+/// Runs Cargo in the generated project and returns its stdout on success.
+/// Target paths follow [`crate::CompileOptions::target_dir`]. Cargo failures
+/// include its stderr.
+fn run_cargo(build_dir: &Path, target_dir: Option<&Path>, args: &[&str]) -> io::Result<Vec<u8>> {
+    let mut command = process::Command::new("cargo");
+    command.args(args).current_dir(build_dir);
+    if let Some(dir) = target_dir {
+        // Resolve before Cargo changes directory so -T follows other CLI paths.
+        let absolute = std::path::absolute(dir).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "failed to resolve Cargo target directory '{}': {error}",
+                    dir.display()
+                ),
+            )
         })?;
+        command.arg("--target-dir").arg(absolute);
+    }
+    let output = command.output().map_err(|e| match e.kind() {
+        io::ErrorKind::NotFound => io::Error::new(
+            io::ErrorKind::NotFound,
+            "cargo not found; install Rust via https://rustup.rs",
+        ),
+        kind => io::Error::new(kind, format!("failed to run cargo: {e}")),
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -154,19 +176,18 @@ fn run_cargo(build_dir: &Path, args: &[&str]) -> io::Result<()> {
             build_dir.display()
         )));
     }
-    Ok(())
+    Ok(output.stdout)
 }
 
-/// Copy a built binary into place and make it executable on Unix.
+/// Copies a built binary into place and makes it executable on Unix.
 fn install_binary(src: &Path, dest: &Path) -> io::Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::copy(src, dest)?;
 
-    // On Unix, `fs::copy` preserves the source's permission bits which may
-    // not include the executable flag if the cargo target dir was created
-    // with an unusual umask — set it explicitly.
+    // Copying preserves source permissions, which may lack executable bits
+    // under a restrictive umask.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -176,9 +197,7 @@ fn install_binary(src: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Ensure the destination path carries the platform-specific executable
-/// extension (`.exe` on Windows). No-op on Unix or when the user already
-/// provided the suffix.
+/// Appends the host platform's executable suffix when it is absent.
 fn exe_with_platform_suffix(path: &Path) -> PathBuf {
     let suffix = env::consts::EXE_SUFFIX;
     if suffix.is_empty() {

@@ -120,6 +120,8 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 - `-F, --fact-dir <DIR>` — default directory for relative `.input` filenames; the executable can override it at runtime.
 - `-o <PATH>` — output executable path; defaults to the program stem (`reach.dl` → `./reach`).
 - `-D, --output-dir <DIR>` — default directory for `.output` files; `-` prints tuples to stdout. The executable can override it at runtime.
+- `-B, --build-dir <DIR>` — keep the generated Rust project in this directory for subsequent builds.
+- `-T, --target-dir <DIR>` — share Cargo artifacts across build directories; overrides `CARGO_TARGET_DIR`. Relative paths start at the compiler's working directory.
 - `--mode <MODE>` — `batch` (default) or `inc`.
 - `--sip` — sideways information passing: filter later body atoms by earlier bindings to shrink joins (off by default).
 - `--str-intern` — intern string columns at load for faster joins and lower memory (off by default).
