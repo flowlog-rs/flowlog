@@ -38,11 +38,8 @@ pub(super) fn gen_write_row_stdout(idb: &Relation, string_intern: bool) -> Token
     }
 }
 
-/// Token streams that read `row.0.<i>` for each data column, wrapping
-/// interned-string leaves in `resolve_out()` so they format as `&str`. Tuple
-/// columns recurse into a nested tuple of resolved leaves, which `{:?}`
-/// renders readably and, just as importantly, keeps `resolve_out` used: the
-/// generated crate builds under `-Dwarnings`.
+/// Preserves relation column order when collecting formatting expressions
+/// from [`stdout_accessor`].
 fn data_field_accessors(idb: &Relation, string_intern: bool) -> Vec<TokenStream> {
     idb.data_type()
         .iter()
@@ -54,19 +51,32 @@ fn data_field_accessors(idb: &Relation, string_intern: bool) -> Vec<TokenStream>
         .collect()
 }
 
-/// Debug-printable accessor for one value at `access`: interned-string leaves
-/// resolve to `&str`; tuple columns rebuild as a nested tuple of resolved
-/// leaves. Used only by the stdout sink.
+/// Emits expressions that borrow owned strings and resolve interned strings.
+/// Tuple expressions preserve nesting and singleton tuple shape.
 fn stdout_accessor(access: &TokenStream, dt: &DataType, string_intern: bool) -> TokenStream {
     match dt {
         DataType::String if string_intern => quote! { resolve_out(#access) },
+        // Tuple reconstruction must borrow string leaves from the shared row.
+        DataType::String => quote! { &#access },
         DataType::FixedTuple(fields) => {
             let elems = fields.iter().enumerate().map(|(j, fdt)| {
                 let jdx = Literal::usize_unsuffixed(j);
                 stdout_accessor(&quote! { (#access).#jdx }, fdt, string_intern)
             });
-            quote! { ( #(#elems),* ) }
+            quote! { ( #(#elems,)* ) }
         }
-        _ => access.clone(),
+        DataType::IntLit
+        | DataType::FloatLit
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Bool => access.clone(),
     }
 }

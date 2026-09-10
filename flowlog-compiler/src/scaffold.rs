@@ -1,20 +1,5 @@
-//! Write the scaffolded Rust crate to disk and render its Cargo metadata.
-//!
-//! The emitted project tree is:
-//!
-//! ```text
-//! <build_dir>/
-//! ├── Cargo.toml
-//! ├── .cargo/config.toml          # `-Dwarnings` so generated code stays clean
-//! └── src/
-//!     ├── main.rs                 # assembled dataflow + runtime shell
-//!     ├── relation.rs             # `Relation` trait + per-EDB handlers
-//!     ├── cmd.rs, prompt.rs       # incremental-mode only (shell)
-//!     └── udf.rs                  # optional, copied from `Config::udf_file`
-//! ```
-//!
-//! `write_project` lays out these files from already-rendered strings;
-//! `render_cargo_toml` / `render_cargo_config` produce the metadata.
+//! Cargo metadata and project files for generated executables. Incremental
+//! executables also receive the interactive shell modules.
 
 use std::env;
 use std::fs;
@@ -144,9 +129,7 @@ pub(crate) fn render_cargo_toml(
         deps["timely"] = "0.31".into();
         deps["differential-dataflow"] = "0.25".into();
         deps["mimalloc"] = "0.1".into();
-        // 0.2.3 is the minimum carrying the `regex` re-export that generated
-        // `match(...)` code resolves through (`::flowlog_runtime::regex`).
-        deps["flowlog-runtime"] = "0.3".into();
+        deps["flowlog-runtime"] = value(inline_versioned_dep("0.3.0", &["cli"]));
 
         if features.string_intern() {
             deps["lasso"] = value(inline_versioned_dep(

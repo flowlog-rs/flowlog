@@ -417,6 +417,7 @@ dependencies = [
 name = "flowlog-runtime"
 version = "0.3.0"
 dependencies = [
+ "clap",
  "differential-dataflow",
  "lasso",
  "ordered-float",

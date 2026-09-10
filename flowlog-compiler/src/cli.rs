@@ -19,7 +19,8 @@ pub struct Cli {
     #[arg(value_name = "PROGRAM")]
     pub program: String,
 
-    /// Directory containing input fact files.
+    /// Default input fact directory (otherwise the working directory).
+    /// The executable's `-F` flag overrides it at runtime.
     #[arg(short = 'F', long, value_name = "DIR")]
     pub fact_dir: Option<String>,
 
@@ -27,7 +28,8 @@ pub struct Cli {
     #[arg(short = 'o', value_name = "PATH")]
     pub executable_path: Option<String>,
 
-    /// Directory for writing output relations. Use `-` for stdout.
+    /// Default output directory (otherwise the working directory).
+    /// Use `-` for stdout. The executable's `-D` flag overrides it at runtime.
     #[arg(short = 'D', long, value_name = "DIR")]
     pub output_dir: Option<String>,
 

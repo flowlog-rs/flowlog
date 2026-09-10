@@ -25,6 +25,8 @@
 //! used internally by the generated code; you should not need to
 //! reference them directly.
 
+#[cfg(feature = "cli")]
+mod args;
 pub mod intern;
 pub mod io;
 pub mod operators;
@@ -63,3 +65,6 @@ pub use regex;
 pub use serde;
 #[doc(hidden)]
 pub use timely;
+
+#[cfg(feature = "cli")]
+pub use crate::args::RuntimeArgs;

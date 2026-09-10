@@ -4,8 +4,6 @@
 //! model. Building it here keeps the generator free of mode-specific
 //! assumptions.
 
-use std::path::Path;
-
 use flowlog_build::CodeParts;
 use flowlog_parser::InputSource;
 use flowlog_parser::Relation;
@@ -24,8 +22,8 @@ pub(crate) struct Input {
 }
 
 impl Compiler {
-    /// Build the binary-mode EDB registry + preload fragments from the
-    /// program's input relations and the compiler's fact directory.
+    /// Emits input registration and preload code that resolves filenames
+    /// against the runtime fact directory.
     pub(crate) fn gen_input(&self, parts: &CodeParts, merge_section: &TokenStream) -> Input {
         let edbs = self.program.edbs();
 
@@ -48,9 +46,6 @@ impl Compiler {
         let has_inline_facts = !self.program.facts().is_empty();
         let needs_preload = has_file_backed_edbs || has_inline_facts;
 
-        // We want a deterministic load whenever the program uses `ord`,
-        // so its value depends on interning order, deterministic across
-        // different runs; evaluation still runs on every worker.
         let deterministic_load = self.config.serialize_load();
 
         let maybe_peers = if has_file_backed_edbs && !deterministic_load {
@@ -65,30 +60,19 @@ impl Compiler {
             .map(|(rel, file_name)| {
                 let rel_name = rel.name();
                 let file_name = file_name.to_string();
-                let path = self
-                    .options
-                    .fact_dir()
-                    .map(|dir| {
-                        Path::new(dir)
-                            .join(&file_name)
-                            .to_string_lossy()
-                            .into_owned()
-                    })
-                    .unwrap_or_else(|| file_name);
                 if deterministic_load {
-                    // Worker 0 alone reads the whole file (`peers = 1, index = 0`);
-                    // other workers skip loading. Interning order thus matches `-w 1`.
+                    // Serial loading keeps string IDs identical to a run
+                    // with one worker, regardless of the worker count.
                     quote! {
                         if index == 0 {
                             rels.get_mut(#rel_name).unwrap()
-                                .apply_file(std::path::Path::new(#path), SEMIRING_ONE, 1, 0);
+                                .apply_file(&fact_dir.join(#file_name), SEMIRING_ONE, 1, 0);
                         }
                     }
                 } else {
-                    // Each worker ingests its own ~1/N byte-range slice in parallel.
                     quote! {
                         rels.get_mut(#rel_name).unwrap()
-                            .apply_file(std::path::Path::new(#path), SEMIRING_ONE, peers, index);
+                            .apply_file(&fact_dir.join(#file_name), SEMIRING_ONE, peers, index);
                     }
                 }
             })

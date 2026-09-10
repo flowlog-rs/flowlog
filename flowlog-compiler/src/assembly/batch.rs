@@ -1,25 +1,5 @@
-//! Batch-mode `fn main()` generator.
-//!
-//! One dataflow, run once to fixpoint, then written out. Incremental mode
-//! (`inc.rs`) keeps its workers alive across epochs and merges inside them;
-//! batch has no epochs, so it lets them finish and die first.
-//!
-//! The generated `main` falls into three phases:
-//!
-//! **Before the workers spawn.** The shared output buffers and `.printsize`
-//! size cells are declared, so they outlive the workers that fill them. Only
-//! clones cross into the closure.
-//!
-//! **Inside each worker.** Everything from graph construction through the
-//! flush, profiling metrics included: those stay worker-local, one table
-//! pair each.
-//!
-//! **Once they have joined.** `timely::execute_from_args` returns only after
-//! every worker has exited, which is why no barrier appears in this file: the
-//! join already establishes that every flush has landed. The main thread
-//! drains the shared buffers (sort, limit, write) and prints the `.printsize`
-//! counts, by which point every arrangement has been dropped, so the output
-//! is formatted against a freed dataflow rather than beside a live one.
+//! Batch assembly. Workers fill shared buffers; dropping their guards joins
+//! them before the main thread drains output and reports sizes.
 
 use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
@@ -27,14 +7,12 @@ use quote::quote;
 
 use crate::io::input::Input;
 
-/// Emit the complete batch-mode `fn main() { ... }` token stream.
-///
-/// `merge_section` is spliced in after the workers join, so it may not
-/// reference anything worker-local: by then the only state left is what
-/// was declared outside `timely::execute_from_args`.
-pub(crate) fn gen_batch_main(
+/// Emits startup, a single dataflow run, and output after workers join.
+/// `merge_section` may reference only state declared outside the workers.
+pub(super) fn gen_batch_main(
     parts: &CodeParts,
     input: &Input,
+    startup: &TokenStream,
     merge_section: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
@@ -63,13 +41,13 @@ pub(crate) fn gen_batch_main(
 
     quote! {
         fn main() {
-            let args: Vec<String> = std::env::args().collect();
+            #startup
 
             #(#output_bufs)*
             #(#size_cell_decls)*
 
             let timer = Instant::now();
-            timely::execute_from_args(args.into_iter(), {
+            timely::execute(timely_config, {
                 #(#output_buf_clones)*
                 #(#size_cell_clones)*
 

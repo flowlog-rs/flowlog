@@ -117,9 +117,9 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 
 `<PROGRAM>` is a path to a `.dl` file, or `all` / `--all` to compile every program in `example/`. Common options:
 
-- `-F, --fact-dir <DIR>` — prepend `<DIR>` to relative `filename=` paths in `.input` directives.
+- `-F, --fact-dir <DIR>` — default directory for relative `.input` filenames; the executable can override it at runtime.
 - `-o <PATH>` — output executable path; defaults to the program stem (`reach.dl` → `./reach`).
-- `-D, --output-dir <DIR>` — where to materialize `.output` relations; `-` prints tuples to stderr.
+- `-D, --output-dir <DIR>` — default directory for `.output` files; `-` prints tuples to stdout. The executable can override it at runtime.
 - `--mode <MODE>` — `batch` (default) or `inc`.
 - `--sip` — sideways information passing: filter later body atoms by earlier bindings to shrink joins (off by default).
 - `--str-intern` — intern string columns at load for faster joins and lower memory (off by default).

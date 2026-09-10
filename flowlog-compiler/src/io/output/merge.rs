@@ -19,79 +19,47 @@ use crate::Compiler;
 use crate::CompilerError;
 
 impl Compiler {
-    /// The `.output` drains and the `.printsize` reports.
-    ///
-    /// Under `-D -` both land on stdout, so a relation's rows are followed by
-    /// its own count, in declaration order. Nothing fans out there: one
-    /// stream takes one writer at a time regardless.
-    ///
-    /// Writing files, the rows never reach stdout and only the counts do, so
-    /// there is nothing to group them with. The drains fan out instead, each
-    /// owning a distinct file the kernel can write in parallel, each
-    /// bounded-streaming, though that bound is per drain: running D of them
-    /// holds D times as much. The counts follow once the scope has joined,
-    /// never inside it, so their order is the program's and not the
-    /// scheduler's.
+    /// Emits output drains and size reports with runtime sink selection.
+    /// Stdout places each relation's rows before its count, in declaration
+    /// order. File drains run concurrently, then counts print in declaration
+    /// order. Each file drain bounds its own memory; total use scales with
+    /// the number of concurrent drains.
     pub(crate) fn gen_merge_section(&self) -> Result<TokenStream, CompilerError> {
-        // One pass in declaration order: each relation's rows and its count,
-        // either of which may be absent. Only the sequencing below differs by
-        // sink.
-        let per_relation: Vec<(Option<TokenStream>, Option<TokenStream>)> = self
-            .program
-            .idbs()
-            .into_iter()
-            .map(|idb| {
-                let drain = idb
-                    .has_output()
-                    .then(|| self.gen_output_drain(idb))
-                    .transpose()?;
-                let report = idb.printsize().then(|| self.gen_size_report(idb));
-                Ok((drain, report))
-            })
-            .collect::<Result<_, CompilerError>>()?;
-
-        if self.config.output_to_stdout() {
-            let blocks: Vec<&TokenStream> = per_relation
-                .iter()
-                .flat_map(|(drain, report)| drain.iter().chain(report.iter()))
-                .collect();
-            return Ok(quote! { #(#blocks)* });
-        }
-
-        let drains: Vec<&TokenStream> = per_relation
-            .iter()
-            .filter_map(|(d, _)| d.as_ref())
-            .collect();
-        let reports: Vec<&TokenStream> = per_relation
-            .iter()
-            .filter_map(|(_, r)| r.as_ref())
-            .collect();
-        let drain_section = if drains.is_empty() {
-            quote! {}
-        } else {
-            quote! {
-                std::thread::scope(|merge_scope| {
-                    #( merge_scope.spawn(|| #drains); )*
-                });
+        let mut file_drains = Vec::new();
+        let mut stdout_blocks = Vec::new();
+        let mut reports = Vec::new();
+        for idb in self.program.idbs() {
+            if idb.has_output() {
+                file_drains.push(self.gen_output_drain(idb, false)?);
+                stdout_blocks.push(self.gen_output_drain(idb, true)?);
             }
-        };
+            if idb.printsize() {
+                let report = self.gen_size_report(idb);
+                stdout_blocks.push(report.clone());
+                reports.push(report);
+            }
+        }
+        if file_drains.is_empty() {
+            return Ok(quote! { #(#reports)* });
+        }
         Ok(quote! {
-            #drain_section
-            #(#reports)*
+            if let Some(output_dir) = &output_dir {
+                std::thread::scope(|merge_scope| {
+                    #( merge_scope.spawn(|| #file_drains); )*
+                });
+                #(#reports)*
+            } else {
+                #(#stdout_blocks)*
+            }
         })
     }
 
-    /// Resolve `-D <outdir>`, or the canonical "unset" error.
-    fn require_output_dir(&self) -> Result<&str, CompilerError> {
-        self.options.output_dir().ok_or_else(|| {
-            CompilerError::internal(
-                "binary mode writing IDB output to files but `output_dir` is unset".to_string(),
-            )
-        })
-    }
-
-    /// Drain one `.output` relation's shared buffer through its sink.
-    fn gen_output_drain(&self, idb: &Relation) -> Result<TokenStream, CompilerError> {
+    /// Emits one `.output` relation's drain for the selected sink.
+    fn gen_output_drain(
+        &self,
+        idb: &Relation,
+        output_to_stdout: bool,
+    ) -> Result<TokenStream, CompilerError> {
         // Only an `.output` relation is drained, so the sink is present; a
         // missing one means an earlier stage handed over the wrong relation.
         let sink = idb.output_sink().ok_or_else(|| {
@@ -118,9 +86,8 @@ impl Compiler {
         // File sinks without ORDER BY take the bounded-streaming parallel drain
         // (same bytes and row order, resolve+format spread across cores).
         // Nullary, ORDER BY/LIMIT, and stdout stay on the sequential path.
-        if idb.uses_parallel_file_drain(self.config.output_to_stdout()) {
-            let base_dir = self.require_output_dir()?;
-            let out_path_stmt = gen_out_path_stmt(sink.filename(), base_dir, is_incremental);
+        if idb.uses_parallel_file_drain(output_to_stdout) {
+            let out_path_stmt = gen_out_path_stmt(sink.filename(), is_incremental);
             return Ok(gen_parallel_file_drain(
                 &buf_ident,
                 idb,
@@ -134,15 +101,14 @@ impl Compiler {
         // Stdout flushes on each newline, so only the file sink needs the
         // explicit final flush; `BufWriter::Drop` would swallow a failed tail
         // write.
-        let (sink_preamble, write_row, sink_postamble) = if self.config.output_to_stdout() {
+        let (sink_preamble, write_row, sink_postamble) = if output_to_stdout {
             (
                 gen_stdout_preamble(),
                 gen_write_row_stdout(idb, string_intern),
                 quote! {},
             )
         } else {
-            let base_dir = self.require_output_dir()?;
-            let file_preamble = gen_file_preamble(sink.filename(), base_dir, is_incremental);
+            let file_preamble = gen_file_preamble(sink.filename(), is_incremental);
             let (scratch_decls, write_row) =
                 gen_file_row_writer(idb, delim, string_intern, is_incremental);
             (

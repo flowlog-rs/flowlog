@@ -1,11 +1,5 @@
-//! Incremental mode (`Inc`) main function generation.
-//!
-//! Generates a `fn main()` that:
-//! 1. Constructs the timely dataflow graph with a probe handle.
-//! 2. Builds the relation registry and runs the preload epoch (if any).
-//! 3. Enters an interactive command loop where worker 0 drives
-//!    transactions (`begin` / `put` / `file` / `commit` / `quit`)
-//!    and non-zero workers follow via shared state + barriers.
+//! Incremental assembly. Preload and interactive transactions share live
+//! workers, with barriers protecting output merges between epochs.
 
 use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
@@ -13,10 +7,12 @@ use quote::quote;
 
 use crate::io::input::Input;
 
-/// Emit the complete incremental-mode `fn main() { ... }` token stream.
-pub(crate) fn gen_incremental_main(
-    p: &CodeParts,
-    rp: &Input,
+/// Emits startup, preload, and an interactive loop over persistent workers.
+/// `merge_section` runs on worker 0 after every worker has flushed.
+pub(super) fn gen_incremental_main(
+    parts: &CodeParts,
+    input: &Input,
+    startup: &TokenStream,
     merge_section: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
@@ -35,26 +31,32 @@ pub(crate) fn gen_incremental_main(
         metrics_write,
         step_loop,
         ..
-    } = p;
+    } = parts;
     let Input {
         registry_inserts,
         preload,
         ..
-    } = rp;
+    } = input;
 
     quote! {
         fn main() {
-            let args: Vec<String> = std::env::args().collect();
+            #startup
 
             let shared_txn: Arc<RwLock<TxnState>> =
                 Arc::new(RwLock::new(TxnState::default()));
-            let barrier = worker_barrier_from_args(&args);
+            let workers = match &timely_config.communication {
+                timely::CommunicationConfig::Thread => 1,
+                timely::CommunicationConfig::Process(workers)
+                | timely::CommunicationConfig::ProcessBinary(workers) => *workers,
+                timely::CommunicationConfig::Cluster { threads, .. } => *threads,
+            };
+            let barrier = Arc::new(std::sync::Barrier::new(workers));
 
             #(#output_bufs)*
             #(#size_cell_decls)*
 
             let timer = Instant::now();
-            timely::execute_from_args(args.into_iter(), {
+            timely::execute(timely_config, {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
                 #(#output_buf_clones)*

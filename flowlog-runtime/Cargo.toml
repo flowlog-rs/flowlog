@@ -1,6 +1,6 @@
 [package]
 name = "flowlog-runtime"
-# The runtime releases on its own cadence — generated code depends on it
+# The runtime releases on its own cadence. Generated code depends on it
 # by published version, so any additive change ships as an independent bump.
 version = "0.3.0"
 edition.workspace = true
@@ -13,7 +13,11 @@ readme = "README.md"
 keywords = ["datalog", "dataflow", "differential", "timely"]
 categories = ["database", "compilers"]
 
+[features]
+cli = ["dep:clap"]
+
 [dependencies]
+clap = { workspace = true, features = ["derive", "string"], optional = true }
 differential-dataflow.workspace = true
 lasso = { workspace = true, features = ["multi-threaded", "serialize"] }
 ordered-float = { workspace = true, features = ["serde"] }
