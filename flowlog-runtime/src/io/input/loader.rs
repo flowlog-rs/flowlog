@@ -12,6 +12,7 @@ use differential_dataflow::input::InputSession;
 use timely::progress::Timestamp;
 
 use crate::error::RuntimeError;
+use crate::io::Relation;
 use crate::io::input::decode::Decode;
 use crate::io::input::decode::text::TextRow;
 use crate::io::input::reader::Reader;
@@ -19,7 +20,6 @@ use crate::io::input::reader::file::FileReader;
 use crate::io::input::reader::host::HostReader;
 use crate::io::input::reader::ingest;
 use crate::io::input::reader::put::PutReader;
-use crate::io::input::relation::Relation;
 
 // =============================================================================
 // Loader
