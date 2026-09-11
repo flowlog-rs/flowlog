@@ -1,88 +1,16 @@
-//! Relation input and atomic output-file writing.
+//! Atomic file writing for generated engine output.
 //!
 //! [`input`] owns relation loading; [`write_atomic`] replaces completed
-//! output files without exposing a partial write. The byte-range and
-//! sharding helpers support the older generated input path.
+//! output files without exposing a partial write.
 
 pub mod input;
 
-use std::fs::File;
 use std::io;
-use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 
-use lasso::Spur;
 use tempfile::NamedTempFile;
-
-// =========================================================================
-// Byte-range file reader
-// =========================================================================
-
-/// Open a byte-range slice of `path` for worker `index` out of `peers`.
-///
-/// Returns `Some((reader, bytes_to_read))` on success. The reader is
-/// pre-seeked to the start of the worker's range (aligned to the next
-/// line boundary for non-zero workers). The caller should read up to
-/// `bytes_to_read` bytes, stopping at the first complete line beyond
-/// that budget.
-///
-/// Returns `None` on I/O error (logged to stderr).
-pub fn byte_range_reader(
-    path: &Path,
-    index: usize,
-    peers: usize,
-) -> Option<(BufReader<File>, u64)> {
-    let open = || -> io::Result<_> {
-        let file = File::open(path)?;
-        let len = file.metadata()?.len();
-        let range = input::reader::file::byte_range(file, len, index, peers)?;
-        Ok((range.reader, range.budget))
-    };
-    open()
-        .inspect_err(|e| {
-            eprintln!(
-                "[flowlog-runtime::io] failed to open {}: {e}",
-                path.display()
-            );
-        })
-        .ok()
-}
-
-// =========================================================================
-// First-column sharding
-// =========================================================================
-
-/// Shard an integer-typed first column across `peers` workers.
-///
-/// Returns `true` if worker `index` owns this tuple.
-#[inline]
-pub fn shard_int(first: i64, peers: usize, index: usize) -> bool {
-    first.rem_euclid(peers as i64) as usize == index
-}
-
-/// Shard a string-typed first column across `peers` workers.
-///
-/// Returns `true` if worker `index` owns this tuple, hashing with 32-bit
-/// FNV-1a for a uniform distribution.
-#[inline]
-pub fn shard_str(first: &str, peers: usize, index: usize) -> bool {
-    let mut hash: u32 = 0x811c9dc5;
-    for &b in first.as_bytes() {
-        hash ^= b as u32;
-        hash = hash.wrapping_mul(0x01000193);
-    }
-    (hash as usize) % peers == index
-}
-
-/// Shard an interned-string first column ([`lasso::Spur`]) across `peers`.
-///
-/// Returns `true` if worker `index` owns this tuple.
-#[inline]
-pub fn shard_spur(first: Spur, peers: usize, index: usize) -> bool {
-    (first.into_inner().get() as usize) % peers == index
-}
 
 // =========================================================================
 // Atomic file write

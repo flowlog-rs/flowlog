@@ -126,7 +126,7 @@ dl_to_rust_type() {
 }
 
 # Convert a snake_case / lowercase name to PascalCase, mirroring
-# `flowlog-build/src/build/relation/mod.rs::pascal_case`. Capitalize
+# `flowlog-build/src/build/bindings.rs::pascal_case`. Capitalize
 # the first character and any character after `_` / `-`, dropping separators.
 pascal_case() {
     local input="$1"

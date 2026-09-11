@@ -193,19 +193,12 @@ pub(super) fn gen_parallel_file_drain(
     }}
 }
 
-/// Per-row byte-assembly statements for both file sinks. Expects `row`,
-/// `bytes: &mut Vec<u8>`, and (when the returned flag is set) `itoa_buf` in
-/// scope. Returns the tokens plus whether they use `itoa_buf`.
+/// Emits statements appending one value's file representation to `bytes`.
 ///
-/// Byte-fidelity contract (pinned by the `output_all_types*` fixtures):
-/// integers via `itoa`, floats/bool via `write!("{}")`, strings as raw bytes
-/// (interned columns resolved through `resolve_out`).
-/// Append the file-form bytes of a single value at `access` to `bytes`.
-/// Scalars match each value's `Display` (integers via `itoa`, floats/bool via
-/// `write!`, strings raw, interned columns resolved through `resolve_out`).
-/// A tuple serializes in FlowLog form `(e0, e1, ...)` with a comma-space
-/// separator, recursing into its fields. Sets `*uses_itoa` when an integer
-/// leaf is emitted.
+/// Scalars use their display form; interned strings resolve through the
+/// runtime. Tuples preserve nesting with comma-space separators and a
+/// trailing comma for singletons. Sets `*uses_itoa` when an integer leaf
+/// requires `itoa_buf` in scope.
 fn gen_value_bytes(
     access: &TokenStream,
     dt: &DataType,
@@ -215,7 +208,11 @@ fn gen_value_bytes(
     match dt {
         DataType::String => {
             if string_intern {
-                quote! { bytes.extend_from_slice(resolve_out(#access).as_bytes()); }
+                quote! {
+                    bytes.extend_from_slice(
+                        ::flowlog_runtime::intern::resolve_out(#access).as_bytes()
+                    );
+                }
             } else {
                 quote! { bytes.extend_from_slice((#access).as_bytes()); }
             }

@@ -131,15 +131,6 @@ pub(crate) fn render_cargo_toml(
         deps["mimalloc"] = "0.1".into();
         deps["flowlog-runtime"] = value(inline_versioned_dep("0.3.0", &["cli"]));
 
-        if features.string_intern() {
-            deps["lasso"] = value(inline_versioned_dep(
-                "0.7",
-                &["multi-threaded", "serialize"],
-            ));
-            // Fast, non-cryptographic hasher for the interner (keys are
-            // program-controlled, so SipHash's HashDoS resistance is wasted).
-            deps["rustc-hash"] = "2.0".into();
-        }
         if features.ordered_float() {
             deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
         }
@@ -152,9 +143,6 @@ pub(crate) fn render_cargo_toml(
             // fully qualified (`::itoa::Buffer`), so no `use` import exists
             // to trip `-Dwarnings`.
             deps["itoa"] = "1.0".into();
-        }
-        if features.string_intern() {
-            deps["serde"] = value(inline_versioned_dep("1.0", &["derive"]));
         }
         match config.mode() {
             ExecutionMode::Inc => deps["rustyline"] = "18".into(),

@@ -10,26 +10,14 @@ use quote::quote;
 
 use crate::codegen::Features;
 
-/// Emit every import the generated library-mode module needs, including the
-/// private `mod relops { ... }` wrapper that encapsulates the input-handler
-/// types.
+/// Emit every import the generated library-mode module needs.
 pub(crate) fn gen_lib_imports(
     relops_body: &TokenStream,
     features: &Features,
     profile: bool,
 ) -> TokenStream {
-    let ordered_float_import = features
-        .ordered_float()
-        .then(|| quote! { use ::flowlog_runtime::ordered_float; });
-    let lasso_import = features
-        .string_intern()
-        .then(|| quote! { use ::flowlog_runtime::lasso; });
-
     let mut out = vec![quote! {
         mod relops {
-            use ::flowlog_runtime::differential_dataflow;
-            #ordered_float_import
-            #lasso_import
             #relops_body
         }
         use relops::*;
@@ -40,7 +28,6 @@ pub(crate) fn gen_lib_imports(
 
     out.push(dd_imports(features));
 
-    out.push(string_intern_imports(features));
     if features.ordered_float() {
         out.push(quote! { use ::flowlog_runtime::ordered_float::OrderedFloat; });
     }
@@ -80,26 +67,4 @@ fn dd_imports(f: &Features) -> TokenStream {
     }
 
     quote! { #(#out)* }
-}
-
-/// `intern` / `resolve` / `Spur` imports; empty when interning is off.
-fn string_intern_imports(f: &Features) -> TokenStream {
-    if !f.string_intern() {
-        return quote! {};
-    }
-
-    let base = quote! {
-        use ::flowlog_runtime::lasso::Spur;
-        use ::flowlog_runtime::intern::intern;
-    };
-
-    let resolve = f
-        .string_resolve()
-        .then(|| quote! { use ::flowlog_runtime::intern::resolve; });
-
-    let resolve_out = f
-        .string_resolve_out()
-        .then(|| quote! { use ::flowlog_runtime::intern::resolve_out; });
-
-    quote! { #base #resolve #resolve_out }
 }

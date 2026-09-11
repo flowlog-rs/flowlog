@@ -33,7 +33,7 @@ pub(super) fn gen_incremental_main(
         ..
     } = parts;
     let Input {
-        registry_inserts,
+        initialize,
         preload,
         ..
     } = input;
@@ -63,7 +63,6 @@ pub(super) fn gen_incremental_main(
                 #(#size_cell_clones)*
 
                 move |worker| {
-                    let peers = worker.peers();
                     let index = worker.index();
 
                     #profile_init
@@ -82,38 +81,26 @@ pub(super) fn gen_incremental_main(
                             #dataflow_return
                         });
 
-                    let mut rels: HashMap<String, Box<dyn Relation>> = HashMap::new();
-                    #(#registry_inserts)*
+                    #initialize
 
                     let mut time_stamp: u32 = 0;
 
                     #preload
 
-                    // Helper: apply a list of txn ops to this worker's input handles.
-                    fn apply_ops(
-                        rels: &mut HashMap<String, Box<dyn Relation>>,
-                        ops: &[TxnOp],
-                        peers: usize,
-                        index: usize,
-                    ) {
-                        for op in ops {
-                            match op {
+                    fn apply_ops(inputs: &mut Inputs, ops: &[TxnOp]) {
+                        for (ordinal, op) in ops.iter().enumerate() {
+                            let (rel, result) = match op {
                                 TxnOp::Put { rel, tuple, diff } => {
-                                    let r = rels
-                                        .get_mut(&rel.to_ascii_lowercase())
-                                        .unwrap_or_else(|| {
-                                            panic!("unknown relation: '{rel}'")
-                                        });
-                                    r.apply_tuple(tuple, *diff, peers, index);
+                                    (rel, inputs.load_put(rel, tuple, ordinal, *diff))
                                 }
                                 TxnOp::File { rel, path, diff } => {
-                                    let r = rels
-                                        .get_mut(&rel.to_ascii_lowercase())
-                                        .unwrap_or_else(|| {
-                                            panic!("unknown relation: '{rel}'")
-                                        });
-                                    r.apply_file(path.as_path(), *diff, peers, index);
+                                    (rel, inputs.load_file(rel, path.as_path(), *diff))
                                 }
+                            };
+                            match result {
+                                Some(Ok(())) => {}
+                                Some(Err(error)) => eprintln!("[relation][{rel}] {error}"),
+                                None => eprintln!("unknown relation: '{rel}'"),
                             }
                         }
                     }
@@ -143,13 +130,11 @@ pub(super) fn gen_incremental_main(
 
                             match snap.action {
                                 TxnAction::Commit => {
-                                    apply_ops(&mut rels, snap.pending.as_slice(), peers, index);
+                                    apply_ops(&mut inputs, snap.pending.as_slice());
 
                                     time_stamp += 1;
-                                    for r in rels.values_mut() {
-                                        r.advance_to(time_stamp);
-                                        r.flush();
-                                    }
+                                    inputs.advance_to_all(time_stamp);
+                                    inputs.flush_all();
                                     #step_loop
 
                                     #metrics_write
@@ -161,9 +146,7 @@ pub(super) fn gen_incremental_main(
                                 }
 
                                 TxnAction::Quit => {
-                                    for r in rels.values_mut() {
-                                        r.close();
-                                    }
+                                    inputs.close_all();
                                     while probe.less_than(&time_stamp) {
                                         worker.step();
                                     }
@@ -185,7 +168,10 @@ pub(super) fn gen_incremental_main(
                     // -------------------------------
                     // Worker 0: interactive driver
                     // -------------------------------
-                    let rel_words = rels.keys().cloned().collect::<Vec<_>>();
+                    let rel_words = Inputs::names()
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect::<Vec<_>>();
                     let mut prompt = Prompt::new(rel_words);
 
                     let mut local_txn: TxnState = TxnState::default();
@@ -245,13 +231,11 @@ pub(super) fn gen_incremental_main(
 
                                 // Apply exactly what got published (keeps behavior consistent).
                                 let snap = shared_txn.read().unwrap().clone();
-                                apply_ops(&mut rels, snap.pending.as_slice(), peers, index);
+                                apply_ops(&mut inputs, snap.pending.as_slice());
 
                                 time_stamp += 1;
-                                for r in rels.values_mut() {
-                                    r.advance_to(time_stamp);
-                                    r.flush();
-                                }
+                                inputs.advance_to_all(time_stamp);
+                                inputs.flush_all();
                                 #step_loop
 
                                 #metrics_write
@@ -289,9 +273,7 @@ pub(super) fn gen_incremental_main(
 
                                 barrier.wait();
 
-                                for r in rels.values_mut() {
-                                    r.close();
-                                }
+                                inputs.close_all();
                                 while probe.less_than(&time_stamp) {
                                     worker.step();
                                 }

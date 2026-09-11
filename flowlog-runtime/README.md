@@ -13,9 +13,7 @@ You typically don't call into it directly.
   directory defaults and Timely worker options.
 - `io::input` — `Relation` declarations and one `Loader` per relation,
   fed from files, text puts, or typed host rows. The runtime owns worker
-  partitioning and decoding.
-- `io` also retains the legacy byte-range reader and first-column
-  sharding helpers until generated input code migrates to `Loader`.
+  partitioning and decoding for both generated binaries and libraries.
 - `io::write_atomic` — atomic output-file replacement.
 - `error` — `RuntimeError`, everything the runtime can fail at.
 - `intern` — thread-safe string-interning pool.

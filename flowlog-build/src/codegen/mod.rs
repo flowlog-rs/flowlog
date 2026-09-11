@@ -13,6 +13,7 @@ mod flow;
 mod idb_buffers;
 mod ident;
 mod profile;
+mod relation;
 mod ty;
 
 // External API -- used by flowlog-compiler via lib.rs re-exports.
@@ -30,6 +31,7 @@ use flowlog_profiler::PlanGraph;
 pub use idb_buffers::field_accessor;
 pub use idb_buffers::gen_drain_block;
 use proc_macro2::Ident;
+pub use relation::gen_relations;
 pub use ty::data::data_type_tokens;
 pub(crate) use ty::data::row_is_copy;
 // Intra-crate shortcuts used by build/ (library mode).

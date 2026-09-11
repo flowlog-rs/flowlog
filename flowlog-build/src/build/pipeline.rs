@@ -1,7 +1,7 @@
 //! Library-mode compilation pipeline.
 //!
 //! ```text
-//! parse → stratify → plan → codegen → library-mode relation module
+//! parse -> stratify -> plan -> codegen -> library-mode relation module
 //! ```
 //!
 //! The caller owns the [`SourceMap`] so any [`BoxError`] can be rendered
@@ -23,16 +23,16 @@ use crate::BuildError;
 use crate::Builder;
 use crate::CodeGen;
 use crate::CodeParts;
-use crate::build::relation::gen_input_module;
-use crate::build::relation::validate_api_surface;
+use crate::build::bindings::validate_api_surface;
 use crate::codegen::Features;
+use crate::codegen::gen_relations;
 
 /// Artifacts produced by one compilation, consumed by library-mode assembly.
 pub(crate) struct Pipeline {
     pub(crate) config: Config,
     pub(crate) parts: CodeParts,
     pub(crate) program: Program,
-    /// Library-mode relation module: `{Name}Input` handlers + `Inputs` container.
+    /// Relation declarations and worker-local input ownership.
     pub(crate) relations: TokenStream,
     pub(crate) features: Features,
 }
@@ -66,7 +66,7 @@ impl Pipeline {
         let mut cg = CodeGen::new(config.clone(), program.clone());
         let parts = cg.generate(&program_planner, &mut plan_graph)?;
         let features = cg.features().clone();
-        let relations = gen_input_module(&program, &features)?;
+        let relations = gen_relations(&program, features.string_intern())?;
 
         Ok(Self {
             config,

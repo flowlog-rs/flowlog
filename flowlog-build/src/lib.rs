@@ -63,7 +63,7 @@ pub use build::BuildError;
 #[doc(hidden)]
 pub use codegen::{
     CodeGen, CodeParts, CodegenError, Features, const_to_token, data_type_tokens, field_accessor,
-    gen_drain_block,
+    gen_drain_block, gen_relations,
 };
 use flowlog_common::BoxError;
 pub use flowlog_common::ExecutionMode;

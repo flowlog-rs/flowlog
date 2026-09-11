@@ -75,9 +75,7 @@ points.
 
 ## Generated code
 
-The target for both generators is to emit only a declaration per relation;
-the runtime API is implemented first, with generator wiring left to a
-later step:
+Both generators share the relation declarations and loader container:
 
 ```rust
 pub struct RelEdge;
@@ -104,8 +102,13 @@ File delimiter and header handling belong to each load; there is no
 file-options wrapper. Text puts take their delimiter directly too. Typed
 host rows do not carry any text-format settings.
 
-A compiled binary will call `load_file` at preload and `load_put` /
+A compiled binary calls `load_file` at preload and `load_put` /
 `load_flag` per transaction op, passing the op's index as `ordinal`.
-A library-mode engine can stage typed batches for `run()` or `commit()`.
-Every worker calls `load_rows` for each batch with the same weight, using
-its loader's fixed partition.
+A library-mode batch engine stages `insert_edge(rows)` into one flat
+`Vec` and shares it with the workers in an `Arc` at `run()`. An incremental
+engine retains each insert or remove call as `(rows, diff)` and shares
+these batches at `commit()`. Workers call `load_rows` for each batch in
+per-relation call order, with one weight for the whole batch. Retaining
+the incoming vectors avoids copying rows into a weighted buffer, at the
+cost of retaining a separate vector per staged call. The loader owns
+partitioning and conversion in both execution modes.
