@@ -67,12 +67,6 @@ impl CodeGen {
                     );
                 });
 
-                // The matching `InputSession` handle is always typed from the
-                // declared column types (see `gen_input_struct`), so annotating
-                // the collection's element type identically is provably
-                // consistent and frees the generated crate from fragile
-                // inference (e.g. fact-only or orphan relations whose element
-                // type is otherwise un-inferable).
                 let ty = data_type_tokens(&rel.data_type(), str_intern);
 
                 quote! {

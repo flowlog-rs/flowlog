@@ -13,11 +13,11 @@ use flowlog_common::pretty_print;
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use crate::build::bindings::gen_public_rel_module;
 use crate::build::engine::gen_lib_engine;
 use crate::build::engine::gen_lib_incremental_engine;
 use crate::build::imports::gen_lib_imports;
 use crate::build::pipeline::Pipeline;
-use crate::build::relation::user::gen_public_rel_module;
 use crate::build::results::gen_batch_results;
 use crate::build::results::gen_incremental_results;
 use crate::codegen::Features;
@@ -39,11 +39,21 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     let (results_struct, lib_engine) = match config.mode() {
         ExecutionMode::Inc => (
             gen_incremental_results(&pipeline.program),
-            gen_lib_incremental_engine(&pipeline.program, string_intern, &pipeline.parts),
+            gen_lib_incremental_engine(
+                &pipeline.program,
+                string_intern,
+                config.serialize_load(),
+                &pipeline.parts,
+            ),
         ),
         ExecutionMode::Batch => (
             gen_batch_results(&pipeline.program),
-            gen_lib_engine(&pipeline.program, string_intern, &pipeline.parts),
+            gen_lib_engine(
+                &pipeline.program,
+                string_intern,
+                config.serialize_load(),
+                &pipeline.parts,
+            ),
         ),
     };
     let udf_mod = gen_udf_mod(&pipeline.features, config.udf_file().map(Path::new))?;

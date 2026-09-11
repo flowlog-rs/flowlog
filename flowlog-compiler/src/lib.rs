@@ -18,18 +18,18 @@
 //! - [`build`] — the two-stage pipeline behind [`Compiler::compile`]
 //!   (`emit_sources`, then shell out to cargo).
 //! - [`scaffold`] — write the emitted crate to disk + render Cargo metadata.
-//! - [`assembly`], [`io`], [`relation`], [`imports`] — codegen modules that
+//! - [`assembly`], [`io`], [`dispatch`], [`imports`]: codegen modules that
 //!   produce the token streams spliced into the emitted `main.rs` and
 //!   `relation.rs`.
 
 mod assembly;
 mod build;
 mod cli;
+mod dispatch;
 mod error;
 mod imports;
 mod io;
 mod options;
-mod relation;
 mod scaffold;
 
 pub use cli::Cli;

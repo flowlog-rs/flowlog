@@ -25,6 +25,7 @@ regex.workspace = true
 rustc-hash.workspace = true
 serde = { workspace = true }
 tempfile.workspace = true
+thiserror.workspace = true
 timely.workspace = true
 
 [dev-dependencies]

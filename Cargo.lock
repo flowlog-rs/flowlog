@@ -427,6 +427,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "tempfile",
+ "thiserror",
  "timely",
 ]
 

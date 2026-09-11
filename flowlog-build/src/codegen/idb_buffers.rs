@@ -84,13 +84,6 @@ impl CodeGen {
             }
 
             if idb.has_output() {
-                if data_type
-                    .iter()
-                    .any(|dt| dt.any_scalar(&|l| matches!(l, DataType::String)))
-                {
-                    self.features.mark_string_resolve_out();
-                }
-
                 self.features.mark_output_buffers();
 
                 // Executables can switch from stdout to files at startup,
@@ -380,13 +373,11 @@ pub fn gen_drain_block(
 // Column + comparator helpers
 // =========================================================================
 
-/// Access column `col_idx` of a buffer row. `base` must evaluate to the
-/// `(tuple, Ts, i32)` triple — produces `<base>.0.<col_idx>` and wraps with
-/// `resolve_out()` for interned-string columns.
+/// Emits access to a buffer row's column, resolving interned string leaves.
 ///
-/// Output runs after fixpoint, so interned strings resolve through the flat
-/// snapshot path (`resolve_out`) rather than the concurrent `DashMap`
-/// (`resolve`) used while the dataflow is still interning.
+/// `base` must evaluate to a `(tuple, Ts, i32)` triple. Output comparisons
+/// and formatting use string contents, including inside tuple columns.
+/// Resolution uses the runtime's output snapshot after fixpoint.
 pub fn field_accessor(
     col_idx: usize,
     data_type: &DataType,
@@ -405,11 +396,11 @@ pub fn field_accessor(
     }
 }
 
-/// Rebuild `access` with every interned-string leaf wrapped in `resolve_out`,
-/// recursing through tuple columns. Non-string leaves pass through unchanged.
+/// Resolves interned string leaves through the runtime's output snapshot.
+/// Tuple nesting is preserved; non-string leaves pass through unchanged.
 fn resolve_string_leaves(access: &TokenStream, data_type: &DataType) -> TokenStream {
     match data_type {
-        DataType::String => quote! { resolve_out(#access) },
+        DataType::String => quote! { ::flowlog_runtime::intern::resolve_out(#access) },
         DataType::FixedTuple(fields) => {
             let elems = fields.iter().enumerate().map(|(j, fdt)| {
                 let jdx = Index::from(j);

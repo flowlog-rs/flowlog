@@ -253,9 +253,9 @@ pub(super) fn compute_kv_param_tokens(
     (param_ident(use_k, "k"), param_ident(use_v, "v"))
 }
 
-// ==================================================
+// =============================================================================
 // Comparison expression predicate builders
-// ==================================================
+// =============================================================================
 
 fn comparison_op_tokens(op: &ComparisonOperator) -> TokenStream {
     match op {
@@ -273,79 +273,85 @@ fn comparison_op_tokens(op: &ComparisonOperator) -> TokenStream {
     }
 }
 
-impl CodeGen {
-    /// Emit a string-constraint test (`match`/`contains`, the `!` folded into
-    /// the operator) from already-built operand tokens.
-    fn emit_string_constraint(
-        &mut self,
-        op: &ComparisonOperator,
-        left: &ArithmeticArgument,
-        l: &TokenStream,
-        r: &TokenStream,
-        string_intern: bool,
-    ) -> TokenStream {
+/// Emits a match or contains predicate, including its negation.
+///
+/// # Panics
+///
+/// Panics if `op` is not a string constraint.
+fn emit_string_constraint(
+    op: &ComparisonOperator,
+    left: &ArithmeticArgument,
+    l: &TokenStream,
+    r: &TokenStream,
+    string_intern: bool,
+) -> TokenStream {
+    let read_str = |t: &TokenStream| -> TokenStream {
         if string_intern {
-            self.features.mark_string_resolve();
+            quote! { ::flowlog_runtime::intern::resolve(#t) }
+        } else {
+            quote! { (#t).as_str() }
         }
-        let read_str = |t: &TokenStream| -> TokenStream {
-            if string_intern {
-                quote! { resolve(#t) }
+    };
+    // Prefix negation avoids redundant outer parentheses in generated
+    // `if` conditions, where unused parentheses are a warning.
+    match op {
+        ComparisonOperator::Contains { negated } => {
+            let neg = if *negated {
+                quote! { ! }
             } else {
-                quote! { (#t).as_str() }
-            }
-        };
-        // Negation is a prefix on the boolean expression (`!`), not an outer
-        // paren wrap — keeps the generated `if` condition free of redundant
-        // parens (`-D warnings` in the generated crate flags those).
-        match op {
-            ComparisonOperator::Contains { negated } => {
-                let neg = if *negated {
-                    quote! { ! }
-                } else {
-                    quote! {}
-                };
-                let needle = read_str(l);
-                let hay = read_str(r);
-                quote! { #neg (#hay).contains(#needle) }
-            }
-            ComparisonOperator::Match { negated } => {
-                // `match(pattern, s)` is a *full* match, so anchor with
-                // `^(?:…)$` (the `regex` crate searches by default). A bad
-                // pattern yields `false` rather than aborting.
-                let neg = if *negated {
-                    quote! { ! }
-                } else {
-                    quote! {}
-                };
-                let hay = read_str(r);
-                if let FactorArgument::Const(c) = left.init()
-                    && c.ty() == &DataType::String
-                    && left.rest().is_empty()
-                {
-                    // Literal pattern (the common case): anchor at codegen time
-                    // and compile once per call site via a `LazyLock` static.
-                    let anchored = format!("^(?:{})$", c.text());
-                    quote! {{
-                        static RE: ::std::sync::LazyLock<
-                            Option<::flowlog_runtime::regex::Regex>,
-                        > = ::std::sync::LazyLock::new(|| {
-                            ::flowlog_runtime::regex::Regex::new(#anchored).ok()
-                        });
-                        #neg RE.as_ref().is_some_and(|re| re.is_match(#hay))
-                    }}
-                } else {
-                    // Computed pattern: compile per evaluation.
-                    let pat = read_str(l);
-                    quote! {
-                        #neg ::flowlog_runtime::regex::Regex::new(&format!("^(?:{})$", #pat))
-                            .map_or(false, |re| re.is_match(#hay))
-                    }
+                quote! {}
+            };
+            let needle = read_str(l);
+            let hay = read_str(r);
+            quote! { #neg (#hay).contains(#needle) }
+        }
+        ComparisonOperator::Match { negated } => {
+            // FlowLog requires a full match, while regex searches by
+            // default. Anchoring gives both literal and computed
+            // patterns the same full-match semantics.
+            let neg = if *negated {
+                quote! { ! }
+            } else {
+                quote! {}
+            };
+            let hay = read_str(r);
+            if let FactorArgument::Const(c) = left.init()
+                && c.ty() == &DataType::String
+                && left.rest().is_empty()
+            {
+                // Literal patterns can share a compiled regex across
+                // evaluations instead of compiling it for every row.
+                let anchored = format!("^(?:{})$", c.text());
+                quote! {{
+                    static RE: ::std::sync::LazyLock<
+                        Option<::flowlog_runtime::regex::Regex>,
+                    > = ::std::sync::LazyLock::new(|| {
+                        ::flowlog_runtime::regex::Regex::new(#anchored).ok()
+                    });
+                    #neg RE.as_ref().is_some_and(|re| re.is_match(#hay))
+                }}
+            } else {
+                // Computed patterns can vary per row, so they cannot
+                // share the literal pattern's static cache.
+                let pat = read_str(l);
+                quote! {
+                    #neg ::flowlog_runtime::regex::Regex::new(&format!("^(?:{})$", #pat))
+                        .map_or(false, |re| re.is_match(#hay))
                 }
             }
-            other => unreachable!("not a string constraint: {other:?}"),
+        }
+        ComparisonOperator::Equal
+        | ComparisonOperator::NotEqual
+        | ComparisonOperator::GreaterThan
+        | ComparisonOperator::GreaterEqualThan
+        | ComparisonOperator::LessThan
+        | ComparisonOperator::LessEqualThan => {
+            unreachable!("not a string constraint: {op:?}")
         }
     }
+}
 
+impl CodeGen {
     /// KV-closure comparison predicate, combined with `&&`.
     pub(super) fn build_kv_compare_predicate(
         &mut self,
@@ -362,7 +368,7 @@ impl CodeGen {
                 let l = self.build_kv_args_arithmetic_expr(c.left(), string_intern)?;
                 let r = self.build_kv_args_arithmetic_expr(c.right(), string_intern)?;
                 if c.operator().is_string_constraint() {
-                    return Ok(self.emit_string_constraint(
+                    return Ok(emit_string_constraint(
                         c.operator(),
                         c.left(),
                         &l,
@@ -377,8 +383,10 @@ impl CodeGen {
                         && self.infer_expr_type(c.left(), input_type, None)? == DataType::String
                         && self.infer_expr_type(c.right(), input_type, None)? == DataType::String
                     {
-                        self.features.mark_string_resolve();
-                        quote! { resolve(#l) #op resolve(#r) }
+                        quote! {
+                            ::flowlog_runtime::intern::resolve(#l)
+                                #op ::flowlog_runtime::intern::resolve(#r)
+                        }
                     } else {
                         quote! { (#l) #op (#r) }
                     },
@@ -409,7 +417,7 @@ impl CodeGen {
                 let l = self.build_join_args_arithmetic_expr(c.left(), string_intern)?;
                 let r = self.build_join_args_arithmetic_expr(c.right(), string_intern)?;
                 if c.operator().is_string_constraint() {
-                    return Ok(self.emit_string_constraint(
+                    return Ok(emit_string_constraint(
                         c.operator(),
                         c.left(),
                         &l,
@@ -426,8 +434,10 @@ impl CodeGen {
                         && self.infer_expr_type(c.right(), left_type, Some(right_type))?
                             == DataType::String
                     {
-                        self.features.mark_string_resolve();
-                        quote! { resolve(#l) #op resolve(#r) }
+                        quote! {
+                            ::flowlog_runtime::intern::resolve(#l)
+                                #op ::flowlog_runtime::intern::resolve(#r)
+                        }
                     } else {
                         quote! { (#l) #op (#r) }
                     },
@@ -459,7 +469,7 @@ impl CodeGen {
                 let r =
                     self.build_row_args_arithmetic_expr(c.right(), row_fields, string_intern)?;
                 if c.operator().is_string_constraint() {
-                    return Ok(self.emit_string_constraint(
+                    return Ok(emit_string_constraint(
                         c.operator(),
                         c.left(),
                         &l,
@@ -474,8 +484,10 @@ impl CodeGen {
                         && self.infer_expr_type(c.left(), input_type, None)? == DataType::String
                         && self.infer_expr_type(c.right(), input_type, None)? == DataType::String
                     {
-                        self.features.mark_string_resolve();
-                        quote! { resolve(#l) #op resolve(#r) }
+                        quote! {
+                            ::flowlog_runtime::intern::resolve(#l)
+                                #op ::flowlog_runtime::intern::resolve(#r)
+                        }
                     } else {
                         quote! { (#l) #op (#r) }
                     },
@@ -614,7 +626,7 @@ pub fn const_to_token(
         DataType::Float64 => float_lit!(f64, Literal::f64_unsuffixed),
         DataType::String => {
             if string_intern {
-                quote! { intern(#text) }
+                quote! { ::flowlog_runtime::intern::intern(#text) }
             } else {
                 quote! { #text.to_string() }
             }
@@ -701,7 +713,7 @@ fn build_cat_batch(factors: Vec<TokenStream>, string_intern: bool) -> TokenStrea
     debug_assert!(factors.len() >= 2, "cat requires at least 2 factors");
     let fmt_str = "{}".repeat(factors.len());
     if string_intern {
-        quote! { intern(&format!(#fmt_str, #(#factors),*)) }
+        quote! { ::flowlog_runtime::intern::intern(&format!(#fmt_str, #(#factors),*)) }
     } else {
         quote! { format!(#fmt_str, #(#factors),*) }
     }
@@ -738,18 +750,11 @@ impl CodeGen {
         Ok(result)
     }
 
-    /// Generate a UDF call token stream: `udf::fn_name(arg1.clone(), arg2.clone(), ...)`.
+    /// Emits a UDF call with owned arguments, preserving the source values.
     ///
-    /// UDFs take ownership of their arguments. We clone each arg to avoid
-    /// invalidating variables that may be used elsewhere in the same closure
-    /// (e.g., in the output tuple or another predicate). Clone on Copy types is free.
-    ///
-    /// Under `--str-intern`, FlowLog string columns are passed around as
-    /// interned `Spur` handles, but user UDFs are written in plain Rust and
-    /// declare their string parameters/returns as `String`. We bridge the
-    /// boundary the same way `builtin_op_to_token` does for built-ins:
-    /// `Spur` args are wrapped with `resolve(...).to_string()`, and a
-    /// `String` return is re-interned with `intern(&...)`.
+    /// String parameters use owned Rust strings even when engine columns
+    /// are interned. The runtime resolves those arguments and interns
+    /// string return values when interning is enabled.
     fn fncall_to_token<F>(
         &mut self,
         name: &str,
@@ -780,9 +785,6 @@ impl CodeGen {
             .udf_return_type(name)
             .is_some_and(|t| t == DataType::String);
 
-        if string_intern && param_types.contains(&DataType::String) {
-            self.features.mark_string_resolve();
-        }
         if string_intern && returns_string {
             self.features.mark_string_intern();
         }
@@ -790,7 +792,7 @@ impl CodeGen {
         self.features.mark_udf();
         let call = quote! { udf::#fn_ident(#(#arg_tokens),*) };
         Ok(if string_intern && returns_string {
-            quote! { intern(&#call) }
+            quote! { ::flowlog_runtime::intern::intern(&#call) }
         } else {
             call
         })
@@ -850,8 +852,7 @@ impl CodeGen {
             FactorArgument::Var(arg) => {
                 let var_token = resolve_var(arg)?;
                 Ok(if string_intern {
-                    self.features.mark_string_resolve();
-                    quote! { resolve(#var_token) }
+                    quote! { ::flowlog_runtime::intern::resolve(#var_token) }
                 } else {
                     var_token
                 })
@@ -867,11 +868,10 @@ impl CodeGen {
                 }
             }
             FactorArgument::FnCall { name, args } => {
-                // UDF returns Spur when string_intern is on — resolve for display.
+                // Formatting needs the string contents, not the interned key.
                 let call = self.fncall_to_token(name, args, string_intern, resolve_var)?;
                 Ok(if string_intern {
-                    self.features.mark_string_resolve();
-                    quote! { resolve(#call) }
+                    quote! { ::flowlog_runtime::intern::resolve(#call) }
                 } else {
                     call
                 })
@@ -881,8 +881,7 @@ impl CodeGen {
                 // String-returning builtins emit a Spur in intern mode;
                 // resolve for display in a cat / format! context.
                 Ok(if string_intern && op.ret_type() == DataType::String {
-                    self.features.mark_string_resolve();
-                    quote! { resolve(#call) }
+                    quote! { ::flowlog_runtime::intern::resolve(#call) }
                 } else {
                     call
                 })
@@ -901,8 +900,7 @@ impl CodeGen {
                 let idx = Index::from(*index);
                 let proj = quote! { (#rec).#idx };
                 Ok(if string_intern {
-                    self.features.mark_string_resolve();
-                    quote! { resolve(#proj) }
+                    quote! { ::flowlog_runtime::intern::resolve(#proj) }
                 } else {
                     proj
                 })
@@ -953,28 +951,16 @@ impl CodeGen {
             .map(|a| self.build_arithmetic_expr(a, string_intern, resolve_var))
             .collect::<Result<_, _>>()?;
 
-        // Avoid marking `resolve` for ops that never read a string param
-        // (e.g. `to_string(n)`), otherwise an unused helper leaks into the
-        // generated binary.
-        if string_intern
-            && op
-                .param_allowed_types()
-                .iter()
-                .any(|set| set.contains(&DataType::String))
-        {
-            self.features.mark_string_resolve();
-        }
-
         let read_str = |t: &TokenStream| -> TokenStream {
             if string_intern {
-                quote! { resolve(#t) }
+                quote! { ::flowlog_runtime::intern::resolve(#t) }
             } else {
                 quote! { (#t).as_str() }
             }
         };
         let emit_string = |body: TokenStream| -> TokenStream {
             if string_intern {
-                quote! { intern(&#body) }
+                quote! { ::flowlog_runtime::intern::intern(&#body) }
             } else {
                 body
             }
@@ -1128,7 +1114,7 @@ fn wrap_udf_arg(
     string_intern: bool,
 ) -> TokenStream {
     if string_intern && param_type == Some(DataType::String) {
-        quote! { resolve((#token).clone()).to_string() }
+        quote! { ::flowlog_runtime::intern::resolve((#token).clone()).to_string() }
     } else {
         quote! { (#token).clone() }
     }

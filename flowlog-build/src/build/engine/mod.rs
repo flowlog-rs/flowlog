@@ -1,13 +1,12 @@
-//! Library-mode engine codegen.
+//! Library-mode engine generation.
 //!
-//! Shared tuple-conversion helpers live here; the `batch` and
-//! `incremental` submodules consume them for their respective codegen.
-//! Per-position conversion only fires for columns whose user-facing
-//! type differs from the internal DD tuple type — floats (`f32` →
-//! `OrderedFloat<f32>`) and, under interning, strings (`String` →
-//! `Spur`). Integer-only relations have identical user / internal
-//! tuples, so the identity binding is forwarded instead of emitting a
-//! pointless destructure-and-re-tuple.
+//! [`batch`] generates a single-run engine; [`incremental`] generates an
+//! engine whose dataflow stays alive across commits. Both engines stage
+//! host rows through typed methods and delegate input partitioning and
+//! conversion to runtime loaders.
+//!
+//! The engines manage worker execution and collect results. Shared helpers
+//! here support converting dataflow output back to user-facing tuples.
 
 mod batch;
 mod incremental;
@@ -16,11 +15,8 @@ pub(crate) use batch::gen_lib_engine;
 use flowlog_parser::DataType;
 use flowlog_parser::Relation;
 pub(crate) use incremental::gen_lib_incremental_engine;
-use proc_macro2::Literal;
 use proc_macro2::TokenStream;
-use quote::quote;
 
-use crate::build::relation::user::user_to_tuple_expr;
 use crate::codegen::tuple_tokens;
 
 pub(crate) fn needs_conversion(rel: &Relation, string_intern: bool) -> bool {
@@ -53,20 +49,5 @@ pub(crate) fn per_position_tuple(
             .iter()
             .enumerate()
             .map(|(i, dt)| elem(dt, src(i))),
-    )
-}
-
-/// User-tuple bound as `item` → internal `Tuple`. Used at insert time by
-/// both engine modes.
-pub(crate) fn user_to_tuple_convert(rel: &Relation, string_intern: bool) -> TokenStream {
-    per_position_tuple(
-        rel,
-        string_intern,
-        quote! { item },
-        |i| {
-            let idx = Literal::usize_unsuffixed(i);
-            quote! { item.#idx }
-        },
-        |dt, src| user_to_tuple_expr(dt, string_intern, src),
     )
 }

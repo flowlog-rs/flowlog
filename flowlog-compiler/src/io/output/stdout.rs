@@ -55,7 +55,9 @@ fn data_field_accessors(idb: &Relation, string_intern: bool) -> Vec<TokenStream>
 /// Tuple expressions preserve nesting and singleton tuple shape.
 fn stdout_accessor(access: &TokenStream, dt: &DataType, string_intern: bool) -> TokenStream {
     match dt {
-        DataType::String if string_intern => quote! { resolve_out(#access) },
+        DataType::String if string_intern => {
+            quote! { ::flowlog_runtime::intern::resolve_out(#access) }
+        }
         // Tuple reconstruction must borrow string leaves from the shared row.
         DataType::String => quote! { &#access },
         DataType::FixedTuple(fields) => {

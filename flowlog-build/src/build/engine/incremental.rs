@@ -1,30 +1,8 @@
-//! `IncrementalEngine` codegen for library mode.
+//! Incremental library execution over staged host batches.
 //!
-//! Mirrors [`super::batch::gen_lib_engine`] but drives a stateful,
-//! epoch-based incremental engine. The surface matches binary-mode's
-//! REPL semantics:
-//!
-//! - `begin()` — mark "in txn" + clear any leftover staged updates.
-//! - `insert_*` / `remove_*` / `set_*` / `unset_*` — auto-begin if
-//!   idle, then append to the per-worker staging buckets.
-//! - `abort()` — mark "not in txn" + clear staged.
-//! - `commit()` — **panics** if called without an active txn; else
-//!   flushes the staged batch as one epoch and returns the
-//!   [`IncrementalResults`] *delta* produced by that epoch.
-//!
-//! Threading model:
-//!
-//! - `new()` spawns a host-owned thread that calls `timely::execute`
-//!   with `workers` workers.
-//! - Workers wait on an `Arc<Barrier>` of `workers + 1` parties; the
-//!   host (user) thread is the extra party and drives the protocol.
-//! - Transaction state is broadcast through an
-//!   `Arc<RwLock<TxnState>>` from `flowlog_runtime::txn`.
-//! - Commit protocol: host moves per-worker staged buckets into shared
-//!   `Mutex<Vec<_>>` slots, publishes a `TxnAction::Commit` snapshot,
-//!   then barriers twice (start + end) before draining output buffers.
-//! - `Drop` publishes `TxnAction::Quit`, barriers twice to release the
-//!   workers, then joins the timely thread.
+//! Each batch keeps the weight of its insert or remove call. A commit
+//! publishes the batches, then workers load their shares through the
+//! runtime in per-relation call order before advancing the epoch.
 
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
@@ -35,19 +13,19 @@ use quote::format_ident;
 use quote::quote;
 
 use super::per_position_tuple;
-use super::user_to_tuple_convert;
 use crate::CodeParts;
-use crate::build::relation::input_struct_ident;
-use crate::build::relation::inputs_field_ident;
-use crate::build::relation::printsize_field_ident;
-use crate::build::relation::results_field_ident;
-use crate::build::relation::user::tuple_to_user_expr;
-use crate::build::relation::user_struct_ident;
+use crate::build::bindings::inputs_field_ident;
+use crate::build::bindings::printsize_field_ident;
+use crate::build::bindings::results_field_ident;
+use crate::build::bindings::tuple_to_user_expr;
+use crate::build::bindings::user_tuple_ident;
+use crate::codegen::user_tuple_tokens;
 use crate::data_type_tokens;
 
 pub(crate) fn gen_lib_incremental_engine(
     program: &Program,
     string_intern: bool,
+    uses_ord: bool,
     parts: &CodeParts,
 ) -> TokenStream {
     let edbs = program.edbs();
@@ -56,11 +34,11 @@ pub(crate) fn gen_lib_incremental_engine(
 
     let inc_imports = gen_imports();
     let engine_struct = gen_engine_struct(program, &non_nullary_edbs, &nullary_edbs, string_intern);
-    let new_body = gen_new_body(program, &non_nullary_edbs, &nullary_edbs, parts);
+    let new_body = gen_new_body(program, &non_nullary_edbs, &nullary_edbs, parts, uses_ord);
     let clear_staged_body = gen_clear_staged_body(&non_nullary_edbs, &nullary_edbs);
     let commit_body = gen_commit_body(program, &non_nullary_edbs, &nullary_edbs, string_intern);
     let drop_body = gen_drop_body();
-    let staging_methods = gen_staging_methods(&non_nullary_edbs, &nullary_edbs, string_intern);
+    let staging_methods = gen_staging_methods(&non_nullary_edbs, &nullary_edbs);
 
     quote! {
         #inc_imports
@@ -92,10 +70,12 @@ pub(crate) fn gen_lib_incremental_engine(
                 self.clear_staged();
             }
 
-            /// Apply all staged updates as one epoch. Panics if no
-            /// transaction is active — call `begin()` or any
-            /// `insert_*` / `remove_*` method first. Returns the
-            /// per-output deltas produced by this epoch.
+            /// Applies staged updates as one epoch and returns output deltas.
+            ///
+            /// # Panics
+            ///
+            /// Panics if no transaction is active. Call `begin()` or stage
+            /// an update before committing.
             pub fn commit(&mut self) -> IncrementalResults {
                 assert!(
                     self.in_txn,
@@ -139,11 +119,9 @@ fn gen_imports() -> TokenStream {
     }
 }
 
-// =========================================================================
-// Engine struct — carries the shared runtime handles (slots, bufs, size
-// cells) and the host-side staging buffers (one Vec per worker for
-// non-nullary EDBs, one Option<i32> for nullary).
-// =========================================================================
+// =============================================================================
+// Engine state
+// =============================================================================
 
 fn gen_engine_struct(
     program: &Program,
@@ -155,8 +133,8 @@ fn gen_engine_struct(
         .iter()
         .map(|rel| {
             let ident = staged_ident(rel);
-            let tuple_ty = data_type_tokens(&rel.data_type(), string_intern);
-            quote! { #ident: Vec<Vec<(#tuple_ty, i32)>> }
+            let tuple_ty = user_tuple_tokens(&rel.data_type());
+            quote! { #ident: Vec<(Vec<#tuple_ty>, i32)> }
         })
         .collect();
 
@@ -172,9 +150,9 @@ fn gen_engine_struct(
         .iter()
         .map(|rel| {
             let ident = slots_ident(rel);
-            let tuple_ty = data_type_tokens(&rel.data_type(), string_intern);
+            let tuple_ty = user_tuple_tokens(&rel.data_type());
             quote! {
-                #ident: Arc<Vec<::std::sync::Mutex<Vec<(#tuple_ty, i32)>>>>
+                #ident: Arc<::std::sync::Mutex<Arc<Vec<(Vec<#tuple_ty>, i32)>>>>
             }
         })
         .collect();
@@ -214,7 +192,6 @@ fn gen_engine_struct(
 
     quote! {
         pub struct IncrementalEngine {
-            workers: usize,
             epoch: u32,
             in_txn: bool,
 
@@ -244,17 +221,17 @@ fn gen_new_body(
     non_nullary_edbs: &[&Relation],
     nullary_edbs: &[&Relation],
     parts: &CodeParts,
+    uses_ord: bool,
 ) -> TokenStream {
     let slot_inits: Vec<TokenStream> = non_nullary_edbs
         .iter()
         .map(|rel| {
             let ident = slots_ident(rel);
+            let tuple_ty = user_tuple_tokens(&rel.data_type());
             quote! {
-                let #ident = Arc::new(
-                    (0..workers)
-                        .map(|_| ::std::sync::Mutex::new(Vec::new()))
-                        .collect::<Vec<_>>(),
-                );
+                let #ident = Arc::new(::std::sync::Mutex::new(Arc::new(
+                    Vec::<(Vec<#tuple_ty>, i32)>::new(),
+                )));
             }
         })
         .collect();
@@ -291,7 +268,7 @@ fn gen_new_body(
         .iter()
         .map(|rel| {
             let ident = staged_ident(rel);
-            quote! { #ident: vec![Vec::new(); workers] }
+            quote! { #ident: Vec::new() }
         })
         .collect();
 
@@ -325,7 +302,8 @@ fn gen_new_body(
         })
         .collect();
 
-    let worker_closure = gen_worker_closure(program, non_nullary_edbs, nullary_edbs, parts);
+    let worker_closure =
+        gen_worker_closure(program, non_nullary_edbs, nullary_edbs, parts, uses_ord);
 
     quote! {
         let barrier = Arc::new(::std::sync::Barrier::new(workers + 1));
@@ -354,7 +332,6 @@ fn gen_new_body(
         });
 
         Self {
-            workers,
             epoch: 0,
             in_txn: false,
             #(#staged_self_inits,)*
@@ -378,6 +355,7 @@ fn gen_worker_closure(
     non_nullary_edbs: &[&Relation],
     nullary_edbs: &[&Relation],
     parts: &CodeParts,
+    uses_ord: bool,
 ) -> TokenStream {
     let edb_decls = &parts.edb_decls;
     let handle_binding = &parts.handle_binding;
@@ -390,7 +368,10 @@ fn gen_worker_closure(
     let metrics_write = &parts.metrics_write;
     let step_loop = &parts.step_loop;
 
-    let inputs_new_args = gen_inputs_new_args(program);
+    let inputs_new_args = program
+        .edbs()
+        .into_iter()
+        .map(|rel| format_ident!("h{}", rel.name()));
 
     let edge_apply_blocks: Vec<TokenStream> = non_nullary_edbs
         .iter()
@@ -399,11 +380,9 @@ fn gen_worker_closure(
             let field = inputs_field_ident(rel);
             quote! {
                 {
-                    let my_chunk = ::std::mem::take(
-                        &mut *#slots[index].lock().expect("slot poisoned"),
-                    );
-                    for (tuple, diff) in my_chunk {
-                        inputs.#field.update_tuple(tuple, diff);
+                    let batches = Arc::clone(&#slots.lock().expect("slot poisoned"));
+                    for (rows, diff) in batches.iter() {
+                        inputs.#field.load_rows(rows.as_slice(), *diff).expect("typed input loading");
                     }
                 }
             }
@@ -416,10 +395,8 @@ fn gen_worker_closure(
             let slots = slots_ident(rel);
             let field = inputs_field_ident(rel);
             quote! {
-                if index == 0 {
-                    if let Some(diff) = #slots.lock().expect("slot poisoned").take() {
-                        inputs.#field.update_tuple((), diff);
-                    }
+                if let Some(diff) = *#slots.lock().expect("slot poisoned") {
+                    inputs.#field.load_rows(&[()], diff).expect("nullary update");
                 }
             }
         })
@@ -443,8 +420,9 @@ fn gen_worker_closure(
                     #dataflow_return
                 });
 
-            let mut inputs = Inputs::new(#(#inputs_new_args),*);
-            inputs.apply_inline_all(index);
+            let mut inputs = Inputs::new(#(#inputs_new_args,)* worker.peers(), index, #uses_ord)
+                .expect("valid worker coordinates");
+            inputs.apply_inline_all();
 
             let mut time_stamp: Ts = 0;
             let mut last_epoch: u32 = 0;
@@ -463,7 +441,7 @@ fn gen_worker_closure(
                     TxnAction::Commit => {
                         // Apply deltas at the current `time_stamp`. On the
                         // first commit this is 0, the same time the inline
-                        // facts were staged at — they get summed together
+                        // facts were staged at; they get summed together
                         // and processed in a single batch.
                         #(#edge_apply_blocks)*
                         #(#nullary_apply_blocks)*
@@ -499,22 +477,9 @@ fn gen_worker_closure(
     }
 }
 
-fn gen_inputs_new_args(program: &Program) -> Vec<TokenStream> {
-    program
-        .edbs()
-        .iter()
-        .map(|rel| {
-            let input_struct = input_struct_ident(rel);
-            let handle = format_ident!("h{}", rel.name());
-            quote! { #input_struct::new(#handle) }
-        })
-        .collect()
-}
-
-// =========================================================================
-// `clear_staged()` body — zeroes host-side staged buffers without
-// freeing the per-worker Vec allocations. Called by `begin()`/`abort()`.
-// =========================================================================
+// =============================================================================
+// Staging lifecycle
+// =============================================================================
 
 fn gen_clear_staged_body(
     non_nullary_edbs: &[&Relation],
@@ -525,9 +490,7 @@ fn gen_clear_staged_body(
         .map(|rel| {
             let staged = staged_ident(rel);
             quote! {
-                for bucket in self.#staged.iter_mut() {
-                    bucket.clear();
-                }
+                self.#staged.clear();
             }
         })
         .collect();
@@ -556,19 +519,14 @@ fn gen_commit_body(
     nullary_edbs: &[&Relation],
     string_intern: bool,
 ) -> TokenStream {
-    // `mem::take` moves each staged bucket into the shared slot, leaving
-    // the staging Vec empty for the next commit cycle without freeing
-    // the outer allocation.
     let stage_moves: Vec<TokenStream> = non_nullary_edbs
         .iter()
         .map(|rel| {
             let staged = staged_ident(rel);
             let slots = slots_ident(rel);
             quote! {
-                for (i, bucket) in self.#staged.iter_mut().enumerate() {
-                    *self.#slots[i].lock().expect("slot poisoned") =
-                        ::std::mem::take(bucket);
-                }
+                *self.#slots.lock().expect("slot poisoned") =
+                    Arc::new(::std::mem::take(&mut self.#staged));
             }
         })
         .collect();
@@ -583,6 +541,11 @@ fn gen_commit_body(
             }
         })
         .collect();
+
+    let release_rows = non_nullary_edbs.iter().map(|rel| {
+        let slots = slots_ident(rel);
+        quote! { *self.#slots.lock().expect("slot poisoned") = Arc::new(Vec::new()); }
+    });
 
     let drain_blocks = gen_drain_blocks(program, string_intern);
     let result_field_names = gen_result_field_names(program);
@@ -601,6 +564,10 @@ fn gen_commit_body(
         self.barrier.wait();
         self.barrier.wait();
 
+        // Workers have finished reading, so committed host rows need not
+        // stay allocated while the engine waits for the next transaction.
+        #(#release_rows)*
+
         #(#drain_blocks)*
 
         IncrementalResults {
@@ -610,7 +577,7 @@ fn gen_commit_body(
 }
 
 /// Per-output drain block: pulls this commit's output rows from the
-/// shared buffer and binds a typed local — `Vec<(rel::Foo, i32)>` for
+/// shared buffer and binds a typed local: `Vec<(rel::Foo, i32)>` for
 /// non-nullary outputs, `i32` net diff for nullary, and the raw size
 /// delta for `.printsize` cells. The engine no longer folds across
 /// commits; callers maintain a snapshot if they need one.
@@ -636,7 +603,7 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
                 };
             });
         } else {
-            let struct_ident = user_struct_ident(rel);
+            let struct_ident = user_tuple_ident(rel);
             let user_tuple = tuple_to_user_from_row(rel, string_intern);
             blocks.push(quote! {
                 let #field: Vec<(rel::#struct_ident, i32)> = {
@@ -705,14 +672,10 @@ fn gen_drop_body() -> TokenStream {
 // relations, `set_<rel>` / `unset_<rel>` for nullary.
 // =========================================================================
 
-fn gen_staging_methods(
-    non_nullary_edbs: &[&Relation],
-    nullary_edbs: &[&Relation],
-    string_intern: bool,
-) -> TokenStream {
+fn gen_staging_methods(non_nullary_edbs: &[&Relation], nullary_edbs: &[&Relation]) -> TokenStream {
     let per_rel: Vec<TokenStream> = non_nullary_edbs
         .iter()
-        .map(|rel| gen_one_rel_staging(rel, string_intern))
+        .map(|rel| gen_one_rel_staging(rel))
         .collect();
     let nullary: Vec<TokenStream> = nullary_edbs
         .iter()
@@ -725,51 +688,37 @@ fn gen_staging_methods(
     }
 }
 
-fn gen_one_rel_staging(rel: &Relation, string_intern: bool) -> TokenStream {
+fn gen_one_rel_staging(rel: &Relation) -> TokenStream {
     let name = rel.name();
-    let struct_ident = user_struct_ident(rel);
+    let struct_ident = user_tuple_ident(rel);
     let staged = staged_ident(rel);
     let insert = format_ident!("insert_{}", name);
     let remove = format_ident!("remove_{}", name);
 
-    // `user_to_tuple_convert` already short-circuits to `quote! { item }` when
-    // no per-position conversion is needed, so no local guard is required.
-    let map_expr = user_to_tuple_convert(rel, string_intern);
-
-    let distribute = |diff_tok: TokenStream| -> TokenStream {
+    let stage = |diff: TokenStream| -> TokenStream {
         quote! {
             if items.is_empty() { return; }
             self.ensure_txn();
-            let total = items.len();
-            let workers = self.workers;
-            let chunk = total / workers;
-            let remainder = total % workers;
-            let mut iter = items.into_iter();
-            for i in 0..workers {
-                let take = chunk + if i < remainder { 1 } else { 0 };
-                if take == 0 { continue; }
-                let bucket = &mut self.#staged[i];
-                bucket.reserve(take);
-                for item in iter.by_ref().take(take) {
-                    bucket.push((#map_expr, #diff_tok));
-                }
-            }
+            self.#staged.push((items, #diff));
         }
     };
 
-    let insert_body = distribute(quote! { 1_i32 });
-    let remove_body = distribute(quote! { -1_i32 });
+    let insert_body = stage(quote! { 1_i32 });
+    let remove_body = stage(quote! { -1_i32 });
 
     quote! {
-        /// Stage tuples to insert at the next `commit()`. Auto-begins
-        /// a transaction if none is active; an empty `items` slice is
-        /// a no-op and does not auto-begin.
+        /// Stages a batch to insert at the next `commit()`.
+        ///
+        /// Begins a transaction if none is active. An empty batch has
+        /// no effect and does not begin a transaction.
         pub fn #insert(&mut self, items: Vec<rel::#struct_ident>) {
             #insert_body
         }
 
-        /// Stage tuples to retract at the next `commit()`. Same
-        /// auto-begin + empty-slice semantics as `insert`.
+        /// Stages a batch to retract at the next `commit()`.
+        ///
+        /// Begins a transaction if none is active. An empty batch has
+        /// no effect and does not begin a transaction.
         pub fn #remove(&mut self, items: Vec<rel::#struct_ident>) {
             #remove_body
         }
@@ -798,8 +747,8 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
     }
 }
 
-/// Output-row tuple → user-tuple. The drain consumes each row by value
-/// (`for row in worker_buf`), so the tuple at `row.0` and its fields
+/// Converts an output row into a user-facing tuple. The drain consumes it
+/// by value, so the tuple at `row.0` and its fields
 /// can be moved out without cloning.
 fn tuple_to_user_from_row(rel: &Relation, string_intern: bool) -> TokenStream {
     per_position_tuple(

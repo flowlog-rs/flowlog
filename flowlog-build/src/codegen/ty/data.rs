@@ -277,7 +277,7 @@ pub(crate) fn internal_column_tokens(dt: &DataType, string_intern: bool) -> Toke
     match dt {
         DataType::Float32 => quote! { OrderedFloat<f32> },
         DataType::Float64 => quote! { OrderedFloat<f64> },
-        DataType::String if string_intern => quote! { Spur },
+        DataType::String if string_intern => quote! { ::flowlog_runtime::lasso::Spur },
         // A tuple column is a nested tuple of its fields' internal types
         // (strings intern to `Spur`, floats wrap, nested records recurse).
         DataType::FixedTuple(fields) => data_type_tokens(fields, string_intern),

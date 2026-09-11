@@ -33,9 +33,8 @@ pub(super) fn gen_batch_main(
         ..
     } = parts;
     let Input {
-        registry_inserts,
+        initialize,
         file_ingests,
-        maybe_peers,
         ..
     } = input;
 
@@ -53,7 +52,6 @@ pub(super) fn gen_batch_main(
 
                 move |worker| {
                     let index = worker.index();
-                    #maybe_peers
 
                     #profile_init
                     #(#local_bufs)*
@@ -72,15 +70,10 @@ pub(super) fn gen_batch_main(
 
                     // Closing the inputs is what lets the dataflow drain to
                     // fixpoint.
-                    let mut rels: HashMap<String, Box<dyn Relation>> = HashMap::new();
-                    #(#registry_inserts)*
+                    #initialize
                     #(#file_ingests)*
-                    for r in rels.values_mut() {
-                        r.apply_inline(index);
-                    }
-                    for r in rels.values_mut() {
-                        r.close();
-                    }
+                    inputs.apply_inline_all();
+                    inputs.close_all();
 
                     #step_loop
 

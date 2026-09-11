@@ -16,8 +16,8 @@ use quote::quote;
 use tracing::info;
 
 use crate::Compiler;
+use crate::dispatch;
 use crate::imports;
-use crate::relation;
 use crate::scaffold;
 
 impl Compiler {
@@ -30,16 +30,15 @@ impl Compiler {
         let parts = self.codegen.generate(program_planner, plan_graph)?;
         let features = self.codegen.features();
 
-        let relation_body = relation::gen_relation(
-            &self.program,
-            features,
-            self.config.mode() == ExecutionMode::Batch,
-        )?;
-        let relation_extras = imports::gen_binary_relation_extras(&self.program, features);
+        let relation_body = flowlog_build::gen_relations(&self.program, features.string_intern())?;
+        let dispatch = match self.config.mode() {
+            ExecutionMode::Batch => quote! {},
+            ExecutionMode::Inc => dispatch::gen_dispatch(&self.program),
+        };
         let relation_rs = flowlog_common::pretty_print(quote! {
             #![allow(non_camel_case_types)]
             #relation_body
-            #relation_extras
+            #dispatch
         });
 
         let bin_imports = imports::gen_imports(&self.config, features);
