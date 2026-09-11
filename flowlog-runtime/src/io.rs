@@ -1,15 +1,18 @@
-//! Atomic file writing for generated engine output.
+//! Relation declarations, input loading, and atomic file writing.
 //!
-//! [`input`] owns relation loading; [`write_atomic`] replaces completed
-//! output files without exposing a partial write.
+//! [`Relation`] declares relations independently of their I/O. [`input`]
+//! owns loading; [`write_atomic`] replaces completed output files without
+//! exposing a partial write.
 
 pub mod input;
+mod relation;
 
 use std::io;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 
+pub use relation::Relation;
 use tempfile::NamedTempFile;
 
 // =========================================================================

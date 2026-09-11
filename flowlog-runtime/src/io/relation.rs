@@ -1,17 +1,13 @@
-//! Relation declarations for runtime input loading.
+//! Relation declarations for runtime I/O.
 //!
-//! [`Relation`] supplies the declaration shared across input sources;
-//! [`Loader`](super::loader::Loader) owns the loading state.
+//! [`Relation`] supplies the name, tuple type, and inline facts independently
+//! of the state used to read or write rows.
 
 use std::iter;
 
 use differential_dataflow::Data;
 
-// =============================================================================
-// Relation
-// =============================================================================
-
-/// Declares one relation independently of its input sources.
+/// Declares one relation independently of how its rows are read or written.
 pub trait Relation {
     /// The name as the `.decl` spells it, for diagnostics.
     const NAME: &'static str;
@@ -19,7 +15,7 @@ pub trait Relation {
     /// The declared number of columns; zero denotes a nullary fact.
     const ARITY: usize;
 
-    /// The row representation stored in the dataflow, after input decoding.
+    /// The row representation stored in the dataflow.
     type Tuple: Data;
 
     /// The `.fact` rows written in the program itself, or none.

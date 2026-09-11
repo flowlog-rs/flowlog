@@ -63,7 +63,7 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
             #[allow(non_camel_case_types)]
             pub(crate) struct #marker;
 
-            impl ::flowlog_runtime::io::input::Relation for #marker {
+            impl ::flowlog_runtime::io::Relation for #marker {
                 const NAME: &'static str = #name;
                 const ARITY: usize = #arity;
                 type Tuple = #tuple;

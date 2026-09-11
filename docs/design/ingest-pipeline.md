@@ -42,15 +42,17 @@ relation's arity; it does not receive the relation declaration.
 
 ## Where each piece lives
 
+Paths below are relative to `flowlog-runtime/src/io/`.
+
 | file            | holds                                                          |
 |-----------------|----------------------------------------------------------------|
 | `relation.rs`   | `Relation` (`NAME`, `ARITY`, `Tuple`, `facts`) |
-| `loader.rs`     | `Loader<R, T, D>`: worker settings, loading sources, and managing the session |
-| `reader/put.rs` | The single-text-row reader |
-| `reader.rs`     | `Reader<T>`: the shared row-reading contract, and the `ingest` loop |
-| `reader/`       | Source-specific readers and their constructors |
-| `decode.rs`     | `Decode<Src>`: the shared row-decoding contract |
-| `decode/`       | Text and typed implementations, with `DecodeCell` and `DecodeField` |
+| `input/loader.rs`     | `Loader<R, T, D>`: worker settings, loading sources, and managing the session |
+| `input/reader.rs`     | `Reader<T>`: the shared row-reading contract, and the `ingest` loop |
+| `input/reader/put.rs` | The single-text-row reader |
+| `input/reader/`       | Source-specific readers and their constructors |
+| `input/decode.rs`     | `Decode<Src>`: the shared row-decoding contract |
+| `input/decode/`       | Text and typed implementations, with `DecodeCell` and `DecodeField` |
 
 Two facts the rustdoc cannot carry on any one item:
 
@@ -58,8 +60,9 @@ Two facts the rustdoc cannot carry on any one item:
   `load_put`), not on `Relation`. A host program's relation never proves it
   can parse a line. Every decoder is an impl that already exists in the
   runtime, selected by the pair of slot tuple and record type; no relation
-  generates one, and a mispaired one does not compile. Only `Relation` and
-  `Loader` are exposed from `io::input`; readers and decoding are internal.
+  generates one, and a mispaired one does not compile. `Relation` is exposed
+  from `io`; `io::input` exposes only `Loader`. Readers and decoding are
+  internal.
 - Readers yield finished tuples rather than records because a lending
   `Record<'_>` would need a generic associated type; decode running inside
   `next` is that constraint, not a preference.
@@ -79,7 +82,7 @@ Both generators share the relation declarations and loader container:
 
 ```rust
 pub struct RelEdge;
-impl ::flowlog_runtime::io::input::Relation for RelEdge {
+impl ::flowlog_runtime::io::Relation for RelEdge {
     const NAME: &'static str = "Edge";
     const ARITY: usize = 2;
     type Tuple = (i32, Spur);
