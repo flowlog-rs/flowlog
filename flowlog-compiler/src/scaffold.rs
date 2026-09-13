@@ -134,16 +134,6 @@ pub(crate) fn render_cargo_toml(
         if features.ordered_float() {
             deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
         }
-        if features.parallel_output() {
-            // The parallel `.output` file drain formats worker buffers with rayon.
-            deps["rayon"] = "1.0".into();
-        }
-        if features.itoa() {
-            // Integer formatting on the parallel file-output path; emitted
-            // fully qualified (`::itoa::Buffer`), so no `use` import exists
-            // to trip `-Dwarnings`.
-            deps["itoa"] = "1.0".into();
-        }
         match config.mode() {
             ExecutionMode::Inc => deps["rustyline"] = "18".into(),
             ExecutionMode::Batch => {}

@@ -13,33 +13,24 @@
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
-use proc_macro2::Literal;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use super::per_position_tuple;
 use crate::CodeParts;
 use crate::build::bindings::inputs_field_ident;
 use crate::build::bindings::printsize_field_ident;
 use crate::build::bindings::results_field_ident;
-use crate::build::bindings::tuple_to_user_expr;
 use crate::build::bindings::user_tuple_ident;
 use crate::codegen::user_tuple_tokens;
-use crate::gen_drain_block;
 
-pub(crate) fn gen_lib_engine(
-    program: &Program,
-    string_intern: bool,
-    uses_ord: bool,
-    parts: &CodeParts,
-) -> TokenStream {
+pub(crate) fn gen_lib_engine(program: &Program, uses_ord: bool, parts: &CodeParts) -> TokenStream {
     let edbs = program.edbs();
 
     let struct_def = gen_engine_struct(&edbs);
     let new_body = gen_new_body(&edbs);
     let method_blocks = edbs.iter().map(|rel| gen_one_rel_methods(rel));
-    let run_body = gen_run_body(program, &edbs, parts, string_intern, uses_ord);
+    let run_body = gen_run_body(program, &edbs, parts, uses_ord);
 
     quote! {
         #struct_def
@@ -136,7 +127,6 @@ fn gen_run_body(
     program: &Program,
     edbs: &[&Relation],
     parts: &CodeParts,
-    string_intern: bool,
     uses_ord: bool,
 ) -> TokenStream {
     let edb_decls = &parts.edb_decls;
@@ -157,7 +147,7 @@ fn gen_run_body(
     let staged_inputs = gen_staged_inputs(edbs);
     let inputs_new_args = edbs.iter().map(|rel| format_ident!("h{}", rel.name()));
     let typed_ingest = gen_typed_ingest(edbs);
-    let drain_locals = gen_drain_blocks(program, string_intern);
+    let drain_locals = gen_drain_blocks(program);
     let result_fields = gen_result_fields(program);
 
     quote! {
@@ -250,50 +240,19 @@ fn gen_result_fields(program: &Program) -> Vec<TokenStream> {
     fields
 }
 
-/// Per-output block that produces the typed local (`reach`, `tc_size`, …)
-/// `BatchResults` then names in its struct literal.
-fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> {
+/// Binds runtime snapshots and independent counts to public result fields.
+fn gen_drain_blocks(program: &Program) -> Vec<TokenStream> {
     let mut blocks = Vec::new();
-
     for rel in program.output_idbs() {
         let field = results_field_ident(rel);
         let buf = format_ident!("buf_{}", rel.name());
-
-        if rel.arity() == 0 {
-            blocks.push(quote! {
-                let #field: bool = {
-                    let guard = #buf.lock().expect("output buffer poisoned");
-                    guard.iter().any(|worker_buf| !worker_buf.is_empty())
-                };
-            });
-        } else {
-            let struct_ident = user_tuple_ident(rel);
-            let user_tuple = tuple_to_user_convert(rel, string_intern);
-            let write_row = quote! {
-                #field.push(#user_tuple);
-            };
-            let drain = gen_drain_block(&buf, rel, quote! {}, write_row, quote! {}, string_intern);
-            blocks.push(quote! {
-                let mut #field: Vec<rel::#struct_ident> = Vec::new();
-                #drain
-            });
-        }
+        blocks.push(quote! { let #field = #buf.emit_host::<false, _>(); });
     }
-
     for rel in program.printsize_idbs() {
         let field = printsize_field_ident(rel);
-        let cell = format_ident!("size_{}", rel.name());
-        // The size cell stores `(Ts, i32)`; clamp negatives to 0 — they
-        // shouldn't happen in batch mode but surfacing `usize` to the user
-        // requires a non-negative value regardless.
-        blocks.push(quote! {
-            let #field: usize = {
-                let (_, raw) = *#cell.lock().expect("size cell poisoned");
-                if raw < 0 { 0 } else { raw as usize }
-            };
-        });
+        let buf = format_ident!("buf_{}", rel.name());
+        blocks.push(quote! { let #field: usize = #buf.batch_size(); });
     }
-
     blocks
 }
 
@@ -303,19 +262,4 @@ fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> 
 
 fn data_field_ident(rel: &Relation) -> Ident {
     format_ident!("{}_data", rel.name())
-}
-
-/// Internal `Tuple` `row.0` → user-tuple. Used at drain time (batch-only
-/// binding: the shared buffer row is `(Tuple, Ts, i32)`).
-fn tuple_to_user_convert(rel: &Relation, string_intern: bool) -> TokenStream {
-    per_position_tuple(
-        rel,
-        string_intern,
-        quote! { row.0.clone() },
-        |i| {
-            let idx = Literal::usize_unsuffixed(i);
-            quote! { row.0.#idx.clone() }
-        },
-        |dt, src| tuple_to_user_expr(dt, string_intern, src),
-    )
 }

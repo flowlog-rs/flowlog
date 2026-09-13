@@ -72,20 +72,14 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     /// Loads this worker's share of the file at `path`, applying each row
     /// with weight `diff`.
     ///
-    /// `delimiter` must be ASCII. Cells are trimmed; delimiters and line
-    /// endings cannot be quoted or escaped. `has_header` skips the first
-    /// line of this file, not the first line of every worker's share.
+    /// Text uses [`Relation::INPUT_DELIMITER`] and
+    /// [`Relation::INPUT_HAS_HEADER`]. Cells are trimmed; delimiters and
+    /// line endings cannot be quoted or escaped.
     ///
     /// Rejected rows are reported to stderr and skipped. File-open failures
     /// are reported and load as empty. Metadata and read failures are
     /// returned without rolling back updates already applied.
-    pub fn load_file(
-        &mut self,
-        path: &Path,
-        delimiter: u8,
-        has_header: bool,
-        diff: D,
-    ) -> Result<(), RuntimeError>
+    pub fn load_file(&mut self, path: &Path, diff: D) -> Result<(), RuntimeError>
     where
         R::Tuple: for<'l> Decode<TextRow<'l>>,
     {
@@ -94,7 +88,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
         let Some((peers, index)) = partition else {
             return Ok(());
         };
-        validate_delimiter(delimiter)?;
+        validate_delimiter(R::INPUT_DELIMITER)?;
         let file = match File::open(path) {
             Ok(file) => file,
             Err(error) => {
@@ -106,7 +100,14 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
                 return Ok(());
             }
         };
-        let reader = FileReader::open(file, R::ARITY == 0, delimiter, has_header, peers, index)?;
+        let reader = FileReader::open(
+            file,
+            R::ARITY == 0,
+            R::INPUT_DELIMITER,
+            R::INPUT_HAS_HEADER,
+            peers,
+            index,
+        )?;
         ingest(
             reader,
             |tuple| session.update(tuple, diff.clone()),
@@ -121,13 +122,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     ///
     /// A decoding error is returned with no update applied. Text follows the
     /// delimiter rules of [`load_file`](Self::load_file).
-    pub fn load_put(
-        &mut self,
-        text: &str,
-        ordinal: usize,
-        delimiter: u8,
-        diff: D,
-    ) -> Result<(), RuntimeError>
+    pub fn load_put(&mut self, text: &str, ordinal: usize, diff: D) -> Result<(), RuntimeError>
     where
         R::Tuple: for<'l> Decode<TextRow<'l>>,
     {
@@ -136,8 +131,9 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
         let Some((peers, index)) = partition else {
             return Ok(());
         };
-        validate_delimiter(delimiter)?;
-        let Some(mut reader) = PutReader::open(text, ordinal, delimiter, peers, index) else {
+        validate_delimiter(R::INPUT_DELIMITER)?;
+        let Some(mut reader) = PutReader::open(text, ordinal, R::INPUT_DELIMITER, peers, index)
+        else {
             return Ok(());
         };
         if let Some(tuple) = reader.next()? {
@@ -151,13 +147,7 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     ///
     /// The text is decoded as a standalone boolean. Ownership and error
     /// handling follow [`load_put`](Self::load_put).
-    pub fn load_flag(
-        &mut self,
-        text: &str,
-        ordinal: usize,
-        delimiter: u8,
-        diff: D,
-    ) -> Result<(), RuntimeError>
+    pub fn load_flag(&mut self, text: &str, ordinal: usize, diff: D) -> Result<(), RuntimeError>
     where
         R: Relation<Tuple = ()>,
         D: Neg<Output = D>,
@@ -167,8 +157,9 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
         let Some((peers, index)) = partition else {
             return Ok(());
         };
-        validate_delimiter(delimiter)?;
-        let Some(mut reader) = PutReader::open(text, ordinal, delimiter, peers, index) else {
+        validate_delimiter(R::INPUT_DELIMITER)?;
+        let Some(mut reader) = PutReader::open(text, ordinal, R::INPUT_DELIMITER, peers, index)
+        else {
             return Ok(());
         };
         if let Some(holds) = Reader::<bool>::next(&mut reader)? {
@@ -295,34 +286,40 @@ mod tests {
     type Ts = u32;
     type Diff = i32;
 
-    struct Numbers;
+    struct Numbers<const DELIMITER: u8 = b'\t'>;
 
-    impl Relation for Numbers {
+    impl<const DELIMITER: u8> Relation for Numbers<DELIMITER> {
         const NAME: &'static str = "Numbers";
+        const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 1;
         type Tuple = (i32,);
     }
 
-    struct Mixed;
+    struct Mixed<const HAS_HEADER: bool = false>;
 
-    impl Relation for Mixed {
+    impl<const HAS_HEADER: bool> Relation for Mixed<HAS_HEADER> {
         const NAME: &'static str = "Mixed";
+        const INPUT_DELIMITER: u8 = b',';
+        const INPUT_HAS_HEADER: bool = HAS_HEADER;
+        const OUTPUT_DELIMITER: u8 = b'|';
         const ARITY: usize = 4;
         type Tuple = (i32, Spur, bool, OrderedFloat<f64>);
     }
 
-    struct Flagged;
+    struct Flagged<const DELIMITER: u8 = b'\t'>;
 
-    impl Relation for Flagged {
+    impl<const DELIMITER: u8> Relation for Flagged<DELIMITER> {
         const NAME: &'static str = "Flagged";
+        const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 0;
         type Tuple = ();
     }
 
-    struct WithFacts;
+    struct WithFacts<const DELIMITER: u8 = b'\t'>;
 
-    impl Relation for WithFacts {
+    impl<const DELIMITER: u8> Relation for WithFacts<DELIMITER> {
         const NAME: &'static str = "WithFacts";
+        const INPUT_DELIMITER: u8 = DELIMITER;
         const ARITY: usize = 2;
         type Tuple = (i32, Spur);
 
@@ -398,7 +395,7 @@ mod tests {
 
     #[test]
     fn load_rows_decodes_and_applies_with_the_given_weight() {
-        let got = deliveries::<Mixed>(1, 0, false, |loader| {
+        let got = deliveries::<Mixed<true>>(1, 0, false, |loader| {
             let rows = vec![
                 (1, "a".to_string(), true, 0.5),
                 (2, "b".to_string(), false, 1.5),
@@ -412,6 +409,14 @@ mod tests {
                 ((2, intern("b"), false, OrderedFloat(1.5)), 3),
             ]
         );
+    }
+
+    #[test]
+    fn typed_rows_do_not_validate_text_delimiters() {
+        let got = deliveries::<Numbers<0xFF>>(1, 0, false, |loader| {
+            loader.load_rows(&[(7,)], 2).expect("host rows");
+        });
+        assert_eq!(got, vec![((7,), 2)]);
     }
 
     #[rstest]
@@ -451,7 +456,7 @@ mod tests {
         let path = dir.path().join("rows.csv");
         fs::write(&path, b"1,a,true,0.5\n2,b,maybe,0.5\n3,c,false,1.5\n").expect("write");
         let got = deliveries::<Mixed>(1, 0, false, move |loader| {
-            loader.load_file(&path, b',', false, 1).expect("file");
+            loader.load_file(&path, 1).expect("file");
         });
         assert_eq!(
             got,
@@ -467,25 +472,24 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("missing.csv");
         let updates = deliveries::<Numbers>(1, 0, false, move |loader| {
-            loader
-                .load_file(&path, b',', false, 1)
-                .expect("empty input");
+            loader.load_file(&path, 1).expect("empty input");
         });
         assert!(updates.is_empty());
     }
 
     #[rstest]
-    #[case(0x80)]
-    #[case(0xA9)]
-    #[case(0xFF)]
-    fn invalid_delimiters_are_rejected_before_opening_a_file(#[case] delimiter: u8) {
+    #[case(Numbers::<0x80>, 0x80)]
+    #[case(Numbers::<0xA9>, 0xA9)]
+    #[case(Numbers::<0xFF>, 0xFF)]
+    fn invalid_delimiters_are_rejected_before_opening_a_file<R: Relation<Tuple = (i32,)>>(
+        #[case] _relation: R,
+        #[case] delimiter: u8,
+    ) {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("missing.csv");
         let mut loader =
-            Loader::<Numbers, Ts, Diff>::new(InputSession::new(), 1, 0, false).expect("loader");
-        let error = loader
-            .load_file(&path, delimiter, false, 1)
-            .expect_err("invalid delimiter");
+            Loader::<R, Ts, Diff>::new(InputSession::new(), 1, 0, false).expect("loader");
+        let error = loader.load_file(&path, 1).expect_err("invalid delimiter");
         assert!(matches!(
             error,
             RuntimeError::InvalidDelimiter { delimiter: actual } if actual == delimiter
@@ -498,9 +502,7 @@ mod tests {
         let path = dir.path().join("rows.csv");
         fs::write(&path, b"1\n\xFF\n").expect("write");
         let updates = deliveries::<Numbers>(1, 0, false, move |loader| {
-            let error = loader
-                .load_file(&path, b',', false, 1)
-                .expect_err("invalid UTF-8");
+            let error = loader.load_file(&path, 1).expect_err("invalid UTF-8");
             assert!(matches!(
                 error,
                 RuntimeError::NotUtf8 {
@@ -517,22 +519,22 @@ mod tests {
         let path = dir.path().join("rows.csv");
         fs::write(&path, b"\n").expect("write");
         let got = deliveries::<Flagged>(1, 0, false, move |loader| {
-            loader.load_file(&path, b',', false, 1).expect("file");
+            loader.load_file(&path, 1).expect("file");
         });
         assert_eq!(got, vec![((), 1)]);
     }
 
     #[test]
-    fn file_format_is_chosen_per_load() {
+    fn the_relations_header_setting_skips_the_first_line_of_each_file() {
         let dir = tempfile::tempdir().expect("temp dir");
         let csv = dir.path().join("rows.csv");
-        let tsv = dir.path().join("rows.tsv");
-        fs::write(&csv, b"1,a,true,0.5\n").expect("write csv");
-        fs::write(&tsv, b"9\theader\ttrue\t9.5\n2\tb\tfalse\t1.5\n").expect("write tsv");
+        let with_header = dir.path().join("with_header.csv");
+        fs::write(&csv, b"8,header,true,8.5\n1,a,true,0.5\n").expect("write csv");
+        fs::write(&with_header, b"9,header,true,9.5\n2,b,false,1.5\n").expect("write header");
 
-        let got = deliveries::<Mixed>(1, 0, false, move |loader| {
-            loader.load_file(&csv, b',', false, 1).expect("csv");
-            loader.load_file(&tsv, b'\t', true, 2).expect("tsv");
+        let got = deliveries::<Mixed<true>>(1, 0, false, move |loader| {
+            loader.load_file(&csv, 1).expect("csv");
+            loader.load_file(&with_header, 2).expect("header");
         });
         assert_eq!(
             got,
@@ -573,8 +575,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("rows.csv");
         fs::write(&path, b"1,a\n2,b\n").expect("write");
-        let got = deliveries::<WithFacts>(4, 0, true, move |loader| {
-            loader.load_file(&path, b',', false, 1).expect("file");
+        let got = deliveries::<WithFacts<b','>>(4, 0, true, move |loader| {
+            loader.load_file(&path, 1).expect("file");
         });
         assert_eq!(got, vec![((1, intern("a")), 1), ((2, intern("b")), 1)]);
     }
@@ -584,14 +586,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("rows.csv");
         fs::write(&path, b"\xFF\n\xFF\n").expect("write");
-        let got = deliveries::<WithFacts>(2, 1, true, move |loader| {
+        let got = deliveries::<WithFacts<0xA9>>(2, 1, true, move |loader| {
             // An invalid delimiter fails at open, even for an empty byte range.
-            loader
-                .load_file(&path, 0xA9, false, 1)
-                .expect("no reader opened");
-            loader
-                .load_put("invalid", 1, 0xA9, 1)
-                .expect("no reader opened");
+            loader.load_file(&path, 1).expect("no reader opened");
+            loader.load_put("invalid", 1, 1).expect("no reader opened");
             loader.inline_facts(1);
         });
         assert!(got.is_empty());
@@ -600,7 +598,7 @@ mod tests {
     #[test]
     fn ord_applies_every_put_on_worker_zero() {
         let got = deliveries::<WithFacts>(4, 0, true, |loader| {
-            loader.load_put("1\ta", 3, b'\t', 1).expect("put");
+            loader.load_put("1\ta", 3, 1).expect("put");
         });
         assert_eq!(got, vec![((1, intern("a")), 1)]);
     }
@@ -624,8 +622,8 @@ mod tests {
 
     #[test]
     fn load_put_applies_the_owned_tuple() {
-        let got = deliveries::<Mixed>(1, 0, false, |loader| {
-            loader.load_put("7,z,true,2.5", 0, b',', -1).expect("put");
+        let got = deliveries::<Mixed<true>>(1, 0, false, |loader| {
+            loader.load_put("7,z,true,2.5", 0, -1).expect("put");
         });
         assert_eq!(got, vec![((7, intern("z"), true, OrderedFloat(2.5)), -1)]);
     }
@@ -634,7 +632,7 @@ mod tests {
     fn a_refused_put_is_the_calls_error() {
         let got = deliveries::<Mixed>(1, 0, false, |loader| {
             let err = loader
-                .load_put("x,z,true,2.5", 0, b',', 1)
+                .load_put("x,z,true,2.5", 0, 1)
                 .expect_err("x is not i32");
             assert!(
                 matches!(
@@ -655,7 +653,7 @@ mod tests {
     fn a_non_owner_does_not_decode_a_put() {
         let updates = deliveries::<Numbers>(2, 0, false, |loader| {
             loader
-                .load_put("invalid", 1, b',', 1)
+                .load_put("invalid", 1, 1)
                 .expect("not this worker's put");
         });
         assert!(updates.is_empty());
@@ -671,11 +669,12 @@ mod tests {
         #[case] flag: bool,
     ) {
         let mut loader =
-            Loader::<Flagged, Ts, Diff>::new(InputSession::new(), 2, index, false).expect("loader");
+            Loader::<Flagged<0xA9>, Ts, Diff>::new(InputSession::new(), 2, index, false)
+                .expect("loader");
         let result = if flag {
-            loader.load_flag("True", 0, 0xA9, 1)
+            loader.load_flag("True", 0, 1)
         } else {
-            loader.load_put("True", 0, 0xA9, 1)
+            loader.load_put("True", 0, 1)
         };
         assert!(matches!(
             result,
@@ -687,7 +686,7 @@ mod tests {
     fn load_flag_asserts_on_true_and_retracts_on_false() {
         let got = deliveries::<Flagged>(1, 0, false, |loader| {
             for (ordinal, text) in ["True", " false "].into_iter().enumerate() {
-                loader.load_flag(text, ordinal, b',', 1).expect("flag");
+                loader.load_flag(text, ordinal, 1).expect("flag");
             }
         });
         assert_eq!(got, vec![((), -1), ((), 1)]);
@@ -697,7 +696,7 @@ mod tests {
     fn load_flag_refuses_any_other_spelling() {
         let got = deliveries::<Flagged>(1, 0, false, |loader| {
             let err = loader
-                .load_flag("maybe", 0, b',', 1)
+                .load_flag("maybe", 0, 1)
                 .expect_err("maybe is not a flag");
             assert!(
                 matches!(
@@ -715,7 +714,7 @@ mod tests {
     fn load_flag_on_a_non_owner_is_a_no_op() {
         let got = deliveries::<Flagged>(2, 0, false, |loader| {
             loader
-                .load_flag("maybe", 1, b',', 1)
+                .load_flag("maybe", 1, 1)
                 .expect("not this worker's put");
         });
         assert!(got.is_empty());
@@ -723,10 +722,8 @@ mod tests {
 
     #[test]
     fn ord_excluded_workers_skip_flag_validation() {
-        let updates = deliveries::<Flagged>(2, 1, true, |loader| {
-            loader
-                .load_flag("invalid", 1, 0xA9, 1)
-                .expect("excluded worker");
+        let updates = deliveries::<Flagged<0xA9>>(2, 1, true, |loader| {
+            loader.load_flag("invalid", 1, 1).expect("excluded worker");
         });
         assert!(updates.is_empty());
     }

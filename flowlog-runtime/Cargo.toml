@@ -19,8 +19,10 @@ cli = ["dep:clap"]
 [dependencies]
 clap = { workspace = true, features = ["derive", "string"], optional = true }
 differential-dataflow.workspace = true
+itoa = "1.0"
 lasso = { workspace = true, features = ["multi-threaded", "serialize"] }
 ordered-float = { workspace = true, features = ["serde"] }
+rayon = "1.0"
 regex.workspace = true
 rustc-hash.workspace = true
 serde = { workspace = true }

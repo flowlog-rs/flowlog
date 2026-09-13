@@ -46,7 +46,7 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
         });
     }
 
-    out.push(std_imports(inc, prof, f));
+    out.push(std_imports(prof));
     out.push(dd_core_imports(f));
 
     if inc {
@@ -78,29 +78,16 @@ pub(crate) fn gen_imports(config: &Config, features: &Features) -> TokenStream {
     quote! { #(#out)* }
 }
 
-fn std_imports(inc: bool, prof: bool, f: &Features) -> TokenStream {
+fn std_imports(prof: bool) -> TokenStream {
     if prof {
-        let rc_refcell = if f.output_buffers() {
-            quote! {}
-        } else {
-            quote! {
-                use std::cell::RefCell;
-                use std::rc::Rc;
-            }
-        };
-        let output_buf = output_buffer_imports(inc, f.output_buffers());
-
-        return quote! {
-            #rc_refcell
-            #output_buf
+        quote! {
+            use std::cell::RefCell;
+            use std::rc::Rc;
             use std::time::{Duration, Instant};
-        };
+        }
+    } else {
+        quote! { use std::time::Instant; }
     }
-
-    let mut out = Vec::new();
-    out.push(output_buffer_imports(inc, f.output_buffers()));
-    out.push(quote! { use std::time::Instant; });
-    quote! { #(#out)* }
 }
 
 fn dd_core_imports(f: &Features) -> TokenStream {
@@ -114,20 +101,4 @@ fn dd_core_imports(f: &Features) -> TokenStream {
         });
     }
     quote! { #(#out)* }
-}
-
-fn output_buffer_imports(inc: bool, needed: bool) -> TokenStream {
-    if !needed {
-        return quote! {};
-    }
-    let sync = if inc {
-        quote! { use std::sync::Mutex; }
-    } else {
-        quote! { use std::sync::{Arc, Mutex}; }
-    };
-    quote! {
-        #sync
-        use std::rc::Rc;
-        use std::cell::RefCell;
-    }
 }

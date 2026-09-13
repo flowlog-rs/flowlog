@@ -17,7 +17,7 @@ pub(crate) struct Input {
 impl Compiler {
     /// Builds loaders and resolves preload filenames against the runtime
     /// fact directory.
-    pub(crate) fn gen_input(&self, parts: &CodeParts, merge_section: &TokenStream) -> Input {
+    pub(crate) fn gen_input(&self, parts: &CodeParts, output: &TokenStream) -> Input {
         let edbs = self.program.edbs();
         let handles = edbs.iter().map(|rel| format_ident!("h{}", rel.name()));
         let uses_ord = self.config.serialize_load();
@@ -37,13 +37,9 @@ impl Compiler {
             .map(|(rel, filename)| {
                 let field = format_ident!("in_{}", rel.name());
                 let name = rel.raw_name();
-                let delimiter = rel.input().and_then(InputSource::delim).unwrap_or(b'\t');
-                let has_header = rel.input().is_some_and(InputSource::has_header);
                 quote! {
                     let path = fact_dir.join(#filename);
-                    if let Err(error) = inputs.#field.load_file(
-                        &path, #delimiter, #has_header, SEMIRING_ONE,
-                    ) {
+                    if let Err(error) = inputs.#field.load_file(&path, SEMIRING_ONE) {
                         eprintln!("[relation][{}] {} in {}", #name, error, path.display());
                     }
                 }
@@ -64,7 +60,7 @@ impl Compiler {
                 #(#flush)*
                 barrier.wait();
                 if index == 0 {
-                    #merge_section
+                    #output
                 }
                 barrier.wait();
             }

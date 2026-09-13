@@ -2,24 +2,20 @@
 //!
 //! Relation names determine the generated `rel` tuple aliases and result
 //! fields. Validation rejects names that Rust cannot represent or that
-//! collide after conversion. Output expressions translate engine values
-//! back to those user-facing tuple types; input conversion stays in the
-//! runtime loaders.
+//! collide after conversion. Runtime loaders and emitters convert between
+//! engine storage and these public tuple types.
 
 use std::collections::HashMap;
 use std::io;
 
-use flowlog_parser::DataType;
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
-use syn::Index;
 
 use crate::build::BuildError;
-use crate::codegen::tuple_tokens;
 use crate::codegen::user_tuple_tokens;
 
 // =============================================================================
@@ -178,47 +174,6 @@ fn ensure_unique(
 }
 
 // =============================================================================
-// Output conversion
-// =============================================================================
-
-/// Emits an expression converting an engine field to its user-facing value.
-///
-/// Floats lose their ordering wrappers and interned strings become owned
-/// strings. Tuple fields are converted recursively; other values pass
-/// through unchanged. Interned strings resolve through the runtime pool.
-pub(super) fn tuple_to_user_expr(
-    dt: &DataType,
-    string_intern: bool,
-    src: TokenStream,
-) -> TokenStream {
-    match dt {
-        DataType::Float32 | DataType::Float64 => quote! { (#src).into_inner() },
-        DataType::String if string_intern => {
-            quote! { ::flowlog_runtime::intern::resolve_out(#src).to_string() }
-        }
-        DataType::FixedTuple(fields) => {
-            let elems = fields.iter().enumerate().map(|(i, f)| {
-                let idx = Index::from(i);
-                tuple_to_user_expr(f, string_intern, quote! { #src.#idx })
-            });
-            tuple_tokens(elems)
-        }
-        DataType::IntLit
-        | DataType::FloatLit
-        | DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::String
-        | DataType::Bool => src,
-    }
-}
-
-// =============================================================================
 // Tests
 // =============================================================================
 
@@ -359,37 +314,6 @@ mod tests {
         assert_eq!(
             gen_public_rel_module(&program).to_string(),
             expected.to_string()
-        );
-    }
-
-    #[rstest]
-    #[case(DataType::Float32, false, quote! { (row).into_inner() })]
-    #[case(DataType::Float64, true, quote! { (row).into_inner() })]
-    #[case(DataType::String, true, quote! { ::flowlog_runtime::intern::resolve_out(row).to_string() })]
-    #[case(DataType::String, false, quote! { row })]
-    #[case(DataType::Int32, true, quote! { row })]
-    #[case(DataType::Bool, false, quote! { row })]
-    #[case(
-        DataType::FixedTuple(vec![
-            DataType::Int32,
-            DataType::FixedTuple(vec![DataType::String, DataType::Float64]),
-        ]),
-        true,
-        quote! {
-            (row . 0, (
-                ::flowlog_runtime::intern::resolve_out(row . 1 . 0).to_string(),
-                (row . 1 . 1).into_inner()
-            ))
-        }
-    )]
-    fn output_fields_convert_to_user_values(
-        #[case] dt: DataType,
-        #[case] string_intern: bool,
-        #[case] expected: TokenStream,
-    ) {
-        assert_eq!(
-            tuple_to_user_expr(&dt, string_intern, quote! { row }).to_string(),
-            expected.to_string(),
         );
     }
 }

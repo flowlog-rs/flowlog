@@ -1,33 +1,17 @@
-//! Relation declarations, input loading, and atomic file writing.
-//!
-//! [`Relation`] declares relations independently of their I/O. [`input`]
-//! owns loading; [`write_atomic`] replaces completed output files without
-//! exposing a partial write.
-
-pub mod input;
-mod relation;
+//! Atomic file replacement with buffered writes.
 
 use std::io;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 
-pub use relation::Relation;
 use tempfile::NamedTempFile;
 
-// =========================================================================
-// Atomic file write
-// =========================================================================
-
-/// Write `path` atomically: stream through `write` into a temp file in the
-/// same directory, then persist it over `path` in a single rename. A failed
-/// or interrupted write leaves `path` untouched, so a concurrent reader never
-/// observes a half-written file. Delegates the platform-specific atomic
-/// replace to `tempfile`, which handles the Unix and Windows differences.
+/// Replaces `path` atomically after `write` completes and its buffer flushes.
+/// Failed writes leave an existing destination untouched.
 ///
-/// The temp file is a sibling of `path` so the rename stays within one
-/// filesystem (a metadata move, not a copy). `path` must have a parent or be
-/// relative to the current directory.
+/// A path with a parent uses a temporary sibling. A bare filename uses the
+/// system temporary directory; persisting requires the same filesystem.
 pub fn write_atomic(
     path: impl AsRef<Path>,
     write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
@@ -48,10 +32,10 @@ pub fn write_atomic(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io;
 
-    /// A completed write leaves the destination with exactly the bytes
-    /// written and no leftover temp sibling in the directory.
+    use crate::io::write_atomic;
+
     #[test]
     fn write_atomic_persists_content_and_leaves_no_temp() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -70,8 +54,6 @@ mod tests {
         );
     }
 
-    /// A second write replaces the destination rather than appending or
-    /// erroring on the existing file.
     #[test]
     fn write_atomic_overwrites_existing() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -82,9 +64,6 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).expect("read"), "second");
     }
 
-    /// The atomicity guarantee: a closure error propagates, the existing
-    /// destination keeps its old contents (the write never clobbers the
-    /// target), and the temp sibling is cleaned up rather than left behind.
     #[test]
     fn write_atomic_failed_write_preserves_existing() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -96,6 +75,7 @@ mod tests {
             Err(io::Error::other("boom"))
         })
         .expect_err("closure error must propagate");
+        assert_eq!(err.kind(), io::ErrorKind::Other);
         assert_eq!(err.to_string(), "boom");
 
         assert_eq!(std::fs::read_to_string(&path).expect("read"), "original");

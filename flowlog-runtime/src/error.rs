@@ -1,5 +1,5 @@
-//! The crate's error currency, [`RuntimeError`], and the [`Position`] a
-//! row's diagnostics point at.
+//! Input validation and ingestion errors, with [`Position`] locating a
+//! rejected row in its source.
 
 use std::fmt;
 use std::io;
@@ -34,7 +34,7 @@ impl fmt::Display for Position {
 // RuntimeError
 // =============================================================================
 
-/// Anything the runtime can fail at.
+/// A failure to validate an input source or ingest its rows.
 ///
 /// A row error carries the row's own coordinates only; which relation and
 /// file it was read for is the reporting caller's context, added exactly

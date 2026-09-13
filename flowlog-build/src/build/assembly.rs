@@ -25,7 +25,6 @@ use crate::codegen::Features;
 /// Render the library-mode source file for one compiled program.
 pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     let config = &pipeline.config;
-    let string_intern = pipeline.features.string_intern();
 
     let lib_imports = gen_lib_imports(
         &pipeline.relations,
@@ -39,21 +38,11 @@ pub(crate) fn assemble(pipeline: &Pipeline) -> io::Result<String> {
     let (results_struct, lib_engine) = match config.mode() {
         ExecutionMode::Inc => (
             gen_incremental_results(&pipeline.program),
-            gen_lib_incremental_engine(
-                &pipeline.program,
-                string_intern,
-                config.serialize_load(),
-                &pipeline.parts,
-            ),
+            gen_lib_incremental_engine(&pipeline.program, config.serialize_load(), &pipeline.parts),
         ),
         ExecutionMode::Batch => (
             gen_batch_results(&pipeline.program),
-            gen_lib_engine(
-                &pipeline.program,
-                string_intern,
-                config.serialize_load(),
-                &pipeline.parts,
-            ),
+            gen_lib_engine(&pipeline.program, config.serialize_load(), &pipeline.parts),
         ),
     };
     let udf_mod = gen_udf_mod(&pipeline.features, config.udf_file().map(Path::new))?;

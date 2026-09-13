@@ -4,17 +4,21 @@
 //! `Inputs` container that groups typed loaders and forwards lifecycle
 //! calls. Source loading and command dispatch are outside this module.
 
+use flowlog_parser::DataType;
+use flowlog_parser::InputSource;
+use flowlog_parser::OrderKey;
 use flowlog_parser::Program;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
+use syn::Index;
 
 use super::CodegenError;
 use super::const_to_token;
 use super::data_type_tokens;
 use super::tuple_tokens;
 
-/// Emits input relation declarations and a worker-local `Inputs` container.
+/// Emits I/O relation declarations and a worker-local `Inputs` container.
 ///
 /// The parent module supplies `Ts`, `Diff`, `SEMIRING_ONE`, and tuple
 /// representation imports. Interned facts use the runtime's string pool.
@@ -29,13 +33,39 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
     let mut flush = Vec::new();
     let mut close = Vec::new();
 
-    for relation in edbs {
+    let outputs = program.idbs();
+    let relations = edbs
+        .iter()
+        .copied()
+        .chain(outputs.into_iter().filter(|output| {
+            !edbs
+                .iter()
+                .any(|input| input.fingerprint() == output.fingerprint())
+        }));
+    for relation in relations {
         let marker = format_ident!("Rel{}", relation.name());
         let field = format_ident!("in_{}", relation.name());
         let handle = format_ident!("h{}", relation.name());
         let name = relation.raw_name();
         let arity = relation.arity();
         let tuple = data_type_tokens(&relation.data_type(), string_intern);
+        let input_delimiter = relation
+            .input()
+            .and_then(|source| source.delim())
+            .map(|delimiter| {
+                quote! { const INPUT_DELIMITER: u8 = #delimiter; }
+            });
+        let input_has_header = relation
+            .input()
+            .is_some_and(InputSource::has_header)
+            .then(|| quote! { const INPUT_HAS_HEADER: bool = true; });
+        let output_delimiter =
+            relation
+                .output_sink()
+                .and_then(|sink| sink.delim())
+                .map(|delimiter| {
+                    quote! { const OUTPUT_DELIMITER: u8 = #delimiter; }
+                });
         let facts = match program.facts().get(relation.name()) {
             Some(rows) if !rows.is_empty() => {
                 let tuples = if arity == 0 {
@@ -59,6 +89,20 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
             }
             Some(_) | None => quote! {},
         };
+        let ordering = relation.output_sink().and_then(|sink| {
+            sink.order_by().map(|keys| {
+                let compare = gen_compare(keys, string_intern);
+                let limit = match sink.limit() {
+                    Some(limit) => quote! { Some(#limit) },
+                    None => quote! { None },
+                };
+                quote! {
+                    const ORDERED: bool = true;
+                    const LIMIT: Option<usize> = #limit;
+                    #compare
+                }
+            })
+        });
         declarations.push(quote! {
             #[allow(non_camel_case_types)]
             pub(crate) struct #marker;
@@ -67,9 +111,19 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
                 const NAME: &'static str = #name;
                 const ARITY: usize = #arity;
                 type Tuple = #tuple;
+                #input_delimiter
+                #input_has_header
+                #output_delimiter
                 #facts
+                #ordering
             }
         });
+        if !edbs
+            .iter()
+            .any(|input| input.fingerprint() == relation.fingerprint())
+        {
+            continue;
+        }
         fields.push(quote! {
             pub #field: ::flowlog_runtime::io::input::Loader<#marker, Ts, Diff>
         });
@@ -115,6 +169,66 @@ pub fn gen_relations(program: &Program, string_intern: bool) -> Result<TokenStre
     })
 }
 
+/// Emits comparisons of relation tuples, resolving interned string leaves.
+fn gen_compare(spec: &[OrderKey], string_intern: bool) -> TokenStream {
+    let comparisons = spec.iter().map(|(col_idx, data_type, ascending)| {
+        let index = Index::from(*col_idx);
+        let a = quote! { a.#index };
+        let b = quote! { b.#index };
+        let (a_expr, b_expr) = if string_intern {
+            (
+                resolve_string_leaves(&a, data_type),
+                resolve_string_leaves(&b, data_type),
+            )
+        } else {
+            (a, b)
+        };
+        let cmp_expr = if *ascending {
+            quote! { #a_expr.cmp(&#b_expr) }
+        } else {
+            quote! { #b_expr.cmp(&#a_expr) }
+        };
+        quote! {
+            let cmp = #cmp_expr;
+            if cmp != std::cmp::Ordering::Equal { return cmp; }
+        }
+    });
+    quote! {
+        fn compare(a: &Self::Tuple, b: &Self::Tuple) -> std::cmp::Ordering {
+            #(#comparisons)*
+            std::cmp::Ordering::Equal
+        }
+    }
+}
+
+/// Resolves interned string leaves through the runtime's output snapshot.
+/// Tuple nesting is preserved; non-string leaves pass through unchanged.
+fn resolve_string_leaves(access: &TokenStream, data_type: &DataType) -> TokenStream {
+    match data_type {
+        DataType::String => quote! { ::flowlog_runtime::intern::resolve_out(#access) },
+        DataType::FixedTuple(fields) => {
+            let elems = fields.iter().enumerate().map(|(j, fdt)| {
+                let jdx = Index::from(j);
+                resolve_string_leaves(&quote! { (#access).#jdx }, fdt)
+            });
+            quote! { ( #(#elems,)* ) }
+        }
+        DataType::IntLit
+        | DataType::FloatLit
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Bool => access.clone(),
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -155,6 +269,31 @@ mod tests {
             assert!(generated.contains(&expected.to_string()), "{generated}");
         }
         assert!(!generated.contains("fn facts"));
+        assert!(!generated.contains("INPUT_HAS_HEADER"), "{generated}");
+    }
+
+    #[test]
+    fn relation_text_settings_are_declared_independently() {
+        let generated = generate(
+            ".decl Edge(id: int32)\n\
+             .input Edge(delimiter=\",\", header=\"true\")\n\
+             .output Edge(delimiter=\"|\")\n",
+        );
+        for expected in [
+            quote! { const INPUT_DELIMITER: u8 = 44u8; },
+            quote! { const INPUT_HAS_HEADER: bool = true; },
+            quote! { const OUTPUT_DELIMITER: u8 = 124u8; },
+        ] {
+            assert!(generated.contains(&expected.to_string()), "{generated}");
+        }
+    }
+
+    #[test]
+    fn inline_counted_relations_keep_default_text_settings() {
+        let generated = generate(".decl Counted(id: int32)\nCounted(1).\n.printsize Counted\n");
+        assert!(!generated.contains("INPUT_DELIMITER"), "{generated}");
+        assert!(!generated.contains("INPUT_HAS_HEADER"), "{generated}");
+        assert!(!generated.contains("OUTPUT_DELIMITER"), "{generated}");
     }
 
     #[test]
