@@ -1,0 +1,2 @@
+CREATE TABLE Seed(x INTEGER);
+INSERT INTO Seed VALUES (1), (1), (2);

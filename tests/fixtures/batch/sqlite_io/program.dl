@@ -1,0 +1,12 @@
+.type Pair = (left: int32, right: string)
+.decl Source(id: int32, left: int32, right: string, enabled: bool, score: f64)
+.input Source(IO="sqlite", filename="input.sqlite")
+.decl Result(id: int32, pair: Pair, enabled: bool, score: f64)
+Result(id, pair, enabled, score) :- Source(id, left, right, enabled, score), pair = (left, right).
+.output Result(IO="sqlite", filename="output.sqlite", order_by="id", limit="1")
+.decl Present()
+Present() :- Source(_, _, _, _, _).
+.output Present(IO="sqlite", filename="./output.sqlite")
+.decl Empty(id: int32)
+Empty(id) :- Source(id, _, _, _, _), id < 0.
+.output Empty(IO="sqlite", filename="output.sqlite")

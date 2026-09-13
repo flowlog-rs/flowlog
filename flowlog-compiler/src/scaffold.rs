@@ -24,7 +24,8 @@ use crate::Compiler;
 // =========================================================================
 
 impl Compiler {
-    /// Materialize the scaffolded crate under [`CompileOptions::build_dir`].
+    /// Writes the generated project under
+    /// [`CompileOptions::build_dir`](crate::CompileOptions::build_dir).
     ///
     /// Arguments are pre-rendered file contents; this function only decides
     /// _where_ they go and creates intermediate directories. Optional files
@@ -89,6 +90,7 @@ pub(crate) fn render_cargo_toml(
     config: &Config,
     features: &Features,
     keep_build_dir: bool,
+    sqlite: bool,
 ) -> String {
     let mut doc = DocumentMut::new();
 
@@ -129,7 +131,10 @@ pub(crate) fn render_cargo_toml(
         deps["timely"] = "0.31".into();
         deps["differential-dataflow"] = "0.25".into();
         deps["mimalloc"] = "0.1".into();
-        deps["flowlog-runtime"] = value(inline_versioned_dep("0.3.0", &["cli"]));
+        deps["flowlog-runtime"] = value(inline_versioned_dep(
+            "0.3.0",
+            if sqlite { &["cli", "sqlite"] } else { &["cli"] },
+        ));
 
         if features.ordered_float() {
             deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
@@ -226,8 +231,8 @@ mod tests {
     fn incremental_is_emitted_only_for_kept_build_dirs() {
         let config = Config::default();
         let features = Features::default();
-        let kept = render_cargo_toml("bin", &config, &features, true);
-        let scratch = render_cargo_toml("bin", &config, &features, false);
+        let kept = render_cargo_toml("bin", &config, &features, true, false);
+        let scratch = render_cargo_toml("bin", &config, &features, false, false);
         assert!(kept.contains("incremental = true"));
         assert!(!scratch.contains("incremental"));
     }

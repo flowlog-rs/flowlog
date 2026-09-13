@@ -18,8 +18,8 @@ You typically don't call into it directly.
 - `io::output` - `Emitter` collects worker results and emits text, typed
   snapshots, weighted deltas, or independent counts. Ordering and limits
   apply to text and snapshots; host deltas remain unfiltered.
-- `error` - `RuntimeError` for input validation and ingestion. Output
-  writers return `std::io::Result`.
+- `error` - `RuntimeError` for input validation, ingestion, and SQLite output.
+  Output text writers return `std::io::Result`.
 - `intern` — thread-safe string-interning pool.
 - `txn` — transaction state types (`TxnOp`, `TxnAction`, `TxnState`)
   consumed by incremental-mode drivers to broadcast per-epoch commits.

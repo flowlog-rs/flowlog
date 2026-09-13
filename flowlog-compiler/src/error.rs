@@ -1,13 +1,12 @@
 //! Compiler-driver errors.
 //!
-//! - `Io` — infrastructure failures (project scaffold write, `cargo build`
+//! - `Io`: infrastructure failures (project scaffold write, `cargo build`
 //!   shell-out, binary install). User fixes their environment.
-//! - `Internal` — invariant violations. Rendered as "please file a bug" ICEs.
+//! - `Internal`: invariant violations reported with a bug-report link.
 
 use std::io;
 
 use codespan_reporting::diagnostic::Diagnostic as CsDiagnostic;
-use flowlog_common::BUG_URL;
 use flowlog_common::Diagnostic;
 use flowlog_common::FileId;
 use flowlog_common::InternalError;
@@ -20,12 +19,6 @@ pub enum CompilerError {
 
     #[error(transparent)]
     Internal(#[from] InternalError),
-}
-
-impl CompilerError {
-    pub(crate) fn internal(detail: impl Into<String>) -> Self {
-        Self::Internal(InternalError::new("compiler", detail, BUG_URL))
-    }
 }
 
 impl Diagnostic for CompilerError {

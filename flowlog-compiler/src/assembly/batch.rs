@@ -8,12 +8,12 @@ use quote::quote;
 use crate::io::input::Input;
 
 /// Emits startup, a single dataflow run, and output after workers join.
-/// `output` may reference only state declared outside the workers.
+/// `emit_output` may reference only state declared outside the workers.
 pub(super) fn gen_batch_main(
     parts: &CodeParts,
     input: &Input,
     startup: &TokenStream,
-    output: &TokenStream,
+    emit_output: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
         edb_decls,
@@ -33,8 +33,8 @@ pub(super) fn gen_batch_main(
         ..
     } = parts;
     let Input {
-        initialize,
-        file_ingests,
+        initialize_inputs,
+        load_files,
         ..
     } = input;
 
@@ -70,8 +70,8 @@ pub(super) fn gen_batch_main(
 
                     // Closing the inputs is what lets the dataflow drain to
                     // fixpoint.
-                    #initialize
-                    #(#file_ingests)*
+                    #initialize_inputs
+                    #(#load_files)*
                     inputs.apply_inline_all();
                     inputs.close_all();
 
@@ -85,7 +85,7 @@ pub(super) fn gen_batch_main(
             .unwrap();
 
             println!("{:?}:\tDataflow executed", timer.elapsed());
-            #output
+            #emit_output
         }
     }
 }

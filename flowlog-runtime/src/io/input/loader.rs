@@ -14,12 +14,16 @@ use timely::progress::Timestamp;
 use crate::error::RuntimeError;
 use crate::io::Relation;
 use crate::io::input::decode::Decode;
+#[cfg(feature = "sqlite")]
+use crate::io::input::decode::sqlite::ReadSqlite;
 use crate::io::input::decode::text::TextRow;
 use crate::io::input::reader::Reader;
 use crate::io::input::reader::file::FileReader;
 use crate::io::input::reader::host::HostReader;
 use crate::io::input::reader::ingest;
 use crate::io::input::reader::put::PutReader;
+#[cfg(feature = "sqlite")]
+use crate::io::input::reader::sqlite;
 
 // =============================================================================
 // Loader
@@ -40,6 +44,8 @@ pub struct Loader<R: Relation, T: Timestamp, D: Semigroup + 'static> {
     /// Coordinates used to divide input; `None` disables reading on this
     /// worker.
     partition: Option<(usize, usize)>,
+    #[cfg(feature = "sqlite")]
+    uses_ord: bool,
 }
 
 impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
@@ -66,6 +72,8 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
         Ok(Self {
             session: Some(session),
             partition,
+            #[cfg(feature = "sqlite")]
+            uses_ord,
         })
     }
 
@@ -113,6 +121,31 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
             |tuple| session.update(tuple, diff.clone()),
             |error| Self::report_skip(&error, Some(path)),
         )
+    }
+
+    /// Loads this worker's share of named SQLite columns, applying `diff` to
+    /// every row. Input must remain unchanged during loading. Reads stop at the
+    /// first database or conversion error without undoing prior updates.
+    /// Missing databases are errors and are never created.
+    #[cfg(feature = "sqlite")]
+    pub fn load_sqlite(
+        &mut self,
+        path: &Path,
+        columns: &[&str],
+        diff: D,
+    ) -> Result<(), RuntimeError>
+    where
+        R::Tuple: ReadSqlite,
+    {
+        let partition = self.partition;
+        let uses_ord = self.uses_ord;
+        let session = self.session();
+        let Some((peers, index)) = partition else {
+            return Ok(());
+        };
+        sqlite::read::<R>(path, columns, peers, index, uses_ord, |row| {
+            session.update(row, diff.clone());
+        })
     }
 
     /// Applies one `put` on its owning worker with weight `diff`.

@@ -6,6 +6,8 @@
 pub(crate) mod file;
 pub(crate) mod host;
 pub(crate) mod put;
+#[cfg(feature = "sqlite")]
+pub(crate) mod sqlite;
 
 use crate::error::RuntimeError;
 

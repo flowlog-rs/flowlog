@@ -8,12 +8,12 @@ use quote::quote;
 use crate::io::input::Input;
 
 /// Emits startup, preload, and an interactive loop over persistent workers.
-/// `output` runs on worker 0 after every worker has published its results.
+/// `emit_output` runs on worker 0 after every worker has published its results.
 pub(super) fn gen_incremental_main(
     parts: &CodeParts,
     input: &Input,
     startup: &TokenStream,
-    output: &TokenStream,
+    emit_output: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
         edb_decls,
@@ -33,8 +33,8 @@ pub(super) fn gen_incremental_main(
         ..
     } = parts;
     let Input {
-        initialize,
-        preload,
+        initialize_inputs,
+        preload_inputs,
         ..
     } = input;
 
@@ -81,11 +81,11 @@ pub(super) fn gen_incremental_main(
                             #dataflow_return
                         });
 
-                    #initialize
+                    #initialize_inputs
 
                     let mut time_stamp: u32 = 0;
 
-                    #preload
+                    #preload_inputs
 
                     fn apply_ops(inputs: &mut Inputs, ops: &[TxnOp]) {
                         for (ordinal, op) in ops.iter().enumerate() {
@@ -244,7 +244,7 @@ pub(super) fn gen_incremental_main(
                                 barrier.wait();
 
                                 if index == 0 {
-                                    #output
+                                    #emit_output
 
                                     println!("{:?}:\tCommitted & executed", round_timer.elapsed());
                                 }

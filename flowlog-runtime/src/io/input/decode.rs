@@ -4,6 +4,8 @@
 //! [`DecodeCell`](text::DecodeCell), while [`typed`] converts typed rows
 //! through [`DecodeField`](typed::DecodeField).
 
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 pub mod text;
 pub mod typed;
 

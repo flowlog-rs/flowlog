@@ -1,8 +1,13 @@
-//! Input validation and ingestion errors, with [`Position`] locating a
-//! rejected row in its source.
+//! Runtime I/O errors, with [`Position`] locating rejected input rows.
+//! SQLite failures cover database access, storage values, and output weights.
 
 use std::fmt;
 use std::io;
+#[cfg(feature = "sqlite")]
+use std::path::PathBuf;
+
+#[cfg(feature = "sqlite")]
+use rusqlite::Error as DatabaseError;
 
 // =============================================================================
 // Position
@@ -34,7 +39,7 @@ impl fmt::Display for Position {
 // RuntimeError
 // =============================================================================
 
-/// A failure to validate an input source or ingest its rows.
+/// A failure to read input or write SQLite output.
 ///
 /// A row error carries the row's own coordinates only; which relation and
 /// file it was read for is the reporting caller's context, added exactly
@@ -45,14 +50,40 @@ impl fmt::Display for Position {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RuntimeError {
+    #[cfg(feature = "sqlite")]
+    #[error(transparent)]
+    Sqlite(#[from] DatabaseError),
+
+    #[cfg(feature = "sqlite")]
+    #[error("SQLite database '{}': {source}", path.display())]
+    SqlitePath {
+        path: PathBuf,
+        source: Box<RuntimeError>,
+    },
+
+    #[cfg(feature = "sqlite")]
+    #[error("SQLite column {column}: {value} is not {expected}")]
+    SqliteValue {
+        column: usize,
+        value: String,
+        expected: &'static str,
+    },
+
+    #[cfg(feature = "sqlite")]
+    #[error("invalid SQLite schema: {0}")]
+    SqliteSchema(String),
+
+    #[cfg(feature = "sqlite")]
+    #[error("relation `{relation}` has incremental weight {diff}; expected +1 or -1")]
+    SqliteWeight { relation: &'static str, diff: i32 },
+
     #[error("worker index {index} requires nonzero peers and index < peers, got {peers} peers")]
     InvalidWorker { peers: usize, index: usize },
 
     #[error("delimiter byte {delimiter} must be ASCII")]
     InvalidDelimiter { delimiter: u8 },
 
-    /// A failed `std::io` call while reading a source. Names no relation
-    /// or path: the caller that opened the source adds both.
+    /// A failed `std::io` call. The caller adds relation or path context.
     #[error(transparent)]
     Io(#[from] io::Error),
 

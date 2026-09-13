@@ -295,13 +295,6 @@ main() {
     echo -e "  ${BOLD}FlowLog Fixture Tests (library mode)${NC}"
     echo ""
 
-    total=$(count_tests "$@")
-    if (( jobs > 1 )); then
-        echo -e "  ${DIM}Running ${total} tests (parallel, -j ${jobs})...${NC}"
-    else
-        echo -e "  ${DIM}Running ${total} tests...${NC}"
-    fi
-
     # Build the flat (category, test_dir) task list.
     local -a tasks=()
     if [[ $# -gt 0 ]]; then
@@ -309,6 +302,7 @@ main() {
         for name in "$@"; do
             local cat
             cat="$(find_test "$name")" || die "Test not found: $name"
+            [[ -f "${TESTS_DIR}/${cat}/${name}/sqlite_setup.sql" ]] && continue
             tasks+=("${cat}|${TESTS_DIR}/${cat}/${name}")
         done
     else
@@ -317,10 +311,20 @@ main() {
             [[ -d "$cat_dir" ]] || continue
             for test_dir in "$cat_dir"/*/; do
                 [[ -f "$test_dir/program.dl" ]] || continue
+                [[ -f "$test_dir/sqlite_setup.sql" ]] && continue
                 tasks+=("${cat}|${test_dir%/}")
             done
         done
     fi
+
+    total=${#tasks[@]}
+    if (( jobs > 1 )); then
+        echo -e "  ${DIM}Running ${total} tests (parallel, -j ${jobs})...${NC}"
+    else
+        echo -e "  ${DIM}Running ${total} tests...${NC}"
+    fi
+
+    (( total > 0 )) || return 0
 
     if (( jobs > 1 )); then
         echo -e "  ${YELLOW}Warming ${jobs} runner crates (release)...${NC}"

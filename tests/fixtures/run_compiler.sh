@@ -18,11 +18,10 @@ set -euo pipefail
 #   tests/fixtures/run_compiler.sh                          # run all tests
 #   tests/fixtures/run_compiler.sh <test_name> [test_name ...] # run specific tests
 
-# Categories exercised by binary mode.
-# first such fixture lands (binary mode already supports the mode).
 CATEGORIES=(batch inc)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+source "$TESTS_DIR/sqlite_helper.sh"
 
 readonly COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
 readonly BUILD_DIR="${ROOT_DIR}/target/e2e"
@@ -104,17 +103,13 @@ run_generated_binary() {
     local run_log="$3"
     local incremental="$4"
 
-    # Incremental: feed commands via stdin. Rustyline detects non-TTY
-    # stdin and falls back to a synchronous line reader, so no PTY or
-    # pacing choreography is needed.
-    if (( incremental )); then
-        (cd "$work_dir" && ./program < "$test_dir/commands.txt" >"$run_log" 2>&1)
-        return
-    fi
-
     local runtime_flags=()
     if [[ -f "$test_dir/runtime_flags" ]]; then
         mapfile -t runtime_flags < "$test_dir/runtime_flags"
+    fi
+    if (( incremental )); then
+        (cd "$work_dir" && ./program "${runtime_flags[@]}" < "$test_dir/commands.txt" >"$run_log" 2>&1)
+        return
     fi
     (cd "$work_dir" && ./program "${runtime_flags[@]}" >"$run_log" 2>&1)
 }
@@ -190,6 +185,12 @@ run_test() {
     # 2) Stage inputs
     copy_test_data "$test_dir" "$work_dir"
     mkdir -p "$output_dir"
+    if [[ -f "$test_dir/sqlite_setup.sql" ]]; then
+        if ! setup_sqlite_fixture "$test_dir" "$work_dir" >"$run_log" 2>&1; then
+            record_failure "$full_name" "SQLite setup failed" "$(cat "$run_log")"
+            return
+        fi
+    fi
 
     # 3) Execute
     if ! run_generated_binary "$work_dir" "$test_dir" "$run_log" "$incremental"; then
@@ -207,8 +208,16 @@ run_test() {
         grep '^\[size\]' "$run_log" > "${output_dir}/printsize"
     fi
 
+    if [[ -f "$test_dir/sqlite_setup.sql" ]]; then
+        if ! export_sqlite_outputs "$test_dir" "$work_dir" >>"$run_log" 2>&1; then
+            record_failure "$full_name" "SQLite query failed" "$(cat "$run_log")"
+            return
+        fi
+    fi
+
     # 4) Compare
     local use_sort=0
+    [[ -f "$test_dir/sqlite_setup.sql" ]] && use_sort=1
     [[ -f "$test_dir/runtime_flags" ]] && grep -q -- '-w' "$test_dir/runtime_flags" && use_sort=1
 
     local mismatch_detail
