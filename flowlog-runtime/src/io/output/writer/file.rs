@@ -197,29 +197,21 @@ mod tests {
         type Tuple = T;
     }
 
-    #[test]
-    fn file_output_replaces_existing_contents_with_fixture_rows() {
+    #[rstest]
+    #[case::empty(vec![], b"")]
+    #[case::nonempty(vec![(7,), (3,)], b"7\n3\n")]
+    fn file_output_replaces_existing_contents(#[case] rows: Vec<(i32,)>, #[case] expected: &[u8]) {
         let dir = tempfile::tempdir().expect("output directory");
-        let path = dir.path().join("Ints.csv");
+        let path = dir.path().join("Out.csv");
         fs::write(&path, "previous output").expect("existing file");
         let mut writer = FileWriter::create(&path, b'\t').expect("create output");
         assert_eq!(fs::metadata(&path).expect("output metadata").len(), 0);
-        for row in [
-            (i8::MIN, i16::MIN, i32::MIN, i64::MIN),
-            (-1, 1, -1, 1),
-            (0, 0, 0, 0),
-            (i8::MAX, i16::MAX, i32::MAX, i64::MAX),
-        ] {
-            Writer::<TestRelation<_, 4>, ()>::write_row(&mut writer, (row, (), 1))
+        for row in rows {
+            Writer::<TestRelation<_, 1>, ()>::write_row(&mut writer, (row, (), 1))
                 .expect("write row");
         }
-        Writer::<TestRelation<(i8, i16, i32, i64), 4>, ()>::finish(writer).expect("flush output");
-        assert_eq!(
-            fs::read(&path).expect("output bytes"),
-            include_bytes!(
-                "../../../../../tests/fixtures/batch/output_all_types/expected/Ints.csv"
-            ),
-        );
+        Writer::<TestRelation<(i32,), 1>, ()>::finish(writer).expect("flush output");
+        assert_eq!(fs::read(&path).expect("output bytes"), expected);
     }
 
     #[test]
@@ -229,16 +221,6 @@ mod tests {
         let error = FileWriter::create(&path, b'\t').expect_err("missing parent");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(!path.parent().expect("parent path").exists());
-    }
-
-    #[test]
-    fn empty_file_output_truncates_existing_rows() {
-        let dir = tempfile::tempdir().expect("output directory");
-        let path = dir.path().join("Out.csv");
-        fs::write(&path, "previous output").expect("existing file");
-        let writer = FileWriter::create(&path, b'\t').expect("create output");
-        Writer::<TestRelation<(i32,), 1>, ()>::finish(writer).expect("flush empty output");
-        assert_eq!(fs::read(path).expect("empty output"), b"");
     }
 
     #[test]
@@ -253,18 +235,6 @@ mod tests {
             .expect("zero weight");
         Writer::<TestRelation<(i32,), 1>, (), true>::finish(writer).expect("flush output");
         assert_eq!(bytes, b"7|-2\n3|+5\n7|+0\n");
-    }
-
-    #[test]
-    fn nullary_files_keep_presence_markers_for_retractions() {
-        let mut bytes = Vec::new();
-        let mut writer = FileWriter::new(&mut bytes, b'|');
-        Writer::<TestRelation<_, 0>, (), true>::write_row(&mut writer, ((), (), -1))
-            .expect("nullary row");
-        Writer::<TestRelation<_, 0>, (), false>::write_row(&mut writer, ((), (), 1))
-            .expect("nullary row");
-        Writer::<TestRelation<(), 0>, (), true>::finish(writer).expect("flush output");
-        assert_eq!(bytes, b"True\nTrue\n");
     }
 
     #[rstest]
@@ -289,29 +259,6 @@ mod tests {
             let expected = "1\t+1\n".repeat(8192) + "7\t+0\n" + &"2\t-1\n".repeat(8192) + "3\t+7\n";
             assert_eq!(bytes, expected.as_bytes());
         });
-    }
-
-    #[test]
-    fn parallel_batch_output_matches_existing_fixture_bytes() {
-        let mut partitions = vec![
-            vec![((0u8, 0u16, 0u32, 0u64), (), 1)],
-            Vec::new(),
-            vec![
-                ((7, 300, 70_000, 5_000_000_000), (), 1),
-                ((u8::MAX, u16::MAX, u32::MAX, u64::MAX), (), 1),
-            ],
-        ];
-        let mut bytes = Vec::new();
-        let mut writer = FileWriter::new(&mut bytes, b'\t');
-        Writer::<TestRelation<_, 4>, _, false>::write_batch(&mut writer, &mut partitions)
-            .expect("parallel output");
-        Writer::<TestRelation<(u8, u16, u32, u64), 4>, ()>::finish(writer).expect("flush output");
-        assert_eq!(
-            bytes,
-            include_bytes!(
-                "../../../../../tests/fixtures/batch/output_all_types/expected/UInts.csv"
-            ),
-        );
     }
 
     /// Scratch ownership is internal, so the memory bound is checked here
@@ -390,52 +337,30 @@ mod tests {
         assert_eq!(error.kind(), kind);
         assert_eq!(error.to_string(), message);
     }
-    #[rstest]
-    #[case::signed(
-        TestRelation::<_, 4>(vec![
-            (i8::MIN, i16::MIN, i32::MIN, i64::MIN),
-            (-1, 1, -1, 1),
-            (0, 0, 0, 0),
-            (i8::MAX, i16::MAX, i32::MAX, i64::MAX),
-        ]),
-        include_bytes!("../../../../../tests/fixtures/batch/output_all_types/expected/Ints.csv").as_slice(),
-    )]
-    #[case::unsigned(
-        TestRelation::<_, 4>(vec![
-            (0u8, 0u16, 0u32, 0u64),
-            (7, 300, 70_000, 5_000_000_000),
-            (u8::MAX, u16::MAX, u32::MAX, u64::MAX),
-        ]),
-        include_bytes!("../../../../../tests/fixtures/batch/output_all_types/expected/UInts.csv").as_slice(),
-    )]
-    #[case::floats(
-        TestRelation::<_, 2>(vec![
+
+    #[test]
+    fn file_batches_match_existing_fixture_bytes() {
+        type Rows = TestRelation<(OrderedFloat<f32>, OrderedFloat<f64>), 2>;
+        let rows = [
             (OrderedFloat(-2.5f32), OrderedFloat(4.140000000000001f64)),
             (OrderedFloat(-0.0), OrderedFloat(0.5)),
             (OrderedFloat(0.1), OrderedFloat(1e20)),
             (OrderedFloat(1.0), OrderedFloat(1.0)),
-        ]),
-        include_bytes!("../../../../../tests/fixtures/batch/output_all_types/expected/Floats.csv").as_slice(),
-    )]
-    #[case::nested(
-        TestRelation::<_, 1>(vec![((String::from("p"), (String::from("q"),)),)]),
-        include_bytes!("../../../../../tests/fixtures/batch/tuple_nested/expected/Nest1.csv").as_slice(),
-    )]
-    fn file_rows_match_existing_fixtures<R, const ARITY: usize>(
-        #[case] rows: TestRelation<Vec<R>, ARITY>,
-        #[case] expected: &[u8],
-    ) where
-        R: differential_dataflow::Data + Sync,
-        for<'a, 'r> TextEncoder<'a, Vec<u8>, false>: Encode<&'r R, Output = io::Result<()>>,
-    {
+        ];
         let mut bytes = Vec::new();
         let mut writer = FileWriter::new(&mut bytes, b'\t');
-        for row in rows.0 {
-            Writer::<TestRelation<R, ARITY>, ()>::write_row(&mut writer, (row, (), 1))
-                .expect("file row");
-        }
-        Writer::<TestRelation<R, ARITY>, ()>::finish(writer).expect("flush output");
-        assert_eq!(bytes, expected);
+        let mut partitions = [
+            Vec::new(),
+            rows.into_iter().map(|row| (row, (), 1)).collect(),
+        ];
+        Writer::<Rows, ()>::write_batch(&mut writer, &mut partitions).expect("file batch");
+        Writer::<Rows, ()>::finish(writer).expect("flush output");
+        assert_eq!(
+            bytes,
+            include_bytes!(
+                "../../../../../tests/fixtures/batch/output_all_types/expected/Floats.csv"
+            ),
+        );
     }
 
     #[rstest]
@@ -466,63 +391,6 @@ mod tests {
             .expect("nullary delta");
         Writer::<TestRelation<(), 0>, ()>::finish(writer).expect("flush output");
         assert_eq!(bytes, b"True\nTrue\n");
-    }
-
-    #[test]
-    fn file_strings_are_written_verbatim() {
-        type Rows = TestRelation<(String, bool, bool), 3>;
-        let row = (String::from("a\t\"b\"\n\u{03bb}"), true, false);
-        let mut bytes = Vec::new();
-        let mut writer = FileWriter::new(&mut bytes, b'|');
-        Writer::<Rows, ()>::write_row(&mut writer, (row, (), 1)).expect("file row");
-        Writer::<Rows, ()>::finish(writer).expect("flush output");
-        assert_eq!(bytes, "a\t\"b\"\n\u{03bb}|true|false\n".as_bytes());
-    }
-
-    #[rstest]
-    #[case::single(TestRelation::<_, 1>((7,)), b"7\n")]
-    #[case::nested_empty(TestRelation::<_, 1>(((),)), b"()\n")]
-    #[case::twelve(
-        TestRelation::<_, 12>((0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)),
-        b"0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11\n",
-    )]
-    fn row_arity_preserves_column_boundaries<R, const ARITY: usize>(
-        #[case] row: TestRelation<R, ARITY>,
-        #[case] expected: &[u8],
-    ) where
-        R: differential_dataflow::Data + Sync,
-        for<'a, 'r> TextEncoder<'a, Vec<u8>, false>: Encode<&'r R, Output = io::Result<()>>,
-    {
-        let mut bytes = Vec::new();
-        let mut writer = FileWriter::new(&mut bytes, b'\t');
-        Writer::<TestRelation<R, ARITY>, ()>::write_row(&mut writer, (row.0, (), 1))
-            .expect("file row");
-        Writer::<TestRelation<R, ARITY>, ()>::finish(writer).expect("flush output");
-        assert_eq!(bytes, expected);
-    }
-
-    #[test]
-    fn non_finite_float_values_keep_their_display_spelling() {
-        type Rows = TestRelation<
-            (
-                OrderedFloat<f32>,
-                OrderedFloat<f64>,
-                OrderedFloat<f32>,
-                OrderedFloat<f64>,
-            ),
-            4,
-        >;
-        let row = (
-            OrderedFloat(f32::NEG_INFINITY),
-            OrderedFloat(f64::INFINITY),
-            OrderedFloat(f32::NAN),
-            OrderedFloat(f64::NAN),
-        );
-        let mut bytes = Vec::new();
-        let mut writer = FileWriter::new(&mut bytes, b'\t');
-        Writer::<Rows, ()>::write_row(&mut writer, (row, (), 1)).expect("file row");
-        Writer::<Rows, ()>::finish(writer).expect("flush output");
-        assert_eq!(bytes, b"-inf\tinf\tNaN\tNaN\n");
     }
 
     /// Output bytes cannot reveal whether the private scratch was reused.

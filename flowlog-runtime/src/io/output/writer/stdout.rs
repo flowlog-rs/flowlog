@@ -130,7 +130,6 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::intern::intern;
 
     #[derive(Debug)]
     struct TestRelation<T, const ARITY: usize>(T);
@@ -146,9 +145,16 @@ mod tests {
         const CHILD: &str = "FLOWLOG_STDOUT_WRITER_CHILD";
         if env::var_os(CHILD).is_some() {
             let mut writer = StdoutWriter::new("Out");
-            Writer::<TestRelation<_, 1>, _>::write_batch(
+            Writer::<TestRelation<_, 4>, _>::write_batch(
                 &mut writer,
-                &mut [Vec::new(), vec![((7,), 5, 1)]],
+                &mut [
+                    Vec::new(),
+                    vec![(
+                        (7, String::from("a\"\nb"), true, OrderedFloat(1.0f64)),
+                        5,
+                        1,
+                    )],
+                ],
             )
             .expect("stdout batch");
             StdoutWriter::write_size("Out", &5, 42).expect("independent count");
@@ -181,65 +187,12 @@ mod tests {
         assert_eq!(
             records,
             [
-                "[tuple][Out]  t=5  data=(7)  diff=+1",
+                "[tuple][Out]  t=5  data=(7, \"a\\\"\\nb\", true, 1.0)  diff=+1",
                 "[size][Out]  t=5  size=42",
                 "[tuple][Out]  t=(2, 3)  True  diff=-1",
                 "[size][CountOnly]  t=()  size=-2",
             ],
         );
-    }
-    /// The process stdout sink cannot be replaced with a byte capture.
-    #[rstest]
-    #[case::nullary(TestRelation::<_, 0>(()), "[tuple][Out]  t=5  True  diff=-2\n")]
-    #[case::single(TestRelation::<_, 1>((7,)), "[tuple][Out]  t=5  data=(7)  diff=-2\n")]
-    #[case::nested_empty(TestRelation::<_, 1>(((),)), "[tuple][Out]  t=5  data=(())  diff=-2\n")]
-    #[case::nested_single(TestRelation::<_, 1>(((7,),)), "[tuple][Out]  t=5  data=((7,))  diff=-2\n")]
-    #[case::nested(
-        TestRelation::<_, 1>(((intern("p"), (intern("q"),)),)),
-        "[tuple][Out]  t=5  data=((\"p\", (\"q\",)))  diff=-2\n",
-    )]
-    #[case::mixed(
-        TestRelation::<_, 4>((7, String::from("a\"\nb"), true, OrderedFloat(1.0f64))),
-        "[tuple][Out]  t=5  data=(7, \"a\\\"\\nb\", true, 1.0)  diff=-2\n",
-    )]
-    #[case::twelve(
-        TestRelation::<_, 12>((0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)),
-        "[tuple][Out]  t=5  data=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)  diff=-2\n",
-    )]
-    fn stdout_rows_preserve_the_existing_layout<R, const ARITY: usize>(
-        #[case] row: TestRelation<R, ARITY>,
-        #[case] expected: &str,
-    ) where
-        R: differential_dataflow::Data,
-        for<'a, 'r> TextEncoder<'a, Vec<u8>, true>: Encode<&'r R, Output = io::Result<()>>,
-    {
-        let mut bytes = Vec::new();
-        write_record::<TestRelation<R, ARITY>, _, _>(
-            &row.0,
-            &mut bytes,
-            "[tuple][Out]  t=",
-            &5,
-            -2,
-            &mut itoa::Buffer::new(),
-        )
-        .expect("stdout row");
-        assert_eq!(bytes, expected.as_bytes());
-    }
-
-    /// The process stdout sink cannot be replaced with a byte capture.
-    #[test]
-    fn stdout_preserves_structured_timestamps_and_positive_weights() {
-        let mut bytes = Vec::new();
-        write_record::<TestRelation<_, 1>, _, _>(
-            &(7,),
-            &mut bytes,
-            "[tuple][Out]  t=",
-            &(2, 3),
-            1,
-            &mut itoa::Buffer::new(),
-        )
-        .expect("stdout row");
-        assert_eq!(bytes, b"[tuple][Out]  t=(2, 3)  data=(7)  diff=+1\n");
     }
 
     /// The process stdout sink cannot be replaced with a byte capture.
@@ -259,30 +212,6 @@ mod tests {
         )
         .expect("stdout row");
         assert_eq!(bytes, expected.as_bytes());
-    }
-
-    /// A supplied sink makes scratch reuse observable without process stdout.
-    #[test]
-    fn stdout_appends_records_and_reuses_storage() {
-        let row = (7, String::from("hello"));
-        let mut bytes = Vec::with_capacity(256);
-        let storage = bytes.as_ptr();
-        let prefix = "[tuple][Out]  t=";
-        let mut integers = itoa::Buffer::new();
-        write_record::<TestRelation<_, 2>, _, _>(&row, &mut bytes, prefix, &(), 1, &mut integers)
-            .expect("insert row");
-        write_record::<TestRelation<_, 2>, _, _>(&row, &mut bytes, prefix, &(), -1, &mut integers)
-            .expect("retract row");
-        assert_eq!(
-            bytes,
-            concat!(
-                "[tuple][Out]  t=()  data=(7, \"hello\")  diff=+1\n",
-                "[tuple][Out]  t=()  data=(7, \"hello\")  diff=-1\n",
-            )
-            .as_bytes(),
-        );
-        assert_eq!(bytes.as_ptr(), storage);
-        assert_eq!(bytes.capacity(), 256);
     }
 
     /// Process stdout cannot inject short writes or interruptions on demand.

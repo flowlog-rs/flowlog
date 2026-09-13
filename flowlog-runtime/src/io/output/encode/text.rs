@@ -245,6 +245,37 @@ mod tests {
     use super::*;
     use crate::intern::intern;
 
+    #[rstest]
+    #[case::nullary((), "True", "True")]
+    #[case::single((7,), "7", "7")]
+    #[case::nested_empty(((),), "()", "()")]
+    #[case::nested_single(((7,),), "(7,)", "(7,)")]
+    #[case::twelve(
+        (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+        "0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11",
+        "0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11",
+    )]
+    fn row_arity_preserves_column_boundaries<R>(
+        #[case] row: R,
+        #[case] plain: &str,
+        #[case] debug: &str,
+    ) where
+        for<'a, 'r> TextEncoder<'a, Vec<u8>, false>: Encode<&'r R, Output = io::Result<()>>,
+        for<'a, 'r> TextEncoder<'a, Vec<u8>, true>: Encode<&'r R, Output = io::Result<()>>,
+    {
+        let mut bytes = Vec::new();
+        let mut integers = itoa::Buffer::new();
+        TextEncoder::<_, false>::new(&mut bytes, b"\t", &mut integers)
+            .encode(&row)
+            .expect("plain row");
+        assert_eq!(bytes, plain.as_bytes());
+        bytes.clear();
+        TextEncoder::<_, true>::new(&mut bytes, b", ", &mut integers)
+            .encode(&row)
+            .expect("debug row");
+        assert_eq!(bytes, debug.as_bytes());
+    }
+
     #[test]
     fn text_style_applies_recursively_without_changing_column_order() {
         let row = (
@@ -265,44 +296,65 @@ mod tests {
     }
 
     #[rstest]
-    #[case::i8((i8::MIN, i8::MAX), "(-128, 127)")]
-    #[case::i16((i16::MIN, i16::MAX), "(-32768, 32767)")]
-    #[case::i32((i32::MIN, i32::MAX), "(-2147483648, 2147483647)")]
-    #[case::i64((i64::MIN, i64::MAX), "(-9223372036854775808, 9223372036854775807)")]
-    #[case::u8((0u8, u8::MAX), "(0, 255)")]
-    #[case::u16((0u16, u16::MAX), "(0, 65535)")]
-    #[case::u32((0u32, u32::MAX), "(0, 4294967295)")]
-    #[case::u64((0u64, u64::MAX), "(0, 18446744073709551615)")]
-    #[case::bool((true, false), "(true, false)")]
+    #[case::i8((i8::MIN, i8::MAX), "(-128, 127)", "(-128, 127)")]
+    #[case::i16((i16::MIN, i16::MAX), "(-32768, 32767)", "(-32768, 32767)")]
+    #[case::i32((i32::MIN, i32::MAX), "(-2147483648, 2147483647)", "(-2147483648, 2147483647)")]
+    #[case::i64(
+        (i64::MIN, i64::MAX),
+        "(-9223372036854775808, 9223372036854775807)",
+        "(-9223372036854775808, 9223372036854775807)",
+    )]
+    #[case::u8((0u8, u8::MAX), "(0, 255)", "(0, 255)")]
+    #[case::u16((0u16, u16::MAX), "(0, 65535)", "(0, 65535)")]
+    #[case::u32((0u32, u32::MAX), "(0, 4294967295)", "(0, 4294967295)")]
+    #[case::u64((0u64, u64::MAX), "(0, 18446744073709551615)", "(0, 18446744073709551615)")]
+    #[case::bool((true, false), "(true, false)", "(true, false)")]
     #[case::f32(
         (OrderedFloat(-0.0f32), OrderedFloat(1.0f32)),
+        "(-0, 1)",
         "(-0.0, 1.0)",
     )]
     #[case::f64(
         (OrderedFloat(-0.0f64), OrderedFloat(1.0f64)),
+        "(-0, 1)",
         "(-0.0, 1.0)",
     )]
     #[case::non_finite_f32(
         (OrderedFloat(f32::NEG_INFINITY), OrderedFloat(f32::INFINITY), OrderedFloat(f32::NAN)),
         "(-inf, inf, NaN)",
+        "(-inf, inf, NaN)",
     )]
     #[case::non_finite_f64(
         (OrderedFloat(f64::NEG_INFINITY), OrderedFloat(f64::INFINITY), OrderedFloat(f64::NAN)),
         "(-inf, inf, NaN)",
+        "(-inf, inf, NaN)",
     )]
     #[case::owned_string(
         String::from("a\"\\\n\r\t\0\u{03bb}"),
+        "a\"\\\n\r\t\0\u{03bb}",
         "\"a\\\"\\\\\\n\\r\\t\\0\u{03bb}\""
     )]
-    #[case::interned_string(intern("a\"\\\n\r\t\0\u{03bb}"), "\"a\\\"\\\\\\n\\r\\t\\0\u{03bb}\"")]
-    fn debug_fields_preserve_their_spelling<F: EncodeField>(
+    #[case::interned_string(
+        intern("a\"\\\n\r\t\0\u{03bb}"),
+        "a\"\\\n\r\t\0\u{03bb}",
+        "\"a\\\"\\\\\\n\\r\\t\\0\u{03bb}\""
+    )]
+    fn fields_preserve_their_plain_and_debug_spelling<F: EncodeField>(
         #[case] field: F,
-        #[case] expected: &str,
+        #[case] plain: &str,
+        #[case] debug: &str,
     ) {
+        let row = (field,);
         let mut bytes = Vec::new();
-        TextEncoder::<_, true>::new(&mut bytes, b", ", &mut itoa::Buffer::new())
-            .encode(&(field,))
-            .expect("stdout field");
-        assert_eq!(bytes, expected.as_bytes());
+        let mut integers = itoa::Buffer::new();
+        TextEncoder::<_, false>::new(&mut bytes, b"\t", &mut integers)
+            .encode(&row)
+            .expect("plain field");
+        assert_eq!(bytes, plain.as_bytes());
+        bytes.clear();
+        TextEncoder::<_, true>::new(&mut bytes, b", ", &mut integers)
+            .encode(&row)
+            .expect("debug field");
+        assert_eq!(bytes, debug.as_bytes());
     }
 }
