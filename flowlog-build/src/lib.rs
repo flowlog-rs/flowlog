@@ -62,8 +62,7 @@ pub use build::BuildError;
 // Hidden from docs.rs for the same reason as the pipeline modules above.
 #[doc(hidden)]
 pub use codegen::{
-    CodeGen, CodeParts, CodegenError, Features, const_to_token, data_type_tokens, field_accessor,
-    gen_drain_block, gen_relations,
+    CodeGen, CodeParts, CodegenError, Features, const_to_token, data_type_tokens, gen_relations,
 };
 use flowlog_common::BoxError;
 pub use flowlog_common::ExecutionMode;

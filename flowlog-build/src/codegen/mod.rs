@@ -28,8 +28,6 @@ use flowlog_parser::DataType;
 use flowlog_parser::Program;
 use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
-pub use idb_buffers::field_accessor;
-pub use idb_buffers::gen_drain_block;
 use proc_macro2::Ident;
 pub use relation::gen_relations;
 pub use ty::data::data_type_tokens;

@@ -7,24 +7,19 @@
 use flowlog_parser::Program;
 use flowlog_parser::Relation;
 use proc_macro2::Ident;
-use proc_macro2::Literal;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use super::per_position_tuple;
 use crate::CodeParts;
 use crate::build::bindings::inputs_field_ident;
 use crate::build::bindings::printsize_field_ident;
 use crate::build::bindings::results_field_ident;
-use crate::build::bindings::tuple_to_user_expr;
 use crate::build::bindings::user_tuple_ident;
 use crate::codegen::user_tuple_tokens;
-use crate::data_type_tokens;
 
 pub(crate) fn gen_lib_incremental_engine(
     program: &Program,
-    string_intern: bool,
     uses_ord: bool,
     parts: &CodeParts,
 ) -> TokenStream {
@@ -33,10 +28,10 @@ pub(crate) fn gen_lib_incremental_engine(
     let nullary_edbs: Vec<&Relation> = edbs.iter().copied().filter(|r| r.arity() == 0).collect();
 
     let inc_imports = gen_imports();
-    let engine_struct = gen_engine_struct(program, &non_nullary_edbs, &nullary_edbs, string_intern);
+    let engine_struct = gen_engine_struct(program, &non_nullary_edbs, &nullary_edbs);
     let new_body = gen_new_body(program, &non_nullary_edbs, &nullary_edbs, parts, uses_ord);
     let clear_staged_body = gen_clear_staged_body(&non_nullary_edbs, &nullary_edbs);
-    let commit_body = gen_commit_body(program, &non_nullary_edbs, &nullary_edbs, string_intern);
+    let commit_body = gen_commit_body(program, &non_nullary_edbs, &nullary_edbs);
     let drop_body = gen_drop_body();
     let staging_methods = gen_staging_methods(&non_nullary_edbs, &nullary_edbs);
 
@@ -127,7 +122,6 @@ fn gen_engine_struct(
     program: &Program,
     non_nullary_edbs: &[&Relation],
     nullary_edbs: &[&Relation],
-    string_intern: bool,
 ) -> TokenStream {
     let staged_fields: Vec<TokenStream> = non_nullary_edbs
         .iter()
@@ -168,25 +162,12 @@ fn gen_engine_struct(
         .collect();
 
     let output_buf_fields: Vec<TokenStream> = program
-        .output_idbs()
+        .idbs()
         .iter()
         .map(|rel| {
             let ident = buf_ident(rel);
-            let tuple_ty = data_type_tokens(&rel.data_type(), string_intern);
-            quote! {
-                #ident: Arc<Mutex<Vec<Vec<(#tuple_ty, Ts, i32)>>>>
-            }
-        })
-        .collect();
-
-    let size_cell_fields: Vec<TokenStream> = program
-        .printsize_idbs()
-        .iter()
-        .map(|rel| {
-            let ident = size_cell_ident(rel);
-            quote! {
-                #ident: Arc<Mutex<(Ts, i32)>>
-            }
+            let marker = format_ident!("Rel{}", rel.name());
+            quote! { #ident: ::flowlog_runtime::io::output::Emitter<#marker, Ts> }
         })
         .collect();
 
@@ -205,7 +186,6 @@ fn gen_engine_struct(
             barrier: Arc<::std::sync::Barrier>,
 
             #(#output_buf_fields,)*
-            #(#size_cell_fields,)*
 
             worker_thread: Option<::std::thread::JoinHandle<()>>,
         }
@@ -283,7 +263,7 @@ fn gen_new_body(
     let output_bufs = &parts.output_bufs;
     let output_buf_clones = &parts.output_buf_clones;
     let output_buf_self_inits: Vec<TokenStream> = program
-        .output_idbs()
+        .idbs()
         .iter()
         .map(|rel| {
             let ident = buf_ident(rel);
@@ -293,15 +273,6 @@ fn gen_new_body(
 
     let size_cell_decls = &parts.size_cell_decls;
     let size_cell_clones = &parts.size_cell_clones;
-    let size_cell_self_inits: Vec<TokenStream> = program
-        .printsize_idbs()
-        .iter()
-        .map(|rel| {
-            let ident = size_cell_ident(rel);
-            quote! { #ident }
-        })
-        .collect();
-
     let worker_closure =
         gen_worker_closure(program, non_nullary_edbs, nullary_edbs, parts, uses_ord);
 
@@ -340,7 +311,6 @@ fn gen_new_body(
             shared_txn,
             barrier,
             #(#output_buf_self_inits,)*
-            #(#size_cell_self_inits,)*
             worker_thread: Some(worker_thread),
         }
     }
@@ -517,7 +487,6 @@ fn gen_commit_body(
     program: &Program,
     non_nullary_edbs: &[&Relation],
     nullary_edbs: &[&Relation],
-    string_intern: bool,
 ) -> TokenStream {
     let stage_moves: Vec<TokenStream> = non_nullary_edbs
         .iter()
@@ -547,7 +516,7 @@ fn gen_commit_body(
         quote! { *self.#slots.lock().expect("slot poisoned") = Arc::new(Vec::new()); }
     });
 
-    let drain_blocks = gen_drain_blocks(program, string_intern);
+    let drain_blocks = gen_drain_blocks(program);
     let result_field_names = gen_result_field_names(program);
 
     quote! {
@@ -576,64 +545,19 @@ fn gen_commit_body(
     }
 }
 
-/// Per-output drain block: pulls this commit's output rows from the
-/// shared buffer and binds a typed local: `Vec<(rel::Foo, i32)>` for
-/// non-nullary outputs, `i32` net diff for nullary, and the raw size
-/// delta for `.printsize` cells. The engine no longer folds across
-/// commits; callers maintain a snapshot if they need one.
-fn gen_drain_blocks(program: &Program, string_intern: bool) -> Vec<TokenStream> {
+/// Binds this commit's weighted deltas and independent count deltas.
+fn gen_drain_blocks(program: &Program) -> Vec<TokenStream> {
     let mut blocks = Vec::new();
-
     for rel in program.output_idbs() {
         let field = results_field_ident(rel);
         let buf = buf_ident(rel);
-        if rel.arity() == 0 {
-            blocks.push(quote! {
-                let #field: i32 = {
-                    let drained: Vec<Vec<_>> = ::std::mem::take(
-                        &mut *self.#buf.lock().expect("output buffer poisoned"),
-                    );
-                    let mut net: i32 = 0;
-                    for worker_buf in drained {
-                        for (_tuple, _time, diff) in worker_buf {
-                            net += diff;
-                        }
-                    }
-                    net
-                };
-            });
-        } else {
-            let struct_ident = user_tuple_ident(rel);
-            let user_tuple = tuple_to_user_from_row(rel, string_intern);
-            blocks.push(quote! {
-                let #field: Vec<(rel::#struct_ident, i32)> = {
-                    let drained: Vec<Vec<_>> = ::std::mem::take(
-                        &mut *self.#buf.lock().expect("output buffer poisoned"),
-                    );
-                    let cap: usize = drained.iter().map(|w| w.len()).sum();
-                    let mut out: Vec<(rel::#struct_ident, i32)> = Vec::with_capacity(cap);
-                    for worker_buf in drained {
-                        for row in worker_buf {
-                            out.push((#user_tuple, row.2));
-                        }
-                    }
-                    out
-                };
-            });
-        }
+        blocks.push(quote! { let #field = self.#buf.emit_host::<true, _>(); });
     }
-
     for rel in program.printsize_idbs() {
         let field = printsize_field_ident(rel);
-        let cell = size_cell_ident(rel);
-        blocks.push(quote! {
-            let #field: i32 = {
-                let (_, raw) = *self.#cell.lock().expect("size cell poisoned");
-                raw
-            };
-        });
+        let buf = buf_ident(rel);
+        blocks.push(quote! { let #field: i32 = self.#buf.delta_size(); });
     }
-
     blocks
 }
 
@@ -747,22 +671,6 @@ fn gen_nullary_staging(rel: &Relation) -> TokenStream {
     }
 }
 
-/// Converts an output row into a user-facing tuple. The drain consumes it
-/// by value, so the tuple at `row.0` and its fields
-/// can be moved out without cloning.
-fn tuple_to_user_from_row(rel: &Relation, string_intern: bool) -> TokenStream {
-    per_position_tuple(
-        rel,
-        string_intern,
-        quote! { row.0 },
-        |i| {
-            let idx = Literal::usize_unsuffixed(i);
-            quote! { row.0.#idx }
-        },
-        |dt, src| tuple_to_user_expr(dt, string_intern, src),
-    )
-}
-
 // =========================================================================
 // Ident helpers.
 // =========================================================================
@@ -777,8 +685,4 @@ fn staged_ident(rel: &Relation) -> Ident {
 
 fn buf_ident(rel: &Relation) -> Ident {
     format_ident!("buf_{}", rel.name())
-}
-
-fn size_cell_ident(rel: &Relation) -> Ident {
-    format_ident!("size_{}", rel.name())
 }

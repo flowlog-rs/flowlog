@@ -1,10 +1,9 @@
 //! Incremental command dispatch.
 //!
 //! [`gen_dispatch`] adds name-based routing and prompt relation names to
-//! the generated `Inputs` container. Each command selects a loader and its
-//! source options; runtime loaders handle decoding and partitioning.
+//! the generated `Inputs` container. Each command selects a loader;
+//! runtime loaders handle decoding and partitioning.
 
-use flowlog_parser::InputSource;
 use flowlog_parser::Program;
 use proc_macro2::TokenStream;
 use quote::format_ident;
@@ -18,20 +17,15 @@ pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
     for relation in program.edbs() {
         let name = relation.name();
         let field = format_ident!("in_{}", name);
-        let delimiter = relation
-            .input()
-            .and_then(InputSource::delim)
-            .unwrap_or(b'\t');
-        let has_header = relation.input().is_some_and(InputSource::has_header);
         let method = if relation.arity() == 0 {
             format_ident!("load_flag")
         } else {
             format_ident!("load_put")
         };
         names.push(name);
-        puts.push(quote! { #name => Some(self.#field.#method(text, ordinal, #delimiter, diff)), });
+        puts.push(quote! { #name => Some(self.#field.#method(text, ordinal, diff)), });
         files.push(quote! {
-            #name => Some(self.#field.load_file(path, #delimiter, #has_header, diff)),
+            #name => Some(self.#field.load_file(path, diff)),
         });
     }
 
@@ -81,7 +75,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn commands_route_to_loaders_with_each_relations_input_options() {
+    fn commands_route_to_each_relations_loader() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("program.dl");
         fs::write(
@@ -108,15 +102,15 @@ mod tests {
         for expected in [
             quote! {
                 match name.to_ascii_lowercase().as_str() {
-                    "edge" => Some(self.in_edge.load_put(text, ordinal, 44u8, diff)),
-                    "flag" => Some(self.in_flag.load_flag(text, ordinal, 9u8, diff)),
+                    "edge" => Some(self.in_edge.load_put(text, ordinal, diff)),
+                    "flag" => Some(self.in_flag.load_flag(text, ordinal, diff)),
                     _ => None,
                 }
             },
             quote! {
                 match name.to_ascii_lowercase().as_str() {
-                    "edge" => Some(self.in_edge.load_file(path, 44u8, true, diff)),
-                    "flag" => Some(self.in_flag.load_file(path, 9u8, false, diff)),
+                    "edge" => Some(self.in_edge.load_file(path, diff)),
+                    "flag" => Some(self.in_flag.load_file(path, diff)),
                     _ => None,
                 }
             },

@@ -20,8 +20,8 @@ impl Compiler {
         parts: &CodeParts,
         imports: &TokenStream,
     ) -> Result<String, CompilerError> {
-        let merge_section = self.gen_merge_section()?;
-        let input = self.gen_input(parts, &merge_section);
+        let output = self.gen_output()?;
+        let input = self.gen_input(parts, &output);
         let fact_dir = self.options.fact_dir().unwrap_or(".");
         let output_dir = if self.config.output_to_stdout() {
             "-"
@@ -50,10 +50,8 @@ impl Compiler {
             #prepare_output
         };
         let main_fn = match self.config.mode() {
-            ExecutionMode::Batch => batch::gen_batch_main(parts, &input, &startup, &merge_section),
-            ExecutionMode::Inc => {
-                inc::gen_incremental_main(parts, &input, &startup, &merge_section)
-            }
+            ExecutionMode::Batch => batch::gen_batch_main(parts, &input, &startup, &output),
+            ExecutionMode::Inc => inc::gen_incremental_main(parts, &input, &startup, &output),
         };
 
         let type_declarations = &parts.type_declarations;

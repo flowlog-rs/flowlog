@@ -95,15 +95,16 @@ Each worker constructs its loader once:
 
 ```rust
 let mut loader = Loader::<RelEdge, Ts, Diff>::new(session, peers, index, uses_ord)?;
-loader.load_file(path, b'\t', false, diff)?;
-loader.load_put(text, ordinal, b'\t', diff)?;
+loader.load_file(path, diff)?;
+loader.load_put(text, ordinal, diff)?;
 loader.load_rows(&rows, diff)?;
 ```
 
 `uses_ord` belongs to the program's execution settings, not the relation.
-File delimiter and header handling belong to each load; there is no
-file-options wrapper. Text puts take their delimiter directly too. Typed
-host rows do not carry any text-format settings.
+`Relation::INPUT_DELIMITER` selects the delimiter for files and text puts,
+with a tab default. `Relation::INPUT_HAS_HEADER` controls header handling,
+defaulting to false. Typed host rows do not consult these constants or
+carry text-format settings.
 
 A compiled binary calls `load_file` at preload and `load_put` /
 `load_flag` per transaction op, passing the op's index as `ordinal`.

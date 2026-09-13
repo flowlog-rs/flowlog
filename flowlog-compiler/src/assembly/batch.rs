@@ -1,5 +1,5 @@
-//! Batch assembly. Workers fill shared buffers; dropping their guards joins
-//! them before the main thread drains output and reports sizes.
+//! Batch assembly. Workers publish results to runtime emitters; dropping
+//! their guards joins them before the main thread emits output and sizes.
 
 use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
@@ -8,12 +8,12 @@ use quote::quote;
 use crate::io::input::Input;
 
 /// Emits startup, a single dataflow run, and output after workers join.
-/// `merge_section` may reference only state declared outside the workers.
+/// `output` may reference only state declared outside the workers.
 pub(super) fn gen_batch_main(
     parts: &CodeParts,
     input: &Input,
     startup: &TokenStream,
-    merge_section: &TokenStream,
+    output: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
         edb_decls,
@@ -85,7 +85,7 @@ pub(super) fn gen_batch_main(
             .unwrap();
 
             println!("{:?}:\tDataflow executed", timer.elapsed());
-            #merge_section
+            #output
         }
     }
 }

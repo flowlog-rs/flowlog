@@ -31,7 +31,6 @@ pub mod error;
 pub mod intern;
 pub mod io;
 pub mod operators;
-pub mod sort;
 pub mod txn;
 
 // Re-exports for generated code. The `include!()`'d code references these

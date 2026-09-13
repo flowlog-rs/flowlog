@@ -4,8 +4,6 @@
 //! - [`diff`] — diff type alias (`Present` vs `i32`) and `SEMIRING_ONE` constant.
 //! - [`time`] — outer timestamp and inner iteration type aliases.
 
-use data::data_type_tokens;
-use flowlog_parser::Relation;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -14,12 +12,6 @@ use crate::codegen::CodeGen;
 pub(crate) mod data;
 pub(super) mod diff;
 pub(super) mod time;
-
-/// Tuple element type: `(data, timestamp, difference)`.
-pub(crate) fn tuple_type(idb: &Relation, string_intern: bool) -> TokenStream {
-    let tuple_ty = data_type_tokens(&idb.data_type(), string_intern);
-    quote! { (#tuple_ty, Ts, i32) }
-}
 
 impl CodeGen {
     /// Emit all type aliases and constants for the `(Data, Diff, Time)` triple.

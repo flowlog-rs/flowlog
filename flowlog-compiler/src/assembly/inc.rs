@@ -1,5 +1,5 @@
 //! Incremental assembly. Preload and interactive transactions share live
-//! workers, with barriers protecting output merges between epochs.
+//! workers, with barriers separating output emission from the next epoch.
 
 use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
@@ -8,12 +8,12 @@ use quote::quote;
 use crate::io::input::Input;
 
 /// Emits startup, preload, and an interactive loop over persistent workers.
-/// `merge_section` runs on worker 0 after every worker has flushed.
+/// `output` runs on worker 0 after every worker has published its results.
 pub(super) fn gen_incremental_main(
     parts: &CodeParts,
     input: &Input,
     startup: &TokenStream,
-    merge_section: &TokenStream,
+    output: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
         edb_decls,
@@ -139,7 +139,6 @@ pub(super) fn gen_incremental_main(
 
                                     #metrics_write
 
-                                    // Flush thread-local buffers into shared buffers.
                                     #(#flush)*
 
                                     barrier.wait();
@@ -240,14 +239,12 @@ pub(super) fn gen_incremental_main(
 
                                 #metrics_write
 
-                                // Flush thread-local buffers into shared buffers.
                                 #(#flush)*
 
                                 barrier.wait();
 
                                 if index == 0 {
-                                    // === Merge output buffers (sort, limit, write) ===
-                                    #merge_section
+                                    #output
 
                                     println!("{:?}:\tCommitted & executed", round_timer.elapsed());
                                 }

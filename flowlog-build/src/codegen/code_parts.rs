@@ -28,19 +28,19 @@ pub struct CodeParts {
     pub flows: Vec<TokenStream>,
 
     // -- output pipeline --
-    /// Shared output buffer declarations (one `Arc<Mutex<Vec>>` per output relation).
+    /// Runtime emitter declarations for output and count relations.
     pub output_bufs: Vec<TokenStream>,
-    /// Clones of shared buffers moved into the worker closure.
+    /// Emitter clones moved into the worker closure.
     pub output_buf_clones: Vec<TokenStream>,
-    /// Per-worker local buffer declarations (`Rc<RefCell<Vec>>`).
+    /// Worker-local output producers.
     pub local_bufs: Vec<TokenStream>,
-    /// `inspect()` calls that push into local buffers.
+    /// Row and count inspections feeding runtime emitters.
     pub inspectors: Vec<TokenStream>,
-    /// Drain local → shared buffer at end of each epoch.
+    /// Publishes local rows at the end of each epoch.
     pub flush: Vec<TokenStream>,
-    /// `.printsize` size cell decls (`Arc<Mutex<i32>>`) before `timely::execute`.
+    /// Empty; count storage is included in `output_bufs`.
     pub size_cell_decls: Vec<TokenStream>,
-    /// Size cell clones moved into the worker closure.
+    /// Empty; count storage is shared through `output_buf_clones`.
     pub size_cell_clones: Vec<TokenStream>,
 
     // -- profiling — all fields below are empty when `--profile` is off.
@@ -111,8 +111,6 @@ impl CodeGen {
             local_decls: local_bufs,
             inspect_stmts: inspectors,
             flush_stmts: flush,
-            size_cell_decls,
-            size_cell_clones,
         } = self.collect_inspectors(plan_graph);
 
         let (metrics_write, step_loop) = match self.config.mode() {
@@ -139,8 +137,8 @@ impl CodeGen {
             local_bufs,
             inspectors,
             flush,
-            size_cell_decls,
-            size_cell_clones,
+            size_cell_decls: Vec::new(),
+            size_cell_clones: Vec::new(),
             profile_structs,
             profile_ops,
             profile_init,

@@ -21,9 +21,7 @@ pub(crate) fn gen_lib_imports(
             #relops_body
         }
         use relops::*;
-        use std::sync::{Arc, Mutex};
-        use std::rc::Rc;
-        use std::cell::RefCell;
+        use std::sync::Arc;
     }];
 
     out.push(dd_imports(features));
@@ -47,6 +45,8 @@ fn profile_imports(profile: bool) -> TokenStream {
     }
     quote! {
         use std::collections::HashMap;
+        use std::cell::RefCell;
+        use std::rc::Rc;
         use std::time::Duration;
         use ::flowlog_runtime::timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
     }
