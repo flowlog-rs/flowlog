@@ -20,6 +20,13 @@ crate that links `flowlog-build` + `flowlog-runtime` and calls
 `engine.run()` directly. They hit different code paths; both must
 pass.
 
+SQLite I/O fixtures live alongside other `batch` and `inc` fixtures, with
+and without `ord`. Their `sqlite_setup.sql` creates the input database. Each `expected/<table>`
+file contains the expected JSON rows of that output table, compared without
+row ordering. Empty files assert that the table exists and has no rows.
+The compiler runner sources `fixtures/sqlite_helper.sh` for these steps.
+The library runner skips them because library engines use host I/O.
+
 ## How to run
 
 Unit and integration tests run under [cargo-nextest](https://nexte.st)

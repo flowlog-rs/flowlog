@@ -4,16 +4,19 @@
 //! the generated `Inputs` container. Each command selects a loader;
 //! runtime loaders handle decoding and partitioning.
 
+use flowlog_parser::InputSource;
 use flowlog_parser::Program;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
+use crate::io::input;
+
 /// Emits name-based command dispatch on the generated `Inputs` container.
 pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
-    let mut puts = Vec::new();
-    let mut files = Vec::new();
-    let mut names = Vec::new();
+    let mut put_arms = Vec::new();
+    let mut file_arms = Vec::new();
+    let mut relation_names = Vec::new();
     for relation in program.edbs() {
         let name = relation.name();
         let field = format_ident!("in_{}", name);
@@ -22,16 +25,34 @@ pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
         } else {
             format_ident!("load_put")
         };
-        names.push(name);
-        puts.push(quote! { #name => Some(self.#field.#method(text, ordinal, diff)), });
-        files.push(quote! {
-            #name => Some(self.#field.load_file(path, diff)),
-        });
+        relation_names.push(name);
+        put_arms.push(quote! { #name => Some(self.#field.#method(text, ordinal, diff)), });
+        let load = input::gen_load(
+            relation,
+            quote! { self.#field },
+            quote! { path },
+            quote! { diff },
+        );
+        let load = match relation.input() {
+            Some(InputSource::Sqlite { .. }) => {
+                let relation_name = relation.raw_name();
+                quote! {{
+                    let result = #load;
+                    if let Err(error) = &result {
+                        eprintln!("[relation][{}] {} in {}", #relation_name, error, path.display());
+                        std::process::exit(1);
+                    }
+                    result
+                }}
+            }
+            Some(InputSource::File { .. } | InputSource::Command { .. }) | None => load,
+        };
+        file_arms.push(quote! { #name => Some(#load), });
     }
 
     quote! {
         impl Inputs {
-            pub fn names() -> &'static [&'static str] { &[#(#names),*] }
+            pub fn names() -> &'static [&'static str] { &[#(#relation_names),*] }
 
             pub fn load_put(
                 &mut self,
@@ -41,7 +62,7 @@ pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
                 diff: Diff,
             ) -> Option<Result<(), ::flowlog_runtime::RuntimeError>> {
                 match name.to_ascii_lowercase().as_str() {
-                    #(#puts)*
+                    #(#put_arms)*
                     _ => None,
                 }
             }
@@ -53,7 +74,7 @@ pub(crate) fn gen_dispatch(program: &Program) -> TokenStream {
                 diff: Diff,
             ) -> Option<Result<(), ::flowlog_runtime::RuntimeError>> {
                 match name.to_ascii_lowercase().as_str() {
-                    #(#files)*
+                    #(#file_arms)*
                     _ => None,
                 }
             }

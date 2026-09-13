@@ -10,25 +10,20 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::Compiler;
-use crate::CompilerError;
 
 impl Compiler {
     /// Renders `main.rs` with compiled directory defaults that runtime
     /// arguments can override before workers start.
-    pub(crate) fn assemble(
-        &self,
-        parts: &CodeParts,
-        imports: &TokenStream,
-    ) -> Result<String, CompilerError> {
-        let output = self.gen_output()?;
-        let input = self.gen_input(parts, &output);
+    pub(crate) fn assemble(&self, parts: &CodeParts, imports: &TokenStream) -> String {
+        let (initialize_output, emit_output) = self.gen_output();
+        let input = self.gen_input(parts, &emit_output);
         let fact_dir = self.options.fact_dir().unwrap_or(".");
         let output_dir = if self.config.output_to_stdout() {
             "-"
         } else {
             self.options.output_dir().unwrap_or(".")
         };
-        let prepare_output = if self.program.idbs().iter().any(|idb| idb.has_output()) {
+        let create_output_dir = if self.program.idbs().iter().any(|idb| idb.has_output()) {
             quote! {
                 if let Some(dir) = &output_dir {
                     if let Err(error) = std::fs::create_dir_all(dir) {
@@ -47,11 +42,12 @@ impl Compiler {
             let ::flowlog_runtime::RuntimeArgs {
                 config: timely_config, fact_dir, output_dir,
             } = ::flowlog_runtime::RuntimeArgs::from_env(#fact_dir, #output_dir);
-            #prepare_output
+            #create_output_dir
+            #initialize_output
         };
         let main_fn = match self.config.mode() {
-            ExecutionMode::Batch => batch::gen_batch_main(parts, &input, &startup, &output),
-            ExecutionMode::Inc => inc::gen_incremental_main(parts, &input, &startup, &output),
+            ExecutionMode::Batch => batch::gen_batch_main(parts, &input, &startup, &emit_output),
+            ExecutionMode::Inc => inc::gen_incremental_main(parts, &input, &startup, &emit_output),
         };
 
         let type_declarations = &parts.type_declarations;
@@ -66,6 +62,6 @@ impl Compiler {
             #main_fn
         };
 
-        Ok(flowlog_common::pretty_print(file_ts))
+        flowlog_common::pretty_print(file_ts)
     }
 }

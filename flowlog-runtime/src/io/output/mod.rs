@@ -11,3 +11,5 @@ mod sort;
 mod writer;
 
 pub use emitter::Emitter;
+#[cfg(feature = "sqlite")]
+pub use writer::sqlite::SqliteWriter;

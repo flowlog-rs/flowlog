@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use std::process;
 
 use flowlog_common::ExecutionMode;
+use flowlog_parser::InputSource;
+use flowlog_parser::OutputSink;
 use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
 use quote::quote;
@@ -42,13 +44,18 @@ impl Compiler {
         });
 
         let bin_imports = imports::gen_imports(&self.config, features);
-        let main_rs = self.assemble(&parts, &bin_imports)?;
+        let main_rs = self.assemble(&parts, &bin_imports);
 
+        let uses_sqlite = self.program.relations().iter().any(|relation| {
+            matches!(relation.input(), Some(InputSource::Sqlite { .. }))
+                || matches!(relation.output_sink(), Some(OutputSink::Sqlite { .. }))
+        });
         let cargo_toml = scaffold::render_cargo_toml(
             &self.options.crate_name(),
             &self.config,
             features,
             self.options.keeps_build_dir(),
+            uses_sqlite,
         );
         let cargo_config = scaffold::render_cargo_config();
 

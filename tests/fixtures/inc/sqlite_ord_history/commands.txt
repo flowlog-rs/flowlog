@@ -1,0 +1,4 @@
+begin
+put source a -1
+commit
+quit

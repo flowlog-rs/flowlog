@@ -15,12 +15,23 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
+#[cfg(feature = "sqlite")]
+use rusqlite::Transaction;
+
+#[cfg(feature = "sqlite")]
+use crate::error::RuntimeError;
 use crate::io::Relation;
+#[cfg(feature = "sqlite")]
+use crate::io::output::encode::sqlite::EncodeField;
+#[cfg(feature = "sqlite")]
+use crate::io::output::encode::sqlite::EncodeRow;
 use crate::io::output::sort;
 use crate::io::output::writer::Writer;
 use crate::io::output::writer::file::FileWriter;
 use crate::io::output::writer::host::HostResult;
 use crate::io::output::writer::host::HostWriter;
+#[cfg(feature = "sqlite")]
+use crate::io::output::writer::sqlite::TableWriter;
 use crate::io::output::writer::stdout::StdoutWriter;
 
 type Updates<D, T> = Vec<(D, T, i32)>;
@@ -145,6 +156,27 @@ impl<R: Relation, T> Emitter<R, T> {
     {
         let writer = FileWriter::create(path, R::OUTPUT_DELIMITER)?;
         Self::emit::<_, INCREMENTAL>(&mut self.shared(), true, writer)
+    }
+
+    /// Consumes rows into a table within the supplied transaction. `reset`
+    /// replaces that table, preserving other tables. Batch output obeys
+    /// ordering and limits; incremental history preserves every change with
+    /// its logical timestamp and an insertion flag. Weights other than +/-1
+    /// are rejected. The caller commits the transaction after all relations.
+    /// Failure consumes buffered rows, so the caller must stop execution.
+    #[cfg(feature = "sqlite")]
+    pub fn emit_sqlite<const INCREMENTAL: bool>(
+        &self,
+        transaction: &Transaction<'_>,
+        columns: &[&str],
+        reset: bool,
+    ) -> Result<(), RuntimeError>
+    where
+        R::Tuple: EncodeRow,
+        T: EncodeField,
+    {
+        let writer = TableWriter::new::<R, INCREMENTAL>(transaction, columns, reset)?;
+        Self::emit::<_, INCREMENTAL>(&mut self.shared(), !INCREMENTAL, writer)
     }
 
     fn shared(&self) -> MutexGuard<'_, Shared<R::Tuple, T>> {

@@ -1,0 +1,8 @@
+.decl Seed(x: int32)
+.input Seed(IO="sqlite", filename="input.sqlite")
+.decl Result(x: int32)
+Result(x) :- Seed(x).
+.output Result(IO="sqlite", filename="output.sqlite", order_by="x", limit="1")
+.decl Present()
+Present() :- Seed(_).
+.output Present(IO="sqlite", filename="./output.sqlite")

@@ -1,0 +1,11 @@
+begin
+put seed 1 -1
+commit
+begin
+put seed 1 +1
+file seed input.sqlite -1
+commit
+begin
+file seed input.sqlite +1
+commit
+quit

@@ -6,6 +6,8 @@
 
 pub(super) mod file;
 pub(super) mod host;
+#[cfg(feature = "sqlite")]
+pub(super) mod sqlite;
 pub(super) mod stdout;
 
 use crate::io::Relation;

@@ -5,6 +5,8 @@
 //! [`text::TextEncoder`] borrows columns for plain or debug text. Writers
 //! supply the record layout.
 
+#[cfg(feature = "sqlite")]
+pub(super) mod sqlite;
 pub(super) mod text;
 pub(super) mod typed;
 
