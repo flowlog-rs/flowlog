@@ -30,6 +30,7 @@ adding end-to-end tests.
 
 Every change must pass CI before it can merge:
 
+- **PR labels**: every PR must have at least one label; any label qualifies.
 - **DCO**: sign off each commit (`git commit -s`, which adds a
   `Signed-off-by:` line).
 - **rustfmt**: `cargo +nightly fmt --all --check` (formatting runs on nightly).
