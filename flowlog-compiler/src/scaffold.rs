@@ -132,7 +132,7 @@ pub(crate) fn render_cargo_toml(
         deps["differential-dataflow"] = "0.25".into();
         deps["mimalloc"] = "0.1".into();
         deps["flowlog-runtime"] = value(inline_versioned_dep(
-            "0.3.0",
+            "0.4.0",
             if sqlite { &["cli", "sqlite"] } else { &["cli"] },
         ));
 

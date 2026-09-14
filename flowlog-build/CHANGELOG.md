@@ -7,20 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.4.0...flowlog-build-v0.5.0) - 2026-09-07
+## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.4.0...flowlog-build-v0.5.0) - 2026-09-14
 
 ### Added
 
+- *(compiler)* allow runtime input and output directory overrides ([#330](https://github.com/flowlog-rs/flowlog/pull/330))
 - *(compiler)* [**breaking**] report `.printsize` on stdout, route `-D -` to stdout, split output by sink ([#309](https://github.com/flowlog-rs/flowlog/pull/309))
 - *(runtime)* own group-by aggregation ([#284](https://github.com/flowlog-rs/flowlog/pull/284))
 - *(runtime)* own set-semantics dedup and antijoin ([#283](https://github.com/flowlog-rs/flowlog/pull/283))
 - *(runtime)* add FlowLog join and map operators ([#282](https://github.com/flowlog-rs/flowlog/pull/282))
+- *(profiler)* periodically flush metrics during incremental commits ([#267](https://github.com/flowlog-rs/flowlog/pull/267))
+- *(profiler)* periodically flush metrics during batch runs ([#246](https://github.com/flowlog-rs/flowlog/pull/246))
+- *(profiler)* record plan graph in codegen and read metrics back in… ([#242](https://github.com/flowlog-rs/flowlog/pull/242))
+- *(planner)* fuse spanning equality comparisons into join keys ([#219](https://github.com/flowlog-rs/flowlog/pull/219))
+
+### Fixed
+
+- *(codegen)* deterministic `ord` via single-thread fact interning ([#208](https://github.com/flowlog-rs/flowlog/pull/208))
 
 ### Other
 
+- *(runtime)* centralize relation output ([#336](https://github.com/flowlog-rs/flowlog/pull/336))
+- *(runtime)* move relation declarations to shared I/O ([#335](https://github.com/flowlog-rs/flowlog/pull/335))
+- *(runtime)* centralize relation input loading across frontends ([#334](https://github.com/flowlog-rs/flowlog/pull/334))
 - *(parser)* [**breaking**] resolve io directive parameters into typed sources ([#308](https://github.com/flowlog-rs/flowlog/pull/308))
 - [**breaking**] drop extended execution modes and loop blocks ([#286](https://github.com/flowlog-rs/flowlog/pull/286))
 - *(build)* [**breaking**] extract planner into flowlog-planner crate ([#273](https://github.com/flowlog-rs/flowlog/pull/273))
+- release ([#264](https://github.com/flowlog-rs/flowlog/pull/264))
+- *(release)* prep first crates.io publish; flowlog-compiler 0.5.0 ([#268](https://github.com/flowlog-rs/flowlog/pull/268))
+- Migrate to differential-dataflow 0.25 / timely 0.31 ([#227](https://github.com/flowlog-rs/flowlog/pull/227))
+- fold flowlog-typechecker into flowlog-parser ([#224](https://github.com/flowlog-rs/flowlog/pull/224))
+- *(codegen)* emit in-place filter/map_in_place for type-preserving row transforms ([#220](https://github.com/flowlog-rs/flowlog/pull/220))
+- *(typechecker)* post-typecheck constant folding pass ([#209](https://github.com/flowlog-rs/flowlog/pull/209))
+- extract `flowlog-typechecker` crate; per-site spelling in type errors ([#202](https://github.com/flowlog-rs/flowlog/pull/202))
+- *(codegen)* elide identity projections (drop no-op flat_maps) ([#200](https://github.com/flowlog-rs/flowlog/pull/200))
+- *(codegen)* fuse chained unions into a single n-ary concatenate ([#205](https://github.com/flowlog-rs/flowlog/pull/205))
+- *(codegen)* use threshold_total for outer-scope dedup in incremental mode ([#201](https://github.com/flowlog-rs/flowlog/pull/201)) ([#201](https://github.com/flowlog-rs/flowlog/pull/201))
+- factor out `flowlog-common` and `flowlog-parser` ([#196](https://github.com/flowlog-rs/flowlog/pull/196))
+- Extended profiler follow-ups ([#192](https://github.com/flowlog-rs/flowlog/pull/192))
+- support tuple syntax ([#194](https://github.com/flowlog-rs/flowlog/pull/194))
 
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.3.4...flowlog-build-v0.4.0) - 2026-07-26
 

@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-common-v0.1.0...flowlog-common-v0.2.0) - 2026-09-07
+## [0.2.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-common-v0.1.0...flowlog-common-v0.2.0) - 2026-09-14
+
+### Fixed
+
+- *(common)* enable clap derive for standalone builds ([#338](https://github.com/flowlog-rs/flowlog/pull/338))
 
 ### Other
 
