@@ -1,17 +1,13 @@
 name: Release compiler
 
-# Auto-detect a flowlog-compiler version bump on push to main, build the
-# binary on Linux + macOS + Windows, and publish a GitHub Release with the
-# binaries attached. Mirrors the crates-publish flow's "skip if already
-# exists" guard so re-runs / unrelated pushes are no-ops.
+# Called after library publishing succeeds for a merged release PR. All jobs
+# use the caller's commit so later development cannot enter this release.
 
 on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
+  workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: release-compiler-${{ github.sha }}
   cancel-in-progress: false
 
 env:
@@ -129,6 +125,22 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Build release notes
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            printf '%s\n\n' \
+              'Prebuilt archives and SHA-256 checksums are attached below.'
+            awk -v heading="## [${VERSION}]" '
+              index($0, heading) == 1 { in_release = 1 }
+              in_release && printed && /^## \[/ { exit }
+              in_release { print; printed = 1 }
+              END { if (!printed) exit 1 }
+            ' flowlog-compiler/CHANGELOG.md
+          } > release-notes.md
+
       - name: 🚀 Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -137,6 +149,6 @@ jobs:
           gh release create "${{ needs.detect.outputs.tag }}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "flowlog-compiler v${{ needs.detect.outputs.version }}" \
-            --generate-notes \
+            --notes-file release-notes.md \
             --target "${{ github.sha }}" \
             artifacts/*

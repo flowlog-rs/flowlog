@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: ["main", "main-next"]
+    branches: ["main"]
   pull_request:
-    branches: ["main", "main-next"]
+    branches: ["main"]
   # Run the required checks against the merge queue's temporary branch too;
   # without this the queue never receives their status and stalls.
   merge_group:

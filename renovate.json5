@@ -7,13 +7,7 @@
   // With a weekly schedule there is no reason to trickle PRs out.
   prHourlyLimit: 0,
 
-  // Scan & open PRs against the integration branch; `main` (release-only)
-  // is never checked — updates reach it via the normal release merge.
-  baseBranchPatterns: ["main-next"],
-  // Overlay the renovate.json5 found on main-next, so config changes take
-  // effect without waiting for a release merge to main (the default branch,
-  // which is where Renovate bootstraps its config from).
-  useBaseBranchConfig: "merge",
+  baseBranchPatterns: ["main"],
 
   // Weekly Cargo.lock refresh: CI builds against the same fresh in-range
   // resolution that users of generated crates always get (they have no lockfile).
@@ -25,7 +19,7 @@
   platformAutomerge: true,
 
   // The merge queue rebuilds each entry against the current base, so don't
-  // force-push (and re-run CI on) PRs merely because main-next advanced;
+  // force-push (and re-run CI on) PRs merely because main advanced;
   // rebase only on a genuine conflict.
   rebaseWhen: "conflicted",
 

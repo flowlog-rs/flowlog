@@ -161,6 +161,6 @@ Benchmark suite: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
 
 ## Contributing
 
-Issues and pull requests are welcome. PRs must pass CI before merge.
+Issues and pull requests are welcome. Target `main` and sign off your commits with `git commit -s`. PRs must pass CI before merge. See the [contributor guide](AGENTS.md) and [release process](docs/dev/releases.md).
 
 **Let's make Datalog fast — and incremental.**
