@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-planner-v0.1.0...flowlog-planner-v0.2.0) - 2026-09-14
+
+### Other
+
+- release FlowLog 0.6.0 ([#296](https://github.com/flowlog-rs/flowlog/pull/296))
+- [**breaking**] drop extended execution modes and loop blocks ([#286](https://github.com/flowlog-rs/flowlog/pull/286))
+- *(planner)* harden catalog metadata ([#275](https://github.com/flowlog-rs/flowlog/pull/275))
+- *(build)* [**breaking**] extract planner into flowlog-planner crate ([#273](https://github.com/flowlog-rs/flowlog/pull/273))
+
 ## [0.1.0](https://github.com/flowlog-rs/flowlog/releases/tag/flowlog-planner-v0.1.0) - 2026-09-14
 
 ### Other

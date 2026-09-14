@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.4.0...flowlog-runtime-v0.5.0) - 2026-09-14
+
+### Added
+
+- add SQLite I/O for compiled programs ([#337](https://github.com/flowlog-rs/flowlog/pull/337))
+- *(compiler)* allow runtime input and output directory overrides ([#330](https://github.com/flowlog-rs/flowlog/pull/330))
+- *(runtime)* own group-by aggregation ([#284](https://github.com/flowlog-rs/flowlog/pull/284))
+- *(runtime)* own set-semantics dedup and antijoin ([#283](https://github.com/flowlog-rs/flowlog/pull/283))
+- *(runtime)* add FlowLog join and map operators ([#282](https://github.com/flowlog-rs/flowlog/pull/282))
+- *(profiler)* periodically flush metrics during batch runs ([#246](https://github.com/flowlog-rs/flowlog/pull/246))
+
+### Other
+
+- release FlowLog 0.6.0 ([#296](https://github.com/flowlog-rs/flowlog/pull/296))
+- *(runtime)* centralize relation output ([#336](https://github.com/flowlog-rs/flowlog/pull/336))
+- *(runtime)* move relation declarations to shared I/O ([#335](https://github.com/flowlog-rs/flowlog/pull/335))
+- *(runtime)* centralize relation input loading across frontends ([#334](https://github.com/flowlog-rs/flowlog/pull/334))
+- [**breaking**] drop extended execution modes and loop blocks ([#286](https://github.com/flowlog-rs/flowlog/pull/286))
+- release ([#264](https://github.com/flowlog-rs/flowlog/pull/264))
+- *(release)* prep first crates.io publish; flowlog-compiler 0.5.0 ([#268](https://github.com/flowlog-rs/flowlog/pull/268))
+- factor out `flowlog-common` and `flowlog-parser` ([#196](https://github.com/flowlog-rs/flowlog/pull/196))
+- Extended profiler follow-ups ([#192](https://github.com/flowlog-rs/flowlog/pull/192))
+
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.3.0...flowlog-runtime-v0.4.0) - 2026-09-14
 
 ### Added
