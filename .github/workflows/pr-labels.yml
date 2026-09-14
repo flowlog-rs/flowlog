@@ -1,0 +1,107 @@
+name: PR labels
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, labeled, unlabeled, edited]
+  pull_request_target:
+    branches: [main]
+    types: [unlabeled]
+  merge_group:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-labels-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  labels:
+    name: PR labels
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const prs = [];
+            if (context.eventName === 'pull_request') {
+              const { data: pr } = await github.rest.pulls.get({
+                owner, repo, pull_number: context.payload.pull_request.number,
+              });
+              prs.push({ number: pr.number, count: pr.labels.length });
+            } else {
+              let cursor = null;
+              let found = false;
+              do {
+                const { repository } = await github.graphql(`
+                  query($owner: String!, $repo: String!, $cursor: String) {
+                    repository(owner: $owner, name: $repo) {
+                      mergeQueue(branch: "main") {
+                        entries(first: 100, after: $cursor) {
+                          nodes {
+                            headCommit { oid }
+                            pullRequest { number labels(first: 1) { totalCount } }
+                          }
+                          pageInfo { hasNextPage endCursor }
+                        }
+                      }
+                    }
+                  }`, { owner, repo, cursor });
+                const entries = repository.mergeQueue.entries;
+                // A speculative build includes the entries ahead of its own PR.
+                for (const entry of entries.nodes) {
+                  const pr = entry.pullRequest;
+                  prs.push({ number: pr.number, count: pr.labels.totalCount });
+                  if (entry.headCommit?.oid === context.payload.merge_group.head_sha) {
+                    found = true;
+                    break;
+                  }
+                }
+                cursor = entries.pageInfo.hasNextPage ? entries.pageInfo.endCursor : null;
+              } while (!found && cursor);
+              if (!found) {
+                core.setFailed('Cannot find this build in the main merge queue.');
+                return;
+              }
+            }
+            const missing = prs.filter(pr => pr.count === 0).map(pr => `#${pr.number}`);
+            if (missing.length) {
+              core.setFailed(`Add at least one label to ${missing.join(', ')}.`);
+            } else {
+              core.info('Every PR has at least one label.');
+            }
+
+  dequeue-unlabeled:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      # Read metadata only; never check out or execute PR code with this token.
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const { repository } = await github.graphql(`
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    id labels(first: 1) { totalCount } mergeQueueEntry { id }
+                  }
+                }
+              }`, { ...context.repo, number: context.payload.pull_request.number });
+            const pr = repository.pullRequest;
+            if (pr.labels.totalCount === 0 && pr.mergeQueueEntry) {
+              // Removing the last label must invalidate a passed queue build.
+              await github.graphql(`
+                mutation($id: ID!) {
+                  dequeuePullRequest(input: { pullRequestId: $id }) { clientMutationId }
+                }`, { id: pr.id });
+              core.info('Removed the unlabeled PR from the merge queue.');
+            }

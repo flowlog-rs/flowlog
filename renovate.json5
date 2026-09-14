@@ -8,6 +8,7 @@
   prHourlyLimit: 0,
 
   baseBranchPatterns: ["main"],
+  labels: ["dependencies"],
 
   // Weekly Cargo.lock refresh: CI builds against the same fresh in-range
   // resolution that users of generated crates always get (they have no lockfile).
