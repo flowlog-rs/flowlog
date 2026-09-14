@@ -66,9 +66,7 @@ pub(super) enum Disposition {
 /// A rule whose body substitution emptied (an all-assignment rule) must become
 /// a ground fact; a head that did not fold to a constant (`1 / 0`, a string
 /// builtin) has no value and is rejected with [`ParseError::GroundRuleNotConst`].
-/// Inside a loop a non-empty rule is only value-folded, never removed or
-/// converted (dropping a recursive rule could change the fixpoint).
-pub(super) fn classify(rule: &FlowLogRule, in_loop: bool) -> Result<Disposition, ParseError> {
+pub(super) fn classify(rule: &FlowLogRule) -> Result<Disposition, ParseError> {
     let rhs = rule.rhs();
 
     // Body substitution emptied this rule: it is a ground fact, or its head has
@@ -80,10 +78,6 @@ pub(super) fn classify(rule: &FlowLogRule, in_loop: bool) -> Result<Disposition,
                 span: rule.head().span(),
             }),
         };
-    }
-
-    if in_loop {
-        return Ok(Disposition::Keep);
     }
 
     if rhs.iter().any(|p| matches!(const_compare(p), Some(false))) {

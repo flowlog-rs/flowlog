@@ -31,12 +31,10 @@ use crate::Arithmetic;
 use crate::BuiltinOperator;
 use crate::DataType;
 use crate::Factor;
-use crate::FlowLogRule;
 use crate::HeadArg;
 use crate::ParseError;
 use crate::Predicate;
 use crate::Program;
-use crate::Segment;
 use crate::pipeline::typecheck::env::PrimitiveEnv;
 
 /// Var -> (first-seen type, first-seen span). Later uses must agree.
@@ -58,8 +56,8 @@ pub(crate) fn check_and_pin(
     Ok(())
 }
 
-/// Check `ord(_)` usage across every segment (plain, loop, and fixpoint):
-/// reject it without `--str-intern` ([`ParseError::OrdRequiresStrIntern`]),
+/// Check `ord(_)` usage across every rule: reject it without `--str-intern`
+/// ([`ParseError::OrdRequiresStrIntern`]),
 /// otherwise set [`Config::serialize_load`] so the loader interns serially and
 /// `ord` stays deterministic across worker counts.
 fn check_ord(program: &Program, config: &mut Config) -> Result<(), ParseError> {
@@ -79,26 +77,20 @@ fn check_ord(program: &Program, config: &mut Config) -> Result<(), ParseError> {
         }
     }
 
-    let ord_span = program.segments().iter().find_map(|segment| {
-        let rules: &[FlowLogRule] = match segment {
-            Segment::Plain(rules) => rules,
-            Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
-        };
-        rules.iter().find_map(|rule| {
-            let body = rule.rhs().iter().find_map(|predicate| match predicate {
-                Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => None,
-                Predicate::Compare(cmp) => arith(cmp.left()).or_else(|| arith(cmp.right())),
-            });
-            body.or_else(|| {
-                rule.head()
-                    .head_arguments()
-                    .iter()
-                    .find_map(|head_arg| match head_arg {
-                        HeadArg::Var(_) => None,
-                        HeadArg::Arith(a) => arith(a),
-                        HeadArg::Aggregation(agg) => arith(agg.arithmetic()),
-                    })
-            })
+    let ord_span = program.rules().iter().find_map(|rule| {
+        let body = rule.rhs().iter().find_map(|predicate| match predicate {
+            Predicate::PositiveAtom(_) | Predicate::NegativeAtom(_) => None,
+            Predicate::Compare(cmp) => arith(cmp.left()).or_else(|| arith(cmp.right())),
+        });
+        body.or_else(|| {
+            rule.head()
+                .head_arguments()
+                .iter()
+                .find_map(|head_arg| match head_arg {
+                    HeadArg::Var(_) => None,
+                    HeadArg::Arith(a) => arith(a),
+                    HeadArg::Aggregation(agg) => arith(agg.arithmetic()),
+                })
         })
     });
 
@@ -126,21 +118,6 @@ mod tests {
             .input In(IO=\"file\", filename=\"In.csv\", delimiter=\",\")\n\
             .output Out\n\
             Out(ord(s)) :- In(s).\n";
-        assert_err!(checked(src), ParseError::OrdRequiresStrIntern { .. });
-    }
-
-    /// The gate must reach inside loop/fixpoint blocks too, not only plain
-    /// segments (regression: it once scanned `as_rules()`, skipping loop rules).
-    #[test]
-    fn ord_in_loop_rule_requires_str_intern() {
-        let src = "\
-            .decl Edge(x: symbol)\n\
-            .decl A(n: int32)\n\
-            .input Edge(IO=\"file\", filename=\"Edge.csv\", delimiter=\",\")\n\
-            .output A\n\
-            fixpoint {\n\
-                A(ord(x)) :- Edge(x).\n\
-            }\n";
         assert_err!(checked(src), ParseError::OrdRequiresStrIntern { .. });
     }
 }

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# FlowLog correctness test — datalog-batch mode, library path.
+# FlowLog correctness test — batch mode, library path.
 #
 # Mirrors `run_compiler.sh` but drives lib mode: instead of
 # compiling a standalone executable with `flowlog-compiler`, synthesize a
@@ -28,7 +28,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 # Configuration
 ###############################################################################
 
-MODE="datalog-batch"
+MODE="batch"
 ENABLE_SIP=0
 SINGLE_CONFIG=""
 KEEP_DATASETS=0
@@ -40,7 +40,7 @@ usage() {
 Usage:
   $(basename "$0") [config_file] [options]
 
-Runs FlowLog in datalog-batch mode (library path) and compares output
+Runs FlowLog in batch mode (library path) and compares output
 against pre-computed Souffle reference results.
 
 By default, runs tests/oracle/config.txt; pass a single config file
@@ -53,7 +53,7 @@ Options:
   --keep-datasets             Don't delete datasets after each pair.
                               Required when <repo>/facts/ is a symlink.
   --workers <n>               Workers forwarded to
-                              DatalogBatchEngine::workers (default: 64).
+                              BatchEngine::workers (default: 64).
   --souffle-ref-cache <path>  Local cache of Souffle reference tarballs;
                               if present, cp instead of wget.
 
@@ -255,7 +255,7 @@ main() {
     parse_args "$@"
     init_paths
     init_opt_flags
-    log "$BLUE" "START" "FlowLog datalog-batch correctness test (library mode)"
+    log "$BLUE" "START" "FlowLog batch correctness test (library mode)"
 
     compile_release_workspace
     warm_runner_crate

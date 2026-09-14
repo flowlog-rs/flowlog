@@ -60,7 +60,10 @@ crate in the workspace.
    caller. Definitions interleaved with other types' implementations
    force the reader to jump.
 
-7. **Roots route; leaves define.** `lib.rs` and every `mod.rs` only
-   declare submodules and re-export the surface; every item, impl, and
-   test lives in a leaf module. An item with no obvious leaf module is a
-   missing module, not a root resident.
+7. **Module entries may define their central contract.** A module entry
+   file (`foo.rs` or `foo/mod.rs`) may define its central traits and
+   types alongside submodule declarations and re-exports. Substantial
+   implementations belong in child modules. Prefer `foo.rs` with a
+   `foo/` directory for its children; do not create a separate file solely
+   to hold a small central contract. `lib.rs` remains limited to module
+   declarations and re-exports.

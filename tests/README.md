@@ -8,7 +8,7 @@ runnable.
 | Path                        | What it does                                                  | Time       |
 |-----------------------------|---------------------------------------------------------------|------------|
 | `cargo nextest run --workspace` | Per-crate `#[test]`s (nextest); doctests via `cargo test --doc` | <15 s warm |
-| `tests/fixtures/`           | ~95 hand-curated `.dl` programs, byte-diff vs `expected/`     | ~2 min     |
+| `tests/fixtures/`           | ~120 hand-curated `.dl` programs, byte-diff vs `expected/`    | ~2 min     |
 | `tests/oracle/`             | Real benchmarks, byte-diff vs **Soufflé** reference outputs   | ~30 min    |
 | `tests/lib/`                | Shared bash helpers (sourced by every runner)                 | —          |
 | `tests/ldbc/` *(future)*    | LDBC SNB correctness — empty placeholder                      | —          |
@@ -19,6 +19,13 @@ Both `fixtures/` and `oracle/` ship **two runner scripts** —
 crate that links `flowlog-build` + `flowlog-runtime` and calls
 `engine.run()` directly. They hit different code paths; both must
 pass.
+
+SQLite I/O fixtures live alongside other `batch` and `inc` fixtures, with
+and without `ord`. Their `sqlite_setup.sql` creates the input database. Each `expected/<table>`
+file contains the expected JSON rows of that output table, compared without
+row ordering. Empty files assert that the table exists and has no rows.
+The compiler runner sources `fixtures/sqlite_helper.sh` for these steps.
+The library runner skips them because library engines use host I/O.
 
 ## How to run
 

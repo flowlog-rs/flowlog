@@ -1,9 +1,5 @@
-//! Command-line interface for the FlowLog compiler binary.
-//!
-//! `Cli` is the clap front-end. It owns every CLI/driver concern (output
-//! paths, build directory, fact directory, `--save-temps`) and projects the
-//! pipeline-relevant subset onto a shared [`flowlog_common::Config`] via
-//! [`Cli::to_config`].
+//! Command-line parsing and conversion into pipeline [`Config`] and build
+//! [`CompileOptions`].
 
 use clap::Parser;
 use flowlog_common::Config;
@@ -19,7 +15,8 @@ pub struct Cli {
     #[arg(value_name = "PROGRAM")]
     pub program: String,
 
-    /// Directory containing input fact files.
+    /// Default input fact directory (otherwise the working directory).
+    /// The executable's `-F` flag overrides it at runtime.
     #[arg(short = 'F', long, value_name = "DIR")]
     pub fact_dir: Option<String>,
 
@@ -27,13 +24,13 @@ pub struct Cli {
     #[arg(short = 'o', value_name = "PATH")]
     pub executable_path: Option<String>,
 
-    /// Directory for writing output relations. Use `-` for stdout.
+    /// Default output directory (otherwise the working directory).
+    /// Use `-` for stdout. The executable's `-D` flag overrides it at runtime.
     #[arg(short = 'D', long, value_name = "DIR")]
     pub output_dir: Option<String>,
 
-    /// Execution strategy: `datalog-batch` (default), `datalog-inc`,
-    /// `extend-batch`, or `extend-inc`.
-    #[arg(long, value_enum, default_value = "datalog-batch", value_name = "MODE")]
+    /// Execution strategy: `batch` (default) or `inc`.
+    #[arg(long, value_enum, default_value = "batch", value_name = "MODE")]
     mode: ExecutionMode,
 
     /// Collect per-rule execution statistics (timing, tuple counts, ...).
@@ -64,13 +61,16 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub udf_file: Option<String>,
 
-    /// Build the generated Rust crate in DIR and keep it afterwards.
-    /// Reusing the same DIR skips dependency rebuilds, reuses incremental
-    /// artifacts across recompiles, and leaves the generated sources
-    /// readable. Without it, the crate is built in a hidden scratch
-    /// directory that is removed after a successful build.
+    /// Keep the generated Rust project in DIR after compilation.
+    /// Without this option, a hidden scratch project is removed on success.
     #[arg(short = 'B', long, value_name = "DIR")]
     pub build_dir: Option<String>,
+
+    /// Store Cargo artifacts in DIR, shared across generated projects.
+    /// Relative paths start at the compiler's working directory. Overrides
+    /// CARGO_TARGET_DIR; when omitted, Cargo uses its environment and config.
+    #[arg(short = 'T', long, value_name = "DIR")]
+    pub target_dir: Option<String>,
 
     /// Type-check the generated crate with `cargo check` instead of building
     /// an executable. Faster; conflicts with `-o`.
@@ -101,7 +101,7 @@ impl Cli {
         }
     }
 
-    /// Project the CLI onto the compiler options.
+    /// Extracts build settings and applies the default executable path.
     pub fn to_compile_options(&self) -> CompileOptions {
         CompileOptions::new(
             &self.program,
@@ -109,6 +109,7 @@ impl Cli {
             self.output_dir.clone(),
             self.fact_dir.clone(),
             self.build_dir.clone(),
+            self.target_dir.clone(),
             self.check,
         )
     }

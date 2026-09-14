@@ -1,0 +1,26 @@
+.decl Edge(src: number, dst: number)
+Edge(1, 2).
+Edge(2, 3).
+Edge(3, 4).
+
+.decl Blocked(node: number)
+Blocked(3).
+
+.decl Reach(src: number, dst: number)
+Reach(?src, ?dst) :- Edge(?src, ?dst).
+Reach(?src, ?dst) :- Reach(?src, ?mid), Edge(?mid, ?dst).
+.output Reach(order_by="src ASC, dst ASC")
+
+.decl Distinct(src: number, dst: number)
+Distinct(x, ?x) :- Edge(x, ?x).
+.output Distinct
+
+.decl Distance(src: number, distance: number)
+Distance(?src, ?distance) :-
+    Reach(?src, ?dst), !Blocked(?dst),
+    ?dst > ?src, ?distance = ?dst - ?src.
+.output Distance
+
+.decl Total(src: number, total: number)
+Total(?src, sum(?distance)) :- Distance(?src, ?distance).
+.output Total

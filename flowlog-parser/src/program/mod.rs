@@ -6,7 +6,7 @@
 //! | Component | Description |
 //! |-----------|-------------|
 //! | [`Relation`] declarations | Schema: name, attribute types, EDB/IDB role |
-//! | [`Segment`]s | Rules and loop blocks in source order |
+//! | Rules | Every rule, in source order |
 //! | UDF declarations | External scalar functions (`.extern fn`) |
 //! | Inline facts | Ground tuples written directly in source (`rel(1, 2).`) |
 
@@ -21,7 +21,6 @@ pub use fact::InlineFact;
 use crate::ast::FlowLogRule;
 use crate::declaration::ExternFn;
 use crate::declaration::Relation;
-use crate::segment::Segment;
 use crate::types::TypeRegistry;
 
 // =============================================================================
@@ -37,9 +36,8 @@ use crate::types::TypeRegistry;
 pub struct Program {
     /// All relation declarations (`.decl`), in source order.
     pub(crate) relations: Vec<Relation>,
-    /// Ordered sequence of [`Segment`]s (plain rule groups and loop blocks),
-    /// in source order, preserved exactly across included files.
-    pub(crate) segments: Vec<Segment>,
+    /// Every rule in source order, preserved exactly across included files.
+    pub(crate) rules: Vec<FlowLogRule>,
     /// External scalar UDF declarations (`.extern fn`).
     pub(crate) udfs: Vec<ExternFn>,
     /// Inline ground facts, keyed by canonical relation name.
@@ -107,25 +105,6 @@ impl Program {
         self.edbs().iter().map(|rel| rel.fingerprint()).collect()
     }
 
-    #[cfg(test)]
-    #[must_use]
-    #[inline]
-    pub fn file_backed_relations(&self) -> Vec<&Relation> {
-        self.relations
-            .iter()
-            .filter(|rel| rel.is_file_backed())
-            .collect()
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn inline_fact_relations(&self) -> Vec<&Relation> {
-        self.relations
-            .iter()
-            .filter(|rel| self.has_inline_facts(rel.name()))
-            .collect()
-    }
-
     // --- IDB outputs (`.output` / `.printsize`) ---
 
     /// IDB relations (those annotated with `.output` or `.printsize`).
@@ -144,7 +123,10 @@ impl Program {
     #[must_use]
     #[inline]
     pub fn output_idbs(&self) -> Vec<&Relation> {
-        self.relations.iter().filter(|rel| rel.output()).collect()
+        self.relations
+            .iter()
+            .filter(|rel| rel.has_output())
+            .collect()
     }
 
     /// IDB relations annotated with `.printsize`, in declaration order.
@@ -157,49 +139,27 @@ impl Program {
             .collect()
     }
 
-    // --- Segments & rules ---
+    // --- Rules ---
 
-    /// Ordered program items (rule segments and loop blocks) in source order.
+    /// Returns every rule in source order.
     #[must_use]
     #[inline]
-    pub fn segments(&self) -> &[Segment] {
-        &self.segments
+    pub fn rules(&self) -> &[FlowLogRule] {
+        &self.rules
     }
 
-    /// Mutable version of [`segments`](Self::segments).
-    pub(crate) fn segments_mut(&mut self) -> &mut [Segment] {
-        &mut self.segments
+    /// Mutable version of [`rules`](Self::rules). Owned so a stage can add
+    /// or drop rules, not only rewrite them in place.
+    #[inline]
+    pub(crate) fn rules_mut(&mut self) -> &mut Vec<FlowLogRule> {
+        &mut self.rules
     }
 
-    /// All top-level rules, flattened across `Segment::Plain` segments;
-    /// excludes rules inside loop blocks. Prefer [`segments`](Self::segments)
-    /// for loop-aware processing.
+    /// Returns the rule with global source-order ID `rule_id`.
     #[must_use]
-    pub fn rules(&self) -> Vec<&FlowLogRule> {
-        self.segments
-            .iter()
-            .flat_map(|item| item.as_rules())
-            .collect()
-    }
-
-    /// Look up a rule by its global source-order ID.
-    ///
-    /// # Panics
-    /// Panics if `rid` is out of bounds.
-    #[must_use]
-    pub fn rule(&self, rid: usize) -> &FlowLogRule {
-        let mut offset = 0;
-        for seg in &self.segments {
-            let rules: &[FlowLogRule] = match seg {
-                Segment::Plain(rules) => rules,
-                Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
-            };
-            if rid < offset + rules.len() {
-                return &rules[rid - offset];
-            }
-            offset += rules.len();
-        }
-        panic!("Parser error: rule ID {rid} out of bounds");
+    #[inline]
+    pub fn rule(&self, rule_id: usize) -> Option<&FlowLogRule> {
+        self.rules.get(rule_id)
     }
 
     // --- Inline facts ---
@@ -235,12 +195,12 @@ impl Program {
 
     // --- Internal ---
 
-    /// Split-borrow of the registry (shared) and segments (mutable): going
+    /// Split-borrow of the registry (shared) and rules (mutable): going
     /// through a method lets the borrow checker see the two fields are
     /// disjoint.
     #[inline]
-    pub(crate) fn registry_and_segments_mut(&mut self) -> (&TypeRegistry, &mut [Segment]) {
-        (&self.type_registry, &mut self.segments)
+    pub(crate) fn registry_and_rules_mut(&mut self) -> (&TypeRegistry, &mut [FlowLogRule]) {
+        (&self.type_registry, &mut self.rules)
     }
 
     #[inline]
@@ -251,40 +211,58 @@ impl Program {
 
 #[cfg(test)]
 mod tests {
+    use crate::InputSource;
     use crate::Relation;
     use crate::test_util::assembled;
 
-    /// `rules()` flattens the rules of every `Segment::Plain` in source order
-    /// and excludes rules nested inside loop blocks.
     #[test]
-    fn rules_flattens_plain_segments_and_excludes_loop_bodies() {
+    fn rules_are_returned_in_source_order() {
         let program = assembled(
             "
             .decl a(x: number)
             .decl b(x: number)
             .output a
             a(X) :- b(X).
-            fixpoint { }
+            a(2) :- b(2).
             a(1) :- b(1).
             ",
         )
         .expect("assembles");
-        assert_eq!(program.rules().len(), 2);
+        let rules = program.rules();
+        assert_eq!(rules.len(), 3);
+        assert!(rules[1].to_string().contains("2"));
     }
 
-    /// `edbs()` is the union of file-backed (`.input`) relations and relations
-    /// with inline facts; `file_backed_relations()` and `inline_fact_relations()`
-    /// are the individual subsets, and a relation may belong to both.
     #[test]
-    fn edb_subsets_track_file_backed_inline_and_overlap_relations() {
+    fn rule_returns_none_for_out_of_bounds_id() {
+        let program = assembled(
+            "
+            .decl a(x: number)
+            .decl b(x: number)
+            .output a
+            a(X) :- b(X).
+            ",
+        )
+        .expect("assembles");
+        assert!(program.rule(1).is_none());
+    }
+
+    /// `edbs()` is the union of relations carrying an `.input` and relations
+    /// carrying inline facts, and the two overlap. Neither holds a `put`-fed
+    /// `IO="command"` source, which reads no file and declares no facts yet
+    /// is available before evaluation all the same.
+    #[test]
+    fn edbs_unions_file_backed_inline_and_put_fed_relations() {
         let program = assembled(
             "
             .decl file_only(x: number)
             .decl fact_only(x: number)
+            .decl cmd_only(x: number)
             .decl both(x: number)
             .decl out(x: number)
             .input file_only(IO=\"file\", filename=\"file_only.csv\", delimiter=\",\")
             .input both(IO=\"file\", filename=\"both.csv\", delimiter=\",\")
+            .input cmd_only(IO=\"command\", delimiter=\",\")
             .output out
 
             fact_only(1).
@@ -292,6 +270,7 @@ mod tests {
 
             out(X) :- file_only(X).
             out(X) :- fact_only(X).
+            out(X) :- cmd_only(X).
             out(X) :- both(X).
             ",
         )
@@ -302,18 +281,22 @@ mod tests {
             v.sort_unstable();
             v
         };
+        let file_backed: Vec<&Relation> = program
+            .relations()
+            .iter()
+            .filter(|rel| rel.input().is_some_and(InputSource::is_file_backed))
+            .collect();
+        let inline_facts: Vec<&Relation> = program
+            .relations()
+            .iter()
+            .filter(|rel| program.has_inline_facts(rel.name()))
+            .collect();
 
         assert_eq!(
             names(program.edbs()),
-            vec!["both", "fact_only", "file_only"]
+            vec!["both", "cmd_only", "fact_only", "file_only"]
         );
-        assert_eq!(
-            names(program.file_backed_relations()),
-            vec!["both", "file_only"]
-        );
-        assert_eq!(
-            names(program.inline_fact_relations()),
-            vec!["both", "fact_only"]
-        );
+        assert_eq!(names(file_backed), vec!["both", "file_only"]);
+        assert_eq!(names(inline_facts), vec!["both", "fact_only"]);
     }
 }

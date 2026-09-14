@@ -6,46 +6,26 @@
 //! there.
 
 use proc_macro2::TokenStream;
-use quote::format_ident;
 use quote::quote;
 
 use crate::codegen::Features;
 
-/// Emit every import the generated library-mode module needs, including the
-/// private `mod relops { ... }` wrapper that encapsulates the input-handler
-/// types.
+/// Emit every import the generated library-mode module needs.
 pub(crate) fn gen_lib_imports(
     relops_body: &TokenStream,
     features: &Features,
     profile: bool,
 ) -> TokenStream {
-    let ordered_float_import = features
-        .ordered_float()
-        .then(|| quote! { use ::flowlog_runtime::ordered_float; });
-    let lasso_import = features
-        .string_intern()
-        .then(|| quote! { use ::flowlog_runtime::lasso; });
-
     let mut out = vec![quote! {
         mod relops {
-            use ::flowlog_runtime::differential_dataflow;
-            #ordered_float_import
-            #lasso_import
             #relops_body
         }
         use relops::*;
-        use std::sync::{Arc, Mutex};
-        use std::rc::Rc;
-        use std::cell::RefCell;
+        use std::sync::Arc;
     }];
 
     out.push(dd_imports(features));
 
-    if features.timely_map() {
-        out.push(quote! { use ::flowlog_runtime::timely::dataflow::operators::vec::Map; });
-    }
-
-    out.push(string_intern_imports(features));
     if features.ordered_float() {
         out.push(quote! { use ::flowlog_runtime::ordered_float::OrderedFloat; });
     }
@@ -65,6 +45,8 @@ fn profile_imports(profile: bool) -> TokenStream {
     }
     quote! {
         use std::collections::HashMap;
+        use std::cell::RefCell;
+        use std::rc::Rc;
         use std::time::Duration;
         use ::flowlog_runtime::timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder};
     }
@@ -78,78 +60,11 @@ fn dd_imports(f: &Features) -> TokenStream {
     if f.dd_input() {
         out.push(quote! { use ::flowlog_runtime::differential_dataflow::input::Input; });
     }
-    if f.threshold_total() {
-        out.push(
-            quote! { use ::flowlog_runtime::differential_dataflow::operators::ThresholdTotal; },
-        );
-    }
-    if f.as_collection() {
-        out.push(quote! { use ::flowlog_runtime::differential_dataflow::AsCollection; });
-    }
     if f.recursive() {
         out.push(quote! {
             use ::flowlog_runtime::differential_dataflow::operators::iterate::Variable;
         });
     }
-    if f.aggregation() {
-        out.push(quote! {
-            use ::flowlog_runtime::differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
-        });
-    }
-
-    if f.agg_semiring() {
-        // Semiring `use` statements: same as binary mode since the
-        // `mod semiring` is injected by assembly.rs via `#[path]`.
-        let semirings = f.agg_semirings();
-        let mut entries: Vec<_> = semirings
-            .iter()
-            .map(|(semiring, dt)| {
-                let mod_suffix = if dt.is_float() { "float" } else { "int" };
-                // TODO: surface as CodegenError::internal instead of panicking.
-                let suffix = dt
-                    .semiring_suffix()
-                    .expect("typechecker guarantees a numeric aggregation input");
-                (
-                    format!("{}_{mod_suffix}", semiring.module_stem()),
-                    format!("{}{}", semiring.name(), suffix),
-                )
-            })
-            .collect();
-        entries.sort();
-
-        let uses = entries.iter().map(|(mod_name, ty_name)| {
-            let mod_ident = format_ident!("{}", mod_name);
-            let ty = format_ident!("{}", ty_name);
-            quote! { use semiring::#mod_ident::#ty; }
-        });
-
-        out.push(quote! {
-            #(#uses)*
-            use ::flowlog_runtime::differential_dataflow::difference::IsZero;
-        });
-    }
 
     quote! { #(#out)* }
-}
-
-/// `intern` / `resolve` / `Spur` imports; empty when interning is off.
-fn string_intern_imports(f: &Features) -> TokenStream {
-    if !f.string_intern() {
-        return quote! {};
-    }
-
-    let base = quote! {
-        use ::flowlog_runtime::lasso::Spur;
-        use ::flowlog_runtime::intern::intern;
-    };
-
-    let resolve = f
-        .string_resolve()
-        .then(|| quote! { use ::flowlog_runtime::intern::resolve; });
-
-    let resolve_out = f
-        .string_resolve_out()
-        .then(|| quote! { use ::flowlog_runtime::intern::resolve_out; });
-
-    quote! { #base #resolve #resolve_out }
 }

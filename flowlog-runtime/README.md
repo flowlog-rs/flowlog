@@ -9,12 +9,18 @@ You typically don't call into it directly.
 
 ## What it offers
 
-- `Relation` trait — implemented by each generated input struct.
-- `io` — parallel-ingest helpers: `partition`, `byte_range_reader`, and
-  first-column sharding.
+- `RuntimeArgs` (optional `cli` feature) - executable argument parsing with
+  directory defaults and Timely worker options.
+- `io::Relation` - shared input and output relation declarations.
+- `io::input` - one `Loader` per relation,
+  fed from files, text puts, or typed host rows. The runtime owns worker
+  partitioning and decoding for both generated binaries and libraries.
+- `io::output` - `Emitter` collects worker results and emits text, typed
+  snapshots, weighted deltas, or independent counts. Ordering and limits
+  apply to text and snapshots; host deltas remain unfiltered.
+- `error` - `RuntimeError` for input validation, ingestion, and SQLite output.
+  Output text writers return `std::io::Result`.
 - `intern` — thread-safe string-interning pool.
-- `sort` — `k_way_merge` and `topk` used by generated `ORDER BY` / `LIMIT`
-  drain code.
 - `txn` — transaction state types (`TxnOp`, `TxnAction`, `TxnState`)
   consumed by incremental-mode drivers to broadcast per-epoch commits.
 

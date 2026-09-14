@@ -5,9 +5,7 @@ set -euo pipefail
 #
 # Layout:
 #   tests/fixtures/<category>/          Category determines --mode flag:
-#     datalog-batch  → (default)         datalog-inc  → --mode datalog-inc
-#     extend-batch   → --mode extend-batch
-#     extend-inc     → --mode extend-inc
+#     batch  → (default)    inc  → --mode inc
 #
 #   tests/fixtures/<category>/<test_name>/
 #     program.dl     Datalog source (must use .output directives)
@@ -20,11 +18,10 @@ set -euo pipefail
 #   tests/fixtures/run_compiler.sh                          # run all tests
 #   tests/fixtures/run_compiler.sh <test_name> [test_name ...] # run specific tests
 
-# Categories exercised by binary mode. Add `extend-inc` here when the
-# first such fixture lands (binary mode already supports the mode).
-CATEGORIES=(datalog-batch datalog-inc extend-batch)
+CATEGORIES=(batch inc)
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+source "$TESTS_DIR/sqlite_helper.sh"
 
 readonly COMPILER_BIN="${ROOT_DIR}/target/release/flowlog-compiler"
 readonly BUILD_DIR="${ROOT_DIR}/target/e2e"
@@ -40,10 +37,8 @@ Usage:
   $(basename "$0") [-j N] [--shard I/N] [test_name ...]
 
 Run FlowLog binary-mode end-to-end tests. Tests are organized by category:
-  datalog-batch/  Standard batch Datalog evaluation (default mode)
-  datalog-inc/    Incremental Datalog evaluation
-  extend-batch/   Extended batch evaluation (loops)
-  extend-inc/     Extended incremental evaluation
+  batch/  Batch evaluation (default mode)
+  inc/    Incremental evaluation
 
 Each test directory contains:
   program.dl      Datalog source using .output directives
@@ -73,10 +68,8 @@ EOF
 mode_flag_for_category() {
     local category="$1"
     case "$category" in
-        datalog-batch) echo "" ;;
-        datalog-inc)   echo "--mode datalog-inc" ;;
-        extend-batch)  echo "--mode extend-batch" ;;
-        extend-inc)    echo "--mode extend-inc" ;;
+        batch) echo "" ;;
+        inc)   echo "--mode inc" ;;
         *) die "Unknown category: $category" ;;
     esac
 }
@@ -110,17 +103,13 @@ run_generated_binary() {
     local run_log="$3"
     local incremental="$4"
 
-    # Incremental: feed commands via stdin. Rustyline detects non-TTY
-    # stdin and falls back to a synchronous line reader, so no PTY or
-    # pacing choreography is needed.
-    if (( incremental )); then
-        (cd "$work_dir" && ./program < "$test_dir/commands.txt" >"$run_log" 2>&1)
-        return
-    fi
-
     local runtime_flags=()
     if [[ -f "$test_dir/runtime_flags" ]]; then
         mapfile -t runtime_flags < "$test_dir/runtime_flags"
+    fi
+    if (( incremental )); then
+        (cd "$work_dir" && ./program "${runtime_flags[@]}" < "$test_dir/commands.txt" >"$run_log" 2>&1)
+        return
     fi
     (cd "$work_dir" && ./program "${runtime_flags[@]}" >"$run_log" 2>&1)
 }
@@ -196,6 +185,12 @@ run_test() {
     # 2) Stage inputs
     copy_test_data "$test_dir" "$work_dir"
     mkdir -p "$output_dir"
+    if [[ -f "$test_dir/sqlite_setup.sql" ]]; then
+        if ! setup_sqlite_fixture "$test_dir" "$work_dir" >"$run_log" 2>&1; then
+            record_failure "$full_name" "SQLite setup failed" "$(cat "$run_log")"
+            return
+        fi
+    fi
 
     # 3) Execute
     if ! run_generated_binary "$work_dir" "$test_dir" "$run_log" "$incremental"; then
@@ -206,8 +201,23 @@ run_test() {
         return
     fi
 
+    # `.printsize` reports on stdout rather than writing a file, so distill
+    # those lines into one; the usual `expected/<name>` comparison pins them
+    # from there.
+    if grep -q '^\[size\]' "$run_log" 2>/dev/null; then
+        grep '^\[size\]' "$run_log" > "${output_dir}/printsize"
+    fi
+
+    if [[ -f "$test_dir/sqlite_setup.sql" ]]; then
+        if ! export_sqlite_outputs "$test_dir" "$work_dir" >>"$run_log" 2>&1; then
+            record_failure "$full_name" "SQLite query failed" "$(cat "$run_log")"
+            return
+        fi
+    fi
+
     # 4) Compare
     local use_sort=0
+    [[ -f "$test_dir/sqlite_setup.sql" ]] && use_sort=1
     [[ -f "$test_dir/runtime_flags" ]] && grep -q -- '-w' "$test_dir/runtime_flags" && use_sort=1
 
     local mismatch_detail

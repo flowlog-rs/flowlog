@@ -45,10 +45,39 @@ pub(crate) fn decode_string(lexeme: &str, span: Span) -> Result<String, ParseErr
 #[cfg(test)]
 mod tests {
     use pest::Parser as _;
+    use pest::error::ErrorVariant;
     use rstest::rstest;
 
     use super::*;
     use crate::assert_err;
+
+    #[rstest]
+    #[case("R(?)")]
+    #[case("R(? x)")]
+    #[case("R(?\nx)")]
+    #[case("R(?// gap\nx)")]
+    #[case("R(?# gap\nx)")]
+    #[case("R(??x)")]
+    #[case("R(?_)")]
+    #[case("R(?1x)")]
+    #[case("R(?x?)")]
+    #[case("R(x?y)")]
+    fn malformed_variable_prefix_is_rejected(#[case] src: &str) {
+        let err = FlowLogParser::parse(Rule::atom, src).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case(Rule::declaration, ".decl ?R(x: number)")]
+    #[case(Rule::declaration, ".decl R(?x: number)")]
+    #[case(Rule::type_alias_decl, ".type ?T = number")]
+    #[case(Rule::extern_fn, ".extern fn ?f(x: number) -> number")]
+    #[case(Rule::atom, "?R(x)")]
+    #[case(Rule::call_expr, "?f(x)")]
+    fn variable_prefix_is_rejected_in_other_names(#[case] start_rule: Rule, #[case] src: &str) {
+        let err = FlowLogParser::parse(start_rule, src).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
 
     /// Every accepted form: Rust's escape alphabet decodes, raw strings
     /// pass through verbatim.

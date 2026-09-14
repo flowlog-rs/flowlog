@@ -3,7 +3,7 @@
 //! `ParseError` covers failures reachable from a user-authored `.dl` program
 //! across every pipeline stage: syntax errors, duplicate declarations,
 //! references to undeclared relations, broken include directives, and the
-//! semantic half — type, subtype, and cast errors raised by the checker.
+//! semantic half: type, subtype, and cast errors raised by the checker.
 //! Each variant carries a [`Span`] so the renderer can point at the
 //! offending source.
 //!
@@ -122,23 +122,6 @@ pub enum ParseError {
         name: String,
     },
 
-    /// A relation carries both `.output` and `.printsize`. Both write
-    /// to the same `<RawName>.csv` path, so the second would silently
-    /// clobber the first — rejected up-front. Use one or the other.
-    #[error(
-        "relation `{name}` has both `.output` and `.printsize`; \
-         both write `{name}.csv` — pick one"
-    )]
-    OutputAndPrintsizeConflict { span: Span, name: String },
-
-    /// A loop's `iterative [...]` list names a relation that was never `.decl`-d.
-    #[error("iterative list references undeclared relation `{name}`")]
-    UndeclaredInIterativeList { span: Span, name: String },
-
-    /// A loop's `until`/`while` condition names a relation that was never `.decl`-d.
-    #[error("loop condition references undeclared relation `{name}`")]
-    UndeclaredLoopCondition { span: Span, name: String },
-
     /// A rule head or body atom names a relation that was never `.decl`-d.
     #[error("rule references undeclared relation `{name}`")]
     UndeclaredInRule { span: Span, name: String },
@@ -146,18 +129,6 @@ pub enum ParseError {
     /// A ground fact names a relation that was never `.decl`-d.
     #[error("fact references undeclared relation `{name}`")]
     UndeclaredInFact { span: Span, name: String },
-
-    /// A `loop` / `fixpoint` block appeared outside `extend-*` mode.
-    #[error("`loop`/`fixpoint` blocks require `--mode extend-batch` or `extend-inc`")]
-    LoopBlockInStandardMode { span: Span },
-
-    /// A loop's until-condition names a relation with nonzero arity.
-    #[error("loop condition relation `{name}` must be nullary, but is declared with arity {arity}")]
-    NonNullaryLoopCondition {
-        span: Span,
-        name: String,
-        arity: usize,
-    },
 
     /// A built-in call passes the wrong number of arguments. Carries the
     /// keyword as the user spelled it.
@@ -207,7 +178,7 @@ pub enum ParseError {
     #[error("attribute references unknown type `{name}`")]
     UnknownAttributeType { span: Span, name: String },
 
-    /// `.type T = ( f: U, … )` where field type `U` is undeclared.
+    /// `.type T = ( f: U, ... )` where field type `U` is undeclared.
     #[error("tuple type `{tuple}` field `{field}` references unknown type `{field_type}`")]
     TupleFieldUnknownType {
         span: Span,
@@ -216,28 +187,65 @@ pub enum ParseError {
         field_type: String,
     },
 
-    /// `.type T = ( …, f: T, … )` — a tuple that references its own type.
+    /// `.type T = ( ..., f: T, ... )`: a tuple that references its own type.
     /// Recursive tuples (cons-lists / trees) are not supported.
     #[error("tuple type `{name}` is recursive; recursive tuples are not supported")]
     RecursiveTuple { span: Span, name: String },
 
     /// `.type X <: Y` where `Y` is a tuple type. Tuples are not subtypeable.
-    #[error("`.type {name} <: {parent}` — tuples cannot be subtyped")]
+    #[error("`.type {name} <: {parent}`: tuples cannot be subtyped")]
     SubtypeOfTuple {
         span: Span,
         name: String,
         parent: String,
     },
 
-    /// `.type T <: ( … )` — an inline tuple RHS declared with `<:`. A tuple
+    /// `.type T <: ( ... )`: an inline tuple RHS declared with `<:`. A tuple
     /// definition is its own kind of `.type` and must use `=`.
-    #[error("`.type {name} <: ( … )` — a tuple type must be defined with `=`, not `<:`")]
+    #[error("`.type {name} <: ( ... )`: a tuple type must be defined with `=`, not `<:`")]
     TupleSubtypeDecl { span: Span, name: String },
 
     /// `.input R` where `R` has a tuple-typed column. Tuples are constructed
     /// by rules, never read from EDB facts.
     #[error("`.input {name}` is not allowed: relation `{name}` has a tuple-typed column")]
     TupleInInput { span: Span, name: String },
+
+    /// `.input R(IO="...")` naming storage no reader implements. The set is
+    /// closed, so a misspelling would otherwise leave the relation with no
+    /// startup facts and no complaint.
+    #[error("unknown `.input` IO `{io}`")]
+    UnknownInputIo { span: Span, io: String },
+
+    /// `.input`/`.output R(delimiter="...")` that names no single byte to
+    /// split cells on, or names one the line reader has already consumed.
+    #[error("delimiter must be one ASCII character, not \"{}\"", .value.escape_debug())]
+    InvalidDelimiter { span: Span, value: String },
+
+    /// `.output R(IO="...")` naming a sink FlowLog does not write.
+    #[error("unknown `.output` IO `{io}`")]
+    UnknownOutputIo { span: Span, io: String },
+
+    /// `.output R(order_by="...")` that names no column of `relation`, or
+    /// spells a clause the sink cannot read.
+    #[error("invalid `order_by` for relation `{relation}`: {reason}")]
+    InvalidOrderBy {
+        span: Span,
+        relation: String,
+        reason: String,
+    },
+
+    /// `.output R(limit="...")` whose value is not a row count.
+    #[error("invalid `limit` `{value}` for relation `{relation}`")]
+    InvalidLimit {
+        span: Span,
+        relation: String,
+        value: String,
+    },
+
+    /// `.output R(limit=...)` with no `order_by`, which leaves which rows
+    /// survive up to the order they were derived in.
+    #[error("`limit` on relation `{relation}` needs an `order_by`")]
+    LimitWithoutOrderBy { span: Span, relation: String },
 
     /// `.init c = Foo<...>` where `Foo` was never declared as a `.comp`.
     #[error("unknown component `{name}`")]
@@ -309,7 +317,7 @@ pub enum ParseError {
         max: usize,
     },
 
-    /// `.plan` lists the same index twice — must be a permutation.
+    /// `.plan` lists the same index twice; must be a permutation.
     #[error("`.plan` lists positive-atom index {index} more than once")]
     PlanDuplicateIndex { span: Span, index: usize },
 
@@ -330,13 +338,18 @@ pub enum ParseError {
     #[error("rule body reduces to nothing but its head is not a constant fact")]
     GroundRuleNotConst { span: Span },
 
+    /// A `_` placeholder alone in parentheses. `(_)` is neither grouping
+    /// (a placeholder is not an expression) nor a tuple (no comma).
+    #[error("`_` cannot be grouped: `(_)` is neither a tuple nor an expression")]
+    GroupedPlaceholder { span: Span },
+
     /// A string token is not a valid Rust string literal. FlowLog strings
     /// follow Rust syntax (quoted with Rust's escape alphabet, or raw);
     /// unknown escapes are errors, unlike Souffle's pass-through.
     #[error("invalid string literal: {reason}")]
     InvalidStringLiteral { span: Span, reason: String },
 
-    // ─── Semantic (type-check) errors ────────────────────────────────
+    // --- Semantic (type-check) errors ---
     /// A variable is bound to one type and later reused with another.
     #[error("variable `{var}` bound as `{first_ty:?}` but used as `{later_ty:?}`")]
     TypeMismatch {
@@ -447,12 +460,12 @@ pub enum ParseError {
     #[error("`_` placeholder is not allowed when constructing a tuple")]
     TuplePlaceholderInConstruct { span: Span },
 
-    /// A tuple destructure (`(a, b) = x`) doesn't match `x`'s type — `x` is
+    /// A tuple destructure (`(a, b) = x`) doesn't match `x`'s type: `x` is
     /// not a tuple, or the pattern has more fields than the tuple.
     #[error("invalid tuple destructure: {detail}")]
     TupleDestructure { span: Span, detail: String },
 
-    /// A tuple construct (`(e0, …)`) doesn't match the declared tuple type —
+    /// A tuple construct (`(e0, ...)`) doesn't match the declared tuple type;
     /// wrong field count or a field whose value type doesn't fit.
     #[error("invalid tuple construct: {detail}")]
     TupleConstruct { span: Span, detail: String },
@@ -505,7 +518,7 @@ pub enum ParseError {
         later_span: Span,
     },
 
-    /// Comparison operands with no common subtype — e.g. `x = y` where
+    /// Comparison operands with no common subtype; e.g. `x = y` where
     /// `x: UserId` and `y: ProductId` are siblings of `number`.
     #[error("comparison operands have incompatible subtypes: `{left_ty}` and `{right_ty}`")]
     ComparisonSubtypeMismatch {
@@ -537,6 +550,25 @@ pub enum ParseError {
     /// `as(expr, T)` where `T` is undeclared.
     #[error("unknown cast target type `{name}`")]
     UnknownCastType { span: Span, name: String },
+
+    /// A rule head references a variable never bound by a positive body
+    /// atom. Valid syntax, but the variable has no value at evaluation time.
+    #[error("unknown head variable `{var}`")]
+    UnknownHeadVariable {
+        head_span: Span,
+        rule_span: Span,
+        var: String,
+    },
+
+    /// A single rule head contains more than one aggregation argument.
+    /// FlowLog's evaluator materializes at most one aggregation per head.
+    #[error("rule head for `{rel}` contains {count} aggregations; at most one is allowed")]
+    MultipleAggregationsInHead {
+        head_span: Span,
+        rule_span: Span,
+        rel: String,
+        count: usize,
+    },
 
     /// A grammar contract the Pest grammar should have made unreachable. Not a
     /// user error; reported as an internal compiler bug.
@@ -580,13 +612,6 @@ impl Diagnostic for ParseError {
                 "first directive here",
             )),
 
-            ParseError::OutputAndPrintsizeConflict { span, .. } => base
-                .with_labels(primary_only(*span))
-                .with_notes(vec![
-                    "remove either the `.output` or the `.printsize` directive for this relation"
-                        .to_string(),
-                ]),
-
             ParseError::DuplicateAttribute { span, prior, .. } => base.with_labels(dup_labels(
                 *span,
                 *prior,
@@ -600,18 +625,6 @@ impl Diagnostic for ParseError {
                     "add a `.decl {name}(...)` before this directive"
                 )]),
 
-            ParseError::UndeclaredInIterativeList { span, name } => base
-                .with_labels(primary_only(*span))
-                .with_notes(vec![format!(
-                    "either `.decl {name}(...)` it, or drop `{name}` from the iterative list"
-                )]),
-
-            ParseError::UndeclaredLoopCondition { span, name } => base
-                .with_labels(primary_only(*span))
-                .with_notes(vec![format!(
-                    "declare `{name}` as a nullary relation with `.decl {name}()` and derive it inside the loop"
-                )]),
-
             ParseError::UndeclaredInRule { span, name }
             | ParseError::UndeclaredInFact { span, name } => base
                 .with_labels(primary_only(*span))
@@ -623,7 +636,7 @@ impl Diagnostic for ParseError {
                 let mut diag = base.with_labels(primary_only(*span));
                 if !chain.is_empty() {
                     let shown: Vec<String> = chain.iter().map(|p| p.display().to_string()).collect();
-                    diag = diag.with_notes(vec![format!("include chain: {}", shown.join(" → "))]);
+                    diag = diag.with_notes(vec![format!("include chain: {}", shown.join(" -> "))]);
                 }
                 diag
             }
@@ -749,9 +762,54 @@ impl Diagnostic for ParseError {
                      or change the column to a non-tuple type"
                 )]),
 
+            ParseError::UnknownInputIo { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "`IO=` selects the storage: \"file\" reads a delimited text file, \
+                     \"command\" takes `put` tuples only, \"sqlite\" reads a database"
+                        .into(),
+                ]),
+
+            ParseError::InvalidDelimiter { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "a delimiter is one ASCII character, written as a string literal: \
+                     a tab is \"\\t\". A newline cannot delimit cells because the reader \
+                     consumes it to end the line"
+                        .into(),
+                ]),
+
+            ParseError::UnknownOutputIo { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "`IO=` selects the storage: \"file\" writes a delimited text file, \
+                     \"sqlite\" writes a database table. Use the compiler's output \
+                     directory to choose where rows go"
+                        .into(),
+                ]),
+
+            ParseError::InvalidOrderBy { span, relation, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![format!(
+                    "an `order_by` lists columns of `{relation}` by name, each optionally \
+                     followed by ASC or DESC: order_by=\"b DESC, a\""
+                )]),
+
+            ParseError::InvalidLimit { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "a `limit` is a row count, written as a string literal: limit=\"10\"".into(),
+                ]),
+
+            ParseError::LimitWithoutOrderBy { span, .. } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "add an `order_by` so the rows that survive the limit are the same \
+                     on every run"
+                        .into(),
+                ]),
+
             ParseError::Syntax { span, .. }
-            | ParseError::LoopBlockInStandardMode { span }
-            | ParseError::NonNullaryLoopCondition { span, .. }
             | ParseError::BuiltinArity { span, .. }
             | ParseError::AssignmentVarInNegation { span, .. }
             | ParseError::GroundRuleNotConst { span }
@@ -859,7 +917,7 @@ impl Diagnostic for ParseError {
             ParseError::OrdRequiresStrIntern { span } => base
                 .with_labels(labels(*span, "`ord` used here"))
                 .with_notes(vec![
-                    "ord returns the symbol's intern key — a unique per-string \
+                    "ord returns the symbol's intern key: a unique per-string \
                      integer that only exists when strings are interned. Compile \
                      with `--str-intern` (binary mode) or `.string_intern(true)` \
                      (library mode) to use it."
@@ -923,6 +981,13 @@ impl Diagnostic for ParseError {
                 format!("`{literal}` does not fit `{expected:?}`"),
             )),
 
+            ParseError::GroupedPlaceholder { span } => base
+                .with_labels(primary_only(*span))
+                .with_notes(vec![
+                    "a 1-tuple that ignores its component is `(_,)`; grouping needs an expression"
+                        .into(),
+                ]),
+
             ParseError::InvalidStringLiteral { span, reason } => {
                 base.with_labels(labels(*span, reason.clone()))
             }
@@ -951,7 +1016,7 @@ impl Diagnostic for ParseError {
                     label_vec.push(l.with_message(format!("`{var}` first bound as `{first_ty}`")));
                 }
                 base.with_labels(label_vec).with_notes(vec![
-                    "sibling subtypes of the same primitive are intentionally incompatible — \
+                    "sibling subtypes of the same primitive are intentionally incompatible; \
                      wrap one side with `as(expr, OtherType)` if you really mean to join them"
                         .into(),
                 ])
@@ -982,8 +1047,8 @@ impl Diagnostic for ParseError {
                     format!("`{rel}` column {col} expects `{expected}`, found `{found}`"),
                 ))
                 .with_notes(vec![
-                    "head columns allow implicit widening (subtype → parent), \
-                     but narrowing (parent → subtype) requires `as(expr, TargetType)`"
+                    "head columns allow implicit widening (subtype -> parent), \
+                     but narrowing (parent -> subtype) requires `as(expr, TargetType)`"
                         .into(),
                 ]),
 
@@ -1000,6 +1065,41 @@ impl Diagnostic for ParseError {
                 .with_notes(vec![format!(
                     "use a built-in primitive or add `.type {name} = ...` (or `<:`)"
                 )]),
+
+            ParseError::UnknownHeadVariable {
+                head_span,
+                rule_span,
+                var,
+            } => base
+                .with_labels(dup_labels(
+                    *head_span,
+                    *rule_span,
+                    &format!("`{var}` is referenced here but never bound by a positive body atom"),
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "every variable in the rule head must appear in a positive body \
+                     atom so its value is determined during evaluation"
+                        .into(),
+                ]),
+
+            ParseError::MultipleAggregationsInHead {
+                head_span,
+                rule_span,
+                ..
+            } => base
+                .with_labels(dup_labels(
+                    *head_span,
+                    *rule_span,
+                    "multiple aggregations declared here",
+                    "in this rule",
+                ))
+                .with_notes(vec![
+                    "split the head into multiple rules, each producing a separate \
+                     relation, if you need several aggregated columns"
+                        .into(),
+                ]),
+
         }
     }
 
@@ -1008,7 +1108,7 @@ impl Diagnostic for ParseError {
     }
 }
 
-/// Produce a `ParseError::Internal` for a violated internal invariant — an
+/// Produce a `ParseError::Internal` for a violated internal invariant: an
 /// "impossible" state an earlier stage should have guaranteed.
 ///
 /// Use this instead of an `.expect`/`panic!` at sites the grammar or an
@@ -1113,5 +1213,41 @@ mod tests {
             ParseError::syntax_from_pest(&err, FileId::new(0)),
             ParseError::Syntax { .. }
         ));
+    }
+
+    #[test]
+    fn unknown_head_variable_labels_head_and_rule() {
+        let (sm, f) = make_sm_with("Out(x) :- Edge(y, z).\n");
+        let out = render(
+            ParseError::UnknownHeadVariable {
+                head_span: Span::new(f, 0, 6),
+                rule_span: Span::new(f, 0, 21),
+                var: "x".into(),
+            },
+            &sm,
+        );
+        assert!(out.contains("unknown head variable `x`"), "got: {out}");
+        assert!(out.contains("never bound"), "got: {out}");
+        assert!(out.contains("in this rule"), "got: {out}");
+    }
+
+    #[test]
+    fn multiple_aggregations_labels_head_and_rule() {
+        let (sm, f) = make_sm_with("Totals(sum(a), count(b)) :- Orders(a, b).\n");
+        let out = render(
+            ParseError::MultipleAggregationsInHead {
+                head_span: Span::new(f, 0, 24),
+                rule_span: Span::new(f, 0, 41),
+                rel: "Totals".into(),
+                count: 2,
+            },
+            &sm,
+        );
+        assert!(out.contains("contains 2 aggregations"), "got: {out}");
+        assert!(out.contains("at most one is allowed"), "got: {out}");
+        assert!(
+            out.contains("multiple aggregations declared here"),
+            "got: {out}"
+        );
     }
 }

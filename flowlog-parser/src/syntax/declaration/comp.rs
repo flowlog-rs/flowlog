@@ -11,7 +11,7 @@ use crate::Node;
 use crate::Rule;
 use crate::ast::FlowLogRule;
 use crate::ast::Head;
-use crate::declaration::directive::parse_io_params;
+use crate::declaration::directive::parse_io_directive;
 use crate::declaration::type_decl::RawTypeOp;
 use crate::declaration::type_decl::split_type_alias;
 use crate::error::ParseError;
@@ -272,11 +272,11 @@ impl RawItem {
             Rule::rule => return parse_raw_rule(node),
             Rule::fact => parse_raw_fact(node)?,
             Rule::input_directive => {
-                let (name, params, span) = parse_io_parts(node)?;
+                let (name, params, span) = parse_io_directive(node)?;
                 RawItem::Input { name, params, span }
             }
             Rule::output_directive => {
-                let (name, params, span) = parse_io_parts(node)?;
+                let (name, params, span) = parse_io_directive(node)?;
                 RawItem::Output { name, params, span }
             }
             Rule::printsize_directive => parse_raw_printsize(node)?,
@@ -308,20 +308,6 @@ fn parse_raw_rule(node: Node) -> Result<Vec<RawItem>, ParseError> {
 fn parse_raw_fact(node: Node) -> Result<RawItem, ParseError> {
     let head = node.children().lower_next::<Head>("head")?;
     Ok(RawItem::Fact(FlowLogRule::new(head, vec![])))
-}
-
-/// Parse the shared `(name, params?, span)` shape of `.input` /
-/// `.output` directives. The caller wraps into the appropriate
-/// `RawItem` variant.
-fn parse_io_parts(node: Node) -> Result<(String, HashMap<String, String>, Span), ParseError> {
-    let span = node.span();
-    let mut children = node.children();
-    let name = children.next_any("relation name")?.text().to_string();
-    let params = match children.next() {
-        Some(params_node) => parse_io_params(params_node)?,
-        None => HashMap::new(),
-    };
-    Ok((name, params, span))
 }
 
 fn parse_raw_printsize(node: Node) -> Result<RawItem, ParseError> {

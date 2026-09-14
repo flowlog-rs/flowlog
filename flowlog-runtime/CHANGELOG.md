@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.3.0...flowlog-runtime-v0.4.0) - 2026-09-14
+
+### Added
+
+- add SQLite I/O for compiled programs ([#337](https://github.com/flowlog-rs/flowlog/pull/337))
+- *(compiler)* allow runtime input and output directory overrides ([#330](https://github.com/flowlog-rs/flowlog/pull/330))
+- *(runtime)* own group-by aggregation ([#284](https://github.com/flowlog-rs/flowlog/pull/284))
+- *(runtime)* own set-semantics dedup and antijoin ([#283](https://github.com/flowlog-rs/flowlog/pull/283))
+- *(runtime)* add FlowLog join and map operators ([#282](https://github.com/flowlog-rs/flowlog/pull/282))
+
+### Other
+
+- *(runtime)* centralize relation output ([#336](https://github.com/flowlog-rs/flowlog/pull/336))
+- *(runtime)* move relation declarations to shared I/O ([#335](https://github.com/flowlog-rs/flowlog/pull/335))
+- *(runtime)* centralize relation input loading across frontends ([#334](https://github.com/flowlog-rs/flowlog/pull/334))
+- [**breaking**] drop extended execution modes and loop blocks ([#286](https://github.com/flowlog-rs/flowlog/pull/286))
+
 ## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.2.5...flowlog-runtime-v0.3.0) - 2026-07-26
 
 ### Breaking

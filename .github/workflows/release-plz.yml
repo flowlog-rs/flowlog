@@ -59,7 +59,7 @@ jobs:
         # Signed-off-by matching the commit author. Amend one in on the
         # author's behalf, using the commit's own author identity so the
         # sign-off matches. Guarded so a rerun does not re-amend.
-        if: steps.release-plz.outputs.pr != ''
+        if: steps.release-plz.outputs.prs_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
         run: |

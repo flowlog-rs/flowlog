@@ -1,30 +1,14 @@
-//! Write the scaffolded Rust crate to disk and render its Cargo metadata.
-//!
-//! The emitted project tree is:
-//!
-//! ```text
-//! <build_dir>/
-//! ├── Cargo.toml
-//! ├── .cargo/config.toml          # `-Dwarnings` so generated code stays clean
-//! └── src/
-//!     ├── main.rs                 # assembled dataflow + runtime shell
-//!     ├── relation.rs             # `Relation` trait + per-EDB handlers
-//!     ├── cmd.rs, prompt.rs       # incremental-mode only (shell)
-//!     ├── udf.rs                  # optional, copied from `Config::udf_file`
-//!     └── semiring/…              # optional, one file per semiring variant
-//! ```
-//!
-//! `write_project` lays out these files from already-rendered strings;
-//! `render_cargo_toml` / `render_cargo_config` produce the metadata.
+//! Cargo metadata and project files for generated executables. Incremental
+//! executables also receive the interactive shell modules.
 
 use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
 
-use flowlog_build::CodeParts;
 use flowlog_build::Features;
 use flowlog_common::Config;
+use flowlog_common::ExecutionMode;
 use toml_edit::Array;
 use toml_edit::DocumentMut;
 use toml_edit::InlineTable;
@@ -40,7 +24,8 @@ use crate::Compiler;
 // =========================================================================
 
 impl Compiler {
-    /// Materialize the scaffolded crate under [`CompileOptions::build_dir`].
+    /// Writes the generated project under
+    /// [`CompileOptions::build_dir`](crate::CompileOptions::build_dir).
     ///
     /// Arguments are pre-rendered file contents; this function only decides
     /// _where_ they go and creates intermediate directories. Optional files
@@ -48,7 +33,6 @@ impl Compiler {
     /// only when the program needs them.
     pub(crate) fn write_project(
         &self,
-        parts: &CodeParts,
         main_rs: &str,
         relation_rs: &str,
         cargo_toml: &str,
@@ -69,14 +53,12 @@ impl Compiler {
         write_file(&src_dir.join("relation.rs"), relation_rs.trim_start())?;
 
         // Incremental shell: REPL command parser + readline wrapper.
-        if config.is_incremental() {
-            write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
-            write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
-        }
-
-        // Aggregation-specific semiring modules (paths are relative to src/).
-        for (rel_path, content) in &parts.semiring_modules {
-            write_file(&src_dir.join(rel_path), content)?;
+        match config.mode() {
+            ExecutionMode::Inc => {
+                write_file(&src_dir.join("cmd.rs"), CMD_RS_TMPL.trim_start())?;
+                write_file(&src_dir.join("prompt.rs"), PROMPT_RS_TMPL.trim_start())?;
+            }
+            ExecutionMode::Batch => {}
         }
 
         // Optional UDF module — copied verbatim from a user-supplied file.
@@ -108,6 +90,7 @@ pub(crate) fn render_cargo_toml(
     config: &Config,
     features: &Features,
     keep_build_dir: bool,
+    sqlite: bool,
 ) -> String {
     let mut doc = DocumentMut::new();
 
@@ -148,37 +131,17 @@ pub(crate) fn render_cargo_toml(
         deps["timely"] = "0.31".into();
         deps["differential-dataflow"] = "0.25".into();
         deps["mimalloc"] = "0.1".into();
-        // 0.2.3 is the minimum carrying the `regex` re-export that generated
-        // `match(...)` code resolves through (`::flowlog_runtime::regex`).
-        deps["flowlog-runtime"] = "0.3".into();
+        deps["flowlog-runtime"] = value(inline_versioned_dep(
+            "0.4.0",
+            if sqlite { &["cli", "sqlite"] } else { &["cli"] },
+        ));
 
-        if features.string_intern() {
-            deps["lasso"] = value(inline_versioned_dep(
-                "0.7",
-                &["multi-threaded", "serialize"],
-            ));
-            // Fast, non-cryptographic hasher for the interner (keys are
-            // program-controlled, so SipHash's HashDoS resistance is wasted).
-            deps["rustc-hash"] = "2.0".into();
-        }
         if features.ordered_float() {
             deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
         }
-        if features.parallel_output() {
-            // The parallel `.output` file drain formats worker buffers with rayon.
-            deps["rayon"] = "1.0".into();
-        }
-        if features.itoa() {
-            // Integer formatting on the parallel file-output path; emitted
-            // fully qualified (`::itoa::Buffer`), so no `use` import exists
-            // to trip `-Dwarnings`.
-            deps["itoa"] = "1.0".into();
-        }
-        if features.agg_semiring() || features.string_intern() {
-            deps["serde"] = value(inline_versioned_dep("1.0", &["derive"]));
-        }
-        if config.is_incremental() {
-            deps["rustyline"] = "18".into();
+        match config.mode() {
+            ExecutionMode::Inc => deps["rustyline"] = "18".into(),
+            ExecutionMode::Batch => {}
         }
     }
 
@@ -268,8 +231,8 @@ mod tests {
     fn incremental_is_emitted_only_for_kept_build_dirs() {
         let config = Config::default();
         let features = Features::default();
-        let kept = render_cargo_toml("bin", &config, &features, true);
-        let scratch = render_cargo_toml("bin", &config, &features, false);
+        let kept = render_cargo_toml("bin", &config, &features, true, false);
+        let scratch = render_cargo_toml("bin", &config, &features, false, false);
         assert!(kept.contains("incremental = true"));
         assert!(!scratch.contains("incremental"));
     }

@@ -2,7 +2,7 @@
 //!
 //! Two structs, two semantics:
 //!
-//! - `BatchResults` (returned by `DatalogBatchEngine::run()`) is a
+//! - `BatchResults` (returned by `BatchEngine::run()`) is a
 //!   snapshot. One field per output-surfaced relation:
 //!     - `.output Foo` (arity > 0) → `pub foo: Vec<rel::Foo>`
 //!     - `.output Foo` (nullary)   → `pub foo: bool`
@@ -23,11 +23,11 @@ use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
-use crate::build::relation::printsize_field_ident;
-use crate::build::relation::results_field_ident;
-use crate::build::relation::user_struct_ident;
+use crate::build::bindings::printsize_field_ident;
+use crate::build::bindings::results_field_ident;
+use crate::build::bindings::user_tuple_ident;
 
-/// `BatchResults` — returned by `DatalogBatchEngine::run()`.
+/// `BatchResults` — returned by `BatchEngine::run()`.
 pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {
     let struct_ident = format_ident!("BatchResults");
     let mut fields: Vec<TokenStream> = Vec::new();
@@ -37,7 +37,7 @@ pub(crate) fn gen_batch_results(program: &Program) -> TokenStream {
         if rel.arity() == 0 {
             fields.push(quote! { pub #field: bool });
         } else {
-            let tuple_struct = user_struct_ident(rel);
+            let tuple_struct = user_tuple_ident(rel);
             fields.push(quote! { pub #field: Vec<rel::#tuple_struct> });
         }
     }
@@ -66,7 +66,7 @@ pub(crate) fn gen_incremental_results(program: &Program) -> TokenStream {
         if rel.arity() == 0 {
             fields.push(quote! { pub #field: i32 });
         } else {
-            let tuple_struct = user_struct_ident(rel);
+            let tuple_struct = user_tuple_ident(rel);
             fields.push(quote! { pub #field: Vec<(rel::#tuple_struct, i32)> });
         }
     }

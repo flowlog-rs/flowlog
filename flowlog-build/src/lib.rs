@@ -16,8 +16,8 @@
 //! // src/lib.rs
 //! pub mod policy { include!(concat!(env!("OUT_DIR"), "/policy.rs")); }
 //!
-//! use policy::DatalogBatchEngine;
-//! let mut engine = DatalogBatchEngine::new(4);
+//! use policy::BatchEngine;
+//! let mut engine = BatchEngine::new(4);
 //! engine.insert_edge(vec![(1, 2), (2, 3)]);
 //! let results = engine.run();
 //! ```
@@ -51,23 +51,6 @@ mod build;
 // the re-exports below, by `flowlog-compiler`'s binary mode.
 mod codegen;
 
-// Pipeline stages — previously independent crates, folded in here so
-// `flowlog-build` ships as a single publishable library.
-//
-// NOTE: These modules are `pub` because the `flowlog-compiler` binary
-// (separate crate, `publish = false`) and the integration tests under
-// `tests/` both reach into them. They are `#[doc(hidden)]` to signal
-// that they are NOT part of the stable public API — do not rely on
-// them from external crates.
-#[doc(hidden)]
-pub mod catalog;
-#[doc(hidden)]
-pub mod optimizer;
-#[doc(hidden)]
-pub mod planner;
-#[doc(hidden)]
-pub mod stratifier;
-
 use std::env;
 use std::fs;
 use std::io;
@@ -79,8 +62,7 @@ pub use build::BuildError;
 // Hidden from docs.rs for the same reason as the pipeline modules above.
 #[doc(hidden)]
 pub use codegen::{
-    AggSemiringNeeds, CodeGen, CodeParts, CodegenError, Features, Semiring, const_to_token,
-    data_type_tokens, field_accessor, gen_drain_block,
+    CodeGen, CodeParts, CodegenError, Features, const_to_token, data_type_tokens, gen_relations,
 };
 use flowlog_common::BoxError;
 pub use flowlog_common::ExecutionMode;
@@ -132,12 +114,11 @@ impl Builder {
         self
     }
 
-    /// Set the execution mode. Defaults to [`ExecutionMode::DatalogBatch`].
+    /// Set the execution mode. Defaults to [`ExecutionMode::Batch`].
     ///
-    /// Batch modes (`DatalogBatch`, `ExtendBatch`) emit a
-    /// `DatalogBatchEngine` with a single `run()` method. Incremental
-    /// modes (`DatalogInc`, `ExtendInc`) emit a
-    /// `DatalogIncrementalEngine` that maintains state across
+    /// `Batch` emits a `BatchEngine` with a single `run()`
+    /// method. `Inc` emits a
+    /// `IncrementalEngine` that maintains state across
     /// `Transaction`-scoped commits.
     pub fn mode(mut self, mode: ExecutionMode) -> Self {
         self.mode = mode;
@@ -156,9 +137,6 @@ impl Builder {
     /// - the generated engine registers timely + DD arrangement loggers
     ///   and writes `log/time/*.log` and `log/memory/*.log` cwd-relative
     ///   at runtime (batch: once at end; incremental: per commit).
-    ///
-    /// Not supported under `ExtendBatch` / `ExtendInc`; compilation
-    /// panics if the combination is requested.
     pub fn profile(mut self, enabled: bool) -> Self {
         self.profile = enabled;
         self
@@ -219,44 +197,9 @@ impl Builder {
             })?;
 
         let output = build::Pipeline::build(self, program_path, sm)?;
-        let source = build::assemble(&output, out_dir).map_err(BuildError::from)?;
-        self.emit_semiring_modules(&output, out_dir)
-            .map_err(BuildError::from)?;
+        let source = build::assemble(&output).map_err(BuildError::from)?;
         fs::write(out_dir.join(format!("{stem}.rs")), source).map_err(BuildError::from)?;
         self.emit_rerun_if_changed(program_path);
-        Ok(())
-    }
-
-    /// Write aggregation-specific semiring modules to `$OUT_DIR/semiring/`.
-    ///
-    /// Library mode only has `flowlog-runtime` as a runtime dep, so we
-    /// prepend aliases that route `serde` / `ordered_float` /
-    /// `differential_dataflow` through `::flowlog_runtime::` — keeping
-    /// the templates mode-agnostic with binary mode.
-    fn emit_semiring_modules(&self, output: &build::Pipeline, out_dir: &Path) -> io::Result<()> {
-        if output.parts.semiring_modules.is_empty() {
-            return Ok(());
-        }
-        let semiring_dir = out_dir.join("semiring");
-        fs::create_dir_all(&semiring_dir)?;
-
-        const LIB_ALIASES: &str = "\
-use ::flowlog_runtime::serde;
-use ::flowlog_runtime::ordered_float;
-use ::flowlog_runtime::differential_dataflow;
-";
-
-        for (rel_path, content) in &output.parts.semiring_modules {
-            let fname = Path::new(rel_path)
-                .file_name()
-                .expect("semiring module path has no file name");
-            let dst = semiring_dir.join(fname);
-            if fname == "mod.rs" {
-                fs::write(dst, content)?;
-            } else {
-                fs::write(dst, format!("{LIB_ALIASES}{content}"))?;
-            }
-        }
         Ok(())
     }
 

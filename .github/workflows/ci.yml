@@ -36,7 +36,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: 📎 Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: 🧪 Unit + integration tests
@@ -57,7 +57,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: 🧪 Unit + integration tests
-        run: cargo nextest run --workspace --profile ci
+        run: cargo nextest run --workspace --all-features --profile ci
 
   doctest:
     name: 📖 Doctests
@@ -75,7 +75,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: 📖 Doctests
-        run: cargo test --doc --workspace
+        run: cargo test --doc --workspace --all-features
 
   # End-to-end fixtures, split across runners. Tune the count via the matrix length.
   fixtures-shard:
@@ -139,7 +139,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: crate-ci/typos@v1.48.0
+      - uses: crate-ci/typos@v1.50.1
 
   lint-toml:
     name: 🧹 taplo (TOML format + lint)

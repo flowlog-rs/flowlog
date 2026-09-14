@@ -105,35 +105,20 @@ impl fmt::Display for TupleLit {
     }
 }
 
-impl Lexeme for TupleLit {
+impl Lexeme for TupleElem {
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
-        let span = node.span();
-        let mut fields = Vec::new();
-        for elem in node.children() {
-            if elem.rule() != Rule::tuple_elem {
-                return Err(grammar_bug(format!(
-                    "unexpected child of tuple_lit: {:?}",
-                    elem.rule()
-                )));
-            }
-            let inner = elem.children().next_any("tuple element value")?;
-            let parsed = match inner.rule() {
-                Rule::arithmetic_expr => TupleElem::Expr(inner.lower()?),
-                Rule::placeholder => TupleElem::Placeholder,
-                other => {
-                    return Err(grammar_bug(format!("invalid tuple element: {other:?}")));
-                }
-            };
-            fields.push(parsed);
-        }
-        Ok(Self::new(fields, span))
+        // No wrapper rule exists for elements: the node is the value
+        // itself, an expression or a placeholder.
+        Ok(match node.rule() {
+            Rule::arithmetic_expr => Self::Expr(node.lower()?),
+            Rule::placeholder => Self::Placeholder,
+            other => return Err(grammar_bug(format!("invalid tuple element: {other:?}"))),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
-
     use super::*;
 
     /// A `( x, _ )` literal: one expression element, one placeholder.
@@ -200,19 +185,16 @@ mod tests {
         assert_eq!(one.to_string(), "(x,)");
     }
 
-    /// A well-formed `tuple_lit` parses successfully: every child is a
-    /// `tuple_elem`, so the `!= tuple_elem` reject guard must NOT fire. If the
-    /// guard's comparison were flipped it would reject valid tuples.
+    /// An element value node lowers to the variant its rule selects: an
+    /// expression to `Expr`, a bare `_` to `Placeholder`.
     #[test]
-    fn from_parsed_rule_accepts_valid_tuple() {
-        use pest::Parser;
+    fn from_parsed_rule_lowers_expr_and_placeholder() {
+        use crate::test_util::parse_node;
 
-        use crate::FlowLogParser;
+        let expr: TupleElem = parse_node(Rule::arithmetic_expr, "x + 1");
+        assert!(matches!(expr, TupleElem::Expr(_)));
 
-        let mut pairs = FlowLogParser::parse(Rule::tuple_lit, "(x, y)").unwrap();
-        let tup = TupleLit::from_parsed_rule(Node::new(pairs.next().unwrap(), FileId::new(0)))
-            .expect("valid tuple_lit must parse");
-        assert_eq!(tup.fields().len(), 2);
-        assert_eq!(tup.to_string(), "(x, y)");
+        let hole: TupleElem = parse_node(Rule::placeholder, "_");
+        assert!(matches!(hole, TupleElem::Placeholder));
     }
 }

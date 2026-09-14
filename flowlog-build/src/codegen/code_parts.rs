@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use flowlog_common::ExecutionMode;
+use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::TokenStream;
@@ -10,7 +12,6 @@ use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
 use crate::codegen::idb_buffers::InspectorCodegen;
 use crate::codegen::profile::render_profile_ops_const;
-use crate::planner::StratumPlanner;
 
 /// Token-stream fragments and rendered source files produced by
 /// [`CodeGen::generate`]. All fields are `pub` so consumers can
@@ -27,19 +28,19 @@ pub struct CodeParts {
     pub flows: Vec<TokenStream>,
 
     // -- output pipeline --
-    /// Shared output buffer declarations (one `Arc<Mutex<Vec>>` per output relation).
+    /// Runtime emitter declarations for output and count relations.
     pub output_bufs: Vec<TokenStream>,
-    /// Clones of shared buffers moved into the worker closure.
+    /// Emitter clones moved into the worker closure.
     pub output_buf_clones: Vec<TokenStream>,
-    /// Per-worker local buffer declarations (`Rc<RefCell<Vec>>`).
+    /// Worker-local output producers.
     pub local_bufs: Vec<TokenStream>,
-    /// `inspect()` calls that push into local buffers.
+    /// Row and count inspections feeding runtime emitters.
     pub inspectors: Vec<TokenStream>,
-    /// Drain local → shared buffer at end of each epoch.
+    /// Publishes local rows at the end of each epoch.
     pub flush: Vec<TokenStream>,
-    /// `.printsize` size cell decls (`Arc<Mutex<i32>>`) before `timely::execute`.
+    /// Empty; count storage is included in `output_bufs`.
     pub size_cell_decls: Vec<TokenStream>,
-    /// Size cell clones moved into the worker closure.
+    /// Empty; count storage is shared through `output_buf_clones`.
     pub size_cell_clones: Vec<TokenStream>,
 
     // -- profiling — all fields below are empty when `--profile` is off.
@@ -58,9 +59,6 @@ pub struct CodeParts {
 
     /// Type aliases and constants for the `(Data, Diff, Time)` triple.
     pub type_declarations: TokenStream,
-
-    /// Rendered semiring module files: `(relative_path, content)`.
-    pub semiring_modules: Vec<(String, String)>,
 }
 
 impl CodeGen {
@@ -113,19 +111,14 @@ impl CodeGen {
             local_decls: local_bufs,
             inspect_stmts: inspectors,
             flush_stmts: flush,
-            size_cell_decls,
-            size_cell_clones,
         } = self.collect_inspectors(plan_graph);
 
-        // A run is either batch or incremental, never both, so build only the
-        // matching pair.
-        let (metrics_write, step_loop) = if self.config.is_incremental() {
-            (
+        let (metrics_write, step_loop) = match self.config.mode() {
+            ExecutionMode::Inc => (
                 self.gen_metrics_write_incremental(),
                 self.gen_incremental_step_loop(),
-            )
-        } else {
-            (self.gen_metrics_write_batch(), self.gen_batch_step_loop())
+            ),
+            ExecutionMode::Batch => (self.gen_metrics_write_batch(), self.gen_batch_step_loop()),
         };
 
         // Rendered after the codegen loop so the plan graph is fully
@@ -133,7 +126,6 @@ impl CodeGen {
         let profile_ops = render_profile_ops_const(plan_graph.as_ref())?;
 
         let type_declarations = self.gen_type_declarations();
-        let semiring_modules = self.render_semiring_modules();
 
         Ok(CodeParts {
             edb_decls,
@@ -145,15 +137,14 @@ impl CodeGen {
             local_bufs,
             inspectors,
             flush,
-            size_cell_decls,
-            size_cell_clones,
+            size_cell_decls: Vec::new(),
+            size_cell_clones: Vec::new(),
             profile_structs,
             profile_ops,
             profile_init,
             metrics_write,
             step_loop,
             type_declarations,
-            semiring_modules,
         })
     }
 }

@@ -24,7 +24,7 @@ use crate::error::grammar_bug;
 /// [`lower`](Self::lower) turns it into one. Rule and span are snapshotted
 /// at construction, so they stay readable after
 /// [`children`](Self::children) consumes the underlying pair.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Node<'a> {
     rule: Rule,
     span: Span,

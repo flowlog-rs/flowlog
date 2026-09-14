@@ -1,48 +1,34 @@
-//! Recursive flow codegen — iterative scopes, feedback variables, and the
+//! Recursive flow codegen: iterative scopes, feedback variables, and the
 //! per-IDB `next_X / recursive_X` plumbing that makes DD's `Variable` loops
 //! converge. Operates inside one stratum's worth of transformations, using
 //! the non-recursive arrangement map built upstream as the entry environment.
 
 use std::collections::HashMap;
 
+use flowlog_common::ExecutionMode;
 use flowlog_parser::AggregationOperator;
-use flowlog_parser::LoopCondition;
-use flowlog_parser::LoopConnective;
+use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::try_with_plan_graph;
 use flowlog_profiler::with_plan_graph;
 use proc_macro2::Ident;
-use proc_macro2::Literal;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
-use crate::codegen::aggregation::aggregation_avg_optimize;
-use crate::codegen::aggregation::aggregation_avg_post_leave;
-use crate::codegen::aggregation::aggregation_avg_pre_leave;
-use crate::codegen::aggregation::aggregation_count_optimize;
-use crate::codegen::aggregation::aggregation_count_pre_leave;
-use crate::codegen::aggregation::aggregation_max_optimize;
-use crate::codegen::aggregation::aggregation_max_pre_leave;
-use crate::codegen::aggregation::aggregation_merge_kv;
-use crate::codegen::aggregation::aggregation_min_optimize;
-use crate::codegen::aggregation::aggregation_min_pre_leave;
-use crate::codegen::aggregation::aggregation_opt_post_leave;
-use crate::codegen::aggregation::aggregation_reduce_stmt;
-use crate::codegen::aggregation::aggregation_row_chop;
-use crate::codegen::aggregation::aggregation_sum_optimize;
-use crate::codegen::aggregation::aggregation_sum_pre_leave;
-use crate::planner::StratumPlanner;
+use crate::codegen::aggregation::aggregation_kind;
+use crate::codegen::aggregation::aggregation_merge;
+use crate::codegen::aggregation::aggregation_split;
 
 // =========================================================================
 // Recursive Flow Generation
 // =========================================================================
 impl CodeGen {
-    /// Emit the `scope.iterative(|inner| { … })` block for one stratum,
+    /// Emit the `scope.iterative(|inner| { ... })` block for one stratum,
     /// wiring up enter bindings, feedback `Variable`s, per-IDB unions with
-    /// dedup/aggregation, optional gated feedback, and the leave expression.
+    /// dedup/aggregation, and the leave expression.
     pub(crate) fn gen_recursive_block(
         &mut self,
         non_recursive_arranged_map: &HashMap<u64, Ident>,
@@ -63,27 +49,20 @@ impl CodeGen {
             plan_graph.enter_scope();
         });
 
-        // --- Enter bindings -------------------------------------------------
+        // --- Enter bindings ---
         let enter_fps = stratum.recursion_enter_collections();
         let (enter_stmts, enter_bindings, mut recursive_arranged) =
             self.build_enter_bindings(non_recursive_arranged_map, enter_fps, plan_graph);
 
-        // --- Recursive variable bindings -------------------------
-        let acc_fps = stratum.recursion_accumulate_recursive_collections();
-        let itr_fps = stratum.recursion_iterative_recursive_collections();
+        // --- Recursive variable bindings ---
+        // Every feedback variable starts empty and grows monotonically, so
+        // `Variable::new` covers all of them.
+        let feedback_fps = stratum.recursion_feedback_collections();
+        let (feedback_names, recursive_bindings) = self.build_recursive_bindings(feedback_fps);
 
-        let (acc_names, acc_bindings) = self.build_recursive_bindings(acc_fps);
-        let (itr_names, itr_bindings) = self.build_recursive_bindings(itr_fps);
-
-        let mut recursive_bindings: HashMap<u64, Ident> = acc_bindings;
-        recursive_bindings.extend(itr_bindings);
-
-        // Initialize recursive variables and record feedback operators.
         let step = quote! { timely::order::Product::new(Default::default(), 1) };
         let mut recursive_var_inits: Vec<TokenStream> = Vec::new();
-
-        // Accumulative: always Variable::new — starts empty and grows monotonically.
-        for (fp, name) in acc_fps.iter().zip(&acc_names) {
+        for (fp, name) in feedback_fps.iter().zip(&feedback_names) {
             with_plan_graph(plan_graph, |plan_graph| {
                 plan_graph.recursive_feedback_operator(
                     self.display_name(*fp),
@@ -97,38 +76,11 @@ impl CodeGen {
             });
         }
 
-        // Iterative: always Variable::new_from for replacement semantics.
-        // When an EDB base enters the scope, seed from it; otherwise seed from
-        // an empty collection so that old values are still retracted each iteration.
-        for (fp, name) in itr_fps.iter().zip(&itr_names) {
-            with_plan_graph(plan_graph, |plan_graph| {
-                plan_graph.recursive_feedback_operator(
-                    self.display_name(*fp),
-                    name.to_string(),
-                    name.to_string(),
-                );
-            });
-            let var_name = format_ident!("{}_var", name);
-            let init = if let Some(base) = enter_bindings.get(fp) {
-                quote! { let (#var_name, #name) = Variable::new_from(#base.clone(), #step); }
-            } else {
-                quote! {
-                    let (#var_name, #name) = Variable::new_from(
-                        ::differential_dataflow::Collection::new(
-                            ::timely::dataflow::operators::generic::operator::empty(inner)
-                        ),
-                        #step,
-                    );
-                }
-            };
-            recursive_var_inits.push(init);
-        }
-
-        // --- Combined environment for rule evaluation -----------------------
+        // --- Combined environment for rule evaluation ---
         let mut current: HashMap<u64, Ident> = enter_bindings.clone();
         current.extend(recursive_bindings.clone());
 
-        // --- Rule transformations -------------------------------------------
+        // --- Rule transformations ---
         let flow_stmts: Vec<TokenStream> = stratum
             .recursive_transformations()
             .iter()
@@ -137,30 +89,21 @@ impl CodeGen {
             })
             .collect::<Result<_, _>>()?;
 
-        // --- Union per IDB (delta_X) and aggregation ------------------------
+        // --- Union per IDB (delta_X) and aggregation ---
         let (next_bindings, union_stmts) = self.collect_unions(
             stratum.idb_to_heads_map(),
             &enter_bindings,
-            itr_fps,
             stratum.idb_to_aggregation_map(),
             plan_graph,
         )?;
 
-        // --- Feedback assignments (Variable::set), optionally gated --------
-        let set_stmts = self.gen_feedback_stmts(
-            stratum.loop_condition(),
-            &next_bindings,
-            &recursive_bindings,
-            itr_fps,
-            plan_graph,
-        )?;
+        // --- Feedback assignments (Variable::set) ---
+        let set_stmts = self.gen_feedback_stmts(&next_bindings, &recursive_bindings, plan_graph)?;
 
-        // --- Leave outputs --------------------------------------------------
-        let (leave_pattern, leave_stmt, post_leave) = self.build_leave_outputs(
+        // --- Leave outputs ---
+        let (leave_pattern, leave_stmt) = self.build_leave_outputs(
             leave_fps,
             &next_bindings,
-            &recursive_bindings,
-            itr_fps,
             stratum.idb_to_aggregation_map(),
             plan_graph,
         )?;
@@ -176,17 +119,16 @@ impl CodeGen {
                 // === Union per IDB (next_X / delta_X) ===
                 #(#union_stmts)*
 
-                // === Feedback (Variable::set, optionally gated) ===
+                // === Feedback (Variable::set) ===
                 #(#set_stmts)*
 
                 #leave_stmt
             });
-            #post_leave
         })
     }
 
     /// Emit one `let in_X = X.enter(inner);` per entering collection, plus
-    /// the `fp → entered_ident` map and a parallel map for arranged inputs.
+    /// the `fp` to entered-ident map and a parallel map for arranged inputs.
     fn build_enter_bindings(
         &self,
         non_recursive_arranged_map: &HashMap<u64, Ident>,
@@ -231,7 +173,6 @@ impl CodeGen {
         &mut self,
         idb_to_heads_map: &HashMap<u64, Vec<u64>>,
         enter_bindings: &HashMap<u64, Ident>,
-        iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<(HashMap<u64, Ident>, Vec<TokenStream>), CodegenError> {
@@ -248,11 +189,7 @@ impl CodeGen {
                 .map(|fp| format_ident!("t_{}", fp))
                 .collect();
 
-            // Iterative relations use replacement semantics: the EDB base is
-            // seeded via Variable::new_from, so we must not re-union it here.
-            if !iterative_fps.contains(idb_fp)
-                && let Some(entered) = enter_bindings.get(idb_fp)
-            {
+            if let Some(entered) = enter_bindings.get(idb_fp) {
                 sources.push(entered.clone());
             }
 
@@ -270,12 +207,11 @@ impl CodeGen {
                 quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) }
             };
 
-            // Apply dedup to merged collection.
-            // Inside a recursive scope we need a persistent trace to avoid
-            // re-emitting tuples across iterations → use dedup_recursive.
-            let dedup_call = self.dedup_recursive();
+            // Feedback must not re-emit tuples across iterations, so the
+            // merged collection takes the retained dedup.
             let mut block = quote! {
-                let #next_ident = #union_expr #dedup_call;
+                let #next_ident =
+                    ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(#union_expr);
             };
 
             with_plan_graph(plan_graph, |plan_graph| {
@@ -296,68 +232,33 @@ impl CodeGen {
             if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(idb_fp) {
                 let output_name = self.display_name(*idb_fp);
                 let agg_type = self.agg_column_type(*idb_fp, *agg_pos)?;
+                let kind = aggregation_kind(*agg_op);
+                let split = aggregation_split(*agg_arity, *agg_pos);
+                let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
+                let op_name = format!("Reduce: {output_name}");
+                block = quote! {
+                    #block
+                    let #next_ident = ::flowlog_runtime::operators::flowlog_reduce(
+                        #next_ident, #op_name, #kind, #split, #merge,
+                    );
+                };
 
-                // Semiring fast path: replace reduce_core with threshold_semigroup
-                // using the appropriate semigroup, avoiding a second arrangement.
-                if self.config.is_datalog_batch() {
-                    self.features.mark_as_collection();
-                    self.features.mark_agg_semiring(*agg_op, agg_type.clone());
-                    self.features.mark_threshold_total();
-                    self.features.mark_timely_map();
-                    let pipeline = match agg_op {
-                        AggregationOperator::Min => {
-                            aggregation_min_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Max => {
-                            aggregation_max_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Sum => {
-                            aggregation_sum_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Count => {
-                            aggregation_count_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Avg => {
-                            aggregation_avg_optimize(*agg_arity, *agg_pos, agg_type)
-                        }
-                    };
-                    block = quote! {
-                        #block
-                        let #next_ident = #next_ident
-                            #pipeline;
-                    };
-
-                    with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.opt_aggregate_operator(
+                // The runtime picks its strategy from the ambient difference,
+                // and the two build different operators, so the plan graph
+                // has to predict the same way.
+                let binding = next_ident.to_string();
+                with_plan_graph(plan_graph, |plan_graph| match self.config.mode() {
+                    ExecutionMode::Batch => {
+                        plan_graph.present_aggregate_operator(
                             output_name,
-                            next_ident.to_string(),
-                            next_ident.to_string(),
+                            binding.clone(),
+                            binding,
                         );
-                    });
-                } else {
-                    self.features.mark_aggregation();
-                    let row_chop = aggregation_row_chop(*agg_arity, *agg_pos);
-                    let merge_kv = aggregation_merge_kv(*agg_arity, *agg_pos);
-                    // Aggregate after union + dedup.
-                    let reduce_stmt =
-                        aggregation_reduce_stmt(self.config.is_incremental(), agg_op, agg_type)?;
-                    block = quote! {
-                        #block
-                        let #next_ident = #next_ident
-                            .map(#row_chop)
-                            .arrange_by_key()
-                            #reduce_stmt
-                            .as_collection(#merge_kv);
-                    };
-
-                    with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.general_aggregate_operator(
-                            output_name,
-                            next_ident.to_string(),
-                            next_ident.to_string(),
-                        );
-                    });
-                }
+                    }
+                    ExecutionMode::Inc => {
+                        plan_graph.i32_aggregate_operator(output_name, binding.clone(), binding);
+                    }
+                });
             }
 
             union_stmts.push(block);
@@ -366,17 +267,16 @@ impl CodeGen {
         Ok((next_bindings, union_stmts))
     }
 
-    /// Assemble the `.leave()` expression(s) and any post-leave
-    /// consolidation needed by batch-mode aggregated relations.
+    /// Assemble the `.leave()` expression(s); aggregated relations in
+    /// batch mode leave through `flowlog_reduce_leave`, which owns the
+    /// boundary fold.
     fn build_leave_outputs(
         &self,
         leave_fps: &[u64],
         next: &HashMap<u64, Ident>,
-        recursive: &HashMap<u64, Ident>,
-        iterative_fps: &[u64],
         idb_to_aggregation_map: &HashMap<u64, (AggregationOperator, usize, usize)>,
         plan_graph: &mut Option<PlanGraph>,
-    ) -> Result<(TokenStream, TokenStream, TokenStream), CodegenError> {
+    ) -> Result<(TokenStream, TokenStream), CodegenError> {
         // Resolve target identifiers and construct pattern.
         let targets: Vec<Ident> = leave_fps
             .iter()
@@ -398,63 +298,32 @@ impl CodeGen {
                     ))
                 })?;
 
-                // For aggregated relations (min/max/sum/count/avg) in datalog-batch mode:
-                // convert to semiring diff before leave() so cross-iteration aggregates
-                // are computed by consolidation after leave.
+                // Aggregated relations in batch mode complete across the
+                // boundary: `flowlog_reduce_leave` lifts contributions into
+                // the semiring diff, leaves, and folds every iteration once
+                // at the outer timestamp.
                 if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
-                    && self.config.is_datalog_batch()
+                    && self.config.mode() == ExecutionMode::Batch
                 {
+                    let kind = aggregation_kind(*agg_op);
+                    let split = aggregation_split(*agg_arity, *agg_pos);
                     let agg_type = self.agg_column_type(*fp, *agg_pos)?;
-                    let pre_leave = match agg_op {
-                        AggregationOperator::Min => {
-                            aggregation_min_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Max => {
-                            aggregation_max_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Sum => {
-                            aggregation_sum_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Count => {
-                            aggregation_count_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                        AggregationOperator::Avg => {
-                            aggregation_avg_pre_leave(*agg_arity, *agg_pos, agg_type)
-                        }
-                    };
+                    let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
 
                     with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.recursive_pre_leave_opt_aggregate_operator(
+                        plan_graph.recursive_pre_leave_present_aggregate_operator(
                             self.display_name(*fp),
                             next_ident.to_string(),
                             next_ident.to_string(),
                         );
                     });
 
-                    return Ok(quote! { #next_ident #pre_leave .leave(scope) });
-                }
-
-                // Mixed loop: all recursive relations leave via recursive_X, not next_X.
-                //
-                // - Iterative: var.set(derived_only) means recursive_X carries ±1 diffs
-                //   across inner iterations.  Inside the scope they can't cancel (different
-                //   inner timestamps); after leave() both project to the same outer time, so
-                //   consolidate nets them out.
-                // - Accumulative: feedback is var.set(derived ∪ self), so recursive_X is
-                //   monotone (+1 only); no consolidate needed.  next_X is unsafe here because
-                //   an iterative retraction can remove facts used in accumulative derivation,
-                //   causing next_X to shrink and emit spurious −1 diffs on leave.
-                //
-                // Pure accumulative loops (iterative_fps empty) use next_X.leave() since
-                // next_X == recursive_X at fixpoint with no retractions.
-                if !iterative_fps.is_empty()
-                    && let Some(recursive_ident) = recursive.get(fp)
-                {
-                    if iterative_fps.contains(fp) {
-                        return Ok(quote! { #recursive_ident.leave(scope).consolidate() });
-                    } else {
-                        return Ok(quote! { #recursive_ident.leave(scope) });
-                    }
+                    let op_name = format!("ReduceLeave: {}", self.display_name(*fp));
+                    return Ok(quote! {
+                        ::flowlog_runtime::operators::flowlog_reduce_leave(
+                            #next_ident, scope, #op_name, #kind, #split, #merge,
+                        )
+                    });
                 }
 
                 Ok(quote! { #next_ident.leave(scope) })
@@ -488,38 +357,26 @@ impl CodeGen {
             _ => quote! { ( #(#leave_exprs),* ) },
         };
 
-        // Post-leave: for batch-mode aggregated relations, consolidate and
-        // convert the semiring diff back to a Present multiplicity.
-        let mut post_leave_stmts = Vec::new();
+        // The boundary fold's outer-scope operators (consolidate + map) are
+        // built by `flowlog_reduce_leave` at the leave site; only their
+        // addresses are recorded here, after the scope exit.
         for (fp, target) in leave_fps.iter().zip(targets.iter()) {
-            if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(fp)
-                && self.config.is_datalog_batch()
+            if idb_to_aggregation_map.contains_key(fp) && self.config.mode() == ExecutionMode::Batch
             {
-                let post_leave = match agg_op {
-                    AggregationOperator::Avg => aggregation_avg_post_leave(*agg_arity, *agg_pos),
-                    _ => aggregation_opt_post_leave(*agg_arity, *agg_pos),
-                };
-
                 with_plan_graph(plan_graph, |plan_graph| {
-                    plan_graph.recursive_post_leave_opt_aggregate_operator(
+                    plan_graph.recursive_post_leave_present_aggregate_operator(
                         self.display_name(*fp),
                         target.to_string(),
                         target.to_string(),
                     );
                 });
-
-                post_leave_stmts.push(quote! {
-                    let #target = #target #post_leave;
-                });
             }
         }
 
-        let post_leave = quote! { #(#post_leave_stmts)* };
-
-        Ok((pattern, leave_stmt, post_leave))
+        Ok((pattern, leave_stmt))
     }
 
-    /// Build `recursive_X` identifier names and the `fp → recursive_X` binding map.
+    /// Build `recursive_X` identifier names and their `fp`-keyed binding map.
     fn build_recursive_bindings(&self, recursive_fps: &[u64]) -> (Vec<Ident>, HashMap<u64, Ident>) {
         let names: Vec<Ident> = recursive_fps
             .iter()
@@ -535,63 +392,14 @@ impl CodeGen {
         (names, bindings)
     }
 
-    /// Translate `Option<&LoopCondition>` into a `ConditionPlan`, marking any
-    /// required imports as a side effect.
-    fn prepare_loop_condition(
-        &mut self,
-        condition: Option<&LoopCondition>,
-        next_bindings: &HashMap<u64, Ident>,
-    ) -> Result<(Vec<TokenStream>, ConditionPlan), CodegenError> {
-        let Some(cond) = condition else {
-            return Ok((Vec::new(), ConditionPlan::default()));
-        };
-
-        let (prelude, boolean_until_conditions) =
-            self.build_until_conditions(cond, next_bindings)?;
-
-        // Preserve empty window lists as Some([]) rather than collapsing them to
-        // None.  An empty list arises from contradictory bounds (e.g. `@it >= 5
-        // and @it < 3`) and means "never continue" — blocking all feedback so
-        // the loop performs zero iterations.
-        //
-        // This fix works in tandem with build_iter_conditions returning `false`
-        // for an empty range list.  Both are required: collapsing Some([]) to
-        // None here would make the empty case unreachable there, and the loop
-        // would run forever instead of zero iterations.
-        let iter_while_conditions = cond.while_part().map(|r| r.to_vec());
-        // Mark imports whenever a `while` clause is present, even if the
-        // resolved range list is empty (contradictory bounds like `@it >= 5
-        // and @it < 3`). The generated feedback still goes through
-        // `continue_stmt(...).flat_map(...).as_collection()`, which requires
-        // these imports regardless of whether the range evaluates to `false`.
-        if iter_while_conditions.is_some() {
-            self.features.mark_timely_map();
-            self.features.mark_as_collection();
-        }
-
-        let connective = cond.connective().cloned();
-        Ok((
-            prelude,
-            ConditionPlan {
-                boolean_until_conditions,
-                iter_while_conditions,
-                connective,
-            },
-        ))
-    }
-
-    /// Emit `Variable::set(feedback)` for each recursive relation, where
-    /// `feedback` is `next_X` optionally filtered by the loop condition.
+    /// Emit `Variable::set(next_X)` for each recursive relation.
     fn gen_feedback_stmts(
         &mut self,
-        condition: Option<&LoopCondition>,
         next_bindings: &HashMap<u64, Ident>,
         recursive_bindings: &HashMap<u64, Ident>,
-        iterative_fps: &[u64],
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Vec<TokenStream>, CodegenError> {
-        let (mut stmts, plan) = self.prepare_loop_condition(condition, next_bindings)?;
-        let has_iterative = !iterative_fps.is_empty();
+        let mut stmts = Vec::new();
 
         for (fp, recursive_ident) in recursive_bindings {
             let next_ident = next_bindings.get(fp).ok_or_else(|| {
@@ -608,260 +416,9 @@ impl CodeGen {
                 );
             });
             let var_name = format_ident!("{}_var", recursive_ident);
-            let dedup = self.dedup_recursive();
-            // Only generate weight tokens and normalize when until conditions
-            // exist — these require antijoin arithmetic (pos/neg/normalize).
-            let (pos, neg, normalize) = if plan.boolean_until_conditions.is_some() {
-                let (p, n) = self.weight_concat_tokens();
-                (p, n, self.dedup_recursive())
-            } else {
-                (quote! {}, quote! {}, quote! {})
-            };
-
-            // Choose the feedback source:
-            //   - Iterative (replacement semantics): feed back the derived value only;
-            //     no self-union, since iterative variables retract by overwriting.
-            //   - Accumulative in a mixed loop: explicitly union with `recursive_X`,
-            //     because iterative relations can retract and that retraction must
-            //     not leak into the accumulative tally — we keep monotonicity by
-            //     re-adding the previous self each iteration.
-            //   - Purely accumulative loop: also feed back `next_X` directly. All
-            //     rules are monotone, so every prior fact is re-derived and no
-            //     self-union is required.
-            let source = if !iterative_fps.contains(fp) && has_iterative {
-                let acc_next = format_ident!("acc_next_{}", fp);
-                stmts.push(quote! {
-                    let #acc_next = #next_ident.clone().concat(#recursive_ident.clone()) #dedup;
-                });
-                acc_next
-            } else {
-                next_ident.clone()
-            };
-            let feedback = build_feedback_expr(
-                &source,
-                recursive_ident,
-                &plan,
-                &pos,
-                &neg,
-                &dedup,
-                &normalize,
-            );
-
-            stmts.push(quote! { #var_name.set(#feedback); });
+            stmts.push(quote! { #var_name.set(#next_ident.clone()); });
         }
 
         Ok(stmts)
-    }
-
-    /// Build prelude stmts and the arranged gate signal for the `until` clause.
-    fn build_until_conditions(
-        &mut self,
-        cond: &LoopCondition,
-        next_bindings: &HashMap<u64, Ident>,
-    ) -> Result<(Vec<TokenStream>, Option<Ident>), CodegenError> {
-        let Some(until_group) = cond.until_part() else {
-            return Ok((Vec::new(), None));
-        };
-        self.features.mark_as_collection();
-        self.features.mark_timely_map();
-
-        let mut stmts: Vec<TokenStream> = Vec::new();
-
-        // Initialise gate from the first until relation.
-        let first_fp = until_group.first().fp();
-        let first_next = next_bindings.get(&first_fp).ok_or_else(|| {
-            CodegenError::internal(format!(
-                "until relation fingerprint 0x{first_fp:016x} missing \
-                 from next bindings"
-            ))
-        })?;
-        let first_sig = format_ident!("rel_sig_{}", first_fp);
-        let dedup = self.dedup_recursive();
-        stmts.push(quote! { let #first_sig = #first_next.clone() #dedup; });
-        let mut gate = first_sig;
-
-        // Fold remaining until relations into the gate with explicit connectives.
-        for (conn, rel) in until_group.rest() {
-            let fp = rel.fp();
-            let next_ident = next_bindings.get(&fp).ok_or_else(|| {
-                CodegenError::internal(format!(
-                    "until relation fingerprint 0x{fp:016x} missing from \
-                     next bindings"
-                ))
-            })?;
-            let sig = format_ident!("rel_sig_{}", fp);
-            stmts.push(quote! { let #sig = #next_ident.clone() #dedup; });
-
-            let combined = format_ident!("rel_sig_comb_{}", fp);
-            match conn {
-                LoopConnective::And => stmts.push(quote! {
-                    let #combined = #gate.arrange_by_self()
-                        .join_core(#sig.arrange_by_self(), |(), _, _| std::iter::once(()));
-                }),
-                LoopConnective::Or => {
-                    stmts.push(quote! { let #combined = #gate.concat(#sig.clone()) #dedup; });
-                }
-            }
-            gate = combined;
-        }
-
-        let arr = format_ident!("{}_arr", gate);
-        stmts.push(quote! { let #arr = #gate.clone().arrange_by_self(); });
-        Ok((stmts, Some(arr)))
-    }
-}
-
-// =========================================================================
-// Loop condition plan
-// =========================================================================
-
-/// Analyzed loop condition, ready for feedback-expression code generation.
-///
-/// Built by `CodeGen::prepare_loop_condition`; consumed by `build_feedback_expr`.
-/// The gate-setup prelude is returned separately so the plan stays pure data.
-#[derive(Default)]
-struct ConditionPlan {
-    /// Arranged until-gate (`<ident>_arr`) or `None` if there is no `until` clause.
-    boolean_until_conditions: Option<Ident>,
-    /// Iteration windows from the `while` clause, or `None` if absent.
-    iter_while_conditions: Option<Vec<(u16, u16)>>,
-    /// Connective joining the `until` and `while` clauses, if both are present.
-    connective: Option<LoopConnective>,
-}
-
-// =========================================================================
-// Token-building helpers
-// =========================================================================
-
-/// Boolean expression: `true` when `i` (DD inner counter as `u16`) is in any window.
-fn build_iter_conditions(ranges: &[(u16, u16)]) -> TokenStream {
-    ranges
-        .iter()
-        .map(|&(lo, hi)| match (lo, hi) {
-            (0, u16::MAX) => quote! { true },
-            (0, hi) => {
-                let h = Literal::u16_suffixed(hi);
-                quote! { i <= #h }
-            }
-            (lo, u16::MAX) => {
-                let l = Literal::u16_suffixed(lo);
-                quote! { i >= #l }
-            }
-            (lo, hi) => {
-                let l = Literal::u16_suffixed(lo);
-                let h = Literal::u16_suffixed(hi);
-                quote! { (i >= #l && i <= #h) }
-            }
-        })
-        .reduce(|acc, c| quote! { #acc || #c })
-        .unwrap_or_else(|| quote! { false })
-}
-
-/// Build the feedback expression for one recursive variable given a `ConditionPlan`.
-///
-/// `dedup` — recursive-safe set-dedup (threshold_semigroup for batch, threshold for inc).
-/// `normalize` — convert i32 antijoin arithmetic back to native diff type.
-fn build_feedback_expr(
-    next: &Ident,
-    recursive: &Ident,
-    plan: &ConditionPlan,
-    pos: &TokenStream,
-    neg: &TokenStream,
-    dedup: &TokenStream,
-    normalize: &TokenStream,
-) -> TokenStream {
-    match (
-        plan.iter_while_conditions.as_deref(),
-        plan.boolean_until_conditions.as_ref(),
-    ) {
-        (None, None) => quote! { #next.clone() },
-        (Some(ranges), None) => continue_stmt(next, build_iter_conditions(ranges)),
-        (None, Some(arr)) => stop_stmt(
-            quote! { #next.clone() },
-            recursive,
-            arr,
-            pos,
-            neg,
-            normalize,
-        ),
-        (Some(ranges), Some(arr)) => {
-            let range_cond = build_iter_conditions(ranges);
-            if matches!(plan.connective, Some(LoopConnective::Or)) {
-                // OR: rows in-range pass unconditionally; rows out-of-range are
-                // still allowed unless the until gate fires.
-                let allowed = continue_stmt(next, range_cond.clone());
-                let blocked = stop_stmt(
-                    continue_stmt(next, quote! { !(#range_cond) }),
-                    recursive,
-                    arr,
-                    pos,
-                    neg,
-                    normalize,
-                );
-                quote! { { #allowed.concat(#blocked) #dedup } }
-            } else {
-                // AND: rows must be in-range AND not stopped.
-                stop_stmt(
-                    continue_stmt(next, range_cond),
-                    recursive,
-                    arr,
-                    pos,
-                    neg,
-                    normalize,
-                )
-            }
-        }
-    }
-}
-
-/// Keep only tuples whose DD inner iteration counter satisfies `cond_expr`.
-fn continue_stmt(next: &Ident, cond_expr: TokenStream) -> TokenStream {
-    quote! {
-        #next.clone()
-            .inner
-            .flat_map(|(data, time, diff)| {
-                let i = time.inner;
-                if #cond_expr { Some((data, time, diff)) } else { None }
-            })
-            .as_collection()
-    }
-}
-
-/// Convergent stop-condition: `input - (input ⋈ gate) + (recursive ⋈ gate)`.
-/// Returns `input` when gate is empty; converges to `recursive` when gate fires.
-///
-/// `normalize` converts the `i32` antijoin result back to the native diff type
-/// (`Present` for batch, `i32` 0/1 for inc).
-fn stop_stmt(
-    input: TokenStream,
-    recursive: &Ident,
-    gate: &Ident,
-    pos: &TokenStream,
-    neg: &TokenStream,
-    normalize: &TokenStream,
-) -> TokenStream {
-    quote! {
-        {
-            let keyed = (#input).map(|t| ((), t));
-            let keyed_arr = keyed.clone().arrange_by_key();
-            let keyed_rec = #recursive.clone().map(|t| ((), t));
-            let keyed_rec_arr = keyed_rec.arrange_by_key();
-            keyed
-                #pos
-                .concatenate([
-                    {
-                        keyed_arr
-                            .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
-                            #neg
-                    },
-                    {
-                        keyed_rec_arr
-                            .join_core(#gate.clone(), |_, v, _| std::iter::once(((), v.clone())))
-                            #pos
-                    },
-                ])
-                .map(|((), t)| t)
-                #normalize
-        }
     }
 }

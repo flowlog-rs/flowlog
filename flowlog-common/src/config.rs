@@ -6,35 +6,18 @@ use std::path::Path;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum ExecutionMode {
-    /// Datalog single-pass batch execution.
+    /// Single-pass batch execution.
     /// Only tracks whether facts are present or absent,
     /// making it suitable for high-performance static execution.
     #[default]
-    DatalogBatch,
-    /// Datalog incremental execution.
+    Batch,
+    /// Incremental execution.
     /// Maintains state across updates, tracking how many times each fact
     /// is derived, supporting incremental view maintenance.
-    DatalogInc,
-    /// Extended batch execution with explicit `loop` blocks.
-    /// Recursion is only allowed inside `loop` blocks; any recursive
-    /// dependency in plain rules is a hard error.
-    ExtendBatch,
-    /// Extended incremental execution with explicit `loop` blocks.
-    /// Combines incremental view maintenance with explicit loop control.
-    ExtendInc,
+    Inc,
 }
 
-impl ExecutionMode {
-    pub(crate) fn is_incremental(self) -> bool {
-        matches!(self, Self::DatalogInc | Self::ExtendInc)
-    }
-
-    pub(crate) fn is_batch(self) -> bool {
-        matches!(self, Self::DatalogBatch | Self::ExtendBatch)
-    }
-}
-
-/// Shared pipeline configuration consumed by parse → plan → codegen.
+/// Shared pipeline configuration consumed by parse, plan, and codegen.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// Path to the Datalog (.dl) program file.
@@ -54,9 +37,9 @@ pub struct Config {
     /// Whether `.output` relations drain to stdout (`-D -`) rather than files.
     /// Derived by the CLI from `--output-dir`; always `false` in library mode.
     pub output_to_stdout: bool,
-    /// When set, fact strings are interned serially rather than in parallel, so
-    /// interning order — and therefore `ord(_)` values — is deterministic across
-    /// worker counts (`-w N` matches `-w 1`).
+    /// When set, fact strings are interned serially rather than in parallel.
+    /// Interning order, and therefore `ord(_)` values, is then deterministic
+    /// across worker counts (`-w N` matches `-w 1`).
     pub serialize_load: bool,
     /// Milliseconds between periodic metric flushes while a profiled run is
     /// executing, so a long or interrupted run still leaves the latest
@@ -83,45 +66,19 @@ impl Config {
         self.mode
     }
 
-    /// Whether the mode maintains state incrementally across updates.
-    pub fn is_incremental(&self) -> bool {
-        self.mode.is_incremental()
-    }
-
-    /// Whether the mode is a one-shot batch mode.
-    pub fn is_batch(&self) -> bool {
-        self.mode.is_batch()
-    }
-
-    /// Whether the mode is `DatalogBatch`. This is the only mode that uses
-    /// `Present` diff; all other modes use `i32` diff for multiplicity tracking.
-    pub fn is_datalog_batch(&self) -> bool {
-        self.mode == ExecutionMode::DatalogBatch
-    }
-
-    /// Whether Extended Datalog mode is enabled (loop blocks allowed,
-    /// implicit recursion forbidden).
-    pub fn is_extended(&self) -> bool {
-        matches!(
-            self.mode,
-            ExecutionMode::ExtendBatch | ExecutionMode::ExtendInc
-        )
-    }
-
-    /// Whether profiling instrumentation is enabled.
+    /// Returns `true` when operator-level profiling is on.
     pub fn profiling_enabled(&self) -> bool {
-        if self.profile && self.is_extended() {
-            unimplemented!("-P (profiling) is not yet supported with extended modes");
-        }
         self.profile
     }
 
-    /// Whether Sideways Information Passing (SIP) optimization is enabled.
+    /// Returns `true` when sideways information passing is on, filtering
+    /// later body atoms by earlier bindings.
     pub fn sip_enabled(&self) -> bool {
         self.sip
     }
 
-    /// Whether string interning is enabled.
+    /// Returns `true` when string columns are interned as compact integer
+    /// keys at load time.
     pub fn str_intern_enabled(&self) -> bool {
         self.str_intern
     }
@@ -136,12 +93,14 @@ impl Config {
         self.include_dirs.iter().map(Path::new).collect()
     }
 
-    /// Whether `.output` relations drain to stdout rather than files.
+    /// Returns `true` when `.output` relations drain to stdout rather than
+    /// files.
     pub fn output_to_stdout(&self) -> bool {
         self.output_to_stdout
     }
 
-    /// Whether fact-string interning must be serial for deterministic `ord(_)`.
+    /// Returns `true` when fact-string interning must run serially to keep
+    /// `ord(_)` deterministic.
     pub fn serialize_load(&self) -> bool {
         self.serialize_load
     }

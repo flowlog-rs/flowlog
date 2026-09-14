@@ -12,7 +12,6 @@ use crate::HeadArg;
 use crate::ParseError;
 use crate::Predicate;
 use crate::Program;
-use crate::Segment;
 use crate::TupleElem;
 use crate::TupleLit;
 use crate::error::grammar_bug;
@@ -34,32 +33,26 @@ pub(super) fn check_and_pin_rules(
     program: &mut Program,
     env: &PrimitiveEnv,
 ) -> Result<(), ParseError> {
-    for segment in program.segments_mut() {
-        let rules: &mut [FlowLogRule] = match segment {
-            Segment::Plain(rules) => rules,
-            Segment::Loop(block) | Segment::Fixpoint(block) => block.rules_mut(),
-        };
-        for rule in rules {
-            let mut bindings: Bindings = HashMap::new();
-            for predicate in rule.rhs() {
-                if let Predicate::PositiveAtom(atom) = predicate {
-                    bind_atom(atom, &env.decls, &mut bindings)?;
-                }
+    for rule in program.rules_mut() {
+        let mut bindings: Bindings = HashMap::new();
+        for predicate in rule.rhs() {
+            if let Predicate::PositiveAtom(atom) = predicate {
+                bind_atom(atom, &env.decls, &mut bindings)?;
             }
-
-            for predicate in rule.rhs_mut() {
-                match predicate {
-                    Predicate::PositiveAtom(atom) => pin_atom(atom, &env.decls)?,
-                    Predicate::NegativeAtom(atom) => {
-                        check_atom(atom, &env.decls, &bindings)?;
-                        pin_atom(atom, &env.decls)?;
-                    }
-                    Predicate::Compare(cmp) => check_and_pin_compare(cmp, &bindings, &env.udfs)?,
-                }
-            }
-
-            check_and_pin_head(rule, env, &bindings)?;
         }
+
+        for predicate in rule.rhs_mut() {
+            match predicate {
+                Predicate::PositiveAtom(atom) => pin_atom(atom, &env.decls)?,
+                Predicate::NegativeAtom(atom) => {
+                    check_atom(atom, &env.decls, &bindings)?;
+                    pin_atom(atom, &env.decls)?;
+                }
+                Predicate::Compare(cmp) => check_and_pin_compare(cmp, &bindings, &env.udfs)?,
+            }
+        }
+
+        check_and_pin_head(rule, env, &bindings)?;
     }
     Ok(())
 }

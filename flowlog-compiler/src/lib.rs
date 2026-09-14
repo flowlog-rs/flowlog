@@ -1,5 +1,4 @@
-//! FlowLog compiler — generate a standalone Rust executable from a FlowLog
-//! program.
+//! Builds standalone Rust executables from FlowLog programs.
 //!
 //! The caller is responsible for parsing + type-checking the program and
 //! building a [`ProgramPlanner`]. This crate consumes the planner and
@@ -15,30 +14,30 @@
 //!
 //! Internal layout:
 //!
-//! - [`build`] — the two-stage pipeline behind [`Compiler::compile`]
+//! - `build`: the two-stage pipeline behind [`Compiler::compile`]
 //!   (`emit_sources`, then shell out to cargo).
-//! - [`scaffold`] — write the emitted crate to disk + render Cargo metadata.
-//! - [`assembly`], [`io`], [`relation`], [`imports`] — codegen modules that
+//! - `scaffold`: writes the emitted crate and renders Cargo metadata.
+//! - `assembly`, `io`, `dispatch`, `imports`: codegen modules that
 //!   produce the token streams spliced into the emitted `main.rs` and
 //!   `relation.rs`.
 
 mod assembly;
 mod build;
 mod cli;
+mod dispatch;
 mod error;
 mod imports;
 mod io;
 mod options;
-mod relation;
 mod scaffold;
 
 pub use cli::Cli;
 pub use error::CompilerError;
 use flowlog_build::CodeGen;
-use flowlog_build::planner::ProgramPlanner;
 use flowlog_common::BoxError;
 use flowlog_common::Config;
 use flowlog_parser::Program;
+use flowlog_planner::planner::ProgramPlanner;
 use flowlog_profiler::PlanGraph;
 pub use options::CompileOptions;
 

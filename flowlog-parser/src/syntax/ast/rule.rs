@@ -3,6 +3,7 @@
 //! - [`FlowLogRule`]: `head :- p1, p2, ..., pn.`, a single derived head
 //!   and the body predicates that must all hold.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use educe::Educe;
@@ -10,6 +11,7 @@ use flowlog_common::FileId;
 use flowlog_common::Span;
 use pest::iterators::Pair;
 
+use super::AtomArg;
 use super::Constant;
 use super::Factor;
 use super::Head;
@@ -72,6 +74,25 @@ impl FlowLogRule {
             .iter()
             .filter(|p| matches!(p, Predicate::PositiveAtom(_)))
             .count()
+    }
+
+    /// Variable names the positive body atoms bind; constants and
+    /// placeholders bind nothing. This is the grounded set: a variable
+    /// used anywhere else in the rule must appear in it to have a value.
+    #[must_use]
+    pub fn positive_body_vars(&self) -> HashSet<&str> {
+        self.rhs
+            .iter()
+            .filter_map(|p| match p {
+                Predicate::PositiveAtom(atom) => Some(atom),
+                Predicate::NegativeAtom(_) | Predicate::Compare(_) => None,
+            })
+            .flat_map(|atom| atom.arguments().iter())
+            .filter_map(|arg| match arg {
+                AtomArg::Var(v) => Some(v.as_str()),
+                AtomArg::Const(_) | AtomArg::Placeholder => None,
+            })
+            .collect()
     }
 
     /// Whether the rule's positive-atom order is pinned by a user `.plan`

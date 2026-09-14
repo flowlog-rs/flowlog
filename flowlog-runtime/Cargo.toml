@@ -1,8 +1,8 @@
 [package]
 name = "flowlog-runtime"
-# The runtime releases on its own cadence — generated code depends on it
+# The runtime releases on its own cadence. Generated code depends on it
 # by published version, so any additive change ships as an independent bump.
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -13,15 +13,27 @@ readme = "README.md"
 keywords = ["datalog", "dataflow", "differential", "timely"]
 categories = ["database", "compilers"]
 
+[features]
+cli = ["dep:clap"]
+sqlite = ["dep:rusqlite"]
+
 [dependencies]
+clap = { workspace = true, features = ["derive", "string"], optional = true }
 differential-dataflow.workspace = true
+itoa = "1.0"
 lasso = { workspace = true, features = ["multi-threaded", "serialize"] }
 ordered-float = { workspace = true, features = ["serde"] }
+rayon = "1.0"
 regex.workspace = true
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 rustc-hash.workspace = true
 serde = { workspace = true }
 tempfile.workspace = true
+thiserror.workspace = true
 timely.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
 
 [lints]
 workspace = true

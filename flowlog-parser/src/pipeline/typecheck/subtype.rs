@@ -45,16 +45,9 @@ pub(crate) fn check_and_lower(program: &mut Program) -> Result<(), ParseError> {
         .map(|r| (r.name().to_string(), r.attribute_declared_ids()))
         .collect();
 
-    let (registry, segments) = program.registry_and_segments_mut();
-    for segment in segments.iter_mut() {
-        for rule in segment.as_rules_mut() {
-            check_and_lower_rule(rule, registry, &decls)?;
-        }
-        if let Some(block) = segment.as_loop_mut() {
-            for rule in block.rules_mut() {
-                check_and_lower_rule(rule, registry, &decls)?;
-            }
-        }
+    let (registry, rules) = program.registry_and_rules_mut();
+    for rule in rules.iter_mut() {
+        check_and_lower_rule(rule, registry, &decls)?;
     }
     Ok(())
 }
@@ -514,7 +507,7 @@ mod tests {
             .output OnlyUsers\n\
             OnlyUsers(as(x, UserId)) :- Plain(x).\n";
         let program = checked(src).expect("typecheck must succeed");
-        let rule = program.rules()[0];
+        let rule = &program.rules()[0];
         for arg in rule.head().head_arguments() {
             if let HeadArg::Arith(a) = arg {
                 assert!(

@@ -4,6 +4,7 @@
 //! a single outer timestamp; recursive programs nest an inner iteration counter
 //! via `Product<Outer, Inner>`.
 
+use flowlog_common::ExecutionMode;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -15,10 +16,9 @@ impl CodeGen {
     /// - Incremental: `u32` (monotonically advancing epoch).
     /// - Batch: `()` (single-shot execution).
     pub(crate) fn timestamp_alias(&self) -> TokenStream {
-        if self.config.is_incremental() {
-            quote! { type Ts = u32; }
-        } else {
-            quote! { type Ts = (); }
+        match self.config.mode() {
+            ExecutionMode::Inc => quote! { type Ts = u32; },
+            ExecutionMode::Batch => quote! { type Ts = (); },
         }
     }
 

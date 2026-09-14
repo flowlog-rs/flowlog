@@ -23,7 +23,7 @@
 #   (cd "$LIB_RUNNER_DIR" && cargo run --release)
 #
 # Runtime: the synthesized `main.rs` reads `WORKERS` from the environment
-# and passes it to `DatalogBatchEngine::new(n)`. Unset → workers=1.
+# and passes it to `BatchEngine::new(n)`. Unset → workers=1.
 
 [[ -n "${FLOWLOG_LIB_RUNNER_SYNTH_SH_LOADED:-}" ]] && return 0
 FLOWLOG_LIB_RUNNER_SYNTH_SH_LOADED=1
@@ -77,9 +77,11 @@ parse_input_filename() {
     echo "${rel}.csv"
 }
 
-# Extract output relation names (lowercase, one per line) from a .dl file
-# and any sibling included .dl files. Treats `.printsize` as `.output` so
-# callers that pre-rewrite the .dl aren't required. Anchored to line-start
+# Extract `.output` relation names (lowercase, one per line) from a .dl file
+# and any sibling included .dl files. `.printsize` is deliberately not one of
+# them: it surfaces as a `<rel>_size` count on the results struct, with no
+# rows field for a writer to read, so a relation carrying only `.printsize`
+# gets no writer at all. Anchored to line-start
 # (modulo whitespace) so commented directives are skipped. The `.` in the
 # name pattern admits component-instance relations like `a.P`; on output
 # the dot is rewritten to `·` (U+00B7) to mirror the inliner's rename
@@ -88,7 +90,7 @@ parse_output_relations() {
     local dl_file="$1"
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
-        (grep -oE '^[[:space:]]*\.(output|printsize)[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' "$f" 2>/dev/null || true) \
+        (grep -oE '^[[:space:]]*\.output[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' "$f" 2>/dev/null || true) \
             | awk '{ name = tolower($2); gsub(/\./, "·", name); print name }'
     done < <(all_dl_files "$dl_file") \
         | sort -u
@@ -305,9 +307,9 @@ EOF
 ###############################################################################
 #
 # Honors optional globals:
-#   LIB_RUNNER_SIP=1         → Builder::sip(true)
-#   LIB_RUNNER_STR_INTERN=1  → Builder::string_intern(true)
-#   LIB_RUNNER_EXTENDED=1    → Builder::mode(ExecutionMode::ExtendBatch)
+#   LIB_RUNNER_SIP=1         -> Builder::sip(true)
+#   LIB_RUNNER_STR_INTERN=1  -> Builder::string_intern(true)
+#   LIB_RUNNER_INC=1         -> Builder::mode(ExecutionMode::Inc)
 #
 # `test_dir` may be empty when called for a warm-up build.
 write_build_rs() {
@@ -329,17 +331,10 @@ write_build_rs() {
     (( ${LIB_RUNNER_SIP:-0} ))        && knob_setters+=$'        .sip(true)\n'
     (( ${LIB_RUNNER_STR_INTERN:-0} )) && knob_setters+=$'        .string_intern(true)\n'
 
-    # Pick exactly one mode line. Defaults to `DatalogBatch`; `LIB_RUNNER_INC`
-    # toggles to incremental and combines with `LIB_RUNNER_EXTENDED`.
+    # Defaults to `Batch`; `LIB_RUNNER_INC` toggles to incremental.
     local mode_setter=""
     if (( ${LIB_RUNNER_INC:-0} )); then
-        if (( ${LIB_RUNNER_EXTENDED:-0} )); then
-            mode_setter=$'        .mode(flowlog_build::ExecutionMode::ExtendInc)\n'
-        else
-            mode_setter=$'        .mode(flowlog_build::ExecutionMode::DatalogInc)\n'
-        fi
-    elif (( ${LIB_RUNNER_EXTENDED:-0} )); then
-        mode_setter=$'        .mode(flowlog_build::ExecutionMode::ExtendBatch)\n'
+        mode_setter=$'        .mode(flowlog_build::ExecutionMode::Inc)\n'
     fi
     knob_setters+="$mode_setter"
 
@@ -532,7 +527,7 @@ EOF
 # Synthesize a fresh main.rs that drives the engine for the current test.
 #
 # Reads `WORKERS` from the environment and passes it to
-# `DatalogBatchEngine::new(n)`. Unset or unparseable → 1 worker.
+# `BatchEngine::new(n)`. Unset or unparseable → 1 worker.
 write_main_rs() {
     local dl_file="$1"
     local main_rs="${LIB_RUNNER_DIR}/src/main.rs"
@@ -549,7 +544,7 @@ write_main_rs() {
         load_calls+=$(gen_csv_loader "$dl_file" "$rel" "$(basename "$csv_path")")$'\n'
     done < <(parse_input_relations "$dl_file")
 
-    # Output writers — one block per .output/.printsize relation. File name
+    # Output writers — one block per `.output` relation. File name
     # is the case-preserved `<RawName>.csv` (via output_filename_for), matching
     # the compiler's Soufflé-compat convention that compare_expected_outputs
     # diffs against.
@@ -571,7 +566,7 @@ pub mod prog {
     include!(concat!(env!("OUT_DIR"), "/program.rs"));
 }
 
-use prog::DatalogBatchEngine;
+use prog::BatchEngine;
 use prog::rel::*;
 use std::io::Write;
 
@@ -583,7 +578,7 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
 
-    let mut engine = DatalogBatchEngine::new(workers);
+    let mut engine = BatchEngine::new(workers);
 ${load_calls}
     let results = engine.run();
 
@@ -597,7 +592,7 @@ EOF
 ###############################################################################
 #
 # Reads binary-inc fixtures (`commands.txt` transcript + `<rel>_t<N>`
-# per-epoch delta expected files) and drives `DatalogIncrementalEngine`
+# per-epoch delta expected files) and drives `IncrementalEngine`
 # through typed insert/remove/set/unset calls. Since the library returns
 # full snapshots rather than per-epoch deltas, the synthesized main.rs
 # keeps a host-side mirror of every output relation and diffs it against
@@ -958,7 +953,7 @@ pub mod prog {
     include!(concat!(env!("OUT_DIR"), "/program.rs"));
 }
 
-use prog::DatalogIncrementalEngine;
+use prog::IncrementalEngine;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
@@ -969,7 +964,7 @@ fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    let mut engine = DatalogIncrementalEngine::new(workers);
+    let mut engine = IncrementalEngine::new(workers);
 
 ${prev_decls}
 

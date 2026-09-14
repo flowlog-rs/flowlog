@@ -1,11 +1,5 @@
-//! Incremental mode (`DatalogInc` / `ExtendInc`) main function generation.
-//!
-//! Generates a `fn main()` that:
-//! 1. Constructs the timely dataflow graph with a probe handle.
-//! 2. Builds the relation registry and runs the preload epoch (if any).
-//! 3. Enters an interactive command loop where worker 0 drives
-//!    transactions (`begin` / `put` / `file` / `commit` / `quit`)
-//!    and non-zero workers follow via shared state + barriers.
+//! Incremental assembly. Preload and interactive transactions share live
+//! workers, with barriers separating output emission from the next epoch.
 
 use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
@@ -13,11 +7,13 @@ use quote::quote;
 
 use crate::io::input::Input;
 
-/// Emit the complete incremental-mode `fn main() { ... }` token stream.
-pub(crate) fn gen_incremental_main(
-    p: &CodeParts,
-    rp: &Input,
-    merge_section: &TokenStream,
+/// Emits startup, preload, and an interactive loop over persistent workers.
+/// `emit_output` runs on worker 0 after every worker has published its results.
+pub(super) fn gen_incremental_main(
+    parts: &CodeParts,
+    input: &Input,
+    startup: &TokenStream,
+    emit_output: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
         edb_decls,
@@ -35,33 +31,38 @@ pub(crate) fn gen_incremental_main(
         metrics_write,
         step_loop,
         ..
-    } = p;
+    } = parts;
     let Input {
-        registry_inserts,
-        preload,
+        initialize_inputs,
+        preload_inputs,
         ..
-    } = rp;
+    } = input;
 
     quote! {
         fn main() {
-            let args: Vec<String> = std::env::args().collect();
+            #startup
 
             let shared_txn: Arc<RwLock<TxnState>> =
                 Arc::new(RwLock::new(TxnState::default()));
-            let barrier = worker_barrier_from_args(&args);
+            let workers = match &timely_config.communication {
+                timely::CommunicationConfig::Thread => 1,
+                timely::CommunicationConfig::Process(workers)
+                | timely::CommunicationConfig::ProcessBinary(workers) => *workers,
+                timely::CommunicationConfig::Cluster { threads, .. } => *threads,
+            };
+            let barrier = Arc::new(std::sync::Barrier::new(workers));
 
             #(#output_bufs)*
             #(#size_cell_decls)*
 
-            timely::execute_from_args(args.into_iter(), {
+            let timer = Instant::now();
+            timely::execute(timely_config, {
                 let shared_txn = shared_txn.clone();
                 let barrier = barrier.clone();
                 #(#output_buf_clones)*
                 #(#size_cell_clones)*
 
                 move |worker| {
-                    let timer = Instant::now();
-                    let peers = worker.peers();
                     let index = worker.index();
 
                     #profile_init
@@ -80,38 +81,26 @@ pub(crate) fn gen_incremental_main(
                             #dataflow_return
                         });
 
-                    let mut rels: HashMap<String, Box<dyn Relation>> = HashMap::new();
-                    #(#registry_inserts)*
+                    #initialize_inputs
 
                     let mut time_stamp: u32 = 0;
 
-                    #preload
+                    #preload_inputs
 
-                    // Helper: apply a list of txn ops to this worker's input handles.
-                    fn apply_ops(
-                        rels: &mut HashMap<String, Box<dyn Relation>>,
-                        ops: &[TxnOp],
-                        peers: usize,
-                        index: usize,
-                    ) {
-                        for op in ops {
-                            match op {
+                    fn apply_ops(inputs: &mut Inputs, ops: &[TxnOp]) {
+                        for (ordinal, op) in ops.iter().enumerate() {
+                            let (rel, result) = match op {
                                 TxnOp::Put { rel, tuple, diff } => {
-                                    let r = rels
-                                        .get_mut(&rel.to_ascii_lowercase())
-                                        .unwrap_or_else(|| {
-                                            panic!("unknown relation: '{rel}'")
-                                        });
-                                    r.apply_tuple(tuple, *diff, peers, index);
+                                    (rel, inputs.load_put(rel, tuple, ordinal, *diff))
                                 }
                                 TxnOp::File { rel, path, diff } => {
-                                    let r = rels
-                                        .get_mut(&rel.to_ascii_lowercase())
-                                        .unwrap_or_else(|| {
-                                            panic!("unknown relation: '{rel}'")
-                                        });
-                                    r.apply_file(path.as_path(), *diff, peers, index);
+                                    (rel, inputs.load_file(rel, path.as_path(), *diff))
                                 }
+                            };
+                            match result {
+                                Some(Ok(())) => {}
+                                Some(Err(error)) => eprintln!("[relation][{rel}] {error}"),
+                                None => eprintln!("unknown relation: '{rel}'"),
                             }
                         }
                     }
@@ -141,27 +130,22 @@ pub(crate) fn gen_incremental_main(
 
                             match snap.action {
                                 TxnAction::Commit => {
-                                    apply_ops(&mut rels, snap.pending.as_slice(), peers, index);
+                                    apply_ops(&mut inputs, snap.pending.as_slice());
 
                                     time_stamp += 1;
-                                    for r in rels.values_mut() {
-                                        r.advance_to(time_stamp);
-                                        r.flush();
-                                    }
+                                    inputs.advance_to_all(time_stamp);
+                                    inputs.flush_all();
                                     #step_loop
 
                                     #metrics_write
 
-                                    // Flush thread-local buffers into shared buffers.
                                     #(#flush)*
 
                                     barrier.wait();
                                 }
 
                                 TxnAction::Quit => {
-                                    for r in rels.values_mut() {
-                                        r.close();
-                                    }
+                                    inputs.close_all();
                                     while probe.less_than(&time_stamp) {
                                         worker.step();
                                     }
@@ -183,7 +167,10 @@ pub(crate) fn gen_incremental_main(
                     // -------------------------------
                     // Worker 0: interactive driver
                     // -------------------------------
-                    let rel_words = rels.keys().cloned().collect::<Vec<_>>();
+                    let rel_words = Inputs::names()
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect::<Vec<_>>();
                     let mut prompt = Prompt::new(rel_words);
 
                     let mut local_txn: TxnState = TxnState::default();
@@ -243,25 +230,21 @@ pub(crate) fn gen_incremental_main(
 
                                 // Apply exactly what got published (keeps behavior consistent).
                                 let snap = shared_txn.read().unwrap().clone();
-                                apply_ops(&mut rels, snap.pending.as_slice(), peers, index);
+                                apply_ops(&mut inputs, snap.pending.as_slice());
 
                                 time_stamp += 1;
-                                for r in rels.values_mut() {
-                                    r.advance_to(time_stamp);
-                                    r.flush();
-                                }
+                                inputs.advance_to_all(time_stamp);
+                                inputs.flush_all();
                                 #step_loop
 
                                 #metrics_write
 
-                                // Flush thread-local buffers into shared buffers.
                                 #(#flush)*
 
                                 barrier.wait();
 
                                 if index == 0 {
-                                    // === Merge output buffers (sort, limit, write) ===
-                                    #merge_section
+                                    #emit_output
 
                                     println!("{:?}:\tCommitted & executed", round_timer.elapsed());
                                 }
@@ -287,9 +270,7 @@ pub(crate) fn gen_incremental_main(
 
                                 barrier.wait();
 
-                                for r in rels.values_mut() {
-                                    r.close();
-                                }
+                                inputs.close_all();
                                 while probe.less_than(&time_stamp) {
                                     worker.step();
                                 }

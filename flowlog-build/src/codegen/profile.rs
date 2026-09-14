@@ -428,7 +428,7 @@ mod tests {
     /// A recorded plan graph bakes the ops const with its JSON payload.
     #[test]
     fn recorded_plan_graph_renders_the_ops_const() {
-        let mut graph = PlanGraph::new(ExecutionMode::DatalogBatch);
+        let mut graph = PlanGraph::new(ExecutionMode::Batch);
         graph.map_join_operator("n".into(), vec![], "a".into(), 1);
         let ts = render_profile_ops_const(Some(&graph)).expect("serializes");
         let rendered = ts.to_string();

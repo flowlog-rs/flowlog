@@ -1,0 +1,5 @@
+.decl Source(value: string)
+.input Source(IO="sqlite", filename="input.sqlite")
+.decl Before(left: string, right: string)
+Before(left, right) :- Source(left), Source(right), ord(left) < ord(right).
+.output Before(IO="sqlite", filename="output.sqlite")

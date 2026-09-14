@@ -1,12 +1,5 @@
-//! Batch-mode `fn main()` generator.
-//!
-//! Runs the dataflow once, to fixpoint, then writes outputs:
-//!
-//! 1. Construct the timely dataflow graph from generator fragments.
-//! 2. Build the EDB registry and ingest all data (files + inline facts).
-//! 3. Close input handles and step the worker until idle.
-//! 4. Flush worker-local output buffers into the shared buffers.
-//! 5. Worker 0 drains the shared buffers (sort / limit / write).
+//! Batch assembly. Workers publish results to runtime emitters; dropping
+//! their guards joins them before the main thread emits output and sizes.
 
 use flowlog_build::CodeParts;
 use proc_macro2::TokenStream;
@@ -14,11 +7,13 @@ use quote::quote;
 
 use crate::io::input::Input;
 
-/// Emit the complete batch-mode `fn main() { ... }` token stream.
-pub(crate) fn gen_batch_main(
+/// Emits startup, a single dataflow run, and output after workers join.
+/// `emit_output` may reference only state declared outside the workers.
+pub(super) fn gen_batch_main(
     parts: &CodeParts,
     input: &Input,
-    merge_section: &TokenStream,
+    startup: &TokenStream,
+    emit_output: &TokenStream,
 ) -> TokenStream {
     let CodeParts {
         edb_decls,
@@ -38,30 +33,25 @@ pub(crate) fn gen_batch_main(
         ..
     } = parts;
     let Input {
-        registry_inserts,
-        file_ingests,
-        maybe_peers,
+        initialize_inputs,
+        load_files,
         ..
     } = input;
 
     quote! {
         fn main() {
-            let args: Vec<String> = std::env::args().collect();
-            let barrier = worker_barrier_from_args(&args);
+            #startup
 
-            // Shared output machinery constructed before workers spawn.
             #(#output_bufs)*
             #(#size_cell_decls)*
 
-            timely::execute_from_args(args.into_iter(), {
-                let barrier = barrier.clone();
+            let timer = Instant::now();
+            timely::execute(timely_config, {
                 #(#output_buf_clones)*
                 #(#size_cell_clones)*
 
                 move |worker| {
-                    let timer = Instant::now();
                     let index = worker.index();
-                    #maybe_peers
 
                     #profile_init
                     #(#local_bufs)*
@@ -78,34 +68,24 @@ pub(crate) fn gen_batch_main(
                         println!("{:?}:\tDataflow assembled", timer.elapsed());
                     }
 
-                    // Register input handlers, ingest data, then close inputs
-                    // so the dataflow can drain to fixpoint.
-                    let mut rels: HashMap<String, Box<dyn Relation>> = HashMap::new();
-                    #(#registry_inserts)*
-                    #(#file_ingests)*
-                    for r in rels.values_mut() {
-                        r.apply_inline(index);
-                    }
-                    for r in rels.values_mut() {
-                        r.close();
-                    }
+                    // Closing the inputs is what lets the dataflow drain to
+                    // fixpoint.
+                    #initialize_inputs
+                    #(#load_files)*
+                    inputs.apply_inline_all();
+                    inputs.close_all();
 
                     #step_loop
 
-                    // Flush per-worker output buffers into the shared ones,
-                    // then worker 0 merges and writes results.
                     #(#flush)*
-                    barrier.wait();
 
                     #metrics_write
-
-                    if index == 0 {
-                        println!("{:?}:\tDataflow executed", timer.elapsed());
-                        #merge_section
-                    }
                 }
             })
             .unwrap();
+
+            println!("{:?}:\tDataflow executed", timer.elapsed());
+            #emit_output
         }
     }
 }

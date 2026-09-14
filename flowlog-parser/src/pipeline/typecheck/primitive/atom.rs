@@ -151,7 +151,7 @@ mod tests {
             .output Out\n\
             Out(x) :- Item(x), Flag(5).\n";
         let program = checked(src).expect("type-check should succeed");
-        let rule = program.rules()[0];
+        let rule = &program.rules()[0];
         let flag_atom = match &rule.rhs()[1] {
             Predicate::PositiveAtom(a) => a,
             other => panic!("expected Flag atom, got {other:?}"),

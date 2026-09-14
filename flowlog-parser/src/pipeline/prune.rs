@@ -7,11 +7,9 @@ use std::collections::HashSet;
 
 use tracing::warn;
 
-use crate::ast::FlowLogRule;
 use crate::ast::Predicate;
 use crate::declaration::Relation;
 use crate::program::Program;
-use crate::segment::Segment;
 
 /// Prune dead components, then materialize orphans. Idempotent.
 // Order matters: materialize must run after pruning so it cannot re-add a
@@ -26,21 +24,13 @@ pub fn prune(program: &mut Program) {
 const NO_TOP_LEVEL_RULE_ID: usize = usize::MAX;
 
 /// The rule indices and predicate names transitively needed by outputs and
-/// facts, plus the underived IDBs. Rule indices are into all segments' rules,
-/// flattened in source order.
+/// facts, plus the underived IDBs. Rule indices are into the program's rule
+/// list, in source order.
 #[must_use]
 fn identify_needed_components(
     program: &Program,
 ) -> ((HashSet<usize>, HashSet<String>), HashSet<String>) {
-    // Flatten all rules (plain and loop-internal) in source order.
-    let all_rules: Vec<&FlowLogRule> = program
-        .segments
-        .iter()
-        .flat_map(|item| match item {
-            Segment::Plain(rules) => rules.as_slice(),
-            Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
-        })
-        .collect();
+    let all_rules = &program.rules;
 
     let mut needed_preds: HashSet<String> = program
         .idbs()
@@ -48,23 +38,7 @@ fn identify_needed_components(
         .map(|d| d.name().to_string())
         .collect();
 
-    // Loop-until relations stay live even if not outputs: the loop reads them
-    // to decide termination.
-    needed_preds.extend(
-        program
-            .segments
-            .iter()
-            .filter_map(Segment::as_loop)
-            .flat_map(|block| {
-                block
-                    .condition()
-                    .and_then(|cond| cond.until_part())
-                    .into_iter()
-                    .flat_map(|stop| stop.relations().map(|rel| rel.name().to_string()))
-            }),
-    );
-
-    // If no outputs and no loop conditions, keep everything.
+    // If no outputs, keep everything.
     if needed_preds.is_empty() {
         let all_indices = (0..all_rules.len()).collect();
         let all_preds = program
@@ -173,12 +147,8 @@ fn prune_dead_components(program: &mut Program) {
         .collect();
 
     let dead_rules: Vec<_> = program
-        .segments
+        .rules
         .iter()
-        .flat_map(|item| match item {
-            Segment::Plain(rules) => rules.as_slice(),
-            Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
-        })
         .enumerate()
         .filter(|(i, _)| !needed_rules.contains(i))
         .map(|(i, r)| format!("#{}: {}", i, r))
@@ -221,54 +191,12 @@ fn prune_dead_components(program: &mut Program) {
     // with them.
     program.facts.retain(|name, _| needed_preds.contains(name));
 
-    // Filter dead rules from all segments; drop any segment that becomes empty.
-    let mut global_idx = 0usize;
-    let new_items: Vec<Segment> = program
-        .segments
-        .drain(..)
-        .filter_map(|item| match item {
-            Segment::Plain(rules) => {
-                let filtered: Vec<FlowLogRule> = rules
-                    .into_iter()
-                    .filter(|_| {
-                        let keep = needed_rules.contains(&global_idx);
-                        global_idx += 1;
-                        keep
-                    })
-                    .collect();
-                if filtered.is_empty() {
-                    None
-                } else {
-                    Some(Segment::Plain(filtered))
-                }
-            }
-            Segment::Loop(mut block) => {
-                block.rules_mut().retain(|_| {
-                    let keep = needed_rules.contains(&global_idx);
-                    global_idx += 1;
-                    keep
-                });
-                if block.rules().is_empty() {
-                    None
-                } else {
-                    Some(Segment::Loop(block))
-                }
-            }
-            Segment::Fixpoint(mut block) => {
-                block.rules_mut().retain(|_| {
-                    let keep = needed_rules.contains(&global_idx);
-                    global_idx += 1;
-                    keep
-                });
-                if block.rules().is_empty() {
-                    None
-                } else {
-                    Some(Segment::Fixpoint(block))
-                }
-            }
-        })
-        .collect();
-    program.segments = new_items;
+    let mut idx = 0usize;
+    program.rules.retain(|_| {
+        let keep = needed_rules.contains(&idx);
+        idx += 1;
+        keep
+    });
 
     program
         .facts
@@ -282,17 +210,11 @@ fn prune_dead_components(program: &mut Program) {
 fn materialize_orphan_relations(program: &mut Program) {
     let mut produced: HashSet<String> = HashSet::new();
     let mut referenced: HashSet<String> = HashSet::new();
-    for segment in &program.segments {
-        let rules: &[FlowLogRule] = match segment {
-            Segment::Plain(rules) => rules,
-            Segment::Loop(block) | Segment::Fixpoint(block) => block.rules(),
-        };
-        for rule in rules {
-            produced.insert(rule.head().name().to_string());
-            for pred in rule.rhs() {
-                if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
-                    referenced.insert(atom.name().to_string());
-                }
+    for rule in &program.rules {
+        produced.insert(rule.head().name().to_string());
+        for pred in rule.rhs() {
+            if let Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) = pred {
+                referenced.insert(atom.name().to_string());
             }
         }
     }
@@ -340,30 +262,6 @@ mod tests {
         assert!(!program.facts().contains_key("p"));
         // The consumed fact relation stays, facts intact.
         assert!(program.facts().contains_key("src"));
-    }
-
-    /// A loop-`until` relation is kept live even though nothing else reads it,
-    /// while an unreferenced derived relation (`dead`) is pruned.
-    #[test]
-    fn dead_code_elimination_keeps_loop_until_relations() {
-        let src = "
-            .decl edge(x: number, y: number)
-            .decl keep()
-            .decl dead()
-            .output edge
-
-            edge(1, 2).
-
-            loop until { keep } {
-                keep() :- edge(1, 2).
-            }
-
-            dead() :- edge(2, 3).
-        ";
-        let program = pruned(src).expect("valid program");
-
-        assert!(program.relations().iter().any(|rel| rel.name() == "keep"));
-        assert!(!program.relations().iter().any(|rel| rel.name() == "dead"));
     }
 
     /// `.output R` with no rules, no facts, and no body references is pruned from
@@ -425,32 +323,6 @@ mod tests {
         assert!(
             !program.facts().contains_key("i"),
             ".input relation must not be materialized as an orphan"
-        );
-    }
-
-    /// Known gap, pinned as-is: `prune` marks loop-until relations live by
-    /// their condition spelling, which keeps the user's dot while the
-    /// declaration was normalized to `\u{b7}`: the spellings no longer match, so
-    /// the guard relation is dropped. Rewriting condition names in
-    /// `normalize_inliner_dots` would close the gap; that is a behavior change.
-    #[test]
-    fn prune_drops_dotted_until_relation_after_normalization() {
-        let src = "
-            .comp C { .decl Holds() }
-            .init c = C
-            .decl edge(x: number, y: number)
-            .output edge
-            edge(1, 2).
-            loop until { c.Holds } {
-                edge(X, Y) :- edge(Y, X).
-            }
-        ";
-        let program = pruned(src).expect("valid program");
-        assert!(
-            !program
-                .relations()
-                .iter()
-                .any(|r| r.name() == "c\u{b7}holds")
         );
     }
 }

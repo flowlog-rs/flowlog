@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# FlowLog correctness test — datalog-batch mode, binary/compiler path.
+# FlowLog correctness test — batch mode, binary/compiler path.
 #
 # For each (program, dataset) pair in the configured config file:
 #   1. Builds the FlowLog release workspace (if needed)
@@ -20,7 +20,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 # Configuration
 ###############################################################################
 
-MODE="datalog-batch"
+MODE="batch"
 ENABLE_SIP=0
 SINGLE_CONFIG=""
 KEEP_DATASETS=0
@@ -32,7 +32,7 @@ usage() {
 Usage:
   $(basename "$0") [config_file] [options]
 
-Runs FlowLog in datalog-batch mode (binary path) and compares output
+Runs FlowLog in batch mode (binary path) and compares output
 against pre-computed Souffle reference results.
 
 By default, runs tests/oracle/config.txt; pass a single config file
@@ -204,7 +204,7 @@ main() {
     parse_args "$@"
     init_paths
     init_opt_flags
-    log "$BLUE" "START" "FlowLog datalog-batch correctness test (compiler mode)"
+    log "$BLUE" "START" "FlowLog batch correctness test (compiler mode)"
 
     compile_release_workspace
 
