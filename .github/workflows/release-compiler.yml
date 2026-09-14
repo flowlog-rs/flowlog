@@ -129,6 +129,22 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Build release notes
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            printf '%s\n\n' \
+              'Prebuilt archives and SHA-256 checksums are attached below.'
+            awk -v heading="## [${VERSION}]" '
+              index($0, heading) == 1 { in_release = 1 }
+              in_release && printed && /^## \[/ { exit }
+              in_release { print; printed = 1 }
+              END { if (!printed) exit 1 }
+            ' flowlog-compiler/CHANGELOG.md
+          } > release-notes.md
+
       - name: 🚀 Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -137,6 +153,6 @@ jobs:
           gh release create "${{ needs.detect.outputs.tag }}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "flowlog-compiler v${{ needs.detect.outputs.version }}" \
-            --generate-notes \
+            --notes-file release-notes.md \
             --target "${{ github.sha }}" \
             artifacts/*
