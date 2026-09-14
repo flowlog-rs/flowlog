@@ -2,6 +2,11 @@
 
 Guidance for contributors and AI coding agents working on FlowLog.
 
+## Branches and releases
+
+Target development PRs at `main`. See `docs/dev/releases.md` for branch,
+merge, and release conventions.
+
 ## Writing code
 
 Read the guide for the area you are changing:

@@ -1,17 +1,13 @@
 name: Release compiler
 
-# Auto-detect a flowlog-compiler version bump on push to main, build the
-# binary on Linux + macOS + Windows, and publish a GitHub Release with the
-# binaries attached. Mirrors the crates-publish flow's "skip if already
-# exists" guard so re-runs / unrelated pushes are no-ops.
+# Called after library publishing succeeds for a merged release PR. All jobs
+# use the caller's commit so later development cannot enter this release.
 
 on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
+  workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: release-compiler-${{ github.sha }}
   cancel-in-progress: false
 
 env:
