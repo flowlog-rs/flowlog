@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.5.0...flowlog-build-v0.6.0) - 2026-09-15
+
+### Other
+
+- *(runtime)* [**breaking**] unify dedup dispatch by diff and timestamp ([#353](https://github.com/flowlog-rs/flowlog/pull/353))
+
 ## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-build-v0.4.0...flowlog-build-v0.5.0) - 2026-09-14
 
 ### Added
