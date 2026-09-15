@@ -82,10 +82,8 @@ init_paths() {
 
     mkdir -p "$LOG_DIR" "$FLOWLOG_OUT_DIR"
 
-# Build generated crates against the workspace runtime instead of crates.io,
-# so unpublished flowlog-runtime additions are testable (scaffold emits a
-# [patch.crates-io] entry when this is set).
-export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
+    # A direct path dependency keeps runtime version bumps testable before release.
+    export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
 }
 
 init_opt_flags() {
