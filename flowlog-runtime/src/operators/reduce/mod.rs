@@ -6,8 +6,8 @@
 //! are internal.
 //!
 //! [`flowlog_reduce`] serves a rule under either weight. A recursive rule
-//! under `Present` needs [`flowlog_reduce_leave`] as well, because
-//! `Present` cannot retract a superseded aggregate: the group can only be
+//! under `StaticPresent` needs [`flowlog_reduce_leave`] as well, because
+//! `StaticPresent` cannot retract a superseded aggregate: the group can only be
 //! folded once the fixpoint is final, at the loop boundary. An `i32` reduce
 //! withdraws its own previous answer and so needs no boundary.
 
@@ -16,7 +16,6 @@ mod semiring;
 use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
-use differential_dataflow::difference::Present;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -34,6 +33,7 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use timely::progress::timestamp::Refines;
 
+use crate::diff::StaticPresent;
 use crate::operators::map::flowlog_map;
 
 // =========================================================================
@@ -68,7 +68,7 @@ where
     R::reduce(collection, name, A::contribute, split, merge)
 }
 
-/// Completes a `Present` aggregate across a recursive scope: the single
+/// Completes a `StaticPresent` aggregate across a recursive scope: the single
 /// fold over every iteration's contributions, deferred to `leave`, where
 /// the fixpoint is final.
 ///
@@ -77,13 +77,13 @@ where
 /// consolidation there is the whole fold. The in-scope [`flowlog_reduce`]
 /// output this consumes exists for feedback; the answer is produced here.
 pub fn flowlog_reduce_leave<'inner, 'outer, A, TInner, TOuter, D, K, V, C, O>(
-    collection: VecCollection<'inner, TInner, D, Present>,
+    collection: VecCollection<'inner, TInner, D, StaticPresent>,
     outer: Scope<'outer, TOuter>,
     name: &str,
     _aggregation: A,
     split: impl FnMut(D) -> (K, V) + 'static,
     merge: impl FnMut(K, C) -> O + 'static,
-) -> VecCollection<'outer, TOuter, O, Present>
+) -> VecCollection<'outer, TOuter, O, StaticPresent>
 where
     A: Aggregation<V, C>,
     C: Scalar,
@@ -104,14 +104,13 @@ where
     )
 }
 
-/// Shared last half of the `Present` pipeline: the settled aggregate comes
-/// back out of the difference position and into a row, which is a set member
-/// again.
+/// Finalizes each accumulated aggregate and rebuilds its output row with
+/// `merge`.
 fn lower<'scope, T, K, S, O>(
     collection: VecCollection<'scope, T, K, S>,
     name: &str,
     mut merge: impl FnMut(K, S::Value) -> O + 'static,
-) -> VecCollection<'scope, T, O, Present>
+) -> VecCollection<'scope, T, O, StaticPresent>
 where
     T: Timestamp,
     K: Data,
@@ -119,14 +118,14 @@ where
     O: Data,
 {
     flowlog_map(collection, name, move |key, time, aggregate| {
-        std::iter::once((merge(key, aggregate.finish()), time, Present))
+        std::iter::once((merge(key, aggregate.finish()), time, StaticPresent))
     })
 }
 
-/// Shared first half of the `Present` pipeline: one contribution per row,
+/// Shared first half of the `StaticPresent` pipeline: one contribution per row,
 /// keyed by group, carried in the difference position.
 fn lift<'scope, T, D, K, V, S>(
-    collection: VecCollection<'scope, T, D, Present>,
+    collection: VecCollection<'scope, T, D, StaticPresent>,
     name: &str,
     contribute: impl Fn(&V) -> S + 'static,
     mut split: impl FnMut(D) -> (K, V) + 'static,
@@ -149,14 +148,14 @@ where
 
 /// How a weight family computes a group-by aggregate.
 ///
-/// Not a performance choice: `Present` has no inverse, so it cannot retract
-/// a superseded aggregate, and the only way to accumulate under it is where
-/// consolidation will find it, in the weight position. `i32` can negate, so
+/// `StaticPresent` has no inverse, so it cannot retract a superseded aggregate.
+/// Its contributions accumulate as weights that consolidation can combine.
+/// `i32` can negate, so
 /// it takes Differential Dataflow's own reduce and lets it withdraw the
 /// previous answer.
 ///
 /// Parameterized by the timestamp so each impl asks of the clock only what
-/// it needs: the `Present` half thresholds and wants a total order, the
+/// it needs: the `StaticPresent` half thresholds and wants a total order, the
 /// `i32` half arranges and does not. That is what lets an incremental rule
 /// aggregate inside a loop, where the clock is partially ordered.
 pub trait ReduceStrategy<T: Timestamp + Lattice>: Semigroup + Sized {
@@ -176,7 +175,7 @@ pub trait ReduceStrategy<T: Timestamp + Lattice>: Semigroup + Sized {
         O: Data;
 }
 
-impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for Present {
+impl<T: Timestamp + TotalOrder + Lattice> ReduceStrategy<T> for StaticPresent {
     fn reduce<'scope, D, K, V, S, O>(
         collection: VecCollection<'scope, T, D, Self>,
         name: &str,
@@ -250,8 +249,8 @@ impl<T: Timestamp + Lattice> ReduceStrategy<T> for i32 {
 /// What one row contributes to its group, for a given aggregated column.
 ///
 /// The aggregation decides this, not the caller's closures, because it is the one
-/// place the two strategies must agree: `Present` contributes per row while
-/// `i32` contributes per arranged entry, and an aggregation that meant
+/// place the two strategies must agree: `StaticPresent` contributes per row,
+/// while `i32` contributes per arranged entry, and an aggregation that meant
 /// different things in each would silently disagree between modes.
 pub trait Aggregation<V, C>: 'static {
     /// The accumulator this aggregation runs in.

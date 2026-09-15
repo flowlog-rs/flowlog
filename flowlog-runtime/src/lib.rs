@@ -15,6 +15,7 @@
 //!
 //! | Module | Purpose |
 //! |--------|---------|
+//! | [`diff`] | Update weights and their arithmetic |
 //! | [`io`] | Reading relations into the engine, and the helpers around it |
 //! | [`error`] | [`RuntimeError`], everything the runtime can fail at |
 //! | [`intern`] | Thread-safe string interning pool (`lasso`) |
@@ -27,6 +28,7 @@
 
 #[cfg(feature = "cli")]
 mod args;
+pub mod diff;
 pub mod error;
 pub mod intern;
 pub mod io;

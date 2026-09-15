@@ -42,28 +42,27 @@ pub(crate) fn arrange(is_key_only: bool) -> u32 {
 /// - Map (row chop) + ArrangeByKey + Reduce + AsCollection (merge)
 pub(crate) const I32_AGGREGATE: u32 = 4;
 
-/// Operators from the `Present` aggregate, the monoid fast path via
+/// Operators from the `StaticPresent` aggregate, the monoid fast path via
 /// `threshold_semigroup` (skips the second arrange `reduce` would add):
 ///
 /// - (5): Map + `.threshold_semigroup()` (3) + Map
-pub(crate) const PRESENT_AGGREGATE: u32 = 5;
+pub(crate) const STATIC_PRESENT_AGGREGATE: u32 = 5;
 
-/// Operators from the post-leave `Present` aggregate, merging semiring
+/// Operators from the post-leave `StaticPresent` aggregate, merging semiring
 /// weights collapsed across iterations (`.consolidate()` then convert back):
 ///
 /// - (4): `.consolidate()` (3) + Map
-pub(crate) const POST_LEAVE_PRESENT_AGGREGATE: u32 = 4;
+pub(crate) const POST_LEAVE_STATIC_PRESENT_AGGREGATE: u32 = 4;
 
-/// Operators from `flowlog_dedup` at an outer scope (EDBs, rule outputs,
+/// Operators from dedup at an outer scope (EDBs, rule outputs,
 /// SIP projections). Three whichever diff is ambient, differing in which:
 ///
 /// - batch `.consolidate()` (3)
 /// - i32 `.threshold_total()` (3)
 pub(crate) const DEDUP_NONRECURSIVE: u32 = 3;
 
-/// Operators from a dedup inside `iterate`, whether the retained
-/// `flowlog_dedup_retained` on feedback or `flowlog_dedup` on a SIP
-/// projection:
+/// Operators from a dedup inside `iterate`: `flowlog_dedup` on feedback
+/// and signed SIP projections, or `.consolidate()` on presence projections:
 ///
 /// - batch `.threshold_semigroup(...)` / `.consolidate()` (3)
 /// - incremental `.threshold(...)` (4): `Product<u32, u16>` is not
@@ -77,7 +76,7 @@ pub(crate) fn dedup_recursive(mode: ExecutionMode) -> u32 {
 
 /// Operators in `flowlog_antijoin` (excluding arrangement), by DD
 /// operator. The deref and projection steps are `.flat_map`s (hence
-/// FlatMap), as is the weight adjust on the `Present` path, while the
+/// FlatMap), as is the weight adjust on the `StaticPresent` path, while the
 /// `i32` path negates in place (MapInPlace); `join_core` is Join, `.concat`
 /// is Concatenate. `dedup` is the dedup expansion, 3 via `threshold_total` or
 /// 4 via `threshold` (see [`DEDUP_NONRECURSIVE`] / [`dedup_recursive`]).

@@ -207,11 +207,11 @@ impl CodeGen {
                 quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) }
             };
 
-            // Feedback must not re-emit tuples across iterations, so the
-            // merged collection takes the retained dedup.
+            // Dedup retains history at the loop's timestamp, so repeated
+            // derivations cannot keep feedback alive.
             let mut block = quote! {
                 let #next_ident =
-                    ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(#union_expr);
+                    ::flowlog_runtime::operators::flowlog_dedup(#union_expr);
             };
 
             with_plan_graph(plan_graph, |plan_graph| {
@@ -249,7 +249,7 @@ impl CodeGen {
                 let binding = next_ident.to_string();
                 with_plan_graph(plan_graph, |plan_graph| match self.config.mode() {
                     ExecutionMode::Batch => {
-                        plan_graph.present_aggregate_operator(
+                        plan_graph.static_present_aggregate_operator(
                             output_name,
                             binding.clone(),
                             binding,
@@ -311,7 +311,7 @@ impl CodeGen {
                     let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
 
                     with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.recursive_pre_leave_present_aggregate_operator(
+                        plan_graph.recursive_pre_leave_static_present_aggregate_operator(
                             self.display_name(*fp),
                             next_ident.to_string(),
                             next_ident.to_string(),
@@ -364,7 +364,7 @@ impl CodeGen {
             if idb_to_aggregation_map.contains_key(fp) && self.config.mode() == ExecutionMode::Batch
             {
                 with_plan_graph(plan_graph, |plan_graph| {
-                    plan_graph.recursive_post_leave_present_aggregate_operator(
+                    plan_graph.recursive_post_leave_static_present_aggregate_operator(
                         self.display_name(*fp),
                         target.to_string(),
                         target.to_string(),
