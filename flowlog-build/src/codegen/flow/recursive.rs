@@ -249,7 +249,7 @@ impl CodeGen {
                 let binding = next_ident.to_string();
                 with_plan_graph(plan_graph, |plan_graph| match self.config.mode() {
                     ExecutionMode::Batch => {
-                        plan_graph.present_aggregate_operator(
+                        plan_graph.static_present_aggregate_operator(
                             output_name,
                             binding.clone(),
                             binding,
@@ -311,7 +311,7 @@ impl CodeGen {
                     let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
 
                     with_plan_graph(plan_graph, |plan_graph| {
-                        plan_graph.recursive_pre_leave_present_aggregate_operator(
+                        plan_graph.recursive_pre_leave_static_present_aggregate_operator(
                             self.display_name(*fp),
                             next_ident.to_string(),
                             next_ident.to_string(),
@@ -364,7 +364,7 @@ impl CodeGen {
             if idb_to_aggregation_map.contains_key(fp) && self.config.mode() == ExecutionMode::Batch
             {
                 with_plan_graph(plan_graph, |plan_graph| {
-                    plan_graph.recursive_post_leave_present_aggregate_operator(
+                    plan_graph.recursive_post_leave_static_present_aggregate_operator(
                         self.display_name(*fp),
                         target.to_string(),
                         target.to_string(),

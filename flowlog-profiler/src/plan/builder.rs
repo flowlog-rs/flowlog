@@ -257,7 +257,7 @@ impl PlanGraph {
         );
     }
 
-    pub fn present_aggregate_operator(
+    pub fn static_present_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -267,7 +267,7 @@ impl PlanGraph {
             format!("{}: opt aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::PRESENT_AGGREGATE,
+            steps::STATIC_PRESENT_AGGREGATE,
             None,
         );
     }
@@ -344,7 +344,7 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_pre_leave_present_aggregate_operator(
+    pub fn recursive_pre_leave_static_present_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -370,7 +370,7 @@ impl PlanGraph {
         );
     }
 
-    pub fn recursive_post_leave_present_aggregate_operator(
+    pub fn recursive_post_leave_static_present_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
@@ -380,7 +380,7 @@ impl PlanGraph {
             format!("{}: post-leave opt aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::POST_LEAVE_PRESENT_AGGREGATE,
+            steps::POST_LEAVE_STATIC_PRESENT_AGGREGATE,
             None,
         );
     }

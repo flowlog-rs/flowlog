@@ -126,7 +126,11 @@ impl CodeGen {
                 let binding = output.to_string();
                 with_plan_graph(plan_graph, |plan_graph| match self.config.mode() {
                     ExecutionMode::Batch => {
-                        plan_graph.present_aggregate_operator(name, binding.clone(), binding);
+                        plan_graph.static_present_aggregate_operator(
+                            name,
+                            binding.clone(),
+                            binding,
+                        );
                     }
                     ExecutionMode::Inc => {
                         plan_graph.i32_aggregate_operator(name, binding.clone(), binding);

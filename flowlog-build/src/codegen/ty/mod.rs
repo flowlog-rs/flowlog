@@ -1,8 +1,8 @@
 //! Type system for the `(Data, Diff, Time)` triple.
 //!
-//! - [`data`] — data type inference and Rust type token generation.
-//! - [`diff`] — diff type alias (`Present` vs `i32`) and `SEMIRING_ONE` constant.
-//! - [`time`] — outer timestamp and inner iteration type aliases.
+//! - [`data`]: data type inference and Rust type token generation.
+//! - [`diff`]: diff type alias and `SEMIRING_ONE` constant.
+//! - [`time`]: outer timestamp and inner iteration type aliases.
 
 use proc_macro2::TokenStream;
 use quote::quote;

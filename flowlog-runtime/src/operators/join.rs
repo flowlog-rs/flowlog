@@ -5,7 +5,6 @@ use differential_dataflow::Data;
 use differential_dataflow::ExchangeData;
 use differential_dataflow::VecCollection;
 use differential_dataflow::difference::Multiply;
-use differential_dataflow::difference::Present;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -23,6 +22,7 @@ use timely::container::PushInto;
 use timely::order::Product;
 use timely::progress::Timestamp;
 
+use crate::diff::StaticPresent;
 use crate::operators::dedup::Epoch;
 use crate::operators::dedup::FlowlogDedup;
 use crate::operators::dedup::first_occurrences;
@@ -107,7 +107,7 @@ where
 /// cancel, then survivors are clamped to the output weight. Signed inputs
 /// must have nonnegative accumulated multiplicities.
 ///
-/// With two `Present` inputs, `filter` must be a fixed key-only set. Each
+/// With two `StaticPresent` inputs, `filter` must be a fixed key-only set. Each
 /// key must occur once in its arranged history, at a time less than or
 /// equal to every matching source update. Source pairs may recur. Repeated
 /// filter occurrences cause extra subtraction; later additions that block
@@ -176,7 +176,7 @@ where
 ///
 /// `i32` arms are set-normalized first: duplicate derivations would
 /// otherwise accumulate weights the cancelling sum cannot tell apart from
-/// a match. `Present` arms use the unit weight under the input guarantees
+/// a match. `StaticPresent` arms use the unit weight under the input guarantees
 /// of [`flowlog_antijoin`].
 pub trait AntijoinWeight: Sized {
     /// Encodes an arm at `+1`, so concatenating it adds.
@@ -200,7 +200,7 @@ pub trait AntijoinWeight: Sized {
         VecCollection<'scope, T, D, i32>: FlowlogDedup;
 }
 
-impl AntijoinWeight for Present {
+impl AntijoinWeight for StaticPresent {
     fn encode_pos<'scope, T, D>(
         arm: VecCollection<'scope, T, D, Self>,
         name: &str,
@@ -266,7 +266,7 @@ pub trait AntijoinOutput<T: Timestamp + Lattice>: Sized {
         VecCollection<'scope, T, D, i32>: FlowlogDedup;
 }
 
-impl AntijoinOutput<()> for Present {
+impl AntijoinOutput<()> for StaticPresent {
     fn decode<'scope, D>(
         rows: VecCollection<'scope, (), D, i32>,
     ) -> VecCollection<'scope, (), D, Self>
@@ -274,11 +274,11 @@ impl AntijoinOutput<()> for Present {
         D: ExchangeData + Hashable,
         VecCollection<'scope, (), D, i32>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(StaticPresent))
     }
 }
 
-impl<T: Epoch> AntijoinOutput<T> for Present {
+impl<T: Epoch> AntijoinOutput<T> for StaticPresent {
     fn decode<'scope, D>(
         rows: VecCollection<'scope, T, D, i32>,
     ) -> VecCollection<'scope, T, D, Self>
@@ -286,11 +286,11 @@ impl<T: Epoch> AntijoinOutput<T> for Present {
         D: ExchangeData + Hashable,
         VecCollection<'scope, T, D, i32>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(StaticPresent))
     }
 }
 
-impl<I: Epoch> AntijoinOutput<Product<(), I>> for Present {
+impl<I: Epoch> AntijoinOutput<Product<(), I>> for StaticPresent {
     fn decode<'scope, D>(
         rows: VecCollection<'scope, Product<(), I>, D, i32>,
     ) -> VecCollection<'scope, Product<(), I>, D, Self>
@@ -298,11 +298,11 @@ impl<I: Epoch> AntijoinOutput<Product<(), I>> for Present {
         D: ExchangeData + Hashable,
         VecCollection<'scope, Product<(), I>, D, i32>: FlowlogDedup,
     {
-        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(StaticPresent))
     }
 }
 
-impl<E: Epoch, I: Epoch> AntijoinOutput<Product<E, I>> for Present {
+impl<E: Epoch, I: Epoch> AntijoinOutput<Product<E, I>> for StaticPresent {
     fn decode<'scope, D>(
         rows: VecCollection<'scope, Product<E, I>, D, i32>,
     ) -> VecCollection<'scope, Product<E, I>, D, Self>
