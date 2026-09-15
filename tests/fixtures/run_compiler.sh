@@ -49,8 +49,8 @@ Each test directory contains:
 
 Options:
   -j N            Run up to N fixtures in parallel (default 1).
-                  Each fixture already gets its own work_dir, so parallelism
-                  is safe in binary mode.
+                  A supplied CARGO_TARGET_DIR is split by fixture to keep
+                  generated binaries separate.
   --shard I/N     Run only shard I of N (the fixtures split into N groups).
 
 Examples:
@@ -260,6 +260,12 @@ run_tasks_parallel() {
             passed=0; failed=0; current=0
             show_progress() { :; }
             clear_progress() { :; }
+
+            # Generated crates share a binary name. Separate targets prevent
+            # one build from replacing another's executable before it is copied.
+            if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+                export CARGO_TARGET_DIR="${CARGO_TARGET_DIR%/}/fixtures/${category}/$(basename "$test_dir")"
+            fi
 
             run_test "$test_dir" "$category"
             write_test_result_and_tally \
