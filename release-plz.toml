@@ -1,29 +1,24 @@
 [workspace]
 pr_labels = ["release"]
 release_always = false
-changelog_update = true
-git_release_enable = true
-git_tag_enable = true
-
-[[package]]
-name = "flowlog-runtime"
-
-[[package]]
-name = "flowlog-build"
 
 [[package]]
 name = "flowlog-compiler"
-# Mirrors `publish = false` in Cargo.toml — not a crates.io crate.
-publish = false
-# release-compiler.yml already creates the flowlog-compiler-vX.Y.Z tag and
-# attaches Linux/macOS/Windows binaries, so release-plz must not also tag
-# or open a GitHub Release for this crate.
-git_tag_enable = false
-git_release_enable = false
+# Compiler archives are versioned against their Git tags, not crates.io.
+git_only = true
+semver_check = false
+git_tag_name = "flowlog-compiler-v{{ version }}"
+# These libraries change the compiler's behavior and generated programs.
+changelog_include = [
+    "flowlog-build",
+    "flowlog-common",
+    "flowlog-parser",
+    "flowlog-planner",
+    "flowlog-profiler",
+    "flowlog-runtime",
+]
 
 [[package]]
 name = "flowlog-visualizer"
-# Not a crates.io crate and nothing ships it: no publish, tags, or Releases.
+release = false
 publish = false
-git_tag_enable = false
-git_release_enable = false

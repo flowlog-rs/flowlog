@@ -10,11 +10,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release-plz-release:
+  publish:
     name: Publish releases
     runs-on: ubuntu-latest
-    outputs:
-      release_compiler: ${{ steps.compiler.outputs.result }}
     permissions:
       contents: write
       pull-requests: read
@@ -30,6 +28,9 @@ jobs:
       - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Check compiler runtime requirement
+        run: python3 .github/scripts/sync-compiler-runtime.py --check
+
       - name: 💾 Cache cargo build
         uses: Swatinem/rust-cache@v2
 
@@ -38,35 +39,11 @@ jobs:
         with:
           command: release
         env:
+          # Releases created with this PAT trigger the compiler asset workflow.
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Select compiler release
-        id: compiler
-        uses: actions/github-script@v9
-        with:
-          # Mirror release_always=false for the compiler, including releases
-          # that only change its version and publish no library crates.
-          script: |
-            const prs = await github.paginate(
-              github.rest.repos.listPullRequestsAssociatedWithCommit,
-              { ...context.repo, commit_sha: context.sha },
-            );
-            return prs.some(pr =>
-              pr.merged_at !== null &&
-              pr.base.ref === 'main' &&
-              pr.head.ref.startsWith('release-plz-') &&
-              pr.merge_commit_sha === context.sha
-            );
-
-  release-compiler:
-    needs: release-plz-release
-    if: needs.release-plz-release.outputs.release_compiler == 'true'
-    permissions:
-      contents: write
-    uses: ./.github/workflows/release-compiler.yml
-
-  release-plz-pr:
+  prepare:
     name: Open / update Release PR
     runs-on: ubuntu-latest
     permissions:
@@ -98,11 +75,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: ✍️ Sign off the release commit (DCO)
-        # release-plz has no sign-off option, and the DCO check requires a
-        # Signed-off-by matching the commit author. Amend one in on the
-        # author's behalf, using the commit's own author identity so the
-        # sign-off matches. Guarded so a rerun does not re-amend.
+      - name: Finalize compiler dependency and DCO sign-off
+        # The generated dependency is outside Cargo's dependency graph, so
+        # synchronize it after release-plz has chosen the runtime version.
+        # Amend with the release commit's identity to keep its DCO valid.
         if: steps.release-plz.outputs.prs_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
@@ -113,11 +89,14 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git fetch origin "$branch"
           git checkout -B "$branch" "origin/$branch"
-          if git show -s --format='%(trailers:key=Signed-off-by,valueonly)' | grep -q .; then
-            echo "Release commit already signed off."; exit 0
+          python3 .github/scripts/sync-compiler-runtime.py
+          git add flowlog-compiler/src/scaffold.rs
+          if git diff --cached --quiet &&
+            git show -s --format='%(trailers:key=Signed-off-by,valueonly)' | grep -q .; then
+            echo "Release commit already synchronized and signed off."; exit 0
           fi
           git config user.name  "$(git show -s --format='%an')"
           git config user.email "$(git show -s --format='%ae')"
           git commit --amend --signoff --no-edit
           git push --force-with-lease origin "HEAD:$branch"
-          echo "Signed off the release commit on $branch."
+          echo "Finalized the release commit on $branch."

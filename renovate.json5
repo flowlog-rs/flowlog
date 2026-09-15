@@ -41,9 +41,8 @@
 
   packageRules: [
     {
-      // Self-dependency: the scaffold's flowlog-runtime pin is a deliberate
-      // compatibility floor, bumped manually when codegen starts needing a
-      // newer runtime API. Renovate must never touch it.
+      // The release workflow synchronizes the compiler's runtime requirement
+      // with its local package version before publishing.
       matchPackageNames: ["flowlog-runtime"],
       enabled: false,
     },

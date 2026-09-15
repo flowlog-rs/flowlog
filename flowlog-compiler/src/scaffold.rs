@@ -80,6 +80,9 @@ impl Compiler {
 // Cargo metadata
 // =========================================================================
 
+// The release PR synchronizes this requirement with its runtime package.
+const RUNTIME_VERSION: &str = "0.4.0";
+
 /// Render the emitted crate's `Cargo.toml`.
 ///
 /// Dependencies are feature-gated: we emit only what the generated code
@@ -131,8 +134,10 @@ pub(crate) fn render_cargo_toml(
         deps["timely"] = "0.31".into();
         deps["differential-dataflow"] = "0.25".into();
         deps["mimalloc"] = "0.1".into();
-        let mut runtime =
-            inline_versioned_dep("0.4.0", if sqlite { &["cli", "sqlite"] } else { &["cli"] });
+        let mut runtime = inline_versioned_dep(
+            RUNTIME_VERSION,
+            if sqlite { &["cli", "sqlite"] } else { &["cli"] },
+        );
         if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
             runtime.remove("version");
             runtime.insert("path", path.into());

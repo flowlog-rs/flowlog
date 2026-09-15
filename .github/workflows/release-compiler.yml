@@ -1,55 +1,28 @@
-name: Release compiler
-
-# Called after library publishing succeeds for a merged release PR. All jobs
-# use the caller's commit so later development cannot enter this release.
+name: Compiler release assets
 
 on:
-  workflow_call:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing compiler release tag to rebuild
+        required: true
+        type: string
 
 concurrency:
-  group: release-compiler-${{ github.sha }}
+  group: compiler-assets-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
-  detect:
-    runs-on: ubuntu-latest
-    outputs:
-      should_release: ${{ steps.check.outputs.should_release }}
-      version: ${{ steps.check.outputs.version }}
-      tag: ${{ steps.check.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: ⚙️ Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: 🔍 Compare local version against GitHub Releases
-        id: check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          LOCAL_VERSION=$(./.github/scripts/crate-version.sh flowlog-compiler)
-          TAG="flowlog-compiler-v${LOCAL_VERSION}"
-          echo "Local version: ${LOCAL_VERSION}"
-          echo "Target tag:    ${TAG}"
-
-          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "✅ Release ${TAG} already exists — skipping."
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "🚀 New release ${TAG}"
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "version=${LOCAL_VERSION}" >> "$GITHUB_OUTPUT"
-            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          fi
-
   build:
-    needs: detect
-    if: needs.detect.outputs.should_release == 'true'
+    if: startsWith(github.event.release.tag_name || inputs.tag, 'flowlog-compiler-v')
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -66,89 +39,44 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
 
-      - name: 🦀 Install Rust toolchain
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: 💾 Cache cargo build
+      - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: 🔨 Build flowlog-compiler (release)
-        run: cargo build --release -p flowlog-compiler --target ${{ matrix.target }}
+      - name: Build compiler
+        run: cargo build --release --locked -p flowlog-compiler --target ${{ matrix.target }}
 
-      # Bash + tar + sha256sum/shasum are available on all three runners
-      # (Windows includes Git Bash + bsdtar via the system PATH), so a
-      # single bash step packages every platform identically.
-      - name: 📦 Package binary + checksum
+      - name: Package binary and checksum
         shell: bash
         run: |
           set -euo pipefail
-          STAGE="flowlog-compiler-${{ needs.detect.outputs.version }}-${{ matrix.target }}"
-          mkdir -p "${STAGE}"
-          cp "target/${{ matrix.target }}/release/flowlog-compiler${{ matrix.ext }}" "${STAGE}/"
-          [ -f LICENSE ] && cp LICENSE "${STAGE}/"
-          [ -f README.md ] && cp README.md "${STAGE}/"
-          tar -czf "${STAGE}.tar.gz" "${STAGE}"
+          stage="flowlog-compiler-${RELEASE_TAG#flowlog-compiler-v}-${{ matrix.target }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/flowlog-compiler${{ matrix.ext }}" "$stage/"
+          cp LICENSE README.md "$stage/"
+          tar -czf "$stage.tar.gz" "$stage/"
           if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+            sha256sum "$stage.tar.gz" > "$stage.tar.gz.sha256"
           else
-            shasum -a 256 "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+            shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
           fi
-          echo "ASSET_TARBALL=${STAGE}.tar.gz" >> "$GITHUB_ENV"
-          echo "ASSET_CHECKSUM=${STAGE}.tar.gz.sha256" >> "$GITHUB_ENV"
+          echo "ASSET_TARBALL=$stage.tar.gz" >> "$GITHUB_ENV"
+          echo "ASSET_CHECKSUM=$stage.tar.gz.sha256" >> "$GITHUB_ENV"
 
-      - name: 📤 Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: flowlog-compiler-${{ matrix.target }}
-          path: |
-            ${{ env.ASSET_TARBALL }}
-            ${{ env.ASSET_CHECKSUM }}
-          if-no-files-found: error
-
-  release:
-    needs: [detect, build]
-    if: needs.detect.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: 📥 Download all build artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Build release notes
-        env:
-          VERSION: ${{ needs.detect.outputs.version }}
-        run: |
-          set -euo pipefail
-          {
-            printf '%s\n\n' \
-              'Prebuilt archives and SHA-256 checksums are attached below.'
-            awk -v heading="## [${VERSION}]" '
-              index($0, heading) == 1 { in_release = 1 }
-              in_release && printed && /^## \[/ { exit }
-              in_release { print; printed = 1 }
-              END { if (!printed) exit 1 }
-            ' flowlog-compiler/CHANGELOG.md
-          } > release-notes.md
-
-      - name: 🚀 Create GitHub Release
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          set -euo pipefail
-          gh release create "${{ needs.detect.outputs.tag }}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "flowlog-compiler v${{ needs.detect.outputs.version }}" \
-            --notes-file release-notes.md \
-            --target "${{ github.sha }}" \
-            artifacts/*
+          gh release upload "$RELEASE_TAG" "$ASSET_TARBALL" "$ASSET_CHECKSUM" \
+            --repo "$GITHUB_REPOSITORY" --clobber
