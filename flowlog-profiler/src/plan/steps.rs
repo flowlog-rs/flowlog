@@ -54,16 +54,15 @@ pub(crate) const PRESENT_AGGREGATE: u32 = 5;
 /// - (4): `.consolidate()` (3) + Map
 pub(crate) const POST_LEAVE_PRESENT_AGGREGATE: u32 = 4;
 
-/// Operators from `flowlog_dedup` at an outer scope (EDBs, rule outputs,
+/// Operators from dedup at an outer scope (EDBs, rule outputs,
 /// SIP projections). Three whichever diff is ambient, differing in which:
 ///
 /// - batch `.consolidate()` (3)
 /// - i32 `.threshold_total()` (3)
 pub(crate) const DEDUP_NONRECURSIVE: u32 = 3;
 
-/// Operators from a dedup inside `iterate`, whether the retained
-/// `flowlog_dedup_retained` on feedback or `flowlog_dedup` on a SIP
-/// projection:
+/// Operators from a dedup inside `iterate`: `flowlog_dedup` on feedback
+/// and signed SIP projections, or `.consolidate()` on presence projections:
 ///
 /// - batch `.threshold_semigroup(...)` / `.consolidate()` (3)
 /// - incremental `.threshold(...)` (4): `Product<u32, u16>` is not

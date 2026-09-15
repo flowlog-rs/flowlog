@@ -207,11 +207,11 @@ impl CodeGen {
                 quote! { #head.clone().concatenate([ #( #tail.clone() ),* ]) }
             };
 
-            // Feedback must not re-emit tuples across iterations, so the
-            // merged collection takes the retained dedup.
+            // Dedup retains history at the loop's timestamp, so repeated
+            // derivations cannot keep feedback alive.
             let mut block = quote! {
                 let #next_ident =
-                    ::flowlog_runtime::operators::flowlog_dedup_retained::<_, Diff>(#union_expr);
+                    ::flowlog_runtime::operators::flowlog_dedup(#union_expr);
             };
 
             with_plan_graph(plan_graph, |plan_graph| {

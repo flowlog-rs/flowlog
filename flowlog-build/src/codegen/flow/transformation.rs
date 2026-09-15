@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use flowlog_common::ExecutionMode;
 use flowlog_planner::planner::ArithmeticArgument;
 use flowlog_planner::planner::FactorArgument;
 use flowlog_planner::planner::StratumPlanner;
@@ -419,7 +420,15 @@ impl CodeGen {
                 // would break the Yannakakis computation bounds. Predicate
                 // paths already filter, so only the bare projection dedups.
                 let out_dedup_expr = if dedups {
-                    quote! { let #out = ::flowlog_runtime::operators::flowlog_dedup(#out); }
+                    match self.config.mode() {
+                        // Presence joins absorb repeated keys across times.
+                        // Consolidate only within a time here to avoid a
+                        // second history alongside the arrangement.
+                        ExecutionMode::Batch => quote! { let #out = #out.consolidate(); },
+                        ExecutionMode::Inc => quote! {
+                            let #out = ::flowlog_runtime::operators::flowlog_dedup(#out);
+                        },
+                    }
                 } else {
                     quote! {}
                 };

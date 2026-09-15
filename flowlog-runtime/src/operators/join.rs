@@ -8,6 +8,8 @@ use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Present;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::ThresholdTotal;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::join::join_traces;
 use differential_dataflow::trace::BatchCursor;
@@ -18,17 +20,19 @@ use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::containers::BatchContainer;
 use timely::container::PushInto;
+use timely::order::Product;
+use timely::progress::Timestamp;
 
-use crate::operators::dedup::DedupTime;
-use crate::operators::dedup::FlowlogDedupRetained;
+use crate::operators::dedup::Epoch;
+use crate::operators::dedup::FlowlogDedup;
+use crate::operators::dedup::first_occurrences;
 use crate::operators::dedup::flowlog_dedup;
-use crate::operators::dedup::flowlog_dedup_retained;
 use crate::operators::map::flowlog_map;
 use crate::operators::map::flowlog_map_in_place;
 
-// =========================================================================
+// =============================================================================
 // Join
-// =========================================================================
+// =============================================================================
 
 /// An equijoin of two arrangements sharing a common key type, under the
 /// name FlowLog gives the join step.
@@ -92,22 +96,23 @@ where
     .as_collection()
 }
 
-// =========================================================================
+// =============================================================================
 // Antijoin
-// =========================================================================
+// =============================================================================
 
 /// Emits every `source` pair whose key is absent from `filter`, mapped
 /// through `logic`, under the name FlowLog gives the step.
 ///
-/// The difference is taken by arithmetic rather than by a diff type,
-/// because `Present` cannot negate: both arms are re-weighted to `+1` and
-/// `-1` `i32` and concatenated so matched pairs cancel, then the survivors
-/// are clamped back to the ambient weight.
+/// Both arms are encoded as signed membership updates so matching pairs
+/// cancel, then survivors are clamped to the output weight. Signed inputs
+/// must have nonnegative accumulated multiplicities.
 ///
-/// Under a `Present` weight the result is append-only, since that semiring
-/// has no inverse: a key arriving in `filter` after a pair was emitted
-/// cannot withdraw it. Stratified negation keeps that from mattering,
-/// because `filter` is complete before this runs.
+/// With two `Present` inputs, `filter` must be a fixed key-only set. Each
+/// key must occur once in its arranged history, at a time less than or
+/// equal to every matching source update. Source pairs may recur. Repeated
+/// filter occurrences cause extra subtraction; later additions that block
+/// earlier source rows require retractions this output cannot represent.
+/// Stratified batch negation satisfies these requirements.
 pub fn flowlog_antijoin<'scope, Tr1, Tr2, KC, D, L, R>(
     filter: Arranged<'scope, Tr1>,
     source: Arranged<'scope, Tr2>,
@@ -117,18 +122,21 @@ pub fn flowlog_antijoin<'scope, Tr1, Tr2, KC, D, L, R>(
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,
     Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time> + Clone + 'static,
-    Tr1::Time: DedupTime,
     BatchCursor<Tr1>: Cursor<Diff = R, Time = Tr1::Time, KeyContainer = KC>,
     BatchCursor<Tr2>: Cursor<Diff = R, Time = Tr1::Time>,
     KC: BatchContainer,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
-    R: AntijoinWeight + Multiply<R, Output = R> + ExchangeData + Semigroup,
+    R: AntijoinWeight
+        + AntijoinOutput<Tr1::Time>
+        + Multiply<R, Output = R>
+        + ExchangeData
+        + Semigroup,
     (KC::Owned, BatchValOwn<Tr2>): ExchangeData + Hashable,
     D: ExchangeData + Hashable,
     L: FnMut((KC::Owned, BatchValOwn<Tr2>)) -> D + 'static,
-    VecCollection<'scope, Tr1::Time, D, i32>:
-        FlowlogDedupRetained<R, Output = VecCollection<'scope, Tr1::Time, D, R>>,
+    VecCollection<'scope, Tr1::Time, (KC::Owned, BatchValOwn<Tr2>), i32>: FlowlogDedup,
+    VecCollection<'scope, Tr1::Time, D, i32>: FlowlogDedup,
 {
     // Both arms must cancel on the same datum, so each rebuilds the owned
     // (key, value) pair from its cursor's borrowed view. Each arm is
@@ -160,7 +168,7 @@ where
     let projected = flowlog_map(positive.concat(negative), name, move |data, t, d| {
         std::iter::once((logic(data), t, d))
     });
-    flowlog_dedup_retained::<_, R>(projected)
+    R::decode(projected)
 }
 
 /// The weight families an antijoin arm can carry, each knowing how to
@@ -168,7 +176,8 @@ where
 ///
 /// `i32` arms are set-normalized first: duplicate derivations would
 /// otherwise accumulate weights the cancelling sum cannot tell apart from
-/// a match. `Present` arms are already sets, so they only take the weight.
+/// a match. `Present` arms use the unit weight under the input guarantees
+/// of [`flowlog_antijoin`].
 pub trait AntijoinWeight: Sized {
     /// Encodes an arm at `+1`, so concatenating it adds.
     fn encode_pos<'scope, T, D>(
@@ -176,8 +185,9 @@ pub trait AntijoinWeight: Sized {
         name: &str,
     ) -> VecCollection<'scope, T, D, i32>
     where
-        T: DedupTime,
-        D: ExchangeData + Hashable;
+        T: Timestamp + Lattice,
+        D: ExchangeData + Hashable,
+        VecCollection<'scope, T, D, i32>: FlowlogDedup;
 
     /// Encodes an arm at `-1`, so concatenating it subtracts.
     fn encode_neg<'scope, T, D>(
@@ -185,8 +195,9 @@ pub trait AntijoinWeight: Sized {
         name: &str,
     ) -> VecCollection<'scope, T, D, i32>
     where
-        T: DedupTime,
-        D: ExchangeData + Hashable;
+        T: Timestamp + Lattice,
+        D: ExchangeData + Hashable,
+        VecCollection<'scope, T, D, i32>: FlowlogDedup;
 }
 
 impl AntijoinWeight for Present {
@@ -195,8 +206,9 @@ impl AntijoinWeight for Present {
         name: &str,
     ) -> VecCollection<'scope, T, D, i32>
     where
-        T: DedupTime,
+        T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
+        VecCollection<'scope, T, D, i32>: FlowlogDedup,
     {
         flowlog_map(arm, name, |data, t, _| std::iter::once((data, t, 1)))
     }
@@ -206,8 +218,9 @@ impl AntijoinWeight for Present {
         name: &str,
     ) -> VecCollection<'scope, T, D, i32>
     where
-        T: DedupTime,
+        T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
+        VecCollection<'scope, T, D, i32>: FlowlogDedup,
     {
         flowlog_map(arm, name, |data, t, _| std::iter::once((data, t, -1)))
     }
@@ -219,8 +232,9 @@ impl AntijoinWeight for i32 {
         _name: &str,
     ) -> VecCollection<'scope, T, D, i32>
     where
-        T: DedupTime,
+        T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
+        VecCollection<'scope, T, D, i32>: FlowlogDedup,
     {
         flowlog_dedup(arm)
     }
@@ -230,11 +244,84 @@ impl AntijoinWeight for i32 {
         name: &str,
     ) -> VecCollection<'scope, T, D, i32>
     where
-        T: DedupTime,
+        T: Timestamp + Lattice,
         D: ExchangeData + Hashable,
+        VecCollection<'scope, T, D, i32>: FlowlogDedup,
     {
         // Negate rather than overwrite: incrementally the clamped arm also
         // carries retractions, and those have to flip back to derivations.
         flowlog_map_in_place(flowlog_dedup(arm), name, |_, _, diff| *diff = -*diff)
+    }
+}
+
+/// Restores set membership after antijoin's signed cancellation.
+/// Presence output requires the input guarantees of [`flowlog_antijoin`].
+pub trait AntijoinOutput<T: Timestamp + Lattice>: Sized {
+    /// Decodes the projected difference of the source and matching pairs.
+    fn decode<'scope, D>(
+        rows: VecCollection<'scope, T, D, i32>,
+    ) -> VecCollection<'scope, T, D, Self>
+    where
+        D: ExchangeData + Hashable,
+        VecCollection<'scope, T, D, i32>: FlowlogDedup;
+}
+
+impl AntijoinOutput<()> for Present {
+    fn decode<'scope, D>(
+        rows: VecCollection<'scope, (), D, i32>,
+    ) -> VecCollection<'scope, (), D, Self>
+    where
+        D: ExchangeData + Hashable,
+        VecCollection<'scope, (), D, i32>: FlowlogDedup,
+    {
+        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+    }
+}
+
+impl<T: Epoch> AntijoinOutput<T> for Present {
+    fn decode<'scope, D>(
+        rows: VecCollection<'scope, T, D, i32>,
+    ) -> VecCollection<'scope, T, D, Self>
+    where
+        D: ExchangeData + Hashable,
+        VecCollection<'scope, T, D, i32>: FlowlogDedup,
+    {
+        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+    }
+}
+
+impl<I: Epoch> AntijoinOutput<Product<(), I>> for Present {
+    fn decode<'scope, D>(
+        rows: VecCollection<'scope, Product<(), I>, D, i32>,
+    ) -> VecCollection<'scope, Product<(), I>, D, Self>
+    where
+        D: ExchangeData + Hashable,
+        VecCollection<'scope, Product<(), I>, D, i32>: FlowlogDedup,
+    {
+        rows.threshold_semigroup(|_, _, prior| prior.is_none().then_some(Present))
+    }
+}
+
+impl<E: Epoch, I: Epoch> AntijoinOutput<Product<E, I>> for Present {
+    fn decode<'scope, D>(
+        rows: VecCollection<'scope, Product<E, I>, D, i32>,
+    ) -> VecCollection<'scope, Product<E, I>, D, Self>
+    where
+        D: ExchangeData + Hashable,
+        VecCollection<'scope, Product<E, I>, D, i32>: FlowlogDedup,
+    {
+        first_occurrences(rows)
+    }
+}
+
+impl<T: Timestamp + Lattice> AntijoinOutput<T> for i32 {
+    fn decode<'scope, D>(
+        rows: VecCollection<'scope, T, D, i32>,
+    ) -> VecCollection<'scope, T, D, Self>
+    where
+        D: ExchangeData + Hashable,
+        VecCollection<'scope, T, D, i32>: FlowlogDedup,
+    {
+        flowlog_dedup(rows)
     }
 }
