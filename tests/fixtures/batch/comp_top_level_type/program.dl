@@ -1,0 +1,17 @@
+.comp Config {
+  .type Context = symbol
+}
+
+.comp Analysis<Cfg> {
+  .init cfg = Cfg
+  .decl Reaches(context: cfg.Context)
+  Reaches("main").
+  Reaches("callee").
+}
+
+.decl Out(context: a.cfg.Context)
+.output Out
+
+.init a = Analysis<Config>
+
+Out(context) :- a.Reaches(context).

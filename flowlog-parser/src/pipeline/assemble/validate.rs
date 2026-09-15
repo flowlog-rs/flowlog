@@ -1,5 +1,5 @@
-//! Apply the `.input` / `.output` / `.printsize` directives to their relations,
-//! and validate the assembled program's references and directives.
+//! Declaration and reference validation, including directive checks and
+//! application to declared relations.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -14,6 +14,21 @@ use crate::declaration::PrintSizeDirective;
 use crate::declaration::Relation;
 use crate::error::DirectiveKind;
 use crate::error::ParseError;
+
+/// Rejects duplicate names across top-level and component declarations.
+pub(super) fn validate_declarations(relations: &[Relation]) -> Result<(), ParseError> {
+    let mut spans = HashMap::new();
+    for relation in relations {
+        if let Some(prior) = spans.insert(relation.name(), relation.span()) {
+            return Err(ParseError::DuplicateDecl {
+                span: relation.span(),
+                prior,
+                name: relation.raw_name().to_string(),
+            });
+        }
+    }
+    Ok(())
+}
 
 /// Reject any rule head, body atom, or ground fact whose relation
 /// name has no matching `.decl`. Mirrors the check directives already
@@ -47,9 +62,8 @@ pub(super) fn validate_relation_references(
         }
     }
 
-    // Validate the raw facts here, before `extract_fact` folds them into
-    // the `facts` map (which is keyed by canonical name only): the head
-    // still carries the user's original spelling for the diagnostic.
+    // Validate raw facts before folding them into the map keyed by canonical
+    // name: their heads still carry the user's spelling for diagnostics.
     for fact in raw_facts {
         let head = fact.head();
         if !declared.contains(head.name()) {
