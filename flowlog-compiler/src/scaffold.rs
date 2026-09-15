@@ -131,10 +131,13 @@ pub(crate) fn render_cargo_toml(
         deps["timely"] = "0.31".into();
         deps["differential-dataflow"] = "0.25".into();
         deps["mimalloc"] = "0.1".into();
-        deps["flowlog-runtime"] = value(inline_versioned_dep(
-            "0.4.0",
-            if sqlite { &["cli", "sqlite"] } else { &["cli"] },
-        ));
+        let mut runtime =
+            inline_versioned_dep("0.4.0", if sqlite { &["cli", "sqlite"] } else { &["cli"] });
+        if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
+            runtime.remove("version");
+            runtime.insert("path", path.into());
+        }
+        deps["flowlog-runtime"] = value(runtime);
 
         if features.ordered_float() {
             deps["ordered-float"] = value(inline_versioned_dep("5.0", &["serde"]));
@@ -143,18 +146,6 @@ pub(crate) fn render_cargo_toml(
             ExecutionMode::Inc => deps["rustyline"] = "18".into(),
             ExecutionMode::Batch => {}
         }
-    }
-
-    // `FLOWLOG_RUNTIME_PATH` redirects the runtime dependency to a local
-    // checkout via `[patch.crates-io]`. The test harness sets it so generated
-    // crates build against the workspace runtime instead of crates.io —
-    // required whenever the workspace runtime has unpublished additions.
-    if let Ok(path) = env::var("FLOWLOG_RUNTIME_PATH") {
-        let mut patch = InlineTable::new();
-        patch.insert("path", path.into());
-        doc["patch"] = Item::Table(Table::new());
-        doc["patch"]["crates-io"] = Item::Table(Table::new());
-        doc["patch"]["crates-io"]["flowlog-runtime"] = value(patch);
     }
 
     let mut rendered = doc.to_string();
