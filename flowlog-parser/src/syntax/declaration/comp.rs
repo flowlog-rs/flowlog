@@ -241,8 +241,8 @@ pub(crate) enum RawItem {
     /// global component map with a mangled name at inline time.
     Comp(CompDecl),
     /// `.override Name`: replace the parent's rules/facts for `Name`
-    /// with this component's own derivations. Resolved (and stripped)
-    /// during `resolve_inheritance`; never reaches `inline_one`.
+    /// with this component's own derivations. Removed when inheritance
+    /// is resolved, before instance expansion.
     Override {
         name: String,
         span: Span,

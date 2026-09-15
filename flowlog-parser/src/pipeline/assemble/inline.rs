@@ -1,26 +1,14 @@
-//! Component inliner: expands `.comp` / `.init` into concrete relations and rules.
-//!
-//! ```text
-//! .comp Container<T> { .decl Holds(x: T)  Holds(x) :- Source(x). }
-//! .init c = Container<symbol>
-//! ```
-//!
-//! becomes
-//!
-//! ```text
-//! .decl c.holds(x: symbol)
-//! c.holds(x) :- Source(x).
-//! ```
-//!
-//! Per-instance types register into the program's existing
-//! [`TypeRegistry`] under a prefixed name; the typechecker runs
-//! unmodified against the lowered program.
+//! Component expansion, inheritance, and scoped name resolution. Member types
+//! register under instance-qualified names in the shared [`TypeRegistry`].
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use flowlog_common::Span;
 
+use super::Assembler;
+use crate::Node;
+use crate::Rule;
 use crate::ast::FlowLogRule;
 use crate::ast::Predicate;
 use crate::declaration::Attribute;
@@ -37,308 +25,296 @@ use crate::declaration::SuperRef;
 use crate::error::ParseError;
 use crate::types::TypeRegistry;
 
-/// Output of inlining one `.init`.
-#[derive(Default)]
-pub(crate) struct InlinerOutput {
-    pub(crate) relations: Vec<Relation>,
-    pub(crate) rules: Vec<FlowLogRule>,
-    pub(crate) facts: Vec<FlowLogRule>,
-    /// Comp-internal directives whose target is not a relation of this
-    /// instance: deferred, to be applied against the full (global + inlined)
-    /// relation set once all instances are inlined.
-    pub(crate) input_directives: Vec<InputDirective>,
-    pub(crate) output_directives: Vec<OutputDirective>,
-    pub(crate) printsize_directives: Vec<PrintSizeDirective>,
-}
-
-// =============================================================================
-// Core recursion
-// =============================================================================
-
-/// Per-comp-body resolution context: the scope parameters for type and
-/// relation resolution, bundled so they pass as a single argument.
+/// Names and type parameters visible while resolving one component body.
+#[derive(Debug)]
 struct Scope<'a> {
     env: &'a HashMap<String, String>,
     prefix: &'a str,
-    /// Simple name of the instance being inlined (the last segment of
-    /// `prefix`). A dotted type whose head equals this is a
-    /// self-reference to the instance's own member types.
+    /// A dotted type beginning with this name refers to this instance itself.
     instance: &'a str,
     local_decls: &'a HashSet<String>,
-    /// Names of `.type` aliases declared in this comp body. A bare
-    /// (unqualified) type name matching one resolves to the prefixed
-    /// alias, which `collect_instance` registered under the instance.
+    /// Bare type names in this set resolve under the instance prefix.
     local_types: &'a HashSet<String>,
     nested_inits: &'a HashSet<String>,
-    /// Instances visible in the *enclosing* scope where this instance was
-    /// instantiated (its sibling / global `.init`s), mapped from name to
-    /// the instance's absolute prefix. A dotted relation/type head that is
-    /// not a nested `.init` may resolve to one of these (Souffle
-    /// sibling-scope visibility, e.g. `basic.SubtypeOf`).
+    /// Lowercase instance names mapped to absolute prefixes. Nested instances
+    /// shadow these names when resolving a dotted reference.
     enclosing_instances: &'a HashMap<String, String>,
-    /// Relations declared in the *enclosing* component instances (and up the
-    /// instantiation chain), mapped from lowercase simple name to the
-    /// absolute qualified relation name. A bare relation reference that is
-    /// not local to this component resolves against these: Souffle's
-    /// lexical scoping lets a nested instance's rules name a relation
-    /// declared in the component it was instantiated within (e.g. a
-    /// `configuration` sub-instance referencing the enclosing analysis's
-    /// `isImmutableHContext`).
+    /// Lowercase relation names mapped to qualified names in enclosing scopes.
+    /// Bare references fall back here when no local declaration exists.
     enclosing_decls: &'a HashMap<String, String>,
 }
 
-pub(crate) fn inline_one(
-    parent_prefix: &str,
-    enclosing: &HashMap<String, String>,
-    enclosing_decls: &HashMap<String, String>,
-    init: InitDecl,
-    comps: &mut HashMap<String, CompDecl>,
-    output: &mut InlinerOutput,
-    registry: &mut TypeRegistry,
-) -> Result<(), ParseError> {
-    let prefix = qualify(parent_prefix, &init.instance);
-    let instance = init.instance;
+impl Assembler {
+    /// Expands rules and component instances in source order.
+    /// Requires all top-level component definitions to have been collected.
+    pub(super) fn expand(&mut self, root: Node<'_>) -> Result<(), ParseError> {
+        // Sibling instances are visible regardless of their declaration order.
+        let mut global_instances = HashMap::new();
+        for node in root.clone().children() {
+            if node.rule() == Rule::init_decl {
+                let name = node
+                    .children()
+                    .require(Rule::identifier)?
+                    .text()
+                    .to_string();
+                global_instances.insert(name.to_lowercase(), name);
+            }
+        }
 
-    let comp = comps
-        .get(&init.comp)
-        .cloned()
-        .ok_or_else(|| ParseError::UnknownComponent {
-            span: init.span,
-            name: init.comp.clone(),
+        for node in root.children() {
+            if node.rule() == Rule::rule {
+                let (pair, file) = node.into_parts();
+                self.rules
+                    .extend(FlowLogRule::expand_from_parsed_rule(pair, file)?);
+            } else if node.rule() == Rule::init_decl {
+                let init = InitDecl::from_parsed_rule(node)?;
+                // Local directives see only this instance's subtree. References
+                // to other instances are deferred until all declarations exist.
+                let first_relation = self.relations.len();
+                self.inline_instance("", &global_instances, &HashMap::new(), init, first_relation)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Expands an instance under its enclosing scope. `first_relation` marks
+    /// the top-level instance's relations and stays fixed in recursion.
+    fn inline_instance(
+        &mut self,
+        parent_prefix: &str,
+        enclosing: &HashMap<String, String>,
+        enclosing_decls: &HashMap<String, String>,
+        init: InitDecl,
+        first_relation: usize,
+    ) -> Result<(), ParseError> {
+        let prefix = qualify(parent_prefix, &init.instance);
+        let instance = init.instance;
+
+        let comp = self.components.get(&init.comp).cloned().ok_or_else(|| {
+            ParseError::UnknownComponent {
+                span: init.span,
+                name: init.comp.clone(),
+            }
         })?;
 
-    if comp.type_params.len() != init.args.len() {
-        return Err(ParseError::ComponentArityMismatch {
-            span: init.span,
-            name: init.comp,
-            expected: comp.type_params.len(),
-            found: init.args.len(),
-        });
-    }
-
-    let env: HashMap<String, String> = comp.type_params.iter().cloned().zip(init.args).collect();
-
-    let mut inheritance_stack = HashSet::new();
-    let body = resolve_inheritance(&comp, &env, comps, &mut inheritance_stack)?;
-
-    // Index local decls / nested-init names and hoist nested `.comp`
-    // decls so subsequent nested `.init`s can resolve them.
-    let mut local_decls = HashSet::new();
-    let mut local_types = HashSet::new();
-    let mut nested_inits = HashSet::new();
-    for item in &body {
-        match item {
-            RawItem::Decl(r) => {
-                local_decls.insert(r.name.to_lowercase());
-            }
-            RawItem::TypeAlias { name, .. } => {
-                local_types.insert(name.to_lowercase());
-            }
-            RawItem::Init(j) => {
-                nested_inits.insert(j.instance.to_lowercase());
-            }
-            RawItem::Comp(nested) => {
-                let mangled = qualify(&prefix, &nested.name);
-                comps.insert(
-                    mangled.clone(),
-                    CompDecl {
-                        name: mangled,
-                        ..nested.clone()
-                    },
-                );
-            }
-            _ => {}
+        if comp.type_params.len() != init.args.len() {
+            return Err(ParseError::ComponentArityMismatch {
+                span: init.span,
+                name: init.comp,
+                expected: comp.type_params.len(),
+                found: init.args.len(),
+            });
         }
-    }
 
-    let scope = Scope {
-        env: &env,
-        prefix: &prefix,
-        instance: &instance,
-        local_decls: &local_decls,
-        local_types: &local_types,
-        nested_inits: &nested_inits,
-        enclosing_instances: enclosing,
-        enclosing_decls,
-    };
+        let env: HashMap<String, String> =
+            comp.type_params.iter().cloned().zip(init.args).collect();
 
-    // Instances visible to a nested `.init` in this body: everything
-    // visible to *this* instance (its enclosing scope) plus this body's
-    // own nested `.init`s, each keyed by name to its absolute prefix.
-    let mut child_enclosing = enclosing.clone();
-    for name in &nested_inits {
-        child_enclosing.insert(name.clone(), qualify(&prefix, name));
-    }
+        let mut inheritance_stack = HashSet::new();
+        let body = resolve_inheritance(&comp, &env, &self.components, &mut inheritance_stack)?;
 
-    // Relations visible to a nested `.init`: those visible to this instance
-    // plus this body's own `.decl`s, qualified under this instance's prefix.
-    // A nested instance's bare relation references resolve against these.
-    let mut child_enclosing_decls = enclosing_decls.clone();
-    for name in &local_decls {
-        child_enclosing_decls.insert(name.clone(), qualify(&prefix, name));
-    }
-
-    // Resolution proceeds in two walks of the body, NOT in textual order.
-    // INVARIANT: `collect_instance` fully populates this instance's symbol
-    // table: its registered member `.type`s plus the `local_decls` /
-    // `nested_inits` already indexed above: before `resolve_instance`
-    // resolves a single `.decl` attribute, rule, or directive. This makes
-    // attribute and relation resolution independent of where a `.decl` sits
-    // relative to the `.init`/`.type` it depends on. Keep the two walks
-    // separate: merging them would reintroduce that order-dependence.
-    //
-    // NOTE: this does NOT make a `.type` alias's *parent* order-independent.
-    // `collect_instance` registers aliases in body order with eager parent
-    // resolution, so a member alias must be declared after the type it
-    // references (`.type B = A` requires `A` earlier): the same
-    // define-before-use rule top-level `.type`s follow (see
-    // `TypeRegistry::from_type_declarations`). Cycles surface as
-    // `UnknownTypeParent`, not a hang.
-    collect_instance(
-        &body,
-        &scope,
-        &child_enclosing,
-        &child_enclosing_decls,
-        comps,
-        output,
-        registry,
-    )?;
-    resolve_instance(body, &scope, output, registry)?;
-
-    Ok(())
-}
-
-/// First walk: build this instance's symbol table. Recursively inline
-/// nested `.init`s (registering their member `.type`s under the instance
-/// prefix) and register local `.type` aliases. Aliases follow the inits
-/// because an alias may reference a nested instance's member type. After
-/// this returns, every member type referenced in the body is registered.
-fn collect_instance(
-    body: &[RawItem],
-    scope: &Scope<'_>,
-    child_enclosing: &HashMap<String, String>,
-    child_enclosing_decls: &HashMap<String, String>,
-    comps: &mut HashMap<String, CompDecl>,
-    output: &mut InlinerOutput,
-    registry: &mut TypeRegistry,
-) -> Result<(), ParseError> {
-    for item in body {
-        if let RawItem::Init(nested) = item {
-            inline_one(
-                scope.prefix,
-                child_enclosing,
-                child_enclosing_decls,
-                resolve_init(nested.clone(), scope.env),
-                comps,
-                output,
-                registry,
-            )?;
+        // Hoist names so references within the body can precede declarations.
+        let mut local_decls = HashSet::new();
+        let mut local_types = HashSet::new();
+        let mut nested_inits = HashSet::new();
+        for item in &body {
+            match item {
+                RawItem::Decl(r) => {
+                    local_decls.insert(r.name.to_lowercase());
+                }
+                RawItem::TypeAlias { name, .. } => {
+                    local_types.insert(name.to_lowercase());
+                }
+                RawItem::Init(j) => {
+                    nested_inits.insert(j.instance.to_lowercase());
+                }
+                RawItem::Comp(nested) => {
+                    let mangled = qualify(&prefix, &nested.name);
+                    self.components.insert(
+                        mangled.clone(),
+                        CompDecl {
+                            name: mangled,
+                            ..nested.clone()
+                        },
+                    );
+                }
+                RawItem::Rule(_)
+                | RawItem::Fact(_)
+                | RawItem::Input { .. }
+                | RawItem::Output { .. }
+                | RawItem::Printsize { .. }
+                | RawItem::Override { .. } => {}
+            }
         }
-    }
-    for item in body {
-        if let RawItem::TypeAlias {
-            name,
-            op,
-            parent,
-            span,
-        } = item
-        {
-            let prefixed = qualify(scope.prefix, name);
-            match op {
-                RawTypeOp::Alias => {
-                    let resolved = resolve_qualified(parent, *span, scope, false)?;
-                    registry.register_alias(&prefixed, &resolved, *span)?;
-                }
-                RawTypeOp::Subtype => {
-                    let resolved = resolve_qualified(parent, *span, scope, false)?;
-                    registry.register_subtype(&prefixed, &resolved, *span)?;
-                }
-                RawTypeOp::Tuple(fields) => {
-                    // Resolve each field type against the instance scope, then register.
-                    let resolved_fields = fields
-                        .iter()
-                        .map(|(fname, ftype)| {
-                            Ok::<_, ParseError>((
-                                fname.clone(),
-                                resolve_qualified(ftype, *span, scope, false)?,
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    registry.register_tuple(&prefixed, &resolved_fields, *span)?;
-                }
-            };
-        }
-    }
-    Ok(())
-}
 
-/// Second walk: resolve against the now-complete symbol table. Declares
-/// relations (attribute types all resolve regardless of source order),
-/// then rewrites rules / facts and applies `.input`/`.output`/`.printsize`
-/// directives over the relations just declared.
-fn resolve_instance(
-    body: Vec<RawItem>,
-    scope: &Scope<'_>,
-    output: &mut InlinerOutput,
-    registry: &TypeRegistry,
-) -> Result<(), ParseError> {
-    for item in &body {
-        if let RawItem::Decl(raw) = item {
-            let prefixed = qualify(scope.prefix, &raw.name);
-            let attrs = resolve_attributes(&raw.attrs, raw.span, scope, registry)?;
-            output
-                .relations
-                .push(Relation::from_components(&prefixed, attrs, raw.span));
+        let scope = Scope {
+            env: &env,
+            prefix: &prefix,
+            instance: &instance,
+            local_decls: &local_decls,
+            local_types: &local_types,
+            nested_inits: &nested_inits,
+            enclosing_instances: enclosing,
+            enclosing_decls,
+        };
+
+        // This body's names shadow the enclosing names inherited by children.
+        let mut child_enclosing = enclosing.clone();
+        for name in &nested_inits {
+            child_enclosing.insert(name.clone(), qualify(&prefix, name));
         }
+
+        let mut child_enclosing_decls = enclosing_decls.clone();
+        for name in &local_decls {
+            child_enclosing_decls.insert(name.clone(), qualify(&prefix, name));
+        }
+
+        // Register nested instances and member types before resolving attribute
+        // types. Alias parents still follow declaration order.
+        self.collect_instance(
+            &body,
+            &scope,
+            &child_enclosing,
+            &child_enclosing_decls,
+            first_relation,
+        )?;
+        self.resolve_instance(body, &scope, first_relation)?;
+
+        Ok(())
     }
 
-    for item in body {
-        match item {
-            RawItem::Rule(mut rule) => {
-                rewrite_rule(&mut rule, scope)?;
-                output.rules.push(rule);
+    /// Registers nested instances and local types before attribute resolution.
+    fn collect_instance(
+        &mut self,
+        body: &[RawItem],
+        scope: &Scope<'_>,
+        child_enclosing: &HashMap<String, String>,
+        child_enclosing_decls: &HashMap<String, String>,
+        first_relation: usize,
+    ) -> Result<(), ParseError> {
+        for item in body {
+            if let RawItem::Init(nested) = item {
+                self.inline_instance(
+                    scope.prefix,
+                    child_enclosing,
+                    child_enclosing_decls,
+                    resolve_init(nested.clone(), scope.env),
+                    first_relation,
+                )?;
             }
-            RawItem::Fact(mut fact) => {
-                rewrite_rule(&mut fact, scope)?;
-                output.facts.push(fact);
-            }
-            // A directive targets a relation of this instance, or: like a
-            // rule-body reference: one in the enclosing/global scope. When
-            // the target is not local, defer it so the driver applies it
-            // against the full relation set (`apply_directives`).
-            RawItem::Input { name, params, span } => {
-                let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
-                match output.relations.iter_mut().find(|r| r.name() == lc) {
-                    Some(rel) => rel.set_input(&params, span)?,
-                    None => output
-                        .input_directives
-                        .push(InputDirective::new(lc, params, span)),
-                }
-            }
-            RawItem::Output { name, params, span } => {
-                let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
-                match output.relations.iter_mut().find(|r| r.name() == lc) {
-                    Some(rel) => rel.set_output(&params, span)?,
-                    None => output
-                        .output_directives
-                        .push(OutputDirective::new(lc, params, span)),
-                }
-            }
-            RawItem::Printsize { name, span } => {
-                let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
-                match output.relations.iter_mut().find(|r| r.name() == lc) {
-                    Some(rel) => rel.set_printsize(true),
-                    None => output
-                        .printsize_directives
-                        .push(PrintSizeDirective::new(lc, span)),
-                }
-            }
-            // Decl / TypeAlias / Init handled in `collect_instance`; Comp
-            // hoisted before the walks; Override stripped in inheritance.
-            _ => {}
         }
+        for item in body {
+            if let RawItem::TypeAlias {
+                name,
+                op,
+                parent,
+                span,
+            } = item
+            {
+                let prefixed = qualify(scope.prefix, name);
+                match op {
+                    RawTypeOp::Alias => {
+                        let resolved = resolve_qualified(parent, *span, scope, false)?;
+                        self.type_registry
+                            .register_alias(&prefixed, &resolved, *span)?;
+                    }
+                    RawTypeOp::Subtype => {
+                        let resolved = resolve_qualified(parent, *span, scope, false)?;
+                        self.type_registry
+                            .register_subtype(&prefixed, &resolved, *span)?;
+                    }
+                    RawTypeOp::Tuple(fields) => {
+                        let resolved_fields = fields
+                            .iter()
+                            .map(|(fname, ftype)| {
+                                Ok::<_, ParseError>((
+                                    fname.clone(),
+                                    resolve_qualified(ftype, *span, scope, false)?,
+                                ))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        self.type_registry
+                            .register_tuple(&prefixed, &resolved_fields, *span)?;
+                    }
+                };
+            }
+        }
+        Ok(())
     }
-    Ok(())
+
+    /// Resolves relations and references against the registered member types.
+    /// Directives outside the top-level instance's subtree remain deferred.
+    fn resolve_instance(
+        &mut self,
+        body: Vec<RawItem>,
+        scope: &Scope<'_>,
+        first_relation: usize,
+    ) -> Result<(), ParseError> {
+        for item in &body {
+            if let RawItem::Decl(raw) = item {
+                let prefixed = qualify(scope.prefix, &raw.name);
+                let attrs = resolve_attributes(&raw.attrs, raw.span, scope, &self.type_registry)?;
+                self.relations
+                    .push(Relation::from_components(&prefixed, attrs, raw.span));
+            }
+        }
+
+        for item in body {
+            match item {
+                RawItem::Rule(mut rule) => {
+                    rewrite_rule(&mut rule, scope)?;
+                    self.rules.push(rule);
+                }
+                RawItem::Fact(mut fact) => {
+                    rewrite_rule(&mut fact, scope)?;
+                    self.raw_facts.push(fact);
+                }
+                // Defer directives outside this subtree until every top-level
+                // and component relation has been declared.
+                RawItem::Input { name, params, span } => {
+                    let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
+                    match self.relations[first_relation..]
+                        .iter_mut()
+                        .find(|r| r.name() == lc)
+                    {
+                        Some(rel) => rel.set_input(&params, span)?,
+                        None => self
+                            .input_directives
+                            .push(InputDirective::new(lc, params, span)),
+                    }
+                }
+                RawItem::Output { name, params, span } => {
+                    let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
+                    match self.relations[first_relation..]
+                        .iter_mut()
+                        .find(|r| r.name() == lc)
+                    {
+                        Some(rel) => rel.set_output(&params, span)?,
+                        None => self
+                            .output_directives
+                            .push(OutputDirective::new(lc, params, span)),
+                    }
+                }
+                RawItem::Printsize { name, span } => {
+                    let lc = resolve_qualified(&name, span, scope, true)?.to_lowercase();
+                    match self.relations[first_relation..]
+                        .iter_mut()
+                        .find(|r| r.name() == lc)
+                    {
+                        Some(rel) => rel.set_printsize(true),
+                        None => self
+                            .printsize_directives
+                            .push(PrintSizeDirective::new(lc, span)),
+                    }
+                }
+                RawItem::Decl(_)
+                | RawItem::TypeAlias { .. }
+                | RawItem::Init(_)
+                | RawItem::Comp(_)
+                | RawItem::Override { .. } => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Resolve a `.decl`'s attribute list against the current scope: each
@@ -444,9 +420,8 @@ fn resolve_inheritance(
         }
         result.push(item);
     }
-    // Own body. Strip `.override` directives: they have served their
-    // purpose above and must not reach `inline_one` or any further
-    // ancestor splice (e.g. if this comp is itself inherited later).
+    // Overrides have served their purpose and must not reach an instance or
+    // a component that later inherits this body.
     for item in &comp.body {
         if matches!(item, RawItem::Override { .. }) {
             continue;
@@ -517,21 +492,34 @@ fn decl_map(items: &[RawItem]) -> HashMap<String, &RawRelation> {
         .iter()
         .filter_map(|item| match item {
             RawItem::Decl(r) => Some((r.name.to_lowercase(), r)),
-            _ => None,
+            RawItem::TypeAlias { .. }
+            | RawItem::Rule(_)
+            | RawItem::Fact(_)
+            | RawItem::Input { .. }
+            | RawItem::Output { .. }
+            | RawItem::Printsize { .. }
+            | RawItem::Init(_)
+            | RawItem::Comp(_)
+            | RawItem::Override { .. } => None,
         })
         .collect()
 }
 
-/// Whether an inherited `RawItem` is a rule or fact whose head matches
-/// one of this comp's `.override` targets: if so, it gets dropped from
-/// the spliced body and replaced by the comp's own derivations.
+/// Returns `true` for an inherited rule or fact replaced by an override.
 fn is_overridden_rule_or_fact(item: &RawItem, overrides: &HashMap<String, (Span, String)>) -> bool {
     if overrides.is_empty() {
         return false;
     }
     let head_name = match item {
         RawItem::Rule(r) | RawItem::Fact(r) => r.head().name(),
-        _ => return false,
+        RawItem::Decl(_)
+        | RawItem::TypeAlias { .. }
+        | RawItem::Input { .. }
+        | RawItem::Output { .. }
+        | RawItem::Printsize { .. }
+        | RawItem::Init(_)
+        | RawItem::Comp(_)
+        | RawItem::Override { .. } => return false,
     };
     overrides.contains_key(head_name)
 }
@@ -559,7 +547,13 @@ fn apply_type_env_to_item(item: RawItem, env: &HashMap<String, String>) -> RawIt
             span,
         },
         RawItem::Init(init) => RawItem::Init(resolve_init(init, env)),
-        other => other,
+        other @ (RawItem::Rule(_)
+        | RawItem::Fact(_)
+        | RawItem::Input { .. }
+        | RawItem::Output { .. }
+        | RawItem::Printsize { .. }
+        | RawItem::Comp(_)
+        | RawItem::Override { .. }) => other,
     }
 }
 
@@ -757,32 +751,25 @@ mod tests {
         }
     }
 
-    /// Inline `init` against `comps`, discarding the emitted output.
-    fn inline(init: InitDecl, comps: &mut HashMap<String, CompDecl>) -> Result<(), ParseError> {
-        inline_one(
-            "",
-            &HashMap::new(),
-            &HashMap::new(),
-            init,
-            comps,
-            &mut InlinerOutput::default(),
-            &mut TypeRegistry::new(),
-        )
+    fn inline(init: InitDecl, comps: HashMap<String, CompDecl>) -> Result<(), ParseError> {
+        let mut assembler = Assembler::new(TypeRegistry::new());
+        assembler.components = comps;
+        assembler.inline_instance("", &HashMap::new(), &HashMap::new(), init, 0)
     }
 
     #[test]
     fn inline_of_unknown_component_is_rejected() {
         assert_err!(
-            inline(init("c", "Container", &[]), &mut HashMap::new()),
+            inline(init("c", "Container", &[]), HashMap::new()),
             ParseError::UnknownComponent { .. }
         );
     }
 
     #[test]
     fn inline_with_wrong_type_arg_count_is_rejected() {
-        let mut comps = HashMap::from([("Pair".to_string(), comp("Pair", &["T"], None))]);
+        let comps = HashMap::from([("Pair".to_string(), comp("Pair", &["T"], None))]);
         assert_err!(
-            inline(init("p", "Pair", &["number", "symbol"]), &mut comps),
+            inline(init("p", "Pair", &["number", "symbol"]), comps),
             ParseError::ComponentArityMismatch { .. }
         );
     }
@@ -794,12 +781,12 @@ mod tests {
             args: vec![],
             span: Span::DUMMY,
         };
-        let mut comps = HashMap::from([
+        let comps = HashMap::from([
             ("A".to_string(), comp("A", &[], Some(sref("B")))),
             ("B".to_string(), comp("B", &[], Some(sref("A")))),
         ]);
         assert_err!(
-            inline(init("c", "A", &[]), &mut comps),
+            inline(init("c", "A", &[]), comps),
             ParseError::CircularInheritance { .. }
         );
     }
@@ -817,9 +804,9 @@ mod tests {
             FileId::new(0),
         ))
         .expect("comp parses");
-        let mut comps = HashMap::from([("Holder".to_string(), holder)]);
+        let comps = HashMap::from([("Holder".to_string(), holder)]);
         assert_err!(
-            inline(init("h", "Holder", &[]), &mut comps),
+            inline(init("h", "Holder", &[]), comps),
             ParseError::UnresolvedQualifiedRef { .. }
         );
     }
