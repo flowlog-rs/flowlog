@@ -71,14 +71,26 @@ impl RulePlanner {
 
         // (2) Positive semijoin optimization
         // When a positive atom has positive supersets, we can join them.
-        // Note we need premap for both LHS and RHS atoms if they are original EDBs (row format).
-        if let Some((lhs_pos_idx, rhs_pos_indices)) = catalog
-            .positive_supersets()
-            .iter()
-            .enumerate()
-            .find(|(_, v)| !v.is_empty())
-            .map(|(idx, indices)| (idx, indices.clone()))
-        {
+        // Note we need premap for both LHS and RHS atoms if they are original EDBs
+        // (row format).
+        // Combining atoms with equal variable sets first avoids copying a filter
+        // into each of them and creating quadratic join plans. This delays
+        // pruning by strict subsets; once equal sets are merged, every strict
+        // superset still receives the combined filter before it is eliminated.
+        let supersets = catalog.positive_supersets();
+        let equal_pair = supersets.iter().enumerate().find_map(|(lhs, candidates)| {
+            candidates
+                .iter()
+                .find(|&&rhs| supersets[rhs].contains(&lhs))
+                .map(|&rhs| (lhs, vec![rhs]))
+        });
+        if let Some((lhs_pos_idx, rhs_pos_indices)) = equal_pair.or_else(|| {
+            supersets
+                .iter()
+                .enumerate()
+                .find(|(_, candidates)| !candidates.is_empty())
+                .map(|(lhs, candidates)| (lhs, candidates.clone()))
+        }) {
             self.apply_positive_semijoin_premap(catalog, lhs_pos_idx, &rhs_pos_indices)?;
 
             let lhs_atom = (

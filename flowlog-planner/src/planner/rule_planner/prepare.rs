@@ -241,6 +241,74 @@ mod tests {
     use super::super::common::test_setup;
     use super::*;
 
+    #[test]
+    fn same_variable_atoms_need_one_join_per_eliminated_atom() {
+        let mut source = String::from(".decl Out(x: int32)\n.output Out\n");
+        for index in 0..8 {
+            source.push_str(&format!(".decl E{index}(x: int32)\n.input E{index}\n"));
+        }
+        source.push_str("Out(x) :- E0(x), E1(x), E2(x), E3(x), E4(x), E5(x), E6(x), E7(x).\n");
+        let (mut planner, mut catalog) = test_setup(&source);
+
+        planner.prepare(&mut catalog).unwrap();
+
+        let joins = planner
+            .transformation_infos()
+            .iter()
+            .filter(|tx| matches!(tx, TransformationInfo::JoinToKV { .. }))
+            .count();
+        assert_eq!(joins, 7);
+        assert!(catalog.is_planned());
+    }
+
+    #[test]
+    fn equal_variable_atoms_merge_before_an_earlier_subset_is_propagated() {
+        let (mut planner, mut catalog) = test_setup(
+            ".decl A(x: int32)\n.input A\n\
+             .decl B(x: int32, y: int32)\n.input B\n\
+             .decl C(y: int32, x: int32)\n.input C\n\
+             .decl Out(x: int32, y: int32)\n.output Out\n\
+             Out(x, y) :- A(x), B(x, y), C(y, x).\n",
+        );
+
+        planner.prepare(&mut catalog).unwrap();
+
+        let joins: Vec<_> = planner
+            .transformation_infos()
+            .iter()
+            .filter(|tx| matches!(tx, TransformationInfo::JoinToKV { .. }))
+            .collect();
+        assert_eq!(joins.len(), 2);
+        assert_eq!(joins[0].output_kv_layout().key().len(), 2);
+        assert!(joins[0].output_kv_layout().value().is_empty());
+        assert!(catalog.is_planned());
+    }
+
+    #[test]
+    fn merged_filter_reaches_every_strict_superset() {
+        let (mut planner, mut catalog) = test_setup(
+            ".decl A(x: int32)\n.input A\n\
+             .decl D(x: int32)\n.input D\n\
+             .decl B(x: int32, y: int32)\n.input B\n\
+             .decl C(x: int32, z: int32)\n.input C\n\
+             .decl Out(x: int32, y: int32, z: int32)\n.output Out\n\
+             Out(x, y, z) :- A(x), D(x), B(x, y), C(x, z).\n",
+        );
+
+        planner.prepare(&mut catalog).unwrap();
+
+        let joins: Vec<_> = planner
+            .transformation_infos()
+            .iter()
+            .filter(|tx| matches!(tx, TransformationInfo::JoinToKV { .. }))
+            .collect();
+        assert_eq!(joins.len(), 3);
+        let merged_filter = joins[0].output_info_fp();
+        assert_eq!(joins[1].input_info_fp().0, merged_filter);
+        assert_eq!(joins[2].input_info_fp().0, merged_filter);
+        assert_eq!(catalog.positive_atom_number(), 2);
+    }
+
     /// `A(x, x)` — var_eq canonicalization must keep the lower-argument-id
     /// slot (arg 0) and drop the higher (arg 1). If the `<=` flipped, the
     /// wrong slot survives and downstream indexes go stale silently.
