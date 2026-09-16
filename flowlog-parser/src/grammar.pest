@@ -3,6 +3,12 @@
 // =============================================================================
 // This grammar defines the syntax for FlowLog, a Datalog language engine
 // for declarative data processing and rule-based queries.
+//
+// Pest builds concrete syntax; Rust lowering checks the context and builds
+// typed AST nodes. Recursive alternatives either have distinct token
+// prefixes or share one production, so retries do not multiply with nesting
+// depth. The sections below keep language concepts separate while sharing
+// the productions whose recursive prefixes overlap.
 
 // Main grammar entry point
 main_grammar = {
@@ -15,11 +21,21 @@ main_grammar = {
 // BASIC ELEMENTS (IDENTIFIERS, LITERALS, TYPES)
 // =============================================================================
 
-// Identifier pattern - must start with letter or underscore,
-// can contain letters, numbers, underscores
+// Identifiers exclude reserved keywords in every naming position, including
+// each segment of a qualified name.
 // Valid examples: x, _temp, myVar123, _private_var
 // Invalid examples: 1x, x-yz (hyphen not allowed)
-identifier = @{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_")* }
+identifier = @{ !keyword ~ identifier_chars }
+
+// Shared spelling for identifiers and names after `?`. The surrounding
+// token decides keyword legality: `as` is reserved, but `?as` is a variable.
+identifier_chars = _{ "_"? ~ ASCII_ALPHA+ ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// Only syntax keywords are reserved globally. Built-in function, aggregate,
+// and primitive type names keep their existing context-dependent meaning;
+// dotted directives such as `.type` do not reserve the bare word `type`.
+// Atomicity keeps the boundary next to the word, before whitespace/comments.
+keyword = @{ as_kw | fn_kw | overridable_kw | boolean }
 
 // A keyword's trailing edge: the next char must NOT continue an identifier,
 // so a reserved word matches the whole token and not a prefix (`as` vs
@@ -29,7 +45,7 @@ word_boundary = _{ !(ASCII_ALPHANUMERIC | "_") }
 // Accept Doop's variable spelling without rewriting its rules. Keep the
 // prefix in the name so `x` and `?x` bind independently.
 // Atomicity keeps whitespace and comments out of the token.
-variable = @{ "?"? ~ identifier }
+variable = @{ "?" ~ identifier_chars | identifier }
 
 // Attribute name - names of relation attributes (columns)
 attribute_name = { identifier }
@@ -202,10 +218,12 @@ attribute_decl = { attribute_name ~ ":" ~ type_ref }
 //   .extern fn   name(param1: type1, ...) -> ret_type
 
 extern_fn = {
-    ".extern" ~ "fn" ~ identifier ~
+    ".extern" ~ fn_kw ~ identifier ~
     "(" ~ extern_fn_params? ~ ")" ~
     "->" ~ data_type
 }
+
+fn_kw = @{ "fn" ~ word_boundary }
 
 extern_fn_params = { extern_fn_param ~ ("," ~ extern_fn_param)* }
 
@@ -219,40 +237,66 @@ extern_fn_param = { identifier ~ ":" ~ data_type }
 // Arithmetic with precedence
 arithmetic_expr = { factor ~ (arithmetic_op ~ factor)* }
 
-// One operand of an expression. `as_cast` must precede `variable`, or a
-// bare `as` matches as a variable and the cast never parses; `call_expr`
-// refuses `as` outright (see `call_expr`).
+// One operand of a value expression. Placeholders belong to atom arguments
+// and tuple patterns, not to arithmetic. Casts have their own argument
+// grammar; excluding `as` from identifiers prevents a failed cast from
+// retrying its recursive operand as a function call (issue #298).
 factor = { as_cast | call_expr | paren_factor | constant | variable }
 
-// Any `(`-headed operand: a tuple literal, or explicit grouping that
-// overrides operator precedence, e.g. `x * (a + b)`. Commas decide which:
-//   (a, b)     tuple literal: constructs a tuple, or destructures one
-//              when matched against a bound variable
-//   (a, b,)    the same tuple; a trailing comma is allowed
-//   (a, _)     tuple literal; `_` ignores that component on destructure
-//   (a,)       1-tuple; the trailing comma keeps it distinct from grouping
-//   (a + b)    grouping
-//   (a)        grouping (not a 1-tuple)
-//   (_)        rejected in lowering (`ParseError::GroupedPlaceholder`)
-// One rule owns `(` so the interior is parsed exactly once. As separate
-// `(`-headed alternatives of `factor`, pest re-parses the whole interior
-// for each alternative that fails, which is exponential in paren depth
-// (issue #289: a 38-byte fuzz input timed out).
-// `arithmetic_expr` before `placeholder`: pest commits to the first match,
-// so `_x` must parse as a variable before `placeholder` can eat its `_`.
-paren_factor = { "(" ~ paren_elem ~ ("," ~ paren_elem)* ~ trailing_comma? ~ ")" }
-paren_elem = _{ arithmetic_expr | placeholder }
+// `as(factor, TargetType)` is an explicit cast and a runtime no-op. The
+// typechecker removes it after validating the subtype relationship. Its
+// operand is one factor; group arithmetic such as `as((x + 1), T)` first.
+as_cast = { as_kw ~ "(" ~ factor ~ "," ~ type_ref ~ ")" }
+as_kw = @{ "as" ~ word_boundary }
 
-// Visible (not silent) so `(a,)` leaves a second child for the lowering
-// to see; the element lowering drops it.
+// =============================================================================
+// PARENTHESIZED VALUES AND CONDITION GROUPS
+// =============================================================================
+// Parentheses share their recursive interior across values and conditions.
+// The outer `predicate` retains separate comparison/atom/group alternatives,
+// but this interior never re-enters that choice. Retrying an outer comparison
+// as a group therefore cannot multiply retries at every depth (issue #355).
+//
+// In value position, commas distinguish tuples from grouping:
+//   (a, b)     tuple construction or destructuring
+//   (a, b,)    the same tuple, with an optional trailing comma
+//   (a, _)     tuple pattern: ignore the second component
+//   (a,)       a 1-tuple, distinct from a grouped value
+//   (a + b)    grouped arithmetic, preserving operator precedence
+//   (a)        grouped value, collapsed to the original factor
+//   (_)        rejected: grouping requires a value, not a placeholder
+//
+// In predicate position, a bare group contains a nested rule body:
+//   (A(x), B(x))   conjunction
+//   (A(x); B(x))   disjunction
+//   (x + 1) > y    comparison whose left operand is a grouped value
+//
+// Lowering chooses the interpretation from the surrounding syntax. It
+// rejects comparisons/disjunctions in value positions and trailing commas
+// in condition groups, using spans from this original parse tree.
+paren_factor = { "(" ~ paren_bodies ~ trailing_comma? ~ ")" }
+
+// A parenthesized item can be a value, tuple field, or condition. Parse its
+// expression prefix once, then its optional comparison suffix. The enclosing
+// AST parser checks which interpretation is legal; it never reparses text.
+// These rules must not call `predicate`: doing so would restore the recursive
+// comparison/group choice that this shared interior removes.
+paren_bodies = { paren_items ~ (";" ~ paren_items)* }
+paren_items = { paren_item ~ ("," ~ paren_item)* }
+paren_item = {
+    negative_string_constraint |
+    negative_atom |
+    arithmetic_expr ~ (compare_op ~ arithmetic_expr)? |
+    placeholder
+}
+
+// Visible so lowering can distinguish `(a,)` from `(a)` even though both
+// contain only one element.
 trailing_comma = { "," }
 
-// `as(factor, TargetType)`: explicit cast, runtime no-op. Inner is a
-// single `factor` (not `arithmetic_expr`) so the typechecker can lower
-// `as(...)` away after validation; for `as(x + 1, T)`, bind first.
-as_cast = { as_kw ~ "(" ~ factor ~ "," ~ type_ref ~ ")" }
-as_kw = _{ "as" ~ word_boundary }
-
+// =============================================================================
+// ARITHMETIC OPERATORS
+// =============================================================================
 // Arithmetic operators. String concatenation lives in the `cat(a, b)`
 // built-in; there is no infix `cat` operator.
 arithmetic_op = {
@@ -275,8 +319,9 @@ modulo = { "%" }
 // =============================================================================
 // Binary comparisons between arithmetic expressions
 
-// Binary comparison between arithmetic expressions
-// Examples: x + y > z + w, count(x) = 5
+// Binary comparison between values, e.g. x + y > z, f(x) = True.
+// Parenthesized operands use the shared interior above, so trying this rule
+// before a condition group adds a bounded retry, not one retry per depth.
 compare_expr = { arithmetic_expr ~ compare_op ~ arithmetic_expr }
 
 // Comparison operators
@@ -297,32 +342,37 @@ greater_than = { ">" }
 less_equal_than = { "<=" }
 less_than = { "<" }
 
-// String constraints. They may only appear bare in a rule body,
-// never inside an arithmetic expression. Optional leading `!` negates.
-//   match("a.*", s)        s fully matches the regex
-//   contains(sub, s)       s contains the substring sub
-//   !match("a.*", s)       s does NOT match
-string_constraint = { not_op? ~ string_constraint_op ~ "(" ~ arithmetic_expr ~ "," ~ arithmetic_expr ~ ")" }
+// `!` belongs to negative atoms and string constraints. It is not a general
+// unary value operator and cannot prefix an arithmetic comparison.
+not_op = { "!" }
+
+// String constraints are predicates with two value operands. The same names
+// can also refer to relations (`contains(x)`) or value functions
+// (`match(x, y) = True`); the ordering in `predicate` preserves these uses.
+string_constraint = {
+    string_constraint_op ~ "(" ~ arithmetic_expr ~ "," ~ arithmetic_expr ~ ")"
+}
+negative_string_constraint = { not_op ~ string_constraint }
 string_constraint_op = { match_op | contains_op }
-not_op       = { "!" }
-match_op     = @{ "match"    ~ word_boundary }
-contains_op  = @{ "contains" ~ word_boundary }
+match_op = @{ "match" ~ word_boundary }
+contains_op = @{ "contains" ~ word_boundary }
 
 // =============================================================================
 // AGGREGATE EXPRESSIONS
 // =============================================================================
-// Aggregation functions for computing statistics over groups
+// Aggregates appear only as direct rule-head arguments. Their operands use
+// ordinary arithmetic syntax, so nested calls are value functions:
+//   sum(price * qty)    aggregate over an arithmetic expression
+//   sum(f(x))           aggregate over the result of a value function
+//   f(sum(x))           value call, not an aggregate
+//
+// Keep this separate from `call_expr`: `head_arg` selects the aggregate
+// before a value expression, and is never re-entered by its operand. A failed
+// aggregate can retry as a value call without multiplying work with depth.
+aggregate_expr = { aggregate_op ~ "(" ~ arithmetic_expr ~ ")" }
 
-// Aggregation operation on a value
-// Examples: count(x), avg(x + y), sum(weight)
-aggregate_expr = { 
-    aggregate_op ~ 
-    "(" ~ 
-    arithmetic_expr ~
-    ")" 
-} 
-
-// Supported aggregate operators
+// Supported aggregate operators. Spellings are case-sensitive; `AVG` is
+// the uppercase spelling of `average`.
 aggregate_op = { count | average | sum | min | max }
 count = { "count" | "COUNT" }       // Count of elements
 average = { "average" | "AVG" }     // Average value
@@ -331,28 +381,40 @@ min = { "min" | "MIN" }             // Minimum value
 max = { "max" | "MAX" }             // Maximum value
 
 // =============================================================================
+// VALUE CALLS
+// =============================================================================
+// Inside shared parentheses a bare call can also become an atom or string
+// constraint. Parse its recursive arguments once; the enclosing AST context
+// decides which interpretation is legal.
+//
+//   cat(a, b)           a reserved built-in function
+//   my_udf(x, y + 1)    an external function
+//
+// Dotted names and placeholder arguments are allowed for atoms inside
+// parentheses; value lowering rejects both for function calls.
+call_expr = { call_name ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")" }
+
+// Preserve a string keyword's token kind for parenthesized conditions, so the
+// comparison parser need not duplicate its spellings in Rust. The bounded
+// lookahead leaves qualified names such as `match.Rel` as relation references.
+call_name = _{ string_constraint_op ~ &"(" | relation_ref }
+
+// Try values before `_` so a variable such as `_x` stays one argument.
+// Type arguments belong exclusively to `as_cast`.
+call_arg = _{ arithmetic_expr | placeholder }
+
+// =============================================================================
 // ATOMS (RELATION REFERENCES)
 // =============================================================================
-// Atoms represent relation instances with specific arguments
+// Relation arguments are constants, variables, or `_`; they cannot contain
+// nested calls or arithmetic. This branch has no expression recursion.
+atom = { relation_ref ~ "(" ~ (atom_arg ~ ("," ~ atom_arg)*)? ~ ")" }
+atom_arg = { constant | variable | placeholder }
 
-// Relation with arguments
-// Example: edge(x, y), person("Alice", 25)
-atom = {
-    relation_ref ~
-    "(" ~
-    (atom_arg ~ ("," ~ atom_arg)*)? ~
-    ")"
-}
-
-// Negative atom for negative conditions. The atom may be wrapped in
-// redundant parentheses, `!(edge(x, y))`, which Souffle accepts and
-// treats identically to `!edge(x, y)`. The parens are silent literals,
-// so the parser sees the same inner `atom` either way.
-// Example: !edge(x, y)  or  !(edge(x, y))
-negative_atom = { "!" ~ ("(" ~ atom ~ ")" | atom) }
-
-// Arguments in atoms can be constants, variables, or placeholders
-atom_arg = { constant | variable | placeholder } 
+// Negation as failure applies to one atom. A single redundant wrapper is
+// accepted for Souffle compatibility: !edge(x) and !(edge(x)) are equivalent.
+// Negating a condition group or a value expression is not part of this rule.
+negative_atom = { not_op ~ ("(" ~ atom ~ ")" | atom) }
 
 // =============================================================================
 // RULES SECTION
@@ -404,52 +466,50 @@ rule_heads = { head ~ ("," ~ head)* }
 // One or more semicolon-separated bodies (disjunction)
 rule_bodies = { predicates ~ (";" ~ predicates)* }
 
-// Left side of rule (before :-)
-// Example: reachable(x, z), stats(count(x))
-head = {
-    relation_ref ~
-    "(" ~
-    (head_arg ~ ("," ~ head_arg)*)? ~
-    ")"
-}
+// Left side of a rule or fact, e.g. reachable(x, z), stats(count(x)).
+// Head arguments have their own grammar because they may contain aggregates.
+head = { relation_ref ~ "(" ~ (head_arg ~ ("," ~ head_arg)*)? ~ ")" }
 
-// Can be aggregate functions or arithmetic expressions (UDF calls are parsed as factors within arithmetic)
+// Try aggregates first: `sum(x)` is an aggregate here, while `sum(x, y)`
+// falls back to a value call. Once an aggregate matches, it must occupy the
+// entire argument: `sum(x) + 1` is rejected by the head's closing delimiter.
+// Neither branch recurses into `head_arg`, so this retry has a fixed cost
+// relative to parsing its operand, independent of the operand's depth.
 head_arg = { aggregate_expr | arithmetic_expr }
 
-// A value function call: `name(args...)`. The parser resolves the name
-// against the reserved built-in set ([`BuiltinOperator::from_keyword`]):
-// a hit becomes a built-in call, otherwise a UDF (`.extern fn`) call.
-// Appears inside expressions, never bare in a body.
-// Example: cat(a, b), strlen(x), my_udf(x, y + 1)
-// `!as_kw` because a failed `as_cast` (a bad type in `as(x, 5)`) would
-// otherwise retry here as a call named `as`, re-parsing the interior at
-// every nesting level (issue #298: a 151-byte input took 19s).
-call_expr = {
-    !as_kw ~
-    identifier ~
-    "(" ~
-    (arithmetic_expr ~ ("," ~ arithmetic_expr)*)? ~
-    ")"
-}
-
-// Comma-separated list of predicates in the rule body
+// =============================================================================
+// BODY PREDICATES
+// =============================================================================
+// Commas conjoin predicates; semicolons in `rule_bodies` separate alternatives.
 predicates = { predicate ~ ("," ~ predicate)* }
 
-// Types of predicates allowed in a rule body. Order matters (ordered choice):
-//   - compare_expr before atom: `cost(x) > 5` starts with a call that atom
-//     would otherwise consume as a relation.
-//   - string_constraint before atom/negative_atom: `match(...)` would parse
-//     as an atom named `match`, and `!match(...)` as a negative atom.
+// Keep each predicate's grammar and AST parser independent. Order matters:
+// comparisons precede atoms so f(x) > 5 is not consumed as a bare relation;
+// string constraints precede atoms so match(x, y) remains a constraint.
+//
+// Only `paren_item` factors the ambiguous recursive expression prefix. These
+// outer alternatives can retry it a fixed number of times, but are never
+// re-entered from inside it. Keep that boundary when adding predicate forms.
+//
+//   edge(x, y)           positive relation atom
+//   !edge(x, y)          negative relation atom
+//   !(edge(x, y))        the same negative atom, with a redundant wrapper
+//   f(x) > 5             arithmetic comparison
+//   match("a.*", x)      binary string constraint
+//   !contains(x, y)      negated string constraint
+//   (A(x); B(x))         nested condition group
 predicate = {
-    compare_expr |       // Comparison: x > y, cost(x) > 5, f(x) = True
-    string_constraint |  // match("a.*", x), !contains(x, y)
-    atom |               // Positive atom: edge(x, y)
-    negative_atom |      // Negative atom: !edge(x, y)
-    disjunction_group    // Nested disjunction: (A ; B)
+    compare_expr |
+    string_constraint |
+    atom |
+    negative_string_constraint |
+    negative_atom |
+    disjunction_group
 }
 
-// Parenthesised disjunction inside a body: `(A ; B)`.
-disjunction_group = { "(" ~ rule_bodies ~ ")" }
+// A grouped condition uses the shared parenthesis interior. Body lowering
+// rejects tuple-only syntax such as a trailing comma and expands disjunctions.
+disjunction_group = { paren_factor }
 
 // =============================================================================
 // TYPE DECLARATIONS (.type)

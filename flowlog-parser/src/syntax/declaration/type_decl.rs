@@ -81,10 +81,44 @@ fn parse_tuple_fields(tuple_type: Node) -> Result<Vec<(String, String)>, ParseEr
 #[cfg(test)]
 mod tests {
     use flowlog_common::FileId;
+    use pest::Parser as _;
+    use pest::error::ErrorVariant;
+    use rstest::rstest;
 
     use super::*;
+    use crate::FlowLogParser;
     use crate::assert_err;
     use crate::test_util::parse_pair;
+
+    #[rstest]
+    #[case(".type as = number")]
+    #[case(".type True = number")]
+    #[case(".type Pair = (as: number)")]
+    fn type_and_field_names_cannot_be_keywords(#[case] source: &str) {
+        let err = FlowLogParser::parse(Rule::type_alias_decl, source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case::complete(true)]
+    #[case::unclosed(false)]
+    fn tuple_type_syntax_handles_nested_fields(#[case] closed: bool) {
+        let close = if closed {
+            ")".repeat(256)
+        } else {
+            String::new()
+        };
+        let source = format!("{}number{close}", "(field:".repeat(256));
+        let result = FlowLogParser::parse(Rule::type_ref, &source);
+        if closed {
+            assert_eq!(result.unwrap().as_str(), source);
+        } else {
+            assert!(matches!(
+                result.unwrap_err().variant,
+                ErrorVariant::ParsingError { .. }
+            ));
+        }
+    }
 
     fn node(src: &str) -> Node<'_> {
         Node::new(parse_pair(Rule::type_alias_decl, src), FileId::new(0))

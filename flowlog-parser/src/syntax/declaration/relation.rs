@@ -380,14 +380,25 @@ impl fmt::Display for Relation {
 #[cfg(test)]
 mod tests {
     use flowlog_common::FileId;
+    use pest::Parser as _;
+    use pest::error::ErrorVariant;
     use rstest::rstest;
 
     use super::*;
+    use crate::FlowLogParser;
     use crate::assert_err;
     use crate::test_util::parse_pair;
     use crate::types::DataType::Int32;
     use crate::types::DataType::String as Str;
     use crate::types::TypeRegistry;
+
+    #[rstest]
+    #[case(".decl as(x: number)")]
+    #[case(".decl R(as: number)")]
+    fn relation_and_attribute_names_cannot_be_keywords(#[case] source: &str) {
+        let err = FlowLogParser::parse(Rule::declaration, source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
 
     fn attrs() -> Vec<Attribute> {
         let reg = TypeRegistry::new();

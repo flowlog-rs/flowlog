@@ -76,7 +76,7 @@ fn primary_only(span: Span) -> Vec<Label<FileId>> {
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum ParseError {
-    /// Pest rejected the input with a grammar error.
+    /// The input violates the grammar or its enclosing syntax context.
     #[error("syntax error: {message}")]
     Syntax { span: Span, message: String },
 

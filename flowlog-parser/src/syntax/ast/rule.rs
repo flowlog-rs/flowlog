@@ -259,42 +259,99 @@ impl FlowLogRule {
 // Body expansion: `,` conjunction, `;` disjunction
 // =============================================================================
 
-/// Expands a `rule_bodies` node into one predicate list per body
-/// alternative. `;` between bodies fans out; `,` within a body conjoins.
+/// Expands the `;` alternatives in `rule_bodies` or `paren_bodies`, preserving
+/// their source order. Each alternative is a conjunction of predicates.
 fn expand_bodies(node: Node) -> Result<Vec<Vec<Predicate>>, ParseError> {
     let mut alternatives = Vec::new();
-    for predicates_node in node.children() {
-        alternatives.extend(expand_conjunction(predicates_node)?);
+    for conjunction in node.children() {
+        alternatives.extend(expand_conjunction(conjunction)?);
     }
     Ok(alternatives)
 }
 
-/// Expands one `,`-separated `predicates` node into its body alternatives.
-/// A plain predicate appends to every alternative; a nested `(p ; q)`
-/// disjunction group multiplies the alternatives by cross-product.
+/// Expands a `predicates` or `paren_items` conjunction. Nested disjunctions
+/// multiply its alternatives; ordinary predicates append to each alternative.
 fn expand_conjunction(node: Node) -> Result<Vec<Vec<Predicate>>, ParseError> {
     let mut alternatives: Vec<Vec<Predicate>> = vec![Vec::new()];
-    for pred_node in node.children() {
-        let inner = pred_node.children().next_any("predicate value")?;
-        if inner.rule() == Rule::disjunction_group {
-            let nested = expand_bodies(inner.children().next_any("rule_bodies")?)?;
-            let mut crossed = Vec::with_capacity(alternatives.len() * nested.len());
-            for prefix in &alternatives {
-                for alt in &nested {
-                    let mut combined = prefix.clone();
-                    combined.extend(alt.iter().cloned());
-                    crossed.push(combined);
-                }
-            }
-            alternatives = crossed;
-        } else {
-            let predicate = Predicate::from_inner(inner)?;
+    // Comma-only groups are associative. Keep their remaining siblings here
+    // so deeply nested conjunctions need neither recursive calls nor repeated
+    // copies of an already-expanded body. Only real disjunctions recurse.
+    let mut pending = vec![node.children()];
+    while let Some(items) = pending.last_mut() {
+        let Some(item) = items.next() else {
+            pending.pop();
+            continue;
+        };
+        let Some(group) = condition_group(item.clone())? else {
+            let predicate: Predicate = item.lower()?;
             for alternative in &mut alternatives {
                 alternative.push(predicate.clone());
             }
+            continue;
+        };
+
+        let mut bodies = group.clone().children();
+        let first = bodies.next_any("condition group body")?;
+        if bodies.next().is_none() {
+            pending.push(first.children());
+            continue;
         }
+
+        let nested = expand_bodies(group)?;
+        // An empty prefix adds no predicates. Taking the nested alternatives
+        // avoids cloning every result through surrounding disjunctions.
+        if let [prefix] = alternatives.as_slice()
+            && prefix.is_empty()
+        {
+            alternatives = nested;
+            continue;
+        }
+        let mut crossed = Vec::with_capacity(alternatives.len() * nested.len());
+        for prefix in &alternatives {
+            for suffix in &nested {
+                let mut body = prefix.clone();
+                body.extend(suffix.iter().cloned());
+                crossed.push(body);
+            }
+        }
+        alternatives = crossed;
     }
     Ok(alternatives)
+}
+
+/// Returns the body of a bare condition group, or `None` for a value or
+/// individual predicate. A trailing comma is valid for tuples, not groups.
+fn condition_group(mut node: Node) -> Result<Option<Node>, ParseError> {
+    loop {
+        match node.rule() {
+            Rule::paren_factor => {
+                let mut children = node.children();
+                let body = children.require(Rule::paren_bodies)?;
+                if let Some(comma) = children.next() {
+                    return Err(ParseError::Syntax {
+                        span: comma.span(),
+                        message: "a condition group cannot end with a comma".into(),
+                    });
+                }
+                return Ok(Some(body));
+            }
+            Rule::predicate
+            | Rule::paren_item
+            | Rule::disjunction_group
+            | Rule::arithmetic_expr
+            | Rule::factor => {
+                let mut children = node.children();
+                let first = children.next_any("body item")?;
+                // Operators belong to the whole predicate. Stripping them
+                // would mistake `(x) > 0` or `(Edge(x)) + 1` for a body group.
+                if children.next().is_some() {
+                    return Ok(None);
+                }
+                node = first;
+            }
+            _ => return Ok(None),
+        }
+    }
 }
 
 // =============================================================================
@@ -377,6 +434,8 @@ fn apply_indices_to_rule(
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::Constant;
     use super::*;
     use crate::AggregationOperator;
@@ -518,6 +577,7 @@ mod tests {
         let agg = Aggregation::new(
             AggregationOperator::Sum,
             Arithmetic::new(Factor::Var("X".into()), vec![]),
+            Span::DUMMY,
         );
         assert_head_arg_rejected(HeadArg::Aggregation(agg));
     }
@@ -564,21 +624,142 @@ mod tests {
     /// Two body disjunctions cross-multiply: `(a ; b), (c ; d)` expands to the
     /// four combinations.
     #[test]
-    fn nested_disjunctions_cross_product() {
+    fn disjunction_cross_product_preserves_source_order() {
         let rules = FlowLogRule::expand_from_parsed_rule(
             parse_pair(Rule::rule, "r(X) :- ( a(X) ; b(X) ), ( c(X) ; d(X) )."),
             FileId::new(0),
         )
         .expect("expansion succeeds");
-        assert_eq!(rules.len(), 4);
         let bodies: Vec<(&str, &str)> = rules
             .iter()
             .map(|r| (r.rhs()[0].name(), r.rhs()[1].name()))
             .collect();
-        assert!(bodies.contains(&("a", "c")));
-        assert!(bodies.contains(&("a", "d")));
-        assert!(bodies.contains(&("b", "c")));
-        assert!(bodies.contains(&("b", "d")));
+        assert_eq!(bodies, [("a", "c"), ("a", "d"), ("b", "c"), ("b", "d")]);
+    }
+
+    #[test]
+    fn nested_conjunctions_keep_each_predicate_once_in_source_order() {
+        let source = format!(
+            "{}middle(x){}",
+            "before(x), (".repeat(200),
+            "), after(x)".repeat(200),
+        );
+        let bodies = expand_bodies(Node::new(
+            parse_pair(Rule::rule_bodies, &source),
+            FileId::new(0),
+        ))
+        .unwrap();
+        assert_eq!(bodies.len(), 1);
+        let body = &bodies[0];
+        assert_eq!(body.len(), 401);
+        assert!(
+            body[..200]
+                .iter()
+                .all(|predicate| predicate.name() == "before")
+        );
+        assert_eq!(body[200].name(), "middle");
+        assert!(
+            body[201..]
+                .iter()
+                .all(|predicate| predicate.name() == "after")
+        );
+    }
+
+    #[test]
+    fn nested_disjunctions_preserve_all_alternatives() {
+        let source = format!("{}last(x){}", "first(x); (".repeat(200), ")".repeat(200));
+        let bodies = expand_bodies(Node::new(
+            parse_pair(Rule::rule_bodies, &source),
+            FileId::new(0),
+        ))
+        .unwrap();
+        assert_eq!(bodies.len(), 201);
+        assert!(bodies.iter().all(|body| body.len() == 1));
+        assert!(bodies[..200].iter().all(|body| body[0].name() == "first"));
+        assert_eq!(bodies[200][0].name(), "last");
+    }
+
+    #[test]
+    fn redundant_body_groups_preserve_predicates_and_source_spans() {
+        let body = "Edge(x), !Other(x), x > 1";
+        let source = format!("{}{body}{}", "(".repeat(200), ")".repeat(200));
+        let bodies = expand_bodies(Node::new(
+            parse_pair(Rule::rule_bodies, &source),
+            FileId::new(0),
+        ))
+        .unwrap();
+        assert_eq!(bodies.len(), 1);
+        let predicates = &bodies[0];
+        assert_eq!(
+            predicates
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["Edge(x)", "!Other(x)", "x > 1"]
+        );
+        let spans: Vec<_> = predicates
+            .iter()
+            .map(|predicate| {
+                let span = match predicate {
+                    Predicate::PositiveAtom(atom) | Predicate::NegativeAtom(atom) => atom.span(),
+                    Predicate::Compare(expr) => expr.span(),
+                };
+                &source[span.range()]
+            })
+            .collect();
+        assert_eq!(spans, ["Edge(x)", "Other(x)", "x > 1"]);
+    }
+
+    #[test]
+    fn surrounding_predicates_are_preserved_in_each_group_alternative() {
+        let bodies = expand_bodies(Node::new(
+            parse_pair(
+                Rule::rule_bodies,
+                "First(x), (Edge(x), (x + 1) > 2; Other(x)), !Last(x)",
+            ),
+            FileId::new(0),
+        ))
+        .unwrap();
+        let shapes: Vec<Vec<_>> = bodies
+            .iter()
+            .map(|body| body.iter().map(ToString::to_string).collect())
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                vec!["First(x)", "Edge(x)", "(x + 1) > 2", "!Last(x)"],
+                vec!["First(x)", "Other(x)", "!Last(x)"],
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case("(Edge(x),)")]
+    #[case("((Edge(x),))")]
+    fn trailing_comma_is_not_a_condition_group(#[case] source: &str) {
+        assert_err!(
+            expand_bodies(Node::new(
+                parse_pair(Rule::rule_bodies, source),
+                FileId::new(0),
+            )),
+            ParseError::Syntax { span, message }
+                if &source[span.range()] == ","
+                    && message == "a condition group cannot end with a comma"
+        );
+    }
+
+    #[rstest]
+    #[case("((Edge(x)) + 1)")]
+    #[case("(1 + (Edge(x)))")]
+    fn arithmetic_around_a_group_is_not_discarded(#[case] source: &str) {
+        assert_err!(
+            expand_bodies(Node::new(
+                parse_pair(Rule::rule_bodies, source),
+                FileId::new(0),
+            )),
+            ParseError::Syntax { span, .. }
+                if source[span.range()] == source[1..source.len() - 1]
+        );
     }
 
     /// Souffle's `.plan N:(...)` form is an alias for the native `.plan (...)`:

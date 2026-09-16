@@ -27,7 +27,7 @@ use crate::error::grammar_bug;
 // ArithmeticOperator
 // =============================================================================
 
-/// Arithmetic operator.
+/// Binary arithmetic operators in value expressions.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ArithmeticOperator {
     Plus,
@@ -39,14 +39,13 @@ pub enum ArithmeticOperator {
 
 impl fmt::Display for ArithmeticOperator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sym = match self {
+        f.write_str(match self {
             Self::Plus => "+",
             Self::Minus => "-",
             Self::Multiply => "*",
             Self::Divide => "/",
             Self::Modulo => "%",
-        };
-        write!(f, "{sym}")
+        })
     }
 }
 
@@ -100,17 +99,37 @@ pub enum Factor {
 }
 
 impl Factor {
+    /// Returns `true` for a bare variable.
     #[must_use]
     pub fn is_var(&self) -> bool {
-        matches!(self, Self::Var(_))
+        match self {
+            Self::Var(_) => true,
+            Self::Const(_)
+            | Self::FnCall(_)
+            | Self::Builtin(_)
+            | Self::Cast(_)
+            | Self::Group(_)
+            | Self::Tuple(_)
+            | Self::TupleProj { .. } => false,
+        }
     }
 
+    /// Returns `true` for a bare constant.
     #[must_use]
     pub fn is_const(&self) -> bool {
-        matches!(self, Self::Const(_))
+        match self {
+            Self::Const(_) => true,
+            Self::Var(_)
+            | Self::FnCall(_)
+            | Self::Builtin(_)
+            | Self::Cast(_)
+            | Self::Group(_)
+            | Self::Tuple(_)
+            | Self::TupleProj { .. } => false,
+        }
     }
 
-    /// Variables appearing in this factor.
+    /// Variables in order of appearance, including repeated occurrences.
     #[must_use]
     pub fn vars(&self) -> Vec<&String> {
         match self {
@@ -155,55 +174,82 @@ impl Lexeme for Factor {
     }
 }
 
-/// Resolves a unified `call_expr` (`name(args...)`) into a [`Factor`]. The
-/// name is matched against the reserved value built-ins
-/// ([`BuiltinOperator::from_keyword`]); a hit yields a [`Factor::Builtin`]
-/// (arity-checked), otherwise a [`Factor::FnCall`] (a `.extern fn` call,
-/// validated against the UDF registry later by the typechecker).
+/// Resolves a value-position call into a built-in or external call.
+/// Built-ins are arity-checked here, while external signatures are checked
+/// against the UDF registry later by the typechecker.
 fn parse_call_expr(node: Node) -> Result<Factor, ParseError> {
     let span = node.span();
-    let mut children = node.children();
-    let name = children.next_any("function name")?.text().to_string();
-    let args = children
-        .filter(|c| c.rule() == Rule::arithmetic_expr)
-        .map(|c| c.lower::<Arithmetic>())
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut arguments = node.children();
+    let name = arguments.next_any("call name")?;
+    let name = name.text();
+    // Shared call syntax admits qualified relation names. A value function
+    // must still use the unqualified name declared by `.extern fn`.
+    if name.contains('.') {
+        return Err(ParseError::Syntax {
+            span,
+            message: "value function names cannot be qualified".into(),
+        });
+    }
+    let args = arguments
+        .map(Node::lower)
+        .collect::<Result<Vec<Arithmetic>, _>>()?;
 
-    if let Some(op) = BuiltinOperator::from_keyword(&name) {
+    if let Some(op) = BuiltinOperator::from_keyword(name) {
         Ok(Factor::Builtin(BuiltinCall::new(op, args, span)?))
     } else {
-        Ok(Factor::FnCall(FnCall::new(name, args, span)))
+        Ok(Factor::FnCall(FnCall::new(name.to_string(), args, span)))
     }
 }
 
-/// Resolves a `paren_factor` (`(`-headed operand) into a [`Factor`]: any
-/// comma (a second element or the trailing-comma marker) commits it to a
-/// [`Factor::Tuple`]; otherwise the interior is grouping and becomes a
-/// [`Factor::Group`], or, single-factor, collapses to the bare factor.
+/// Lowers value parentheses: a comma selects a tuple; otherwise the contents
+/// are one expression. Conditions are rejected, and redundant groups collapse
+/// without adding a lowering stack frame for each enclosing pair.
 fn parse_paren_factor(mut node: Node) -> Result<Factor, ParseError> {
     loop {
         let span = node.span();
         let mut children = node.children();
-        let first = children.next_any("parenthesised operand")?;
-        let mut rest = children.peekable();
-
-        if rest.peek().is_some() {
+        let mut alternatives = children.require(Rule::paren_bodies)?.children();
+        let conjunction = alternatives.require(Rule::paren_items)?;
+        if alternatives.next().is_some() {
+            return Err(ParseError::Syntax {
+                span,
+                message: "expected a value expression, found a disjunction".into(),
+            });
+        }
+        let mut elements = conjunction.children();
+        let first = elements.require(Rule::paren_item)?;
+        let mut elements = elements.peekable();
+        let trailing_comma = children.take_if(Rule::trailing_comma).is_some();
+        if trailing_comma || elements.peek().is_some() {
+            // A trailing comma makes `(x,)` a tuple even with one field.
+            // Tuple elements own their expression-or-placeholder validation.
             let fields = std::iter::once(first)
-                .chain(rest)
-                .filter(|c| c.rule() != Rule::trailing_comma)
-                .map(|c| c.lower())
-                .collect::<Result<Vec<_>, _>>()?;
+                .chain(elements)
+                .map(Node::lower)
+                .collect::<Result<_, _>>()?;
             return Ok(Factor::Tuple(TupleLit::new(fields, span)));
         }
 
-        if first.rule() == Rule::placeholder {
-            return Err(ParseError::GroupedPlaceholder { span: first.span() });
+        // A comma-free item must be a value. The shared grammar also admits
+        // conditions, so neither a negation nor a comparison suffix may be
+        // discarded when the item is interpreted as a grouped expression.
+        let item_span = first.span();
+        let mut parts = first.children();
+        let value = parts.next_any("grouped operand")?;
+        if value.rule() == Rule::placeholder {
+            return Err(ParseError::GroupedPlaceholder { span: value.span() });
+        }
+        if value.rule() != Rule::arithmetic_expr || parts.next().is_some() {
+            return Err(ParseError::Syntax {
+                span: item_span,
+                message: "expected a value expression".into(),
+            });
         }
 
-        // Redundant parentheses collapse to the same factor. Peel them here
-        // so their depth does not add recursive AST-construction frames.
-        let mut operands = first.clone().children();
-        let factor = operands.next_any("initial factor")?;
+        // Peel redundant parentheses before lowering the expression. Lowering
+        // first would recurse once per wrapper even though all wrappers vanish.
+        let mut operands = value.clone().children();
+        let factor = operands.require(Rule::factor)?;
         if operands.next().is_none() {
             let inner = factor.children().next_any("factor value")?;
             if inner.rule() == Rule::paren_factor {
@@ -211,8 +257,7 @@ fn parse_paren_factor(mut node: Node) -> Result<Factor, ParseError> {
                 continue;
             }
         }
-
-        let expr: Arithmetic = first.lower()?;
+        let expr: Arithmetic = value.lower()?;
         return Ok(expr.into_factor());
     }
 }
@@ -379,6 +424,12 @@ impl fmt::Display for Arithmetic {
 
 impl Lexeme for Arithmetic {
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
+        if node.rule() != Rule::arithmetic_expr {
+            return Err(ParseError::Syntax {
+                span: node.span(),
+                message: "expected a value expression".into(),
+            });
+        }
         let span = node.span();
         let mut children = node.children();
         let initial = children.next_any("initial factor")?;
@@ -406,12 +457,41 @@ impl Lexeme for Arithmetic {
 
 #[cfg(test)]
 mod tests {
-    use ArithmeticOperator::Plus;
-    use Factor::Var;
+    use flowlog_common::FileId;
+    use pest::Parser as _;
+    use pest::error::ErrorVariant;
     use rstest::rstest;
 
     use super::*;
+    use crate::FlowLogParser;
+    use crate::assert_err;
     use crate::test_util::parse_node;
+    use crate::test_util::parse_pair;
+    use crate::types::DataType;
+
+    #[rstest]
+    #[case("x")]
+    #[case("x, y")]
+    fn nested_value_parentheses_are_fully_consumed(#[case] inner: &str) {
+        let source = format!("{}{inner}{}", "(".repeat(256), ")".repeat(256));
+        let pairs = FlowLogParser::parse(Rule::arithmetic_expr, &source).unwrap();
+        assert_eq!(pairs.as_str(), source);
+    }
+
+    #[rstest]
+    #[case::unclosed("x", "")]
+    #[case::missing_operand("x +", ")")]
+    fn malformed_nested_parentheses_are_rejected(#[case] inner: &str, #[case] close: &str) {
+        let source = format!("{}{inner}{}", "(".repeat(256), close.repeat(256));
+        let err = FlowLogParser::parse(Rule::paren_factor, &source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[test]
+    fn empty_parentheses_are_rejected() {
+        let err = FlowLogParser::parse(Rule::paren_factor, "()").unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
 
     #[rstest]
     #[case("?x")]
@@ -437,36 +517,39 @@ mod tests {
         );
     }
 
-    /// `vars()` preserves order and duplicates; `vars_set()` dedups. The
-    /// two accessors exist because downstream passes need both: variable
-    /// binding passes count occurrences (repeat = join predicate), while
-    /// scope analysis needs the unique set. Collapsing either one into
-    /// the other would silently break one of those callers.
-    #[test]
-    fn vars_preserves_dups_vars_set_dedups() {
-        // x + x + y: vars = [x, x, y], vars_set = {x, y}
-        let a = Arithmetic::new(
-            Var("x".into()),
-            vec![(Plus, Var("x".into())), (Plus, Var("y".into()))],
-        );
-        let x = "x".to_string();
-        let y = "y".to_string();
-        assert_eq!(a.vars(), vec![&x, &x, &y]);
-        assert_eq!(a.vars_set().len(), 2);
+    #[rstest]
+    #[case("x + x + y", vec!["x", "x", "y"])]
+    #[case("a * (b + c)", vec!["a", "b", "c"])]
+    #[case("f(x, x + y)", vec!["x", "x", "y"])]
+    #[case("(x, y, x)", vec!["x", "y", "x"])]
+    fn vars_preserve_source_order_and_occurrences(
+        #[case] source: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let expr: Arithmetic = parse_node(Rule::arithmetic_expr, source);
+        assert_eq!(expr.vars(), expected);
     }
 
-    /// Every operator spelling round-trips through parse and Display.
+    #[test]
+    fn vars_set_contains_each_variable_once() {
+        let expr: Arithmetic = parse_node(Rule::arithmetic_expr, "x + x + y");
+        let vars: HashSet<_> = expr.vars_set().into_iter().map(String::as_str).collect();
+        assert_eq!(vars, HashSet::from(["x", "y"]));
+    }
+
     #[rstest]
-    #[case("x + y")]
-    #[case("x - y")]
-    #[case("x * y")]
-    #[case("x / y")]
-    #[case("x % y")]
-    fn display_round_trips_each_operator(#[case] src: &str) {
-        assert_eq!(
-            parse_node::<Arithmetic>(Rule::arithmetic_expr, src).to_string(),
-            src
-        );
+    #[case("+", ArithmeticOperator::Plus)]
+    #[case("-", ArithmeticOperator::Minus)]
+    #[case("*", ArithmeticOperator::Multiply)]
+    #[case("/", ArithmeticOperator::Divide)]
+    #[case("%", ArithmeticOperator::Modulo)]
+    fn operators_parse_and_display_their_surface_spelling(
+        #[case] source: &str,
+        #[case] expected: ArithmeticOperator,
+    ) {
+        let op: ArithmeticOperator = parse_node(Rule::arithmetic_op, source);
+        assert_eq!(op, expected);
+        assert_eq!(op.to_string(), source);
     }
 
     #[rstest]
@@ -517,59 +600,32 @@ mod tests {
         }
     }
 
-    /// A parenthesised sub-expression parses into `Factor::Group`,
-    /// preserves its inner variables (in order), and round-trips through
-    /// `Display` with its parentheses intact: without the preserved group,
-    /// `a * (b + c)` would fold as `a * b + c`.
+    /// Dropping this group would turn `a * (b + c)` into `a * b + c`.
     #[test]
     fn multi_term_parens_parse_as_group() {
         let arith: Arithmetic = parse_node(Rule::arithmetic_expr, "a * (b + c)");
 
-        // init = `a`; rest = [(*, Group(b + c))].
         assert!(matches!(arith.init(), Factor::Var(v) if v == "a"));
         let (op, factor) = &arith.rest()[0];
         assert!(matches!(op, ArithmeticOperator::Multiply));
         assert!(matches!(factor, Factor::Group(_)));
 
-        // Variables recurse through the group, preserving order.
-        let a = "a".to_string();
-        let b = "b".to_string();
-        let c = "c".to_string();
-        assert_eq!(arith.vars(), vec![&a, &b, &c]);
-
-        // Parentheses survive the round-trip.
         assert_eq!(arith.to_string(), "a * (b + c)");
+        assert_eq!(arith, parse_node(Rule::arithmetic_expr, &arith.to_string()));
     }
 
-    /// Parentheses around a single factor are semantically transparent and
-    /// collapse to the bare factor at parse time: `(x)`, `("c")`, and
-    /// `(f(x))` must behave exactly like their unparenthesised forms in
-    /// fact detection, subtype narrowing, and assignment recognition.
-    /// Nested parens around a multi-term expression collapse to one `Group`.
-    #[test]
-    fn single_factor_parens_collapse_to_the_factor() {
-        let parse = |src: &str| -> Factor {
-            parse_node::<Arithmetic>(Rule::arithmetic_expr, src)
-                .init()
-                .clone()
-        };
-
-        assert!(matches!(parse("(x)"), Factor::Var(v) if v == "x"));
-        assert!(matches!(parse("(((x)))"), Factor::Var(v) if v == "x"));
-        assert!(matches!(parse("(\"boolean\")"), Factor::Const(_)));
-        // Nested parens: `((b + c))` is one Group around the expression.
-        let Factor::Group(inner) = parse("((b + c))") else {
-            panic!("expected Group");
-        };
-        assert!(matches!(inner.init(), Factor::Var(v) if v == "b"));
-        assert!(!inner.rest().is_empty());
+    /// A single factor keeps its identity when parentheses are removed.
+    #[rstest]
+    #[case("(x)", Factor::Var("x".into()))]
+    #[case("(((x)))", Factor::Var("x".into()))]
+    #[case("(42)", Factor::Const(Constant::new(DataType::IntLit, "42")))]
+    #[case("(f(x))", Factor::FnCall(FnCall::new("f".into(), vec![Arithmetic::var("x")], Span::DUMMY)))]
+    fn single_factor_parens_collapse_to_the_factor(#[case] source: &str, #[case] expected: Factor) {
+        assert_eq!(parse_node::<Factor>(Rule::factor, source), expected);
     }
 
-    /// A comma is what commits parens to a tuple literal: a lone trailing
-    /// comma is a 1-tuple, a `_` element stays a placeholder, and a
-    /// trailing comma after multiple elements is accepted but renders
-    /// canonically without it. Comma-free parens are grouping, pinned by
-    /// `single_factor_parens_collapse_to_the_factor`.
+    /// The comma must distinguish `(a,)` from grouping, including after
+    /// canonical rendering removes a trailing comma from a longer tuple.
     #[rstest]
     #[case("(a,)", "(a,)")]
     #[case("(_, b)", "(_, b)")]
@@ -577,35 +633,31 @@ mod tests {
     #[case("(a, b,)", "(a, b)")]
     #[case("(_,)", "(_,)")]
     fn comma_commits_parens_to_a_tuple(#[case] src: &str, #[case] rendered: &str) {
-        let arith: Arithmetic = parse_node(Rule::arithmetic_expr, src);
-        assert!(matches!(arith.init(), Factor::Tuple(_)), "src={src}");
-        assert_eq!(arith.to_string(), rendered);
+        let factor: Factor = parse_node(Rule::factor, src);
+        assert!(matches!(factor, Factor::Tuple(_)), "src={src}");
+        assert_eq!(factor.to_string(), rendered);
+        assert_eq!(factor, parse_node(Rule::factor, rendered));
     }
 
     #[rstest]
     #[case("(_)")]
     #[case("(((_)))")]
     fn grouped_placeholder_is_rejected(#[case] src: &str) {
-        use flowlog_common::FileId;
-
-        use crate::assert_err;
-        use crate::test_util::parse_pair;
-
-        let pair = parse_pair(Rule::arithmetic_expr, src);
-        let result = Arithmetic::from_parsed_rule(Node::new(pair, FileId::new(0)));
-        assert_err!(result, ParseError::GroupedPlaceholder { .. });
+        let node = Node::new(parse_pair(Rule::factor, src), FileId::new(0));
+        assert_err!(
+            node.lower::<Factor>(),
+            ParseError::GroupedPlaceholder { span } if &src[span.range()] == "_"
+        );
     }
 
-    /// A 200-deep paren nest parses and collapses redundant groups.
-    /// Under split `(`-headed rules this input would hang the suite; the
-    /// mechanism is documented at `paren_factor` in grammar.pest
-    /// (issue #289).
+    /// Removing redundant parentheses must preserve the expression, including
+    /// the distinction between a grouped arithmetic operation and a tuple.
     #[rstest]
     #[case("x", "x")]
     #[case("a+b*c", "(a + (b * c))")]
     #[case("a,b", "(a, b)")]
     #[case("x,", "(x,)")]
-    fn deeply_nested_parens_parse_without_backtracking_blowup(
+    fn redundant_parentheses_preserve_expression_shape(
         #[case] inner: &str,
         #[case] rendered: &str,
     ) {
@@ -626,58 +678,39 @@ mod tests {
         assert_eq!(&src[group.span().range()], "a+b*c");
     }
 
-    /// A 200-deep unclosed paren nest is rejected; the failure path must
-    /// stay free of the re-parsing blowup too (issue #289).
     #[test]
-    fn unclosed_paren_nest_is_rejected_without_backtracking_blowup() {
-        use pest::Parser as _;
-
-        use crate::FlowLogParser;
-
-        assert!(FlowLogParser::parse(Rule::arithmetic_expr, &"(".repeat(200)).is_err());
+    fn malformed_cast_is_not_accepted_as_a_value_call() {
+        let err = FlowLogParser::parse(Rule::arithmetic_expr, "as(x, 5)").unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
     }
 
-    /// Empty parens are rejected by the grammar: `paren_factor` requires
-    /// at least one element.
-    #[test]
-    fn empty_parens_are_rejected() {
-        use pest::Parser as _;
-
-        use crate::FlowLogParser;
-
-        assert!(FlowLogParser::parse(Rule::arithmetic_expr, "()").is_err());
+    #[rstest]
+    #[case("(x > 1)", "x > 1", "expected a value expression")]
+    #[case(
+        "(Edge(x); Other(x))",
+        "(Edge(x); Other(x))",
+        "expected a value expression, found a disjunction"
+    )]
+    #[case("(!Edge(x))", "!Edge(x)", "expected a value expression")]
+    #[case("f(_)", "_", "expected a value expression")]
+    #[case("c.f(x)", "c.f(x)", "value function names cannot be qualified")]
+    fn predicate_syntax_is_rejected_in_value_context(
+        #[case] src: &str,
+        #[case] invalid: &str,
+        #[case] expected_message: &str,
+    ) {
+        let node = Node::new(parse_pair(Rule::factor, src), FileId::new(0));
+        assert_err!(
+            node.lower::<Factor>(),
+            ParseError::Syntax { span, message }
+                if &src[span.range()] == invalid && message == expected_message
+        );
     }
 
-    /// A malformed cast stops the expression at the bare `as`, leaving
-    /// `(x, 5)` for the enclosing rule, rather than being taken as a call
-    /// named `as` (issue #298).
-    #[test]
-    fn malformed_cast_is_not_accepted_as_a_call() {
-        use crate::test_util::parse_pair;
-
-        // `5` is not a type, so `as_cast` fails at its type argument.
-        assert_eq!(parse_pair(Rule::arithmetic_expr, "as(x, 5)").as_str(), "as");
-    }
-
-    /// The reserved-name guard keys on a whole word, so a UDF whose name
-    /// only starts with `as` is still a call.
     #[test]
     fn udf_whose_name_starts_with_as_still_parses() {
-        let arith: Arithmetic = parse_node(Rule::arithmetic_expr, "assert(x)");
-        assert!(matches!(arith.init(), Factor::FnCall(c) if c.name() == "assert"));
-    }
-
-    /// A 200-deep unterminated cast nest stops at the bare `as` instead of
-    /// re-parsing every level; the mechanism is documented at `call_expr`
-    /// in grammar.pest (issue #298). A *valid* nest cannot pin this: pest
-    /// never backtracks out of a successful alternative, so only a failing
-    /// nest exercises the retry.
-    #[test]
-    fn unclosed_cast_nest_is_refused_without_backtracking_blowup() {
-        use crate::test_util::parse_pair;
-
-        let src = "as(".repeat(200);
-        assert_eq!(parse_pair(Rule::arithmetic_expr, &src).as_str(), "as");
+        let factor: Factor = parse_node(Rule::factor, "assert(x)");
+        assert!(matches!(factor, Factor::FnCall(c) if c.name() == "assert"));
     }
 
     /// Each grammar factor kind parses to its variant. Contents are tested
@@ -692,7 +725,7 @@ mod tests {
     #[case("(a, b)", "tuple")]
     #[case("(a + b)", "group")]
     fn factor_parses_each_variant(#[case] src: &str, #[case] expected: &str) {
-        let kind = match parse_node::<Arithmetic>(Rule::arithmetic_expr, src).init() {
+        let kind = match parse_node::<Factor>(Rule::factor, src) {
             Factor::Var(_) => "var",
             Factor::Const(_) => "const",
             Factor::FnCall(_) => "fncall",
@@ -703,6 +736,34 @@ mod tests {
             Factor::TupleProj { .. } => "tupleproj",
         };
         assert_eq!(kind, expected, "src={src}");
+    }
+
+    #[rstest]
+    #[case("x", true, false)]
+    #[case("1", false, true)]
+    #[case("f(x)", false, false)]
+    #[case("ord(x)", false, false)]
+    #[case("as(x, T)", false, false)]
+    #[case("(x + 1)", false, false)]
+    #[case("(x, y)", false, false)]
+    fn factor_classification_requires_a_bare_variable_or_constant(
+        #[case] source: &str,
+        #[case] is_var: bool,
+        #[case] is_const: bool,
+    ) {
+        let factor: Factor = parse_node(Rule::factor, source);
+        assert_eq!(factor.is_var(), is_var);
+        assert_eq!(factor.is_const(), is_const);
+    }
+
+    #[test]
+    fn synthesized_projection_is_neither_a_variable_nor_a_constant() {
+        let factor = Factor::TupleProj {
+            tuple: Box::new(Arithmetic::var("x")),
+            index: 0,
+        };
+        assert!(!factor.is_var());
+        assert!(!factor.is_const());
     }
 
     /// The single-term predicates require both "no operators" and the
@@ -719,5 +780,12 @@ mod tests {
         let a: Arithmetic = parse_node(Rule::arithmetic_expr, src);
         assert_eq!(a.is_const(), is_const);
         assert_eq!(a.is_var(), is_var);
+    }
+
+    #[test]
+    fn infix_cat_is_rejected() {
+        // The head's closing delimiter prevents accepting only the `x` prefix.
+        let err = FlowLogParser::parse(Rule::head, "C(x cat y)").unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
     }
 }

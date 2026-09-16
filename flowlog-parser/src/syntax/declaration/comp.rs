@@ -329,3 +329,41 @@ fn parse_raw_override(node: Node) -> Result<RawItem, ParseError> {
         .to_string();
     Ok(RawItem::Override { name, span })
 }
+
+#[cfg(test)]
+mod tests {
+    use pest::Parser as _;
+    use pest::error::ErrorVariant;
+    use rstest::rstest;
+
+    use crate::FlowLogParser;
+    use crate::Rule;
+
+    #[rstest]
+    #[case::complete(true)]
+    #[case::unclosed(false)]
+    fn component_syntax_handles_nested_declarations(#[case] closed: bool) {
+        let close = if closed {
+            "}".repeat(256)
+        } else {
+            String::new()
+        };
+        let source = format!("{} .decl R(x: number){close}", ".comp C {".repeat(256));
+        let result = FlowLogParser::parse(Rule::comp_decl, &source);
+        if closed {
+            assert_eq!(result.unwrap().as_str(), source);
+        } else {
+            assert!(matches!(
+                result.unwrap_err().variant,
+                ErrorVariant::ParsingError { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn override_outside_comp_is_rejected() {
+        let err = FlowLogParser::parse(Rule::main_grammar, ".decl Foo(x: number)\n.override Foo\n")
+            .unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+}

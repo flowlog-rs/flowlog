@@ -14,7 +14,6 @@ use crate::Lexeme;
 use crate::Node;
 use crate::Rule;
 use crate::error::ParseError;
-use crate::error::grammar_bug;
 
 /// An argument to an atom: variable, constant, or `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,15 +35,39 @@ impl fmt::Display for AtomArg {
 
 impl Lexeme for AtomArg {
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
-        let inner = node.children().next_any("argument value")?;
+        let span = node.span();
+        // Inside shared parentheses, a call argument arrives as an expression
+        // until the enclosing predicate identifies the call as a relation.
+        let inner = match node.rule() {
+            Rule::atom_arg => node.children().next_any("atom argument")?,
+            Rule::placeholder => node,
+            Rule::arithmetic_expr => {
+                let mut children = node.children();
+                let factor = children.require(Rule::factor)?;
+                if children.next().is_some() {
+                    return Err(ParseError::Syntax {
+                        span,
+                        message: "expected a constant, variable or '_' argument".into(),
+                    });
+                }
+                factor.children().next_any("atom argument")?
+            }
+            _ => {
+                return Err(ParseError::Syntax {
+                    span,
+                    message: "expected a constant, variable or '_' argument".into(),
+                });
+            }
+        };
         Ok(match inner.rule() {
             Rule::variable => Self::Var(inner.text().to_string()),
             Rule::constant => Self::Const(inner.lower()?),
             Rule::placeholder => Self::Placeholder,
-            other => {
-                return Err(grammar_bug(format!(
-                    "invalid atom argument rule: {other:?}"
-                )));
+            _ => {
+                return Err(ParseError::Syntax {
+                    span: inner.span(),
+                    message: "expected a constant, variable or '_' argument".into(),
+                });
             }
         })
     }
@@ -149,17 +172,12 @@ impl fmt::Display for Atom {
 impl Lexeme for Atom {
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         let span = node.span();
-        let mut children = node.children();
-
-        let raw_name = children.next_any("relation name")?.text().to_string();
+        let mut arguments = node.children();
+        let name = arguments.next_any("relation name")?;
+        let raw_name = name.text().to_string();
         let name = raw_name.to_lowercase();
         let fingerprint = compute_fp(&name);
-
-        let arguments = children
-            .filter(|c| c.rule() == Rule::atom_arg)
-            .map(|c| c.lower::<AtomArg>())
-            .collect::<Result<Vec<_>, _>>()?;
-
+        let arguments = arguments.map(Node::lower).collect::<Result<_, _>>()?;
         Ok(Self {
             name,
             raw_name,
@@ -172,11 +190,37 @@ impl Lexeme for Atom {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::FileId;
+    use pest::Parser as _;
+    use pest::error::ErrorVariant;
     use rstest::rstest;
 
     use super::*;
+    use crate::FlowLogParser;
+    use crate::assert_err;
     use crate::test_util::parse_node;
+    use crate::test_util::parse_pair;
     use crate::types::DataType;
+
+    #[rstest]
+    #[case("as(x, T)")]
+    #[case("as()")]
+    #[case("as.Edge(x)")]
+    #[case("c.as(x)")]
+    fn atom_names_cannot_contain_keyword_segments(#[case] source: &str) {
+        let err = FlowLogParser::parse(Rule::atom, source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case("Edge(x + 1)")]
+    #[case("Edge((x))")]
+    #[case("Edge(f(x))")]
+    #[case("Edge(x, c.T)")]
+    fn atom_syntax_rejects_value_expressions_and_types(#[case] source: &str) {
+        let err = FlowLogParser::parse(Rule::atom, source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
 
     #[rstest]
     #[case("x", AtomArg::Var("x".into()))]
@@ -185,8 +229,21 @@ mod tests {
     #[case("?True", AtomArg::Var("?True".into()))]
     #[case("_", AtomArg::Placeholder)]
     #[case("42", AtomArg::Const(Constant::new(DataType::IntLit, "42")))]
-    fn atom_arg_parses_each_variant(#[case] src: &str, #[case] expected: AtomArg) {
-        assert_eq!(parse_node::<AtomArg>(Rule::atom_arg, src), expected);
+    fn atom_arg_parses_each_variant(
+        #[values(Rule::atom_arg, Rule::call_arg)] start_rule: Rule,
+        #[case] src: &str,
+        #[case] expected: AtomArg,
+    ) {
+        assert_eq!(parse_node::<AtomArg>(start_rule, src), expected);
+    }
+
+    #[rstest]
+    #[case("x + 1")]
+    #[case("(x)")]
+    #[case("f(x)")]
+    fn expression_arguments_cannot_be_lowered_as_atom_arguments(#[case] source: &str) {
+        let node = Node::new(parse_pair(Rule::call_arg, source), FileId::new(0));
+        assert_err!(node.lower::<AtomArg>(), ParseError::Syntax { .. });
     }
 
     #[test]

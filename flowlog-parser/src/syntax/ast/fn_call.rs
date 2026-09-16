@@ -74,7 +74,44 @@ impl fmt::Display for FnCall {
 
 #[cfg(test)]
 mod tests {
+    use pest::Parser as _;
+    use pest::error::ErrorVariant;
+    use rstest::rstest;
+
     use super::*;
+    use crate::FlowLogParser;
+    use crate::Rule;
+
+    #[rstest]
+    #[case("as(x, T)")]
+    #[case("as(x, 5)")]
+    #[case("f(x, cfg.Type)")]
+    #[case("f(x, (field: number))")]
+    fn call_syntax_excludes_casts_and_type_arguments(#[case] source: &str) {
+        let err = FlowLogParser::parse(Rule::call_expr, source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case::complete(true)]
+    #[case::unclosed(false)]
+    fn call_syntax_handles_nested_arguments(#[case] closed: bool) {
+        let close = if closed {
+            ")".repeat(256)
+        } else {
+            String::new()
+        };
+        let source = format!("{}x{close}", "f(".repeat(256));
+        let result = FlowLogParser::parse(Rule::call_expr, &source);
+        if closed {
+            assert_eq!(result.unwrap().as_str(), source);
+        } else {
+            assert!(matches!(
+                result.unwrap_err().variant,
+                ErrorVariant::ParsingError { .. }
+            ));
+        }
+    }
 
     /// `my_udf(x, y)` built directly.
     fn call() -> FnCall {

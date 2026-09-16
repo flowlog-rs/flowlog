@@ -15,6 +15,12 @@ let program = parse("program.dl", &[], &mut sm, &mut config)?;
 
 `parse` runs the whole pipeline; `check_program`, `fold_constants`, and `prune` expose the individual stages, and the AST layer is public for tools that work on the syntax directly.
 
+The `keyword` rule in [grammar.pest](src/grammar.pest) defines reserved words.
+They cannot be used as identifiers, including qualified name segments.
+Matching is case-sensitive and applies to complete tokens: `assert` and
+`as_value` are ordinary names; `?as` and `?True` are variables. Built-in function,
+aggregate, and primitive type names retain their context-dependent meaning.
+
 ## Layout
 
 - `types` — the type vocabulary (`DataType`, the registry).
