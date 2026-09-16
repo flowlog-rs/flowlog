@@ -242,17 +242,22 @@ impl PlanGraph {
         );
     }
 
+    /// Registers the operator range of an `i32` aggregate.
+    ///
+    /// `seeded` must match whether the runtime emits an empty-group default;
+    /// otherwise every following operator address is shifted.
     pub fn i32_aggregate_operator(
         &mut self,
         name: String,
         input_variable_name: String,
         output_variable_name: String,
+        seeded: bool,
     ) {
         self.push_node(
             format!("{}: aggregate", name),
             vec![input_variable_name],
             Some(output_variable_name),
-            steps::I32_AGGREGATE,
+            steps::I32_AGGREGATE + if seeded { steps::I32_AGGREGATE_SEED } else { 0 },
             None,
         );
     }

@@ -1,4 +1,4 @@
-//! Non-recursive flow codegen — two entry points per stratum:
+//! Non-recursive flow codegen, with two entry points per stratum:
 //!
 //! - **Core flows.** The stratum's non-recursive transformations; a
 //!   recursive stratum can also carry these when the planner factors
@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::mem;
 
 use flowlog_common::ExecutionMode;
+use flowlog_parser::AggregationOperator;
 use flowlog_planner::planner::StratumPlanner;
 use flowlog_profiler::PlanGraph;
 use flowlog_profiler::with_plan_graph;
@@ -22,6 +23,7 @@ use tracing::trace;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
+use crate::codegen::aggregation::aggregation_empty_key;
 use crate::codegen::aggregation::aggregation_kind;
 use crate::codegen::aggregation::aggregation_merge;
 use crate::codegen::aggregation::aggregation_split;
@@ -112,10 +114,11 @@ impl CodeGen {
                 let split = aggregation_split(*agg_arity, *agg_pos);
                 let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
                 let op_name = format!("Reduce: {}", self.display_name(*idb_fp));
+                let empty_key = aggregation_empty_key(*agg_arity);
                 block = quote! {
                     #block
                     let #output = ::flowlog_runtime::operators::flowlog_reduce(
-                        #output, #op_name, #kind, #split, #merge,
+                        #output, #op_name, #kind, #empty_key, #split, #merge,
                     );
                 };
 
@@ -124,12 +127,19 @@ impl CodeGen {
                 // has to predict the same way.
                 let name = self.display_name(*idb_fp);
                 let binding = output.to_string();
+                let seeded = *agg_arity == 1
+                    && match agg_op {
+                        AggregationOperator::Count | AggregationOperator::Sum => true,
+                        AggregationOperator::Min
+                        | AggregationOperator::Max
+                        | AggregationOperator::Avg => false,
+                    };
                 with_plan_graph(plan_graph, |plan_graph| match self.config.mode() {
                     ExecutionMode::Batch => {
                         plan_graph.present_aggregate_operator(name, binding.clone(), binding);
                     }
                     ExecutionMode::Inc => {
-                        plan_graph.i32_aggregate_operator(name, binding.clone(), binding);
+                        plan_graph.i32_aggregate_operator(name, binding.clone(), binding, seeded);
                     }
                 });
             }

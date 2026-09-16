@@ -1,7 +1,4 @@
-// ════════════════════════════════════════════════════════════════════════════
-// Suite   : agg_count
-// Feature : count aggregation with grouping over joined IDB
-// ════════════════════════════════════════════════════════════════════════════
+// Grouped and global aggregates, including empty and recursive inputs.
 
 .decl Edge(src: int32, dst: int32)
 .input Edge(IO="file", filename="Edge.csv", delimiter=",")
@@ -15,3 +12,35 @@ Weighted(s, d) :- Edge(s, d), Weight(s, d, _).
 .decl OutDeg(src: int32, cnt: int32)
 OutDeg(s, count(d)) :- Weighted(s, d).
 .output OutDeg
+
+.decl Total(cnt: int32)
+Total(count((s, d))) :- Weighted(s, d).
+.output Total
+
+.decl EmptyCount(cnt: int32)
+EmptyCount(count((s, d))) :- Weighted(s, d), s < 0.
+
+.decl Zero(cnt: int32)
+Zero(n) :- EmptyCount(n), n = 0.
+.output Zero
+
+.decl EmptySum(total: int32)
+EmptySum(sum(d)) :- Weighted(_, d), d < 0.
+.output EmptySum
+
+.decl RecursiveCount(total: int32)
+RecursiveCount(count(x)) :- RecursiveCount(x), x < 0.
+.output RecursiveCount
+
+.decl RecursiveSum(total: int32)
+RecursiveSum(sum(x)) :- RecursiveSum(x), x < 0.
+.output RecursiveSum
+
+// The initial zero starts feedback; final output must fold original inputs.
+.decl GrowingCount(total: int32)
+GrowingCount(count(x)) :- GrowingCount(n), n < 3, x = n + 10.
+.output GrowingCount
+
+.decl GrowingSum(total: int32)
+GrowingSum(sum(x)) :- GrowingSum(n), n < 3, x = n + 1.
+.output GrowingSum

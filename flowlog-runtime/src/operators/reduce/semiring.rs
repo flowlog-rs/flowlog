@@ -77,8 +77,8 @@ int_scalar!(u32, u64);
 int_scalar!(u64, u64);
 
 /// One [`Scalar`] impl per float column type. `MIN` / `MAX` are the
-/// infinities rather than the finite bounds, so that `Smallest` and `Largest` start
-/// from a true identity.
+/// infinities rather than the finite bounds, so that `Smallest` and `Largest`
+/// start from a true identity.
 macro_rules! float_scalar {
     ($inner:ty) => {
         impl Scalar for OrderedFloat<$inner> {
@@ -133,8 +133,9 @@ pub trait Semiring: Monoid + Copy + 'static {
 /// Declares a semiring whose accumulation is one binary operation over a
 /// single column value.
 ///
-/// `is_zero` is `false` throughout: these have no absorbing element, and
-/// reporting one would let Differential Dataflow drop a live aggregate.
+/// A result can equal the numeric identity, such as a sum of zero.
+/// `is_zero` must stay `false` so Differential Dataflow does not mistake
+/// that valid result for an absent record and discard it.
 macro_rules! value_semiring {
     (
         $name:ident,
