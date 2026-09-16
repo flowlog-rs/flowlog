@@ -521,7 +521,7 @@ mod tests {
             panic!("got {err:?}");
         };
         assert_eq!(*kind, UnsafePredicateKind::Comparison);
-        assert_eq!(predicate, "is_positive(z) == True");
+        assert_eq!(predicate, "is_positive(z) = True");
         assert_eq!(sm.snippet(*predicate_span), "is_positive(z) = True");
         assert_eq!(
             sm.snippet(*rule_span),

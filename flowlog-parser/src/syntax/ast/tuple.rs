@@ -5,8 +5,8 @@
 //! [`TupleElem`] is an expression or a `_` placeholder (the latter only
 //! meaningful when destructuring: it discards the matched component).
 //!
-//! This is the term-level literal; the tuple *type* (`.type T = ( ... )`) lives in
-//! the type registry, and the dual projection node is `Factor::TupleProj`.
+//! Tuple types (`.type T = (...)`) live in the type registry.
+//! `Factor::TupleProj` represents a projection of one tuple component.
 
 use std::fmt;
 
@@ -20,6 +20,10 @@ use crate::Rule;
 use crate::error::ParseError;
 use crate::error::grammar_bug;
 
+// =============================================================================
+// TupleLit
+// =============================================================================
+
 /// A tuple literal `( e0, e1, ... )` (value/pattern position). Each element is
 /// either an expression or a `_` placeholder (only meaningful when
 /// destructuring: it discards the matched component).
@@ -29,13 +33,6 @@ pub struct TupleLit {
     fields: Vec<TupleElem>,
     #[educe(PartialEq(ignore), Hash(ignore))]
     span: Span,
-}
-
-/// One element of a [`TupleLit`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TupleElem {
-    Expr(Arithmetic),
-    Placeholder,
 }
 
 impl TupleLit {
@@ -105,10 +102,38 @@ impl fmt::Display for TupleLit {
     }
 }
 
+// =============================================================================
+// TupleElem
+// =============================================================================
+
+/// One tuple field: a value expression or a destructuring placeholder.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TupleElem {
+    Expr(Arithmetic),
+    Placeholder,
+}
+
 impl Lexeme for TupleElem {
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
-        // No wrapper rule exists for elements: the node is the value
-        // itself, an expression or a placeholder.
+        // A `paren_item` can contain a condition because value parentheses
+        // share their recursive grammar with rule bodies. In a tuple it must
+        // be one expression or placeholder, with no comparison suffix.
+        let node = if node.rule() == Rule::paren_item {
+            let span = node.span();
+            let mut parts = node.children();
+            let value = parts.next_any("tuple element")?;
+            if !matches!(value.rule(), Rule::arithmetic_expr | Rule::placeholder)
+                || parts.next().is_some()
+            {
+                return Err(ParseError::Syntax {
+                    span,
+                    message: "expected a value expression".into(),
+                });
+            }
+            value
+        } else {
+            node
+        };
         Ok(match node.rule() {
             Rule::arithmetic_expr => Self::Expr(node.lower()?),
             Rule::placeholder => Self::Placeholder,
@@ -119,7 +144,13 @@ impl Lexeme for TupleElem {
 
 #[cfg(test)]
 mod tests {
+    use flowlog_common::FileId;
+    use rstest::rstest;
+
     use super::*;
+    use crate::assert_err;
+    use crate::test_util::parse_node;
+    use crate::test_util::parse_pair;
 
     /// A `( x, _ )` literal: one expression element, one placeholder.
     fn expr_and_placeholder() -> TupleLit {
@@ -185,16 +216,32 @@ mod tests {
         assert_eq!(one.to_string(), "(x,)");
     }
 
-    /// An element value node lowers to the variant its rule selects: an
-    /// expression to `Expr`, a bare `_` to `Placeholder`.
-    #[test]
-    fn from_parsed_rule_lowers_expr_and_placeholder() {
-        use crate::test_util::parse_node;
+    #[rstest]
+    fn expression_elements_accept_direct_and_parenthesized_items(
+        #[values(Rule::arithmetic_expr, Rule::paren_item)] start: Rule,
+    ) {
+        let field: TupleElem = parse_node(start, "x + 1");
+        assert!(matches!(field, TupleElem::Expr(expr) if expr.to_string() == "x + 1"));
+    }
 
-        let expr: TupleElem = parse_node(Rule::arithmetic_expr, "x + 1");
-        assert!(matches!(expr, TupleElem::Expr(_)));
-
-        let hole: TupleElem = parse_node(Rule::placeholder, "_");
+    #[rstest]
+    fn placeholder_elements_accept_direct_and_parenthesized_items(
+        #[values(Rule::placeholder, Rule::paren_item)] start: Rule,
+    ) {
+        let hole: TupleElem = parse_node(start, "_");
         assert!(matches!(hole, TupleElem::Placeholder));
+    }
+
+    #[rstest]
+    #[case("x > 0")]
+    #[case("!R(x)")]
+    #[case("!match(x, y)")]
+    fn tuple_elements_reject_conditions(#[case] source: &str) {
+        let node = Node::new(parse_pair(Rule::paren_item, source), FileId::new(0));
+        assert_err!(
+            node.lower::<TupleElem>(),
+            ParseError::Syntax { span, message }
+                if &source[span.range()] == source && message == "expected a value expression"
+        );
     }
 }

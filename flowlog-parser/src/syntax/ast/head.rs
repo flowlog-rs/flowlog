@@ -11,6 +11,7 @@ use flowlog_common::compute_fp;
 
 use super::Aggregation;
 use super::Arithmetic;
+use super::Factor;
 use crate::Lexeme;
 use crate::Node;
 use crate::Rule;
@@ -51,28 +52,20 @@ impl fmt::Display for HeadArg {
 }
 
 impl Lexeme for HeadArg {
-    /// Parse a head argument from the grammar.
-    ///
-    /// Optimization: if the arithmetic is a single variable (`is_var()`), emit `Var` instead of `Arith`.
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         let inner = node.children().next_any("head argument value")?;
         Ok(match inner.rule() {
+            Rule::aggregate_expr => Self::Aggregation(inner.lower()?),
             Rule::arithmetic_expr => {
-                let arith = inner.lower::<Arithmetic>()?;
-                if arith.is_var() {
-                    let name = arith
-                        .init()
-                        .vars()
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| grammar_bug("is_var() but no variable in init"))?
-                        .clone();
-                    Self::Var(name)
+                let arith: Arithmetic = inner.lower()?;
+                if arith.rest().is_empty()
+                    && let Factor::Var(name) = arith.init()
+                {
+                    Self::Var(name.clone())
                 } else {
                     Self::Arith(arith)
                 }
             }
-            Rule::aggregate_expr => Self::Aggregation(inner.lower()?),
             other => {
                 return Err(grammar_bug(format!(
                     "unexpected rule for HeadArg: {other:?}"
@@ -180,20 +173,14 @@ impl fmt::Display for Head {
 }
 
 impl Lexeme for Head {
-    /// Parse `relation_name "(" (head_arg ("," head_arg)*)? ")"`.
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         let span = node.span();
         let mut children = node.children();
-
-        let raw_name = children.next_any("relation name")?.text().to_string();
+        let name = children.require(Rule::relation_ref)?;
+        let raw_name = name.text().to_string();
         let name = raw_name.to_lowercase();
         let head_fingerprint = compute_fp(&name);
-
-        let head_arguments: Vec<HeadArg> = children
-            .filter(|c| c.rule() == Rule::head_arg)
-            .map(|c| c.lower::<HeadArg>())
-            .collect::<Result<_, _>>()?;
-
+        let head_arguments = children.map(Node::lower).collect::<Result<_, _>>()?;
         Ok(Self {
             name,
             raw_name,
@@ -206,8 +193,86 @@ impl Lexeme for Head {
 
 #[cfg(test)]
 mod tests {
+    use pest::Parser as _;
+    use pest::error::ErrorVariant;
+    use rstest::rstest;
+
     use super::*;
     use crate::AggregationOperator;
+    use crate::FlowLogParser;
+    use crate::test_util::parse_node;
+
+    #[test]
+    fn cast_keyword_cannot_name_a_head_relation() {
+        let err = FlowLogParser::parse(Rule::head, "as(x, T)").unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case("sum(x) + 1")]
+    #[case("count(x) * y")]
+    fn aggregate_must_occupy_the_entire_head_argument(#[case] source: &str) {
+        let err = FlowLogParser::parse(Rule::head, &format!("H({source})")).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[test]
+    fn head_arguments_do_not_admit_negation() {
+        let err = FlowLogParser::parse(Rule::head, "H(!f(x))").unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case::aggregate("f(", "")]
+    #[case::value_fallback("f(", ", y")]
+    #[case::aggregate_named_calls("sum(", "")]
+    fn nested_head_operands_are_fully_consumed(#[case] open: &str, #[case] suffix: &str) {
+        let operand = format!("{}x{}", open.repeat(256), ")".repeat(256));
+        let source = format!("H(sum({operand}{suffix}))");
+        let pairs = FlowLogParser::parse(Rule::head, &source).unwrap();
+        assert_eq!(pairs.as_str(), source);
+    }
+
+    #[rstest]
+    #[case("f(")]
+    #[case("sum(")]
+    fn unclosed_nested_head_operands_are_rejected(#[case] open: &str) {
+        let source = format!("H(sum({}x", open.repeat(256));
+        let err = FlowLogParser::parse(Rule::head, &source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case("count(x)", "aggregate")]
+    #[case("COUNT(x)", "aggregate")]
+    #[case("average(x)", "aggregate")]
+    #[case("AVG(x)", "aggregate")]
+    #[case("sum(x + 1)", "aggregate")]
+    #[case("min(x)", "aggregate")]
+    #[case("max(x)", "aggregate")]
+    #[case("x", "variable")]
+    #[case("(x)", "variable")]
+    #[case("(sum(x))", "value")]
+    #[case("sum(x, y)", "value")]
+    #[case("sum()", "value")]
+    #[case("summary(x)", "value")]
+    #[case("countdown(x)", "value")]
+    #[case("Sum(x)", "value")]
+    #[case("avg(x)", "value")]
+    #[case("f(sum(x))", "value")]
+    #[case("as(x, T)", "value")]
+    fn calls_are_aggregates_only_as_direct_head_arguments(
+        #[case] source: &str,
+        #[case] expected: &str,
+    ) {
+        let arg: HeadArg = parse_node(Rule::head_arg, source);
+        let kind = match arg {
+            HeadArg::Var(_) => "variable",
+            HeadArg::Arith(_) => "value",
+            HeadArg::Aggregation(_) => "aggregate",
+        };
+        assert_eq!(kind, expected);
+    }
 
     /// `HeadArg::vars` must return the *real* referenced variables for each
     /// variant: a constant/empty/"xyzzy" stand-in return would break every
@@ -221,7 +286,7 @@ mod tests {
         assert_eq!(HeadArg::Arith(Arithmetic::var("Y")).vars(), vec![&y]);
 
         let z = "Z".to_string();
-        let agg = Aggregation::new(AggregationOperator::Sum, Arithmetic::var("Z"));
+        let agg = Aggregation::new(AggregationOperator::Sum, Arithmetic::var("Z"), Span::DUMMY);
         assert_eq!(HeadArg::Aggregation(agg).vars(), vec![&z]);
     }
 
@@ -231,7 +296,7 @@ mod tests {
     fn head_arg_display_renders_each_variant() {
         assert_eq!(HeadArg::Var("X".into()).to_string(), "X");
         assert_eq!(HeadArg::Arith(Arithmetic::var("Y")).to_string(), "Y");
-        let agg = Aggregation::new(AggregationOperator::Sum, Arithmetic::var("Z"));
+        let agg = Aggregation::new(AggregationOperator::Sum, Arithmetic::var("Z"), Span::DUMMY);
         assert_eq!(HeadArg::Aggregation(agg).to_string(), "sum(Z)");
     }
 

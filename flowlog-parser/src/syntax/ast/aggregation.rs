@@ -38,7 +38,6 @@ impl fmt::Display for AggregationOperator {
 }
 
 impl Lexeme for AggregationOperator {
-    /// Parse an aggregation operator from the grammar.
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         let op = node.children().next_any("operator keyword")?;
         Ok(match op.rule() {
@@ -67,12 +66,11 @@ pub struct Aggregation {
 }
 
 impl Aggregation {
-    #[cfg(test)]
-    pub fn new(operator: AggregationOperator, arithmetic: Arithmetic) -> Self {
+    pub(super) fn new(operator: AggregationOperator, arithmetic: Arithmetic, span: Span) -> Self {
         Self {
             operator,
             arithmetic,
-            span: Span::DUMMY,
+            span,
         }
     }
 
@@ -116,37 +114,57 @@ impl fmt::Display for Aggregation {
 }
 
 impl Lexeme for Aggregation {
-    /// Parse an aggregation from the grammar.
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         let span = node.span();
         let mut children = node.children();
-        let operator = children.lower_next::<AggregationOperator>("operator")?;
-        let arithmetic = children.lower_next::<Arithmetic>("arithmetic expression")?;
-        Ok(Self {
-            operator,
-            arithmetic,
-            span,
-        })
+        let operator = children.lower_next("aggregate operator")?;
+        let arithmetic = children.lower_next("aggregate operand")?;
+        Ok(Self::new(operator, arithmetic, span))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use flowlog_common::FileId;
-    use pest::Parser;
+    use rstest::rstest;
 
     use super::*;
-    use crate::FlowLogParser;
-    use crate::Lexeme;
-    use crate::Rule;
+    use crate::test_util::parse_node;
+
+    #[rstest]
+    #[case("min", AggregationOperator::Min)]
+    #[case("MIN", AggregationOperator::Min)]
+    #[case("max", AggregationOperator::Max)]
+    #[case("MAX", AggregationOperator::Max)]
+    #[case("count", AggregationOperator::Count)]
+    #[case("COUNT", AggregationOperator::Count)]
+    #[case("sum", AggregationOperator::Sum)]
+    #[case("SUM", AggregationOperator::Sum)]
+    #[case("average", AggregationOperator::Avg)]
+    #[case("AVG", AggregationOperator::Avg)]
+    fn aggregate_operator_spellings_lower_to_their_variant(
+        #[case] source: &str,
+        #[case] expected: AggregationOperator,
+    ) {
+        assert_eq!(
+            parse_node::<AggregationOperator>(Rule::aggregate_op, source),
+            expected
+        );
+    }
 
     #[test]
-    fn parse_aggregate_expr() {
-        let mut pairs = FlowLogParser::parse(Rule::aggregate_expr, "sum(price * qty)").unwrap();
-        let agg = Aggregation::from_parsed_rule(Node::new(pairs.next().unwrap(), FileId::new(0)))
-            .unwrap();
+    fn aggregate_preserves_operator_and_operand() {
+        let agg: Aggregation = parse_node(Rule::aggregate_expr, "sum(price * qty)");
         assert_eq!(*agg.operator(), AggregationOperator::Sum);
-        assert_eq!(agg.vars().len(), 2);
+        assert_eq!(agg.arithmetic().to_string(), "price * qty");
+        assert_eq!(agg.vars(), vec!["price", "qty"]);
+    }
+
+    #[test]
+    fn aggregate_preserves_source_spans() {
+        let agg: Aggregation = parse_node(Rule::aggregate_expr, "sum(price * qty)");
+        assert_eq!((agg.span().start(), agg.span().end()), (0, 16));
+        let operand_span = agg.arithmetic().span();
+        assert_eq!((operand_span.start(), operand_span.end()), (4, 15));
     }
 
     /// `Display` for `AggregationOperator` renders the surface keyword:
@@ -170,7 +188,7 @@ mod tests {
     /// so a no-op `fmt` (empty output) is caught.
     #[test]
     fn aggregation_display_renders_op_and_expr() {
-        let agg = Aggregation::new(AggregationOperator::Sum, Arithmetic::var("x"));
+        let agg = Aggregation::new(AggregationOperator::Sum, Arithmetic::var("x"), Span::DUMMY);
         assert_eq!(agg.to_string(), "sum(x)");
     }
 }

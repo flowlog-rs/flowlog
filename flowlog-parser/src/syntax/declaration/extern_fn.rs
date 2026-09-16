@@ -74,6 +74,7 @@ impl ExternFn {
         let span = node.span();
         let mut children = node.children();
 
+        children.require(Rule::fn_kw)?;
         let name = children.next_any("name")?.text().to_string();
 
         let mut params = Vec::new();
@@ -137,9 +138,22 @@ fn parse_param(node: Node, registry: &TypeRegistry) -> Result<Attribute, ParseEr
 #[cfg(test)]
 mod tests {
     use flowlog_common::FileId;
+    use pest::Parser as _;
+    use pest::error::ErrorVariant;
+    use rstest::rstest;
 
     use super::*;
+    use crate::FlowLogParser;
     use crate::test_util::parse_pair;
+
+    #[rstest]
+    #[case(".extern fn as(x: number) -> number")]
+    #[case(".extern fn f(as: number) -> number")]
+    #[case(".extern fnname(x: number) -> number")]
+    fn extern_syntax_separates_keywords_from_names(#[case] source: &str) {
+        let err = FlowLogParser::parse(Rule::extern_fn, source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
 
     fn ext(src: &str) -> ExternFn {
         let registry = TypeRegistry::new();

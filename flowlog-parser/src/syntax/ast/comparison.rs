@@ -1,7 +1,7 @@
-//! Comparison expressions for FlowLog Datalog programs.
+//! Value comparisons and string constraints, including their source locations.
 //!
-//! - [`ComparisonOperator`]: `== | != | > | >= | < | <=`
-//! - [`ComparisonExpr`]: `{left} {op} {right}`
+//! [`ComparisonOperator`] identifies the operation and string negation;
+//! [`ComparisonExpr`] owns both operands and their surface rendering.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -16,83 +16,93 @@ use crate::Rule;
 use crate::error::ParseError;
 use crate::error::grammar_bug;
 
-/// Comparison operator. The arithmetic comparisons (`==`, `<`, ...) are
-/// symmetric value tests; `Match`/`Contains` are the string constraints
-/// (`match(pat, s)`, `contains(sub, s)`): binary boolean operators over two
-/// string operands, with the surface `!` negation folded into the operator.
+// =============================================================================
+// ComparisonOperator
+// =============================================================================
+
+/// Equality, ordering, or a string constraint over two operands.
+/// String constraints carry their own negation; value comparisons do not
+/// introduce a unary `!` operator.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ComparisonOperator {
-    Equal,            // ==
-    NotEqual,         // !=
-    GreaterThan,      // >
-    GreaterEqualThan, // >=
-    LessThan,         // <
-    LessEqualThan,    // <=
-    /// match(pat, s).
+    Equal,
+    NotEqual,
+    GreaterThan,
+    GreaterEqualThan,
+    LessThan,
+    LessEqualThan,
+    /// Tests the right operand against the left operand's regular expression.
     Match {
         negated: bool,
     },
-    /// contains(sub, s).
+    /// Tests whether the right operand contains the left operand's substring.
     Contains {
         negated: bool,
     },
 }
 
 impl ComparisonOperator {
+    /// Returns `true` for strict or inclusive ordering comparisons.
     #[must_use]
     #[inline]
     pub fn is_ordering(&self) -> bool {
-        matches!(
-            self,
-            Self::LessThan | Self::LessEqualThan | Self::GreaterThan | Self::GreaterEqualThan
-        )
+        match self {
+            Self::LessThan | Self::LessEqualThan | Self::GreaterThan | Self::GreaterEqualThan => {
+                true
+            }
+            Self::Equal | Self::NotEqual | Self::Match { .. } | Self::Contains { .. } => false,
+        }
     }
 
-    /// Whether this is a string constraint (`match`/`contains`) rather than
-    /// an arithmetic comparison.
+    /// Returns `true` for a string constraint with either polarity.
     #[must_use]
     #[inline]
     pub fn is_string_constraint(&self) -> bool {
-        matches!(self, Self::Match { .. } | Self::Contains { .. })
+        match self {
+            Self::Match { .. } | Self::Contains { .. } => true,
+            Self::Equal
+            | Self::NotEqual
+            | Self::LessThan
+            | Self::LessEqualThan
+            | Self::GreaterThan
+            | Self::GreaterEqualThan => false,
+        }
+    }
+
+    /// Parses a `string_constraint_op`, including the enclosing constraint's
+    /// negation.
+    fn from_string_constraint(node: Node, negated: bool) -> Result<Self, ParseError> {
+        let keyword = node.children().next_any("string constraint keyword")?;
+        Ok(match keyword.rule() {
+            Rule::match_op => Self::Match { negated },
+            Rule::contains_op => Self::Contains { negated },
+            other => return Err(grammar_bug(format!("unknown string constraint: {other:?}"))),
+        })
     }
 }
 
 impl fmt::Display for ComparisonOperator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // String constraints render in their surface call form via
-        // `ComparisonExpr`'s Display; standalone we show the keyword.
-        let sym = match self {
-            Self::Equal => "==",
+        f.write_str(match self {
+            Self::Equal => "=",
             Self::NotEqual => "!=",
             Self::GreaterThan => ">",
             Self::GreaterEqualThan => ">=",
             Self::LessThan => "<",
             Self::LessEqualThan => "<=",
-            Self::Match { negated } => {
-                return write!(f, "{}match", if *negated { "!" } else { "" });
-            }
-            Self::Contains { negated } => {
-                return write!(f, "{}contains", if *negated { "!" } else { "" });
-            }
-        };
-        write!(f, "{sym}")
+            Self::Match { negated: false } => "match",
+            Self::Match { negated: true } => "!match",
+            Self::Contains { negated: false } => "contains",
+            Self::Contains { negated: true } => "!contains",
+        })
     }
 }
 
-/// Map a `string_constraint_op` node (`match` | `contains`) to its
-/// [`ComparisonOperator`], folding in `negated`.
-fn string_constraint_op(node: Node, negated: bool) -> Result<ComparisonOperator, ParseError> {
-    let kw = node.children().next_any("constraint keyword")?;
-    Ok(match kw.rule() {
-        Rule::match_op => ComparisonOperator::Match { negated },
-        Rule::contains_op => ComparisonOperator::Contains { negated },
-        other => return Err(grammar_bug(format!("unknown string constraint: {other:?}"))),
-    })
-}
-
 impl Lexeme for ComparisonOperator {
-    /// Parse a comparison operator from the grammar.
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
+        if node.rule() == Rule::string_constraint_op {
+            return Self::from_string_constraint(node, false);
+        }
         let op = node.children().next_any("operator symbol")?;
         Ok(match op.rule() {
             Rule::equal => Self::Equal,
@@ -110,7 +120,12 @@ impl Lexeme for ComparisonOperator {
     }
 }
 
-/// `{left} {op} {right}` boolean comparison.
+// =============================================================================
+// ComparisonExpr
+// =============================================================================
+
+/// An infix value comparison or a string constraint in call notation.
+/// Equality and hashing ignore source locations.
 #[derive(Debug, Clone, Educe)]
 #[educe(PartialEq, Eq, Hash)]
 pub struct ComparisonExpr {
@@ -122,9 +137,36 @@ pub struct ComparisonExpr {
 }
 
 impl ComparisonExpr {
-    /// Build a comparison directly.
+    /// Recognizes a bare `call_expr` as a string constraint. Returns `None`
+    /// for another name, a different arity, or a placeholder argument.
+    /// Once recognized, invalid value operands produce a parse error.
+    pub(super) fn from_parenthesized_call(node: Node) -> Result<Option<Self>, ParseError> {
+        let span = node.span();
+        let mut children = node.children();
+        let name = children.next_any("call name")?;
+        if name.rule() != Rule::string_constraint_op {
+            return Ok(None);
+        }
+        let operator = name.lower()?;
+        let (Some(left), Some(right)) = (children.next(), children.next()) else {
+            return Ok(None);
+        };
+        if children.next().is_some()
+            || left.rule() == Rule::placeholder
+            || right.rule() == Rule::placeholder
+        {
+            return Ok(None);
+        }
+        Ok(Some(Self::new(
+            left.lower()?,
+            operator,
+            right.lower()?,
+            span,
+        )))
+    }
+
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         left: Arithmetic,
         operator: ComparisonOperator,
         right: Arithmetic,
@@ -138,43 +180,6 @@ impl ComparisonExpr {
         }
     }
 
-    /// Parse a `string_constraint` node (`match`/`contains`, optionally `!`-negated)
-    /// into a comparison whose operator is [`ComparisonOperator::Match`] /
-    /// [`ComparisonOperator::Contains`]. `left` is the first argument (pattern /
-    /// substring), `right` the subject string.
-    pub(crate) fn from_string_constraint(node: Node) -> Result<Self, ParseError> {
-        let span = node.span();
-
-        // Grammar is `not_op? ~ string_constraint_op ~ ...`, so `not_op` (if any)
-        // precedes the operator, so `negated` is known when we reach it.
-        let mut negated = false;
-        let mut operator = None;
-        let mut args: Vec<Arithmetic> = Vec::with_capacity(2);
-        for child in node.children() {
-            match child.rule() {
-                Rule::not_op => negated = true,
-                Rule::string_constraint_op => {
-                    operator = Some(string_constraint_op(child, negated)?)
-                }
-                Rule::arithmetic_expr => args.push(child.lower::<Arithmetic>()?),
-                other => {
-                    return Err(grammar_bug(format!(
-                        "unexpected node in string_constraint: {other:?}"
-                    )));
-                }
-            }
-        }
-        let operator = operator.ok_or_else(|| grammar_bug("string_constraint missing operator"))?;
-        let mut args = args.into_iter();
-        let left = args
-            .next()
-            .ok_or_else(|| grammar_bug("string_constraint missing first argument"))?;
-        let right = args
-            .next()
-            .ok_or_else(|| grammar_bug("string_constraint missing second argument"))?;
-        Ok(Self::new(left, operator, right, span))
-    }
-
     /// Source location this comparison was parsed from.
     #[must_use]
     #[inline]
@@ -182,21 +187,18 @@ impl ComparisonExpr {
         self.span
     }
 
-    /// Left-hand expression.
     #[must_use]
     #[inline]
     pub fn left(&self) -> &Arithmetic {
         &self.left
     }
 
-    /// Operator.
     #[must_use]
     #[inline]
     pub fn operator(&self) -> &ComparisonOperator {
         &self.operator
     }
 
-    /// Right-hand expression.
     #[must_use]
     #[inline]
     pub fn right(&self) -> &Arithmetic {
@@ -213,7 +215,7 @@ impl ComparisonExpr {
         &mut self.right
     }
 
-    /// Unique variables referenced on either side (deduplicated).
+    /// Unique variables referenced across both operands.
     #[must_use]
     pub fn vars_set(&self) -> HashSet<&String> {
         let mut vars = self.left.vars_set();
@@ -233,30 +235,95 @@ impl fmt::Display for ComparisonExpr {
 }
 
 impl Lexeme for ComparisonExpr {
-    /// Parse `arithmetic ~ comparison_operator ~ arithmetic`.
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
         let span = node.span();
-        let mut children = node.children();
-        let left = children.lower_next::<Arithmetic>("left operand")?;
-        let operator = children.lower_next::<ComparisonOperator>("operator")?;
-        let right = children.lower_next::<Arithmetic>("right operand")?;
-        Ok(Self {
-            left,
-            operator,
-            right,
-            span,
-        })
+        match node.rule() {
+            Rule::compare_expr | Rule::paren_item => {
+                // A comparison inside shared parentheses has the same three
+                // children as `compare_expr`; only its enclosing rule differs.
+                let mut children = node.children();
+                let left = children.lower_next("left operand")?;
+                let operator = children.lower_next("comparison operator")?;
+                let right = children.lower_next("right operand")?;
+                Ok(Self::new(left, operator, right, span))
+            }
+            Rule::string_constraint | Rule::negative_string_constraint => {
+                let negated = node.rule() == Rule::negative_string_constraint;
+                let mut children = node.children();
+                if negated {
+                    children.require(Rule::not_op)?;
+                    children = children.require(Rule::string_constraint)?.children();
+                }
+                let operator = ComparisonOperator::from_string_constraint(
+                    children.require(Rule::string_constraint_op)?,
+                    negated,
+                )?;
+                let left = children.lower_next("left operand")?;
+                let right = children.lower_next("right operand")?;
+                Ok(Self::new(left, operator, right, span))
+            }
+            other => Err(grammar_bug(format!("invalid comparison rule: {other:?}"))),
+        }
     }
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
 
 #[cfg(test)]
 mod tests {
     use flowlog_common::FileId;
+    use pest::Parser as _;
+    use pest::error::ErrorVariant;
     use rstest::rstest;
 
     use super::*;
+    use crate::FlowLogParser;
+    use crate::assert_err;
     use crate::test_util::parse_node;
     use crate::test_util::parse_pair;
+
+    #[rstest]
+    #[case("match(")]
+    #[case("contains(")]
+    fn nested_string_constraint_syntax_is_fully_consumed(#[case] open: &str) {
+        let source = format!("{}x{}", open.repeat(256), ", y)".repeat(256));
+        let pairs = FlowLogParser::parse(Rule::string_constraint, &source).unwrap();
+        assert_eq!(pairs.as_str(), source);
+    }
+
+    #[rstest]
+    #[case("match(")]
+    #[case("contains(")]
+    fn unclosed_nested_string_constraints_are_rejected(#[case] open: &str) {
+        let source = format!("{}x", open.repeat(256));
+        let err = FlowLogParser::parse(Rule::string_constraint, &source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case("match(cfg.Type, x)")]
+    #[case("contains(x, cfg.Type)")]
+    #[case("match((field: number), x)")]
+    fn string_constraint_syntax_rejects_type_operands(#[case] source: &str) {
+        let err = FlowLogParser::parse(Rule::string_constraint, source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case("match((x > 0), y)", "x > 0")]
+    #[case("contains(x, (R(x); S(x)))", "(R(x); S(x))")]
+    fn bare_string_constraints_reject_condition_operands(
+        #[case] source: &str,
+        #[case] invalid: &str,
+    ) {
+        let node = Node::new(parse_pair(Rule::call_expr, source), FileId::new(0));
+        assert_err!(
+            ComparisonExpr::from_parenthesized_call(node),
+            ParseError::Syntax { span, .. } if &source[span.range()] == invalid
+        );
+    }
 
     #[rstest]
     #[case::equal(ComparisonOperator::Equal, false, false)]
@@ -266,8 +333,10 @@ mod tests {
     #[case::greater(ComparisonOperator::GreaterThan, true, false)]
     #[case::greater_equal(ComparisonOperator::GreaterEqualThan, true, false)]
     #[case::match_op(ComparisonOperator::Match { negated: false }, false, true)]
-    #[case::contains(ComparisonOperator::Contains { negated: true }, false, true)]
-    fn operator_classification(
+    #[case::negated_match(ComparisonOperator::Match { negated: true }, false, true)]
+    #[case::contains(ComparisonOperator::Contains { negated: false }, false, true)]
+    #[case::negated_contains(ComparisonOperator::Contains { negated: true }, false, true)]
+    fn operators_distinguish_ordering_and_string_constraints(
         #[case] op: ComparisonOperator,
         #[case] is_ordering: bool,
         #[case] is_string_constraint: bool,
@@ -277,36 +346,132 @@ mod tests {
     }
 
     #[rstest]
-    #[case::equal("x = y", ComparisonOperator::Equal)]
-    #[case::not_equal("x != y", ComparisonOperator::NotEqual)]
-    #[case::less("x < y", ComparisonOperator::LessThan)]
-    #[case::less_equal("x <= y", ComparisonOperator::LessEqualThan)]
-    #[case::greater("x > y", ComparisonOperator::GreaterThan)]
-    #[case::greater_equal("x >= y", ComparisonOperator::GreaterEqualThan)]
-    fn compare_expr_parses_its_operator(#[case] src: &str, #[case] op: ComparisonOperator) {
+    #[case(Rule::compare_op, "=", ComparisonOperator::Equal)]
+    #[case(Rule::compare_op, "!=", ComparisonOperator::NotEqual)]
+    #[case(Rule::compare_op, "<", ComparisonOperator::LessThan)]
+    #[case(Rule::compare_op, "<=", ComparisonOperator::LessEqualThan)]
+    #[case(Rule::compare_op, ">", ComparisonOperator::GreaterThan)]
+    #[case(Rule::compare_op, ">=", ComparisonOperator::GreaterEqualThan)]
+    #[case(Rule::string_constraint_op, "match", ComparisonOperator::Match { negated: false })]
+    #[case(Rule::string_constraint_op, "contains", ComparisonOperator::Contains { negated: false })]
+    fn operator_spellings_round_trip(
+        #[case] start_rule: Rule,
+        #[case] src: &str,
+        #[case] expected: ComparisonOperator,
+    ) {
+        let operator: ComparisonOperator = parse_node(start_rule, src);
+        assert_eq!(operator, expected);
+        assert_eq!(operator.to_string(), src);
         assert_eq!(
-            parse_node::<ComparisonExpr>(Rule::compare_expr, src).operator(),
-            &op
+            parse_node::<ComparisonOperator>(start_rule, &operator.to_string()),
+            operator
+        );
+    }
+
+    #[rstest]
+    #[case(Rule::compare_expr, "x = y")]
+    #[case(Rule::compare_expr, "x != y")]
+    #[case(Rule::compare_expr, "x < y")]
+    #[case(Rule::compare_expr, "x <= y")]
+    #[case(Rule::compare_expr, "x > y")]
+    #[case(Rule::compare_expr, "x >= y")]
+    #[case(Rule::string_constraint, "match(x, y)")]
+    #[case(Rule::string_constraint, "contains(x, y)")]
+    #[case(Rule::negative_string_constraint, "!match(x, y)")]
+    #[case(Rule::negative_string_constraint, "!contains(x, y)")]
+    fn comparisons_round_trip_in_source_notation(#[case] start_rule: Rule, #[case] src: &str) {
+        let expr: ComparisonExpr = parse_node(start_rule, src);
+        assert_eq!(expr.to_string(), src);
+        assert_eq!(
+            parse_node::<ComparisonExpr>(start_rule, &expr.to_string()),
+            expr
+        );
+    }
+
+    #[rstest]
+    fn comparisons_preserve_operand_order_and_spans(
+        #[values(Rule::compare_expr, Rule::paren_item)] start_rule: Rule,
+    ) {
+        let source = "x + x > y";
+        let expr: ComparisonExpr = parse_node(start_rule, source);
+        assert_eq!(&source[expr.span().range()], source);
+        assert_eq!(&source[expr.left().span().range()], "x + x");
+        assert_eq!(&source[expr.right().span().range()], "y");
+        assert_eq!(expr.operator(), &ComparisonOperator::GreaterThan);
+    }
+
+    #[rstest]
+    #[case(Rule::string_constraint, "match(x, y)", ComparisonOperator::Match { negated: false })]
+    #[case(Rule::string_constraint, "contains(x, y)", ComparisonOperator::Contains { negated: false })]
+    #[case(Rule::negative_string_constraint, "!match(x, y)", ComparisonOperator::Match { negated: true })]
+    #[case(Rule::negative_string_constraint, "!contains(x, y)", ComparisonOperator::Contains { negated: true })]
+    fn string_constraints_preserve_negation_and_source_spans(
+        #[case] start_rule: Rule,
+        #[case] source: &str,
+        #[case] expected: ComparisonOperator,
+    ) {
+        let expr: ComparisonExpr = parse_node(start_rule, source);
+        assert_eq!(expr.operator(), &expected);
+        assert_eq!(&source[expr.span().range()], source);
+        assert_eq!(&source[expr.left().span().range()], "x");
+        assert_eq!(&source[expr.right().span().range()], "y");
+    }
+
+    #[rstest]
+    #[case("match(x, y)", ComparisonOperator::Match { negated: false })]
+    #[case("contains(x, y)", ComparisonOperator::Contains { negated: false })]
+    fn bare_calls_recognize_string_constraints(
+        #[case] source: &str,
+        #[case] expected: ComparisonOperator,
+    ) {
+        let node = Node::new(parse_pair(Rule::call_expr, source), FileId::new(0));
+        let expr = ComparisonExpr::from_parenthesized_call(node)
+            .unwrap()
+            .unwrap();
+        assert_eq!(expr.operator(), &expected);
+        assert_eq!(expr.to_string(), source);
+        assert_eq!(&source[expr.span().range()], source);
+    }
+
+    #[rstest]
+    #[case("f(x, y)")]
+    #[case("Match(x, y)")]
+    #[case("match.Edge(x, y)")]
+    #[case("match()")]
+    #[case("contains(x)")]
+    #[case("match(x, y, z)")]
+    #[case("match(_, y)")]
+    #[case("contains(x, _)")]
+    fn other_bare_calls_remain_available_as_relations(#[case] source: &str) {
+        let node = Node::new(parse_pair(Rule::call_expr, source), FileId::new(0));
+        assert!(
+            ComparisonExpr::from_parenthesized_call(node)
+                .unwrap()
+                .is_none()
         );
     }
 
     #[test]
-    fn string_constraint_folds_negation_into_the_operator() {
-        let m = ComparisonExpr::from_string_constraint(Node::new(
-            parse_pair(Rule::string_constraint, "match(\"a\", x)"),
-            FileId::new(0),
-        ))
-        .unwrap();
-        assert_eq!(m.operator(), &ComparisonOperator::Match { negated: false });
+    fn vars_set_deduplicates_across_both_operands() {
+        let expr: ComparisonExpr = parse_node(Rule::compare_expr, "x + x > x + y");
+        let vars: HashSet<_> = expr.vars_set().into_iter().map(String::as_str).collect();
+        assert_eq!(vars, HashSet::from(["x", "y"]));
+    }
 
-        let c = ComparisonExpr::from_string_constraint(Node::new(
-            parse_pair(Rule::string_constraint, "!contains(\"a\", x)"),
+    #[test]
+    fn comparison_identity_ignores_source_locations() {
+        let first = ComparisonExpr::from_parsed_rule(Node::new(
+            parse_pair(Rule::compare_expr, "x > y"),
             FileId::new(0),
         ))
         .unwrap();
-        assert_eq!(
-            c.operator(),
-            &ComparisonOperator::Contains { negated: true }
-        );
+        let second = ComparisonExpr::from_parsed_rule(Node::new(
+            parse_pair(Rule::compare_expr, "x > y"),
+            FileId::new(1),
+        ))
+        .unwrap();
+        assert_ne!(first.span(), second.span());
+        assert_eq!(first, second);
+        assert_eq!(HashSet::from([first, second]).len(), 1);
     }
 }

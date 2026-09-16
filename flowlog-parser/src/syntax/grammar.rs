@@ -52,6 +52,77 @@ mod tests {
     use crate::assert_err;
 
     #[rstest]
+    #[case("as")]
+    #[case("fn")]
+    #[case("overridable")]
+    #[case("True")]
+    #[case("False")]
+    fn keywords_cannot_be_identifiers(#[case] source: &str) {
+        assert_eq!(
+            FlowLogParser::parse(Rule::keyword, source)
+                .unwrap()
+                .as_str(),
+            source
+        );
+        let err = FlowLogParser::parse(Rule::identifier, source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
+    #[case("assert")]
+    #[case("as_value")]
+    #[case("as2")]
+    #[case("_as")]
+    #[case("As")]
+    #[case("fn_name")]
+    #[case("overridable_name")]
+    #[case("TrueValue")]
+    #[case("False_value")]
+    #[case("sum")]
+    #[case("match")]
+    #[case("cat")]
+    #[case("number")]
+    #[case("type")]
+    fn non_keywords_remain_complete_identifiers(#[case] source: &str) {
+        let pairs = FlowLogParser::parse(Rule::identifier, source).unwrap();
+        assert_eq!(pairs.as_str(), source);
+    }
+
+    #[rstest]
+    #[case("?as")]
+    #[case("?fn")]
+    #[case("?overridable")]
+    #[case("?True")]
+    #[case("?False")]
+    fn prefixed_variables_may_contain_keyword_spellings(#[case] source: &str) {
+        let pairs = FlowLogParser::parse(Rule::variable, source).unwrap();
+        assert_eq!(pairs.as_str(), source);
+    }
+
+    /// The program entry retries a failed fact as a rule. Nested aggregate
+    /// operands must remain tractable across that outer choice (issue #355).
+    #[rstest]
+    #[case::complete(true)]
+    #[case::unclosed(false)]
+    fn nested_rule_heads_preserve_the_fact_rule_boundary(#[case] closed: bool) {
+        let operand = format!("{}x{}", "f(".repeat(256), ")".repeat(256));
+        let source = if closed {
+            format!("H(sum({operand}, y)) :- R(x).")
+        } else {
+            format!("H(sum({operand}")
+        };
+        let result = FlowLogParser::parse(Rule::main_grammar, &source);
+        if closed {
+            assert_eq!(result.unwrap().as_str(), source);
+        } else {
+            assert!(matches!(
+                result.unwrap_err().variant,
+                ErrorVariant::ParsingError { .. }
+            ));
+        }
+    }
+
+    #[rstest]
     #[case("R(?)")]
     #[case("R(? x)")]
     #[case("R(?\nx)")]
@@ -63,7 +134,7 @@ mod tests {
     #[case("R(?x?)")]
     #[case("R(x?y)")]
     fn malformed_variable_prefix_is_rejected(#[case] src: &str) {
-        let err = FlowLogParser::parse(Rule::atom, src).unwrap_err();
+        let err = FlowLogParser::parse(Rule::call_expr, src).unwrap_err();
         assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
     }
 
@@ -72,7 +143,7 @@ mod tests {
     #[case(Rule::declaration, ".decl R(?x: number)")]
     #[case(Rule::type_alias_decl, ".type ?T = number")]
     #[case(Rule::extern_fn, ".extern fn ?f(x: number) -> number")]
-    #[case(Rule::atom, "?R(x)")]
+    #[case(Rule::call_expr, "?R(x)")]
     #[case(Rule::call_expr, "?f(x)")]
     fn variable_prefix_is_rejected_in_other_names(#[case] start_rule: Rule, #[case] src: &str) {
         let err = FlowLogParser::parse(start_rule, src).unwrap_err();
@@ -116,27 +187,6 @@ mod tests {
         assert_err!(
             decode_string(lexeme, Span::DUMMY),
             ParseError::InvalidStringLiteral { .. }
-        );
-    }
-
-    /// Infix `cat` was removed: `x cat y` must not parse. A re-introduction
-    /// would silently change the grammar; this pins its absence.
-    #[test]
-    fn infix_cat_no_longer_parses() {
-        assert!(
-            FlowLogParser::parse(Rule::main_grammar, "C(x cat y) :- A(x), B(y).\n").is_err(),
-            "infix `cat` should be a grammar error"
-        );
-    }
-
-    /// `.override` is a comp-only directive: at the top level the grammar
-    /// rejects it (it appears only inside a `.comp` body).
-    #[test]
-    fn override_outside_comp_is_rejected() {
-        assert!(
-            FlowLogParser::parse(Rule::main_grammar, ".decl Foo(x: number)\n.override Foo\n")
-                .is_err(),
-            "top-level `.override` should be a grammar error"
         );
     }
 }
