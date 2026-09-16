@@ -18,6 +18,7 @@ use quote::quote;
 
 use crate::codegen::CodeGen;
 use crate::codegen::CodegenError;
+use crate::codegen::aggregation::aggregation_empty_key;
 use crate::codegen::aggregation::aggregation_kind;
 use crate::codegen::aggregation::aggregation_merge;
 use crate::codegen::aggregation::aggregation_split;
@@ -168,7 +169,7 @@ impl CodeGen {
     }
 
     /// For each recursive IDB: union its contributing heads, dedup, then
-    /// optionally apply aggregation. Produces `next_X` bindings for feedback.
+    /// optionally apply aggregation. Produces bindings for feedback.
     fn collect_unions(
         &mut self,
         idb_to_heads_map: &HashMap<u64, Vec<u64>>,
@@ -236,10 +237,17 @@ impl CodeGen {
                 let split = aggregation_split(*agg_arity, *agg_pos);
                 let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
                 let op_name = format!("Reduce: {output_name}");
+                let empty_key = aggregation_empty_key(*agg_arity);
+                let aggregated = format_ident!("aggregated_{idb_fp}");
+                next_bindings.insert(*idb_fp, aggregated.clone());
+                // Keep both streams: feedback needs the current answers, but
+                // the batch boundary fold needs the original contributions.
+                // In particular, a seeded count result of 0 is an answer,
+                // not an input row that should be counted again at leave.
                 block = quote! {
                     #block
-                    let #next_ident = ::flowlog_runtime::operators::flowlog_reduce(
-                        #next_ident, #op_name, #kind, #split, #merge,
+                    let #aggregated = ::flowlog_runtime::operators::flowlog_reduce(
+                        #next_ident.clone(), #op_name, #kind, #empty_key, #split, #merge,
                     );
                 };
 
@@ -247,16 +255,28 @@ impl CodeGen {
                 // and the two build different operators, so the plan graph
                 // has to predict the same way.
                 let binding = next_ident.to_string();
+                let seeded = *agg_arity == 1
+                    && match agg_op {
+                        AggregationOperator::Count | AggregationOperator::Sum => true,
+                        AggregationOperator::Min
+                        | AggregationOperator::Max
+                        | AggregationOperator::Avg => false,
+                    };
                 with_plan_graph(plan_graph, |plan_graph| match self.config.mode() {
                     ExecutionMode::Batch => {
                         plan_graph.present_aggregate_operator(
                             output_name,
                             binding.clone(),
-                            binding,
+                            aggregated.to_string(),
                         );
                     }
                     ExecutionMode::Inc => {
-                        plan_graph.i32_aggregate_operator(output_name, binding.clone(), binding);
+                        plan_graph.i32_aggregate_operator(
+                            output_name,
+                            binding.clone(),
+                            aggregated.to_string(),
+                            seeded,
+                        );
                     }
                 });
             }
@@ -309,11 +329,23 @@ impl CodeGen {
                     let split = aggregation_split(*agg_arity, *agg_pos);
                     let agg_type = self.agg_column_type(*fp, *agg_pos)?;
                     let merge = aggregation_merge(*agg_arity, *agg_pos, &agg_type);
+                    // Min/max can fold their improving bounds: the final
+                    // extreme is unchanged, and fewer rows cross the boundary.
+                    // Count/sum/avg need original contributions. For example,
+                    // summing running answers 2 and 5 would give 7, although
+                    // the original inputs 2 and 3 sum to 5.
+                    let input = match agg_op {
+                        AggregationOperator::Min | AggregationOperator::Max => next_ident.clone(),
+                        AggregationOperator::Count
+                        | AggregationOperator::Sum
+                        | AggregationOperator::Avg => format_ident!("next_{fp}"),
+                    };
+                    let empty_key = aggregation_empty_key(*agg_arity);
 
                     with_plan_graph(plan_graph, |plan_graph| {
                         plan_graph.recursive_pre_leave_present_aggregate_operator(
                             self.display_name(*fp),
-                            next_ident.to_string(),
+                            input.to_string(),
                             next_ident.to_string(),
                         );
                     });
@@ -321,7 +353,7 @@ impl CodeGen {
                     let op_name = format!("ReduceLeave: {}", self.display_name(*fp));
                     return Ok(quote! {
                         ::flowlog_runtime::operators::flowlog_reduce_leave(
-                            #next_ident, scope, #op_name, #kind, #split, #merge,
+                            #input, scope, #op_name, #kind, #empty_key, #split, #merge,
                         )
                     });
                 }

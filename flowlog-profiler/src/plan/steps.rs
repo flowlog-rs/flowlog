@@ -42,10 +42,16 @@ pub(crate) fn arrange(is_key_only: bool) -> u32 {
 /// - Map (row chop) + ArrangeByKey + Reduce + AsCollection (merge)
 pub(crate) const I32_AGGREGATE: u32 = 4;
 
-/// Operators from the `Present` aggregate, the monoid fast path via
-/// `threshold_semigroup` (skips the second arrange `reduce` would add):
+/// Additional operators for an `i32` aggregate with an empty-group default:
 ///
-/// - (5): Map + `.threshold_semigroup()` (3) + Map
+/// - ToStreamBuilder + Concatenate
+pub(crate) const I32_AGGREGATE_SEED: u32 = 2;
+
+/// Operators from the `Present` aggregate, carrying contributions as weights:
+///
+/// - Lift (1) + `.threshold_semigroup()` (3) + Lower (1)
+///
+/// Lift emits the optional empty-group contribution without extra operators.
 pub(crate) const PRESENT_AGGREGATE: u32 = 5;
 
 /// Operators from the post-leave `Present` aggregate, merging semiring

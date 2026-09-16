@@ -1,0 +1,25 @@
+.decl Item(value: symbol)
+.input Item(IO="command")
+
+.decl Total(cnt: int32)
+Total(count(value)) :- Item(value).
+.output Total
+
+.decl Empty(cnt: int32)
+Empty(n) :- Total(n), n = 0.
+.output Empty
+
+.decl Amount(value: number)
+.input Amount(IO="command")
+
+.decl SumTotal(total: number)
+SumTotal(sum(value)) :- Amount(value).
+.output SumTotal
+
+.decl RecursiveCount(total: int32)
+RecursiveCount(count(x)) :- RecursiveCount(x), x < 0.
+.output RecursiveCount
+
+.decl RecursiveSum(total: int32)
+RecursiveSum(sum(x)) :- RecursiveSum(x), x < 0.
+.output RecursiveSum

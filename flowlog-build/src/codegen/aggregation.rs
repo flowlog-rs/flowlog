@@ -1,15 +1,10 @@
-//! The pieces generated code passes to the runtime's reduce.
+//! Aggregation arguments generated from a rule's row shape.
 //!
-//! An aggregation reaches codegen already reduced to "accumulate the column
-//! at this position": the rule's arithmetic was materialized by the
-//! preceding flat map, so `sum(a + b)` arrives as a column holding `a + b`.
-//! What codegen contributes is the part it alone knows -- the row shape --
-//! as two closures, plus a name for the aggregation. Which semiring
-//! accumulates, and whether the aggregate rides in the difference position
-//! or through an arrangement, are the runtime's to decide.
-//!
-//! [`aggregation_split`] and [`aggregation_merge`] are inverses around the
-//! aggregated column: split takes it out, merge puts the result back.
+//! [`aggregation_kind`] selects the runtime aggregation;
+//! [`aggregation_split`] and [`aggregation_merge`] remove the aggregated
+//! column and put its result back. [`aggregation_empty_key`] identifies a
+//! group that exists without input. The runtime owns accumulation and
+//! decides whether that group has a defined empty result.
 
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::DataType;
@@ -33,6 +28,19 @@ pub(super) fn aggregation_kind(op: AggregationOperator) -> TokenStream {
         }
     );
     quote! { ::flowlog_runtime::operators::#name }
+}
+
+/// The group key known to exist without any input rows.
+///
+/// An aggregate-only head leaves no grouping columns, so its global group
+/// has key `()`. Other heads need input to supply their grouping keys.
+/// The runtime decides whether the aggregation defines an empty result.
+pub(super) fn aggregation_empty_key(arity: usize) -> TokenStream {
+    if arity == 1 {
+        quote! { Some(()) }
+    } else {
+        quote! { None }
+    }
 }
 
 /// Closure cutting a row into `(group-by key, aggregated column)`.

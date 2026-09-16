@@ -1,0 +1,19 @@
+begin
+commit
+begin
+put item alpha +1
+put item beta +1
+put amount 7 +1
+put amount -2 +1
+commit
+begin
+put item alpha -1
+put item beta -1
+put amount 7 -1
+put amount -2 -1
+commit
+begin
+put item gamma +1
+put amount 9 +1
+commit
+quit
