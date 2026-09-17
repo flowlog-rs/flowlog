@@ -163,6 +163,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tuple_fields_preserve_question_mark_prefixes() {
+        let (_, op, ..) =
+            split_type_alias(node(".type Pair = (?var: symbol, ?as: number)")).unwrap();
+        assert_eq!(
+            op,
+            RawTypeOp::Tuple(vec![
+                ("?var".to_string(), "symbol".to_string()),
+                ("?as".to_string(), "number".to_string()),
+            ])
+        );
+    }
+
     /// `split_type_alias` rejects `<:` (subtype) on a tuple RHS: a tuple must
     /// be defined with `=`. Tested at the producing function, not through a
     /// whole-program parse.

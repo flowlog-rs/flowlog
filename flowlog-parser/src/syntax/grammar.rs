@@ -139,8 +139,24 @@ mod tests {
     }
 
     #[rstest]
+    #[case("?")]
+    #[case("? x")]
+    #[case("?\nx")]
+    #[case("?// gap\nx")]
+    #[case("?# gap\nx")]
+    #[case("??x")]
+    #[case("?_")]
+    #[case("?1x")]
+    #[case("?x?")]
+    #[case("x?y")]
+    fn malformed_attribute_prefix_is_rejected(#[case] name: &str) {
+        let source = format!(".decl R({name}: symbol)");
+        let err = FlowLogParser::parse(Rule::declaration, &source).unwrap_err();
+        assert!(matches!(err.variant, ErrorVariant::ParsingError { .. }));
+    }
+
+    #[rstest]
     #[case(Rule::declaration, ".decl ?R(x: number)")]
-    #[case(Rule::declaration, ".decl R(?x: number)")]
     #[case(Rule::type_alias_decl, ".type ?T = number")]
     #[case(Rule::extern_fn, ".extern fn ?f(x: number) -> number")]
     #[case(Rule::call_expr, "?R(x)")]
