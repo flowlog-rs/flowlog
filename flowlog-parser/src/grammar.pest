@@ -47,8 +47,9 @@ word_boundary = _{ !(ASCII_ALPHANUMERIC | "_") }
 // Atomicity keeps whitespace and comments out of the token.
 variable = @{ "?" ~ identifier_chars | identifier }
 
-// Attribute name - names of relation attributes (columns)
-attribute_name = { identifier }
+// Schema fields accept the same spelling as rule variables so Doop
+// declarations can retain their `?` prefixes.
+attribute_name = { variable }
 
 // Relation name as it appears at a *defining* site (`.decl`). Always
 // a single identifier: dots are reserved for inliner-produced names.

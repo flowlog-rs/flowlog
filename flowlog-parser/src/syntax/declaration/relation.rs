@@ -563,6 +563,35 @@ mod tests {
         assert_eq!(rel.data_type(), vec![Int32, Str]);
     }
 
+    #[rstest]
+    #[case("?var", "?var")]
+    #[case("?Var_1", "?var_1")]
+    #[case("?_temp", "?_temp")]
+    #[case("?as", "?as")]
+    #[case("?fn", "?fn")]
+    #[case("?overridable", "?overridable")]
+    #[case("?True", "?true")]
+    #[case("?False", "?false")]
+    fn decl_preserves_attribute_prefix_through_display_roundtrip(
+        #[case] name: &str,
+        #[case] expected: &str,
+    ) {
+        let rel = parse_decl(&format!(".decl R({name}: symbol)")).unwrap();
+        assert_eq!(rel.attributes()[0].name(), expected);
+        assert_eq!(rel.data_type(), vec![Str]);
+        assert_eq!(
+            parse_decl(&rel.to_string()).unwrap().attributes(),
+            rel.attributes()
+        );
+    }
+
+    #[test]
+    fn decl_keeps_plain_and_prefixed_attribute_names_distinct() {
+        let rel = parse_decl(".decl R(x: number, ?x: symbol)").unwrap();
+        assert_eq!(rel.attributes()[0].name(), "x");
+        assert_eq!(rel.attributes()[1].name(), "?x");
+    }
+
     #[test]
     fn decl_with_unknown_attribute_type_is_rejected() {
         assert_err!(
@@ -571,13 +600,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn decl_with_duplicate_attribute_name_is_rejected() {
-        // `X` collides with `x`; attribute names are case-insensitive.
-        assert_err!(
-            parse_decl(".decl R(x: number, X: number)"),
-            ParseError::DuplicateAttribute { .. }
-        );
+    #[rstest]
+    #[case(".decl R(x: number, X: number)")]
+    #[case(".decl R(?x: number, ?X: number)")]
+    fn decl_with_duplicate_attribute_name_is_rejected(#[case] source: &str) {
+        assert_err!(parse_decl(source), ParseError::DuplicateAttribute { .. });
     }
 
     /// `overridable` is a comp-only keyword; on a top-level `.decl` it reaches
