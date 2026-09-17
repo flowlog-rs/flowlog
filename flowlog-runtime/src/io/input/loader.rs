@@ -81,8 +81,9 @@ impl<R: Relation, T: Timestamp, D: Semigroup + 'static> Loader<R, T, D> {
     /// with weight `diff`.
     ///
     /// Text uses [`Relation::INPUT_DELIMITER`] and
-    /// [`Relation::INPUT_HAS_HEADER`]. Cells are trimmed; delimiters and
-    /// line endings cannot be quoted or escaped.
+    /// [`Relation::INPUT_HAS_HEADER`]. String cells are preserved verbatim;
+    /// numeric and boolean cells ignore surrounding whitespace. Delimiters
+    /// and line endings cannot be quoted or escaped.
     ///
     /// Rejected rows are reported to stderr and skipped. File-open failures
     /// are reported and load as empty. Metadata and read failures are

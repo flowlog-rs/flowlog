@@ -25,8 +25,8 @@ pub struct TextRow<'a> {
 }
 
 impl<'a> TextRow<'a> {
-    /// Take the next cell out of `rest`, without the whitespace around it,
-    /// or refuse a row that ran out before `column`.
+    /// Takes the next cell out of `rest` verbatim, or refuses a row that ran
+    /// out before `column`.
     ///
     /// `rest` is the unconsumed remainder, and `None` once the last cell
     /// has been taken, which an empty `&str` cannot mean: a trailing empty
@@ -48,11 +48,11 @@ impl<'a> TextRow<'a> {
         match cell.as_bytes().iter().position(|&b| b == self.delim) {
             Some(i) => {
                 *rest = Some(&cell[i + 1..]);
-                Ok(cell[..i].trim())
+                Ok(&cell[..i])
             }
             None => {
                 *rest = None;
-                Ok(cell.trim())
+                Ok(cell)
             }
         }
     }
@@ -64,17 +64,19 @@ impl<'a> TextRow<'a> {
 
 /// One text cell as one slot value.
 pub trait DecodeCell: Sized {
-    /// Parse `cell`, already trimmed, or report why it is not this type.
+    /// Parses an untrimmed `cell` according to this type's whitespace rules,
+    /// or reports why it is not this type.
     fn decode_cell(cell: &str, at: Position, column: usize) -> Result<Self, RuntimeError>;
 }
 
-/// Every type that spells itself, parsed through `FromStr`, which also
-/// range-checks an integer against its width.
+/// Numeric and boolean cells ignore surrounding whitespace and parse through
+/// `FromStr`, which also range-checks an integer against its width.
 macro_rules! decode_cell {
     ($($ty:ty),+ $(,)?) => {$(
         impl DecodeCell for $ty {
             #[inline]
             fn decode_cell(cell: &str, at: Position, column: usize) -> Result<Self, RuntimeError> {
+                let cell = cell.trim();
                 cell.parse::<$ty>().map_err(|_| RuntimeError::Malformed {
                     at,
                     column,
@@ -206,12 +208,55 @@ mod tests {
         }
     }
 
-    /// A row decodes as whatever tuple its relation declares, one cell per
-    /// column, trimmed.
     #[test]
     fn a_row_decodes_as_the_declared_tuple() {
         let t: (i32, String, bool) = Decode::decode(&row("42, hello ,true")).expect("row");
-        assert_eq!(t, (42, "hello".to_string(), true));
+        assert_eq!(t, (42, " hello ".to_string(), true));
+    }
+
+    #[rstest]
+    #[case::trailing_nel("value\u{85}", "value\u{85}")]
+    #[case::leading_nel("\u{85}value", "\u{85}value")]
+    #[case::interior_nel("left\u{85}right", "left\u{85}right")]
+    #[case::only_nel("\u{85}", "\u{85}")]
+    #[case::ascii_padding(" \tvalue\u{85}\t ", " \tvalue\u{85}\t ")]
+    #[case::no_break_space("\u{a0}value\u{a0}", "\u{a0}value\u{a0}")]
+    #[case::em_space("\u{2003}value\u{2003}", "\u{2003}value\u{2003}")]
+    #[case::line_separator("\u{2028}value\u{2028}", "\u{2028}value\u{2028}")]
+    #[case::paragraph_separator("\u{2029}value\u{2029}", "\u{2029}value\u{2029}")]
+    #[case::ideographic_space("\u{3000}value\u{3000}", "\u{3000}value\u{3000}")]
+    #[case::leading_space(" value", " value")]
+    #[case::trailing_space("value ", "value ")]
+    #[case::tabs("\tvalue\t", "\tvalue\t")]
+    #[case::vertical_tabs("\u{b}value\u{b}", "\u{b}value\u{b}")]
+    #[case::form_feeds("\u{c}value\u{c}", "\u{c}value\u{c}")]
+    #[case::only_spaces("   ", "   ")]
+    #[case::only_vertical_tab("\u{b}", "\u{b}")]
+    #[case::only_form_feed("\u{c}", "\u{c}")]
+    #[case::empty("", "")]
+    fn string_cells_preserve_whitespace(#[case] cell: &str, #[case] expected: &str) {
+        let text = format!("{cell},{cell}");
+        let row = row(&text);
+        let owned: (String, String) = Decode::decode(&row).expect("owned strings");
+        assert_eq!(owned, (expected.to_owned(), expected.to_owned()));
+        let interned: (Spur, Spur) = Decode::decode(&row).expect("interned strings");
+        assert_eq!(interned, (intern(expected), intern(expected)));
+    }
+
+    #[rstest]
+    #[case::space(" ")]
+    #[case::tab("\t")]
+    #[case::line_feed("\n")]
+    #[case::carriage_return("\r")]
+    #[case::vertical_tab("\u{b}")]
+    #[case::form_feed("\u{c}")]
+    #[case::nel("\u{85}")]
+    #[case::ideographic_space("\u{3000}")]
+    fn numeric_and_boolean_cells_ignore_surrounding_whitespace(#[case] padding: &str) {
+        let text = format!("{padding}42{padding},{padding}true{padding},{padding}0.5{padding}");
+        let tuple: (i32, bool, OrderedFloat<f64>) =
+            Decode::decode(&row(&text)).expect("padded cells");
+        assert_eq!(tuple, (42, true, OrderedFloat(0.5)));
     }
 
     /// An interned column yields the key an equal string computed during
