@@ -60,17 +60,16 @@ pub(crate) const PRESENT_AGGREGATE: u32 = 5;
 /// - (4): `.consolidate()` (3) + Map
 pub(crate) const POST_LEAVE_PRESENT_AGGREGATE: u32 = 4;
 
-/// Operators from dedup at an outer scope (EDBs, rule outputs,
-/// SIP projections). Three whichever diff is ambient, differing in which:
+/// Operators from dedup at an outer scope (EDBs and rule outputs).
+/// Both modes add three operators:
 ///
 /// - batch `.consolidate()` (3)
 /// - i32 `.threshold_total()` (3)
 pub(crate) const DEDUP_NONRECURSIVE: u32 = 3;
 
-/// Operators from a dedup inside `iterate`: `flowlog_dedup` on feedback
-/// and signed SIP projections, or `.consolidate()` on presence projections:
+/// Operators from `flowlog_dedup` on feedback inside `iterate`:
 ///
-/// - batch `.threshold_semigroup(...)` / `.consolidate()` (3)
+/// - batch `.threshold_semigroup(...)` (3)
 /// - incremental `.threshold(...)` (4): `Product<u32, u16>` is not
 ///   totally ordered
 pub(crate) fn dedup_recursive(mode: ExecutionMode) -> u32 {

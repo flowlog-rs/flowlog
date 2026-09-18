@@ -78,7 +78,6 @@ use flowlog_build::Builder;
 // build.rs
 fn main() {
     if let Err(err) = Builder::default()
-        .sip(true)              // sideways information passing
         .string_intern(true)    // intern string-typed columns at ingest
         .udf_file("src/udf.rs") // included as `mod udf` in generated code
         .compile(

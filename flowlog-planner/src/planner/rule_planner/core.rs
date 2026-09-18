@@ -92,7 +92,7 @@ impl RulePlanner {
 
         // Gate: only pairs with no shared variable (an otherwise-keyed join
         // is fine as-is; the equality stays a cheap post-join filter).
-        if catalog.check_sip_pair(lhs_idx, rhs_idx)? {
+        if catalog.positive_atoms_share_variable(lhs_idx, rhs_idx)? {
             return Ok(());
         }
 

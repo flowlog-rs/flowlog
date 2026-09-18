@@ -60,7 +60,6 @@ Accepted by `tests/oracle/run_compiler.sh` and `run_lib.sh`:
 | `--keep-datasets` | off | Don't delete `<repo>/facts/<dataset>` after each pair. |
 | `--workers <n>` | 64 | Worker thread count. |
 | `--souffle-ref-cache <dir>` | — | If `<dir>/<ref>.tar.gz` exists, `cp` it instead of fetching from HuggingFace. |
-| `--sip` | off | Also test with the `--sip` optimization (binary) / `Builder::sip(true)` (lib). |
 
 > [!WARNING]
 > **If `<repo>/facts/` is a symlink, pass `--keep-datasets`.** Without

@@ -139,33 +139,6 @@ impl PlanGraph {
         );
     }
 
-    /// Like [`Self::map_join_arrange_operator`] with a dedup between the
-    /// projection and the arrangement: the SIP key-only projection dedups
-    /// when no predicate already filters it, adding the mode's dedup
-    /// operators.
-    pub fn map_dedup_arrange_operator(
-        &mut self,
-        name: String,
-        input_variable_names: Vec<String>,
-        output_variable_name: String,
-        fingerprint: u64,
-        is_key_only: bool,
-        recursive: bool,
-    ) {
-        let dedup = if recursive {
-            steps::dedup_recursive(self.mode)
-        } else {
-            steps::DEDUP_NONRECURSIVE
-        };
-        self.push_node(
-            name,
-            input_variable_names,
-            Some(output_variable_name),
-            1 + dedup + steps::arrange(is_key_only),
-            Some(fingerprint),
-        );
-    }
-
     /// Arrangement of an identity-projected input: the `flat_map` was aliased
     /// away, so only the arrangement itself remains (one fewer op than
     /// [`Self::map_join_arrange_operator`]).

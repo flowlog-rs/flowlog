@@ -72,21 +72,6 @@ impl KeyValueLayout {
         };
         (extract(self.key()), extract(self.value()))
     }
-
-    #[inline]
-    pub(crate) fn extract_atom_id(&self) -> Result<usize, PlanError> {
-        self.key()
-            .iter()
-            .chain(self.value().iter())
-            .flat_map(|pos| pos.signatures())
-            .map(|sig| sig.atom_signature().rhs_id())
-            .next()
-            .ok_or_else(|| {
-                PlanError::internal(
-                    "extract_atom_id: empty key/value layout has no atom signatures",
-                )
-            })
-    }
 }
 
 /// Transformation information, describing how to transform input collection(s)
@@ -116,8 +101,6 @@ pub(crate) enum TransformationInfo {
         output_kv_layout: KeyValueLayout,
         /// Filter predicates (equality constraints, comparisons, UDF predicates).
         predicates: KvPredicates,
-        /// SIP projection
-        is_sip_projection: bool,
     },
 
     /// Binary Join to Key-Value transformation.
@@ -202,22 +185,7 @@ impl TransformationInfo {
             input_kv_layout,
             output_kv_layout: output_fake_kv_layout,
             predicates,
-            is_sip_projection: false,
         }
-    }
-
-    /// Mark this Key-Value transformation as a SIP projection.
-    pub(crate) fn into_sip_projection(mut self) -> Result<Self, PlanError> {
-        let Self::KVToKV {
-            is_sip_projection, ..
-        } = &mut self
-        else {
-            return Err(PlanError::internal(
-                "into_sip_projection: only applicable to KVToKV transformations",
-            ));
-        };
-        *is_sip_projection = true;
-        Ok(self)
     }
 
     /// Build a Join to Key-Value transformation with a derived (fake) output fingerprint.
@@ -303,20 +271,6 @@ impl TransformationInfo {
     #[inline]
     pub(crate) fn is_neg_join(&self) -> bool {
         matches!(self, Self::AntiJoinToKV { .. })
-    }
-
-    /// `true` only for a KVToKV whose `is_sip_projection` flag is set.
-    /// A plain KVToKV filter or any join/anti-join returns `false`.
-    #[cfg(test)]
-    #[inline]
-    pub(crate) fn is_sip_projection(&self) -> bool {
-        matches!(
-            self,
-            Self::KVToKV {
-                is_sip_projection: true,
-                ..
-            }
-        )
     }
 
     // Fingerprint getters
@@ -432,23 +386,6 @@ impl TransformationInfo {
             | Self::AntiJoinToKV {
                 output_kv_layout, ..
             } => output_kv_layout,
-        }
-    }
-
-    // Layout modifier
-
-    /// Input layout modifier for SIP premap transformations; only applicable to KVToKV transformations.
-    #[inline]
-    pub(crate) fn update_input_layout(&mut self, new_input_kv_layout: KeyValueLayout) {
-        match self {
-            Self::KVToKV {
-                input_kv_layout, ..
-            } => {
-                *input_kv_layout = new_input_kv_layout;
-            }
-            _ => panic!(
-                "Planner error: update_input_layout is only applicable to KVToKV transformations"
-            ),
         }
     }
 

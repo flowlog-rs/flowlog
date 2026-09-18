@@ -24,9 +24,7 @@ use tracing::trace;
 use super::RulePlanner;
 use crate::catalog::ArithmeticPos;
 use crate::catalog::AtomArgumentSignature;
-use crate::catalog::AtomSignature;
 use crate::catalog::ComparisonExprPos;
-use crate::catalog::FactorPos;
 use crate::catalog::KvPredicates;
 use crate::planner::KeyValueLayout;
 use crate::planner::PlanError;
@@ -76,17 +74,11 @@ impl RulePlanner {
                 output_name,
                 output_kv_layout,
                 predicates,
-                is_sip_projection,
                 ..
             }) = self.transformation_infos.get(index)
             else {
                 continue;
             };
-
-            // Do not fuse SIP projection transformations
-            if *is_sip_projection {
-                continue;
-            }
 
             // Do not fuse if the input is from an EDB
             if original_atom_fp.contains(input_info_fp) {
@@ -404,19 +396,6 @@ impl RulePlanner {
             .collect()
     }
 
-    /// Remap a key-value layout so every variable signature uses the given `atom_id`,
-    /// preserving argument ids and constants.
-    fn remap_atom_kv_layout(layout: &KeyValueLayout, atom_id: usize) -> KeyValueLayout {
-        let remap = &|sig: &AtomArgumentSignature| {
-            let atom_sig = AtomSignature::new(sig.is_positive(), atom_id);
-            FactorPos::Var(AtomArgumentSignature::new(atom_sig, sig.argument_id()))
-        };
-        KeyValueLayout::new(
-            layout.key().iter().map(|p| p.map_vars(remap)).collect(),
-            layout.value().iter().map(|p| p.map_vars(remap)).collect(),
-        )
-    }
-
     fn remap_atom_signature(
         positions: &[ArithmeticPos],
         sig: &AtomArgumentSignature,
@@ -484,94 +463,32 @@ impl RulePlanner {
         Ok(())
     }
 
-    /// Collect distinct key-value layouts required by consumers of a given input fingerprint.
-    /// Sorted by minimum consumer index.
+    /// Groups consumers by their own input layouts, ordered by first use.
     fn collect_consumer_layout_indices(
-        &mut self,
+        &self,
         consumer_indices: &[usize],
         input_fp: u64,
     ) -> Result<Vec<ConsumerLayout>, PlanError> {
-        // Map from (key indices, value indices) to consumer ids
         let mut layouts: BTreeMap<(Vec<usize>, Vec<usize>), Vec<usize>> = BTreeMap::new();
-        let mut real_key_value_layout = None;
 
-        // First pass: only join and antijoin contribute real key/value layout requirements.
         for &consumer_idx in consumer_indices {
-            let join_inputs = match &self.transformation_infos[consumer_idx] {
-                TransformationInfo::JoinToKV {
-                    left_input_info_fp,
-                    right_input_info_fp,
-                    left_input_kv_layout,
-                    right_input_kv_layout,
-                    ..
-                }
-                | TransformationInfo::AntiJoinToKV {
-                    left_input_info_fp,
-                    right_input_info_fp,
-                    left_input_kv_layout,
-                    right_input_kv_layout,
-                    ..
-                } => Some((
-                    left_input_info_fp,
-                    right_input_info_fp,
-                    left_input_kv_layout,
-                    right_input_kv_layout,
-                )),
-                _ => None,
-            };
-
-            if let Some((left_fp, right_fp, left_layout, right_layout)) = join_inputs {
-                let matched_layout = if *left_fp == input_fp {
-                    left_layout
-                } else if *right_fp == input_fp {
-                    right_layout
-                } else {
-                    return Err(PlanError::internal(format!(
-                        "collect_consumer_layout_indices: consumer idx {consumer_idx} does not match input fp {input_fp:#018x} in join/antijoin layout"
-                    )));
-                };
-
-                if real_key_value_layout.is_none() {
-                    real_key_value_layout = Some(matched_layout.clone());
-                }
-                let (key_indices, value_indices) =
-                    matched_layout.extract_argument_ids_from_layout();
-                layouts
-                    .entry((key_indices, value_indices))
-                    .or_default()
-                    .push(consumer_idx);
+            let consumer = &self.transformation_infos[consumer_idx];
+            let (left_fp, right_fp) = consumer.input_info_fp();
+            let (left_layout, right_layout) = consumer.input_kv_layout();
+            let layout = if left_fp == input_fp {
+                Some(left_layout)
+            } else if right_fp == Some(input_fp) {
+                right_layout
+            } else {
+                None
             }
-        }
-
-        // Second pass: KV-to-KV consumers inherit the join/antijoin layout requirement.
-        // They don't define their own key/value split — they adopt the first join/antijoin's.
-        for &consumer_idx in consumer_indices {
-            // Only process KV-to-KV maps whose input matches this producer.
-            if !matches!(
-                &self.transformation_infos[consumer_idx],
-                TransformationInfo::KVToKV { input_info_fp, .. } if *input_info_fp == input_fp
-            ) {
-                continue;
-            }
-
-            // The canonical layout comes from the first join/antijoin seen in pass 1.
-            let layout = real_key_value_layout.clone().ok_or_else(|| {
+            .ok_or_else(|| {
                 PlanError::internal(format!(
-                    "collect_consumer_layout_indices: consumer idx {consumer_idx} missing join/antijoin layout for producer fp {input_fp:#018x}"
+                    "collect_consumer_layout_indices: consumer idx {consumer_idx} has no input layout for producer fp {input_fp:#018x}"
                 ))
             })?;
 
-            // Remap layout signatures to this consumer's atom id, then apply.
-            let consumer_tx = &mut self.transformation_infos[consumer_idx];
-            let atom_id = consumer_tx.input_kv_layout().0.extract_atom_id()?;
-            consumer_tx.update_input_layout(Self::remap_atom_kv_layout(&layout, atom_id));
-
-            // Group this consumer under the same (key, value) indices as the joins.
-            let (key_indices, value_indices) = layouts.keys().next().cloned().ok_or_else(|| {
-                PlanError::internal(format!(
-                    "collect_consumer_layout_indices: consumer idx {consumer_idx} missing join/antijoin layout keys for producer fp {input_fp:#018x}"
-                ))
-            })?;
+            let (key_indices, value_indices) = layout.extract_argument_ids_from_layout();
             layouts
                 .entry((key_indices, value_indices))
                 .or_default()
@@ -724,54 +641,6 @@ mod tests {
         assert_eq!(
             computed_keys, 2,
             "each side keys on its computed expression"
-        );
-    }
-
-    /// fuse.rs:79 explicitly skips `is_sip_projection == true`. If that
-    /// guard were removed, SIP's project→semijoin pair would collapse
-    /// into the wrong producer and SIP semantics would silently break.
-    ///
-    /// Rule shape avoids positive-subset relations among atoms so that
-    /// `prepare`'s `apply_positive_semijoin` doesn't consume the SIP
-    /// opportunities before SIP runs.
-    #[test]
-    fn fuse_map_preserves_sip_projection() {
-        let (mut planner, mut catalog) = test_setup(
-            "\
-            .decl A(a: int32, b: int32)\n\
-            .decl B(a: int32, b: int32)\n\
-            .decl C(a: int32, b: int32)\n\
-            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
-            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
-            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
-            .decl Out(x: int32, w: int32, z: int32)\n\
-            .output Out\n\
-            Out(x, w, z) :- A(x, w), B(x, y), C(y, z).\n",
-        );
-        planner.prepare(&mut catalog).expect("prepare");
-        planner.apply_sip(&mut catalog).expect("sip");
-        while !catalog.is_planned() {
-            planner.core(&mut catalog, (0, 1)).expect("core");
-        }
-
-        let sip_before = planner
-            .transformation_infos()
-            .iter()
-            .filter(|t| t.is_sip_projection())
-            .count();
-        assert!(sip_before > 0, "SIP must produce projections to test");
-
-        planner
-            .fuse(catalog.original_atom_fingerprints())
-            .expect("fuse");
-        let sip_after = planner
-            .transformation_infos()
-            .iter()
-            .filter(|t| t.is_sip_projection())
-            .count();
-        assert_eq!(
-            sip_before, sip_after,
-            "fuse must preserve every SIP projection"
         );
     }
 }

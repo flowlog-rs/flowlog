@@ -25,7 +25,7 @@ help:
 	@echo "                         full byte-diff against pre-baked Soufflé refs"
 	@echo "                         ARGS forwards to the runner; common flags:"
 	@echo "                           --keep-datasets, --workers <n>,"
-	@echo "                           --souffle-ref-cache <path>, --sip"
+	@echo "                           --souffle-ref-cache <path>"
 	@echo
 	@echo "  See tests/README.md for the per-suite contracts."
 

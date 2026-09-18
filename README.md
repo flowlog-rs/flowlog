@@ -123,7 +123,6 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 - `-B, --build-dir <DIR>` — keep the generated Rust project in this directory for subsequent builds.
 - `-T, --target-dir <DIR>` — share Cargo artifacts across build directories; overrides `CARGO_TARGET_DIR`. Relative paths start at the compiler's working directory.
 - `--mode <MODE>` — `batch` (default) or `inc`.
-- `--sip` — sideways information passing: filter later body atoms by earlier bindings to shrink joins (off by default).
 - `--str-intern` — intern string columns at load for faster joins and lower memory (off by default).
 - `-P, --profile` — collect execution statistics.
 - `-h, --help` — full help text.

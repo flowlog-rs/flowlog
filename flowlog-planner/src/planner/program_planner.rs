@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use flowlog_common::BoxError;
-use flowlog_common::Config;
 use flowlog_parser::Program;
 use flowlog_profiler::PlanGraph;
 
@@ -23,7 +22,6 @@ impl ProgramPlanner {
     /// Run the full planner pipeline against `program`: stratify, build a
     /// [`StratumPlanner`] per stratum, prune cross-stratum duplicates.
     pub fn from_program(
-        config: &Config,
         program: &Program,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Self, BoxError> {
@@ -33,7 +31,7 @@ impl ProgramPlanner {
             .strata()
             .iter()
             .map(|stratum| {
-                StratumPlanner::from_stratum(config, program, stratum, &mut optimizer, plan_graph)
+                StratumPlanner::from_stratum(program, stratum, &mut optimizer, plan_graph)
                     .map_err(BoxError::from)
             })
             .collect::<Result<_, _>>()?;
@@ -101,6 +99,7 @@ fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
 mod tests {
     use std::io::Write;
 
+    use flowlog_common::Config;
     use flowlog_common::SourceMap;
     use flowlog_common::compute_fp;
     use tempfile::NamedTempFile;
@@ -117,7 +116,7 @@ mod tests {
         let program =
             flowlog_parser::parse(&tmp.path().to_string_lossy(), &[], &mut sm, &mut config)
                 .expect("parse");
-        ProgramPlanner::from_program(&Config::default(), &program, &mut None).expect("plan")
+        ProgramPlanner::from_program(&program, &mut None).expect("plan")
     }
 
     /// Dyck has three strata:

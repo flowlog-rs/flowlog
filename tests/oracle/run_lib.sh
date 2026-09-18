@@ -29,7 +29,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/runner_synth.sh"
 ###############################################################################
 
 MODE="batch"
-ENABLE_SIP=0
 SINGLE_CONFIG=""
 KEEP_DATASETS=0
 WORKERS=64
@@ -49,7 +48,6 @@ extra runner behavior (e.g. `str-intern` enables
 Builder::string_intern(true)).
 
 Options:
-  --sip                       Also test with Builder::sip(true).
   --keep-datasets             Don't delete datasets after each pair.
                               Required when <repo>/facts/ is a symlink.
   --workers <n>               Workers forwarded to
@@ -66,7 +64,6 @@ EOF
 parse_args() {
     while (( $# )); do
         case "$1" in
-            --sip)               ENABLE_SIP=1 ;;
             --keep-datasets)     KEEP_DATASETS=1 ;;
             --workers)           shift; WORKERS="${1:?--workers requires a value}" ;;
             --souffle-ref-cache) shift; SOUFFLE_REF_CACHE="${1:?--souffle-ref-cache requires a path}" ;;
@@ -86,17 +83,6 @@ init_paths() {
     PROG_DIR="$PROG_DIR_DEFAULT"
     FACT_DIR="$FACT_DIR_DEFAULT"
     export WORKERS
-}
-
-init_opt_flags() {
-    # Each entry is a space-separated list of Builder knob env-vars to set
-    # before sourcing `write_build_rs`. An empty string means "defaults".
-    OPT_KNOBS=("")
-    OPT_LABELS=("")
-    if (( ENABLE_SIP )); then
-        OPT_KNOBS+=("LIB_RUNNER_SIP=1")
-        OPT_LABELS+=("sip")
-    fi
 }
 
 ###############################################################################
@@ -120,7 +106,7 @@ warm_runner_crate() {
     rm -rf "${LIB_RUNNER_DIR}/data" "${LIB_RUNNER_DIR}/output" "${LIB_RUNNER_DIR}/program.dl"
     mkdir -p "${LIB_RUNNER_DIR}/data"
 
-    LIB_RUNNER_SIP=0 LIB_RUNNER_STR_INTERN=0 write_build_rs ""
+    LIB_RUNNER_STR_INTERN=0 write_build_rs ""
     cat > "${LIB_RUNNER_DIR}/program.dl" <<'EOF'
 .decl Edge(x: int32, y: int32)
 .input Edge()
@@ -162,23 +148,6 @@ stage_fixture() {
     done
 }
 
-# Apply a space-separated `KEY=VAL` knob list before calling write_build_rs,
-# so sip / string_intern can be combined per configuration.
-write_build_rs_with_knobs() {
-    local knob_list="$1"
-    local str_intern="$2"  # 1 or 0 from the config suite
-
-    local sip=0
-    for kv in $knob_list; do
-        case "$kv" in
-            LIB_RUNNER_SIP=1)        sip=1 ;;
-            LIB_RUNNER_STR_INTERN=1) str_intern=1 ;;
-        esac
-    done
-
-    LIB_RUNNER_SIP="$sip" LIB_RUNNER_STR_INTERN="$str_intern" write_build_rs ""
-}
-
 run_test() {
     local prog_name="$1" dataset_name="$2" tags="${3:-}"
     local str_intern_config=0
@@ -205,35 +174,29 @@ run_test() {
     local prepared_dl="${STAGE_DIR}/flowlog_prepared_$$_${prog_file}"
     prepare_dl_file "$prog_path" "$prepared_dl"
 
-    for oi in "${!OPT_KNOBS[@]}"; do
-        local knobs="${OPT_KNOBS[$oi]}"
-        local label="${OPT_LABELS[$oi]}"
-        local suffix="${label:+_${label}}"
+    log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=lib)"
 
-        log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=lib${suffix})"
+    stage_fixture "$prepared_dl" "$dataset_path"
+    LIB_RUNNER_STR_INTERN="$str_intern_config" write_build_rs ""
+    write_main_rs "${LIB_RUNNER_DIR}/program.dl"
 
-        stage_fixture "$prepared_dl" "$dataset_path"
-        write_build_rs_with_knobs "$knobs" "$str_intern_config"
-        write_main_rs "${LIB_RUNNER_DIR}/program.dl"
+    local run_log="${LIB_RUNNER_DIR}/run.log"
+    local lib_bin="${LIB_RUNNER_DIR}/target/release/flowlog_lib_runner"
 
-        local run_log="${LIB_RUNNER_DIR}/run.log"
-        local lib_bin="${LIB_RUNNER_DIR}/target/release/flowlog_lib_runner"
+    log "$YELLOW" "BUILD" "cargo build --release  (lib runner)"
+    (cd "${LIB_RUNNER_DIR}" && cargo build --release --quiet) \
+        || die "lib build failed: $prog_file with $dataset_name"
 
-        log "$YELLOW" "BUILD" "cargo build --release  (lib runner)"
-        (cd "${LIB_RUNNER_DIR}" && cargo build --release --quiet) \
-            || die "lib build failed: $prog_file with $dataset_name${suffix}"
+    log "$YELLOW" "RUN" "$lib_bin  (WORKERS=$WORKERS)"
+    # Synthesized main reads `data/*.csv` / writes `output/*` relative
+    # to the runner crate dir.
+    (cd "${LIB_RUNNER_DIR}" && "$lib_bin" 2>&1 | tee "$run_log") \
+        || die "lib run failed: $prog_file with $dataset_name"
 
-        log "$YELLOW" "RUN" "$lib_bin  (WORKERS=$WORKERS)"
-        # Synthesized main reads `data/*.csv` / writes `output/*` relative
-        # to the runner crate dir.
-        (cd "${LIB_RUNNER_DIR}" && "$lib_bin" 2>&1 | tee "$run_log") \
-            || die "lib run failed: $prog_file with $dataset_name${suffix}"
+    verify_output "${LIB_RUNNER_DIR}/output" "$ref_dir" \
+        || die "Verification failed: $prog_file with $dataset_name"
 
-        verify_output "${LIB_RUNNER_DIR}/output" "$ref_dir" \
-            || die "Verification failed: $prog_file with $dataset_name${suffix}"
-
-        rm -rf "${LIB_RUNNER_DIR}/output"
-    done
+    rm -rf "${LIB_RUNNER_DIR}/output"
 
     rm -f "$prepared_dl"
     rm -rf "$ref_dir"
@@ -254,7 +217,6 @@ run_config() {
 main() {
     parse_args "$@"
     init_paths
-    init_opt_flags
     log "$BLUE" "START" "FlowLog batch correctness test (library mode)"
 
     compile_release_workspace

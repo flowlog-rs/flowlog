@@ -61,7 +61,7 @@ impl Pipeline {
         let mut plan_graph = config
             .profiling_enabled()
             .then(|| PlanGraph::new(config.mode()));
-        let program_planner = ProgramPlanner::from_program(&config, &program, &mut plan_graph)?;
+        let program_planner = ProgramPlanner::from_program(&program, &mut plan_graph)?;
 
         let mut cg = CodeGen::new(config.clone(), program.clone());
         let parts = cg.generate(&program_planner, &mut plan_graph)?;
@@ -97,7 +97,6 @@ fn build_config(builder: &Builder, program: &str) -> Config {
         program: program.to_string(),
         mode: builder.mode,
         profile: builder.profile,
-        sip: builder.sip,
         str_intern: builder.string_intern,
         udf_file: builder
             .udf_file

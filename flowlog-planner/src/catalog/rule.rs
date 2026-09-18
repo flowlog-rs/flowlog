@@ -254,7 +254,7 @@ impl Catalog {
                 self.rule
             )));
         }
-        Ok(self.positive_atom_fingerprints.len())
+        Ok(self.positive_atom_number())
     }
 
     /// Returns the atom fingerprints as first catalogued.
@@ -346,16 +346,14 @@ impl Catalog {
         .copied()
     }
 
-    /// Returns `true` if two positive atoms share at least one variable,
-    /// indicating that a SIP (side-information passing) semijoin between
-    /// them may be beneficial.
+    /// Returns `true` if two positive atoms share at least one variable.
     ///
     /// # Errors
     ///
     /// Returns an internal error if either index is outside the positive
     /// atoms.
     #[inline]
-    pub(crate) fn check_sip_pair(
+    pub(crate) fn positive_atoms_share_variable(
         &self,
         left_atom_index: usize,
         right_atom_index: usize,
@@ -932,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn sip_pair_requires_a_shared_variable() {
+    fn positive_atoms_share_variable_requires_overlap() {
         let shared = catalog_for(
             "\
             .decl A(a: int32, b: int32)\n\
@@ -943,7 +941,11 @@ mod tests {
             .output Out\n\
             Out(x, y, z) :- A(x, y), B(y, z).\n",
         );
-        assert!(shared.check_sip_pair(0, 1).expect("valid atom indices"));
+        assert!(
+            shared
+                .positive_atoms_share_variable(0, 1)
+                .expect("valid atom indices")
+        );
 
         let disjoint = catalog_for(
             "\
@@ -955,7 +957,11 @@ mod tests {
             .output Out\n\
             Out(x, y) :- A(x), B(y).\n",
         );
-        assert!(!disjoint.check_sip_pair(0, 1).expect("valid atom indices"));
+        assert!(
+            !disjoint
+                .positive_atoms_share_variable(0, 1)
+                .expect("valid atom indices")
+        );
     }
 
     #[test]
