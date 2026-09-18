@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.4.0...flowlog-runtime-v0.5.0) - 2026-09-18
+
+### Fixed
+
+- *(runtime)* [**breaking**] preserve whitespace in text string fields ([#364](https://github.com/flowlog-rs/flowlog/pull/364))
+- *(runtime)* [**breaking**] emit zero for empty global count and sum ([#360](https://github.com/flowlog-rs/flowlog/pull/360))
+
+### Other
+
+- *(runtime)* [**breaking**] unify dedup dispatch by diff and timestamp ([#353](https://github.com/flowlog-rs/flowlog/pull/353))
+
 ## [0.4.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-runtime-v0.3.0...flowlog-runtime-v0.4.0) - 2026-09-14
 
 ### Added
