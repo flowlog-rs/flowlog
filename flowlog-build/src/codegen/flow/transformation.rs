@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 
-use flowlog_common::ExecutionMode;
 use flowlog_planner::planner::ArithmeticArgument;
 use flowlog_planner::planner::FactorArgument;
 use flowlog_planner::planner::StratumPlanner;
@@ -376,31 +375,14 @@ impl CodeGen {
                 let cst_pred = build_kv_constraints_predicate(flow.constraints(), si)?;
                 let pred = combine_predicates(vec![cmp_pred, cst_pred]);
 
-                // One flag drives the emitted dedup and its recording,
-                // so the predicted operator count cannot drift.
-                let dedups = pred.is_none() && output.is_k_only();
-
-                // Profiling hook (optional), after the predicates so the
-                // dedup is known.
                 with_plan_graph(plan_graph, |plan_graph| {
-                    if dedups {
-                        plan_graph.map_dedup_arrange_operator(
-                            transformation_name,
-                            vec![inp.to_string()],
-                            format!("{}_arr", out),
-                            output.fingerprint(),
-                            output.is_k_only(),
-                            recursive,
-                        );
-                    } else {
-                        plan_graph.map_join_arrange_operator(
-                            transformation_name,
-                            vec![inp.to_string()],
-                            format!("{}_arr", out),
-                            output.fingerprint(),
-                            output.is_k_only(),
-                        );
-                    }
+                    plan_graph.map_join_arrange_operator(
+                        transformation_name,
+                        vec![inp.to_string()],
+                        format!("{}_arr", out),
+                        output.fingerprint(),
+                        output.is_k_only(),
+                    );
                 });
                 let (kv_param_k, kv_param_v) = compute_kv_param_tokens(
                     flow.key(),
@@ -416,23 +398,6 @@ impl CodeGen {
                     quote! { |( #kv_param_k, #kv_param_v ), t, d| }
                 };
 
-                // SIP projection to a key can introduce duplicates, which
-                // would break the Yannakakis computation bounds. Predicate
-                // paths already filter, so only the bare projection dedups.
-                let out_dedup_expr = if dedups {
-                    match self.config.mode() {
-                        // Presence joins absorb repeated keys across times.
-                        // Consolidate only within a time here to avoid a
-                        // second history alongside the arrangement.
-                        ExecutionMode::Batch => quote! { let #out = #out.consolidate(); },
-                        ExecutionMode::Inc => quote! {
-                            let #out = ::flowlog_runtime::operators::flowlog_dedup(#out);
-                        },
-                    }
-                } else {
-                    quote! {}
-                };
-
                 // Flat_map body depends on whether there is a predicate
                 let flat_map_body = flat_map_body_tokens(pred, out_expr);
 
@@ -442,7 +407,6 @@ impl CodeGen {
                         #operator_name,
                         #closure_param { #flat_map_body },
                     );
-                    #out_dedup_expr
                 };
 
                 // Arrangement registration

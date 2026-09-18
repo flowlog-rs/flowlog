@@ -67,11 +67,6 @@ impl AtomArgumentSignature {
     }
 
     #[inline]
-    pub(crate) fn is_positive(&self) -> bool {
-        self.atom_signature.is_positive()
-    }
-
-    #[inline]
     pub(crate) fn atom_signature(&self) -> &AtomSignature {
         &self.atom_signature
     }

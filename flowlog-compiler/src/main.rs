@@ -42,7 +42,7 @@ fn main() {
     let mut plan_graph = config
         .profiling_enabled()
         .then(|| PlanGraph::new(config.mode()));
-    let program_planner = ProgramPlanner::from_program(&config, &program, &mut plan_graph)
+    let program_planner = ProgramPlanner::from_program(&program, &mut plan_graph)
         .unwrap_or_else(|err| emit_and_exit(err, &sm));
 
     // Compile into a Rust executable.

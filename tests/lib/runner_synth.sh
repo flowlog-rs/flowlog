@@ -12,7 +12,6 @@
 #   LIB_RUNNER_DIR="${ROOT_DIR}/target/e2e-lib/runner"
 #
 #   # Optional Builder knobs — unset = default (off). Set to 1 to enable.
-#   LIB_RUNNER_SIP=1
 #   LIB_RUNNER_STR_INTERN=1
 #
 #   source "${ROOT_DIR}/tests/lib/runner_synth.sh"
@@ -307,7 +306,6 @@ EOF
 ###############################################################################
 #
 # Honors optional globals:
-#   LIB_RUNNER_SIP=1         -> Builder::sip(true)
 #   LIB_RUNNER_STR_INTERN=1  -> Builder::string_intern(true)
 #   LIB_RUNNER_INC=1         -> Builder::mode(ExecutionMode::Inc)
 #
@@ -328,7 +326,6 @@ write_build_rs() {
     fi
 
     local knob_setters=""
-    (( ${LIB_RUNNER_SIP:-0} ))        && knob_setters+=$'        .sip(true)\n'
     (( ${LIB_RUNNER_STR_INTERN:-0} )) && knob_setters+=$'        .string_intern(true)\n'
 
     # Defaults to `Batch`; `LIB_RUNNER_INC` toggles to incremental.

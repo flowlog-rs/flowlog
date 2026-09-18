@@ -33,7 +33,6 @@
 //!
 //! // build.rs
 //! if let Err(err) = Builder::default()
-//!     .sip(true)
 //!     .string_intern(true)
 //!     .compile(&["policy.dl", "auth.dl"], &[] as &[&std::path::Path])
 //! {
@@ -91,7 +90,6 @@ pub fn compile<P: AsRef<Path>>(program_path: P) -> io::Result<()> {
 /// settings prefer the free [`compile`] function.
 #[derive(Default)]
 pub struct Builder {
-    pub(crate) sip: bool,
     pub(crate) string_intern: bool,
     pub(crate) mode: ExecutionMode,
     pub(crate) profile: bool,
@@ -101,12 +99,6 @@ pub struct Builder {
 }
 
 impl Builder {
-    /// Enable Sideways Information Passing.
-    pub fn sip(mut self, enabled: bool) -> Self {
-        self.sip = enabled;
-        self
-    }
-
     /// Enable string interning. User-facing tuple slots stay `String`;
     /// interning is applied at `insert_<rel>` / drain.
     pub fn string_intern(mut self, enabled: bool) -> Self {

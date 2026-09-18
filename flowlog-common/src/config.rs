@@ -26,8 +26,6 @@ pub struct Config {
     pub mode: ExecutionMode,
     /// Collect per-rule execution statistics (timing, tuple counts).
     pub profile: bool,
-    /// Enable Sideways Information Passing.
-    pub sip: bool,
     /// Intern string columns as compact integer keys at load time.
     pub str_intern: bool,
     /// Path to a Rust source file containing UDF implementations.
@@ -69,12 +67,6 @@ impl Config {
     /// Returns `true` when operator-level profiling is on.
     pub fn profiling_enabled(&self) -> bool {
         self.profile
-    }
-
-    /// Returns `true` when sideways information passing is on, filtering
-    /// later body atoms by earlier bindings.
-    pub fn sip_enabled(&self) -> bool {
-        self.sip
     }
 
     /// Returns `true` when string columns are interned as compact integer

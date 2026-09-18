@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use std::fmt;
 use std::mem;
 
-use flowlog_common::Config;
 use flowlog_common::SECTION_BAR;
 use flowlog_common::SUBSECTION_BAR;
 use flowlog_parser::AggregationOperator;
@@ -76,7 +75,6 @@ pub struct StratumPlanner {
 impl StratumPlanner {
     /// Build a stratum planner from a stratum.
     pub(crate) fn from_stratum(
-        config: &Config,
         program: &Program,
         stratified: &Stratum,
         optimizer: &mut Optimizer,
@@ -113,15 +111,7 @@ impl StratumPlanner {
             rule_planners.push(planner);
         }
 
-        // Phase 2 pushes filters through joins when SIP is enabled.
-        if config.sip_enabled() {
-            for (i, planner) in rule_planners.iter_mut().enumerate() {
-                trace!("rule[{i}] SIP");
-                planner.apply_sip(&mut catalogs[i])?;
-            }
-        }
-
-        // Phase 3 uses optimizer guidance to limit intermediate join results.
+        // Phase 2 uses optimizer guidance to limit intermediate join results.
         while !catalogs.iter().all(|c| c.is_planned()) {
             let join_decisions = optimizer.plan_stratum(&catalogs)?;
 
@@ -136,20 +126,17 @@ impl StratumPlanner {
             }
         }
 
-        // Phase 4: Fusion
-        // to combine transformations and optimize execution
+        // Phase 3 combines transformations before final output alignment.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
             planner.fuse(catalog.original_atom_fingerprints())?;
         }
 
-        // Phase 5: Post-processing
-        // align final output to the rule head (vars and arithmetic)
-        // to apply final adjustments after fusion, e.g. convert to row type
+        // Phase 4 aligns each final output with its rule head and row format.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
             planner.post(catalog)?;
         }
 
-        // Phase 6: Materialize per-rule transformations, rewriting lineage
+        // Phase 5: Materialize per-rule transformations, rewriting lineage
         // (rhs_id-laden) fingerprints to content-canonical ones so identical
         // operations dedup across rules.
         for planner in rule_planners.iter_mut() {
@@ -183,8 +170,7 @@ impl StratumPlanner {
             }
         });
 
-        // Phase 7: Cross-rule sharing: dedup the per-rule transformations
-        // by content fingerprint
+        // Phase 6 shares transformations with identical content fingerprints.
         let atom_fps: HashSet<u64> = rule_planners
             .iter()
             .flat_map(RulePlanner::rhs_atom_fps)
@@ -200,8 +186,7 @@ impl StratumPlanner {
         };
         stratum_planner.deduplicate_transformations();
 
-        // Phase 8: Recursive split and metadata mappings
-        // this phase to factoring optimizations
+        // Phase 7 separates recursive operations and builds their metadata.
         stratum_planner.build_idb_to_heads_map(&catalogs);
         stratum_planner.identify_recursive_transformations(is_recursive);
         stratum_planner.build_recursion_enter_collections(stratified.available_relations());
@@ -561,6 +546,7 @@ impl StratumPlanner {
 mod tests {
     use std::io::Write;
 
+    use flowlog_common::Config;
     use flowlog_common::SourceMap;
     use tempfile::NamedTempFile;
 

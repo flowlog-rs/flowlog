@@ -44,11 +44,6 @@ pub struct Cli {
     #[arg(long, value_name = "MS", default_value_t = 5000)]
     pub metrics_flush_interval_ms: u64,
 
-    /// Enable Sideways Information Passing to propagate binding constraints
-    /// from rule heads into body atoms, reducing intermediate results.
-    #[arg(long)]
-    pub sip: bool,
-
     /// Intern string columns as compact integer keys at load time for faster
     /// joins, hashing, and lower memory usage. Recommended when the majority
     /// of join keys are string-typed.
@@ -91,7 +86,6 @@ impl Cli {
             program: self.program.clone(),
             mode: self.mode,
             profile: self.profile,
-            sip: self.sip,
             str_intern: self.str_intern,
             udf_file: self.udf_file.clone(),
             include_dirs: self.include_dirs.clone(),

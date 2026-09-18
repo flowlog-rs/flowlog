@@ -21,7 +21,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 ###############################################################################
 
 MODE="batch"
-ENABLE_SIP=0
 SINGLE_CONFIG=""
 KEEP_DATASETS=0
 WORKERS=64
@@ -40,7 +39,6 @@ path to run a different one. Per-entry tags in the config select
 extra runner behavior (e.g. `str-intern`).
 
 Options:
-  --sip                       Also test with --sip optimization.
   --keep-datasets             Don't delete datasets after each pair.
                               Required when <repo>/facts/ is a symlink.
   --workers <n>               Worker threads (default: 64).
@@ -56,7 +54,6 @@ EOF
 parse_args() {
     while (( $# )); do
         case "$1" in
-            --sip)               ENABLE_SIP=1 ;;
             --keep-datasets)     KEEP_DATASETS=1 ;;
             --workers)           shift; WORKERS="${1:?--workers requires a value}" ;;
             --souffle-ref-cache) shift; SOUFFLE_REF_CACHE="${1:?--souffle-ref-cache requires a path}" ;;
@@ -86,15 +83,6 @@ init_paths() {
     export FLOWLOG_RUNTIME_PATH="${ROOT_DIR}/flowlog-runtime"
 }
 
-init_opt_flags() {
-    OPT_FLAGS=("")
-    OPT_LABELS=("")
-    if (( ENABLE_SIP )); then
-        OPT_FLAGS+=("--sip")
-        OPT_LABELS+=("sip")
-    fi
-}
-
 ###############################################################################
 # Build + compile helpers
 ###############################################################################
@@ -104,15 +92,6 @@ compile_release_workspace() {
     pushd "$ROOT_DIR" >/dev/null
     cargo build --release >/dev/null
     popd >/dev/null
-}
-
-compute_flag_combo() {
-    local oi="$1" str_intern_flag="${2:-}"
-    COMBO_EXTRA_FLAGS="$(trim "${OPT_FLAGS[$oi]} ${str_intern_flag}")"
-
-    local parts=""
-    [[ -n "${OPT_LABELS[$oi]}" ]] && parts="${OPT_LABELS[$oi]}"
-    COMBO_LABEL_SUFFIX="${parts:+_${parts}}"
 }
 
 invoke_compiler() {
@@ -151,37 +130,32 @@ run_test() {
     local dataset_path
     dataset_path="$(realpath "${FACT_DIR}/${dataset_name}")"
 
-    for oi in "${!OPT_FLAGS[@]}"; do
-        compute_flag_combo "$oi" "$str_intern_flag"
-        local suffix="$COMBO_LABEL_SUFFIX" flags="$COMBO_EXTRA_FLAGS"
+    local package_name executable log_file output_dir prepared_dl
+    package_name="$(sanitize_package_name "${program_stem}_${dataset_name}_${MODE}")"
+    executable="${ROOT_DIR}/${package_name}"
+    log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${MODE}.log"
+    output_dir="${FLOWLOG_OUT_DIR}/${program_stem}_${dataset_name}"
+    prepared_dl="${STAGE_DIR}/flowlog_prepared_$$_${prog_file}"
 
-        local package_name executable log_file output_dir prepared_dl
-        package_name="$(sanitize_package_name "${program_stem}_${dataset_name}_${MODE}${suffix}")"
-        executable="${ROOT_DIR}/${package_name}"
-        log_file="${LOG_DIR}/${program_stem}_${dataset_name}_${MODE}${suffix}.log"
-        output_dir="${FLOWLOG_OUT_DIR}/${program_stem}_${dataset_name}${suffix}"
-        prepared_dl="${STAGE_DIR}/flowlog_prepared_$$_${prog_file}"
+    mkdir -p "$output_dir"
 
-        mkdir -p "$output_dir"
+    log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=$MODE)"
 
-        log "$BLUE" "TEST" "$prog_file with $dataset_name (mode=$MODE${suffix})"
+    prepare_dl_file "$prog_path" "$prepared_dl"
 
-        prepare_dl_file "$prog_path" "$prepared_dl"
+    rm -f "$executable"
+    invoke_compiler "$prepared_dl" "$dataset_path" "$executable" "$output_dir" "$str_intern_flag"
+    [[ -x "$executable" ]] || die "Executable not found: $executable"
 
-        rm -f "$executable"
-        invoke_compiler "$prepared_dl" "$dataset_path" "$executable" "$output_dir" "$flags"
-        [[ -x "$executable" ]] || die "Executable not found: $executable"
+    log "$YELLOW" "RUN" "$executable -w $WORKERS"
+    "$executable" -w "$WORKERS" 2>&1 | tee "$log_file"
 
-        log "$YELLOW" "RUN" "$executable -w $WORKERS"
-        "$executable" -w "$WORKERS" 2>&1 | tee "$log_file"
+    verify_output "$output_dir" "$ref_dir" \
+        || die "Verification failed: $prog_file with $dataset_name"
 
-        verify_output "$output_dir" "$ref_dir" \
-            || die "Verification failed: $prog_file with $dataset_name${suffix}"
-
-        rm -f "$executable" "${executable}_ops.json" "$prepared_dl"
-        rm -rf "${ROOT_DIR}/.${package_name}.build"
-        rm -rf "$output_dir"
-    done
+    rm -f "$executable" "${executable}_ops.json" "$prepared_dl"
+    rm -rf "${ROOT_DIR}/.${package_name}.build"
+    rm -rf "$output_dir"
 
     rm -rf "$ref_dir"
     cleanup_dataset "$dataset_name" "$FACT_DIR" "$KEEP_DATASETS"
@@ -201,7 +175,6 @@ run_config() {
 main() {
     parse_args "$@"
     init_paths
-    init_opt_flags
     log "$BLUE" "START" "FlowLog batch correctness test (compiler mode)"
 
     compile_release_workspace

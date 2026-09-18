@@ -146,34 +146,6 @@ impl Catalog {
         self.update_rule_in_place(rhs_index, new_atom)
     }
 
-    /// Replaces a positive atom with its arguments in the requested
-    /// order, normally with semijoin keys first.
-    ///
-    /// For example, using argument order `[0.1, 0.0]` and name
-    /// `A_key_first` rewrites `Out(value) :- A(value, key).` as
-    /// `Out(value) :- A_key_first(key, value).`.
-    pub(crate) fn sip_modify(
-        &mut self,
-        right_atom_signature: AtomSignature,
-        new_argument_list: Vec<AtomArgumentSignature>,
-        new_atom_name: String,
-        new_atom_fingerprint: u64,
-    ) -> Result<(), CatalogError> {
-        let rhs_index = self.rhs_index_from_signature(right_atom_signature)?;
-
-        if !matches!(self.rule.rhs()[rhs_index], Predicate::PositiveAtom(_)) {
-            return Err(CatalogError::internal(format!(
-                "sip_modify: target predicate at rhs index {rhs_index} is not a positive atom: {}",
-                self.rule.rhs()[rhs_index]
-            )));
-        }
-
-        let new_atom_args = self.lookup_arg_vars(&new_argument_list, "sip_modify")?;
-
-        let new_atom = Atom::new(&new_atom_name, new_atom_args, new_atom_fingerprint);
-        self.update_rule_in_place(rhs_index, Predicate::PositiveAtom(new_atom))
-    }
-
     /// Removes one left atom and replaces each right atom with a positive
     /// joined atom using its requested arguments, name, and fingerprint.
     ///
@@ -658,82 +630,6 @@ Out() :- {body}.
                 error.to_string(),
                 "internal compiler error at stage `catalog`: projection_modify: argument id 3 \
                  out of bounds for atom `a` with arity 3"
-            );
-        }
-    }
-
-    mod sip_modify {
-        use super::*;
-
-        #[test]
-        fn reorders_arguments_and_refreshes_identity() {
-            let mut catalog = catalog_for_body("A(value, key, rest)");
-            let atom = AtomSignature::new(true, 0);
-            let new_fp = compute_fp("a_key_first");
-
-            catalog
-                .sip_modify(
-                    atom,
-                    vec![
-                        AtomArgumentSignature::new(atom, 1),
-                        AtomArgumentSignature::new(atom, 0),
-                        AtomArgumentSignature::new(atom, 2),
-                    ],
-                    "A_key_first".into(),
-                    new_fp,
-                )
-                .expect("reorder arguments");
-
-            assert_eq!(
-                catalog.rule().to_string(),
-                "out() :- A_key_first(key, value, rest)."
-            );
-            assert_eq!(
-                catalog
-                    .positive_atom_fingerprint(0)
-                    .expect("positive fingerprint"),
-                new_fp
-            );
-        }
-
-        #[test]
-        fn rejects_negative_atom() {
-            let mut catalog = catalog_for_body("A(x, y, z), !B(x, y)");
-
-            let error = catalog
-                .sip_modify(
-                    AtomSignature::new(false, 0),
-                    Vec::new(),
-                    "B_key_first".into(),
-                    compute_fp("b_key_first"),
-                )
-                .expect_err("negative atom must be rejected");
-
-            assert_eq!(
-                error.to_string(),
-                "internal compiler error at stage `catalog`: sip_modify: target predicate at rhs \
-                 index 1 is not a positive atom: !B(x, y)"
-            );
-        }
-
-        #[test]
-        fn rejects_argument_without_variable_mapping() {
-            let mut catalog = catalog_for_body("A(x, y, z)");
-            let atom = AtomSignature::new(true, 0);
-
-            let error = catalog
-                .sip_modify(
-                    atom,
-                    vec![AtomArgumentSignature::new(atom, 3)],
-                    "A_key_first".into(),
-                    compute_fp("a_key_first"),
-                )
-                .expect_err("unknown argument must be rejected");
-
-            assert_eq!(
-                error.to_string(),
-                "internal compiler error at stage `catalog`: sip_modify: argument signature 0.3 \
-                 not found in signature map"
             );
         }
     }
