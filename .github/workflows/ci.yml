@@ -21,6 +21,8 @@ jobs:
   clippy:
     name: 📎 Clippy
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
@@ -41,6 +43,8 @@ jobs:
   test:
     name: 🧪 Unit + integration tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
@@ -62,6 +66,8 @@ jobs:
   doctest:
     name: 📖 Doctests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
@@ -85,6 +91,8 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
@@ -109,6 +117,7 @@ jobs:
     needs: [fixtures-shard]
     if: always()
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - run: |
           [ "${{ needs.fixtures-shard.result }}" = success ] || { echo "a fixture shard failed"; exit 1; }
@@ -116,6 +125,8 @@ jobs:
   fmt:
     name: 🎨 rustfmt
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       # Nightly: rustfmt.toml uses group_imports / imports_granularity,
@@ -128,6 +139,8 @@ jobs:
   deny:
     name: 🛡️ cargo-deny (licenses + advisories)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
@@ -137,6 +150,8 @@ jobs:
   typos:
     name: 📝 typos (spell check)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: crate-ci/typos@v1.50.1
@@ -144,6 +159,8 @@ jobs:
   lint-toml:
     name: 🧹 taplo (TOML format + lint)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - name: ⬇️ Install taplo
