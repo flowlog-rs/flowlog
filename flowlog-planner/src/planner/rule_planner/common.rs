@@ -869,6 +869,54 @@ impl RulePlanner {
 // Producer-Consumer Relationship Management
 // =========================================================================
 impl RulePlanner {
+    /// Replaces dependency indices with those of the current transformations.
+    /// Original body atoms are external inputs and need no producer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if a non-original input has no producer.
+    pub(super) fn rebuild_producer_consumer(
+        &mut self,
+        original_atom_fp: &BTreeSet<u64>,
+    ) -> Result<(), PlanError> {
+        self.producer_consumer.clear();
+
+        let count = self.transformation_infos.len();
+        trace!(
+            "[rebuild_producer_consumer] rebuilding for {} transformations",
+            count
+        );
+
+        for index in 0..count {
+            let output_fp = self.transformation_infos[index].output_info_fp();
+            self.insert_producer(output_fp, index);
+            trace!(
+                "[rebuild_producer_consumer] producer: idx {} -> fp {:#018x}",
+                index, output_fp
+            );
+        }
+
+        for index in 0..count {
+            let (left_fp, right_fp_opt) = self.transformation_infos[index].input_info_fp();
+            for input_fp in [Some(left_fp), right_fp_opt].into_iter().flatten() {
+                self.insert_consumer(original_atom_fp, input_fp, index)?;
+            }
+        }
+
+        for (fp, (producer_indices, consumer_indices)) in &self.producer_consumer {
+            trace!(
+                "[rebuild_producer_consumer] mapping: fp {:#018x} -> producers {:?}, consumers {:?}",
+                fp, producer_indices, consumer_indices
+            );
+        }
+
+        trace!(
+            "[rebuild_producer_consumer] done: {} producer-consumer entries",
+            self.producer_consumer.len()
+        );
+        Ok(())
+    }
+
     /// Registers a producer transformation for data with a given fingerprint.
     ///
     /// Multiple transformations can produce the same data (i.e., multiple producers per output).
@@ -940,6 +988,26 @@ impl RulePlanner {
                     "consumer_indices: no consumers for transformation fingerprint {fp:#018x}"
                 ))
             })
+    }
+
+    /// Like [`Self::producer_indices`], but empty for an original atom,
+    /// which nothing in the rule produces, instead of an error.
+    #[inline]
+    pub(super) fn producers(&self, fp: u64) -> &[usize] {
+        self.producer_consumer
+            .get(&fp)
+            .map_or(&[], |(producers, _)| producers.as_slice())
+    }
+
+    /// Like [`Self::consumer_indices`], but deduplicated and empty for an
+    /// original atom, which the index never records, instead of an error.
+    /// A consumer reading `fp` on both inputs is registered twice in the
+    /// index and listed once here.
+    pub(super) fn consumers(&self, fp: u64) -> BTreeSet<usize> {
+        self.producer_consumer
+            .get(&fp)
+            .map(|(_, consumers)| consumers.iter().copied().collect())
+            .unwrap_or_default()
     }
 }
 

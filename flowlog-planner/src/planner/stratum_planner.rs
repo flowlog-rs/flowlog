@@ -1,5 +1,6 @@
 //! Stratum planner that plans a stratum (a group of rules).
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
@@ -69,7 +70,7 @@ pub struct StratumPlanner {
     /// Atom fingerprints unioned across every rule's rhs. Computed once at
     /// stratum construction so codegen can tell which transformation inputs
     /// are named atoms without re-walking the rule planners.
-    atom_fps: HashSet<u64>,
+    atom_fps: BTreeSet<u64>,
 }
 
 impl StratumPlanner {
@@ -126,17 +127,22 @@ impl StratumPlanner {
             }
         }
 
-        // Phase 3 combines transformations before final output alignment.
+        // Phase 3 removes semijoins and antijoins another copy makes redundant.
+        for planner in &mut rule_planners {
+            planner.prune()?;
+        }
+
+        // Phase 4 combines transformations before final output alignment.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
             planner.fuse(catalog.original_atom_fingerprints())?;
         }
 
-        // Phase 4 aligns each final output with its rule head and row format.
+        // Phase 5 aligns each final output with its rule head and row format.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
             planner.post(catalog)?;
         }
 
-        // Phase 5: Materialize per-rule transformations, rewriting lineage
+        // Phase 6: Materialize per-rule transformations, rewriting lineage
         // (rhs_id-laden) fingerprints to content-canonical ones so identical
         // operations dedup across rules.
         for planner in rule_planners.iter_mut() {
@@ -170,8 +176,8 @@ impl StratumPlanner {
             }
         });
 
-        // Phase 6 shares transformations with identical content fingerprints.
-        let atom_fps: HashSet<u64> = rule_planners
+        // Phase 7 shares transformations with identical content fingerprints.
+        let atom_fps: BTreeSet<u64> = rule_planners
             .iter()
             .flat_map(RulePlanner::rhs_atom_fps)
             .collect();
@@ -186,7 +192,7 @@ impl StratumPlanner {
         };
         stratum_planner.deduplicate_transformations();
 
-        // Phase 7 separates recursive operations and builds their metadata.
+        // Phase 8 separates recursive operations and builds their metadata.
         stratum_planner.build_idb_to_heads_map(&catalogs);
         stratum_planner.identify_recursive_transformations(is_recursive);
         stratum_planner.build_recursion_enter_collections(stratified.available_relations());
@@ -284,7 +290,7 @@ impl StratumPlanner {
     /// the profiler/visualizer can show `[Row -> KV] K:(V0) arc(x, y)` without
     /// any downstream knowledge of atoms.
     #[inline]
-    pub fn atom_fps(&self) -> &HashSet<u64> {
+    pub fn atom_fps(&self) -> &BTreeSet<u64> {
         &self.atom_fps
     }
 

@@ -8,6 +8,8 @@
 //!   arguments to simplify the rule before joining.
 //! - `core`: performs the core join between two selected positive atoms and
 //!   then iterates semijoin/pushdown and projection removal to a fixed point.
+//! - `prune`: removes semijoins and antijoins that another copy of the same
+//!   filter already makes redundant.
 //! - `fuse`: merges compatible KV-to-KV map steps into their producers and
 //!   propagates key/value layout requirements upstream.
 //! - `post`: aligns the final pipeline output with the rule head (variables and
@@ -36,6 +38,7 @@ mod core; // core join, plus fixed-point of semijoin/pushdown and projection rem
 mod fuse; // fuse KV-to-KV maps and propagate key/value layout constraints upstream
 mod post; // align final output to the rule head (vars and arithmetic)
 mod prepare; // local filters, semi-join and comparison before the core join
+mod prune; // remove semijoins and antijoins another copy makes redundant
 
 /// Planner state for a single rule.
 #[derive(Debug)]
@@ -146,7 +149,7 @@ impl RulePlanner {
     /// Fingerprints of every positive/negative atom on the rule's rhs.
     /// Consumed by codegen to decide which transformation inputs are named
     /// atoms (label text comes from `display_name`).
-    pub(crate) fn rhs_atom_fps(&self) -> HashSet<u64> {
+    pub(crate) fn rhs_atom_fps(&self) -> BTreeSet<u64> {
         self.rhs_atom_map(|_| ()).into_keys().collect()
     }
 
