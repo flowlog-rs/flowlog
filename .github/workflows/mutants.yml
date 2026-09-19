@@ -22,6 +22,8 @@ env:
 jobs:
   mutants:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 45
     strategy:
       fail-fast: false
