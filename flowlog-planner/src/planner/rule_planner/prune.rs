@@ -47,13 +47,6 @@ use crate::planner::KeyValueLayout;
 use crate::planner::PlanError;
 use crate::planner::TransformationInfo;
 
-/// Largest group of duplicate filters the bitmask cover can handle. Bigger
-/// groups are left as they are, with a warning naming the rule. The
-/// semijoin pass makes one duplicate per atom that can take the filter, so
-/// a rule would need this many atoms sharing a variable set before this
-/// matters.
-const MAX_GROUP: usize = u64::BITS as usize;
-
 /// Search nodes `minimum_cover` may visit before it settles for the best
 /// cover found so far. Realistic groups are solved in a few dozen nodes;
 /// the budget only matters when the clauses form large cliques, where an
@@ -222,26 +215,15 @@ impl RulePlanner {
     /// remaining groups are recomputed afterwards.
     fn redundant_filters(&self) -> Vec<Filter> {
         for group in duplicate_groups(self.filters()) {
-            if group.len() > MAX_GROUP {
-                warn!(
-                    "prune: rule `{}` applies one filter {} times, more than the {} copies \
-                     the cover solver can track in one bitmask; keeping every copy, which \
-                     is correct but leaves this filter unpruned",
-                    self.rule,
-                    group.len(),
-                    MAX_GROUP
-                );
-                continue;
-            }
             let reach: Vec<BTreeSet<Trace>> = group.iter().map(|f| self.reach(f)).collect();
-            let clauses: Vec<u64> = (0..group.len())
+            let clauses: Vec<Vec<usize>> = (0..group.len())
                 .flat_map(|member| self.exit_clauses(&group, &reach, member))
                 .collect();
             let kept = minimum_cover(&clauses, group.len());
             let removed: Vec<Filter> = group
                 .into_iter()
                 .enumerate()
-                .filter(|(member, _)| kept & (1 << member) == 0)
+                .filter(|(member, _)| !kept.contains(*member))
                 .map(|(_, filter)| filter)
                 .collect();
             if !removed.is_empty() {
@@ -375,33 +357,86 @@ impl RulePlanner {
 
     /// The clauses that member `member` of `group` contributes: one per
     /// place its walk ends, each a set of members of which at least one
-    /// must stay (bit `i` stands for member `i`). A member is proven
+    /// must stay. A member is proven
     /// wherever another member's reach holds the same trace. The member
     /// itself is in every one of its clauses, so two copies that prove each
     /// other can never both be removed. A walk that is proven at a point it
     /// could continue past stops there instead.
-    fn exit_clauses(&self, group: &[Filter], reach: &[BTreeSet<Trace>], member: usize) -> Vec<u64> {
-        let me = 1 << member;
-        let provers = |known: &Trace| -> u64 {
+    fn exit_clauses(
+        &self,
+        group: &[Filter],
+        reach: &[BTreeSet<Trace>],
+        member: usize,
+    ) -> Vec<Vec<usize>> {
+        let provers = |known: &Trace| -> Vec<usize> {
             (0..group.len())
                 .filter(|&other| other != member && reach[other].contains(known))
-                .fold(0, |mask, other| mask | 1 << other)
+                .collect()
         };
         let mut clauses = Vec::new();
         self.follow(
             (group[member].fp, group[member].tested.clone()),
             |known, continues| {
-                let proven_by = known.as_ref().map_or(0, provers);
+                let proven_by = known.as_ref().map_or_else(Vec::new, provers);
                 match known {
-                    Some(next) if continues && proven_by == 0 => Some(next),
+                    Some(next) if continues && proven_by.is_empty() => Some(next),
                     _ => {
-                        clauses.push(me | proven_by);
+                        let mut clause = proven_by;
+                        clause.push(member);
+                        clause.sort_unstable();
+                        clauses.push(clause);
                         None
                     }
                 }
             },
         );
         clauses
+    }
+}
+
+/// The selected members of one cover, packed into machine words.
+#[derive(Clone)]
+struct Cover(Box<[u64]>);
+
+impl Cover {
+    const WORD_BITS: usize = u64::BITS as usize;
+
+    fn empty(members: usize) -> Self {
+        Self(vec![0; members.div_ceil(Self::WORD_BITS)].into_boxed_slice())
+    }
+
+    fn all(members: usize) -> Self {
+        let full_words = members / Self::WORD_BITS;
+        let remaining_bits = members % Self::WORD_BITS;
+        let mut words = vec![u64::MAX; full_words];
+        if remaining_bits != 0 {
+            words.push((1 << remaining_bits) - 1);
+        }
+        Self(words.into_boxed_slice())
+    }
+
+    fn contains(&self, member: usize) -> bool {
+        let (word, bit) = Self::word_and_bit(member);
+        self.0[word] & bit != 0
+    }
+
+    /// Returns `true` if `member` was not selected already.
+    fn insert(&mut self, member: usize) -> bool {
+        let (word, bit) = Self::word_and_bit(member);
+        let was_missing = self.0[word] & bit == 0;
+        self.0[word] |= bit;
+        was_missing
+    }
+
+    fn remove(&mut self, member: usize) {
+        let (word, bit) = Self::word_and_bit(member);
+        self.0[word] &= !bit;
+    }
+
+    fn word_and_bit(member: usize) -> (usize, u64) {
+        let word = member / Self::WORD_BITS;
+        let bit = 1 << (member % Self::WORD_BITS);
+        (word, bit)
     }
 }
 
@@ -412,41 +447,71 @@ impl RulePlanner {
 /// search tries members in ascending order, so that favors the filters
 /// that come first in the plan. Members named by a unit clause are fixed
 /// before the search.
-fn minimum_cover(clauses: &[u64], members: usize) -> u64 {
-    fn search(clauses: &[u64], chosen: u64, best: &mut u64, budget: &mut usize) {
-        let Some(&clause) = clauses.iter().find(|&&clause| clause & chosen == 0) else {
-            if chosen.count_ones() < best.count_ones() {
-                *best = chosen;
+fn minimum_cover(clauses: &[Vec<usize>], members: usize) -> Cover {
+    fn search(
+        clauses: &[Vec<usize>],
+        chosen: &mut Cover,
+        chosen_count: usize,
+        best: &mut Cover,
+        best_count: &mut usize,
+        budget: &mut usize,
+    ) -> bool {
+        let Some(clause) = clauses
+            .iter()
+            .find(|clause| clause.iter().all(|&member| !chosen.contains(member)))
+        else {
+            if chosen_count < *best_count {
+                *best = chosen.clone();
+                *best_count = chosen_count;
             }
-            return;
+            return false;
         };
         // Covering the clause costs one more member, so a branch that
         // cannot beat `best` is cut here. Cutting at equal size matters:
         // without it every same-size cover would be enumerated, and a run
         // of disjoint clauses has exponentially many.
-        if *budget == 0 || chosen.count_ones() + 1 >= best.count_ones() {
-            return;
+        if *budget == 0 {
+            warn!(
+                "prune: cover search reached the {COVER_BUDGET}-node budget; \
+                 returning the best valid cover found so far"
+            );
+            return true;
+        }
+        if chosen_count + 1 >= *best_count {
+            return false;
         }
         *budget -= 1;
-        let mut candidates = clause;
-        while candidates != 0 {
-            let lowest = candidates.isolate_lowest_one();
-            candidates ^= lowest;
-            search(clauses, chosen | lowest, best, budget);
+        for &member in clause {
+            debug_assert!(!chosen.contains(member));
+            chosen.insert(member);
+            let exhausted = search(clauses, chosen, chosen_count + 1, best, best_count, budget);
+            chosen.remove(member);
+            if exhausted {
+                return true;
+            }
         }
+        false
     }
 
-    let mut best = match members {
-        0 => return 0,
-        MAX_GROUP.. => u64::MAX,
-        _ => (1 << members) - 1,
-    };
-    let forced = clauses
-        .iter()
-        .filter(|clause| clause.count_ones() == 1)
-        .fold(0, |mask, clause| mask | clause);
+    let mut best = Cover::all(members);
+    let mut best_count = members;
+    let mut forced = Cover::empty(members);
+    let mut forced_count = 0;
+    for clause in clauses.iter().filter(|clause| clause.len() == 1) {
+        let member = clause[0];
+        if forced.insert(member) {
+            forced_count += 1;
+        }
+    }
     let mut budget = COVER_BUDGET;
-    search(clauses, forced, &mut best, &mut budget);
+    search(
+        clauses,
+        &mut forced,
+        forced_count,
+        &mut best,
+        &mut best_count,
+        &mut budget,
+    );
     best
 }
 
@@ -900,6 +965,12 @@ mod tests {
         plain_columns(positions).expect("plain positions")
     }
 
+    fn kept_members(cover: &Cover) -> Vec<usize> {
+        (0..cover.0.len() * Cover::WORD_BITS)
+            .filter(|&member| cover.contains(member))
+            .collect()
+    }
+
     /// Whether every output position of `tx` names a position of one of
     /// its inputs, which is what materialization requires.
     fn output_resolves(tx: &TransformationInfo) -> bool {
@@ -1168,18 +1239,22 @@ mod tests {
     #[test]
     fn minimum_cover_stays_within_budget_on_cliques() {
         let mut clauses = Vec::new();
-        for clique in 0..2u32 {
-            for a in 0..24u32 {
+        for clique in 0..2 {
+            for a in 0..24 {
                 for b in (a + 1)..24 {
-                    clauses.push(1u64 << (clique * 24 + a) | 1u64 << (clique * 24 + b));
+                    clauses.push(vec![clique * 24 + a, clique * 24 + b]);
                 }
             }
         }
 
         let cover = minimum_cover(&clauses, 48);
 
-        assert!(clauses.iter().all(|clause| clause & cover != 0));
-        assert_eq!(cover.count_ones(), 46);
+        assert!(
+            clauses
+                .iter()
+                .all(|clause| clause.iter().any(|&member| cover.contains(member)))
+        );
+        assert_eq!(kept_members(&cover).len(), 46);
     }
 
     /// A map swaps the two columns of `A semijoin R` before the full join,
@@ -1521,25 +1596,37 @@ mod tests {
     #[test]
     fn minimum_cover_picks_the_pair_hitting_every_clause() {
         let clauses = [
-            0b0011, // {0, 1}
-            0b1101, // {0, 2, 3}
-            0b1001, // {0, 3}
-            0b0110, // {1, 2}
-            0b1010, // {1, 3}
-            0b1100, // {2, 3}
+            vec![0, 1],
+            vec![0, 2, 3],
+            vec![0, 3],
+            vec![1, 2],
+            vec![1, 3],
+            vec![2, 3],
         ];
 
-        assert_eq!(minimum_cover(&clauses, 4), 0b1010);
+        assert_eq!(kept_members(&minimum_cover(&clauses, 4)), vec![1, 3]);
     }
 
     #[test]
     fn minimum_cover_keeps_members_named_by_unit_clauses() {
-        assert_eq!(minimum_cover(&[0b01, 0b11, 0b10], 2), 0b11);
+        let clauses = [vec![0], vec![0, 1], vec![1]];
+
+        assert_eq!(kept_members(&minimum_cover(&clauses, 2)), vec![0, 1]);
     }
 
     #[test]
     fn minimum_cover_breaks_ties_toward_earlier_members() {
-        assert_eq!(minimum_cover(&[0b11], 2), 0b01);
-        assert_eq!(minimum_cover(&[0b110, 0b011], 3), 0b010);
+        assert_eq!(kept_members(&minimum_cover(&[vec![0, 1]], 2)), vec![0]);
+        assert_eq!(
+            kept_members(&minimum_cover(&[vec![1, 2], vec![0, 1]], 3)),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn minimum_cover_handles_members_past_64() {
+        let clauses = [vec![0, 64], vec![1, 64]];
+
+        assert_eq!(kept_members(&minimum_cover(&clauses, 65)), vec![64]);
     }
 }
