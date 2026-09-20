@@ -102,8 +102,8 @@ pub(crate) enum TransformationInfo {
         output_kv_layout: KeyValueLayout,
         /// Filter predicates (equality constraints, comparisons, UDF predicates).
         predicates: KvPredicates,
-        /// Variable name behind each argument position the output layout can
-        /// mention; see [`Self::output_variables`].
+        /// Variable name behind each argument position the layouts mention;
+        /// see [`Self::variables`].
         variables: BTreeMap<AtomArgumentSignature, String>,
     },
 
@@ -131,8 +131,8 @@ pub(crate) enum TransformationInfo {
         output_kv_layout: KeyValueLayout,
         /// Filter predicates (comparisons and UDF predicates).
         predicates: JoinPredicates,
-        /// Variable name behind each argument position the output layout can
-        /// mention; see [`Self::output_variables`].
+        /// Variable name behind each argument position the layouts mention;
+        /// see [`Self::variables`].
         variables: BTreeMap<AtomArgumentSignature, String>,
     },
 
@@ -158,8 +158,8 @@ pub(crate) enum TransformationInfo {
         right_input_kv_layout: KeyValueLayout,
         /// Output layout (key/value positions) (fake until resolved).
         output_kv_layout: KeyValueLayout,
-        /// Variable name behind each argument position the output layout can
-        /// mention; see [`Self::output_variables`].
+        /// Variable name behind each argument position the layouts mention;
+        /// see [`Self::variables`].
         variables: BTreeMap<AtomArgumentSignature, String>,
     },
 }
@@ -433,7 +433,19 @@ impl TransformationInfo {
             .collect()
     }
 
-    /// Records the variable names behind the output layout's positions.
+    /// Variable name behind each argument position the input and output
+    /// layouts mention. An input position names a column of the producer
+    /// as this transformation reads it, which can differ from how another
+    /// reader of the same collection names that column.
+    pub(crate) fn variables(&self) -> &BTreeMap<AtomArgumentSignature, String> {
+        match self {
+            Self::KVToKV { variables, .. }
+            | Self::JoinToKV { variables, .. }
+            | Self::AntiJoinToKV { variables, .. } => variables,
+        }
+    }
+
+    /// Records the variable names behind the layouts' positions.
     pub(crate) fn set_variables(&mut self, names: BTreeMap<AtomArgumentSignature, String>) {
         match self {
             Self::KVToKV { variables, .. }

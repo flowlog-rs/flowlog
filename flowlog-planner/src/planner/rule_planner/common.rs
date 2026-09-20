@@ -268,6 +268,7 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
         self.push_transformation(tx, catalog, "Positive semijoin")?;
+        self.folded_filters.push(lhs_pos_fp);
 
         // Update catalog with the new joined atom
         catalog.join_modify(
@@ -352,6 +353,7 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
         self.push_transformation(tx, catalog, "Anti semijoin")?;
+        self.folded_filters.push(lhs_neg_fp);
 
         // Update catalog with the new anti-joined atom
         catalog.join_modify(
@@ -792,8 +794,8 @@ impl RulePlanner {
 // Producer-Consumer Relationship Management
 // =========================================================================
 impl RulePlanner {
-    /// Records the variable names behind `tx`'s output positions, logs it
-    /// under `label`, and appends it to the plan.
+    /// Records the variable names behind `tx`'s input and output positions,
+    /// logs it under `label`, and appends it to the plan.
     ///
     /// Every planning site must append through here, before the catalog
     /// rewrite that consumes the transformation: the names resolve through
@@ -806,10 +808,15 @@ impl RulePlanner {
         catalog: &Catalog,
         label: &str,
     ) -> Result<(), PlanError> {
-        let layout = tx.output_kv_layout();
+        let (left, right) = tx.input_kv_layout();
+        let layouts = [Some(left), right, Some(tx.output_kv_layout())];
         let filters = catalog.filters();
         let mut names = BTreeMap::new();
-        for position in layout.key().iter().chain(layout.value()) {
+        for position in layouts
+            .into_iter()
+            .flatten()
+            .flat_map(|layout| layout.key().iter().chain(layout.value()))
+        {
             let factors = std::iter::once(position.init())
                 .chain(position.rest().iter().map(|(_, factor)| factor));
             for signature in factors.filter_map(|factor| factor.as_var_signature()) {
@@ -873,6 +880,62 @@ impl RulePlanner {
                 "insert_consumer: no producer for transformation fingerprint {producer_fp:#018x}"
             ))),
         }
+    }
+
+    /// Rebuilds the producer-consumer map from the transformation list,
+    /// after a phase has inserted, removed, or rewired transformations.
+    pub(super) fn rebuild_producer_consumer(
+        &mut self,
+        original_atom_fp: &BTreeSet<u64>,
+    ) -> Result<(), PlanError> {
+        // Clear caches
+        self.producer_consumer.clear();
+
+        let count = self.transformation_infos.len();
+        trace!(
+            "[rebuild_producer_consumer] rebuilding for {} transformations",
+            count
+        );
+
+        // First pass: register all producers
+        for index in 0..count {
+            let output_fp = self.transformation_infos[index].output_info_fp();
+            self.insert_producer(output_fp, index);
+            trace!(
+                "[rebuild_producer_consumer] producer: idx {} -> fp {:#018x}",
+                index, output_fp
+            );
+        }
+
+        // Second pass: register all consumers for each input fingerprint
+        for index in 0..count {
+            let (left_fp, right_fp_opt) = self.transformation_infos[index].input_info_fp();
+            for input_fp in [Some(left_fp), right_fp_opt].into_iter().flatten() {
+                self.insert_consumer(original_atom_fp, input_fp, index)?;
+            }
+        }
+
+        // Detailed mapping summary
+        for (fp, (prod_idx, consumers)) in &self.producer_consumer {
+            trace!(
+                "[rebuild_producer_consumer] mapping: fp {:#018x} -> producer {:?}, consumers {:?}",
+                fp, prod_idx, consumers
+            );
+        }
+
+        trace!(
+            "[rebuild_producer_consumer] done: {} producer-consumer entries",
+            self.producer_consumer.len(),
+        );
+        Ok(())
+    }
+
+    /// Index of the transformation producing the collection `fp`, or
+    /// `None` for an original atom.
+    pub(super) fn producer(&self, fp: u64) -> Option<usize> {
+        self.producer_consumer
+            .get(&fp)
+            .and_then(|(producers, _)| producers.first().copied())
     }
 
     /// Retrieves the indices of producer transformations for a given fingerprint.

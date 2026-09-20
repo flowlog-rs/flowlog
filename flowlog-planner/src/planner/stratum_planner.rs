@@ -126,17 +126,22 @@ impl StratumPlanner {
             }
         }
 
-        // Phase 3 combines transformations before final output alignment.
+        // Phase 3 pushdown more folded original filters down the finished plans.
+        for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
+            planner.pushdown(catalog)?;
+        }
+
+        // Phase 4 combines transformations before final output alignment.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter()) {
             planner.fuse(catalog.original_atom_fingerprints())?;
         }
 
-        // Phase 4 aligns each final output with its rule head and row format.
+        // Phase 5 aligns each final output with its rule head and row format.
         for (planner, catalog) in rule_planners.iter_mut().zip(catalogs.iter_mut()) {
             planner.post(catalog)?;
         }
 
-        // Phase 5: Materialize per-rule transformations, rewriting lineage
+        // Phase 6: Materialize per-rule transformations, rewriting lineage
         // (rhs_id-laden) fingerprints to content-canonical ones so identical
         // operations dedup across rules.
         for planner in rule_planners.iter_mut() {
@@ -170,7 +175,7 @@ impl StratumPlanner {
             }
         });
 
-        // Phase 6 shares transformations with identical content fingerprints.
+        // Phase 7 shares transformations with identical content fingerprints.
         let atom_fps: HashSet<u64> = rule_planners
             .iter()
             .flat_map(RulePlanner::rhs_atom_fps)
@@ -186,7 +191,7 @@ impl StratumPlanner {
         };
         stratum_planner.deduplicate_transformations();
 
-        // Phase 7 separates recursive operations and builds their metadata.
+        // Phase 8 separates recursive operations and builds their metadata.
         stratum_planner.build_idb_to_heads_map(&catalogs);
         stratum_planner.identify_recursive_transformations(is_recursive);
         stratum_planner.build_recursion_enter_collections(stratified.available_relations());

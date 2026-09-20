@@ -416,53 +416,6 @@ impl RulePlanner {
         })
     }
 
-    /// Rebuild the producer_consumer map and key-value layouts after fusion.
-    fn rebuild_producer_consumer(
-        &mut self,
-        original_atom_fp: &BTreeSet<u64>,
-    ) -> Result<(), PlanError> {
-        // Clear caches
-        self.producer_consumer.clear();
-
-        let count = self.transformation_infos.len();
-        trace!(
-            "[rebuild_producer_consumer] rebuilding for {} transformations",
-            count
-        );
-
-        // First pass: register all producers
-        for index in 0..count {
-            let output_fp = self.transformation_infos[index].output_info_fp();
-            self.insert_producer(output_fp, index);
-            trace!(
-                "[rebuild_producer_consumer] producer: idx {} -> fp {:#018x}",
-                index, output_fp
-            );
-        }
-
-        // Second pass: register all consumers for each input fingerprint
-        for index in 0..count {
-            let (left_fp, right_fp_opt) = self.transformation_infos[index].input_info_fp();
-            for input_fp in [Some(left_fp), right_fp_opt].into_iter().flatten() {
-                self.insert_consumer(original_atom_fp, input_fp, index)?;
-            }
-        }
-
-        // Detailed mapping summary
-        for (fp, (prod_idx, consumers)) in &self.producer_consumer {
-            trace!(
-                "[rebuild_producer_consumer] mapping: fp {:#018x} -> producer {:?}, consumers {:?}",
-                fp, prod_idx, consumers
-            );
-        }
-
-        trace!(
-            "[rebuild_producer_consumer] done: {} producer-consumer entries",
-            self.producer_consumer.len(),
-        );
-        Ok(())
-    }
-
     /// Groups consumers by their own input layouts, ordered by first use.
     fn collect_consumer_layout_indices(
         &self,

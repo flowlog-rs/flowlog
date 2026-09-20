@@ -8,6 +8,9 @@
 //!   arguments to simplify the rule before joining.
 //! - `core`: performs the core join between two selected positive atoms and
 //!   then iterates semijoin/pushdown and projection removal to a fixed point.
+//! - `pushdown`: copies each folded original filter down to the deepest plan
+//!   nodes that still cover its variables, skipping copies a join already
+//!   enforces.
 //! - `fuse`: merges compatible KV-to-KV map steps into their producers and
 //!   propagates key/value layout requirements upstream.
 //! - `post`: aligns the final pipeline output with the rule head (variables and
@@ -36,6 +39,7 @@ mod core; // core join, plus fixed-point of semijoin/pushdown and projection rem
 mod fuse; // fuse KV-to-KV maps and propagate key/value layout constraints upstream
 mod post; // align final output to the rule head (vars and arithmetic)
 mod prepare; // local filters, semi-join and comparison before the core join
+mod pushdown; // copy folded original filters down the finished plan
 
 /// Planner state for a single rule.
 #[derive(Debug)]
@@ -66,6 +70,12 @@ pub struct RulePlanner {
     /// Fingerprints of the body atoms that feed back into the stratum's
     /// fixpoint. Empty for a non-recursive stratum.
     recursive_relations: BTreeSet<u64>,
+
+    /// Fingerprint of the filter-side collection of every semijoin and
+    /// antijoin that folded an atom into a superset, in fold order. It is
+    /// the collection as the fold consumed it, after premap and any
+    /// earlier rewrite.
+    folded_filters: Vec<u64>,
 }
 
 impl RulePlanner {
@@ -77,6 +87,7 @@ impl RulePlanner {
             transformations: Vec::new(),
             producer_consumer: HashMap::new(),
             recursive_relations: recursive_relations.iter().copied().collect(),
+            folded_filters: Vec::new(),
         }
     }
 
