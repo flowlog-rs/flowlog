@@ -229,7 +229,7 @@ impl RulePlanner {
 
         // Extract RHS atom information and register as consumer
         let rhs_pos_fp = catalog.positive_atom_fingerprint(rhs_idx)?;
-        let right_atom_signatures = vec![AtomSignature::new(true, rhs_idx)];
+        let right_atom_signature = AtomSignature::new(true, rhs_idx);
         let right_atom_argument_signatures =
             catalog.positive_atom_argument_signature(rhs_idx)?.to_vec();
 
@@ -289,10 +289,10 @@ impl RulePlanner {
         // Update catalog with the new joined atom
         catalog.join_modify(
             left_atom_signature,
-            right_atom_signatures,
-            vec![new_arguments_list],
-            vec![new_name],
-            vec![new_fp],
+            right_atom_signature,
+            &new_arguments_list,
+            &new_name,
+            new_fp,
         )?;
         Ok(())
     }

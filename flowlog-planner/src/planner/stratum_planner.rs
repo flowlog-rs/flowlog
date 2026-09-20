@@ -98,7 +98,7 @@ impl StratumPlanner {
             trace!("rule[{i}] init:");
             let mut catalog = Catalog::from_rule(rule)?;
 
-            let mut planner = RulePlanner::new(rule.clone());
+            let mut planner = RulePlanner::new(rule.clone(), stratified.recursive_relations());
             planner.prepare(&mut catalog)?;
 
             debug!(

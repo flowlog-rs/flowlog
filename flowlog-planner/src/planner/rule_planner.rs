@@ -62,16 +62,21 @@ pub struct RulePlanner {
     /// 4. One collection could have multiple consumers.
     ///    e.g. when an atom can be semijoined to multiple other atoms.
     producer_consumer: HashMap<u64, (Vec<usize>, Vec<usize>)>,
+
+    /// Fingerprints of the body atoms that feed back into the stratum's
+    /// fixpoint. Empty for a non-recursive stratum.
+    recursive_relations: BTreeSet<u64>,
 }
 
 impl RulePlanner {
     /// Creates a new empty RulePlanner.
-    pub(crate) fn new(rule: FlowLogRule) -> Self {
+    pub(crate) fn new(rule: FlowLogRule, recursive_relations: &[u64]) -> Self {
         Self {
             rule,
             transformation_infos: Vec::new(),
             transformations: Vec::new(),
             producer_consumer: HashMap::new(),
+            recursive_relations: recursive_relations.iter().copied().collect(),
         }
     }
 
