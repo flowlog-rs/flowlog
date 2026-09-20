@@ -213,10 +213,8 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("{} transformation:\n{}", label, tx);
-
+        self.push_transformation(tx, catalog, label)?;
         catalog.projection_modify(*atom_signature, vec![drop_sig], new_name, new_fp)?;
-        self.transformation_infos.push(tx);
 
         Ok(true)
     }
@@ -342,6 +340,22 @@ mod tests {
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].input_name(), ("a", Some("b")));
         assert_eq!(positive_names(&catalog)[0], "c");
+    }
+
+    #[test]
+    fn output_variables_follow_the_output_layout() {
+        let (mut planner, mut catalog) = test_setup(
+            ".decl A(x: int32)\n.input A\n\
+             .decl B(x: int32, y: int32)\n.input B\n\
+             .decl Out(x: int32, y: int32)\n.output Out\n\
+             Out(x, y) :- A(x), B(x, y).\n",
+        );
+
+        planner.prepare(&mut catalog).unwrap();
+
+        let semijoin = planner.transformation_infos().last().unwrap();
+        assert_eq!(semijoin.input_name(), ("a", Some("b")));
+        assert_eq!(semijoin.output_variables(), vec![Some("x"), Some("y")]);
     }
 
     #[test]

@@ -12,6 +12,7 @@
 //! replaced with real ones once they are known. This allows building
 //! a transformation plan before all details are finalized.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use flowlog_common::compute_fp;
@@ -101,6 +102,9 @@ pub(crate) enum TransformationInfo {
         output_kv_layout: KeyValueLayout,
         /// Filter predicates (equality constraints, comparisons, UDF predicates).
         predicates: KvPredicates,
+        /// Variable name behind each argument position the output layout can
+        /// mention; see [`Self::output_variables`].
+        variables: BTreeMap<AtomArgumentSignature, String>,
     },
 
     /// Binary Join to Key-Value transformation.
@@ -127,6 +131,9 @@ pub(crate) enum TransformationInfo {
         output_kv_layout: KeyValueLayout,
         /// Filter predicates (comparisons and UDF predicates).
         predicates: JoinPredicates,
+        /// Variable name behind each argument position the output layout can
+        /// mention; see [`Self::output_variables`].
+        variables: BTreeMap<AtomArgumentSignature, String>,
     },
 
     /// Binary Anti-Join to Key-Value transformation.
@@ -151,6 +158,9 @@ pub(crate) enum TransformationInfo {
         right_input_kv_layout: KeyValueLayout,
         /// Output layout (key/value positions) (fake until resolved).
         output_kv_layout: KeyValueLayout,
+        /// Variable name behind each argument position the output layout can
+        /// mention; see [`Self::output_variables`].
+        variables: BTreeMap<AtomArgumentSignature, String>,
     },
 }
 
@@ -185,6 +195,7 @@ impl TransformationInfo {
             input_kv_layout,
             output_kv_layout: output_fake_kv_layout,
             predicates,
+            variables: BTreeMap::new(),
         }
     }
 
@@ -222,6 +233,7 @@ impl TransformationInfo {
             right_input_kv_layout: right_kv_layout,
             output_kv_layout: output_fake_kv_layout,
             predicates,
+            variables: BTreeMap::new(),
         }
     }
 
@@ -257,6 +269,7 @@ impl TransformationInfo {
             left_input_kv_layout: left_kv_layout,
             right_input_kv_layout: right_kv_layout,
             output_kv_layout: output_fake_kv_layout,
+            variables: BTreeMap::new(),
         }
     }
 }
@@ -386,6 +399,46 @@ impl TransformationInfo {
             | Self::AntiJoinToKV {
                 output_kv_layout, ..
             } => output_kv_layout,
+        }
+    }
+
+    /// Variable name of each output column, in layout order (key columns
+    /// first), or `None` for a column that holds no variable: an arithmetic
+    /// expression, a constant, or a placeholder.
+    ///
+    /// The names come from the catalog at the time the transformation was
+    /// planned. Later phases permute or drop output positions but never
+    /// invent new ones, so the answer stays correct after fuse and post.
+    pub(crate) fn output_variables(&self) -> Vec<Option<&str>> {
+        let variables = match self {
+            Self::KVToKV { variables, .. }
+            | Self::JoinToKV { variables, .. }
+            | Self::AntiJoinToKV { variables, .. } => variables,
+        };
+        let layout = self.output_kv_layout();
+        layout
+            .key()
+            .iter()
+            .chain(layout.value())
+            .map(|position| {
+                if !position.rest().is_empty() {
+                    return None;
+                }
+                position
+                    .init()
+                    .as_var_signature()
+                    .and_then(|signature| variables.get(signature))
+                    .map(String::as_str)
+            })
+            .collect()
+    }
+
+    /// Records the variable names behind the output layout's positions.
+    pub(crate) fn set_variables(&mut self, names: BTreeMap<AtomArgumentSignature, String>) {
+        match self {
+            Self::KVToKV { variables, .. }
+            | Self::JoinToKV { variables, .. }
+            | Self::AntiJoinToKV { variables, .. } => *variables = names,
         }
     }
 
@@ -706,14 +759,16 @@ impl fmt::Display for TransformationInfo {
     /// [Join -> KV]
     ///     Left : (reach ⋈[y] arc) [0x....], key:(..), value:(..)
     ///     Right: arc [0x....], key:(..), value:(..)
-    ///     Out  : ((reach ⋈[y] arc) ⋈[y] arc) [0x....], key:(..), value:(..)
+    ///     Out  : ((reach ⋈[y] arc) ⋈[y] arc) [0x....], key:(..), value:(..), vars:(x, y)
     ///     F    : (if x = 5 and y > 0)
     /// ```
     ///
     /// Each collection is rendered as `<hierarchical-name> [0x<fingerprint>], key:(..), value:(..)`.
     /// The name encodes the full construction path from EDBs (composed by
     /// each phase's constructor); the fingerprint is the disambiguating
-    /// identity. Unlike [`crate::planner::Transformation`], there is no `Flow` line —
+    /// identity. `vars` lists the output columns by variable name, with `_`
+    /// for a column that holds no variable (see
+    /// [`TransformationInfo::output_variables`]). Unlike [`crate::planner::Transformation`], there is no `Flow` line —
     /// the `TransformationFlow` is only materialized when a `Transformation`
     /// is built from this info. The `F` line is omitted when no predicates
     /// apply.
@@ -721,6 +776,12 @@ impl fmt::Display for TransformationInfo {
         let coll = |fp: u64, name: &str, kv: &KeyValueLayout| {
             Collection::new(fp, name.to_string(), kv.key(), kv.value())
         };
+        let vars = self
+            .output_variables()
+            .iter()
+            .map(|name| name.unwrap_or("_"))
+            .collect::<Vec<_>>()
+            .join(", ");
 
         writeln!(f, "{}", self.operation_name())?;
         match self {
@@ -741,8 +802,9 @@ impl fmt::Display for TransformationInfo {
                 )?;
                 writeln!(
                     f,
-                    "    Out  : {}",
-                    coll(*output_info_fp, output_name, output_kv_layout)
+                    "    Out  : {}, vars:({})",
+                    coll(*output_info_fp, output_name, output_kv_layout),
+                    vars
                 )?;
                 if !predicates.is_empty() {
                     writeln!(f, "    F    : (if {})", predicates)?;
@@ -777,8 +839,9 @@ impl fmt::Display for TransformationInfo {
                 )?;
                 writeln!(
                     f,
-                    "    Out  : {}",
-                    coll(*output_info_fp, output_name, output_kv_layout)
+                    "    Out  : {}, vars:({})",
+                    coll(*output_info_fp, output_name, output_kv_layout),
+                    vars
                 )?;
                 if !predicates.is_empty() {
                     writeln!(f, "    F    : (if {})", predicates)?;
@@ -812,8 +875,9 @@ impl fmt::Display for TransformationInfo {
                 )?;
                 writeln!(
                     f,
-                    "    Out  : {}",
-                    coll(*output_info_fp, output_name, output_kv_layout)
+                    "    Out  : {}, vars:({})",
+                    coll(*output_info_fp, output_name, output_kv_layout),
+                    vars
                 )?;
             }
         }

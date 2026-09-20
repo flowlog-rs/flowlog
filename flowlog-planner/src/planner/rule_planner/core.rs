@@ -176,8 +176,7 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("Shadow-column premap transformation:\n{}", tx);
-        self.transformation_infos.push(tx);
+        self.push_transformation(tx, catalog, "Shadow-column premap")?;
 
         catalog.append_arguments_modify(
             AtomSignature::new(true, atom_idx),
@@ -281,10 +280,7 @@ impl RulePlanner {
 
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("Join transformation:\n{}", tx);
-
-        // Store the transformation info
-        self.transformation_infos.push(tx);
+        self.push_transformation(tx, catalog, "Join")?;
 
         // Update catalog with the new joined atom
         catalog.join_modify(

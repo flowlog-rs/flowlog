@@ -6,6 +6,7 @@
 //! - Projection and unused argument removal
 //! - Producer-consumer relationship management
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -266,8 +267,7 @@ impl RulePlanner {
         );
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
-        trace!("Positive semijoin transformation:\n{}", tx);
-        self.transformation_infos.push(tx);
+        self.push_transformation(tx, catalog, "Positive semijoin")?;
 
         // Update catalog with the new joined atom
         catalog.join_modify(
@@ -351,8 +351,7 @@ impl RulePlanner {
         );
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
-        trace!("Anti semijoin transformation:\n{}", tx);
-        self.transformation_infos.push(tx);
+        self.push_transformation(tx, catalog, "Anti semijoin")?;
 
         // Update catalog with the new anti-joined atom
         catalog.join_modify(
@@ -427,13 +426,10 @@ impl RulePlanner {
             // Register this transformation as a producer
             self.insert_producer(new_fp, current_transformation_index);
 
-            trace!("Comparison transformation:\n{}", tx);
-
             new_names.push(new_name);
             new_fps.push(new_fp);
 
-            // Store the transformation info
-            self.transformation_infos.push(tx);
+            self.push_transformation(tx, catalog, "Comparison")?;
         }
 
         catalog.comparison_modify(lhs_comp_idx, right_sigs, new_names, new_fps)?;
@@ -528,10 +524,7 @@ impl RulePlanner {
             // Register this transformation as a producer
             self.insert_producer(new_fp, current_transformation_index);
 
-            trace!("Unused transformation:\n{}", tx);
-
-            // Store the transformation info
-            self.transformation_infos.push(tx);
+            self.push_transformation(tx, catalog, "Unused")?;
 
             // Modify the catalog to reflect the projected atom
             catalog.projection_modify(atom_signature, to_delete, new_name, new_fp)?;
@@ -600,8 +593,7 @@ impl RulePlanner {
         let new_name = edb_name;
         let new_fp = tx.output_info_fp();
 
-        // Store the transformation info
-        self.transformation_infos.push(tx);
+        self.push_transformation(tx, catalog, "Premap")?;
 
         // Register this transformation as consumer of EDB atom
         self.insert_consumer(
@@ -800,6 +792,42 @@ impl RulePlanner {
 // Producer-Consumer Relationship Management
 // =========================================================================
 impl RulePlanner {
+    /// Records the variable names behind `tx`'s output positions, logs it
+    /// under `label`, and appends it to the plan.
+    ///
+    /// Every planning site must append through here, before the catalog
+    /// rewrite that consumes the transformation: the names resolve through
+    /// the catalog's current argument signatures, which that rewrite
+    /// renumbers. A constant or placeholder argument has no name and is
+    /// skipped; any other unresolved position is an internal error.
+    pub(super) fn push_transformation(
+        &mut self,
+        mut tx: TransformationInfo,
+        catalog: &Catalog,
+        label: &str,
+    ) -> Result<(), PlanError> {
+        let layout = tx.output_kv_layout();
+        let filters = catalog.filters();
+        let mut names = BTreeMap::new();
+        for position in layout.key().iter().chain(layout.value()) {
+            let factors = std::iter::once(position.init())
+                .chain(position.rest().iter().map(|(_, factor)| factor));
+            for signature in factors.filter_map(|factor| factor.as_var_signature()) {
+                if filters.const_map().contains_key(signature)
+                    || filters.placeholder_set().contains(signature)
+                {
+                    continue;
+                }
+                let name = catalog.signature_to_argument_str(signature)?;
+                names.insert(*signature, name.to_string());
+            }
+        }
+        tx.set_variables(names);
+        trace!("{label} transformation:\n{tx}");
+        self.transformation_infos.push(tx);
+        Ok(())
+    }
+
     /// Registers a producer transformation for data with a given fingerprint.
     ///
     /// Multiple transformations can produce the same data (i.e., multiple producers per output).
