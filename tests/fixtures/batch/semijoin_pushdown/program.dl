@@ -1,0 +1,23 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : semijoin_pushdown
+// Feature : copying a folded filter down to atoms that join before its carrier
+// Covers  : one relation read three times so two of its premaps share a
+//           fingerprint, with a filter that folds elsewhere by arity; the same
+//           shape with distinct projections of the relation
+// ════════════════════════════════════════════════════════════════════════════
+.decl R(a: int32, b: int32, p: int32)
+.input R(IO="file", filename="R.csv", delimiter=",")
+.decl S(c: int32, z: int32)
+.input S(IO="file", filename="S.csv", delimiter=",")
+.decl F(c: int32)
+.input F(IO="file", filename="F.csv", delimiter=",")
+
+// The three R atoms keep every column, so their premaps look alike.
+.decl T(a: int32, b: int32, c: int32, z: int32)
+T(a, b, c, z) :- R(a, b, p), R(b, c, p), R(c, a, p), S(c, z), F(c).
+.output T
+
+// Each R atom drops a different column, so their projections differ.
+.decl U(a: int32, b: int32, c: int32, z: int32)
+U(a, b, c, z) :- R(a, b, p), R(b, c, q), R(c, a, r), S(c, z), F(c).
+.output U

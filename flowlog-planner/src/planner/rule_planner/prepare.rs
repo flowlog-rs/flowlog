@@ -213,10 +213,8 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("{} transformation:\n{}", label, tx);
-
+        self.push_transformation(tx, catalog, label)?;
         catalog.projection_modify(*atom_signature, vec![drop_sig], new_name, new_fp)?;
-        self.transformation_infos.push(tx);
 
         Ok(true)
     }
@@ -239,7 +237,24 @@ mod tests {
     use flowlog_parser::DataType;
 
     use super::super::common::test_setup;
+    use super::super::common::test_setup_recursive;
     use super::*;
+
+    /// Joins the planner emitted, in plan order.
+    fn joins(planner: &RulePlanner) -> Vec<&TransformationInfo> {
+        planner
+            .transformation_infos()
+            .iter()
+            .filter(|tx| matches!(tx, TransformationInfo::JoinToKV { .. }))
+            .collect()
+    }
+
+    /// Names of the positive atoms left in the catalog, in body order.
+    fn positive_names(catalog: &Catalog) -> Vec<String> {
+        (0..catalog.positive_atom_number())
+            .map(|index| catalog.positive_atom_name(index).unwrap().to_string())
+            .collect()
+    }
 
     #[test]
     fn same_variable_atoms_need_one_join_per_eliminated_atom() {
@@ -262,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn equal_variable_atoms_merge_before_an_earlier_subset_is_propagated() {
+    fn equal_variable_atoms_fold_into_one_join() {
         let (mut planner, mut catalog) = test_setup(
             ".decl A(x: int32)\n.input A\n\
              .decl B(x: int32, y: int32)\n.input B\n\
@@ -273,40 +288,95 @@ mod tests {
 
         planner.prepare(&mut catalog).unwrap();
 
-        let joins: Vec<_> = planner
-            .transformation_infos()
-            .iter()
-            .filter(|tx| matches!(tx, TransformationInfo::JoinToKV { .. }))
-            .collect();
+        let joins = joins(&planner);
         assert_eq!(joins.len(), 2);
-        assert_eq!(joins[0].output_kv_layout().key().len(), 2);
-        assert!(joins[0].output_kv_layout().value().is_empty());
+        assert_eq!(joins[0].input_name(), ("a", Some("b")));
+        assert_eq!(joins[1].output_kv_layout().key().len(), 2);
+        assert!(joins[1].output_kv_layout().value().is_empty());
         assert!(catalog.is_planned());
     }
 
+    const RECURSIVE_PATH: &str = ".decl path(x: int32, y: int32)\n.output path\n\
+                                  .decl edge(x: int32, y: int32)\n.input edge\n\
+                                  .decl A(x: int32)\n.input A\n\
+                                  path(x, z) :- path(x, y), edge(y, z), A(y).\n";
+
     #[test]
-    fn merged_filter_reaches_every_strict_superset() {
+    fn static_candidate_wins_over_recursive_candidate() {
+        let (mut planner, mut catalog) = test_setup_recursive(RECURSIVE_PATH, &["path"]);
+
+        planner.prepare(&mut catalog).unwrap();
+
+        let joins = joins(&planner);
+        assert_eq!(joins.len(), 1);
+        assert_eq!(joins[0].input_name(), ("a", Some("edge")));
+        assert_eq!(positive_names(&catalog)[0], "path");
+    }
+
+    #[test]
+    fn body_order_breaks_ties_between_static_candidates() {
+        let (mut planner, mut catalog) = test_setup(RECURSIVE_PATH);
+
+        planner.prepare(&mut catalog).unwrap();
+
+        let joins = joins(&planner);
+        assert_eq!(joins.len(), 1);
+        assert_eq!(joins[0].input_name(), ("a", Some("path")));
+        assert_eq!(positive_names(&catalog)[1], "edge");
+    }
+
+    #[test]
+    fn fewer_arguments_win_among_static_candidates() {
         let (mut planner, mut catalog) = test_setup(
             ".decl A(x: int32)\n.input A\n\
-             .decl D(x: int32)\n.input D\n\
+             .decl C(x: int32, z: int32, w: int32)\n.input C\n\
              .decl B(x: int32, y: int32)\n.input B\n\
-             .decl C(x: int32, z: int32)\n.input C\n\
-             .decl Out(x: int32, y: int32, z: int32)\n.output Out\n\
-             Out(x, y, z) :- A(x), D(x), B(x, y), C(x, z).\n",
+             .decl Out(x: int32, y: int32, z: int32, w: int32)\n.output Out\n\
+             Out(x, y, z, w) :- A(x), C(x, z, w), B(x, y).\n",
+        );
+        planner.prepare(&mut catalog).unwrap();
+
+        let joins = joins(&planner);
+        assert_eq!(joins.len(), 1);
+        assert_eq!(joins[0].input_name(), ("a", Some("b")));
+        assert_eq!(positive_names(&catalog)[0], "c");
+    }
+
+    #[test]
+    fn output_variables_follow_the_output_layout() {
+        let (mut planner, mut catalog) = test_setup(
+            ".decl A(x: int32)\n.input A\n\
+             .decl B(x: int32, y: int32)\n.input B\n\
+             .decl Out(x: int32, y: int32)\n.output Out\n\
+             Out(x, y) :- A(x), B(x, y).\n",
         );
 
         planner.prepare(&mut catalog).unwrap();
 
-        let joins: Vec<_> = planner
+        let semijoin = planner.transformation_infos().last().unwrap();
+        assert_eq!(semijoin.input_name(), ("a", Some("b")));
+        assert_eq!(semijoin.output_variables(), vec![Some("x"), Some("y")]);
+    }
+
+    #[test]
+    fn anti_semijoin_reaches_one_superset() {
+        let (mut planner, mut catalog) = test_setup(
+            ".decl B(x: int32, y: int32)\n.input B\n\
+             .decl C(x: int32, z: int32)\n.input C\n\
+             .decl N(x: int32)\n.input N\n\
+             .decl Out(x: int32, y: int32, z: int32)\n.output Out\n\
+             Out(x, y, z) :- B(x, y), C(x, z), !N(x).\n",
+        );
+        planner.prepare(&mut catalog).unwrap();
+
+        let antijoins: Vec<_> = planner
             .transformation_infos()
             .iter()
-            .filter(|tx| matches!(tx, TransformationInfo::JoinToKV { .. }))
+            .filter(|tx| matches!(tx, TransformationInfo::AntiJoinToKV { .. }))
             .collect();
-        assert_eq!(joins.len(), 3);
-        let merged_filter = joins[0].output_info_fp();
-        assert_eq!(joins[1].input_info_fp().0, merged_filter);
-        assert_eq!(joins[2].input_info_fp().0, merged_filter);
-        assert_eq!(catalog.positive_atom_number(), 2);
+        assert_eq!(antijoins.len(), 1);
+        assert_eq!(antijoins[0].input_name(), ("n", Some("b")));
+        assert_eq!(positive_names(&catalog)[1], "c");
     }
 
     /// `A(x, x)` — var_eq canonicalization must keep the lower-argument-id

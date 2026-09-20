@@ -100,7 +100,7 @@ impl RulePlanner {
         post_tx.update_row_output(true);
         post_tx.update_output_fake_sig();
 
-        self.transformation_infos.push(post_tx);
+        self.push_transformation(post_tx, catalog, "Post")?;
         Ok(())
     }
 }
@@ -246,6 +246,29 @@ mod tests {
     /// Post must preserve the `+ 1` operator, not flatten to bare `x`.
     /// If post dropped the Arith branch, codegen emits `x`: off-by-one
     /// every row with no compiler error.
+    /// Post replaces the last output layout with head positions; the names
+    /// recorded at planning time must still describe the new columns, and
+    /// an arithmetic column has no name.
+    #[test]
+    fn output_variables_follow_post_alignment() {
+        let (mut planner, mut catalog) = test_setup(
+            "\
+            .decl A(a: int32, b: int32)\n\
+            .decl Out(y: int32, x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(y, x + 1) :- A(x, y).\n",
+        );
+        planner.prepare(&mut catalog).expect("prepare");
+        planner
+            .fuse(catalog.original_atom_fingerprints())
+            .expect("fuse");
+        planner.post(&mut catalog).expect("post");
+
+        let last = planner.transformation_infos().last().unwrap();
+        assert_eq!(last.output_variables(), vec![Some("y"), None]);
+    }
+
     #[test]
     fn post_emits_head_arithmetic_expression() {
         let (mut planner, mut catalog) = test_setup(

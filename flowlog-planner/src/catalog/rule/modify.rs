@@ -146,8 +146,8 @@ impl Catalog {
         self.update_rule_in_place(rhs_index, new_atom)
     }
 
-    /// Removes one left atom and replaces each right atom with a positive
-    /// joined atom using its requested arguments, name, and fingerprint.
+    /// Removes the left atom and replaces the right atom with a positive
+    /// joined atom using the requested arguments, name, and fingerprint.
     ///
     /// For example, joining left atom `0` with right atom `1`, using
     /// arguments `[0.0, 1.1]` and name `A_join_B`, rewrites
@@ -156,26 +156,11 @@ impl Catalog {
     pub(crate) fn join_modify(
         &mut self,
         left_atom_signature: AtomSignature,
-        right_atom_signatures: Vec<AtomSignature>,
-        new_arguments_list: Vec<Vec<AtomArgumentSignature>>,
-        new_names: Vec<String>,
-        new_fingerprints: Vec<u64>,
+        right_atom_signature: AtomSignature,
+        new_arguments: &[AtomArgumentSignature],
+        new_name: &str,
+        new_fingerprint: u64,
     ) -> Result<(), CatalogError> {
-        let num_right_atoms = right_atom_signatures.len();
-        if new_arguments_list.len() != num_right_atoms
-            || new_names.len() != num_right_atoms
-            || new_fingerprints.len() != num_right_atoms
-        {
-            return Err(CatalogError::internal(format!(
-                "join_modify: parameter length mismatch: right_atom_signatures={}, \
-                 new_arguments_list={}, new_names={}, new_fingerprints={}",
-                num_right_atoms,
-                new_arguments_list.len(),
-                new_names.len(),
-                new_fingerprints.len()
-            )));
-        }
-
         let left_rhs_index = self.rhs_index_from_signature(left_atom_signature)?;
 
         match &self.rule.rhs()[left_rhs_index] {
@@ -189,16 +174,11 @@ impl Catalog {
         }
 
         let right_indices =
-            self.validate_atom_rhs_indices(&right_atom_signatures, "join_modify")?;
+            self.validate_atom_rhs_indices(&[right_atom_signature], "join_modify")?;
+        let new_atom_args = self.lookup_arg_vars(new_arguments, "join_modify")?;
+        let new_atom = Predicate::PositiveAtom(Atom::new(new_name, new_atom_args, new_fingerprint));
 
-        let mut new_joined_atoms = Vec::with_capacity(num_right_atoms);
-        for i in 0..num_right_atoms {
-            let new_atom_args = self.lookup_arg_vars(&new_arguments_list[i], "join_modify")?;
-            let new_atom = Atom::new(&new_names[i], new_atom_args, new_fingerprints[i]);
-            new_joined_atoms.push(Predicate::PositiveAtom(new_atom));
-        }
-
-        self.remove_and_update_rule(left_rhs_index, right_indices, new_joined_atoms)
+        self.remove_and_update_rule(left_rhs_index, right_indices, vec![new_atom])
     }
 
     /// Removes a comparison and replaces each target atom with a positive
@@ -645,13 +625,13 @@ Out() :- {body}.
             positive
                 .join_modify(
                     a,
-                    vec![b],
-                    vec![vec![
+                    b,
+                    &[
                         AtomArgumentSignature::new(a, 0),
                         AtomArgumentSignature::new(b, 1),
-                    ]],
-                    vec!["A_join_B".into()],
-                    vec![compute_fp("a_join_b")],
+                    ],
+                    "A_join_B",
+                    compute_fp("a_join_b"),
                 )
                 .expect("join positive left atom");
             assert_eq!(positive.rule().to_string(), "out() :- A_join_B(x, w).");
@@ -662,38 +642,16 @@ Out() :- {body}.
             negative
                 .join_modify(
                     b,
-                    vec![a],
-                    vec![vec![
+                    a,
+                    &[
                         AtomArgumentSignature::new(b, 1),
                         AtomArgumentSignature::new(a, 2),
-                    ]],
-                    vec!["A_without_B".into()],
-                    vec![compute_fp("a_without_b")],
+                    ],
+                    "A_without_B",
+                    compute_fp("a_without_b"),
                 )
                 .expect("join negative left atom");
             assert_eq!(negative.rule().to_string(), "out() :- A_without_B(y, z).");
-        }
-
-        #[test]
-        fn rejects_mismatched_parameter_lengths() {
-            let mut catalog = catalog_for_body("A(x, y, z), B(y, z)");
-
-            let error = catalog
-                .join_modify(
-                    AtomSignature::new(true, 0),
-                    vec![AtomSignature::new(true, 1)],
-                    Vec::new(),
-                    vec!["A_join_B".into()],
-                    vec![compute_fp("a_join_b")],
-                )
-                .expect_err("parallel parameters must have matching lengths");
-
-            assert_eq!(
-                error.to_string(),
-                "internal compiler error at stage `catalog`: join_modify: parameter length \
-                 mismatch: right_atom_signatures=1, new_arguments_list=0, new_names=1, \
-                 new_fingerprints=1"
-            );
         }
     }
 

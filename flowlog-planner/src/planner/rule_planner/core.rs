@@ -176,8 +176,7 @@ impl RulePlanner {
         let new_fp = tx.output_info_fp();
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("Shadow-column premap transformation:\n{}", tx);
-        self.transformation_infos.push(tx);
+        self.push_transformation(tx, catalog, "Shadow-column premap")?;
 
         catalog.append_arguments_modify(
             AtomSignature::new(true, atom_idx),
@@ -229,7 +228,7 @@ impl RulePlanner {
 
         // Extract RHS atom information and register as consumer
         let rhs_pos_fp = catalog.positive_atom_fingerprint(rhs_idx)?;
-        let right_atom_signatures = vec![AtomSignature::new(true, rhs_idx)];
+        let right_atom_signature = AtomSignature::new(true, rhs_idx);
         let right_atom_argument_signatures =
             catalog.positive_atom_argument_signature(rhs_idx)?.to_vec();
 
@@ -281,18 +280,15 @@ impl RulePlanner {
 
         self.insert_producer(new_fp, current_transformation_index);
 
-        trace!("Join transformation:\n{}", tx);
-
-        // Store the transformation info
-        self.transformation_infos.push(tx);
+        self.push_transformation(tx, catalog, "Join")?;
 
         // Update catalog with the new joined atom
         catalog.join_modify(
             left_atom_signature,
-            right_atom_signatures,
-            vec![new_arguments_list],
-            vec![new_name],
-            vec![new_fp],
+            right_atom_signature,
+            &new_arguments_list,
+            &new_name,
+            new_fp,
         )?;
         Ok(())
     }
