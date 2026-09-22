@@ -14,7 +14,7 @@ use crate::catalog::CatalogError;
 
 /// A factor in an arithmetic expression with variables resolved to their
 /// concrete positions within atoms.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum FactorPos {
     /// A variable reference identified by its atom and argument position.
     Var(AtomArgumentSignature),
@@ -68,6 +68,34 @@ impl FactorPos {
             FactorPos::Group(a) => a.signatures(),
             FactorPos::Tuple { fields } => fields.iter().flat_map(|a| a.signatures()).collect(),
             FactorPos::TupleProj { tuple, .. } => tuple.signatures(),
+        }
+    }
+
+    /// Rewrites this factor top-down: the factor becomes `f(factor)` when
+    /// that is `Some`, otherwise its sub-expressions are rewritten in turn
+    /// and the factor is rebuilt around them.
+    pub(crate) fn map_factors(&self, f: &impl Fn(&FactorPos) -> Option<FactorPos>) -> FactorPos {
+        if let Some(replacement) = f(self) {
+            return replacement;
+        }
+        match self {
+            FactorPos::Var(_) | FactorPos::Const(_) => self.clone(),
+            FactorPos::FnCall { name, args } => FactorPos::FnCall {
+                name: name.clone(),
+                args: args.iter().map(|a| a.map_factors(f)).collect(),
+            },
+            FactorPos::Builtin { op, args } => FactorPos::Builtin {
+                op: *op,
+                args: args.iter().map(|a| a.map_factors(f)).collect(),
+            },
+            FactorPos::Group(a) => FactorPos::Group(Box::new(a.map_factors(f))),
+            FactorPos::Tuple { fields } => FactorPos::Tuple {
+                fields: fields.iter().map(|a| a.map_factors(f)).collect(),
+            },
+            FactorPos::TupleProj { tuple, index } => FactorPos::TupleProj {
+                tuple: Box::new(tuple.map_factors(f)),
+                index: *index,
+            },
         }
     }
 
@@ -134,7 +162,7 @@ impl fmt::Display for FactorPos {
 
 /// Positional arithmetic expression with variables resolved to their
 /// concrete argument signatures.
-#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+#[derive(Clone, Hash, PartialEq, Eq, Debug, PartialOrd, Ord)]
 pub(crate) struct ArithmeticPos {
     /// The left-most factor.
     init: FactorPos,
@@ -310,6 +338,21 @@ impl ArithmeticPos {
             sigs.extend(factor.signatures());
         }
         sigs
+    }
+
+    /// Rewrites every factor of this expression top-down with `f`; see
+    /// [`FactorPos::map_factors`].
+    pub(crate) fn map_factors(
+        &self,
+        f: &impl Fn(&FactorPos) -> Option<FactorPos>,
+    ) -> ArithmeticPos {
+        let init = self.init.map_factors(f);
+        let rest = self
+            .rest
+            .iter()
+            .map(|(op, factor)| (op.clone(), factor.map_factors(f)))
+            .collect();
+        ArithmeticPos::new(init, rest)
     }
 
     /// Transforms every variable in this expression using `f`, recursing

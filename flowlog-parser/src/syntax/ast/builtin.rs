@@ -14,7 +14,7 @@ use crate::error::ParseError;
 use crate::types::DataType;
 
 /// Built-in operator kinds; one per reserved keyword in `grammar.pest`.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BuiltinOperator {
     /// `strlen(s) -> int32`: character count.
     Strlen,

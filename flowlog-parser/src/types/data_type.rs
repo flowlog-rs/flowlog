@@ -19,7 +19,7 @@ use std::str::FromStr;
 ///
 /// The grammar spelling of each primitive (canonical name plus accepted
 /// aliases, e.g. `number` for `Int32`) is defined once in `PRIM_NAMES`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DataType {
     /// An integer literal's type before the typechecker pins its width.
     #[doc(hidden)]

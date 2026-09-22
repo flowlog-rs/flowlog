@@ -1,5 +1,6 @@
 mod argument;
 mod arithmetic;
+mod canonical;
 mod collection;
 mod compare;
 mod constraint;
@@ -14,6 +15,7 @@ mod transformation;
 pub use argument::TransformationArgument;
 pub use arithmetic::ArithmeticArgument;
 pub use arithmetic::FactorArgument;
+pub(crate) use canonical::CanonicalForm;
 pub use collection::Collection;
 pub use compare::ComparisonExprArgument;
 pub use constraint::Constraints;
