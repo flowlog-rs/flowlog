@@ -133,7 +133,7 @@ impl RulePlanner {
             // Update all consumers to point to the producer's new output
             for &output_consumer_index in &output_consumer_indices {
                 let consumer_tx = &mut self.transformation_infos[output_consumer_index];
-                consumer_tx.update_input_fake_info_fp(input_producer_output_fp, &output_fp);
+                consumer_tx.update_input_fp(input_producer_output_fp, output_fp);
 
                 // Update the producer-consumer mapping
                 self.insert_consumer(
@@ -170,6 +170,11 @@ impl RulePlanner {
 
     /// Fuse correct key-value layout requirements from downstream transformation infos
     /// to upstream transformations.
+    ///
+    /// Walking the pipeline in order and refreshing each producer after its
+    /// inputs settled also leaves every read fingerprint hashing the inputs
+    /// actually read, whatever an earlier phase rewired; post refreshes the
+    /// one node nothing reads.
     fn fuse_kv_layout(&mut self, original_atom_fp: &BTreeSet<u64>) -> Result<(), PlanError> {
         // Collect output fingerprints in transformation order, keeping only
         // the first occurrence of each. Order matters for sharing
@@ -212,15 +217,14 @@ impl RulePlanner {
                     new_output_fp = {
                         let producer_tx = &mut self.transformation_infos[producer_idx];
                         producer_tx.refactor_output_key_value_layout(&key_indices, &value_indices);
-                        producer_tx.update_output_fake_sig();
+                        producer_tx.refresh_output_fp();
                         producer_tx.output_info_fp()
                     };
                 }
 
                 // Update consumers to use new fingerprint
                 for consumer_idx in consumers {
-                    self.transformation_infos[consumer_idx]
-                        .update_input_fake_info_fp(new_output_fp, &tx_fp);
+                    self.transformation_infos[consumer_idx].update_input_fp(new_output_fp, tx_fp);
                 }
             }
         }
@@ -270,7 +274,7 @@ impl RulePlanner {
                 producer_tx.update_comparisons(remapped_cmps)?;
             }
             producer_tx.update_output_name(fused_map_output_name);
-            producer_tx.update_output_fake_sig();
+            producer_tx.refresh_output_fp();
         }
 
         // Return the new output fingerprint

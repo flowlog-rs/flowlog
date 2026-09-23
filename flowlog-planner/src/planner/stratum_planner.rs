@@ -142,10 +142,7 @@ impl StratumPlanner {
             planner.post(catalog)?;
         }
 
-        // Phase 6: Materialize per-rule transformations, rewriting lineage
-        // (rhs_id-laden) fingerprints to content-canonical ones so identical
-        // operations dedup across rules, and deriving each output's
-        // canonical form.
+        // Phase 6 materializes each rule's pipeline and derives every canonical form.
         for planner in rule_planners.iter_mut() {
             planner.materialize()?;
         }

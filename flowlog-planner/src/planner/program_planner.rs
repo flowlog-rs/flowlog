@@ -44,15 +44,19 @@ impl ProgramPlanner {
     }
 }
 
-/// Drop non-recursive transformations whose output fingerprint was already
-/// emitted by an earlier stratum's prelude.
+/// Drops non-recursive transformations whose output fingerprint an
+/// earlier stratum already emitted.
 ///
 /// Soundness: the earlier binding only stays correct as long as none of the
 /// IDBs its value transitively depends on have been updated between the two
 /// strata. Stratification puts all consumers after all definers, so this
 /// holds; the transitive check below keeps the later emission on the
 /// remaining cases where an IDB is rewritten between two consumers of the
-/// same content-addressed transformation.
+/// same transformation.
+///
+/// TODO: compare canonical forms instead of fingerprints, under this same
+/// check, so collections that hold the same rows through different plans
+/// share across strata as they already do within one.
 fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
     let mut idb_writes: HashMap<u64, Vec<usize>> = HashMap::new();
     for (idx, stratum) in strata.iter().enumerate() {
@@ -174,8 +178,8 @@ mod tests {
     }
 
     /// Both rules key `B` on its first column, but at different rhs
-    /// positions (1 vs 0). Lineage fps embed that position; content-canonical
-    /// materialization must share one arrangement.
+    /// positions (1 vs 0). Their fingerprints embed that position and
+    /// differ; the canonical form does not, so the arrangements are one.
     const RHS_ID_SHARING_SRC: &str = "\
         .decl A(x: int32, y: int32)\n\
         .decl B(x: int32, y: int32)\n\
@@ -256,14 +260,57 @@ mod tests {
         );
     }
 
+    /// One relation read three times, a filter that folds elsewhere, and a
+    /// second rule with distinct projections: pushdown lands copies and
+    /// fuse rewires inputs, the two phases that leave a reader hashing an
+    /// input it no longer reads until fuse's own pass refreshes it.
+    const PUSHDOWN_SRC: &str = "\
+        .decl R(a: int32, b: int32, p: int32)\n\
+        .decl S(c: int32, z: int32)\n\
+        .decl F(c: int32)\n\
+        .decl T(a: int32, b: int32, c: int32, z: int32)\n\
+        .decl U(a: int32, b: int32, c: int32, z: int32)\n\
+        .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+        .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+        .input F(IO=\"file\", filename=\"F.csv\", delimiter=\",\")\n\
+        .output T\n\
+        .output U\n\
+        T(a, b, c, z) :- R(a, b, p), R(b, c, p), R(c, a, p), S(c, z), F(c).\n\
+        U(a, b, c, z) :- R(a, b, p), R(b, c, q), R(c, a, r), S(c, z), F(c).\n";
+
+    /// After planning, every fingerprint hashes the inputs its info reads
+    /// now, so recomputing it changes nothing. Materialization takes the
+    /// fingerprints as they stand, so a stale one would name a plan node
+    /// by inputs it no longer has.
+    #[test]
+    fn planned_fingerprints_hash_the_inputs_actually_read() {
+        for src in [DYCK_SRC, RHS_ID_SHARING_SRC, PUSHDOWN_SRC] {
+            let pp = ProgramPlanner::analyze(src);
+            for stratum in pp.strata() {
+                for planner in stratum.rule_planners() {
+                    for info in planner.transformation_infos() {
+                        let mut recomputed = info.clone();
+                        recomputed.refresh_output_fp();
+                        assert_eq!(
+                            recomputed.output_info_fp(),
+                            info.output_info_fp(),
+                            "stale fingerprint in {info}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Equal output fingerprint must imply equal content (operation, input
-    /// fps, flow) across all per-rule transformations; otherwise dedup
-    /// would substitute a different transformation.
+    /// fingerprints, flow) across all per-rule transformations: the plan
+    /// graph is wired by fingerprint, so a collision would splice one
+    /// collection's readers onto another.
     #[test]
     fn equal_fingerprint_implies_equal_content() {
         use crate::planner::TransformationFlow;
 
-        for src in [DYCK_SRC, RHS_ID_SHARING_SRC] {
+        for src in [DYCK_SRC, RHS_ID_SHARING_SRC, PUSHDOWN_SRC] {
             let pp = ProgramPlanner::analyze(src);
             let mut seen: HashMap<u64, (&str, Vec<u64>, TransformationFlow)> = HashMap::new();
             for stratum in pp.strata() {

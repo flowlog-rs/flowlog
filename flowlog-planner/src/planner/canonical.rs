@@ -3,9 +3,11 @@
 //!
 //! # Why
 //!
-//! A collection's content fingerprint is bottom-up: it hashes the operator
-//! and its inputs' fingerprints, so two collections holding the same rows
-//! never match once their plans diverged, even by an early projection.
+//! A collection's fingerprint is its identity in the plan: it hashes the
+//! operation, its inputs' fingerprints, and layouts that embed body
+//! positions, so two collections holding the same rows never share one
+//! once their plans diverged, even by an early projection or by reading
+//! the same relation at another position.
 //! For `T1(x, z) :- R(x, y), S(y, z, w)` and `T2(x, w) :- R(x, y),
 //! S(y, z, w)` the join fingerprints differ, because each rule projects
 //! `S` down to its own columns first, yet the two heads read

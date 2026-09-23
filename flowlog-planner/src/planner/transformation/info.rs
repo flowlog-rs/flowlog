@@ -6,11 +6,10 @@
 //! equalities, comparisons) that must hold for the transformation to
 //! produce an output tuple.
 //!
-//! These are high-level descriptions that do not yet refer to concrete
-//! collections (with their actual schemas). Instead, they use fake
-//! fingerprints and key/value layouts as placeholders, which are later
-//! replaced with real ones once they are known. This allows building
-//! a transformation plan before all details are finalized.
+//! An info is the planner's working copy of a step: the planning phases
+//! rewrite its layouts and inputs in place, and its output fingerprint is
+//! recomputed from those fields, so a fingerprint is final only once the
+//! pipeline is.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -97,17 +96,17 @@ impl fmt::Display for KeyValueLayout {
 /// Transformation information, describing how to transform input collection(s)
 /// into an output collection, along with any constraints that must hold.
 ///
-/// `output_info_fp` is a lineage fingerprint that wires the per-rule
-/// pipeline; materialization rewrites it to a content-canonical one.
+/// `output_info_fp` wires the per-rule pipeline and becomes the output
+/// collection's fingerprint (see [`crate::planner::Collection`]).
 #[derive(Clone, Debug)]
 pub(crate) enum TransformationInfo {
     /// Unary Key-Value to Key-Value transformation (filter, map, projection, etc.).
     KVToKV {
-        /// Upstream (input) collection fingerprint (fake until resolved).
+        /// Upstream (input) collection fingerprint.
         input_info_fp: u64,
         /// Upstream collection's hierarchical name (e.g. `π[x](reach)`).
         input_name: String,
-        /// Output collection fingerprint (fake until resolved).
+        /// Output collection fingerprint.
         output_info_fp: u64,
         /// Output collection's hierarchical name.
         output_name: String,
@@ -117,7 +116,7 @@ pub(crate) enum TransformationInfo {
         is_row_output: bool,
         /// Input layout (key/value positions).
         input_kv_layout: KeyValueLayout,
-        /// Output layout (key/value positions) (fake until resolved).
+        /// Output layout (key/value positions).
         output_kv_layout: KeyValueLayout,
         /// Filter predicates (equality constraints, comparisons, UDF predicates).
         predicates: KvPredicates,
@@ -136,7 +135,7 @@ pub(crate) enum TransformationInfo {
         right_input_info_fp: u64,
         /// Right input's hierarchical name.
         right_input_name: String,
-        /// Output collection fingerprint (fake until resolved).
+        /// Output collection fingerprint.
         output_info_fp: u64,
         /// Output collection's hierarchical name (e.g. `(reach ⋈[y] arc)`).
         output_name: String,
@@ -146,7 +145,7 @@ pub(crate) enum TransformationInfo {
         left_input_kv_layout: KeyValueLayout,
         /// Right input layout (its value contributes to output value).
         right_input_kv_layout: KeyValueLayout,
-        /// Output layout (key/value positions) (fake until resolved).
+        /// Output layout (key/value positions).
         output_kv_layout: KeyValueLayout,
         /// Filter predicates (comparisons and UDF predicates).
         predicates: JoinPredicates,
@@ -165,7 +164,7 @@ pub(crate) enum TransformationInfo {
         right_input_info_fp: u64,
         /// Right input's hierarchical name.
         right_input_name: String,
-        /// Output collection fingerprint (fake until resolved).
+        /// Output collection fingerprint.
         output_info_fp: u64,
         /// Output collection's hierarchical name (e.g. `(reach ▷[y] arc)`).
         output_name: String,
@@ -175,7 +174,7 @@ pub(crate) enum TransformationInfo {
         left_input_kv_layout: KeyValueLayout,
         /// Right input layout (its value is ignored in the output, but key participates).
         right_input_kv_layout: KeyValueLayout,
-        /// Output layout (key/value positions) (fake until resolved).
+        /// Output layout (key/value positions).
         output_kv_layout: KeyValueLayout,
         /// Variable name behind each argument position the layouts mention;
         /// see [`Self::variables`].
@@ -187,109 +186,90 @@ pub(crate) enum TransformationInfo {
 // Constructors
 // ========================
 impl TransformationInfo {
-    /// Build a Key-Value to Key-Value transformation with a derived (fake) output fingerprint.
+    /// Builds a Key-Value to Key-Value transformation.
     pub(crate) fn kv_to_kv(
-        input_fake_sig: u64,
+        input_fp: u64,
         input_name: String,
         output_name: String,
         is_row_input: bool,
         input_kv_layout: KeyValueLayout,
-        output_fake_kv_layout: KeyValueLayout,
+        output_kv_layout: KeyValueLayout,
         predicates: KvPredicates,
     ) -> Self {
-        let fake_output_sig = compute_fp((
-            "kv_to_kv",
-            &input_fake_sig,
-            &input_kv_layout,
-            &output_fake_kv_layout,
-            &predicates,
-        ));
-        Self::KVToKV {
-            input_info_fp: input_fake_sig,
+        let mut info = Self::KVToKV {
+            input_info_fp: input_fp,
             input_name,
-            output_info_fp: fake_output_sig,
+            output_info_fp: 0,
             output_name,
             is_row_input,
             is_row_output: false,
             input_kv_layout,
-            output_kv_layout: output_fake_kv_layout,
+            output_kv_layout,
             predicates,
             variables: BTreeMap::new(),
-        }
+        };
+        info.refresh_output_fp();
+        info
     }
 
-    /// Build a Join to Key-Value transformation with a derived (fake) output fingerprint.
+    /// Builds a Join to Key-Value transformation.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn join_to_kv(
-        left_fake_sig: u64,
+        left_fp: u64,
         left_input_name: String,
-        right_fake_sig: u64,
+        right_fp: u64,
         right_input_name: String,
         output_name: String,
         left_kv_layout: KeyValueLayout,
         right_kv_layout: KeyValueLayout,
-        output_fake_kv_layout: KeyValueLayout,
+        output_kv_layout: KeyValueLayout,
         predicates: JoinPredicates,
     ) -> Self {
-        let fake_output_sig = compute_fp((
-            "join_to_kv",
-            &left_fake_sig,
-            &right_fake_sig,
-            &left_kv_layout,
-            &right_kv_layout,
-            &output_fake_kv_layout,
-            &predicates,
-        ));
-        Self::JoinToKV {
-            left_input_info_fp: left_fake_sig,
+        let mut info = Self::JoinToKV {
+            left_input_info_fp: left_fp,
             left_input_name,
-            right_input_info_fp: right_fake_sig,
+            right_input_info_fp: right_fp,
             right_input_name,
-            output_info_fp: fake_output_sig,
+            output_info_fp: 0,
             output_name,
             is_row_output: false,
             left_input_kv_layout: left_kv_layout,
             right_input_kv_layout: right_kv_layout,
-            output_kv_layout: output_fake_kv_layout,
+            output_kv_layout,
             predicates,
             variables: BTreeMap::new(),
-        }
+        };
+        info.refresh_output_fp();
+        info
     }
 
-    /// Build an AntiJoin to Key-Value transformation with a derived (fake) output fingerprint.
+    /// Builds an AntiJoin to Key-Value transformation.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn anti_join_to_kv(
-        left_fake_sig: u64,
+        left_fp: u64,
         left_input_name: String,
-        right_fake_sig: u64,
+        right_fp: u64,
         right_input_name: String,
         output_name: String,
         left_kv_layout: KeyValueLayout,
         right_kv_layout: KeyValueLayout,
-        output_fake_kv_layout: KeyValueLayout,
+        output_kv_layout: KeyValueLayout,
     ) -> Self {
-        let fake_output_sig = compute_fp((
-            "anti_join_to_kv",
-            &left_fake_sig,
-            &right_fake_sig,
-            &left_kv_layout,
-            &right_kv_layout,
-            &output_fake_kv_layout,
-        ));
-
-        Self::AntiJoinToKV {
-            left_input_info_fp: left_fake_sig,
+        let mut info = Self::AntiJoinToKV {
+            left_input_info_fp: left_fp,
             left_input_name,
-            right_input_info_fp: right_fake_sig,
+            right_input_info_fp: right_fp,
             right_input_name,
-            output_info_fp: fake_output_sig,
+            output_info_fp: 0,
             output_name,
             is_row_output: false,
             left_input_kv_layout: left_kv_layout,
             right_input_kv_layout: right_kv_layout,
-            output_kv_layout: output_fake_kv_layout,
+            output_kv_layout,
             variables: BTreeMap::new(),
-        }
+        };
+        info.refresh_output_fp();
+        info
     }
 }
 
@@ -524,26 +504,16 @@ impl TransformationInfo {
 // Mutating Methods
 // ========================
 impl TransformationInfo {
-    /// Replace a placeholder (fake) input fingerprint with the resolved (real) one.
-    ///
-    /// This method updates the input fingerprint after an upstream transformation
-    /// finalizes its output fingerprint. For binary operations (joins/anti-joins),
-    /// it automatically determines which input (left or right) to update based on
-    /// the provided fake signature.
-    ///
-    /// # Arguments
-    ///
-    /// * `input_real_sig` - The resolved (real) fingerprint to use
-    /// * `input_fake_sig` - The placeholder fingerprint to replace
-    ///
-    /// # Panics
-    ///
-    /// For binary operations, panics if `input_fake_sig` doesn't match either
-    /// the left or right input fingerprint.
-    pub(crate) fn update_input_fake_info_fp(&mut self, input_real_sig: u64, input_fake_sig: &u64) {
+    /// Points every input that reads `old` at `new` instead. A join may
+    /// read the same collection on both sides, and both then move. The
+    /// output fingerprint hashes the inputs and is stale until
+    /// [`Self::refresh_output_fp`] runs.
+    pub(crate) fn update_input_fp(&mut self, new: u64, old: u64) {
         match self {
             Self::KVToKV { input_info_fp, .. } => {
-                *input_info_fp = input_real_sig;
+                if *input_info_fp == old {
+                    *input_info_fp = new;
+                }
             }
             Self::JoinToKV {
                 left_input_info_fp,
@@ -555,10 +525,10 @@ impl TransformationInfo {
                 right_input_info_fp,
                 ..
             } => {
-                if left_input_info_fp == input_fake_sig {
-                    *left_input_info_fp = input_real_sig;
-                } else {
-                    *right_input_info_fp = input_real_sig;
+                for input in [left_input_info_fp, right_input_info_fp] {
+                    if *input == old {
+                        *input = new;
+                    }
                 }
             }
         }
@@ -599,11 +569,9 @@ impl TransformationInfo {
         }
     }
 
-    /// Replace a placeholder (fake) output layout with its resolved (real) positions.
-    ///
-    /// Necessary once the actual output schema is known, since downstream operators
-    /// (e.g., joins) require concrete key/value layouts.
-    pub(crate) fn update_output_key_value_layout(&mut self, real_output_kv_layout: KeyValueLayout) {
+    /// Sets the output layout. The output fingerprint hashes it and is
+    /// stale until [`Self::refresh_output_fp`] runs.
+    pub(crate) fn update_output_key_value_layout(&mut self, new_output_kv_layout: KeyValueLayout) {
         match self {
             Self::KVToKV {
                 output_kv_layout, ..
@@ -614,7 +582,7 @@ impl TransformationInfo {
             | Self::AntiJoinToKV {
                 output_kv_layout, ..
             } => {
-                *output_kv_layout = real_output_kv_layout;
+                *output_kv_layout = new_output_kv_layout;
             }
         }
     }
@@ -713,10 +681,11 @@ impl TransformationInfo {
         }
     }
 
-    /// Recompute the (fake) output fingerprint using the current resolved fields.
-    ///
-    /// Call this after all relevant inputs/layouts/constraints are up-to-date.
-    pub(crate) fn update_output_fake_sig(&mut self) {
+    /// Recomputes the output fingerprint from the variant, the input
+    /// fingerprints, the row flags, the layouts, and the predicates. It is
+    /// the only recipe for an output fingerprint, so the fingerprint is
+    /// stale exactly when one of those fields changed since the last call.
+    pub(crate) fn refresh_output_fp(&mut self) {
         match self {
             Self::KVToKV {
                 input_info_fp,

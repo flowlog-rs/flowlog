@@ -553,9 +553,10 @@ impl RulePlanner {
         // restores the order once every copy is in. The walk itself reads
         // the producer-consumer map, rebuilt here, never the list order.
         self.transformation_infos.push(tx);
-        // Fingerprints are lineage placeholders resolved at materialization,
-        // so nothing downstream of `parent` needs recomputing.
-        self.transformation_infos[parent].update_input_fake_info_fp(copy_fp, &target_fp);
+        // `parent` now hashes an input it no longer reads. Fuse refreshes
+        // every fingerprint in pipeline order once the copies are in, so
+        // nothing downstream of `parent` needs recomputing here.
+        self.transformation_infos[parent].update_input_fp(copy_fp, target_fp);
         self.rebuild_producer_consumer(originals)
     }
 
