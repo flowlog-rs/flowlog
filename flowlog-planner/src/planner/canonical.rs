@@ -88,10 +88,10 @@ use crate::planner::TransformationInfo;
 /// that negation rather than the row.
 ///
 /// Equal forms are the same query. The converse is the goal but not a
-/// guarantee: one query can still reach two forms when a comparison
-/// between two columns is written in either order, or when an equality
-/// folds into a class along one plan and stays a filter along another.
-/// Each gap costs a sharing opportunity, never a wrong match.
+/// guarantee: one query can still reach two forms when an equality folds
+/// into a class along one plan and stays a filter along another, or when
+/// two expressions differ only algebraically. Each gap costs a sharing
+/// opportunity, never a wrong match.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct CanonicalForm {
     /// One entry per read of a relation, its canonical name, sorted;
@@ -443,9 +443,10 @@ impl CanonicalForm {
     /// equalities, which [`Self::fold_equalities`] turns into classes or
     /// filters, and every other comparison, which is a filter already.
     ///
-    /// A comparison with a plain column on the right only is turned
-    /// around, so `5 < x` and `x > 5` read alike; string constraints have
-    /// no mirror and keep their sides.
+    /// A filter is spelled one way: `>` and `>=` are turned around into
+    /// `<` and `<=`, so `x > y` and `y < x` read alike, and the sides of
+    /// `!=` are ordered, since it has no direction. String constraints
+    /// have no mirror and keep their sides.
     ///
     /// # Errors
     ///
@@ -460,27 +461,27 @@ impl CanonicalForm {
         for compare in compares {
             let left = Self::atom_expr(compare.left(), exprs)?;
             let right = Self::atom_expr(compare.right(), exprs)?;
-            if *compare.operator() == ComparisonOperator::Equal {
-                equalities.push((left, right));
-                continue;
-            }
-            let mirrored = match compare.operator() {
-                ComparisonOperator::NotEqual => Some(ComparisonOperator::NotEqual),
-                ComparisonOperator::LessThan => Some(ComparisonOperator::GreaterThan),
-                ComparisonOperator::GreaterThan => Some(ComparisonOperator::LessThan),
-                ComparisonOperator::LessEqualThan => Some(ComparisonOperator::GreaterEqualThan),
-                ComparisonOperator::GreaterEqualThan => Some(ComparisonOperator::LessEqualThan),
-                ComparisonOperator::Equal
-                | ComparisonOperator::Match { .. }
-                | ComparisonOperator::Contains { .. } => None,
-            };
-            let column_on_right_only = left.plain_var().is_none() && right.plain_var().is_some();
-            filters.push(match mirrored {
-                Some(operator) if column_on_right_only => {
+            let operator = compare.operator().clone();
+            filters.push(match operator {
+                ComparisonOperator::Equal => {
+                    equalities.push((left, right));
+                    continue;
+                }
+                ComparisonOperator::GreaterThan => {
+                    ComparisonExprPos::from_parts(right, ComparisonOperator::LessThan, left)
+                }
+                ComparisonOperator::GreaterEqualThan => {
+                    ComparisonExprPos::from_parts(right, ComparisonOperator::LessEqualThan, left)
+                }
+                ComparisonOperator::NotEqual if right < left => {
                     ComparisonExprPos::from_parts(right, operator, left)
                 }
-                Some(_) | None => {
-                    ComparisonExprPos::from_parts(left, compare.operator().clone(), right)
+                ComparisonOperator::NotEqual
+                | ComparisonOperator::LessThan
+                | ComparisonOperator::LessEqualThan
+                | ComparisonOperator::Match { .. }
+                | ComparisonOperator::Contains { .. } => {
+                    ComparisonExprPos::from_parts(left, operator, right)
                 }
             });
         }
@@ -987,7 +988,7 @@ impl CanonicalForm {
 // =============================================================================
 impl fmt::Display for CanonicalForm {
     /// One line with every section, empty ones included:
-    /// `atoms(r, s) not(n) eq(0.1 = 1.0 = !0.0) where(0.2 > 5) key()
+    /// `atoms(r, s) not(n) eq(0.1 = 1.0 = !0.0) where(5 < 0.2) key()
     /// value(0.0, 1.1)`. Columns are `atom.argument` into `atoms`, or
     /// `!atom.argument` into `not`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1289,7 +1290,7 @@ mod tests {
 
         assert_eq!(
             form.to_string(),
-            "atoms(a) not() eq() where(0.0 < 2, 0.1 > 3) key() value(0.0)"
+            "atoms(a) not() eq() where(0.0 < 2, 3 < 0.1) key() value(0.0)"
         );
     }
 
@@ -1806,9 +1807,9 @@ mod tests {
         assert_eq!(twice, once);
     }
 
-    /// `5 < x` and `x > 5` are one filter, spelled with the column first.
+    /// `5 < x` and `x > 5` are one filter, spelled with `<`.
     #[test]
-    fn comparison_with_the_column_on_the_right_is_turned_around() {
+    fn greater_than_is_turned_around_into_less_than() {
         let filtered = |compare_exprs| {
             let info = map(
                 layout(&[], &[column(0, 0)]),
@@ -1834,7 +1835,7 @@ mod tests {
 
         assert_eq!(
             turned.to_string(),
-            "atoms(a) not() eq() where(0.0 > 5) key() value(0.0)"
+            "atoms(a) not() eq() where(5 < 0.0) key() value(0.0)"
         );
         assert_eq!(turned, direct);
     }
@@ -2047,8 +2048,48 @@ mod tests {
 
         assert_eq!(
             head_form(&pp, "out"),
-            "atoms(a) not() eq() where(0.0 > 3, 0.1 = 5) key() value(0.0)"
+            "atoms(a) not() eq() where(0.1 = 5, 3 < 0.0) key() value(0.0)"
         );
+    }
+
+    /// A comparison between two columns has one spelling: `>` turns
+    /// around into `<`, so `x > y` and `y < x` share a head.
+    #[test]
+    fn a_comparison_reads_the_same_in_either_direction() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl R(x: int32, y: int32)\n\
+            .decl Gt(x: int32)\n\
+            .decl Lt(x: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .output Gt\n\
+            .output Lt\n\
+            Gt(x) :- R(x, y), x > y.\n\
+            Lt(x) :- R(x, y), y < x.\n",
+        );
+        assert_eq!(head_form(&pp, "gt"), head_form(&pp, "lt"));
+        assert_eq!(
+            head_form(&pp, "gt"),
+            "atoms(r) not() eq() where(0.1 < 0.0) key() value(0.0)"
+        );
+    }
+
+    /// `!=` has no direction, so its sides are ordered and `x != y` and
+    /// `y != x` share a head.
+    #[test]
+    fn inequality_sides_are_ordered() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl R(x: int32, y: int32)\n\
+            .decl A(x: int32)\n\
+            .decl B(x: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .output A\n\
+            .output B\n\
+            A(x) :- R(x, y), x != y.\n\
+            B(x) :- R(x, y), y != x.\n",
+        );
+        assert_eq!(head_form(&pp, "a"), head_form(&pp, "b"));
     }
 
     /// Body order decides which read the plan joins on the left; the
