@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.2.0...flowlog-parser-v0.3.0) - 2026-09-23
+
+### Added
+
+- *(planner)* describe every collection by a canonical form ([#373](https://github.com/flowlog-rs/flowlog/pull/373))
+
+### Fixed
+
+- *(parser)* accept question mark prefixes in declarations ([#363](https://github.com/flowlog-rs/flowlog/pull/363))
+- *(parser)* [**breaking**] avoid recursive backtracking in nested syntax ([#361](https://github.com/flowlog-rs/flowlog/pull/361))
+- *(parser)* resolve top-level component-qualified types ([#359](https://github.com/flowlog-rs/flowlog/pull/359))
+
 ## [0.2.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-parser-v0.1.0...flowlog-parser-v0.2.0) - 2026-09-14
 
 ### Added
