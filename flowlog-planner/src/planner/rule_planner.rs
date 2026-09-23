@@ -26,13 +26,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 use flowlog_parser::Atom;
 use flowlog_parser::FlowLogRule;
 use flowlog_parser::Predicate;
 
-use crate::planner::Collection;
+use crate::planner::CanonicalForm;
 use crate::planner::PlanError;
 use crate::planner::Transformation;
 use crate::planner::TransformationInfo;
@@ -53,8 +52,8 @@ pub struct RulePlanner {
     /// Linear list of planned transformation infos for the current rule.
     transformation_infos: Vec<TransformationInfo>,
 
-    /// Materialized transformations with content-canonical fingerprints.
-    /// Empty until [`RulePlanner::materialize`] runs after the post phase.
+    /// Materialized transformations; empty until
+    /// [`RulePlanner::materialize`] runs after the post phase.
     transformations: Vec<Transformation>,
 
     /// Mapping from a fingerprint to its producer indices and optional
@@ -106,17 +105,15 @@ impl RulePlanner {
         &self.transformations
     }
 
-    /// Materialize all infos into [`Transformation`]s with content-canonical
-    /// fingerprints and canonical forms (see [`Transformation::from_info`]).
-    /// Must run after post, in pipeline order so inputs resolve to their
-    /// producers' outputs.
+    /// Materializes every info into a [`Transformation`] (see
+    /// [`Transformation::from_info`]).
     ///
     /// # Errors
     ///
     /// Returns an internal error if a transformation's canonical form
     /// cannot be derived from its inputs.
     pub(crate) fn materialize(&mut self) -> Result<(), PlanError> {
-        let mut produced: HashMap<u64, Arc<Collection>> = HashMap::new();
+        let mut produced: HashMap<u64, CanonicalForm> = HashMap::new();
         self.transformations = self
             .transformation_infos
             .iter()

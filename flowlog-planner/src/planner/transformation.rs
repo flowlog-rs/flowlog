@@ -8,8 +8,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use flowlog_common::compute_fp;
-
 use crate::planner::CanonicalForm;
 use crate::planner::Collection;
 use crate::planner::PlanError;
@@ -230,17 +228,13 @@ impl Transformation {
 // Construction
 // =============================================================================
 impl Transformation {
-    /// Materializes `info` into a transformation whose output fingerprint
-    /// is content-canonical: a hash of the operation, the inputs' content
-    /// fingerprints, and the flow, free of rule-local atom positions, so
-    /// the same step in two rules gets one fingerprint. The output
-    /// collection also carries its canonical form, derived from the
-    /// inputs' forms.
+    /// Materializes `info` into a transformation. The output collection
+    /// keeps the info's fingerprint and gains its canonical form, derived
+    /// from the inputs' forms.
     ///
-    /// `produced` holds the output collection of every info materialized
-    /// so far in this rule, keyed by the info's lineage fingerprint; an
-    /// input fingerprint absent from it names a relation read directly.
-    /// This info's output is added on return.
+    /// `produced` holds the form of every info materialized so far in this
+    /// rule, keyed by fingerprint; an input fingerprint absent from it
+    /// names a relation read directly. This info's form is added on return.
     ///
     /// # Errors
     ///
@@ -249,7 +243,7 @@ impl Transformation {
     /// variant does not allow.
     pub(crate) fn from_info(
         info: &TransformationInfo,
-        produced: &mut HashMap<u64, Arc<Collection>>,
+        produced: &mut HashMap<u64, CanonicalForm>,
     ) -> Result<Self, PlanError> {
         let (left_fp, right_fp) = info.input_info_fp();
         let (left_name, right_name) = info.input_name();
@@ -265,14 +259,9 @@ impl Transformation {
             right.as_ref().map(|right| right.canonical()),
         )?;
         let flow = info.flow();
-        // The operation label names the variant built below, so equal
-        // fingerprints imply the same variant.
-        let fingerprints: Vec<u64> = std::iter::once(&left)
-            .chain(&right)
-            .map(|input| input.fingerprint())
-            .collect();
+        let input_count = 1 + usize::from(right.is_some());
         let output = Arc::new(Collection::new(
-            compute_fp((info.operation_name(), &fingerprints, &flow)),
+            info.output_info_fp(),
             info.output_name().to_string(),
             info.output_kv_layout().clone(),
             form,
@@ -350,11 +339,11 @@ impl Transformation {
                 return Err(PlanError::internal(format!(
                     "{} has {} inputs",
                     info.operation_name(),
-                    fingerprints.len()
+                    input_count
                 )));
             }
         };
-        produced.insert(info.output_info_fp(), Arc::clone(tx.output()));
+        produced.insert(info.output_info_fp(), tx.output().canonical().clone());
         Ok(tx)
     }
 
@@ -383,26 +372,16 @@ impl Transformation {
     }
 
     /// The collection an info reads under `layout`, its own view of the
-    /// columns: the producer's content fingerprint and canonical form when
-    /// `produced` knows lineage fingerprint `fp`, else the relation named
-    /// `name` read as rows, whose fingerprint `fp` already is.
+    /// columns, with the producer's canonical form when `produced` knows
+    /// `fp`, else the form of the relation named `name` read as rows.
     fn input(
-        produced: &HashMap<u64, Arc<Collection>>,
+        produced: &HashMap<u64, CanonicalForm>,
         (fp, name, layout): (u64, &str, &KeyValueLayout),
     ) -> Arc<Collection> {
-        let (fingerprint, form) = match produced.get(&fp) {
-            Some(producer) => (producer.fingerprint(), producer.canonical().clone()),
-            None => (
-                fp,
-                CanonicalForm::relation(name, layout.key().len() + layout.value().len()),
-            ),
-        };
-        Arc::new(Collection::new(
-            fingerprint,
-            name.to_string(),
-            layout.clone(),
-            form,
-        ))
+        let form = produced.get(&fp).cloned().unwrap_or_else(|| {
+            CanonicalForm::relation(name, layout.key().len() + layout.value().len())
+        });
+        Arc::new(Collection::new(fp, name.to_string(), layout.clone(), form))
     }
 }
 

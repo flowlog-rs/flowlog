@@ -193,7 +193,7 @@ Tail(x, y) :- Dyck(x, z), Dyck(z, y).          // stratum 3
 ```
 
 stratum 2 and stratum 3 both arrange `dyck` by its first column, and the
-two collections carry the same form *and the same content fingerprint*,
+two collections carry the same form *and the same fingerprint*,
 yet stratum 2's is the feedback variable inside the fixpoint. The
 fingerprint has the same property for the same reason, which is why
 `prune_cross_stratum_duplicates` exists: it keeps the later emission

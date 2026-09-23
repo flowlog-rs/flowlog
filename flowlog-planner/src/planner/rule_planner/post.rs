@@ -59,7 +59,7 @@ impl RulePlanner {
         let new_layout = KeyValueLayout::new(Vec::new(), output_values);
         last_tx.update_row_output(true);
         last_tx.update_output_key_value_layout(new_layout);
-        last_tx.update_output_fake_sig();
+        last_tx.refresh_output_fp();
         Ok(())
     }
 
@@ -74,7 +74,7 @@ impl RulePlanner {
 
         // We default here assume the input layout is all values from the first positive atom.
         // No additional mapping is needed.
-        let (input_fake_sig, input_kv_layout) = (
+        let (input_fp, input_kv_layout) = (
             catalog.positive_atom_fingerprint(0)?,
             KeyValueLayout::new(
                 Vec::new(),
@@ -89,7 +89,7 @@ impl RulePlanner {
         // Post is a layout-only alignment; the name passes through unchanged.
         let input_name = catalog.positive_atom_name(0)?.to_string();
         let mut post_tx = TransformationInfo::kv_to_kv(
-            input_fake_sig,
+            input_fp,
             input_name.clone(),
             input_name,
             true,
@@ -98,7 +98,7 @@ impl RulePlanner {
             KvPredicates::default(),
         );
         post_tx.update_row_output(true);
-        post_tx.update_output_fake_sig();
+        post_tx.refresh_output_fp();
 
         self.push_transformation(post_tx, catalog, "Post")?;
         Ok(())

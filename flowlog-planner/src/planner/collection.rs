@@ -2,7 +2,8 @@
 //!
 //! A Collection models a relation of tuples represented by a key/value
 //! layout of argument positions. Collections can be row-based (no keys) or
-//! key/value-based and are identified by a fingerprint.
+//! key/value-based. A fingerprint says which plan node a collection is;
+//! a canonical form says what rows it holds.
 
 use std::fmt;
 
@@ -12,7 +13,13 @@ use crate::planner::KeyValueLayout;
 /// Represents a data collection with key-value structure.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Collection {
-    /// A fingerprint identifying the collection type and lineage
+    /// Identity of this collection in the plan graph, which readers name
+    /// their inputs by. It is the lineage fingerprint the rule planner
+    /// built the collection under, so equal fingerprints mean the same
+    /// operation over the same inputs at the same body positions, and
+    /// nothing about rows: the same rows reached through another plan, or
+    /// the same step planned by another rule, carry a different
+    /// fingerprint.
     fingerprint: u64,
 
     /// Hierarchical name describing how this collection was built from EDBs
@@ -25,8 +32,8 @@ pub struct Collection {
     kv_layout: KeyValueLayout,
 
     /// The query this collection computes, independent of the plan that
-    /// built it. Where the fingerprint tells collections apart by lineage,
-    /// the form tells them apart by content.
+    /// built it. Where the fingerprint says which node this is, the form
+    /// says what rows it holds, so equal forms are what sharing acts on.
     canonical: CanonicalForm,
 }
 
