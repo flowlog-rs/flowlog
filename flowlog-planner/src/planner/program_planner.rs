@@ -1,8 +1,5 @@
-//! Whole-program planner: owns the per-stratum plans after cross-stratum
-//! dedup of redundant non-recursive transformations.
-
-use std::collections::HashMap;
-use std::collections::HashSet;
+//! Whole-program planner: plans the strata in order, each sharing work
+//! with the ones before it.
 
 use flowlog_common::BoxError;
 use flowlog_parser::Program;
@@ -10,6 +7,7 @@ use flowlog_profiler::PlanGraph;
 
 use crate::optimizer::Optimizer;
 use crate::planner::StratumPlanner;
+use crate::planner::Transformation;
 use crate::stratifier::Stratifier;
 
 /// Whole-program planning.
@@ -19,83 +17,34 @@ pub struct ProgramPlanner {
 }
 
 impl ProgramPlanner {
-    /// Run the full planner pipeline against `program`: stratify, build a
-    /// [`StratumPlanner`] per stratum, prune cross-stratum duplicates.
+    /// Runs the full planner pipeline against `program`: stratify, then
+    /// build a [`StratumPlanner`] per stratum in order, each sharing the
+    /// collections the preludes before it compute.
     pub fn from_program(
         program: &Program,
         plan_graph: &mut Option<PlanGraph>,
     ) -> Result<Self, BoxError> {
         let stratifier = Stratifier::from_program(program);
         let mut optimizer = Optimizer::new();
-        let mut strata: Vec<StratumPlanner> = stratifier
-            .strata()
-            .iter()
-            .map(|stratum| {
-                StratumPlanner::from_stratum(program, stratum, &mut optimizer, plan_graph)
-                    .map_err(BoxError::from)
-            })
-            .collect::<Result<_, _>>()?;
-        prune_cross_stratum_duplicates(&mut strata);
+        let mut preludes: Vec<Transformation> = Vec::new();
+        let mut strata = Vec::with_capacity(stratifier.strata().len());
+        for stratum in stratifier.strata() {
+            let planned = StratumPlanner::from_stratum(
+                program,
+                stratum,
+                &mut optimizer,
+                plan_graph,
+                &preludes,
+            )
+            .map_err(BoxError::from)?;
+            preludes.extend(planned.non_recursive_transformations().iter().cloned());
+            strata.push(planned);
+        }
         Ok(Self { strata })
     }
 
     pub fn strata(&self) -> &[StratumPlanner] {
         &self.strata
-    }
-}
-
-/// Drops non-recursive transformations whose output fingerprint an
-/// earlier stratum already emitted.
-///
-/// Soundness: the earlier binding only stays correct as long as none of the
-/// IDBs its value transitively depends on have been updated between the two
-/// strata. Stratification puts all consumers after all definers, so this
-/// holds; the transitive check below keeps the later emission on the
-/// remaining cases where an IDB is rewritten between two consumers of the
-/// same transformation.
-///
-/// TODO: compare canonical forms instead of fingerprints, under this same
-/// check, so collections that hold the same rows through different plans
-/// share across strata as they already do within one.
-fn prune_cross_stratum_duplicates(strata: &mut [StratumPlanner]) {
-    let mut idb_writes: HashMap<u64, Vec<usize>> = HashMap::new();
-    for (idx, stratum) in strata.iter().enumerate() {
-        for fp in stratum.idb_to_heads_map().keys() {
-            idb_writes.entry(*fp).or_default().push(idx);
-        }
-    }
-
-    // Transitive set of IDB-head fps each fp's runtime value depends on.
-    // IDB heads depend on themselves; intermediates inherit from their inputs.
-    let mut idb_deps: HashMap<u64, HashSet<u64>> = idb_writes
-        .keys()
-        .map(|&fp| (fp, HashSet::from([fp])))
-        .collect();
-    let mut emitted_at: HashMap<u64, usize> = HashMap::new();
-
-    for (idx, stratum) in strata.iter_mut().enumerate() {
-        stratum.retain_non_recursive_transformations(|t| {
-            let fp = t.output().fingerprint();
-            let t_deps: HashSet<u64> = t
-                .input_fingerprints()
-                .into_iter()
-                .filter_map(|f| idb_deps.get(&f))
-                .flatten()
-                .copied()
-                .collect();
-            idb_deps.entry(fp).or_default().extend(&t_deps);
-
-            let keep = match emitted_at.get(&fp) {
-                None => true,
-                Some(&prev) => t_deps
-                    .iter()
-                    .any(|idb| idb_writes[idb].iter().any(|&k| k > prev && k <= idx)),
-            };
-            if keep {
-                emitted_at.insert(fp, idx);
-            }
-            keep
-        });
     }
 }
 
@@ -120,6 +69,8 @@ impl ProgramPlanner {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use flowlog_common::compute_fp;
 
     use super::*;
@@ -151,13 +102,14 @@ mod tests {
         Dyck(x, y) :- One(x, z), Dyck(z, w), One(w, y).\n\
         Dyck(x, y) :- Dyck(x, z), Dyck(z, y).\n";
 
+    /// The recursive Dyck stratum arranges `zero` and `one` exactly as the
+    /// base stratum before it did; it reads those arrangements instead.
     #[test]
-    fn dyck_prune_collapses_cross_stratum_duplicates() {
+    fn dyck_reads_the_base_stratum_arrangements_instead_of_rebuilding_them() {
         let pp = ProgramPlanner::analyze(DYCK_SRC);
         assert_eq!(pp.strata().len(), 3, "dyck should stratify into 3 strata");
 
-        // Structural invariant: each surviving output fingerprint belongs to
-        // exactly one stratum: no duplicate emissions across strata.
+        // No prelude collection is computed by two strata.
         let mut owner: HashMap<u64, usize> = HashMap::new();
         for (idx, stratum) in pp.strata().iter().enumerate() {
             for t in stratum.non_recursive_transformations() {
@@ -168,12 +120,111 @@ mod tests {
             }
         }
 
-        // Headline count: 12 unpruned becomes 8 after prune (four re-keys
-        // collapse). Locks the savings number in for regression.
+        // Twelve prelude collections as planned, eight once the recursive
+        // stratum reads the four arrangements the base stratum built.
+        assert_eq!(owner.len(), 8, "expected 8 prelude transformations");
+    }
+
+    /// `Q`'s join of `R` and `S` holds the rows `P` computed one stratum
+    /// earlier, keyed differently, so the later stratum arranges `P`'s join
+    /// instead of joining again.
+    #[test]
+    fn later_stratum_arranges_an_earlier_join_instead_of_recomputing_it() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl R(x: int32, y: int32)\n\
+            .decl S(y: int32, z: int32)\n\
+            .decl P(x: int32, y: int32, z: int32)\n\
+            .decl Q(x: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output P\n\
+            .output Q\n\
+            P(x, y, z) :- R(x, y), S(y, z).\n\
+            Q(x) :- R(x, y), S(y, z), P(x, _, z).\n",
+        );
         assert_eq!(
-            owner.len(),
-            8,
-            "expected 8 non-recursive transformations after prune"
+            pp.strata().len(),
+            2,
+            "Q reads P, so it plans one stratum later"
+        );
+        let [first, second] = pp.strata() else {
+            unreachable!()
+        };
+        let joins = |stratum: &StratumPlanner| {
+            stratum
+                .non_recursive_transformations()
+                .iter()
+                .filter(|tx| !tx.is_unary())
+                .map(|tx| tx.output().fingerprint())
+                .collect::<Vec<u64>>()
+        };
+        let [p_join] = joins(first)[..] else {
+            panic!("P's stratum computes one join")
+        };
+        assert_eq!(
+            joins(second).len(),
+            1,
+            "Q's stratum joins once, against P, and reads P's join for R and S"
+        );
+        assert!(
+            second
+                .non_recursive_transformations()
+                .iter()
+                .any(|tx| tx.is_unary() && tx.unary_input().fingerprint() == p_join),
+            "Q's stratum arranges P's join"
+        );
+    }
+
+    /// `P` here drops `y`, which `Q`'s join of `R` and `S` needs to keep
+    /// for its own join with `P`, so the earlier join cannot serve it and
+    /// the later stratum joins `R` and `S` itself.
+    #[test]
+    fn later_stratum_recomputes_a_join_whose_columns_an_earlier_one_dropped() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl R(x: int32, y: int32)\n\
+            .decl S(y: int32, z: int32)\n\
+            .decl P(x: int32, z: int32)\n\
+            .decl Q(x: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output P\n\
+            .output Q\n\
+            P(x, z) :- R(x, y), S(y, z).\n\
+            Q(x) :- R(x, y), S(y, z), P(x, z).\n",
+        );
+        let [_, second] = pp.strata() else {
+            panic!("Q reads P, so it plans one stratum later")
+        };
+        let joins = second
+            .non_recursive_transformations()
+            .iter()
+            .filter(|tx| !tx.is_unary())
+            .count();
+        assert_eq!(joins, 2, "Q's stratum joins R with S and the result with P");
+    }
+
+    /// The recursive Dyck stratum arranges `dyck` inside its fixpoint, where
+    /// the collection holds only what has been derived so far. `Tail`, one
+    /// stratum later, needs the same arrangement of the complete relation
+    /// and builds it itself.
+    #[test]
+    fn later_stratum_rebuilds_an_arrangement_a_recursive_stratum_made() {
+        let src = format!(
+            "{DYCK_SRC}.decl Tail(x: int32, y: int32)\n.output Tail\nTail(x, y) :- Dyck(x, z), Dyck(z, y).\n"
+        );
+        let pp = ProgramPlanner::analyze(&src);
+        let tail = pp.strata().last().expect("Tail plans last");
+        assert!(!tail.is_recursive());
+        let arrangements = tail
+            .non_recursive_transformations()
+            .iter()
+            .filter(|tx| tx.is_unary())
+            .count();
+        assert_eq!(
+            arrangements, 2,
+            "Tail arranges dyck on each join side itself"
         );
     }
 

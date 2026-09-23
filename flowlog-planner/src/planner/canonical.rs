@@ -51,12 +51,14 @@
 //! and a relation holds different rows at different points of the run: a
 //! recursive relation read inside its fixpoint holds what has been derived
 //! so far, and any relation read after a later stratum rewrote it holds
-//! more than it did before. Two forms are therefore comparable only within
-//! one evaluation scope. One stratum is such a scope, since a stratum's
-//! own relations are read only by its recursive part, but a reader
-//! comparing forms across strata needs the check
-//! `prune_cross_stratum_duplicates` makes on fingerprints, for the same
-//! reason and to the same effect.
+//! more than it did before. Two forms are therefore comparable only when
+//! both read every relation they name in the same state. That holds
+//! within one stratum, whose own relations are read only by its recursive
+//! part, and between a stratum and the preludes of the strata before it:
+//! the stratifier places a rule after every rule writing a relation it
+//! reads, so a prelude reads only relations that are complete and stay
+//! so. A recursive collection never serves a later stratum, since it holds
+//! only what its fixpoint has derived so far.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;

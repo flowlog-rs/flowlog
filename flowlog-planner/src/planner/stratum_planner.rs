@@ -27,10 +27,11 @@ mod dedup;
 
 /// Planned transformations and execution metadata for one stratum.
 ///
-/// Work is shared across its rules by canonical form: a collection equal
-/// to an earlier one is that collection, and a join whose rows another
-/// collection already holds becomes a map over it. Recursive plans
-/// separate work that runs once from work repeated at each iteration.
+/// Work is shared across its rules, and with the preludes of the strata
+/// before it, by canonical form: a collection equal to an earlier one is
+/// that collection, and a join whose rows another collection already
+/// holds becomes a map over it. Recursive plans separate work that runs
+/// once from work repeated at each iteration.
 #[derive(Debug, Default)]
 pub struct StratumPlanner {
     /// One planner per rule; these own the raw transformation infos.
@@ -74,12 +75,15 @@ pub struct StratumPlanner {
 }
 
 impl StratumPlanner {
-    /// Build a stratum planner from a stratum.
+    /// Builds a stratum planner from a stratum, sharing work with
+    /// `preludes`, the non-recursive transformations of the strata before
+    /// it in order.
     pub(crate) fn from_stratum(
         program: &Program,
         stratified: &Stratum,
         optimizer: &mut Optimizer,
         plan_graph: &mut Option<PlanGraph>,
+        preludes: &[Transformation],
     ) -> Result<Self, PlanError> {
         let rules = program.rules();
         let stratum: Vec<FlowLogRule> = stratified
@@ -174,9 +178,9 @@ impl StratumPlanner {
             }
         });
 
-        // Phase 7 shares work across rules by canonical form. Heads stay
-        // even when nothing in the stratum reads them: codegen unions them
-        // into their relations.
+        // Phase 7 shares work across rules, and with earlier preludes, by
+        // canonical form. Heads stay even when nothing in the stratum reads
+        // them: codegen unions them into their relations.
         let atom_fps: HashSet<u64> = rule_planners
             .iter()
             .flat_map(RulePlanner::rhs_atom_fps)
@@ -202,11 +206,12 @@ impl StratumPlanner {
             atom_fps,
             ..Self::default()
         };
-        stratum_planner.dedup_transformations()?;
+        stratum_planner.dedup_transformations(preludes)?;
 
         // Phase 8 separates recursive operations and builds their metadata.
         stratum_planner.identify_recursive_transformations(is_recursive);
-        stratum_planner.build_recursion_enter_collections(stratified.available_relations());
+        stratum_planner
+            .build_recursion_enter_collections(stratified.available_relations(), preludes);
 
         // Debug info for non-recursive vs recursive transformations.
         debug!("\n{}", stratum_planner);
@@ -224,16 +229,6 @@ impl StratumPlanner {
     #[inline]
     pub fn non_recursive_transformations(&self) -> &[Transformation] {
         &self.non_recursive_transformations
-    }
-
-    /// Retain only the non-recursive transformations matching `f`. Used by
-    /// the cross-stratum prune pass to drop transformations whose output
-    /// fingerprint was already produced by an earlier stratum's prelude.
-    pub(crate) fn retain_non_recursive_transformations<F>(&mut self, f: F)
-    where
-        F: FnMut(&Transformation) -> bool,
-    {
-        self.non_recursive_transformations.retain(f);
     }
 
     /// Get dynamic transformations that depend on IDB collections.
@@ -429,13 +424,19 @@ impl StratumPlanner {
 // Metadata Mappings
 // =========================================================================
 impl StratumPlanner {
-    /// Build the fingerprint of collections that enter recursion.
-    fn build_recursion_enter_collections(&mut self, available_relations: &HashSet<u64>) {
+    /// Build the fingerprint of collections that enter recursion: the
+    /// relations available to the stratum, its own prelude, and the
+    /// preludes of the strata before it.
+    fn build_recursion_enter_collections(
+        &mut self,
+        available_relations: &HashSet<u64>,
+        preludes: &[Transformation],
+    ) {
         let mut recursion_input_fps: HashSet<u64> = HashSet::new();
         let mut recursion_output_fps: HashSet<u64> = HashSet::new();
         let mut available_fps = available_relations.clone();
 
-        for tx in &self.non_recursive_transformations {
+        for tx in self.non_recursive_transformations.iter().chain(preludes) {
             available_fps.insert(tx.output().fingerprint());
         }
 

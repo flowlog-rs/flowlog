@@ -1,12 +1,22 @@
-//! Sharing by canonical form within one stratum.
+//! Sharing by canonical form within one stratum and with the preludes of
+//! the strata before it.
 //!
 //! Every rule plans on its own, so the stratum's transformations repeat
-//! work. `merge_equal` makes collections with the same form and shape one
-//! collection. `cover_bodies` then takes each set of collections that hold
-//! the same rows, largest bodies first, and picks which of them to compute
-//! so that every one the rest of the plan needs is computed or a map over
-//! a computed one, with the fewest joins. `drop_unread` and
-//! `sort_producers_first` tidy the result.
+//! work, their own and the earlier strata's. `merge_equal` makes
+//! collections with the same form and shape one collection. `cover_bodies`
+//! then takes each set of collections that hold the same rows, largest
+//! bodies first, and picks which of them to compute so that every one the
+//! rest of the plan needs is computed or a map over a computed one, with
+//! the fewest joins. `drop_unread` and `sort_producers_first` tidy the
+//! result.
+//!
+//! The preludes of earlier strata take part as collections computed
+//! already: they may serve this stratum's collections but are never
+//! served, and they are not in the stratum's own list, so nothing here
+//! drops or reorders them. They hold the same rows for this stratum as for
+//! their own: the stratifier places a rule after every rule writing a
+//! relation it reads, so a prelude reads only relations that are complete
+//! and stay so.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -17,6 +27,7 @@ use tracing::trace;
 
 use crate::planner::ArithmeticArgument;
 use crate::planner::CanonicalForm;
+use crate::planner::Collection;
 use crate::planner::Constraints;
 use crate::planner::PlanError;
 use crate::planner::StratumPlanner;
@@ -28,25 +39,38 @@ impl StratumPlanner {
     /// work runs once: equal collections are merged, and of the
     /// collections holding the same rows only as many are computed as the
     /// rest of the plan needs, the others becoming maps over them. The
-    /// heads in `idb_to_heads_map` follow: a relation whose head was merged
-    /// unions the surviving collection instead.
+    /// collections in `preludes` count as computed already. The heads in
+    /// `idb_to_heads_map` follow: a relation whose head was merged unions
+    /// the surviving collection instead.
     ///
     /// # Errors
     ///
     /// Returns an internal error if the result has a cycle, which cannot
     /// happen: a map is only ever placed over a computed collection of
     /// the same body.
-    pub(super) fn dedup_transformations(&mut self) -> Result<(), PlanError> {
+    pub(super) fn dedup_transformations(
+        &mut self,
+        preludes: &[Transformation],
+    ) -> Result<(), PlanError> {
         self.transformations = self
             .rule_planners
             .iter()
             .flat_map(|planner| planner.transformations())
             .cloned()
             .collect();
-        self.merge_equal();
-        self.cover_bodies();
+        self.merge_equal(preludes);
+        self.cover_bodies(preludes);
         self.drop_unread();
         self.sort_producers_first()
+    }
+
+    /// The transformation at `index` when the preludes are numbered first
+    /// and this stratum's own transformations after them.
+    fn member<'a>(&'a self, preludes: &'a [Transformation], index: usize) -> &'a Transformation {
+        match index.checked_sub(preludes.len()) {
+            Some(own) => &self.transformations[own],
+            None => &preludes[index],
+        }
     }
 
     // --- Equal collections ---
@@ -55,20 +79,26 @@ impl StratumPlanner {
     /// one that earlier collection: its producer goes, its readers read
     /// the earlier one through their unchanged flows, and a relation it
     /// fed unions the earlier one instead. Shape counts because a join
-    /// reads only arranged input and a map only one shape.
-    fn merge_equal(&mut self) {
-        let mut first: HashMap<(&CanonicalForm, bool), usize> = HashMap::new();
-        let mut merges: Vec<(usize, usize)> = Vec::new();
+    /// reads only arranged input and a map only one shape. The preludes
+    /// come first, so they only ever stand for others.
+    fn merge_equal(&mut self, preludes: &[Transformation]) {
+        let mut first: HashMap<(&CanonicalForm, bool), &Arc<Collection>> = HashMap::new();
+        for tx in preludes {
+            first
+                .entry((tx.output().canonical(), tx.need_arrange()))
+                .or_insert_with(|| tx.output());
+        }
+        let mut merges: Vec<(usize, Arc<Collection>)> = Vec::new();
         for (index, tx) in self.transformations.iter().enumerate() {
             match first.entry((tx.output().canonical(), tx.need_arrange())) {
-                Entry::Occupied(earlier) => merges.push((index, *earlier.get())),
+                Entry::Occupied(earlier) => merges.push((index, Arc::clone(earlier.get()))),
                 Entry::Vacant(slot) => {
-                    slot.insert(index);
+                    slot.insert(tx.output());
                 }
             }
         }
-        for &(later, earlier) in &merges {
-            self.alias(later, earlier);
+        for (later, earlier) in &merges {
+            self.alias(*later, earlier);
         }
         let merged: HashSet<usize> = merges.iter().map(|&(later, _)| later).collect();
         let mut index = 0;
@@ -79,22 +109,25 @@ impl StratumPlanner {
         });
     }
 
-    /// Makes `earlier`'s output stand for `later`'s: every reader of it
+    /// Makes `earlier` stand for `later`'s output: every reader of it
     /// reads `earlier` through its unchanged flow, and a relation it fed
     /// unions `earlier` once instead. The two have the same columns in the
     /// same positions, so the flows keep meaning what they did.
-    fn alias(&mut self, later: usize, earlier: usize) {
+    fn alias(&mut self, later: usize, earlier: &Arc<Collection>) {
         let from = self.transformations[later].output().fingerprint();
-        let to = Arc::clone(self.transformations[earlier].output());
-        trace!("[dedup] {} is {}", self.transformations[later].output(), to);
+        trace!(
+            "[dedup] {} is {}",
+            self.transformations[later].output(),
+            earlier
+        );
         for tx in &mut self.transformations {
-            tx.swap_input(from, &to);
+            tx.swap_input(from, earlier);
         }
         for heads in self.idb_to_heads_map.values_mut() {
             if heads.contains(&from) {
                 heads.retain(|fp| *fp != from);
-                if !heads.contains(&to.fingerprint()) {
-                    heads.push(to.fingerprint());
+                if !heads.contains(&earlier.fingerprint()) {
+                    heads.push(earlier.fingerprint());
                 }
             }
         }
@@ -108,30 +141,39 @@ impl StratumPlanner {
     /// of the plan is settled before the set is decided: a collection is
     /// needed when a relation unions it or a transformation outside its
     /// set reads it, and a collection nothing needs is left for
-    /// `drop_unread`, its inputs losing a reader at once.
-    fn cover_bodies(&mut self) {
+    /// `drop_unread`, its inputs losing a reader at once. A prelude is
+    /// computed already and takes part only as a server.
+    fn cover_bodies(&mut self, preludes: &[Transformation]) {
         let heads: HashSet<u64> = self.idb_to_heads_map.values().flatten().copied().collect();
+        // Readers by input fingerprint, as indices into this stratum's own
+        // transformations; a prelude reads nothing of this stratum.
         let mut readers: HashMap<u64, Vec<usize>> = HashMap::new();
         for (reader, tx) in self.transformations.iter().enumerate() {
             for input in tx.input_fingerprints() {
                 readers.entry(input).or_default().push(reader);
             }
         }
-        for group in self.body_groups() {
-            let members: HashSet<usize> = group.iter().copied().collect();
+        let own = |member: usize| member.checked_sub(preludes.len());
+        for group in self.body_groups(preludes) {
+            let members: HashSet<usize> = group.iter().filter_map(|&member| own(member)).collect();
             let needed: Vec<bool> = group
                 .iter()
-                .map(|&index| {
-                    let output = self.transformations[index].output().fingerprint();
-                    heads.contains(&output)
-                        || readers
-                            .get(&output)
-                            .is_some_and(|who| who.iter().any(|reader| !members.contains(reader)))
+                .map(|&member| {
+                    own(member).is_some_and(|index| {
+                        let output = self.transformations[index].output().fingerprint();
+                        heads.contains(&output)
+                            || readers.get(&output).is_some_and(|who| {
+                                who.iter().any(|reader| !members.contains(reader))
+                            })
+                    })
                 })
                 .collect();
-            let mut cover = self.cover(&group, &needed);
-            for (position, &index) in group.iter().enumerate() {
-                if cover.computed.contains(&index) {
+            let mut cover = self.cover(preludes, &group, &needed);
+            for (position, &member) in group.iter().enumerate() {
+                let Some(index) = own(member) else {
+                    continue;
+                };
+                if cover.computed.contains(&member) {
                     continue;
                 }
                 for input in self.transformations[index].input_fingerprints() {
@@ -140,43 +182,50 @@ impl StratumPlanner {
                     }
                 }
                 if let Some((server, key, value)) = cover.served.remove(&position) {
+                    let server = self.member(preludes, server);
                     trace!(
                         "[dedup] {} now a map over {}",
                         self.transformations[index].output(),
-                        self.transformations[server].output()
+                        server.output()
                     );
-                    self.transformations[index] = Self::map_over(
-                        &self.transformations[server],
-                        &self.transformations[index],
-                        key,
-                        value,
-                    );
-                    let server_output = self.transformations[server].output().fingerprint();
-                    readers.entry(server_output).or_default().push(index);
+                    let map = Self::map_over(server, &self.transformations[index], key, value);
+                    readers
+                        .entry(server.output().fingerprint())
+                        .or_default()
+                        .push(index);
+                    self.transformations[index] = map;
                 }
             }
         }
     }
 
-    /// The transformations grouped by the body of their output, each group
-    /// in list order, the groups by body rank from the most constrained
-    /// down. Bodies depend only on forms, which sharing never changes.
-    fn body_groups(&self) -> Vec<Vec<usize>> {
+    /// The transformations grouped by the body of their output, numbered
+    /// as [`Self::member`] does and each group in that order, keeping the
+    /// groups that hold at least one of this stratum's own; the groups by
+    /// body rank from the most constrained down. Bodies depend only on
+    /// forms, which sharing never changes.
+    fn body_groups(&self, preludes: &[Transformation]) -> Vec<Vec<usize>> {
+        let count = preludes.len() + self.transformations.len();
         let mut by_hash: HashMap<u64, Vec<Vec<usize>>> = HashMap::new();
-        for (index, tx) in self.transformations.iter().enumerate() {
-            let form = tx.output().canonical();
+        for index in 0..count {
+            let form = self.member(preludes, index).output().canonical();
             let bucket = by_hash.entry(form.body_hash()).or_default();
             match bucket
                 .iter_mut()
-                .find(|group| form.same_body(self.transformations[group[0]].output().canonical()))
+                .find(|group| form.same_body(self.member(preludes, group[0]).output().canonical()))
             {
                 Some(group) => group.push(index),
                 None => bucket.push(vec![index]),
             }
         }
-        let mut groups: Vec<Vec<usize>> = by_hash.into_values().flatten().collect();
+        let mut groups: Vec<Vec<usize>> = by_hash
+            .into_values()
+            .flatten()
+            .filter(|group| group.last().is_some_and(|&member| member >= preludes.len()))
+            .collect();
         groups.sort_by_key(|group| {
-            let (relations, filters) = self.transformations[group[0]]
+            let (relations, filters) = self
+                .member(preludes, group[0])
                 .output()
                 .canonical()
                 .body_rank();
@@ -192,19 +241,23 @@ impl StratumPlanner {
     /// The cheapest way to provide the needed members of one body group:
     /// which members to compute and, for each needed member left out, the
     /// computed member serving it with the map's key and value. A computed
-    /// member keeps the members it reads computed. Cost is joins computed,
-    /// then maps (computed maps and served members alike), then members
-    /// served rather than kept, then the width of the servers read, then
-    /// the earliest members; exact up to [`EXACT_COVER_LIMIT`] members,
-    /// greedy beyond.
-    fn cover(&self, group: &[usize], needed: &[bool]) -> Cover {
+    /// member keeps the members it reads computed, and a prelude is
+    /// computed in every choice: it is paid for already, so it weighs the
+    /// same in each and never decides between them. Cost is joins
+    /// computed, then maps (computed maps and served members alike), then
+    /// members served rather than kept, then the width of the servers
+    /// read, then the earliest members; exact up to [`EXACT_COVER_LIMIT`]
+    /// members of this stratum in the group, greedy beyond.
+    fn cover(&self, preludes: &[Transformation], group: &[usize], needed: &[bool]) -> Cover {
         let n = group.len();
-        let tx = |member: usize| &self.transformations[group[member]];
+        let tx = |member: usize| self.member(preludes, group[member]);
+        let fixed: Vec<bool> = group.iter().map(|&index| index < preludes.len()).collect();
         let covers: Vec<Vec<bool>> = (0..n)
             .map(|served| {
                 (0..n)
                     .map(|server| {
                         served != server
+                            && !fixed[served]
                             && tx(served)
                                 .output()
                                 .canonical()
@@ -236,7 +289,7 @@ impl StratumPlanner {
                 if computed[member] {
                     inputs[member].iter().all(|&input| computed[input])
                 } else {
-                    !needed[member] || server_for(member, computed).is_some()
+                    !fixed[member] && (!needed[member] || server_for(member, computed).is_some())
                 }
             })
         };
@@ -263,18 +316,23 @@ impl StratumPlanner {
             )
         };
 
-        let computed = if n <= EXACT_COVER_LIMIT {
-            (0..1u32 << n)
+        // Only the members of this stratum are choices; the search is over
+        // their subsets, with the fixed members computed in every one.
+        let free: Vec<usize> = (0..n).filter(|&member| !fixed[member]).collect();
+        let computed = if free.len() <= EXACT_COVER_LIMIT {
+            (0..1u32 << free.len())
                 .map(|mask| {
-                    (0..n)
-                        .map(|member| mask & (1 << member) != 0)
-                        .collect::<Vec<bool>>()
+                    let mut computed = fixed.clone();
+                    for (bit, &member) in free.iter().enumerate() {
+                        computed[member] = mask & (1 << bit) != 0;
+                    }
+                    computed
                 })
                 .filter(|computed| valid(computed))
                 .min_by_key(|computed| cost(computed))
                 .expect("Planner error: computing every member is valid")
         } else {
-            greedy_cover(&covers, &inputs, needed)
+            greedy_cover(&covers, &inputs, needed, &fixed)
         };
         let served = (0..n)
             .filter(|&member| !computed[member] && needed[member])
@@ -406,10 +464,11 @@ impl StratumPlanner {
     }
 }
 
-/// Up to this many members, a body group is covered by trying every subset
-/// of them; beyond it [`greedy_cover`] runs. Picked so the exact search
-/// stays under a few thousand subsets per group; DOOP's largest group has
-/// ten members.
+/// Up to this many members of this stratum in a body group, the group is
+/// covered by trying every subset of them; beyond it [`greedy_cover`]
+/// runs. Preludes do not count, since they are computed in every
+/// subset. Picked so the exact search stays under a few thousand subsets
+/// per group; DOOP's largest group has ten members.
 const EXACT_COVER_LIMIT: usize = 12;
 
 /// One body group's decision: the transformations to keep computing, and
@@ -422,12 +481,17 @@ struct Cover {
 }
 
 /// A valid choice of computed members for a group too large to search:
-/// first every needed member nothing covers, then repeatedly the member
-/// covering the most needed members still without a computed server, each
-/// closed over the members it reads. `covers[served][server]` says a map
-/// over `server` can produce `served`; `inputs[member]` lists the members
-/// `member` reads.
-fn greedy_cover(covers: &[Vec<bool>], inputs: &[Vec<usize>], needed: &[bool]) -> Vec<bool> {
+/// every fixed member, then every needed member nothing covers, then
+/// repeatedly the member covering the most needed members still without a
+/// computed server, each closed over the members it reads.
+/// `covers[served][server]` says a map over `server` can produce `served`;
+/// `inputs[member]` lists the members `member` reads.
+fn greedy_cover(
+    covers: &[Vec<bool>],
+    inputs: &[Vec<usize>],
+    needed: &[bool],
+    fixed: &[bool],
+) -> Vec<bool> {
     let n = needed.len();
     let mut computed = vec![false; n];
     let close = |computed: &mut Vec<bool>, member: usize| {
@@ -439,6 +503,9 @@ fn greedy_cover(covers: &[Vec<bool>], inputs: &[Vec<usize>], needed: &[bool]) ->
             }
         }
     };
+    for member in (0..n).filter(|&member| fixed[member]) {
+        close(&mut computed, member);
+    }
     for member in (0..n).filter(|&member| needed[member]) {
         if !covers[member].iter().any(|&covered| covered) {
             close(&mut computed, member);

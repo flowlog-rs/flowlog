@@ -193,15 +193,19 @@ Tail(x, y) :- Dyck(x, z), Dyck(z, y).          // stratum 3
 ```
 
 stratum 2 and stratum 3 both arrange `dyck` by its first column, and the
-two collections carry the same form *and the same fingerprint*,
-yet stratum 2's is the feedback variable inside the fixpoint. The
-fingerprint has the same property for the same reason, which is why
-`prune_cross_stratum_duplicates` exists: it keeps the later emission
-exactly when an IDB the collection depends on was written in between.
+two collections carry the same form *and the same fingerprint*, yet
+stratum 2's is the feedback variable inside the fixpoint and holds only
+what the fixpoint has derived so far.
 
-So forms are comparable within one stratum, where dedup runs and where a
-stratum's own relations are read only by its recursive part. A pass that
-compares forms across strata owes the same check on `idb_deps`.
+So forms are comparable within one stratum, where a stratum's own
+relations are read only by its recursive part, and between a stratum and
+the *preludes* of the strata before it. A prelude is safe to share because
+the stratifier places a rule after every rule writing a relation it reads:
+a prelude reads only relations that are complete, and nothing writes them
+again, so its rows are the same for every later stratum. A recursive
+collection, like stratum 2's arrangement above, never serves a later
+stratum; only preludes do. Dedup therefore runs over the earlier preludes
+and the stratum's own transformations together, with the preludes fixed.
 
 ## What this does not claim
 
