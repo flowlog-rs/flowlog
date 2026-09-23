@@ -28,8 +28,10 @@ impl ComparisonExprArgument {
         left_arguments: &[TransformationArgument],
         right_arguments: &[TransformationArgument],
     ) -> Self {
-        let left = ArithmeticArgument::from_arithmeticpos(compare_expr.left(), left_arguments);
-        let right = ArithmeticArgument::from_arithmeticpos(compare_expr.right(), right_arguments);
+        let left =
+            ArithmeticArgument::from_arithmetic_pos_in_order(compare_expr.left(), left_arguments);
+        let right =
+            ArithmeticArgument::from_arithmetic_pos_in_order(compare_expr.right(), right_arguments);
         let operator = compare_expr.operator().clone();
 
         Self {

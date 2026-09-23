@@ -23,9 +23,13 @@ use crate::planner::RulePlanner;
 use crate::planner::Transformation;
 use crate::stratifier::Stratum;
 
+mod dedup;
+
 /// Planned transformations and execution metadata for one stratum.
 ///
-/// Equivalent transformations are shared across its rules. Recursive plans
+/// Work is shared across its rules by canonical form: a collection equal
+/// to an earlier one is that collection, and a join whose rows another
+/// collection already holds becomes a map over it. Recursive plans
 /// separate work that runs once from work repeated at each iteration.
 #[derive(Debug, Default)]
 pub struct StratumPlanner {
@@ -53,13 +57,10 @@ pub struct StratumPlanner {
     /// Fingerprints of collections that exit recursion.
     recursion_leave_collections: Vec<u64>,
 
-    /// Map each IDB fingerprint to the per-rule head fingerprints that feed it.
-    /// Enables the compiler to locate the materialized results per rule.
+    /// The collections whose rows each relation of this stratum unions:
+    /// one per rule as planned, fewer once sharing lets one collection
+    /// stand for several heads. Codegen concatenates them per relation.
     idb_to_heads_map: HashMap<u64, Vec<u64>>,
-
-    /// Reverse map: per-rule head fingerprint to IDB fingerprint.
-    /// Used to type-check rule outputs against their target IDB.
-    head_to_idb_map: HashMap<u64, u64>,
 
     /// Aggregation metadata keyed by IDB fingerprint.
     /// Only populated for rules whose heads contain an aggregation argument.
@@ -176,24 +177,37 @@ impl StratumPlanner {
             }
         });
 
-        // Phase 7 shares transformations with identical content fingerprints.
+        // Phase 7 shares work across rules by canonical form. Heads stay
+        // even when nothing in the stratum reads them: codegen unions them
+        // into their relations.
         let atom_fps: HashSet<u64> = rule_planners
             .iter()
             .flat_map(RulePlanner::rhs_atom_fps)
             .collect();
+        // Each rule's last transformation is its head; dedup rewrites the
+        // map as it merges heads or serves one from another collection.
+        let mut idb_to_heads_map: HashMap<u64, Vec<u64>> = HashMap::new();
+        for (catalog, planner) in catalogs.iter().zip(&rule_planners) {
+            if let Some(head) = planner.transformations().last() {
+                idb_to_heads_map
+                    .entry(catalog.head_idb_fingerprint())
+                    .or_default()
+                    .push(head.output().fingerprint());
+            }
+        }
         let mut stratum_planner = Self {
             rule_planners,
             is_recursive,
             recursion_feedback_collections: stratified.recursive_relations().to_vec(),
             recursion_leave_collections: stratified.leave_relations().to_vec(),
+            idb_to_heads_map,
             idb_to_aggregation_map,
             atom_fps,
             ..Self::default()
         };
-        stratum_planner.deduplicate_transformations();
+        stratum_planner.dedup_transformations()?;
 
         // Phase 8 separates recursive operations and builds their metadata.
-        stratum_planner.build_idb_to_heads_map(&catalogs);
         stratum_planner.identify_recursive_transformations(is_recursive);
         stratum_planner.build_recursion_enter_collections(stratified.available_relations());
 
@@ -268,12 +282,6 @@ impl StratumPlanner {
     #[inline]
     pub fn idb_to_heads_map(&self) -> &HashMap<u64, Vec<u64>> {
         &self.idb_to_heads_map
-    }
-
-    /// Returns the IDB fingerprint for each per-rule head fingerprint.
-    #[inline]
-    pub fn head_to_idb_map(&self) -> &HashMap<u64, u64> {
-        &self.head_to_idb_map
     }
 
     /// Get the mapping from IDB fingerprint to corresponding aggregation.
@@ -365,24 +373,6 @@ impl fmt::Display for StratumPlanner {
 }
 
 // =========================================================================
-// Sharing Optimization
-// =========================================================================
-impl StratumPlanner {
-    /// Dedup the per-rule materialized transformations by content
-    /// fingerprint (first occurrence wins; order stays topological).
-    fn deduplicate_transformations(&mut self) {
-        let mut seen = HashSet::new();
-        self.transformations = self
-            .rule_planners
-            .iter()
-            .flat_map(|planner| planner.transformations())
-            .filter(|tx| seen.insert(tx.output().fingerprint()))
-            .cloned()
-            .collect();
-    }
-}
-
-// =========================================================================
 // Recursive/Non-Recursive Separation
 // =========================================================================
 impl StratumPlanner {
@@ -470,27 +460,6 @@ impl StratumPlanner {
             .filter(|fp| available_fps.contains(fp))
             .copied()
             .collect()
-    }
-
-    /// Maps each IDB fingerprint to the materialized rule heads that produce
-    /// it.
-    ///
-    /// Shared transformations may leave a rule without a distinct materialized
-    /// head.
-    fn build_idb_to_heads_map(&mut self, catalogs: &[Catalog]) {
-        for (rule_idx, catalog) in catalogs.iter().enumerate() {
-            let head_idb_fp = catalog.head_idb_fingerprint();
-            let Some(final_tx) = self.rule_planners[rule_idx].transformations().last() else {
-                continue;
-            };
-            let head_fp = final_tx.output().fingerprint();
-            // Rules with identical pipelines share one head fp; record it once.
-            let heads = self.idb_to_heads_map.entry(head_idb_fp).or_default();
-            if !heads.contains(&head_fp) {
-                heads.push(head_fp);
-            }
-            self.head_to_idb_map.insert(head_fp, head_idb_fp);
-        }
     }
 
     /// Returns aggregation metadata after checking compatibility within one

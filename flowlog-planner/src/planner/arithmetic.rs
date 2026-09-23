@@ -1,13 +1,15 @@
-//! Arithmetic expression representation for query planning in FlowLog Datalog programs.
+//! Arithmetic expressions as a transformation computes them: the same
+//! shapes the catalog parses, with every column resolved to a slot of the
+//! input collection.
 
 use std::fmt;
-use std::slice;
 
 use flowlog_parser::ArithmeticOperator;
 use flowlog_parser::BuiltinOperator;
 use flowlog_parser::Constant;
 
 use crate::catalog::ArithmeticPos;
+use crate::catalog::AtomArgumentSignature;
 use crate::catalog::FactorPos;
 use crate::planner::TransformationArgument;
 
@@ -46,6 +48,41 @@ pub enum FactorArgument {
 }
 
 impl FactorArgument {
+    /// `factor` with each column replaced by the slot `column` gives for
+    /// it, or `None` when some column has none.
+    pub(crate) fn from_factor_pos(
+        factor: &FactorPos,
+        column: &mut impl FnMut(&AtomArgumentSignature) -> Option<TransformationArgument>,
+    ) -> Option<Self> {
+        let mut args = |args: &[ArithmeticPos]| {
+            args.iter()
+                .map(|arg| ArithmeticArgument::from_arithmetic_pos(arg, column))
+                .collect::<Option<Vec<_>>>()
+        };
+        Some(match factor {
+            FactorPos::Var(signature) => Self::Var(column(signature)?),
+            FactorPos::Const(constant) => Self::Const(constant.clone()),
+            FactorPos::FnCall { name, args: inner } => Self::FnCall {
+                name: name.clone(),
+                args: args(inner)?,
+            },
+            FactorPos::Builtin { op, args: inner } => Self::Builtin {
+                op: *op,
+                args: args(inner)?,
+            },
+            FactorPos::Group(inner) => Self::Group(Box::new(
+                ArithmeticArgument::from_arithmetic_pos(inner, column)?,
+            )),
+            FactorPos::Tuple { fields } => Self::Tuple {
+                fields: args(fields)?,
+            },
+            FactorPos::TupleProj { tuple, index } => Self::TupleProj {
+                tuple: Box::new(ArithmeticArgument::from_arithmetic_pos(tuple, column)?),
+                index: *index,
+            },
+        })
+    }
+
     /// Returns all transformation arguments referenced in this factor
     /// (including nested in FnCall / Builtin args).
     pub fn transformation_arguments(&self) -> Vec<&TransformationArgument> {
@@ -68,41 +105,26 @@ impl FactorArgument {
 
 impl fmt::Display for FactorArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let list = |args: &[ArithmeticArgument]| {
+            args.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         match self {
-            Self::Var(transformation_arg) => write!(f, "{transformation_arg}"),
+            Self::Var(slot) => write!(f, "{slot}"),
             Self::Const(constant) => write!(f, "{constant}"),
-            Self::FnCall { name, args } => {
-                let args_str = args
-                    .iter()
-                    .map(|a| a.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(f, "{name}({args_str})")
-            }
-            Self::Builtin { op, args } => {
-                let args_str = args
-                    .iter()
-                    .map(|a| a.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(f, "{op}({args_str})")
-            }
-            Self::Group(a) => write!(f, "({a})"),
-            Self::Tuple { fields } => {
-                let inner = fields
-                    .iter()
-                    .map(|a| a.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(f, "[{inner}]")
-            }
+            Self::FnCall { name, args } => write!(f, "{name}({})", list(args)),
+            Self::Builtin { op, args } => write!(f, "{op}({})", list(args)),
+            Self::Group(inner) => write!(f, "({inner})"),
+            Self::Tuple { fields } => write!(f, "[{}]", list(fields)),
             Self::TupleProj { tuple, index } => write!(f, "({tuple}).{index}"),
         }
     }
 }
 
 /// Represents a complete arithmetic expression
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArithmeticArgument {
     /// The initial factor in the expression
     pub init: FactorArgument,
@@ -112,76 +134,39 @@ pub struct ArithmeticArgument {
 }
 
 impl ArithmeticArgument {
-    /// Creates an ArithmeticArgument from an ArithmeticPos and a list of transformation arguments.
-    pub(crate) fn from_arithmeticpos(
-        arithmetic: &ArithmeticPos,
-        var_arguments: &[TransformationArgument],
+    /// `expr` with each column replaced by the slot `column` gives for
+    /// it, or `None` when some column has none. Columns are asked for in
+    /// source order.
+    pub(crate) fn from_arithmetic_pos(
+        expr: &ArithmeticPos,
+        column: &mut impl FnMut(&AtomArgumentSignature) -> Option<TransformationArgument>,
+    ) -> Option<Self> {
+        Some(Self {
+            init: FactorArgument::from_factor_pos(expr.init(), column)?,
+            rest: expr
+                .rest()
+                .iter()
+                .map(|(op, factor)| {
+                    Some((op.clone(), FactorArgument::from_factor_pos(factor, column)?))
+                })
+                .collect::<Option<Vec<_>>>()?,
+        })
+    }
+
+    /// `expr` with its columns replaced by `slots` in source order, one
+    /// per column.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `slots` has fewer entries than `expr` has columns, which
+    /// the catalog rules out.
+    pub(crate) fn from_arithmetic_pos_in_order(
+        expr: &ArithmeticPos,
+        slots: &[TransformationArgument],
     ) -> Self {
-        fn map_factor(
-            factor: &FactorPos,
-            var_arguments: &[TransformationArgument],
-            var_id: &mut usize,
-        ) -> FactorArgument {
-            // Shared between `FnCall` and `Builtin`: consume `signatures().len()`
-            // slots per arg from the running `var_arguments` cursor.
-            let map_call_args =
-                |args: &[ArithmeticPos], var_id: &mut usize| -> Vec<ArithmeticArgument> {
-                    args.iter()
-                        .map(|arg| {
-                            let num_vars = arg.signatures().len();
-                            let sub_args = &var_arguments[*var_id..*var_id + num_vars];
-                            *var_id += num_vars;
-                            ArithmeticArgument::from_arithmeticpos(arg, sub_args)
-                        })
-                        .collect()
-                };
-            match factor {
-                FactorPos::Var(_) => {
-                    let var = var_arguments[*var_id];
-                    *var_id += 1;
-                    FactorArgument::Var(var)
-                }
-                FactorPos::Const(constant) => FactorArgument::Const(constant.clone()),
-                FactorPos::FnCall { name, args } => FactorArgument::FnCall {
-                    name: name.clone(),
-                    args: map_call_args(args, var_id),
-                },
-                FactorPos::Builtin { op, args } => FactorArgument::Builtin {
-                    op: *op,
-                    args: map_call_args(args, var_id),
-                },
-                FactorPos::Group(a) => {
-                    let num_vars = a.signatures().len();
-                    let sub_args = &var_arguments[*var_id..*var_id + num_vars];
-                    *var_id += num_vars;
-                    FactorArgument::Group(Box::new(ArithmeticArgument::from_arithmeticpos(
-                        a, sub_args,
-                    )))
-                }
-                FactorPos::Tuple { fields } => FactorArgument::Tuple {
-                    fields: map_call_args(fields, var_id),
-                },
-                FactorPos::TupleProj { tuple, index } => FactorArgument::TupleProj {
-                    tuple: Box::new(
-                        map_call_args(slice::from_ref(tuple), var_id)
-                            .pop()
-                            .expect("proj lowering yields exactly one arithmetic"),
-                    ),
-                    index: *index,
-                },
-            }
-        }
-
-        let mut var_id = 0;
-
-        let init = map_factor(arithmetic.init(), var_arguments, &mut var_id);
-        let rest = arithmetic
-            .rest()
-            .iter()
-            .map(|(op, factor)| (op.clone(), map_factor(factor, var_arguments, &mut var_id)))
-            .collect();
-
-        Self { init, rest }
+        let mut slots = slots.iter().copied();
+        Self::from_arithmetic_pos(expr, &mut |_| slots.next())
+            .expect("Planner error: a slot for every column")
     }
 
     /// Returns the initial factor of the arithmetic expression.

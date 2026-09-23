@@ -92,6 +92,16 @@ impl Transformation {
         )
     }
 
+    /// Returns `true` if the output needs arranging by key, the shape a
+    /// join reads. A row output does not, even when its layout has no
+    /// key columns either.
+    pub fn need_arrange(&self) -> bool {
+        matches!(
+            self,
+            Self::RowToKv { .. } | Self::KvToKv { .. } | Self::JnToKv { .. } | Self::NJnToKv { .. }
+        )
+    }
+
     /// Returns the input collection of a unary transformation.
     ///
     /// # Panics
@@ -346,6 +356,30 @@ impl Transformation {
         };
         produced.insert(info.output_info_fp(), Arc::clone(tx.output()));
         Ok(tx)
+    }
+
+    /// Makes every input whose fingerprint is `from` read `to` instead.
+    /// The flow keeps its positions, so `to` must lay out the same
+    /// columns as the collection it replaces.
+    pub(crate) fn swap_input(&mut self, from: u64, to: &Arc<Collection>) {
+        let swap = |input: &mut Arc<Collection>| {
+            if input.fingerprint() == from {
+                *input = Arc::clone(to);
+            }
+        };
+        match self {
+            Self::RowToRow { input, .. }
+            | Self::RowToKv { input, .. }
+            | Self::KvToRow { input, .. }
+            | Self::KvToKv { input, .. } => swap(input),
+            Self::JnToRow { input, .. }
+            | Self::JnToKv { input, .. }
+            | Self::NJnToRow { input, .. }
+            | Self::NJnToKv { input, .. } => {
+                swap(&mut input.0);
+                swap(&mut input.1);
+            }
+        }
     }
 
     /// The collection an info reads under `layout`, its own view of the

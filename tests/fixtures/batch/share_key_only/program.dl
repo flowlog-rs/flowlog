@@ -1,0 +1,19 @@
+// Both arranges its join of R and S under k alone, with no value, to meet
+// T. Same's head holds the same rows, so the planner serves it by a map
+// over that key-only arrangement; codegen must read the key without a
+// value beside it.
+
+.decl R(k: int32)
+.input R(IO="file", filename="R.csv", delimiter=",")
+.decl S(k: int32)
+.input S(IO="file", filename="S.csv", delimiter=",")
+.decl T(k: int32, x: int32)
+.input T(IO="file", filename="T.csv", delimiter=",")
+
+.decl Both(k: int32, x: int32)
+Both(k, x) :- R(k), S(k), T(k, x).
+.output Both
+
+.decl Same(k: int32)
+Same(k) :- R(k), S(k).
+.output Same
