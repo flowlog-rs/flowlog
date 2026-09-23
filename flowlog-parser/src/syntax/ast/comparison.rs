@@ -23,7 +23,7 @@ use crate::error::grammar_bug;
 /// Equality, ordering, or a string constraint over two operands.
 /// String constraints carry their own negation; value comparisons do not
 /// introduce a unary `!` operator.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ComparisonOperator {
     Equal,
     NotEqual,

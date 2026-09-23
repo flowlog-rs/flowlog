@@ -1,12 +1,13 @@
 //! Collection types used during planning.
 //!
-//! A Collection models a relation of tuples represented by key/value
-//! positions (as `ArithmeticPos`). Collections can be row-based (no keys) or
+//! A Collection models a relation of tuples represented by a key/value
+//! layout of argument positions. Collections can be row-based (no keys) or
 //! key/value-based and are identified by a fingerprint.
 
 use std::fmt;
 
-use crate::catalog::ArithmeticPos;
+use crate::planner::CanonicalForm;
+use crate::planner::KeyValueLayout;
 
 /// Represents a data collection with key-value structure.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -19,46 +20,52 @@ pub struct Collection {
     /// log/debug rendering. Empty for internal placeholders.
     name: String,
 
-    /// Key argument signatures (empty for row-only collections)
-    key_argument_signatures: Vec<ArithmeticPos>,
+    /// Key and value argument signatures; the key is empty for a row-only
+    /// collection.
+    kv_layout: KeyValueLayout,
 
-    /// Value argument signatures
-    value_argument_signatures: Vec<ArithmeticPos>,
+    /// The query this collection computes, independent of the plan that
+    /// built it. Where the fingerprint tells collections apart by lineage,
+    /// the form tells them apart by content.
+    canonical: CanonicalForm,
 }
 
 impl Collection {
-    /// Creates a new collection with the given fingerprint, name, and argument signatures.
+    /// Creates a new collection with the given fingerprint, name, layout,
+    /// and canonical form.
     pub(crate) fn new(
         fingerprint: u64,
         name: String,
-        key_argument_signatures: &[ArithmeticPos],
-        value_argument_signatures: &[ArithmeticPos],
+        kv_layout: KeyValueLayout,
+        canonical: CanonicalForm,
     ) -> Self {
         Self {
             fingerprint,
             name,
-            key_argument_signatures: key_argument_signatures.to_vec(),
-            value_argument_signatures: value_argument_signatures.to_vec(),
+            kv_layout,
+            canonical,
         }
     }
 
     /// Returns the arity as (key_count, value_count).
     #[inline]
     pub fn arity(&self) -> (usize, usize) {
-        (
-            self.key_argument_signatures.len(),
-            self.value_argument_signatures.len(),
-        )
+        (self.kv_layout.key().len(), self.kv_layout.value().len())
     }
 
     /// Returns `true` if this collection has only keys (no values).
     pub fn is_k_only(&self) -> bool {
-        self.value_argument_signatures.is_empty()
+        self.kv_layout.value().is_empty()
     }
 
     /// Returns the collection fingerprint.
     pub fn fingerprint(&self) -> u64 {
         self.fingerprint
+    }
+
+    /// Returns the query this collection computes.
+    pub(crate) fn canonical(&self) -> &CanonicalForm {
+        &self.canonical
     }
 }
 
@@ -66,25 +73,13 @@ impl fmt::Display for Collection {
     /// Canonical form: `<name> [0x{:016x}], key:(..), value:(..)`.
     /// When `name` is empty (internal placeholder), only the hex form appears.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let k = self
-            .key_argument_signatures
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let v = self
-            .value_argument_signatures
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
         if self.name.is_empty() {
-            write!(f, "0x{:016x}, key:({}), value:({})", self.fingerprint, k, v)
+            write!(f, "0x{:016x}, {}", self.fingerprint, self.kv_layout)
         } else {
             write!(
                 f,
-                "{} [0x{:016x}], key:({}), value:({})",
-                self.name, self.fingerprint, k, v
+                "{} [0x{:016x}], {}",
+                self.name, self.fingerprint, self.kv_layout
             )
         }
     }

@@ -143,9 +143,10 @@ impl StratumPlanner {
 
         // Phase 6: Materialize per-rule transformations, rewriting lineage
         // (rhs_id-laden) fingerprints to content-canonical ones so identical
-        // operations dedup across rules.
+        // operations dedup across rules, and deriving each output's
+        // canonical form.
         for planner in rule_planners.iter_mut() {
-            planner.materialize();
+            planner.materialize()?;
         }
 
         // Debug info for per-rule plan trees

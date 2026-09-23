@@ -23,8 +23,8 @@ use crate::catalog::AtomArgumentSignature;
 use crate::catalog::ComparisonExprPos;
 use crate::catalog::JoinPredicates;
 use crate::catalog::KvPredicates;
-use crate::planner::Collection;
 use crate::planner::PlanError;
+use crate::planner::TransformationFlow;
 
 /// Key/Value layout of a collection: which positions form the key-value.
 #[derive(PartialEq, Clone, Eq, Hash, Debug)]
@@ -72,6 +72,25 @@ impl KeyValueLayout {
                 .collect()
         };
         (extract(self.key()), extract(self.value()))
+    }
+}
+
+impl fmt::Display for KeyValueLayout {
+    /// `key:(..), value:(..)`, each side comma-separated.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let list = |positions: &[ArithmeticPos]| {
+            positions
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        write!(
+            f,
+            "key:({}), value:({})",
+            list(&self.key),
+            list(&self.value)
+        )
     }
 }
 
@@ -402,6 +421,43 @@ impl TransformationInfo {
         }
     }
 
+    /// How the output's columns and filters read the input columns.
+    pub(crate) fn flow(&self) -> TransformationFlow {
+        match self {
+            Self::KVToKV {
+                input_kv_layout,
+                output_kv_layout,
+                predicates,
+                ..
+            } => TransformationFlow::kv_to_kv(input_kv_layout, output_kv_layout, predicates),
+            Self::JoinToKV {
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
+                predicates,
+                ..
+            } => TransformationFlow::join_to_kv(
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
+                predicates,
+            ),
+            // An antijoin only matches keys; every filter of the rule
+            // sits on its inputs.
+            Self::AntiJoinToKV {
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
+                ..
+            } => TransformationFlow::join_to_kv(
+                left_input_kv_layout,
+                right_input_kv_layout,
+                output_kv_layout,
+                &JoinPredicates::default(),
+            ),
+        }
+    }
+
     /// Variable name of each output column, in layout order (key columns
     /// first), or `None` for a column that holds no variable: an arithmetic
     /// expression, a constant, or a placeholder.
@@ -454,21 +510,12 @@ impl TransformationInfo {
         }
     }
 
-    /// Predicate filters for KVToKV transformations.
-    #[inline]
+    /// Test-only: predicate filters of a KVToKV transformation.
+    #[cfg(test)]
     pub(crate) fn kv_predicates(&self) -> &KvPredicates {
         match self {
             Self::KVToKV { predicates, .. } => predicates,
             _ => panic!("Planner error: kv_predicates is only available for KVToKV"),
-        }
-    }
-
-    /// Predicate filters for JoinToKV transformations.
-    #[inline]
-    pub(crate) fn join_predicates(&self) -> &JoinPredicates {
-        match self {
-            Self::JoinToKV { predicates, .. } => predicates,
-            _ => panic!("Planner error: join_predicates is only available for JoinToKV"),
         }
     }
 }
@@ -785,9 +832,6 @@ impl fmt::Display for TransformationInfo {
     /// is built from this info. The `F` line is omitted when no predicates
     /// apply.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let coll = |fp: u64, name: &str, kv: &KeyValueLayout| {
-            Collection::new(fp, name.to_string(), kv.key(), kv.value())
-        };
         let vars = self
             .output_variables()
             .iter()
@@ -809,15 +853,15 @@ impl fmt::Display for TransformationInfo {
             } => {
                 writeln!(
                     f,
-                    "    In   : {}",
-                    coll(*input_info_fp, input_name, input_kv_layout)
+                    "    In   : {} [0x{:016x}], {}",
+                    input_name, input_info_fp, input_kv_layout
                 )?;
-                writeln!(
+                write!(
                     f,
-                    "    Out  : {}, vars:({})",
-                    coll(*output_info_fp, output_name, output_kv_layout),
-                    vars
+                    "    Out  : {} [0x{:016x}], {}",
+                    output_name, output_info_fp, output_kv_layout
                 )?;
+                writeln!(f, ", vars:({vars})")?;
                 if !predicates.is_empty() {
                     writeln!(f, "    F    : (if {})", predicates)?;
                 }
@@ -837,24 +881,20 @@ impl fmt::Display for TransformationInfo {
             } => {
                 writeln!(
                     f,
-                    "    Left : {}",
-                    coll(*left_input_info_fp, left_input_name, left_input_kv_layout)
+                    "    Left : {} [0x{:016x}], {}",
+                    left_input_name, left_input_info_fp, left_input_kv_layout
                 )?;
                 writeln!(
                     f,
-                    "    Right: {}",
-                    coll(
-                        *right_input_info_fp,
-                        right_input_name,
-                        right_input_kv_layout
-                    )
+                    "    Right: {} [0x{:016x}], {}",
+                    right_input_name, right_input_info_fp, right_input_kv_layout
                 )?;
-                writeln!(
+                write!(
                     f,
-                    "    Out  : {}, vars:({})",
-                    coll(*output_info_fp, output_name, output_kv_layout),
-                    vars
+                    "    Out  : {} [0x{:016x}], {}",
+                    output_name, output_info_fp, output_kv_layout
                 )?;
+                writeln!(f, ", vars:({vars})")?;
                 if !predicates.is_empty() {
                     writeln!(f, "    F    : (if {})", predicates)?;
                 }
@@ -873,24 +913,20 @@ impl fmt::Display for TransformationInfo {
             } => {
                 writeln!(
                     f,
-                    "    Left : {}",
-                    coll(*left_input_info_fp, left_input_name, left_input_kv_layout)
+                    "    Left : {} [0x{:016x}], {}",
+                    left_input_name, left_input_info_fp, left_input_kv_layout
                 )?;
                 writeln!(
                     f,
-                    "    Right: {}",
-                    coll(
-                        *right_input_info_fp,
-                        right_input_name,
-                        right_input_kv_layout
-                    )
+                    "    Right: {} [0x{:016x}], {}",
+                    right_input_name, right_input_info_fp, right_input_kv_layout
                 )?;
-                writeln!(
+                write!(
                     f,
-                    "    Out  : {}, vars:({})",
-                    coll(*output_info_fp, output_name, output_kv_layout),
-                    vars
+                    "    Out  : {} [0x{:016x}], {}",
+                    output_name, output_info_fp, output_kv_layout
                 )?;
+                writeln!(f, ", vars:({vars})")?;
             }
         }
         Ok(())

@@ -31,7 +31,7 @@ use crate::types::DataType;
 /// content; every other type stores the literal as written. Downstream
 /// of the typechecker, every constant is concrete and its spelling
 /// parses as its type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Constant {
     text: String,
     ty: DataType,

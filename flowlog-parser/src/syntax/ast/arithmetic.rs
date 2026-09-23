@@ -28,7 +28,7 @@ use crate::error::grammar_bug;
 // =============================================================================
 
 /// Binary arithmetic operators in value expressions.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ArithmeticOperator {
     Plus,
     Minus,
