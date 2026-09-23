@@ -96,7 +96,6 @@ impl CodeGen {
                     None,
                     output.fingerprint(),
                     flow,
-                    stratum,
                 )?;
                 let input_type = self.find_global_data_type(input.fingerprint())?.clone();
                 let itype = input_type.1.clone();
@@ -210,7 +209,6 @@ impl CodeGen {
                     None,
                     output.fingerprint(),
                     flow,
-                    stratum,
                 )?;
                 let input_type = self.find_global_data_type(input.fingerprint())?.clone();
                 let itype = input_type.1.clone();
@@ -315,7 +313,6 @@ impl CodeGen {
                     None,
                     output.fingerprint(),
                     flow,
-                    stratum,
                 )?;
 
                 // Output value + predicates
@@ -331,6 +328,13 @@ impl CodeGen {
                     Some(flow.constraints()),
                 );
 
+                // Closure parameter depends on whether input is key-only
+                let closure_param = if input.is_k_only() {
+                    quote! { |#kv_param_k, t, d| }
+                } else {
+                    quote! { |( #kv_param_k, #kv_param_v ), t, d| }
+                };
+
                 // Transformation logic
                 let flat_map_body = flat_map_body_tokens(pred, out_val);
 
@@ -338,7 +342,7 @@ impl CodeGen {
                     let #out = ::flowlog_runtime::operators::flowlog_map(
                         #inp.clone(),
                         #operator_name,
-                        |( #kv_param_k, #kv_param_v ), t, d| { #flat_map_body },
+                        #closure_param { #flat_map_body },
                     );
                 })
             }
@@ -359,7 +363,6 @@ impl CodeGen {
                     None,
                     output.fingerprint(),
                     flow,
-                    stratum,
                 )?;
 
                 // Output expression + predicates
@@ -453,7 +456,6 @@ impl CodeGen {
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
-                    stratum,
                 )?;
 
                 // Output expression + predicates
@@ -513,7 +515,6 @@ impl CodeGen {
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
-                    stratum,
                 )?;
 
                 // Output expression + predicates
@@ -591,7 +592,6 @@ impl CodeGen {
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
-                    stratum,
                 )?;
 
                 // Output expression
@@ -640,7 +640,6 @@ impl CodeGen {
                     Some(right.fingerprint()),
                     output.fingerprint(),
                     flow,
-                    stratum,
                 )?;
 
                 // Output expression

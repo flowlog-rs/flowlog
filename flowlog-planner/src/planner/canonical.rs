@@ -60,17 +60,23 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::Hash;
+use std::hash::Hasher;
 
 use flowlog_parser::ComparisonOperator;
 use itertools::Itertools;
+use rustc_hash::FxHasher;
 
 use crate::catalog::ArithmeticPos;
 use crate::catalog::AtomArgumentSignature;
 use crate::catalog::AtomSignature;
 use crate::catalog::ComparisonExprPos;
 use crate::catalog::FactorPos;
+use crate::planner::ArithmeticArgument;
+use crate::planner::FactorArgument;
 use crate::planner::KeyValueLayout;
 use crate::planner::PlanError;
+use crate::planner::TransformationArgument;
 use crate::planner::TransformationInfo;
 
 /// The query a collection computes, over the relations of one rule.
@@ -479,6 +485,83 @@ impl CanonicalForm {
             });
         }
         Ok((equalities, filters))
+    }
+}
+
+// =============================================================================
+// Sharing
+// =============================================================================
+impl CanonicalForm {
+    /// A hash of everything but the outputs, equal for forms with the
+    /// same body; [`Self::same_body`] tells a collision from a match.
+    pub(crate) fn body_hash(&self) -> u64 {
+        // Bodies come from the program, never from an adversary, and a
+        // collision only costs a `same_body` comparison, so FxHasher's
+        // speed over SipHash is free here.
+        let mut hasher = FxHasher::default();
+        (&self.atoms, &self.negated, &self.classes, &self.filters).hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// How much the body constrains: relations read or negated, then
+    /// filters. A transformation's output ranks at least as high as its
+    /// inputs, since a join adds a relation, an antijoin a negated one, a
+    /// filter a filter, and a projection or arrangement keeps the body.
+    pub(crate) fn body_rank(&self) -> (usize, usize) {
+        (self.atoms.len() + self.negated.len(), self.filters.len())
+    }
+
+    /// Whether the two forms agree on everything but the outputs: the
+    /// relations read and negated, the classes and the filters. Such forms
+    /// hold the same rows and differ only in which expressions of those
+    /// rows they carry, so one can serve the other by a map when it
+    /// carries the columns the other needs.
+    pub(crate) fn same_body(&self, other: &Self) -> bool {
+        self.atoms == other.atoms
+            && self.negated == other.negated
+            && self.classes == other.classes
+            && self.filters == other.filters
+    }
+
+    /// This form's key and value columns read over `server`'s output, the
+    /// flow of the map that would produce this form's rows from it. An
+    /// output expression `server` also outputs is read from that
+    /// position; any other is rewritten over the positions of the plain
+    /// columns it names. `None` unless the two forms have the same body
+    /// and every output can be read one of these two ways.
+    pub(crate) fn flow_over(
+        &self,
+        server: &Self,
+    ) -> Option<(Vec<ArithmeticArgument>, Vec<ArithmeticArgument>)> {
+        if !self.same_body(server) {
+            return None;
+        }
+        let mut outputs: HashMap<&ArithmeticPos, TransformationArgument> = HashMap::new();
+        let mut columns: HashMap<AtomArgumentSignature, TransformationArgument> = HashMap::new();
+        for (is_key, exprs) in [(true, &server.key), (false, &server.value)] {
+            for (index, expr) in exprs.iter().enumerate() {
+                let position = TransformationArgument::KV((is_key, index));
+                outputs.entry(expr).or_insert(position);
+                if let Some(column) = expr.plain_var() {
+                    columns.entry(column).or_insert(position);
+                }
+            }
+        }
+        let read = |exprs: &[ArithmeticPos]| {
+            exprs
+                .iter()
+                .map(|expr| match outputs.get(expr) {
+                    Some(&position) => Some(ArithmeticArgument {
+                        init: FactorArgument::Var(position),
+                        rest: Vec::new(),
+                    }),
+                    None => ArithmeticArgument::from_arithmetic_pos(expr, &mut |column| {
+                        columns.get(column).copied()
+                    }),
+                })
+                .collect::<Option<Vec<_>>>()
+        };
+        Some((read(&self.key)?, read(&self.value)?))
     }
 }
 
@@ -956,6 +1039,7 @@ impl fmt::Display for CanonicalForm {
 // =============================================================================
 #[cfg(test)]
 mod tests {
+    use flowlog_common::compute_fp;
     use flowlog_parser::ArithmeticOperator;
     use flowlog_parser::Constant;
     use flowlog_parser::DataType;
@@ -963,6 +1047,7 @@ mod tests {
     use super::*;
     use crate::catalog::JoinPredicates;
     use crate::catalog::KvPredicates;
+    use crate::planner::ProgramPlanner;
 
     fn column(atom: usize, argument: usize) -> ArithmeticPos {
         ArithmeticPos::from_var_signature(AtomArgumentSignature::new(
@@ -1842,6 +1927,238 @@ mod tests {
         assert_eq!(
             chain.to_string(),
             "atoms(e, e, e) not() eq(0.0 = 1.1; 0.1 = 2.0) where() key(2.1) value(1.0)"
+        );
+    }
+
+    // Forms derived through the planner: `derive` runs on real plans, so
+    // these drive a source snippet end to end and read the head's form.
+
+    /// Canonical form of the head collection derived for relation `name`,
+    /// rendered; the relation must be produced by exactly one rule.
+    fn head_form(pp: &ProgramPlanner, name: &str) -> String {
+        let idb = compute_fp(name);
+        let stratum = pp
+            .strata()
+            .iter()
+            .find(|stratum| stratum.idb_to_heads_map().contains_key(&idb))
+            .expect("relation is produced by some stratum");
+        let [head] = stratum.idb_to_heads_map()[&idb].as_slice() else {
+            panic!("relation {name} has more than one rule");
+        };
+        stratum
+            .non_recursive_transformations()
+            .iter()
+            .chain(stratum.recursive_transformations())
+            .find(|tx| tx.output().fingerprint() == *head)
+            .expect("head is produced by a transformation")
+            .output()
+            .canonical()
+            .to_string()
+    }
+
+    /// The user-facing motivation for canonical forms: two rules over the
+    /// same join keep different columns, so their fingerprints diverge at
+    /// the first projection, while their forms differ only in the values.
+    #[test]
+    fn projections_of_one_join_share_a_form_up_to_their_outputs() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl R(x: int32, y: int32)\n\
+            .decl S(y: int32, z: int32, w: int32)\n\
+            .decl T1(x: int32, z: int32)\n\
+            .decl T2(x: int32, w: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output T1\n\
+            .output T2\n\
+            T1(x, z) :- R(x, y), S(y, z, w).\n\
+            T2(x, w) :- R(x, y), S(y, z, w).\n",
+        );
+
+        assert_eq!(
+            head_form(&pp, "t1"),
+            "atoms(r, s) not() eq(0.1 = 1.0) where() key() value(0.0, 1.1)"
+        );
+        assert_eq!(
+            head_form(&pp, "t2"),
+            "atoms(r, s) not() eq(0.1 = 1.0) where() key() value(0.0, 1.2)"
+        );
+    }
+
+    /// A semijoin is the join with the filter side's columns projected
+    /// away, and its form says so.
+    #[test]
+    fn semijoin_form_is_the_join_form_without_the_filter_columns() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl R(k: int32, a: int32)\n\
+            .decl S(k: int32, b: int32)\n\
+            .decl Wide(a: int32, b: int32)\n\
+            .decl Semi(a: int32)\n\
+            .input R(IO=\"file\", filename=\"R.csv\", delimiter=\",\")\n\
+            .input S(IO=\"file\", filename=\"S.csv\", delimiter=\",\")\n\
+            .output Wide\n\
+            .output Semi\n\
+            Wide(a, b) :- R(k, a), S(k, b).\n\
+            Semi(a) :- R(k, a), S(k, _).\n",
+        );
+
+        assert_eq!(
+            head_form(&pp, "wide"),
+            "atoms(r, s) not() eq(0.0 = 1.0) where() key() value(0.1, 1.1)"
+        );
+        assert_eq!(
+            head_form(&pp, "semi"),
+            "atoms(r, s) not() eq(0.0 = 1.0) where() key() value(0.1)"
+        );
+    }
+
+    #[test]
+    fn negated_atom_is_bound_to_the_positive_column_it_filters() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl B(x: int32, y: int32)\n\
+            .decl C(x: int32, z: int32)\n\
+            .decl N(x: int32)\n\
+            .decl Out(x: int32, y: int32, z: int32)\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+            .input N(IO=\"file\", filename=\"N.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, y, z) :- B(x, y), C(x, z), !N(x).\n",
+        );
+
+        assert_eq!(
+            head_form(&pp, "out"),
+            "atoms(b, c) not(n) eq(0.0 = 1.0 = !0.0) where() key() value(0.0, 0.1, 1.1)"
+        );
+    }
+
+    #[test]
+    fn constant_arguments_and_comparisons_are_filters_of_the_head_form() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl A(x: int32, y: int32)\n\
+            .decl Out(x: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x) :- A(x, 5), x > 3.\n",
+        );
+
+        assert_eq!(
+            head_form(&pp, "out"),
+            "atoms(a) not() eq() where(0.0 > 3, 0.1 = 5) key() value(0.0)"
+        );
+    }
+
+    /// Body order decides which read the plan joins on the left; the
+    /// form does not depend on it.
+    #[test]
+    fn body_order_does_not_change_the_head_form() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl E(x: int32, y: int32)\n\
+            .decl P(x: int32, z: int32)\n\
+            .decl Q(x: int32, z: int32)\n\
+            .input E(IO=\"file\", filename=\"E.csv\", delimiter=\",\")\n\
+            .output P\n\
+            .output Q\n\
+            P(x, z) :- E(x, y), E(y, z).\n\
+            Q(x, z) :- E(y, z), E(x, y).\n",
+        );
+
+        assert_eq!(
+            head_form(&pp, "p"),
+            "atoms(e, e) not() eq(0.0 = 1.1) where() key() value(1.0, 0.1)"
+        );
+        assert_eq!(head_form(&pp, "q"), head_form(&pp, "p"));
+    }
+
+    #[test]
+    fn spanning_equality_between_computed_values_is_a_filter() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl A(x: int32)\n\
+            .decl B(y: int32)\n\
+            .decl Out(x: int32, y: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, y) :- A(x), B(y), x + 1 = y + 2.\n",
+        );
+
+        assert_eq!(
+            head_form(&pp, "out"),
+            "atoms(a, b) not() eq() where(0.0 + 1 = 1.0 + 2) key() value(0.0, 1.0)"
+        );
+    }
+
+    /// Core folds `A` into `B` and pushdown copies it onto `C`; the head
+    /// form reads `A` once.
+    #[test]
+    fn pushdown_copies_of_a_filter_collapse_into_one_read() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl A(x: int32)\n\
+            .decl B(x: int32, y: int32)\n\
+            .decl C(x: int32, z: int32, v: int32)\n\
+            .decl D(z: int32, w: int32)\n\
+            .decl Out(x: int32, y: int32, z: int32, w: int32, v: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .input B(IO=\"file\", filename=\"B.csv\", delimiter=\",\")\n\
+            .input C(IO=\"file\", filename=\"C.csv\", delimiter=\",\")\n\
+            .input D(IO=\"file\", filename=\"D.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(x, y, z, w, v) :- C(x, z, v), D(z, w), B(x, y), A(x).\n",
+        );
+
+        assert_eq!(
+            head_form(&pp, "out"),
+            "atoms(a, b, c, d) not() eq(0.0 = 1.0 = 2.0; 2.1 = 3.0) where() key() \
+             value(0.0, 1.1, 2.1, 3.1, 2.2)"
+        );
+    }
+
+    /// Two reads of one relation that each keep a column the other drops
+    /// ask for two rows; the head form keeps both reads.
+    #[test]
+    fn self_join_on_different_columns_keeps_both_reads() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .decl A(x: int32, y: int32, z: int32)\n\
+            .decl Out(y: int32, w: int32)\n\
+            .input A(IO=\"file\", filename=\"A.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Out(y, w) :- A(x, y, _), A(x, _, w).\n",
+        );
+
+        assert_eq!(
+            head_form(&pp, "out"),
+            "atoms(a, a) not() eq(0.0 = 1.0) where() key() value(0.1, 1.2)"
+        );
+    }
+
+    /// The tuple projection `c.0` keys the join from the `Mk` side; the
+    /// head spells `v` by the plain column it equals.
+    #[test]
+    fn tuple_projection_key_is_spelled_by_the_column_it_equals() {
+        let pp = ProgramPlanner::analyze(
+            "\
+            .type P = (a: int32, b: int32)\n\
+            .decl Base(a: int32, b: int32)\n\
+            .decl Mk(c: P)\n\
+            .decl Val(v: int32, t: int32)\n\
+            .decl Out(v: int32, t: int32)\n\
+            .input Base(IO=\"file\", filename=\"Base.csv\", delimiter=\",\")\n\
+            .input Val(IO=\"file\", filename=\"Val.csv\", delimiter=\",\")\n\
+            .output Out\n\
+            Mk(c) :- Base(a, b), c = (a, b).\n\
+            Out(v, t) :- Mk(c), Val(v, t), c = (v, w).\n",
+        );
+
+        assert_eq!(
+            head_form(&pp, "out"),
+            "atoms(mk, val) not() eq() where(1.0 = (0.0).0) key() value(1.0, 1.1)"
         );
     }
 }

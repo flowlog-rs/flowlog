@@ -18,6 +18,7 @@ flowlog-profiler.workspace = true
 
 codespan-reporting.workspace = true
 itertools.workspace = true
+rustc-hash.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

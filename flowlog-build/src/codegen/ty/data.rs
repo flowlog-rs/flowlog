@@ -9,7 +9,6 @@
 use flowlog_parser::DataType;
 use flowlog_planner::planner::ArithmeticArgument;
 use flowlog_planner::planner::FactorArgument;
-use flowlog_planner::planner::StratumPlanner;
 use flowlog_planner::planner::TransformationArgument;
 use flowlog_planner::planner::TransformationFlow;
 use proc_macro2::TokenStream;
@@ -65,32 +64,18 @@ impl CodeGen {
     }
 
     /// Propagate types through `flow` and register the output shape
-    /// under `output_fingerprint` (or its IDB fingerprint, if this head
-    /// feeds one).
+    /// under `output_fingerprint`, the collection's own identity: any
+    /// transformation may read it, a shared one included. Relations are
+    /// seeded from their `.decl` and never registered here, so a head's
+    /// flow type, which for `count(n)` is the type of `n`, never stands
+    /// in for the declared type of the relation it feeds.
     pub(crate) fn record_transformation_output_type(
         &mut self,
         left_fingerprint: u64,
         right_fingerprint: Option<u64>,
         output_fingerprint: u64,
         flow: &TransformationFlow,
-        stratum: &StratumPlanner,
     ) -> Result<(), CodegenError> {
-        let output_fingerprint = stratum
-            .head_to_idb_map()
-            .get(&output_fingerprint)
-            .copied()
-            .unwrap_or(output_fingerprint);
-
-        // IDB relations are seeded from their `.decl` in
-        // `make_global_data_type_map`, and that declared shape is
-        // authoritative. For aggregation rules in particular, the
-        // transformation flow carries the *pre-aggregation* column types
-        // (e.g. `count(n)` where `n: String` flows a `String` value),
-        // which don't match the IDB's `.decl`-declared output type.
-        if self.global_fp_to_type.contains_key(&output_fingerprint) {
-            return Ok(());
-        }
-
         let left_type = self.find_global_data_type(left_fingerprint)?.clone();
         let right_type = right_fingerprint
             .map(|rf| self.find_global_data_type(rf))
@@ -365,26 +350,21 @@ mod tests {
         );
     }
 
-    /// Aggregation rules feed a transformation flow whose column types
-    /// match the *pre-reduce* input (e.g. `count(n: String)` flows a
-    /// `String`), not the IDB's declared output. Inferring from that flow
-    /// would overwrite the authoritative `.decl` shape and break later
-    /// codegen (see `agg_count_string` e2e).
+    /// A head's flow carries the pre-reduce column types, `count(n:
+    /// String)` flows a `String`, so its shape goes under the head's own
+    /// fingerprint and the relation it feeds keeps the shape its `.decl`
+    /// seeded (see `agg_count_string` e2e).
     #[test]
-    fn record_transformation_output_type_preserves_declared_idb_shape() {
+    fn record_transformation_output_type_registers_the_head_not_the_relation() {
         use std::sync::Arc;
 
         use flowlog_planner::planner::Constraints;
 
         let mut cg = make_codegen();
-        // IDB's declared shape: e.g. `DeptHeadcount(d: int32, cnt: int32)`.
+        // The relation's declared shape: `DeptHeadcount(d: int32, cnt: int32)`.
         let declared = (vec![DataType::Int32], vec![DataType::Int32]);
         cg.global_fp_to_type.insert(0x1, declared.clone());
-
-        // Pre-aggregation input: `(d: Int32, n: String)`. If the
-        // short-circuit is removed, the flow below would resolve its
-        // value column as `String` from this input, and overwrite the
-        // declared IDB shape at fp 0x1.
+        // The head's input: `(d: Int32, n: String)`.
         cg.global_fp_to_type
             .insert(0x2, (vec![], vec![DataType::Int32, DataType::String]));
         let flow = TransformationFlow::KVToKV {
@@ -399,11 +379,14 @@ mod tests {
             constraints: Constraints::new(vec![], vec![]),
             compares: vec![],
         };
-        let stratum = StratumPlanner::default();
 
-        cg.record_transformation_output_type(0x2, None, 0x1, &flow, &stratum)
-            .expect("short-circuit on registered output must not error");
+        cg.record_transformation_output_type(0x2, None, 0x3, &flow)
+            .expect("the head's inputs are registered");
 
+        assert_eq!(
+            cg.global_fp_to_type.get(&0x3),
+            Some(&(vec![DataType::Int32], vec![DataType::String]))
+        );
         assert_eq!(cg.global_fp_to_type.get(&0x1), Some(&declared));
     }
 

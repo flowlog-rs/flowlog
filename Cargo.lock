@@ -450,6 +450,7 @@ dependencies = [
  "flowlog-parser",
  "flowlog-profiler",
  "itertools 0.15.0",
+ "rustc-hash",
  "tempfile",
  "thiserror",
  "tracing",

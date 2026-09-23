@@ -318,7 +318,7 @@ impl TransformationFlow {
                                     })
                                 })
                                 .collect();
-                            ArithmeticArgument::from_arithmeticpos(a, &var_args)
+                            ArithmeticArgument::from_arithmetic_pos_in_order(a, &var_args)
                         })
                         .collect()
                 };
