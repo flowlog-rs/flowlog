@@ -181,9 +181,9 @@ the geometric-mean FlowLog/Soufflé peak-RSS ratio is **2.20×**.
 
 Benchmark suite: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
 
-[benchmark-table]: https://github.com/flowlog-rs/flowlog-bench/blob/129a72fd17ee39ed7c038f55bd03dc0570185170/docs/benchmarks/2026-09-24/README.md#complete-results-table
-[benchmark-csv]: https://github.com/flowlog-rs/flowlog-bench/blob/129a72fd17ee39ed7c038f55bd03dc0570185170/docs/benchmarks/2026-09-24/all_results.csv
-[benchmark-report]: https://github.com/flowlog-rs/flowlog-bench/blob/129a72fd17ee39ed7c038f55bd03dc0570185170/docs/benchmarks/2026-09-24/README.md
+[benchmark-table]: https://github.com/flowlog-rs/flowlog-bench/blob/334c3760c864df6893f675c828eb7d991b357e4b/docs/benchmarks/2026-09-24/README.md#complete-results-table
+[benchmark-csv]: https://github.com/flowlog-rs/flowlog-bench/blob/334c3760c864df6893f675c828eb7d991b357e4b/docs/benchmarks/2026-09-24/all_results.csv
+[benchmark-report]: https://github.com/flowlog-rs/flowlog-bench/blob/334c3760c864df6893f675c828eb7d991b357e4b/docs/benchmarks/2026-09-24/README.md
 
 ## Publication
 
