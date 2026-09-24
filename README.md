@@ -15,7 +15,7 @@
 
 > **status** · under active development; interfaces may change.
 
-FlowLog compiles Datalog into efficient and scalable [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow) rust executables.</h3> As such, FlowLog has first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to it runs **~3.6× faster than Soufflé** across 20 DaCapo programs (32 threads).
+FlowLog compiles Datalog into efficient and scalable [Differential Dataflow](https://github.com/TimelyDataflow/differential-dataflow) rust executables.</h3> As such, FlowLog has first-class **incremental maintenance** — outputs update without recomputation as facts change. On DOOP points-to, [batch execution is **3.68× faster than Soufflé**](#benchmarks) across 20 DaCapo datasets (geometric mean, 32 threads).
 
 ## Quick Start
 
@@ -131,23 +131,59 @@ $ flowlog-compiler <PROGRAM> [OPTIONS]
 
 A green oracle run is the definition of correct — see [`tests/README.md`](tests/README.md) for per-suite contracts and recipes.
 
-### vs Soufflé — DOOP
+## Benchmarks
 
-On DOOP **default** points-to analysis (`doop/default.dl`) across all 20 [DaCapo](https://www.dacapobench.org/) programs at **32 threads** (FlowLog `-w 32`, Soufflé `-j 32`). The Soufflé program is the same `default.dl` of identical rules and join order; all 20 produce **identical `VarPointsTo`**.
+Measured September 24, 2026 with **FlowLog compiler 0.7.0 / runtime 0.5.0
+(batch mode)** and **Soufflé 2.5**, using the same **32 physical cores** on an
+AMD EPYC 7763 host. FlowLog was compiled with `--mode batch --str-intern` and
+run with `-w 32`; Soufflé was **both compiled and run with `-j 32`**.
+
+Times are median whole-process wall times over three runs per engine and
+case, **including input loading and excluding compilation**. Profiling was
+disabled. Memory is the median of per-run peak RSS.
+
+| Scope | Comparisons | FlowLog faster | Geometric-mean speedup |
+|---|---:|---:|---:|
+| All supported cases | 50 | 49/50 | **5.78×** |
+| DOOP | 20 | 20/20 | **3.68×** |
+
+Speedup is Soufflé wall time / FlowLog wall time. All **300 executions**
+completed successfully. Soufflé used less peak memory in all 50 cases;
+the geometric-mean FlowLog/Soufflé peak-RSS ratio was **1.88×**.
+Five CC/SSSP cases without Soufflé translations were excluded.
+
+**[Full results table: all 55 case outcomes, including Jython][benchmark-table]**
+· [Results CSV][benchmark-csv] · [Methodology, all plots, and reproduction][benchmark-report].
+
+**Row-count parity:** every shared reported relation count matched across
+engines and all three runs. This is **not tuple-by-tuple verification**.
+CSPA's `MemoryAlias` and `ValueAlias` counts were reported only by FlowLog
+and were not cross-checked.
+
+### DOOP default points-to
+
+The `doop/default.dl` analysis covers all **20 [DaCapo](https://www.dacapobench.org/)
+datasets, including Jython**. All **26 shared reported relation counts**,
+including `VarPointsTo`, matched for every dataset.
 
 <p align="center">
   <img src="docs/doop-time.png" alt="DOOP run time — FlowLog vs Soufflé" width="820"/>
 </p>
 
-**Run time** (run only; one-off compile excluded) — FlowLog is faster on **20/20**, geomean **3.62×** (range 1.41–6.07×).
+**Run time** — FlowLog's speedup ranges from **1.45× to 5.50×**.
 
 <p align="center">
   <img src="docs/doop-memory.png" alt="DOOP peak memory — FlowLog vs Soufflé" width="820"/>
 </p>
 
-**Peak memory** — Soufflé is leaner: Soufflé/FlowLog geomean **0.43×** (FlowLog trades memory for speed).
+**Peak memory** — Soufflé is leaner on all 20 datasets:
+the geometric-mean FlowLog/Soufflé peak-RSS ratio is **2.20×**.
 
 Benchmark suite: [`flowlog-bench`](https://github.com/flowlog-rs/flowlog-bench).
+
+[benchmark-table]: https://github.com/flowlog-rs/flowlog-bench/blob/129a72fd17ee39ed7c038f55bd03dc0570185170/docs/benchmarks/2026-09-24/README.md#complete-results-table
+[benchmark-csv]: https://github.com/flowlog-rs/flowlog-bench/blob/129a72fd17ee39ed7c038f55bd03dc0570185170/docs/benchmarks/2026-09-24/all_results.csv
+[benchmark-report]: https://github.com/flowlog-rs/flowlog-bench/blob/129a72fd17ee39ed7c038f55bd03dc0570185170/docs/benchmarks/2026-09-24/README.md
 
 ## Publication
 
