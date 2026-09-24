@@ -369,7 +369,7 @@ checksum = "ef25905e51abafe4dcea6c15fec58c57b601cdbd0ee53d22ea1d3016c587d39b"
 
 [[package]]
 name = "flowlog-build"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "clap",
  "codespan-reporting",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-common"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "codespan-reporting",
@@ -405,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-compiler"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "codespan-reporting",
@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-parser"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "codespan-reporting",
  "educe",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-planner"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codespan-reporting",
  "flowlog-common",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-profiler"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "flowlog-common",
  "rstest",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "flowlog-runtime"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "differential-dataflow",
