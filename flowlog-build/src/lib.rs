@@ -91,6 +91,7 @@ pub fn compile<P: AsRef<Path>>(program_path: P) -> io::Result<()> {
 #[derive(Default)]
 pub struct Builder {
     pub(crate) string_intern: bool,
+    pub(crate) assume_set_inputs: bool,
     pub(crate) mode: ExecutionMode,
     pub(crate) profile: bool,
     pub(crate) include_dirs: Vec<PathBuf>,
@@ -103,6 +104,18 @@ impl Builder {
     /// interning is applied at `insert_<rel>` / drain.
     pub fn string_intern(mut self, enabled: bool) -> Self {
         self.string_intern = enabled;
+        self
+    }
+
+    /// Skip input deduplication when the caller guarantees set inputs.
+    /// Defaults to `false`.
+    ///
+    /// Batch inputs must contain no duplicate tuples. Incremental inputs
+    /// must keep each tuple's accumulated weight at zero or one across
+    /// committed epochs, including updates from all workers. Violating
+    /// these requirements can produce incorrect results.
+    pub fn assume_set_inputs(mut self, enabled: bool) -> Self {
+        self.assume_set_inputs = enabled;
         self
     }
 

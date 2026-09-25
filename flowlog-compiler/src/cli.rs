@@ -50,6 +50,13 @@ pub struct Cli {
     #[arg(long)]
     pub str_intern: bool,
 
+    /// Skip input deduplication. Requires duplicate-free batch inputs;
+    /// incremental updates must keep each tuple's accumulated weight at
+    /// zero or one after every commit across all workers. Otherwise,
+    /// results may be incorrect. Disabled by default.
+    #[arg(long)]
+    pub assume_set_inputs: bool,
+
     /// Path to a Rust source file containing UDF implementations.
     /// Functions declared with `.extern fn` in the Datalog
     /// program must be defined in this file.
@@ -87,6 +94,7 @@ impl Cli {
             mode: self.mode,
             profile: self.profile,
             str_intern: self.str_intern,
+            assume_set_inputs: self.assume_set_inputs,
             udf_file: self.udf_file.clone(),
             include_dirs: self.include_dirs.clone(),
             output_to_stdout: self.output_dir.as_deref() == Some("-"),

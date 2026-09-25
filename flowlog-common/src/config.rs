@@ -28,6 +28,12 @@ pub struct Config {
     pub profile: bool,
     /// Intern string columns as compact integer keys at load time.
     pub str_intern: bool,
+    /// Skip input deduplication. Defaults to `false`.
+    ///
+    /// Requires duplicate-free batch inputs and incremental inputs whose
+    /// accumulated tuple weights stay at zero or one at each committed
+    /// epoch across all workers. Otherwise, results may be incorrect.
+    pub assume_set_inputs: bool,
     /// Path to a Rust source file containing UDF implementations.
     pub udf_file: Option<String>,
     /// Extra search directories for `.include` directives.

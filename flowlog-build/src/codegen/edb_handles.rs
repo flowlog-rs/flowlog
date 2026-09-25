@@ -12,9 +12,8 @@ use crate::codegen::CodeGen;
 use crate::codegen::ty::data::data_type_tokens;
 
 impl CodeGen {
-    /// Generate per-EDB declarations as `(handle, collection)` pairs,
-    /// set-normalizing the input so duplicate facts cannot inflate
-    /// multiplicities:
+    /// Generate per-EDB declarations as `(handle, collection)` pairs.
+    /// Deduplicate inputs unless `assume_set_inputs` is enabled:
     ///
     /// ```ignore
     /// let (h_<rel>, <rel>) = scope.new_collection::<_, Diff>();
@@ -43,7 +42,6 @@ impl CodeGen {
             self.features.mark_ordered_float();
         }
 
-        // Record the enter-inputs block when profiling is on
         with_plan_graph(plan_graph, |plan_graph| {
             plan_graph.update_input_block();
         });
@@ -52,26 +50,28 @@ impl CodeGen {
         edbs.iter()
             .map(|rel| {
                 let handle = format_ident!("h{}", rel.name());
-                // The collection binding comes from the global ident map —
-                // never re-derived from the name — so it always matches the
-                // ident every downstream flow resolves via fingerprint.
+                // Resolve by fingerprint so downstream flows share this binding.
                 let coll = self.find_global_ident(rel.fingerprint());
 
-                // Record the source-file input and dedup operators when profiling is on
                 with_plan_graph(plan_graph, |plan_graph| {
                     plan_graph.input_edb_operator(rel.raw_name().to_string(), coll.to_string());
-                    plan_graph.input_dedup_operator(
-                        rel.raw_name().to_string(),
-                        coll.to_string(),
-                        coll.to_string(),
-                    );
+                    if !self.config.assume_set_inputs {
+                        plan_graph.input_dedup_operator(
+                            rel.raw_name().to_string(),
+                            coll.to_string(),
+                            coll.to_string(),
+                        );
+                    }
                 });
 
                 let ty = data_type_tokens(&rel.data_type(), str_intern);
+                let normalize = (!self.config.assume_set_inputs).then(|| {
+                    quote! { let #coll = ::flowlog_runtime::operators::flowlog_dedup(#coll); }
+                });
 
                 quote! {
                     let (#handle, #coll) = scope.new_collection::<#ty, Diff>();
-                    let #coll = ::flowlog_runtime::operators::flowlog_dedup(#coll);
+                    #normalize
                 }
             })
             .collect()
