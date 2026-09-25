@@ -81,7 +81,7 @@ impl Compiler {
 // =========================================================================
 
 // The release PR synchronizes this requirement with its runtime package.
-const RUNTIME_VERSION: &str = "0.5.0";
+const RUNTIME_VERSION: &str = "0.5.1";
 
 /// Render the emitted crate's `Cargo.toml`.
 ///
