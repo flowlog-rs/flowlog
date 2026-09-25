@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.7.0...flowlog-compiler-v0.7.1) - 2026-09-25
+
+### Added
+
+- bitwise operators and power in arithmetic expressions ([#381](https://github.com/flowlog-rs/flowlog/pull/381))
+- *(parser)* let a component inherit from several parents ([#383](https://github.com/flowlog-rs/flowlog/pull/383))
+- *(parser)* hexadecimal literals and native-only `.plan` ([#379](https://github.com/flowlog-rs/flowlog/pull/379))
+
 ## [0.7.0](https://github.com/flowlog-rs/flowlog/compare/flowlog-compiler-v0.6.0...flowlog-compiler-v0.7.0) - 2026-09-23
 
 ### Added
