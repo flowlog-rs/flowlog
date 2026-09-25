@@ -1,0 +1,55 @@
+// Incremental aggregates over rows with several derivations: a row counts
+// once and stays until its last derivation is retracted. Derivations come
+// from two rules (Union*) or from projecting out a witness column (Proj*,
+// ExprMax, GlobalCount).
+//   t1  load; (1,10) has two derivations in both shapes
+//   t2  retract one derivation of each (1,10); add Primary(2,8)
+//   t3  retract the remaining derivations of (1,10)
+//   t4  add (1,10) back with two derivations in one transaction
+//   t5  retract every derivation in group 2
+//   t6  retract every Witness row; the global count returns to 0
+
+.decl Primary(g: int32, v: int32)
+.input Primary(IO="command", delimiter=",")
+
+.decl Secondary(g: int32, v: int32)
+.input Secondary(IO="command", delimiter=",")
+
+.decl Witness(g: int32, v: int32, w: int32)
+.input Witness(IO="command", delimiter=",")
+
+.decl UnionCount(g: int32, n: int32)
+UnionCount(g, count(v)) :- Primary(g, v).
+UnionCount(g, count(v)) :- Secondary(g, v).
+.output UnionCount
+
+.decl UnionSum(g: int32, s: int32)
+UnionSum(g, sum(v)) :- Primary(g, v).
+UnionSum(g, sum(v)) :- Secondary(g, v).
+.output UnionSum
+
+.decl UnionMin(g: int32, m: int32)
+UnionMin(g, min(v)) :- Primary(g, v).
+UnionMin(g, min(v)) :- Secondary(g, v).
+.output UnionMin
+
+.decl UnionMax(g: int32, m: int32)
+UnionMax(g, max(v)) :- Primary(g, v).
+UnionMax(g, max(v)) :- Secondary(g, v).
+.output UnionMax
+
+.decl ProjCount(g: int32, n: int32)
+ProjCount(g, count(v)) :- Witness(g, v, _).
+.output ProjCount
+
+.decl ProjSum(g: int32, s: int32)
+ProjSum(g, sum(v)) :- Witness(g, v, _).
+.output ProjSum
+
+.decl ExprMax(g: int32, m: int32)
+ExprMax(g, max(v + w)) :- Witness(g, v, w).
+.output ExprMax
+
+.decl GlobalCount(n: int32)
+GlobalCount(count(v)) :- Witness(_, v, _).
+.output GlobalCount

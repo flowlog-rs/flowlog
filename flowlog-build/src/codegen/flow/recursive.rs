@@ -22,6 +22,7 @@ use crate::codegen::aggregation::aggregation_empty_key;
 use crate::codegen::aggregation::aggregation_kind;
 use crate::codegen::aggregation::aggregation_merge;
 use crate::codegen::aggregation::aggregation_split;
+use crate::codegen::aggregation::union_needs_dedup;
 
 // =========================================================================
 // Recursive Flow Generation
@@ -168,8 +169,9 @@ impl CodeGen {
         (stmts, bindings, recursive_arranged)
     }
 
-    /// For each recursive IDB: union its contributing heads, dedup, then
-    /// optionally apply aggregation. Produces bindings for feedback.
+    /// For each recursive IDB: union its contributing heads, dedup where
+    /// `union_needs_dedup` requires, then optionally apply aggregation.
+    /// Produces bindings for feedback.
     fn collect_unions(
         &mut self,
         idb_to_heads_map: &HashMap<u64, Vec<u64>>,
@@ -209,28 +211,43 @@ impl CodeGen {
             };
 
             // Dedup retains history at the loop's timestamp, so repeated
-            // derivations cannot keep feedback alive.
-            let mut block = quote! {
-                let #next_ident =
-                    ::flowlog_runtime::operators::flowlog_dedup(#union_expr);
+            // derivations cannot keep feedback alive. An aggregated relation
+            // feeds back its reduce output instead of this union.
+            let aggregation = idb_to_aggregation_map.get(idb_fp);
+            let dedup = union_needs_dedup(self.config.mode(), aggregation.is_some());
+            let union = if dedup {
+                quote! { ::flowlog_runtime::operators::flowlog_dedup(#union_expr) }
+            } else {
+                union_expr
             };
+            let mut block = quote! { let #next_ident = #union; };
 
             with_plan_graph(plan_graph, |plan_graph| {
+                let name = self.display_name(*idb_fp);
                 let source_names: Vec<String> = sources.iter().map(|id| id.to_string()).collect();
                 let concat_count = if tail.is_empty() { 0 } else { 1 };
-                plan_graph.concat_dedup_operator(
-                    self.display_name(*idb_fp),
-                    source_names,
-                    next_ident.to_string(),
-                    concat_count,
-                    true,
-                );
+                if dedup {
+                    plan_graph.concat_dedup_operator(
+                        name,
+                        source_names,
+                        next_ident.to_string(),
+                        concat_count,
+                        true,
+                    );
+                } else {
+                    plan_graph.concat_operator(
+                        name,
+                        source_names,
+                        next_ident.to_string(),
+                        concat_count,
+                    );
+                }
             });
 
             // ----------------------------------------------------------------
             // Aggregation
             // ----------------------------------------------------------------
-            if let Some((agg_op, agg_pos, agg_arity)) = idb_to_aggregation_map.get(idb_fp) {
+            if let Some((agg_op, agg_pos, agg_arity)) = aggregation {
                 let output_name = self.display_name(*idb_fp);
                 let agg_type = self.agg_column_type(*idb_fp, *agg_pos)?;
                 let kind = aggregation_kind(*agg_op);

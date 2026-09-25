@@ -4,8 +4,8 @@
 //!   recursive stratum can also carry these when the planner factors
 //!   non-recursive work out of a fixpoint.
 //! - **Post flows.** Final output processing after core flows: union the
-//!   heads producing each IDB, dedup, and apply aggregation. Emitted only
-//!   for non-recursive strata.
+//!   heads producing each IDB, dedup where `union_needs_dedup` requires,
+//!   and apply aggregation. Emitted only for non-recursive strata.
 
 use std::collections::HashSet;
 use std::mem;
@@ -27,6 +27,7 @@ use crate::codegen::aggregation::aggregation_empty_key;
 use crate::codegen::aggregation::aggregation_kind;
 use crate::codegen::aggregation::aggregation_merge;
 use crate::codegen::aggregation::aggregation_split;
+use crate::codegen::aggregation::union_needs_dedup;
 
 // =========================================================================
 // Non-Recursive Flow Generation
@@ -59,8 +60,8 @@ impl CodeGen {
         Ok(flows)
     }
 
-    /// Emit per-IDB post-processing: union the contributing heads, dedup,
-    /// and apply aggregation.
+    /// Emit per-IDB post-processing: union the contributing heads, dedup
+    /// where `union_needs_dedup` requires, and apply aggregation.
     pub(crate) fn gen_non_recursive_post_flows(
         &mut self,
         bound_fps: &HashSet<u64>,
@@ -93,22 +94,33 @@ impl CodeGen {
                 )
             };
 
+            let aggregation = stratum.idb_to_aggregation_map().get(idb_fp);
+            let dedup = union_needs_dedup(self.config.mode(), aggregation.is_some());
+
             with_plan_graph(plan_graph, |plan_graph| {
-                plan_graph.concat_dedup_operator(
-                    self.display_name(*idb_fp),
-                    outs.iter().map(|id| id.to_string()).collect(),
-                    output.to_string(),
-                    concat_count,
-                    false,
-                );
+                let name = self.display_name(*idb_fp);
+                let inputs = outs.iter().map(|id| id.to_string()).collect();
+                if dedup {
+                    plan_graph.concat_dedup_operator(
+                        name,
+                        inputs,
+                        output.to_string(),
+                        concat_count,
+                        false,
+                    );
+                } else {
+                    plan_graph.concat_operator(name, inputs, output.to_string(), concat_count);
+                }
             });
 
-            let mut block = quote! {
-                let #output = ::flowlog_runtime::operators::flowlog_dedup(#concat_expr);
+            let union = if dedup {
+                quote! { ::flowlog_runtime::operators::flowlog_dedup(#concat_expr) }
+            } else {
+                concat_expr
             };
+            let mut block = quote! { let #output = #union; };
 
-            if let Some((agg_op, agg_pos, agg_arity)) = stratum.idb_to_aggregation_map().get(idb_fp)
-            {
+            if let Some((agg_op, agg_pos, agg_arity)) = aggregation {
                 let agg_type = self.agg_column_type(*idb_fp, *agg_pos)?;
                 let kind = aggregation_kind(*agg_op);
                 let split = aggregation_split(*agg_arity, *agg_pos);
