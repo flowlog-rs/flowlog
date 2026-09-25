@@ -555,8 +555,10 @@ comp_decl = {
 // `<T>` or `<T, U>`: names of types this component is parameterized by.
 comp_type_params = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
 
-// `: BaseComp<args>` inherits and splices another component's body.
-comp_supertype = { ":" ~ identifier ~ comp_type_args? }
+// `: BaseComp<args>, Other<args>` inherits and splices the bodies of one
+// or more components, in the order written.
+comp_supertype = { ":" ~ comp_super_ref ~ ("," ~ comp_super_ref)* }
+comp_super_ref = { identifier ~ comp_type_args? }
 
 // `<symbol, NodeId>`: concrete type arguments. `type_ref` so dotted
 // forms like `cfg.Context` work.
