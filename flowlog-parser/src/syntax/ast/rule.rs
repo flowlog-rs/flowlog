@@ -374,10 +374,6 @@ fn parse_plan_indices(node: Node) -> Result<(Span, Vec<usize>), ParseError> {
     let mut raw_indices = Vec::new();
     for child in node.children() {
         match child.rule() {
-            // The optional version index disambiguates the clauses of a
-            // multi-head/multi-body rule; we expand those clauses at parse
-            // time, so it has no clause to bind to: parse and discard.
-            Rule::plan_version => continue,
             Rule::plan_index => {
                 let parsed: usize = child
                     .text()
@@ -434,11 +430,13 @@ fn apply_indices_to_rule(
 
 #[cfg(test)]
 mod tests {
+    use pest::Parser as _;
     use rstest::rstest;
 
     use super::Constant;
     use super::*;
     use crate::AggregationOperator;
+    use crate::FlowLogParser;
     use crate::assert_err;
     use crate::ast::Aggregation;
     use crate::ast::Arithmetic;
@@ -762,20 +760,19 @@ mod tests {
         );
     }
 
-    /// Souffle's `.plan N:(...)` form is an alias for the native `.plan (...)`:
-    /// the leading version index is stripped and the permutation applied.
-    #[test]
-    fn plan_souffle_form_applies_permutation() {
-        let rule = parse_rule("h(X) :- a(X), b(X), c(X).\n.plan 1:(3, 1, 2)");
-        let names: Vec<&str> = rule
-            .rhs()
-            .iter()
-            .filter_map(|p| match p {
-                Predicate::PositiveAtom(a) => Some(a.name()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(names, ["c", "a", "b"]);
+    /// A `.plan` is one parenthesized order; a version prefix or a second
+    /// order is a syntax error.
+    #[rstest]
+    #[case::version_prefix(".plan 1:(3, 1, 2)")]
+    #[case::second_order(".plan (3, 1, 2), (2, 3, 1)")]
+    fn plan_with_version_prefix_or_second_order_is_rejected(#[case] plan: &str) {
+        // `main_grammar` demands end of input; a bare `rule` parse would
+        // stop before the hint and leave it unread.
+        let source = format!(
+            ".decl h(x: number) .decl a(x: number) .decl b(x: number) .decl c(x: number) \
+             h(X) :- a(X), b(X), c(X).\n{plan}"
+        );
+        assert!(FlowLogParser::parse(Rule::main_grammar, &source).is_err());
     }
 
     /// Display round-trips the source, joining predicates with `, ` and

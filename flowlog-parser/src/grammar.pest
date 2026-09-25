@@ -129,9 +129,11 @@ constant = { boolean | float | integer | string }
 // Examples: 1.5, -3.14, +0.0
 float = @{ ("+" | "-")? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 
-// Integer with optional sign
-// Examples: 42, -17, +100
-integer = @{ ("+" | "-")? ~ ASCII_DIGIT+ }
+// Integer with optional sign, in decimal or `0x` hexadecimal. Lowering
+// rewrites a hexadecimal spelling to decimal, so the AST holds one notation.
+// Examples: 42, -17, +100, 0xFF, -0x10
+integer = @{ ("+" | "-")? ~ (hex_integer | ASCII_DIGIT+) }
+hex_integer = _{ "0x" ~ ASCII_HEX_DIGIT+ }
 
 // String literal in Rust syntax: quoted (Rust's escape alphabet) or raw
 // (r"..." / r#"..."#, no escapes). Decoded and validated by
@@ -445,21 +447,11 @@ rule = { rule_heads ~ ":-" ~ rule_bodies ~ "." ~ plan_directive? }
 // positive atoms. Applied at parse time by permuting the rule's RHS, so
 // downstream the source order is the plan order.
 //
-// An optional `<plan_version> :` prefix is accepted for Souffle
-// compatibility. Souffle uses the version to disambiguate clauses in a
-// multi-headed/multi-bodied rule; FlowLog already expands those clauses
-// during parsing, so the prefix is parsed and discarded: the
-// permutation is then applied identically to the native form.
-//
-// Examples:
+// Example:
 //   A(x,z) :- B(x,y), C(y,z), D(z,w).
-//   .plan (3, 1, 2)         // native form
-//   .plan 1:(3, 1, 2)       // Souffle form, same effect
-plan_directive = {
-    ".plan" ~ (plan_version ~ ":")? ~ "(" ~ plan_index ~ ("," ~ plan_index)* ~ ")"
-}
+//   .plan (3, 1, 2)
+plan_directive = { ".plan" ~ "(" ~ plan_index ~ ("," ~ plan_index)* ~ ")" }
 plan_index = @{ ASCII_DIGIT+ }
-plan_version = @{ ASCII_DIGIT+ }
 
 // One or more commas-separated heads
 rule_heads = { head ~ ("," ~ head)* }

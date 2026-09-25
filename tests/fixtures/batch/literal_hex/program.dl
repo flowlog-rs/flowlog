@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : literal_hex
+// Feature : `0x` integer literals in body comparisons and head arithmetic
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: uint64, b: int32)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(a: uint64, next: uint64, b: int32)
+Out(a, a + 0x10, b) :- Data(a, b), a >= 0x100, b != -0x1.
+.output Out
