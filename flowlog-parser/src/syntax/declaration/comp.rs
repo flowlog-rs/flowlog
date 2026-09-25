@@ -21,12 +21,14 @@ use crate::error::grammar_bug;
 // CompDecl
 // =============================================================================
 
-/// `.comp Name<T1, T2, ...> [: Super<args>] { body... }`.
+/// `.comp Name<T1, T2, ...> [: Super<args>, ...] { body... }`.
 #[derive(Debug, Clone)]
 pub(crate) struct CompDecl {
     pub(crate) name: String,
     pub(crate) type_params: Vec<String>,
-    pub(crate) supertype: Option<SuperRef>,
+    /// Inherited components in the order written; each body is spliced
+    /// before this component's own.
+    pub(crate) supertypes: Vec<SuperRef>,
     pub(crate) body: Vec<RawItem>,
     pub(crate) span: Span,
 }
@@ -41,7 +43,7 @@ impl CompDecl {
         let name = children.next_any("name")?.text().to_string();
 
         let mut type_params = Vec::new();
-        let mut supertype: Option<SuperRef> = None;
+        let mut supertypes = Vec::new();
         let mut body: Vec<RawItem> = Vec::new();
 
         for child in children {
@@ -50,7 +52,9 @@ impl CompDecl {
                     type_params.extend(child.children().map(|p| p.text().to_string()));
                 }
                 Rule::comp_supertype => {
-                    supertype = Some(SuperRef::from_parsed_rule(child)?);
+                    for super_ref in child.children() {
+                        supertypes.push(SuperRef::from_parsed_rule(super_ref)?);
+                    }
                 }
                 // A body rule carries its own trailing `.plan`, applied when
                 // `RawItem::from_parsed_rule` expands the rule.
@@ -69,7 +73,7 @@ impl CompDecl {
         Ok(Self {
             name,
             type_params,
-            supertype,
+            supertypes,
             body,
             span,
         })
@@ -80,7 +84,7 @@ impl CompDecl {
 // SuperRef
 // =============================================================================
 
-/// `: Base<arg1, arg2>` on a `.comp` header.
+/// One `Base<arg1, arg2>` in the supertype list of a `.comp` header.
 #[derive(Debug, Clone)]
 pub(crate) struct SuperRef {
     pub(crate) name: String,
@@ -93,7 +97,7 @@ pub(crate) struct SuperRef {
 
 impl SuperRef {
     fn from_parsed_rule(node: Node) -> Result<Self, ParseError> {
-        debug_assert_eq!(node.rule(), Rule::comp_supertype);
+        debug_assert_eq!(node.rule(), Rule::comp_super_ref);
         let span = node.span();
         let mut children = node.children();
         let name = children.next_any("name")?.text().to_string();

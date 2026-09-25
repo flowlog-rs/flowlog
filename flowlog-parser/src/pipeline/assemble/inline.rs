@@ -376,8 +376,10 @@ fn resolve_inheritance(
         });
     }
 
+    // Parents splice in the order written, so a later parent's rules
+    // follow an earlier one's exactly as if the bodies were concatenated.
     let mut inherited = Vec::new();
-    if let Some(super_ref) = &comp.supertype {
+    for super_ref in &comp.supertypes {
         let SuperRef {
             name: super_name,
             args: super_args,
@@ -741,12 +743,20 @@ mod tests {
         }
     }
 
-    fn comp(name: &str, type_params: &[&str], supertype: Option<SuperRef>) -> CompDecl {
+    fn comp(name: &str, type_params: &[&str], supertypes: Vec<SuperRef>) -> CompDecl {
         CompDecl {
             name: name.to_string(),
             type_params: type_params.iter().map(|s| (*s).to_string()).collect(),
-            supertype,
+            supertypes,
             body: vec![],
+            span: Span::DUMMY,
+        }
+    }
+
+    fn sref(name: &str, args: &[&str]) -> SuperRef {
+        SuperRef {
+            name: name.to_string(),
+            args: args.iter().map(|s| (*s).to_string()).collect(),
             span: Span::DUMMY,
         }
     }
@@ -767,7 +777,7 @@ mod tests {
 
     #[test]
     fn inline_with_wrong_type_arg_count_is_rejected() {
-        let comps = HashMap::from([("Pair".to_string(), comp("Pair", &["T"], None))]);
+        let comps = HashMap::from([("Pair".to_string(), comp("Pair", &["T"], vec![]))]);
         assert_err!(
             inline(init("p", "Pair", &["number", "symbol"]), comps),
             ParseError::ComponentArityMismatch { .. }
@@ -776,19 +786,99 @@ mod tests {
 
     #[test]
     fn inline_with_circular_inheritance_is_rejected() {
-        let sref = |n: &str| SuperRef {
-            name: n.to_string(),
-            args: vec![],
-            span: Span::DUMMY,
-        };
         let comps = HashMap::from([
-            ("A".to_string(), comp("A", &[], Some(sref("B")))),
-            ("B".to_string(), comp("B", &[], Some(sref("A")))),
+            ("A".to_string(), comp("A", &[], vec![sref("B", &[])])),
+            ("B".to_string(), comp("B", &[], vec![sref("A", &[])])),
         ]);
         assert_err!(
             inline(init("c", "A", &[]), comps),
             ParseError::CircularInheritance { .. }
         );
+    }
+
+    /// A cycle through the second parent is caught the same as through
+    /// the first.
+    #[test]
+    fn inline_with_circular_inheritance_via_second_parent_is_rejected() {
+        let comps = HashMap::from([
+            ("Leaf".to_string(), comp("Leaf", &[], vec![])),
+            (
+                "A".to_string(),
+                comp("A", &[], vec![sref("Leaf", &[]), sref("B", &[])]),
+            ),
+            ("B".to_string(), comp("B", &[], vec![sref("A", &[])])),
+        ]);
+        assert_err!(
+            inline(init("c", "A", &[]), comps),
+            ParseError::CircularInheritance { .. }
+        );
+    }
+
+    /// Each parent binds its own type arguments: `Left<number>` and
+    /// `Right<symbol>` splice into one instance with different column
+    /// types.
+    #[test]
+    fn each_parent_binds_its_own_type_arguments() {
+        let src = "
+            .comp Left<T> { .decl L(x: T) }
+            .comp Right<U> { .decl R(x: U) }
+            .comp Both : Left<number>, Right<symbol> { .decl B(x: number) }
+            .init both = Both
+        ";
+        let program = assembled(src).expect("assembles");
+        assert_eq!(
+            find_relation(&program, "both\u{b7}l").data_type(),
+            vec![DataType::Int32]
+        );
+        assert_eq!(
+            find_relation(&program, "both\u{b7}r").data_type(),
+            vec![DataType::String]
+        );
+        assert_eq!(
+            find_relation(&program, "both\u{b7}b").data_type(),
+            vec![DataType::Int32]
+        );
+    }
+
+    /// A relation declared by two parents is a redefinition, as in
+    /// Souffle, not a silent merge.
+    #[test]
+    fn two_parents_declaring_the_same_relation_are_rejected() {
+        let src = "
+            .comp Left { .decl Foo(x: number) }
+            .comp Right { .decl Foo(x: number) }
+            .comp Both : Left, Right { .decl B(x: number) }
+            .init both = Both
+        ";
+        assert_err!(assembled(src), ParseError::DuplicateDecl { .. });
+    }
+
+    /// `.override` reaches a relation declared by the second parent, and
+    /// leaves the first parent's rules alone.
+    #[test]
+    fn override_reaches_the_second_parents_rules() {
+        let src = "
+            .decl Src(x: number)
+            .decl Other(x: number)
+            .comp Left { .decl Keep(x: number)  Keep(x) :- Src(x). }
+            .comp Right { .decl Foo(x: number) overridable  Foo(x) :- Src(x). }
+            .comp Both : Left, Right {
+              .override Foo
+              Foo(x) :- Other(x).
+            }
+            .init both = Both
+        ";
+        let program = assembled(src).expect("assembles");
+        let bodies_of = |head: &str| -> Vec<Vec<&str>> {
+            program
+                .rules()
+                .iter()
+                .filter(|r| r.head().name() == head)
+                .map(|r| r.rhs().iter().map(|p| p.name()).collect())
+                .collect()
+        };
+        assert_eq!(bodies_of("both\u{b7}foo"), vec![vec!["other"]]);
+        assert_eq!(bodies_of("both\u{b7}keep"), vec![vec!["src"]]);
     }
 
     /// A rule inside a comp body referencing `cfg.X`, where `cfg` is neither a

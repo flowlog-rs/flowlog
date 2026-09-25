@@ -1,0 +1,32 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : comp_multi_inheritance
+// Feature : `.comp C : A<T>, B<U>` splices both parents' bodies, in order,
+//           with separately resolved type arguments
+// ════════════════════════════════════════════════════════════════════════════
+
+.comp Ids<T> {
+  .decl Id(x: T)
+  Id(x) :- IdSource(x).
+}
+
+.comp Names<T> {
+  .decl Name(x: T)
+  Name(x) :- NameSource(x).
+}
+
+.comp Both : Ids<number>, Names<symbol> {
+  .decl Pair(id: number, name: symbol)
+  Pair(i, n) :- Id(i), Name(n).
+}
+
+.decl IdSource(x: number)
+.input IdSource(IO="file", filename="IdSource.csv", delimiter=",")
+
+.decl NameSource(x: symbol)
+.input NameSource(IO="file", filename="NameSource.csv", delimiter=",")
+
+.init both = Both
+
+.decl Result(id: number, name: symbol)
+Result(i, n) :- both.Pair(i, n).
+.output Result(order_by="id, name")
