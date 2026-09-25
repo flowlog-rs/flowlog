@@ -1,0 +1,38 @@
+begin
+put primary 1,10 +1
+put primary 1,20 +1
+put primary 2,5 +1
+put secondary 1,10 +1
+put secondary 2,7 +1
+put witness 1,10,1 +1
+put witness 1,10,2 +1
+put witness 1,30,1 +1
+put witness 2,4,9 +1
+commit
+begin
+put primary 1,10 -1
+put witness 1,10,1 -1
+put primary 2,8 +1
+commit
+begin
+put secondary 1,10 -1
+put witness 1,10,2 -1
+commit
+begin
+put primary 1,10 +1
+put secondary 1,10 +1
+put witness 1,10,5 +1
+put witness 1,10,6 +1
+commit
+begin
+put primary 2,5 -1
+put primary 2,8 -1
+put secondary 2,7 -1
+put witness 2,4,9 -1
+commit
+begin
+put witness 1,30,1 -1
+put witness 1,10,5 -1
+put witness 1,10,6 -1
+commit
+quit

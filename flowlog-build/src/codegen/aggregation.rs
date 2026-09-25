@@ -5,7 +5,10 @@
 //! column and put its result back. [`aggregation_empty_key`] identifies a
 //! group that exists without input. The runtime owns accumulation and
 //! decides whether that group has a defined empty result.
+//! [`union_needs_dedup`] decides whether a relation's union of rule heads
+//! is deduplicated before an aggregate reads it.
 
+use flowlog_common::ExecutionMode;
 use flowlog_parser::AggregationOperator;
 use flowlog_parser::DataType;
 use proc_macro2::TokenStream;
@@ -40,6 +43,21 @@ pub(super) fn aggregation_empty_key(arity: usize) -> TokenStream {
         quote! { Some(()) }
     } else {
         quote! { None }
+    }
+}
+
+/// Returns `true` if a relation's union of rule heads goes through
+/// `flowlog_dedup` before use.
+///
+/// An incremental aggregate reads the union directly. Its `i32` reduce sees
+/// each distinct row once, with the number of derivations as its count, and
+/// uses the row while that count is positive: the rows dedup would keep. A
+/// batch reduce receives `Present` rows, which carry no count, so only
+/// dedup keeps a repeated derivation from contributing twice.
+pub(super) fn union_needs_dedup(mode: ExecutionMode, aggregated: bool) -> bool {
+    match mode {
+        ExecutionMode::Batch => true,
+        ExecutionMode::Inc => !aggregated,
     }
 }
 
@@ -124,6 +142,19 @@ mod tests {
 
     fn normalized(tokens: TokenStream) -> String {
         tokens.to_string().split_whitespace().collect()
+    }
+
+    #[rstest]
+    #[case(ExecutionMode::Batch, false, true)]
+    #[case(ExecutionMode::Batch, true, true)]
+    #[case(ExecutionMode::Inc, false, true)]
+    #[case(ExecutionMode::Inc, true, false)]
+    fn only_incremental_aggregates_read_their_union_without_dedup(
+        #[case] mode: ExecutionMode,
+        #[case] aggregated: bool,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(union_needs_dedup(mode, aggregated), expected);
     }
 
     /// `count` and `sum` share the split: `count` ignores the value, but the

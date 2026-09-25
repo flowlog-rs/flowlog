@@ -43,10 +43,12 @@ This is a set of key/value pairs: the rows of a collection.
   producer's output column `p`, key columns first. Codegen relies on the
   same invariant when it indexes `KV` and `Jn` arguments.
 - **(P2) Rows are a set.** Codegen dedups each EDB as it is read and each
-  IDB once its rules' heads are unioned, before any aggregate sees it, so
-  a multiplicity inside a rule is a count of derivations that the next
-  dedup flattens. Row-set equality is therefore the right notion for
-  substituting one collection for another.
+  IDB once its rules' heads are unioned, so a multiplicity inside a rule
+  is a count of derivations that the next dedup flattens. An incremental
+  aggregate reads its union without that dedup and flattens the count
+  itself: it uses a row once while the row's count is positive. Row-set
+  equality is therefore the right notion for substituting one collection
+  for another.
 - **(P3) Expressions are pure.** A function call denotes a deterministic
   function of its arguments.
 - **(P4) One database.** Both collections are evaluated against the same

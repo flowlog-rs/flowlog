@@ -35,8 +35,10 @@ use timely::progress::Timestamp;
 /// Groups rows by key and reduces each group under `aggregation`.
 ///
 /// `split` produces the group key and aggregated value; `merge` rebuilds
-/// an output row. The pairs produced by `split` must already be deduplicated
-/// so both weight strategies count the same set of contributions.
+/// an output row. Each distinct pair contributes once, whichever weight
+/// strategy runs. An `i32` input may count a pair once per derivation: the
+/// pair contributes while its count is positive. `Present` carries no
+/// count, so its pairs must already be deduplicated.
 ///
 /// `empty_key` names a group that exists even without input. That group
 /// receives the aggregation's empty result when defined; no other absent
@@ -370,6 +372,78 @@ mod tests {
                 vec![(0, 1)],
                 vec![(0, -1)],
                 vec![(9, 1)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                for (value, diff) in updates {
+                    input.update(value, diff);
+                }
+                let next = epoch as u32 + 1;
+                input.advance_to(next);
+                input.flush();
+                worker.step_while(|| probe.less_than(&next));
+            }
+            input.close();
+            while worker.step() {}
+            seen.take()
+        });
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    /// A value counts once while its count is positive, as it would after
+    /// `flowlog_dedup`. Present values by epoch: 0 {}, 1 {7, 8}, 2 {7, 8},
+    /// 3 {7}, 4 {}, 5 {9}.
+    #[rstest]
+    #[case(Count, vec![
+        (0, 0, 1), (0, 1, -1), (0, 4, 1), (0, 5, -1),
+        (1, 3, 1), (1, 4, -1), (1, 5, 1),
+        (2, 1, 1), (2, 3, -1),
+    ])]
+    #[case(Sum, vec![
+        (0, 0, 1), (0, 1, -1), (0, 4, 1), (0, 5, -1),
+        (7, 3, 1), (7, 4, -1), (9, 5, 1),
+        (15, 1, 1), (15, 3, -1),
+    ])]
+    #[case(Min, vec![(7, 1, 1), (7, 4, -1), (9, 5, 1)])]
+    #[case(Max, vec![(7, 3, 1), (7, 4, -1), (8, 1, 1), (8, 3, -1), (9, 5, 1)])]
+    #[case(Avg, vec![(7, 1, 1), (7, 4, -1), (9, 5, 1)])]
+    fn incremental_aggregates_count_each_positive_value_once<A>(
+        #[case] aggregation: A,
+        #[case] expected: Vec<(i64, u32, i32)>,
+    ) where
+        A: Aggregation<i64, i64> + Send + Sync,
+        A::Semiring: ExchangeData,
+    {
+        let mut actual = timely::execute_directly(move |worker| {
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let probe = Handle::new();
+            let mut input = worker.dataflow::<u32, _, _>(|scope| {
+                let (input, rows) = scope.new_collection::<i64, i32>();
+                let seen = Rc::clone(&seen);
+                flowlog_reduce(
+                    rows,
+                    "Reduce",
+                    aggregation,
+                    Some(()),
+                    |value| ((), value),
+                    |(), value| value,
+                )
+                .inspect(move |update| seen.borrow_mut().push(*update))
+                .probe_with(&probe);
+                input
+            });
+            // Epoch 1 derives 7 twice, and epoch 2 drops one derivation,
+            // which changes no answer. Epoch 3 leaves 9 at -1, which is
+            // absent, so epoch 4 has input but no present value.
+            for (epoch, updates) in [
+                vec![],
+                vec![(7, 2), (8, 1)],
+                vec![(7, -1)],
+                vec![(8, -1), (9, -1)],
+                vec![(7, -1)],
+                vec![(9, 2)],
             ]
             .into_iter()
             .enumerate()
