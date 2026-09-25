@@ -846,8 +846,9 @@ impl Diagnostic for ParseError {
             ParseError::ArithmeticOpNotAllowed { span, op, ty } => base
                 .with_labels(labels(*span, format!("`{op}` cannot apply to `{ty:?}`")))
                 .with_notes(vec![
-                    "numeric operators (`+`, `-`, `*`, `/`, `%`) require numeric factors; \
-                     `cat` requires strings; `Bool` has no arithmetic"
+                    "numeric operators (`+`, `-`, `*`, `/`, `%`, `^`) require numeric factors; \
+                     bitwise operators (`band`, `bor`, `bxor`, `bshl`, `bshr`, `bshru`) require \
+                     integers; `cat` requires strings; `Bool` has no arithmetic"
                         .into(),
                 ]),
 

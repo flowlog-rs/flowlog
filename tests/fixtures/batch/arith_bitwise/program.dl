@@ -1,0 +1,32 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Suite   : arith_bitwise
+// Feature : bitwise operators (band, bor, bxor, bshl, bshr, bshru) and power
+//           (^): count masking, sign versus zero fill, and precedence
+//
+// Every cell but one matches Souffle's compiled 64-bit expressions
+// bit for bit. The exception is `2 ^ 64`: Souffle computes `^` in
+// `double` and casts back, which is undefined past the integer range
+// (i64::MIN on x86), while FlowLog wraps exactly and yields 0.
+// ════════════════════════════════════════════════════════════════════════════
+
+.decl Data(a: int64, n: int64)
+.input Data(IO="file", filename="Data.csv", delimiter=",")
+
+.decl Out(a: int64, n: int64, and: int64, or: int64, xor: int64, shl: int64, shr: int64, shru: int64, pow: int64)
+Out(a, n, a band 0xF0, a bor 1, a bxor 0xFF, a bshl n, a bshr n, a bshru n, 2 ^ n) :- Data(a, n).
+.output Out(order_by="a, n")
+
+.decl Wide(a: uint64)
+.input Wide(IO="file", filename="Wide.csv", delimiter=",")
+
+.decl Unsigned(shr: uint64, shru: uint64, pow: uint64)
+Unsigned(a bshr 1, a bshru 1, 2 ^ a) :- Wide(a).
+.output Unsigned
+
+.decl Prec(shift_then_add: int64, power_right: int64, and_then_or: int64, mul_before_shift: int64)
+Prec(1 bshl 2 + 1, 2 ^ 3 ^ 2, 6 band 3 bor 8, 1 bshl 2 * 3) :- Data(a, _), a = 255.
+.output Prec
+
+.decl LowNibbleSet(a: int64)
+LowNibbleSet(a) :- Data(a, _), (a band 0xF) = 0xF.
+.output LowNibbleSet

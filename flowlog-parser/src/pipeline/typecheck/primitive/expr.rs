@@ -186,18 +186,23 @@ fn infer_fn_call(fc: &FnCall, bindings: &Bindings, udfs: &UdfSigs) -> Result<Dat
     Ok(ret_ty.clone())
 }
 
-/// Numeric ops (`+`, `-`, `*`, `/`, `%`) require numeric factors.
-/// String / bool factors can't appear in arithmetic.
+/// Numeric ops (`+`, `-`, `*`, `/`, `%`, `^`) require numeric factors;
+/// the bitwise ops require integer factors. String / bool / tuple
+/// factors can't appear in arithmetic.
 fn check_arith_op(kind: &DataType, op: &ArithmeticOperator, span: Span) -> Result<(), ParseError> {
-    // Arithmetic requires a numeric operand. This rejects `Bool`/`String` and
-    // also tuple operands.
-    if kind.defaulted().is_numeric() {
+    let kind = kind.defaulted();
+    let allowed = if op.is_bitwise() {
+        kind.is_integer()
+    } else {
+        kind.is_numeric()
+    };
+    if allowed {
         Ok(())
     } else {
         Err(ParseError::ArithmeticOpNotAllowed {
             span,
             op: op.clone(),
-            ty: kind.defaulted(),
+            ty: kind,
         })
     }
 }
@@ -343,9 +348,21 @@ mod tests {
         // Positive: numeric with numeric ops is fine.
         assert!(check_arith_op(&Int32, &Plus, span).is_ok());
         assert!(check_arith_op(&Float64, &Multiply, span).is_ok());
+        assert!(check_arith_op(&Float64, &Power, span).is_ok());
+
+        // Positive: bitwise ops on any integer width and signedness.
+        assert!(check_arith_op(&Int32, &BitAnd, span).is_ok());
+        assert!(check_arith_op(&UInt64, &ShiftRightUnsigned, span).is_ok());
+        assert!(check_arith_op(&IntLit, &BitOr, span).is_ok());
+
+        // Negative: bitwise ops need integers; floats are out.
+        assert!(check_arith_op(&Float64, &BitAnd, span).is_err());
+        assert!(check_arith_op(&Float32, &ShiftLeft, span).is_err());
+        assert!(check_arith_op(&FloatLit, &BitXor, span).is_err());
 
         // Negative: numeric op on strings is an error.
         assert!(check_arith_op(&String, &Plus, span).is_err());
+        assert!(check_arith_op(&String, &BitOr, span).is_err());
 
         // Negative: Bool rejects every arithmetic op.
         assert!(check_arith_op(&Bool, &Plus, span).is_err());

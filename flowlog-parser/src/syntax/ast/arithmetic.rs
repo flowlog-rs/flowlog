@@ -1,6 +1,7 @@
 //! Arithmetic expressions for FlowLog Datalog programs.
 //!
-//! - [`ArithmeticOperator`]: `+ | - | * | / | %`
+//! - [`ArithmeticOperator`]: `+ - * / % ^` and the bitwise
+//!   `band bor bxor bshl bshr bshru`
 //! - [`Factor`]: atomic operands (variables, constants, calls, casts,
 //!   groups, and tuples)
 //! - [`Arithmetic`]: a left-to-right fold with precedence encoded as groups
@@ -28,6 +29,11 @@ use crate::error::grammar_bug;
 // =============================================================================
 
 /// Binary arithmetic operators in value expressions.
+///
+/// The bitwise operators and `^` follow Souffle: the shifts mask their
+/// count to the operand width, `bshr` extends the sign and `bshru` fills
+/// with zeros, and integer `^` wraps on overflow and yields `0` for a
+/// negative exponent. Those rules live in the runtime's `arith` module.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ArithmeticOperator {
     Plus,
@@ -35,6 +41,76 @@ pub enum ArithmeticOperator {
     Multiply,
     Divide,
     Modulo,
+    /// `^`, exponentiation; the only right-associative operator.
+    Power,
+    /// `band`
+    BitAnd,
+    /// `bor`
+    BitOr,
+    /// `bxor`
+    BitXor,
+    /// `bshl`
+    ShiftLeft,
+    /// `bshr`, arithmetic on signed operands.
+    ShiftRight,
+    /// `bshru`, logical on signed operands.
+    ShiftRightUnsigned,
+}
+
+impl ArithmeticOperator {
+    /// Returns `true` for the bitwise operators, which accept integer
+    /// operands only.
+    #[must_use]
+    pub fn is_bitwise(&self) -> bool {
+        match self {
+            Self::BitAnd
+            | Self::BitOr
+            | Self::BitXor
+            | Self::ShiftLeft
+            | Self::ShiftRight
+            | Self::ShiftRightUnsigned => true,
+            Self::Plus
+            | Self::Minus
+            | Self::Multiply
+            | Self::Divide
+            | Self::Modulo
+            | Self::Power => false,
+        }
+    }
+
+    /// Binding strength, weakest first: bitwise or, xor, and; shifts;
+    /// additive; multiplicative; power. The same ladder as C, with `^`
+    /// on top.
+    fn precedence(&self) -> u8 {
+        match self {
+            Self::BitOr => 0,
+            Self::BitXor => 1,
+            Self::BitAnd => 2,
+            Self::ShiftLeft | Self::ShiftRight | Self::ShiftRightUnsigned => 3,
+            Self::Plus | Self::Minus => 4,
+            Self::Multiply | Self::Divide | Self::Modulo => 5,
+            Self::Power => 6,
+        }
+    }
+
+    /// Returns `true` if a run of this operator groups from the right:
+    /// `a ^ b ^ c` is `a ^ (b ^ c)`.
+    fn is_right_associative(&self) -> bool {
+        match self {
+            Self::Power => true,
+            Self::Plus
+            | Self::Minus
+            | Self::Multiply
+            | Self::Divide
+            | Self::Modulo
+            | Self::BitAnd
+            | Self::BitOr
+            | Self::BitXor
+            | Self::ShiftLeft
+            | Self::ShiftRight
+            | Self::ShiftRightUnsigned => false,
+        }
+    }
 }
 
 impl fmt::Display for ArithmeticOperator {
@@ -45,6 +121,13 @@ impl fmt::Display for ArithmeticOperator {
             Self::Multiply => "*",
             Self::Divide => "/",
             Self::Modulo => "%",
+            Self::Power => "^",
+            Self::BitAnd => "band",
+            Self::BitOr => "bor",
+            Self::BitXor => "bxor",
+            Self::ShiftLeft => "bshl",
+            Self::ShiftRight => "bshr",
+            Self::ShiftRightUnsigned => "bshru",
         })
     }
 }
@@ -58,6 +141,13 @@ impl Lexeme for ArithmeticOperator {
             Rule::times => Self::Multiply,
             Rule::divide => Self::Divide,
             Rule::modulo => Self::Modulo,
+            Rule::power => Self::Power,
+            Rule::band => Self::BitAnd,
+            Rule::bor => Self::BitOr,
+            Rule::bxor => Self::BitXor,
+            Rule::bshl => Self::ShiftLeft,
+            Rule::bshr => Self::ShiftRight,
+            Rule::bshru => Self::ShiftRightUnsigned,
             other => {
                 return Err(grammar_bug(format!(
                     "unknown arithmetic operator: {other:?}"
@@ -266,9 +356,12 @@ fn parse_paren_factor(mut node: Node) -> Result<Factor, ParseError> {
 // Arithmetic
 // =============================================================================
 
-/// A left-to-right fold over factors. Parsing groups `*`, `/`, and `%`
-/// before `+` and `-`; operators at the same precedence associate left.
-/// Explicit parentheses preserve their own evaluation boundaries.
+/// A left-to-right fold over factors. Every operator in `rest` has the
+/// same precedence, so the fold order is the evaluation order; tighter
+/// operators are grouped into [`Factor::Group`] operands by parsing.
+/// Operators at the same precedence associate left, except `^`, which
+/// associates right. Explicit parentheses preserve their own evaluation
+/// boundaries.
 #[derive(Debug, Clone, Educe)]
 #[educe(PartialEq, Eq, Hash)]
 pub struct Arithmetic {
@@ -299,54 +392,17 @@ impl Arithmetic {
         }
     }
 
-    /// Groups multiplicative runs, preserving source order and operand spans.
+    /// Groups a flat operator run by precedence, preserving source order
+    /// and operand spans.
     fn with_precedence(
         span: Span,
         init: Factor,
         init_span: Span,
         steps: Vec<(ArithmeticOperator, Factor, Span)>,
     ) -> Self {
-        let mut term = Self {
-            init,
-            rest: Vec::new(),
-            span: init_span,
-        };
-        // Each completed multiplicative term keeps its following additive
-        // operator. Fresh terms keep explicit groups opaque, so a / (b * c)
-        // cannot become a / b * c. Flat runs avoid nesting per operator.
-        let mut terms = Vec::new();
-        for (op, factor, factor_span) in steps {
-            match op {
-                ArithmeticOperator::Plus | ArithmeticOperator::Minus => {
-                    terms.push((term, op));
-                    term = Self {
-                        init: factor,
-                        rest: Vec::new(),
-                        span: factor_span,
-                    };
-                }
-                ArithmeticOperator::Multiply
-                | ArithmeticOperator::Divide
-                | ArithmeticOperator::Modulo => {
-                    term.rest.push((op, factor));
-                    term.span = term.span.merge(factor_span);
-                }
-            }
-        }
-
-        let mut terms = terms.into_iter();
-        let Some((first, mut op)) = terms.next() else {
-            term.span = span;
-            return term;
-        };
-        let init = first.into_factor();
-        let mut rest = Vec::new();
-        for (next, following_op) in terms {
-            rest.push((op, next.into_factor()));
-            op = following_op;
-        }
-        rest.push((op, term.into_factor()));
-        Self { init, rest, span }
+        let mut expr = group_by_precedence((init, init_span), steps);
+        expr.span = span;
+        expr
     }
 
     /// A bare variable as an expression: `Factor::Var(name)` with no operators.
@@ -451,6 +507,82 @@ impl Lexeme for Arithmetic {
     }
 }
 
+/// Builds the expression for `first` followed by `steps`, splitting at the
+/// weakest operators present so each level of the result holds operators
+/// of one precedence. A run of the weakest operator stays flat when it
+/// associates left; a right-associative run nests its tail as one operand.
+/// Fresh groups keep explicit parentheses opaque, so `a / (b * c)` cannot
+/// become `a / b * c`. Recursion depth is bounded by the number of
+/// precedence levels, not by the expression length.
+fn group_by_precedence(
+    first: (Factor, Span),
+    steps: Vec<(ArithmeticOperator, Factor, Span)>,
+) -> Arithmetic {
+    let span = steps
+        .last()
+        .map_or(first.1, |(_, _, last)| first.1.merge(*last));
+    let Some(weakest) = steps.iter().map(|(op, ..)| op.precedence()).min() else {
+        return Arithmetic {
+            init: first.0,
+            rest: Vec::new(),
+            span,
+        };
+    };
+
+    // Cut the run at every weakest operator: the steps before the first
+    // cut belong to the leading segment, and each cut starts a segment
+    // headed by the operand after it.
+    let mut lead_steps = Vec::new();
+    let mut joins: Vec<(ArithmeticOperator, (Factor, Span), Vec<_>)> = Vec::new();
+    for (op, factor, factor_span) in steps {
+        if op.precedence() == weakest {
+            joins.push((op, (factor, factor_span), Vec::new()));
+        } else if let Some((_, _, tail)) = joins.last_mut() {
+            tail.push((op, factor, factor_span));
+        } else {
+            lead_steps.push((op, factor, factor_span));
+        }
+    }
+    let lead = group_by_precedence(first, lead_steps);
+
+    if joins
+        .first()
+        .is_some_and(|(op, ..)| op.is_right_associative())
+    {
+        // Hang each segment on the one after it, from the right, so
+        // `a ^ b ^ c` is `a ^ (b ^ c)`.
+        let mut tail: Option<(ArithmeticOperator, Factor, Span)> = None;
+        for (op, head, tail_steps) in joins.into_iter().rev() {
+            let mut segment = group_by_precedence(head, tail_steps);
+            if let Some((next_op, next, next_span)) = tail.take() {
+                segment = Arithmetic {
+                    span: segment.span.merge(next_span),
+                    init: segment.into_factor(),
+                    rest: vec![(next_op, next)],
+                };
+            }
+            let segment_span = segment.span;
+            tail = Some((op, segment.into_factor(), segment_span));
+        }
+        return Arithmetic {
+            init: lead.into_factor(),
+            rest: tail
+                .map(|(op, factor, _)| (op, factor))
+                .into_iter()
+                .collect(),
+            span,
+        };
+    }
+    Arithmetic {
+        init: lead.into_factor(),
+        rest: joins
+            .into_iter()
+            .map(|(op, head, tail_steps)| (op, group_by_precedence(head, tail_steps).into_factor()))
+            .collect(),
+        span,
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -543,6 +675,13 @@ mod tests {
     #[case("*", ArithmeticOperator::Multiply)]
     #[case("/", ArithmeticOperator::Divide)]
     #[case("%", ArithmeticOperator::Modulo)]
+    #[case("^", ArithmeticOperator::Power)]
+    #[case("band", ArithmeticOperator::BitAnd)]
+    #[case("bor", ArithmeticOperator::BitOr)]
+    #[case("bxor", ArithmeticOperator::BitXor)]
+    #[case("bshl", ArithmeticOperator::ShiftLeft)]
+    #[case("bshr", ArithmeticOperator::ShiftRight)]
+    #[case("bshru", ArithmeticOperator::ShiftRightUnsigned)]
     fn operators_parse_and_display_their_surface_spelling(
         #[case] source: &str,
         #[case] expected: ArithmeticOperator,
@@ -574,6 +713,20 @@ mod tests {
     #[case("-3 + 2 * -4", "-3 + (2 * -4)")]
     #[case("f(a + b * c)", "f(a + (b * c))")]
     #[case("(a + b * c, d)", "(a + (b * c), d)")]
+    // Bitwise operators bind looser than arithmetic, in C's order.
+    #[case("a bor b bxor c band d", "a bor (b bxor (c band d))")]
+    #[case("a band b bor c", "(a band b) bor c")]
+    #[case("a bshl b + c", "a bshl (b + c)")]
+    #[case("a + b bshl c", "(a + b) bshl c")]
+    #[case("a bshl b bshr c bshru d", "a bshl b bshr c bshru d")]
+    #[case("a band b bshl c * d", "a band (b bshl (c * d))")]
+    // `^` binds tightest and groups from the right.
+    #[case("a * b ^ c", "a * (b ^ c)")]
+    #[case("a ^ b * c", "(a ^ b) * c")]
+    #[case("a ^ b ^ c", "a ^ (b ^ c)")]
+    #[case("a ^ b ^ c ^ d", "a ^ (b ^ (c ^ d))")]
+    #[case("(a ^ b) ^ c", "(a ^ b) ^ c")]
+    #[case("a + b ^ c ^ d * e", "a + ((b ^ (c ^ d)) * e)")]
     fn precedence_groups_round_trip(#[case] src: &str, #[case] rendered: &str) {
         let expr: Arithmetic = parse_node(Rule::arithmetic_expr, src);
         assert_eq!(expr.to_string(), rendered);
@@ -598,6 +751,16 @@ mod tests {
             };
             assert_eq!(&src[group.span().range()], expected);
         }
+    }
+
+    /// A bitwise word is an operator only as a whole word, so a variable
+    /// that starts with one is still an operand.
+    #[rstest]
+    #[case("x bandy", "x")]
+    #[case("x borrow", "x")]
+    fn bitwise_word_prefix_does_not_split_a_variable(#[case] src: &str, #[case] consumed: &str) {
+        let pairs = FlowLogParser::parse(Rule::arithmetic_expr, src).unwrap();
+        assert_eq!(pairs.as_str().trim_end(), consumed);
     }
 
     /// Dropping this group would turn `a * (b + c)` into `a * b + c`.

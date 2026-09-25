@@ -19,6 +19,7 @@
 //! | [`error`] | [`RuntimeError`], everything the runtime can fail at |
 //! | [`intern`] | Thread-safe string interning pool (`lasso`) |
 //! | [`operators`] | Named dataflow operators used by generated rules |
+//! | [`arith`] | Arithmetic operators whose semantics FlowLog defines itself |
 //! | [`txn`] | Transaction state types shared with incremental drivers |
 //!
 //! The re-exported crates (`timely`, `differential_dataflow`, etc.) are
@@ -27,6 +28,7 @@
 
 #[cfg(feature = "cli")]
 mod args;
+pub mod arith;
 pub mod error;
 pub mod intern;
 pub mod io;

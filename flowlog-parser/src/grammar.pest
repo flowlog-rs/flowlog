@@ -301,13 +301,16 @@ trailing_comma = { "," }
 // ARITHMETIC OPERATORS
 // =============================================================================
 // Arithmetic operators. String concatenation lives in the `cat(a, b)`
-// built-in; there is no infix `cat` operator.
+// built-in; there is no infix `cat` operator. The grammar keeps an
+// expression flat; lowering groups it by precedence.
 arithmetic_op = {
     plus |    // +
     minus |   // -
     times |   // *
     divide |  // /
-    modulo    // %
+    modulo |  // %
+    power |   // ^
+    bitwise_op
 }
 
 // Individual arithmetic operators
@@ -316,6 +319,17 @@ minus = { "-" }
 times = { "*" }
 divide = { "/" }
 modulo = { "%" }
+power = { "^" }
+
+// Bitwise operators, spelled as words as in Souffle. Each is atomic and
+// whole-word, so `x bandy` does not read as `x band y`.
+bitwise_op = _{ band | bor | bxor | bshl | bshru | bshr }
+band = @{ "band" ~ word_boundary }
+bor = @{ "bor" ~ word_boundary }
+bxor = @{ "bxor" ~ word_boundary }
+bshl = @{ "bshl" ~ word_boundary }
+bshru = @{ "bshru" ~ word_boundary }
+bshr = @{ "bshr" ~ word_boundary }
 
 // =============================================================================
 // COMPARISON EXPRESSIONS
