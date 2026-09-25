@@ -694,13 +694,56 @@ pub(super) fn combine_predicates(preds: Vec<Option<TokenStream>>) -> Option<Toke
 // ==================================================
 // Arithmetic expression helpers
 // ==================================================
-fn numeric_arithmetic_op_tokens(op: &ArithmeticOperator) -> TokenStream {
+/// Returns `true` for the operators [`arithmetic_step`] emits as a call
+/// rather than an infix expression.
+fn is_call_form(op: &ArithmeticOperator) -> bool {
     match op {
-        ArithmeticOperator::Plus => quote! { + },
-        ArithmeticOperator::Minus => quote! { - },
-        ArithmeticOperator::Multiply => quote! { * },
-        ArithmeticOperator::Divide => quote! { / },
-        ArithmeticOperator::Modulo => quote! { % },
+        ArithmeticOperator::Power
+        | ArithmeticOperator::ShiftLeft
+        | ArithmeticOperator::ShiftRight
+        | ArithmeticOperator::ShiftRightUnsigned => true,
+        ArithmeticOperator::Plus
+        | ArithmeticOperator::Minus
+        | ArithmeticOperator::Multiply
+        | ArithmeticOperator::Divide
+        | ArithmeticOperator::Modulo
+        | ArithmeticOperator::BitAnd
+        | ArithmeticOperator::BitOr
+        | ArithmeticOperator::BitXor => false,
+    }
+}
+
+/// Wraps an emitted expression so it binds as one operand. A fold whose
+/// last step is a call is already one term, and parentheses around a call
+/// in argument position trip Rust's `unused_parens` lint.
+fn as_operand(expr: &ArithmeticArgument, tokens: TokenStream) -> TokenStream {
+    if expr.rest().last().is_some_and(|(op, _)| is_call_form(op)) {
+        tokens
+    } else {
+        quote! { ( #tokens ) }
+    }
+}
+
+/// Emits `lhs op rhs`. Rust's infix operators carry FlowLog's meaning
+/// for every operator but the shifts and `^`, which call the runtime's
+/// `arith` functions so the count masking and exponent rules live in one
+/// place.
+fn arithmetic_step(op: &ArithmeticOperator, lhs: TokenStream, rhs: TokenStream) -> TokenStream {
+    match op {
+        ArithmeticOperator::Plus => quote! { #lhs + #rhs },
+        ArithmeticOperator::Minus => quote! { #lhs - #rhs },
+        ArithmeticOperator::Multiply => quote! { #lhs * #rhs },
+        ArithmeticOperator::Divide => quote! { #lhs / #rhs },
+        ArithmeticOperator::Modulo => quote! { #lhs % #rhs },
+        ArithmeticOperator::BitAnd => quote! { #lhs & #rhs },
+        ArithmeticOperator::BitOr => quote! { #lhs | #rhs },
+        ArithmeticOperator::BitXor => quote! { #lhs ^ #rhs },
+        ArithmeticOperator::Power => quote! { ::flowlog_runtime::arith::pow(#lhs, #rhs) },
+        ArithmeticOperator::ShiftLeft => quote! { ::flowlog_runtime::arith::bshl(#lhs, #rhs) },
+        ArithmeticOperator::ShiftRight => quote! { ::flowlog_runtime::arith::bshr(#lhs, #rhs) },
+        ArithmeticOperator::ShiftRightUnsigned => {
+            quote! { ::flowlog_runtime::arith::bshru(#lhs, #rhs) }
+        }
     }
 }
 
@@ -733,18 +776,19 @@ impl CodeGen {
     where
         F: Fn(&TransformationArgument) -> Result<TokenStream, CodegenError>,
     {
-        // Numeric fold: left-to-right, parenthesising intermediate steps
-        // only — the outermost expression stays bare to avoid Rust's
-        // `unused_parens` lint when it's used as a function argument.
+        // Numeric fold, left to right. Intermediate infix steps are
+        // parenthesised to keep the fold order; the outermost step stays
+        // bare, as parentheses around a whole function argument trip
+        // Rust's `unused_parens` lint.
         let rest = expr.rest();
         let mut result = self.factor_to_token(expr.init(), string_intern, resolve_var)?;
         for (i, (op, factor)) in rest.iter().enumerate() {
-            let op_token = numeric_arithmetic_op_tokens(op);
             let factor_token = self.factor_to_token(factor, string_intern, resolve_var)?;
-            result = if i < rest.len() - 1 {
-                quote! { ( #result #op_token #factor_token ) }
+            let step = arithmetic_step(op, result, factor_token);
+            result = if i < rest.len() - 1 && !is_call_form(op) {
+                quote! { ( #step ) }
             } else {
-                quote! { #result #op_token #factor_token }
+                step
             };
         }
         Ok(result)
@@ -819,9 +863,10 @@ impl CodeGen {
             }
             FactorArgument::Group(a) => {
                 let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
-                Ok(quote! { ( #inner ) })
+                Ok(as_operand(a, inner))
             }
-            // Tuple construct → Rust tuple literal `(a, b)` (singleton `(a,)`).
+            // Tuple construct becomes a Rust tuple literal `(a, b)`
+            // (singleton `(a,)`).
             FactorArgument::Tuple { fields } => {
                 let field_toks = fields
                     .iter()
@@ -888,9 +933,9 @@ impl CodeGen {
             }
             FactorArgument::Group(a) => {
                 // Grammar guarantees a `Group` is multi-term, hence numeric
-                // (string concat is `cat`) — no display resolution needed.
+                // (string concat is `cat`): no display resolution needed.
                 let inner = self.build_arithmetic_expr(a, string_intern, resolve_var)?;
-                Ok(quote! { ( #inner ) })
+                Ok(as_operand(a, inner))
             }
             // A projected field reaching a `cat`/display context is a string
             // (typecheck-enforced); resolve the interned `Spur` to display text,

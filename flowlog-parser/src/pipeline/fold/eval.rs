@@ -24,6 +24,15 @@ pub(super) fn eval_arith(op: &ArithmeticOperator, a: &Constant, b: &Constant) ->
     // never diverges from runtime: integers use `checked_*` (overflow and
     // divide/modulo-by-zero yield `None`, leaving release to wrap or panic),
     // floats use raw `f32`/`f64` (inf/NaN on divide-by-zero).
+    //
+    // The shifts and `^` are not folded. Their count masking and exponent
+    // rules are owned by `flowlog_runtime::arith`, and this crate cannot
+    // depend on the runtime without pulling Differential Dataflow into the
+    // compiler and into every library user's build script; a second copy
+    // here could drift from the runtime.
+    // TODO: fold them by calling the runtime's functions once those live
+    // in a crate both this crate and the runtime depend on, such as a lean
+    // `flowlog-common` core with the compiler-only modules feature-gated.
     macro_rules! int_op {
         ($t:ty, $dt:expr) => {{
             let x: $t = a.text().parse().ok()?;
@@ -34,6 +43,13 @@ pub(super) fn eval_arith(op: &ArithmeticOperator, a: &Constant, b: &Constant) ->
                 ArithmeticOperator::Multiply => x.checked_mul(y)?,
                 ArithmeticOperator::Divide => x.checked_div(y)?,
                 ArithmeticOperator::Modulo => x.checked_rem(y)?,
+                ArithmeticOperator::BitAnd => x & y,
+                ArithmeticOperator::BitOr => x | y,
+                ArithmeticOperator::BitXor => x ^ y,
+                ArithmeticOperator::Power
+                | ArithmeticOperator::ShiftLeft
+                | ArithmeticOperator::ShiftRight
+                | ArithmeticOperator::ShiftRightUnsigned => return None,
             };
             Some(Constant::new($dt, r.to_string()))
         }};
@@ -48,6 +64,15 @@ pub(super) fn eval_arith(op: &ArithmeticOperator, a: &Constant, b: &Constant) ->
                 ArithmeticOperator::Multiply => x * y,
                 ArithmeticOperator::Divide => x / y,
                 ArithmeticOperator::Modulo => x % y,
+                // The typechecker keeps bitwise operators off floats; be
+                // defensive rather than fold an impossible expression.
+                ArithmeticOperator::Power
+                | ArithmeticOperator::BitAnd
+                | ArithmeticOperator::BitOr
+                | ArithmeticOperator::BitXor
+                | ArithmeticOperator::ShiftLeft
+                | ArithmeticOperator::ShiftRight
+                | ArithmeticOperator::ShiftRightUnsigned => return None,
             };
             Some(Constant::new($dt, r.to_string()))
         }};
@@ -194,6 +219,44 @@ mod tests {
         c(DataType::Float32, "1.0"),
         c(DataType::Float32, "2.0"),
         Some(c(DataType::Float32, "3"))
+    )]
+    // Bitwise and, or, xor have one meaning on every width, so they fold.
+    #[case::int_band(
+        ArithmeticOperator::BitAnd,
+        c(DataType::Int64, "-8"),
+        c(DataType::Int64, "240"),
+        Some(c(DataType::Int64, "240"))
+    )]
+    #[case::uint_bor(
+        ArithmeticOperator::BitOr,
+        c(DataType::UInt8, "8"),
+        c(DataType::UInt8, "3"),
+        Some(c(DataType::UInt8, "11"))
+    )]
+    #[case::int_bxor(
+        ArithmeticOperator::BitXor,
+        c(DataType::Int32, "255"),
+        c(DataType::Int32, "15"),
+        Some(c(DataType::Int32, "240"))
+    )]
+    // Shifts and power are left to the runtime, which owns their rules.
+    #[case::shift_unfolded(
+        ArithmeticOperator::ShiftLeft,
+        c(DataType::Int32, "1"),
+        c(DataType::Int32, "3"),
+        None
+    )]
+    #[case::power_unfolded(
+        ArithmeticOperator::Power,
+        c(DataType::Int32, "2"),
+        c(DataType::Int32, "3"),
+        None
+    )]
+    #[case::float_power_unfolded(
+        ArithmeticOperator::Power,
+        c(DataType::Float64, "2.0"),
+        c(DataType::Float64, "0.5"),
+        None
     )]
     // A non-canonical spelling folds by value; the result re-renders
     // canonically.
